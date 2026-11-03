@@ -307,6 +307,7 @@ fn preview(preview: EnginePreview) -> InvitePreview {
             EngineClass::Contact => PairingClass::Contact,
             EngineClass::Private => PairingClass::Private,
         },
+        own: preview.own,
     }
 }
 
@@ -459,9 +460,11 @@ impl Session {
         })
     }
 
-    pub(crate) fn pairing_preview(&self, link: &str) -> Result<InvitePreview, WalletError> {
+    pub(crate) async fn pairing_preview(&self, link: &str) -> Result<InvitePreview, WalletError> {
         let link = bounded(link, MAX_LINK_TEXT, "link")?;
-        Ok(preview(self.engine.contact_book().pairing_preview(link)?))
+        Ok(preview(
+            self.engine.contact_book().pairing_preview(link).await?,
+        ))
     }
 
     pub(crate) async fn pairing_find_words(
@@ -482,7 +485,7 @@ impl Session {
             .contact_book()
             .pairing_find_words(&relays, &words)
             .await?;
-        let preview = preview(self.engine.contact_book().pairing_preview(&link)?);
+        let preview = preview(self.engine.contact_book().pairing_preview(&link).await?);
         Ok(FoundInvite { link, preview })
     }
 

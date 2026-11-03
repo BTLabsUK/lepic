@@ -221,7 +221,7 @@ impl<H: Host> Run<'_, H> {
             ContactCommand::Invite(args) => invite(&opened, &relays, args).await?,
             ContactCommand::Request(args) => request(&opened, &relays, args).await?,
             ContactCommand::Open(args) => {
-                let preview = wallet.contact_book().pairing_preview(&args.link)?;
+                let preview = wallet.contact_book().pairing_preview(&args.link).await?;
                 Report::ContactPreview(ContactPreviewReport {
                     claimed_name: preview.claimed_name,
                     kind: kind_name(preview.kind),

@@ -1323,3 +1323,86 @@ async fn pairing_v3_calls_keep_their_contract() {
         0
     );
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_preview_knows_this_wallets_own_invites_after_a_reopen() {
+    let mut world = World::new();
+    let config = world.config(RELAY);
+    let store = AppSecretStore::in_memory();
+    let anna = EpicWallet::create(
+        &world.runtime,
+        config.clone(),
+        &store,
+        None,
+        "password".to_owned(),
+    )
+    .await
+    .unwrap();
+    let ben = world.wallet().await;
+
+    let standing = anna
+        .pairing_standing_invite("Anna".to_owned())
+        .await
+        .unwrap();
+    let cancelled = anna
+        .pairing_invite(
+            "Anna".to_owned(),
+            ContactKind::Person,
+            InviteExpiry::OneDay,
+            false,
+            Online,
+            meeting(),
+            None,
+            PairingClass::Contact,
+            None,
+        )
+        .await
+        .unwrap();
+    anna.pairing_cancel(cancelled.contact_id).await.unwrap();
+    let theirs = ben
+        .pairing_invite(
+            "Ben".to_owned(),
+            ContactKind::Person,
+            InviteExpiry::OneDay,
+            false,
+            Online,
+            meeting(),
+            None,
+            PairingClass::Contact,
+            None,
+        )
+        .await
+        .unwrap();
+    anna.pairing_accept(
+        theirs.link.clone(),
+        "Anna".to_owned(),
+        true,
+        Online,
+        PairingClass::Contact,
+        None,
+    )
+    .await
+    .unwrap();
+    assert!(
+        anna.pairings_pending()
+            .await
+            .unwrap()
+            .iter()
+            .all(|p| !p.inviter)
+    );
+
+    // A new session over the same store, as after a restart.
+    drop(anna);
+    let anna = EpicWallet::open(&world.runtime, config, &store, "password".to_owned())
+        .await
+        .unwrap();
+    for link in [&standing.link, &cancelled.link] {
+        assert!(
+            anna.pairing_preview(link.clone()).await.unwrap().own,
+            "{link}"
+        );
+    }
+    // An invite this wallet answered is the other wallet's.
+    assert!(!anna.pairing_preview(theirs.link).await.unwrap().own);
+    assert!(!ben.pairing_preview(standing.link).await.unwrap().own);
+}

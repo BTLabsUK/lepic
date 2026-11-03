@@ -11826,6 +11826,7 @@ impl SseDecode for crate::api::types::InvitePreview {
         let mut var_homeRelay = <String>::sse_decode(deserializer);
         let mut var_service = <bool>::sse_decode(deserializer);
         let mut var_pairingClass = <crate::api::types::PairingClass>::sse_decode(deserializer);
+        let mut var_own = <bool>::sse_decode(deserializer);
         return crate::api::types::InvitePreview {
             claimed_name: var_claimedName,
             kind: var_kind,
@@ -11833,6 +11834,7 @@ impl SseDecode for crate::api::types::InvitePreview {
             home_relay: var_homeRelay,
             service: var_service,
             pairing_class: var_pairingClass,
+            own: var_own,
         };
     }
 }
@@ -15683,6 +15685,7 @@ impl flutter_rust_bridge::IntoDart for crate::api::types::InvitePreview {
             self.home_relay.into_into_dart().into_dart(),
             self.service.into_into_dart().into_dart(),
             self.pairing_class.into_into_dart().into_dart(),
+            self.own.into_into_dart().into_dart(),
         ]
         .into_dart()
     }
@@ -18477,6 +18480,7 @@ impl SseEncode for crate::api::types::InvitePreview {
         <String>::sse_encode(self.home_relay, serializer);
         <bool>::sse_encode(self.service, serializer);
         <crate::api::types::PairingClass>::sse_encode(self.pairing_class, serializer);
+        <bool>::sse_encode(self.own, serializer);
     }
 }
 

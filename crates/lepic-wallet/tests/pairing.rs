@@ -279,15 +279,12 @@ fn an_expired_invite_is_refused_after_the_skew_and_ends_on_the_inviter() {
     world.payer.clock.advance(HOUR + 5 * MINUTE);
     assert!(
         world
-            .payer
-            .wallet
-            .contact_book()
-            .pairing_preview(&link)
+            .block_on(world.payer.wallet.contact_book().pairing_preview(&link))
             .is_ok()
     );
     world.payer.clock.advance(10 * MINUTE);
     assert!(matches!(
-        world.payer.wallet.contact_book().pairing_preview(&link),
+        world.block_on(world.payer.wallet.contact_book().pairing_preview(&link)),
         Err(ContactError::InviteExpired)
     ));
     assert!(matches!(
@@ -2835,10 +2832,8 @@ fn private_pair(world: &World, inviter: &Party, joiner: &Party) -> (ContactId, C
             },
         ))
         .unwrap();
-    let preview = joiner
-        .wallet
-        .contact_book()
-        .pairing_preview(&invite.link)
+    let preview = world
+        .block_on(joiner.wallet.contact_book().pairing_preview(&invite.link))
         .unwrap();
     assert_eq!(preview.class, PairingClass::Private);
     assert!(matches!(

@@ -177,7 +177,7 @@ impl EpicWallet {
     /// and `InviteExpired` for one past its expiry.
     pub async fn pairing_preview(&self, link: String) -> Result<InvitePreview, WalletError> {
         self.run("pairing_preview", |session| async move {
-            session.pairing_preview(&link)
+            session.pairing_preview(&link).await
         })
         .await
     }

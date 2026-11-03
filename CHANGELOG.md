@@ -9,6 +9,10 @@ Conventional Commit messages at release time.
 
 ### Added
 
+- `InvitePreview::own` (`lepic-wallet-contacts` and `lepic-ffi`): the invite is one this
+  wallet made, standing, waiting or cancelled, so an app refuses its own invite before asking
+  "Pair with …?", also after a restart. `ContactBook::pairing_preview` is now async and reads
+  the store, so it needs an open session.
 - `lepic-ffi` gains `EpicWallet::set_http_over_tor` and `EpicWallet::http_over_tor`: HTTP
   sends can reach the other wallet directly while the wallet's tor runs, as the node and the
   relay already can (`set_node_over_tor`, `set_epicbox_over_tor`), for an app that runs tor

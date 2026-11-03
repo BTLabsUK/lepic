@@ -110,6 +110,9 @@ pub struct InvitePreview {
     /// The invite comes from a service with a fixed pairing inbox.
     pub service: bool,
     pub class: PairingClass,
+    /// This wallet made the invite: standing, waiting or cancelled. Answering it fails with
+    /// [`ContactError::AlreadyPaired`].
+    pub own: bool,
 }
 
 /// How to answer an invite.
@@ -438,13 +441,27 @@ where
         Ok(())
     }
 
-    /// Reads an invite link for the user to decide on (RFC 0002 7.2). Nothing is stored or sent.
+    /// Reads an invite link for the user to decide on (RFC 0002 7.2), and tells whether this
+    /// wallet made it. Nothing is stored or sent.
     ///
     /// Fails with [`ContactError::Decode`] for text that is not an invite on the wallet's
-    /// network, and with [`ContactError::InviteExpired`] for one past its expiry by more than
-    /// [`CLOCK_SKEW`].
-    pub fn pairing_preview(&self, link: &str) -> Result<InvitePreview, ContactError> {
+    /// network, with [`ContactError::InviteExpired`] for one past its expiry by more than
+    /// [`CLOCK_SKEW`], with [`lepic_wallet::WalletError::Locked`] and as the store does.
+    pub async fn pairing_preview(&self, link: &str) -> Result<InvitePreview, ContactError> {
         let invite = self.read_invite(link)?;
+        let session = self.wallet.session()?;
+        let invite_id = invite.id().as_bytes().to_owned();
+        // The pending pairing `pairing_accept` refuses an invite by, kept for standing,
+        // waiting and cancelled invites alike.
+        let own = self
+            .contact_work(move |_, _| {
+                Ok(session.store.read(|repos| {
+                    repos
+                        .pending_pairing_by_invite(&invite_id)
+                        .map(|pending| pending.is_some_and(|p| p.role == PairingRole::Inviter))
+                })?)
+            })
+            .await?;
         let fields = invite.fields();
         Ok(InvitePreview {
             claimed_name: fields.name.as_str().to_owned(),
@@ -453,6 +470,7 @@ where
             home_relay: fields.home_relay.as_str().to_owned(),
             service: fields.service_inbox.is_some(),
             class: invite.class(),
+            own,
         })
     }
 

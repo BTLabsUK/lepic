@@ -1092,6 +1092,9 @@ pub struct InvitePreview {
     pub service: bool,
     /// Answer it with this class in `EpicWallet::pairing_accept`.
     pub pairing_class: PairingClass,
+    /// This wallet made the invite: standing, waiting or cancelled. `EpicWallet::pairing_accept`
+    /// refuses it with `AlreadyPaired`.
+    pub own: bool,
 }
 
 /// Which kind of pairing an invite makes. Values are only added, at the end.
