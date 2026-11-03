@@ -123,9 +123,51 @@ fn a_pending_restore_scan_starts_at_genesis_after_a_partial_scan() {
     assert_eq!(received["amount"], "1.00000000");
 }
 
+/// A restore from a start height scans from it, finds nothing below it, and once that scan
+/// completed the wallet receives; with `--no-scan` the next plain scan starts there.
+#[test]
+fn a_restore_from_a_height_scans_from_it_and_then_receives() {
+    let host = TestHost::new();
+    let sender = funded_sender(&host);
+    let slate = sender.path("payment.slate");
+    sender
+        .run(
+            &host,
+            &["tx", "send", "1", "--to-file", slate.to_str().unwrap()],
+        )
+        .ok();
+    host.node
+        .update_chain(|chain| chain.tip.height = Height::new(300));
+
+    let (receiver, restored) = restored_with(&host, FUNDING / 2, &["--from-height", "250"]);
+
+    assert_eq!(restored["scan"]["start_height"], 250, "{restored}");
+    assert_eq!(restored["scan"]["end_height"], 300, "{restored}");
+    assert_eq!(restored["scan"]["restored"], 0, "{restored}");
+    let receive = ["tx", "receive", slate.to_str().unwrap()];
+    let received = receiver.run(&host, &receive).ok().json();
+    assert_eq!(received["amount"], "1.00000000");
+
+    let (later, restored) =
+        restored_with(&host, FUNDING / 2, &["--from-height", "250", "--no-scan"]);
+    assert!(restored["scan"].is_null(), "{restored}");
+    let scanned = scan(&later, &host, &[]);
+    assert_eq!(scanned["start_height"], 250, "{scanned}");
+    let next = scan(&later, &host, &[]);
+    assert_eq!(next["start_height"], 200, "{next}");
+}
+
 /// A wallet restored with `--no-scan` from a new phrase that owns one output of `amount` on
 /// chain.
 fn restored_without_scan(host: &TestHost, amount: u64) -> Instance {
+    let (receiver, restored) = restored_with(host, amount, &["--no-scan"]);
+    assert!(restored["scan"].is_null(), "{restored}");
+    receiver
+}
+
+/// A wallet restored with `args` from a new phrase that owns one output of `amount` on chain,
+/// and the restore's report.
+fn restored_with(host: &TestHost, amount: u64, args: &[&str]) -> (Instance, serde_json::Value) {
     let phrase = {
         let created = Instance::new("throwaway password");
         let report = created.run(host, &["wallet", "init"]).ok().json();
@@ -133,17 +175,15 @@ fn restored_without_scan(host: &TestHost, amount: u64) -> Instance {
     };
     host.fund(&phrase, 0, amount, 2);
     let receiver = Instance::new("receiver password");
+    let command: Vec<&str> = ["wallet", "restore"]
+        .into_iter()
+        .chain(args.iter().copied())
+        .collect();
     let restored = receiver
-        .run_with(
-            host,
-            &["wallet", "restore", "--no-scan"],
-            receiver.env(),
-            &format!("{phrase}\n"),
-        )
+        .run_with(host, &command, receiver.env(), &format!("{phrase}\n"))
         .ok()
         .json();
-    assert!(restored["scan"].is_null(), "{restored}");
-    receiver
+    (receiver, restored)
 }
 
 /// Without options a scan reaches back 100 blocks from the last completed one; a start height

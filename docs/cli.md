@@ -224,6 +224,14 @@ create outputs, so to receive or to send with change, until `lepic wallet scan` 
 chain from genesis. The scan alone does not restore the history: each output found appears in
 `tx list` as one confirmed incoming transaction with no slate, dated by its block.
 
+`lepic wallet restore --from-height <HEIGHT>` scans from that block height instead of genesis,
+which is much faster on mainnet. Give a height below the first transaction of the phrase: outputs
+below it are not found, and their funds do not show until a scan from below them, such as
+`lepic wallet scan --start-height 0`. Once the scan from the height completes the wallet receives,
+sends and makes invoices; its key counters are moved past the keys that scan found, so it does not
+reuse a key the phrase used before. With `--no-scan` too, the next `lepic wallet scan` starts at
+the height.
+
 ## Import history
 
 ```
@@ -255,13 +263,14 @@ Scanned heights 952 to 1052: 1 outputs found, 0 restored, 0 revived.
 
 Without options it starts 100 blocks before the end of the last completed scan, so outputs of a
 short reorganisation are found again. It starts at genesis when no scan has completed, or when the
-wallet was restored with `--no-scan` and has not scanned from genesis since. Progress goes to
+wallet was restored with `--no-scan` and its restore scan has not completed since; then it starts
+where that scan does, at genesis or at the restore's `--from-height`. Progress goes to
 stderr. Ctrl-C stops it and keeps what it found (exit 12); the next scan with the same options
 continues where it stopped, and says `Continued an interrupted scan.`
 
 - `--start-height <HEIGHT>` starts there instead; `0` scans the whole chain. A height above the
-  node's tip is refused with exit 2. Only a scan from 0 ends the wait after a `--no-scan`
-  restore.
+  node's tip is refused with exit 2. Only a scan from 0, or for a restore with `--from-height`
+  from that height or below, ends the wait after a `--no-scan` restore.
 - `--delete-unconfirmed` also repairs what unfinished transactions hold, as `epic-wallet scan
   --delete_unconfirmed` does: locked outputs found on chain are unlocked and unconfirmed outputs
   not found are deleted, and their transactions are cancelled. The report adds the outputs
@@ -713,5 +722,5 @@ With human output, an error ends with a `hint:` line that names what to try next
 | `transaction N cannot be released` (exit 7) | The send is not finalized or posted, or no refresh at the height `lepic tx show` names has missed its kernel yet. |
 | `transaction N is in the node's pool` (exit 7) | The node may still mine it; refresh later instead of releasing it. |
 | `finalized but the node did not accept it` (exit 11) | The node neither took the transaction nor holds its kernel. Check the node, then `lepic tx post <ID>`. |
-| `a restore scan must complete before new outputs are created` (exit 5) | The wallet was restored with `--no-scan`, or its database was rebuilt, and has not scanned the chain from genesis since. Run `lepic wallet scan`. |
+| `a restore scan must complete before new outputs are created` (exit 5) | The wallet was restored with `--no-scan`, or its database was rebuilt, and its restore scan, from genesis or from the restore's `--from-height`, has not completed since. Run `lepic wallet scan`. |
 | `The node is behind the last refresh; balances not updated.` from `wallet info` | The node is still syncing, or the wallet stored a height this chain does not have. Once the node is synced, `lepic wallet scan --reset-chain` recovers. |

@@ -215,7 +215,8 @@ fn wallet_hint(error: &WalletError, settings: Option<&Settings>) -> Option<Strin
         WalletError::Node(_) | WalletError::Implausible(_) => Some(node_hint_text(settings)),
         WalletError::RestoreScanRequired => Some(
             "the wallet was restored, or its database rebuilt, without a scan of the chain, so \
-             the keys already in use are not known; `lepic wallet scan` scans it from genesis"
+             the keys already in use are not known; `lepic wallet scan` scans it from where the \
+             restore started"
                 .to_owned(),
         ),
         WalletError::NotReleasable {

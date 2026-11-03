@@ -450,7 +450,11 @@ impl<H: Host> Run<'_, H> {
             .await?;
         let password = self.new_password().await?;
         let opened = self.prepare(true)?;
-        opened.wallet.restore(password, phrase.trim()).await?;
+        let scan_from = Height::new(args.from_height.unwrap_or(0));
+        opened
+            .wallet
+            .restore_from_height(password, phrase.trim(), scan_from)
+            .await?;
         self.restored(&opened, &args.scan).await
     }
 
@@ -478,13 +482,16 @@ impl<H: Host> Run<'_, H> {
         let scan = if args.no_scan {
             None
         } else {
+            let options = ScanOptions {
+                start: pending_restore_start(opened.wallet.restore_scan_start()?)
+                    .unwrap_or(ScanStart::Genesis),
+                ..ScanOptions::restore(self.settings.network)
+            };
             let cancel = ScanCancel::new();
             let summary: ScanSummary = self
                 .until_interrupted(
                     opened.wallet.subscribe(),
-                    opened
-                        .wallet
-                        .scan(ScanOptions::restore(self.settings.network), &cancel),
+                    opened.wallet.scan(options, &cancel),
                     || cancel.cancel(),
                 )
                 .await?;
@@ -503,16 +510,16 @@ impl<H: Host> Run<'_, H> {
     }
 
     /// A scan to the node's tip from where the arguments say, or from shortly before the last
-    /// completed scan. A pending restore scan is completed only by a scan from genesis, so it
-    /// starts there unless a start height is given.
+    /// completed scan. A pending restore scan is completed only by a scan from its start or
+    /// below, so it starts there unless a start height is given.
     async fn scan(&mut self, args: &WalletScanArgs) -> Result<Report, CliError> {
         let opened = self.open().await?;
         let network = self.settings.network;
         let start = match args.start_height {
             Some(0) => ScanStart::Genesis,
             Some(height) => ScanStart::Height(Height::new(height)),
-            None if opened.wallet.restore_scan_required()? => ScanStart::Genesis,
-            None => ScanOptions::update(network).start,
+            None => pending_restore_start(opened.wallet.restore_scan_start()?)
+                .unwrap_or(ScanOptions::update(network).start),
         };
         let options = ScanOptions {
             start,
@@ -1547,6 +1554,17 @@ impl Spend {
             ttl_blocks: args.ttl_blocks,
         })
     }
+}
+
+/// Where a pending restore scan starts: genesis, or the start height it was restored with.
+fn pending_restore_start(pending: Option<Height>) -> Option<ScanStart> {
+    pending.map(|from| {
+        if from == Height::ZERO {
+            ScanStart::Genesis
+        } else {
+            ScanStart::Height(from)
+        }
+    })
 }
 
 fn password_from(mut secret: Zeroizing<String>) -> Password {

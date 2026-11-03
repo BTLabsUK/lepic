@@ -205,6 +205,10 @@ pub enum WordsArg {
 
 #[derive(Debug, Args)]
 pub struct RestoreArgs {
+    /// Start the restore scan at this block height instead of genesis; outputs below it are
+    /// not found
+    #[arg(long, value_name = "HEIGHT")]
+    pub from_height: Option<u64>,
     #[command(flatten)]
     pub scan: ScanArgs,
 }
