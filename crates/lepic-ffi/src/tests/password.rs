@@ -94,6 +94,7 @@ async fn create(fixture: &Fixture, store: &AppSecretStore) -> EpicWallet {
         fixture.config(),
         store,
         None,
+        None,
         OLD.to_owned(),
     )
     .await

@@ -78,9 +78,16 @@ impl Fixture {
     }
 
     async fn create_with_pin(&self, store: &AppSecretStore, pin: &str) -> PinWallet {
-        EpicWallet::create_with_pin(&self.runtime, self.config(), store, None, pin.to_owned())
-            .await
-            .unwrap()
+        EpicWallet::create_with_pin(
+            &self.runtime,
+            self.config(),
+            store,
+            None,
+            None,
+            pin.to_owned(),
+        )
+        .await
+        .unwrap()
     }
 
     async fn open_with_pin(
@@ -117,12 +124,43 @@ async fn create_with_pin_rejects_a_short_pin() {
             fixture.config(),
             &store,
             None,
+            None,
             pin.to_owned(),
         )
         .await;
         assert_eq!(kind(created), WalletErrorKind::InvalidArgument, "{pin:?}");
         assert_eq!(store.read(VAULT_KEY).await.unwrap(), None, "{pin:?}");
     }
+}
+
+#[tokio::test]
+async fn a_restore_height_without_a_mnemonic_is_refused_before_anything_is_written() {
+    let fixture = Fixture::new();
+    let store = AppSecretStore::in_memory();
+    let created = EpicWallet::create(
+        &fixture.runtime,
+        fixture.config(),
+        &store,
+        None,
+        Some(5),
+        "a long password".to_owned(),
+    )
+    .await;
+    assert_eq!(kind(created), WalletErrorKind::InvalidArgument);
+    let created = EpicWallet::create_with_pin(
+        &fixture.runtime,
+        fixture.config(),
+        &store,
+        None,
+        Some(5),
+        PIN.to_owned(),
+    )
+    .await;
+    assert_eq!(kind(created), WalletErrorKind::InvalidArgument);
+
+    assert_eq!(store.read(VAULT_KEY).await.unwrap(), None);
+    assert_eq!(store.read(crate::pin::KEY_KEY).await.unwrap(), None);
+    assert_eq!(std::fs::read_dir(fixture.dir.path()).unwrap().count(), 0);
 }
 
 /// The sealed text and the vault together, as in a copied backup, do not open the wallet
@@ -437,6 +475,7 @@ async fn slate_text_above_the_wire_limit_is_refused_before_it_is_written() {
         fixture.config(),
         &AppSecretStore::in_memory(),
         None,
+        None,
         "password".to_owned(),
     )
     .await
@@ -466,8 +505,14 @@ async fn create_with_pin_keeps_the_key_of_a_wallet_in_the_store() {
         data_dir: other_dir.path().to_string_lossy().into_owned(),
         ..fixture.config()
     };
-    let again =
-        EpicWallet::create_with_pin(&fixture.runtime, config, &store, None, "987654".to_owned());
+    let again = EpicWallet::create_with_pin(
+        &fixture.runtime,
+        config,
+        &store,
+        None,
+        None,
+        "987654".to_owned(),
+    );
     assert_eq!(kind(again.await), WalletErrorKind::WalletAlreadyExists);
     assert_eq!(store.read(PIN_KEY).await.unwrap(), key);
     assert!(fixture.open_with_pin(&store, PIN, &sealed).await.is_ok());
@@ -518,6 +563,7 @@ async fn summary_without_refresh_needs_no_node() {
         fixture.config(),
         &AppSecretStore::in_memory(),
         None,
+        None,
         "password".to_owned(),
     )
     .await
@@ -559,6 +605,7 @@ async fn send_epicbox_refuses_an_address_without_its_relay() {
         config,
         &AppSecretStore::in_memory(),
         None,
+        None,
         "password".to_owned(),
     )
     .await
@@ -586,6 +633,7 @@ async fn send_tor_takes_the_send_options_of_the_other_sends() {
         &fixture.runtime,
         fixture.config(),
         &AppSecretStore::in_memory(),
+        None,
         None,
         "password".to_owned(),
     )
@@ -623,6 +671,7 @@ async fn a_build_without_tor_answers_every_tor_call_without_tor() {
         &fixture.runtime,
         fixture.config(),
         &AppSecretStore::in_memory(),
+        None,
         None,
         "password".to_owned(),
     )
@@ -933,6 +982,7 @@ async fn the_fingerprint_of_a_phrase_is_the_one_its_wallet_stores() {
         created.config(),
         &store,
         None,
+        None,
         "password".to_owned(),
     )
     .await
@@ -950,6 +1000,7 @@ async fn the_fingerprint_of_a_phrase_is_the_one_its_wallet_stores() {
         restored.config(),
         &AppSecretStore::in_memory(),
         Some(phrase),
+        None,
         "password".to_owned(),
     )
     .await
@@ -1162,6 +1213,7 @@ async fn a_new_wallet_refuses_a_password_shorter_than_eight_characters() {
             fixture.config(),
             &store,
             None,
+            None,
             password.to_owned(),
         )
         .await;
@@ -1232,6 +1284,7 @@ async fn wrong_passwords_are_counted_and_delayed_until_one_is_right() {
         fixture.config(),
         &store,
         None,
+        None,
         password.to_owned(),
     )
     .await
@@ -1277,6 +1330,7 @@ async fn check_password_counts_attempts() {
         &fixture.runtime,
         fixture.config(),
         &store,
+        None,
         None,
         password.to_owned(),
     )
@@ -1357,6 +1411,7 @@ async fn a_create_that_could_not_store_its_vault_can_be_retried() {
         fixture.config(),
         &failing,
         None,
+        None,
         "password".to_owned(),
     )
     .await;
@@ -1390,6 +1445,7 @@ async fn a_failed_restore_keeps_the_database_that_was_there() {
         fixture.config(),
         &AppSecretStore::in_memory(),
         phrase.clone(),
+        None,
         "password".to_owned(),
     )
     .await
@@ -1403,6 +1459,7 @@ async fn a_failed_restore_keeps_the_database_that_was_there() {
         fixture.config(),
         &store_refusing_the_vault(),
         phrase,
+        None,
         "password".to_owned(),
     )
     .await;

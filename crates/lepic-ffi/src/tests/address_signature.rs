@@ -31,6 +31,7 @@ async fn wallet(fixture: &mut Fixture, mnemonic: Option<&str>) -> EpicWallet {
         config,
         &AppSecretStore::in_memory(),
         mnemonic.map(str::to_owned),
+        None,
         "password".to_owned(),
     )
     .await
@@ -165,6 +166,7 @@ async fn signs_without_a_relay_and_refuses_an_oversized_message() {
         &fixture.runtime,
         fixture.config(),
         &AppSecretStore::in_memory(),
+        None,
         None,
         "password".to_owned(),
     )

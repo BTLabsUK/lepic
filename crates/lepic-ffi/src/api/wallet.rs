@@ -309,7 +309,7 @@ async fn create_pin_wallet(
     runtime: &LepicRuntime,
     config: WalletConfig,
     store: &AppSecretStore,
-    origin: SeedOrigin,
+    origin: Result<SeedOrigin, WalletError>,
     pin: String,
     operation: &'static str,
 ) -> Result<PinWallet, WalletError> {
@@ -323,6 +323,7 @@ async fn create_pin_wallet(
         .inner
         .boundary
         .run(operation, async move {
+            let origin = origin?;
             let pin = pin::NewPin::new(pin)?;
             let session = Session::new(&inner, &config, &node_secret, store.clone()).await?;
             // Checked before the PIN key is written, so it never replaces another wallet's
@@ -419,8 +420,14 @@ impl EpicWallet {
     /// generated, whose phrase [`EpicWallet::mnemonic`] returns for the backup screen. Returns
     /// the open wallet.
     ///
-    /// Fails with `InvalidArgument` when `password` has fewer than eight characters, before
-    /// anything is written, `WalletAlreadyExists` when `store` holds a vault, `InvalidMnemonic`,
+    /// `restore_from_height` is the height the restore scan starts from: a scan from it or below
+    /// completes the restore, and outputs below the height that the chain still holds are not
+    /// found by it. `None` and 0 start from genesis. Pass a height only when the phrase was
+    /// first used above it.
+    ///
+    /// Fails with `InvalidArgument` when `password` has fewer than eight characters or
+    /// `restore_from_height` comes without `mnemonic`, before anything is written,
+    /// `WalletAlreadyExists` when `store` holds a vault, `InvalidMnemonic`,
     /// `ForeignWallet` when the directory holds another wallet's database, `WalletBusy` when a
     /// wallet on the directory is open, and `SecretStore` when the vault could not be written.
     pub async fn create(
@@ -428,11 +435,12 @@ impl EpicWallet {
         config: WalletConfig,
         store: &AppSecretStore,
         mnemonic: Option<String>,
+        restore_from_height: Option<u64>,
         password: String,
     ) -> Result<EpicWallet, WalletError> {
         let mut config = config;
         let node_secret = NodeSecret::take(&mut config);
-        let mnemonic = mnemonic.map(Zeroizing::new);
+        let origin = SeedOrigin::phrase(mnemonic.map(Zeroizing::new), restore_from_height);
         let password = Zeroizing::new(password);
         let inner = Arc::clone(&runtime.inner);
         let store = store.clone();
@@ -440,11 +448,10 @@ impl EpicWallet {
             .inner
             .boundary
             .run("create", async move {
+                let origin = origin?;
                 let password = new_password(password)?;
                 let session = Session::new(&inner, &config, &node_secret, store).await?;
-                session
-                    .create(SeedOrigin::phrase(mnemonic), password)
-                    .await?;
+                session.create(origin, password).await?;
                 Ok(EpicWallet {
                     session: Arc::new(session),
                 })
@@ -533,16 +540,17 @@ impl EpicWallet {
     /// app stops before storing it, the wallet cannot be opened by PIN; delete it with
     /// [`delete_wallet`] and create it again (a restored wallet from its phrase).
     ///
-    /// Fails with `InvalidArgument` when `pin` has fewer than six characters, and otherwise
-    /// as `create` does.
+    /// `restore_from_height` is as in `create`. Fails with `InvalidArgument` when `pin` has
+    /// fewer than six characters, and otherwise as `create` does.
     pub async fn create_with_pin(
         runtime: &LepicRuntime,
         config: WalletConfig,
         store: &AppSecretStore,
         mnemonic: Option<String>,
+        restore_from_height: Option<u64>,
         pin: String,
     ) -> Result<PinWallet, WalletError> {
-        let origin = SeedOrigin::phrase(mnemonic.map(Zeroizing::new));
+        let origin = SeedOrigin::phrase(mnemonic.map(Zeroizing::new), restore_from_height);
         create_pin_wallet(runtime, config, store, origin, pin, "create_with_pin").await
     }
 
@@ -565,7 +573,7 @@ impl EpicWallet {
             runtime,
             config,
             store,
-            origin,
+            Ok(origin),
             pin,
             "import_wallet_seed_with_pin",
         )
@@ -797,10 +805,12 @@ impl EpicWallet {
     }
 
     /// Whether the wallet's database was rebuilt from its seed, by a restore from the phrase or
-    /// a `wallet.seed`, or by an open after a damaged or missing database, and no scan from
-    /// genesis has completed since. While it is, the wallet refuses every new output: receiving,
+    /// a `wallet.seed`, or by an open after a damaged or missing database, and no restore scan
+    /// has completed since: one from genesis, or for a restore with `restore_from_height` one
+    /// from that height or below. While it is, the wallet refuses every new output: receiving,
     /// the change of a send and invoices fail with `RestoreScanRequired`. A [`EpicWallet::scan`]
-    /// without a start height starts at genesis while it is, and ends it when it completes.
+    /// without a start height starts where the restore scan does while it is, and ends it when
+    /// it completes.
     pub async fn restore_scan_required(&self) -> Result<bool, WalletError> {
         self.run("restore_scan_required", |session| async move {
             session.restore_scan_required()
@@ -1084,11 +1094,13 @@ impl EpicWallet {
     /// [`WalletError`] as the stream's error; a cancelled scan ends it with `Cancelled`.
     ///
     /// While [`EpicWallet::restore_scan_required`] is true, a scan without `start_height`
-    /// starts at genesis, so it resumes a restore scan that stopped, and once it completes the
-    /// wallet creates outputs again. `Some(0)` scans from genesis too and ends the restore scan
-    /// the same way. A scan from a higher `start_height` finds the outputs above it, for a
-    /// balance soon after a restore from a known height, but leaves the restore scan pending:
-    /// run one without `start_height` after it. A `start_height` above the chain tip scans
+    /// starts where the restore scan does, at genesis or at the `restore_from_height` the
+    /// wallet was created with, so it resumes a restore scan that stopped, and once it
+    /// completes the wallet creates outputs again. `Some(0)` scans from genesis and ends any
+    /// restore scan the same way, and so does a `start_height` at or below the restore's start.
+    /// A scan from a higher `start_height` finds the outputs above it but leaves the restore
+    /// scan pending: run one without `start_height` after it. A `start_height` above the chain
+    /// tip scans
     /// nothing: the last event's message says the scan was skipped, and its `result` has a
     /// `start_height` above its `end_height`.
     ///

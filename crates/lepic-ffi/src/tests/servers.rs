@@ -102,6 +102,7 @@ impl World {
             config.clone(),
             &AppSecretStore::in_memory(),
             None,
+            None,
             "password".to_owned(),
         )
         .await

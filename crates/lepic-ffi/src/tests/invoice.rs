@@ -58,6 +58,7 @@ impl World {
             config,
             &AppSecretStore::in_memory(),
             None,
+            None,
             "password".to_owned(),
         )
         .await

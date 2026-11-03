@@ -11,6 +11,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use hmac::{Hmac, KeyInit, Mac};
+use lepic_primitives::amount::Height;
 use lepic_tor::OnionTarget;
 use sha2::Sha256;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
@@ -992,7 +993,10 @@ async fn the_onion_address_is_the_payment_proof_address_in_onion_form() {
     .unwrap();
     session
         .create(
-            SeedOrigin::Phrase(Zeroizing::new(phrase.to_string())),
+            SeedOrigin::Phrase {
+                phrase: Zeroizing::new(phrase.to_string()),
+                scan_from: Height::ZERO,
+            },
             password(),
         )
         .await

@@ -2410,6 +2410,7 @@ fn wire__crate__api__wallet__EpicWallet_create_impl(
                 flutter_rust_bridge::for_generated::RustAutoOpaqueInner<AppSecretStore>,
             >>::sse_decode(&mut deserializer);
             let api_mnemonic = <Option<String>>::sse_decode(&mut deserializer);
+            let api_restore_from_height = <Option<u64>>::sse_decode(&mut deserializer);
             let api_password = <String>::sse_decode(&mut deserializer);
             deserializer.end();
             move |context| async move {
@@ -2450,6 +2451,7 @@ fn wire__crate__api__wallet__EpicWallet_create_impl(
                             api_config,
                             &*api_store_guard,
                             api_mnemonic,
+                            api_restore_from_height,
                             api_password,
                         )
                         .await?;
@@ -2558,6 +2560,7 @@ fn wire__crate__api__wallet__EpicWallet_create_with_pin_impl(
                 flutter_rust_bridge::for_generated::RustAutoOpaqueInner<AppSecretStore>,
             >>::sse_decode(&mut deserializer);
             let api_mnemonic = <Option<String>>::sse_decode(&mut deserializer);
+            let api_restore_from_height = <Option<u64>>::sse_decode(&mut deserializer);
             let api_pin = <String>::sse_decode(&mut deserializer);
             deserializer.end();
             move |context| async move {
@@ -2598,6 +2601,7 @@ fn wire__crate__api__wallet__EpicWallet_create_with_pin_impl(
                             api_config,
                             &*api_store_guard,
                             api_mnemonic,
+                            api_restore_from_height,
                             api_pin,
                         )
                         .await?;

@@ -13,6 +13,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use lepic_keychain::KdfParams;
+use lepic_primitives::amount::Height;
 use zeroize::Zeroizing;
 
 use crate::api::diagnostics::LogLevel;
@@ -111,7 +112,10 @@ fn live_restore() {
 
         let restored = session_in(&runtime, &config(&restored_dir)).await;
         restored
-            .create(SeedOrigin::Phrase(Zeroizing::new(phrase)), password())
+            .create(SeedOrigin::Phrase {
+                phrase: Zeroizing::new(phrase),
+                scan_from: Height::ZERO,
+            }, password())
             .await
             .unwrap();
         let mut tip_config = config(&restored_dir);

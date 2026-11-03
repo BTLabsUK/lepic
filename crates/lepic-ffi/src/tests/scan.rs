@@ -6,6 +6,7 @@
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use lepic_primitives::amount::Height;
 use zeroize::Zeroizing;
 
 use super::eventually;
@@ -57,6 +58,15 @@ async fn restored_from(
     pair: &super::http::Pair,
     session: &Session,
 ) -> (tempfile::TempDir, Session) {
+    restored_from_height(pair, session, Height::ZERO).await
+}
+
+/// As [`restored_from`], with a restore scan from `scan_from`.
+async fn restored_from_height(
+    pair: &super::http::Pair,
+    session: &Session,
+    scan_from: Height,
+) -> (tempfile::TempDir, Session) {
     let phrase = session.recovery_phrase(password()).await.unwrap();
     let dir = tempfile::tempdir().unwrap();
     let mut config = WalletConfig {
@@ -82,10 +92,48 @@ async fn restored_from(
     .await
     .unwrap();
     restored
-        .create(SeedOrigin::Phrase(Zeroizing::new(phrase)), password())
+        .create(
+            SeedOrigin::Phrase {
+                phrase: Zeroizing::new(phrase),
+                scan_from,
+            },
+            password(),
+        )
         .await
         .unwrap();
     (dir, restored)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_restore_from_a_height_is_completed_by_a_scan_without_a_start_from_that_height() {
+    let pair = funded_pair().await;
+    pair.chain.set_height(300);
+    let (_dir, bob) = restored_from_height(&pair, &pair.bob, Height::new(250)).await;
+    assert!(bob.restore_scan_required().unwrap());
+
+    let result = scan(&bob, false).await;
+
+    assert_eq!(result.start_height, 250);
+    assert!(!bob.restore_scan_required().unwrap());
+    let slate = pair.alice.create_send_slate(EPIC, 1, None).await.unwrap();
+    assert!(bob.receive_slate(slate.json).await.is_ok());
+}
+
+/// A restore made before restores could start from a height waits for a scan from genesis:
+/// after the update a scan from a height still leaves it pending, and a scan without a start
+/// begins at genesis.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn after_an_update_a_restore_pending_from_genesis_stays_pending_after_a_scan_from_a_height() {
+    let pair = funded_pair().await;
+    pair.chain.set_height(300);
+    let (_dir, bob) = restored_from(&pair, &pair.bob).await;
+
+    scan_from(&bob, Some(250), false).await;
+
+    assert!(bob.restore_scan_required().unwrap());
+    let result = scan(&bob, false).await;
+    assert_eq!(result.start_height, 0);
+    assert!(!bob.restore_scan_required().unwrap());
 }
 
 /// The fix for a restore from a block height: that scan finds the outputs above it, and the
@@ -221,7 +269,13 @@ async fn a_restore_scan_reports_the_outputs_it_restored() {
     .await
     .unwrap();
     restored
-        .create(SeedOrigin::Phrase(Zeroizing::new(phrase)), password())
+        .create(
+            SeedOrigin::Phrase {
+                phrase: Zeroizing::new(phrase),
+                scan_from: Height::ZERO,
+            },
+            password(),
+        )
         .await
         .unwrap();
 

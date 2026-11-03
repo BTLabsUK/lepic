@@ -171,8 +171,11 @@ impl Clock for SystemClock {
 /// Where a new wallet's seed comes from.
 pub(crate) enum SeedOrigin {
     Generate,
-    /// A recovery phrase the user typed.
-    Phrase(Zeroizing<String>),
+    /// A recovery phrase the user typed, and the height its restore scan starts from.
+    Phrase {
+        phrase: Zeroizing<String>,
+        scan_from: Height,
+    },
     /// The text of an `epic-wallet` `wallet.seed` file and the password it was written with.
     SeedFile {
         text: String,
@@ -181,8 +184,21 @@ pub(crate) enum SeedOrigin {
 }
 
 impl SeedOrigin {
-    pub(crate) fn phrase(mnemonic: Option<Zeroizing<String>>) -> Self {
-        mnemonic.map_or(Self::Generate, Self::Phrase)
+    /// A restore of `mnemonic` from `restore_from_height`, `None` and 0 meaning genesis, or
+    /// without a mnemonic a fresh seed. Fails with `InvalidArgument` for a height without a
+    /// mnemonic.
+    pub(crate) fn phrase(
+        mnemonic: Option<Zeroizing<String>>,
+        restore_from_height: Option<u64>,
+    ) -> Result<Self, WalletError> {
+        match (mnemonic, restore_from_height) {
+            (Some(phrase), height) => Ok(Self::Phrase {
+                phrase,
+                scan_from: Height::new(height.unwrap_or(0)),
+            }),
+            (None, None) => Ok(Self::Generate),
+            (None, Some(_)) => Err(invalid("a restore height needs a recovery phrase")),
+        }
     }
 }
 
@@ -729,9 +745,11 @@ impl Session {
         self.vault.load(&self.store).await?;
         let password = self::password(password);
         match origin {
-            SeedOrigin::Phrase(phrase) => {
+            SeedOrigin::Phrase { phrase, scan_from } => {
                 let phrase = normalize_phrase(&phrase);
-                self.engine.restore(password, &phrase).await?;
+                self.engine
+                    .restore_from_height(password, &phrase, scan_from)
+                    .await?;
             }
             SeedOrigin::SeedFile {
                 text,
@@ -1136,14 +1154,15 @@ impl Session {
         }
         let cancel = ScanCancel::new();
         let _running = ScanSlot::claim(&self.scan, cancel.clone())?;
-        // Only a scan from genesis completes a restore scan, so while one is pending a scan
-        // without a start begins there, where a stopped one resumes, as `lepic wallet scan`
-        // does.
-        let start = match start_height {
-            Some(0) => ScanStart::Genesis,
-            Some(height) => ScanStart::Height(Height::new(height)),
-            None if self.engine.restore_scan_required()? => ScanStart::Genesis,
-            None => ScanStart::LastScanned,
+        // Only a scan from the restore's start or below completes a restore scan, so while one
+        // is pending a scan without a start begins there, where a stopped one resumes, as
+        // `lepic wallet scan` does.
+        let start = match (start_height, self.engine.restore_scan_start()?) {
+            (Some(0), _) => ScanStart::Genesis,
+            (Some(height), _) => ScanStart::Height(Height::new(height)),
+            (None, Some(Height::ZERO)) => ScanStart::Genesis,
+            (None, Some(from)) => ScanStart::Height(from),
+            (None, None) => ScanStart::LastScanned,
         };
         #[allow(unused_mut)]
         let mut options = ScanOptions {

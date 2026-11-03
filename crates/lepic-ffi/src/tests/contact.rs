@@ -82,6 +82,7 @@ impl World {
             config,
             &AppSecretStore::in_memory(),
             mnemonic,
+            None,
             "password".to_owned(),
         )
         .await
@@ -553,6 +554,7 @@ async fn words_are_offered_whatever_relay_the_wallet_uses() {
         config,
         &AppSecretStore::in_memory(),
         None,
+        None,
         "password".to_owned(),
     )
     .await
@@ -709,6 +711,7 @@ async fn the_relay_mode_and_bad_input_are_refused_before_anything_happens() {
         &world.runtime,
         config,
         &AppSecretStore::in_memory(),
+        None,
         None,
         "password".to_owned(),
     )
@@ -1333,6 +1336,7 @@ async fn a_preview_knows_this_wallets_own_invites_after_a_reopen() {
         &world.runtime,
         config.clone(),
         &store,
+        None,
         None,
         "password".to_owned(),
     )
