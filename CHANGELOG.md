@@ -9,6 +9,10 @@ Conventional Commit messages at release time.
 
 ### Added
 
+- Restore from a start height, ADR 0035: `Wallet::restore_from_height` scans from a chosen
+  height, and the wallet creates outputs once a scan from that height or below completes; its
+  key counters move past the keys that scan found. `Wallet::restore_scan_start` tells where a
+  pending restore scan starts. `lepic-cli` gains `lepic wallet restore --from-height`.
 - `InvitePreview::own` (`lepic-wallet-contacts` and `lepic-ffi`): the invite is one this
   wallet made, standing, waiting or cancelled, so an app refuses its own invite before asking
   "Pair with …?", also after a restart. `ContactBook::pairing_preview` is now async and reads
@@ -50,6 +54,10 @@ Conventional Commit messages at release time.
 
 ### Changed
 
+- `lepic-ffi`'s `EpicWallet::create` and `EpicWallet::create_with_pin` take
+  `restore_from_height: Option<u64>` after the mnemonic; `None` or 0 restores from genesis, and a
+  height without a mnemonic is refused with `InvalidArgument`. `scan` without a start, while a
+  restore is pending, starts where that restore starts, and `lepic wallet scan` does the same.
 - The library crates hold no host name, onion or URL: the default Epicbox domain, the meeting
   relays for pairing words and the onion routes all come from the caller. An Epicbox address
   without `@domain` is refused unless a default domain is given. In `lepic-ffi`,

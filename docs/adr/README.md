@@ -40,6 +40,7 @@ record that supersedes the old one; accepted records are not rewritten.
 | [0032](0032-store-encrypted-at-rest.md) | Wallet database encrypted at rest with SQLite3 Multiple Ciphers | accepted |
 | [0033](0033-key-and-domain-registry.md) | One registry of seed-derived keys and signature domains | proposed |
 | [0034](0034-trust-versioning-and-probing.md) | Trust, versioning and probing between Epic wallets | proposed |
+| [0035](0035-restore-from-a-start-height.md) | Restore from a start height | accepted |
 
 Template:
 
