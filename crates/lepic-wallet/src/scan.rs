@@ -35,7 +35,7 @@ use thiserror::Error;
 use tokio::sync::watch;
 use tracing::{debug, info, instrument, warn};
 
-use crate::account::{FIRST_HARDENED, OWN_KEY_WINDOW, key_counter_start};
+use crate::account::{FIRST_HARDENED, OWN_KEY_WINDOW, key_counter_start, move_past_found_keys};
 use crate::cancel::{drop_holdings, self_send_partner};
 use crate::chain::{self, ChainPosition, ImplausibleNodeData};
 use crate::error::WalletError;
@@ -64,6 +64,9 @@ const CHECKPOINT_SETTING: &str = "scan.checkpoint";
 /// Set once a scan from genesis completed: from then on an output no scan found is not on
 /// chain.
 const GENESIS_SCANNED_SETTING: &str = "scan.genesis_completed";
+/// The start height of the scan that completed a restore from a start height: from then on an
+/// output above it that no scan found is not on chain.
+const RESTORE_COMPLETED_SETTING: &str = "scan.restore_completed_from";
 
 /// Label prefix `epic-wallet` gives an account that a restore finds outputs of.
 const RESTORED_ACCOUNT_LABEL: &str = "account";
@@ -222,8 +225,8 @@ impl ScannedBlock {
 struct ScanPlan {
     /// Where an interrupted scan stopped, if one did.
     checkpoint: Option<Checkpoint>,
-    /// An update scan of recent blocks on a wallet whose scan from genesis completed.
-    update: bool,
+    /// For an update scan, the height a completed scan found every output from.
+    update: Option<Height>,
     /// What a repairing scan compares the chain against.
     repair: Option<Arc<Repair>>,
     start_height: Height,
@@ -359,9 +362,9 @@ struct Page {
     outputs: Vec<UnspentOutput>,
     checkpoint: Checkpoint,
     tip: Height,
-    /// An update scan of recent blocks on a wallet whose scan from genesis completed: an output
-    /// it finds with no record here was received by another wallet on the phrase.
-    update: bool,
+    /// For an update scan, the height a completed scan found every output from: an output at or
+    /// above it that has no record here was received by another wallet on the phrase.
+    update: Option<Height>,
 }
 
 /// When a scan ends the open transactions whose inputs the chain holds unspent again.
@@ -546,11 +549,12 @@ where
         } else {
             options.start
         };
+        let update = state.covered_from.filter(|_| {
+            !options.delete_unconfirmed && !matches!(options.start, ScanStart::Genesis)
+        });
         Ok(ScanPlan {
             checkpoint: state.checkpoint,
-            update: !options.delete_unconfirmed
-                && !matches!(options.start, ScanStart::Genesis)
-                && state.genesis_scanned,
+            update,
             repair: state.repair.map(Arc::new),
             start_height: resolve_start(start, state.last_scanned.as_ref(), tip),
         })
@@ -807,8 +811,8 @@ fn resolve_start(start: ScanStart, last_scanned: Option<&ScannedBlock>, tip: Hei
 /// What a scan starts from.
 struct ScanState {
     last_scanned: Option<ScannedBlock>,
-    /// A scan from genesis completed before this one.
-    genesis_scanned: bool,
+    /// Where a completed scan before this one found every output from, as [`covered_from`].
+    covered_from: Option<Height>,
     checkpoint: Option<Checkpoint>,
     position: ChainPosition,
     repair: Option<Repair>,
@@ -849,7 +853,7 @@ fn scan_state(repos: &dyn Repositories, repairing: bool) -> Result<ScanState, Sc
     };
     Ok(ScanState {
         last_scanned: last_scanned(repos)?,
-        genesis_scanned: has_scanned(repos)?,
+        covered_from: covered_from(repos)?,
         checkpoint,
         position: chain::position(repos)?,
         repair: repairing.then(|| repair_set(repos)).transpose()?,
@@ -877,6 +881,19 @@ fn stored_as_spent(
 /// Whether a scan from genesis has completed.
 pub(crate) fn has_scanned(repos: &dyn Repositories) -> Result<bool, StoreError> {
     Ok(repos.setting(GENESIS_SCANNED_SETTING)?.is_some())
+}
+
+/// The lowest height from which a completed scan found every output of the wallet: genesis
+/// once a scan from genesis completed, else the start of the scan that completed a restore
+/// from a start height. `None` before either.
+pub(crate) fn covered_from(repos: &dyn Repositories) -> Result<Option<Height>, StoreError> {
+    if has_scanned(repos)? {
+        return Ok(Some(Height::ZERO));
+    }
+    Ok(repos
+        .setting(RESTORE_COMPLETED_SETTING)?
+        .and_then(|text| text.parse().ok())
+        .map(Height::new))
 }
 
 /// A stored position that does not parse is ignored, which costs a full scan and loses nothing.
@@ -973,7 +990,7 @@ fn store_found(
     block_times: &BTreeMap<Height, Timestamp>,
     repair: Option<&Repair>,
     checkpoint: Checkpoint,
-    update: bool,
+    update: Option<Height>,
     ending: &Ending<'_>,
 ) -> Result<PageOutcome, ScanError> {
     let now = ending.now;
@@ -1098,7 +1115,7 @@ fn restore_missing(
     output: &FoundOutput,
     created_at: Timestamp,
     found: ScanFound,
-    update: bool,
+    update: Option<Height>,
     now: Timestamp,
 ) -> Result<Option<StateChange>, ScanError> {
     ensure_account(repos, output.account)?;
@@ -1137,8 +1154,10 @@ fn restore_missing(
             })?;
             repos.set_confirmed_height(tx, output.height)?;
             // An update scan over recent blocks finds what another wallet on the phrase
-            // received; a restore or a scan from genesis finds what no record explains.
-            let received_elsewhere = update && found.during == FoundDuring::Rescan;
+            // received; a restore or a scan from genesis finds what no record explains, and so
+            // does any scan below the start of a restore from a start height.
+            let received_elsewhere = update.is_some_and(|from| output.height >= from)
+                && found.during == FoundDuring::Rescan;
             repos.put_scan_found(
                 tx,
                 &ScanFoundRecord {
@@ -1296,7 +1315,10 @@ fn cancel_one(
 }
 
 /// Ends a scan: the `delete_unconfirmed` repair, then the scanned position replaces the
-/// checkpoint. A scan from genesis has found every output key in use.
+/// checkpoint. A scan from genesis has found every output key in use. A scan from at or below
+/// the start of a pending restore from a start height completes that restore without
+/// claiming genesis: the outputs below it stay unknown, and the imported history is not
+/// judged against them.
 fn finish(
     repos: &mut dyn Repositories,
     repair: Option<&Repair>,
@@ -1332,6 +1354,11 @@ fn finish(
         lifecycle::restore_scan_completed(repos)?;
         repos.put_setting(GENESIS_SCANNED_SETTING, "1")?;
         legacy_history::flag_missing_outputs(repos)?;
+    } else if lifecycle::restore_scan_start(repos)?.is_some_and(|from| start_height <= from) {
+        lifecycle::restore_scan_completed(repos)?;
+        move_past_found_keys(repos)?;
+        repos.put_setting(RESTORE_COMPLETED_SETTING, &start_height.value().to_string())?;
+        info!(height = %start_height, "restore scan completed");
     }
     Ok(outcome)
 }

@@ -1065,7 +1065,8 @@ where
     /// `OtherWallet`, and the change of spends such a wallet made, credited to them. It scans
     /// from [`crate::scan::UPDATE_RESCAN_BLOCKS`] behind the last completed scan, or from the
     /// lowest block such a spend can lie in when that is lower. It does nothing before a scan
-    /// from genesis completed or while a restore scan waits, so it never scans the whole chain.
+    /// from genesis or a restore scan completed, or while a restore scan waits, so it never
+    /// scans the whole chain.
     /// Emits what [`Wallet::scan`] emits.
     ///
     /// Fails as [`Wallet::scan`] does.
@@ -1076,7 +1077,7 @@ where
             let session = Arc::clone(&session);
             self.blocking(move |_, _| {
                 Ok(session.store.read(|repos| {
-                    let ready = crate::scan::has_scanned(repos)?
+                    let ready = crate::scan::covered_from(repos)?.is_some()
                         && !crate::lifecycle::restore_scan_pending(repos)?;
                     Ok::<_, StoreError>((ready, other_wallet::change_window(repos)?))
                 }))

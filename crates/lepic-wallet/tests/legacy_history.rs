@@ -28,13 +28,14 @@ use legacy_support::{
 use lepic_keychain::Keychain;
 use lepic_node::mock::MockFailure;
 use lepic_primitives::amount::{Amount, Fee, Height};
+use lepic_primitives::params::Network;
 use lepic_slate::role::Role;
 use lepic_store::{AccountIndex, ChainCheck, ImportedKind, TxDirection, TxState};
 use lepic_transport::transport::Destination;
 use lepic_wallet::StoreOpener;
 use lepic_wallet::details::{SlateMessage, TransactionDetails};
 use lepic_wallet::legacy_history::{LegacyImportOutcome, LegacyImportStatus, TxOrigin};
-use lepic_wallet::scan::{FoundDuring, ScanFound};
+use lepic_wallet::scan::{FoundDuring, ScanCancel, ScanFound, ScanOptions, ScanStart};
 use support::{Harness, TestStore, TestWallet, fixed_time, password};
 use tempfile::TempDir;
 use uuid::Uuid;
@@ -56,10 +57,15 @@ impl World {
     /// A wallet restored from [`MNEMONIC`], not scanned, over a chain holding the outputs the
     /// old wallet still holds plus `extra`, and the old wallet's folder.
     fn new(old: &OldWallet, extra: &[(u32, u32, u64, u64)]) -> Self {
+        Self::restored_from(old, extra, Height::ZERO)
+    }
+
+    /// As [`World::new`], restored with a scan from `scan_from`.
+    fn restored_from(old: &OldWallet, extra: &[(u32, u32, u64, u64)], scan_from: Height) -> Self {
         let harness = Harness::new();
         let wallet = harness.wallet();
         harness
-            .block_on(wallet.restore(password("import password"), MNEMONIC))
+            .block_on(wallet.restore_from_height(password("import password"), MNEMONIC, scan_from))
             .unwrap();
         let keychain = keychain(MNEMONIC);
         let mut on_chain = old.chain_outputs();
@@ -438,6 +444,28 @@ fn an_unspent_output_the_chain_lacks_is_flagged_and_not_counted_after_a_genesis_
         world.total(DEFAULT),
         Amount::new(69_000_000 + 50_000_000),
         "the 11 M output the old wallet held is not on chain"
+    );
+}
+
+#[test]
+fn a_restore_from_a_height_leaves_an_unspent_output_the_chain_lacks_unchecked() {
+    let start = Height::new(1);
+    let world = World::restored_from(&OldWallet::standard(&keychain(MNEMONIC)), &[], start);
+    world.import();
+    let options = ScanOptions {
+        start: ScanStart::Height(start),
+        ..ScanOptions::restore(Network::Mainnet)
+    };
+
+    world
+        .harness
+        .block_on(world.wallet.scan(options, &ScanCancel::new()))
+        .unwrap();
+
+    assert!(!world.wallet.restore_scan_required().unwrap());
+    assert_eq!(
+        check(&world.tx(DEFAULT, SLATE_MISSING)),
+        ChainCheck::Unchecked
     );
 }
 

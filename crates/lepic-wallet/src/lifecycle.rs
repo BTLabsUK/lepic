@@ -10,6 +10,7 @@ use blake2::digest::consts::U32;
 use blake2::digest::{FixedOutput, KeyInit, Update};
 use lepic_keychain::vault::SecretName;
 use lepic_keychain::{Identifier, Keychain, SecretBytes, SecretStore, Seed, SwitchCommitment};
+use lepic_primitives::amount::Height;
 use lepic_primitives::params::Network;
 use lepic_store::{
     AtRestReport, AtRestState, CONTEXT_KEY_LEN, ContextKey, PEER_TAG_KEY_LEN, PeerTagKey,
@@ -31,7 +32,9 @@ const SEED_SECRET: &str = "wallet/seed";
 const NETWORK_SETTING: &str = "wallet.network";
 const FINGERPRINT_SETTING: &str = "wallet.fingerprint";
 
-/// Present while a database rebuilt from a seed has not been scanned from genesis.
+/// Present while a database rebuilt from a seed has not been scanned from the height its
+/// restore starts at: a decimal height for a restore from a start height, any other value
+/// (`true`, as every earlier version writes) for a restore from genesis.
 const RESTORE_SCAN_SETTING: &str = "wallet.restore_scan_required";
 
 /// The seed check, as lowercase hex: written by every create and open, so a recovery phrase can
@@ -126,7 +129,11 @@ impl WordCount {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SeedSource {
     Generated,
-    Recovered,
+    /// From a phrase or a seed file, with the height the restore scan starts at: no output of
+    /// the seed lies below it.
+    Recovered {
+        scan_from: Height,
+    },
 }
 
 /// The unlocked state of a wallet: the root key and the database it opened.
@@ -205,12 +212,18 @@ pub(crate) fn create<S: StoreOpener, V: SecretVault>(
     let mut vault = secrets.create(password)?;
     put_seed(&mut vault, seed)?;
     debug!("secret storage created");
-    let rebuilt = identity == StoredIdentity::Empty && source == SeedSource::Recovered;
+    let rebuilt = match (identity, source) {
+        (StoredIdentity::Empty, SeedSource::Recovered { scan_from }) => Some(scan_from),
+        _ => None,
+    };
     let at_rest = store.write(|repos| {
         initialise(repos, target.network, &ours, key_start)?;
         let at_rest = after_rollback(repos, at_rest)?;
-        if rebuilt || rolled_back(at_rest.as_ref()) {
-            require_restore_scan(repos)?;
+        // What a rollback set aside may lie below any start, so it scans from genesis.
+        if rolled_back(at_rest.as_ref()) {
+            require_restore_scan(repos, Height::ZERO)?;
+        } else if let Some(scan_from) = rebuilt {
+            require_restore_scan(repos, scan_from)?;
         }
         Ok::<_, WalletError>(at_rest)
     })?;
@@ -233,12 +246,14 @@ fn admit(
     keychain: &Keychain,
 ) -> Result<(), WalletError> {
     match (identity, source) {
-        (StoredIdentity::Empty, _) | (StoredIdentity::Proven, SeedSource::Recovered) => Ok(()),
+        (StoredIdentity::Empty, _) | (StoredIdentity::Proven, SeedSource::Recovered { .. }) => {
+            Ok(())
+        }
         (_, SeedSource::Generated) => Err(WalletError::ForeignDatabase),
         // The fingerprint alone proves nothing, and the seed check a create writes would stamp
         // the database with this seed: an output of another seed refuses it. A database without
         // outputs holds nothing a seed could be proven by, nor anything to lose.
-        (StoredIdentity::FingerprintOnly, SeedSource::Recovered) => {
+        (StoredIdentity::FingerprintOnly, SeedSource::Recovered { .. }) => {
             if store.read(|repos| outputs_prove(repos, keychain))? == Some(false) {
                 return Err(WalletError::ForeignDatabase);
             }
@@ -271,7 +286,7 @@ pub(crate) fn open<S: StoreOpener, V: SecretVault>(
         initialise(repos, target.network, &ours, key_start)?;
         let at_rest = after_rollback(repos, at_rest)?;
         if identity == StoredIdentity::Empty || rolled_back(at_rest.as_ref()) {
-            require_restore_scan(repos)?;
+            require_restore_scan(repos, Height::ZERO)?;
         }
         Ok::<_, WalletError>(at_rest)
     })?;
@@ -510,14 +525,24 @@ fn rolled_back(report: Option<&AtRestReport>) -> bool {
     report.is_some_and(|report| report.rollback_set_aside)
 }
 
-fn require_restore_scan(repos: &mut dyn Repositories) -> Result<(), WalletError> {
-    repos.put_setting(RESTORE_SCAN_SETTING, "true")?;
-    debug!("restore scan required");
+/// Requires a restore scan from `scan_from`. A scan from genesis keeps the `true` every
+/// earlier version writes; a version that reads only that value takes any other one for it too.
+fn require_restore_scan(
+    repos: &mut dyn Repositories,
+    scan_from: Height,
+) -> Result<(), WalletError> {
+    let value = if scan_from == Height::ZERO {
+        "true".to_owned()
+    } else {
+        scan_from.value().to_string()
+    };
+    repos.put_setting(RESTORE_SCAN_SETTING, &value)?;
+    debug!(height = %scan_from, "restore scan required");
     Ok(())
 }
 
-/// Refuses to hand out output keys on a rebuilt database before a scan from genesis found the
-/// keys already in use on chain.
+/// Refuses to hand out output keys on a rebuilt database before a restore scan found the keys
+/// already in use on chain.
 pub(crate) fn ensure_restore_scanned(repos: &dyn Repositories) -> Result<(), WalletError> {
     if restore_scan_pending(repos)? {
         return Err(WalletError::RestoreScanRequired);
@@ -526,7 +551,23 @@ pub(crate) fn ensure_restore_scanned(repos: &dyn Repositories) -> Result<(), Wal
 }
 
 pub(crate) fn restore_scan_pending(repos: &dyn Repositories) -> Result<bool, StoreError> {
-    Ok(repos.setting(RESTORE_SCAN_SETTING)?.is_some())
+    Ok(restore_scan_start(repos)?.is_some())
+}
+
+/// The height the pending restore scan must start at or below, or `None` when none is pending.
+/// A value that is not a decimal height asks for genesis.
+pub(crate) fn restore_scan_start(repos: &dyn Repositories) -> Result<Option<Height>, StoreError> {
+    Ok(repos
+        .setting(RESTORE_SCAN_SETTING)?
+        .map(|text| Height::new(decimal(&text).unwrap_or(0))))
+}
+
+/// `text` as a plain decimal number: digits only, no sign or space.
+fn decimal(text: &str) -> Option<u64> {
+    if text.is_empty() || !text.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    text.parse().ok()
 }
 
 pub(crate) fn restore_scan_completed(repos: &mut dyn Repositories) -> Result<(), StoreError> {

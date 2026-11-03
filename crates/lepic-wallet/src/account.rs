@@ -37,6 +37,11 @@ const KEY_START_CEILING: u32 = FIRST_HARDENED - (1 << 24);
 /// install's range, and following it would hand out that install's next keys.
 pub(crate) const OWN_KEY_WINDOW: u32 = 1 << 16;
 
+/// How far a restore from a start height keeps its counter from the keys it found, on either
+/// side: more keys than an install hands out, so that another install of the phrase working
+/// near the counter used none of the keys it will hand out, below the start or after.
+pub(crate) const RESTORE_KEY_GAP: u32 = 1 << 20;
+
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 #[non_exhaustive]
 pub enum AccountError {
@@ -160,6 +165,64 @@ pub(crate) fn place_key_counters(
         }
     }
     Ok(())
+}
+
+/// Moves each account's counter that a key found by a restore scan lies within
+/// [`RESTORE_KEY_GAP`] of, below or above, to that gap past the highest such key, again while
+/// one lies within it of the new counter. A found key near the counter is another install's,
+/// whose keys from before the scan's start lie below the ones found and whose next keys lie
+/// above them, none of which the chain can show. A counter that would reach the hardened range
+/// stays. Counters only move up; hardened accounts hand out no keys and are left alone.
+pub(crate) fn move_past_found_keys(repos: &mut dyn Repositories) -> Result<(), WalletError> {
+    for mut record in repos.accounts()? {
+        if record.index.0 >= FIRST_HARDENED {
+            continue;
+        }
+        let children: Vec<u32> = repos
+            .outputs(record.index, None)?
+            .iter()
+            .filter_map(|output| child_of(record.index, &output.key_id))
+            .collect();
+        let next = past_found_keys(record.next_child, &children);
+        if next != record.next_child {
+            record.next_child = next;
+            repos.put_account(&record)?;
+        }
+    }
+    Ok(())
+}
+
+/// The child number `c` of an output key `m/<account>/0/<c>` below the hardened range.
+fn child_of(account: AccountIndex, key_id: &KeyId) -> Option<u32> {
+    let key = Identifier::from_bytes(&key_id.0).ok()?;
+    match (key.depth(), key.components()) {
+        (3, [index, 0, child, _]) if index == account.0 && child < FIRST_HARDENED => Some(child),
+        _ => None,
+    }
+}
+
+/// The counter [`move_past_found_keys`] moves `next` to, given the found child numbers.
+fn past_found_keys(mut next: u32, children: &[u32]) -> u32 {
+    loop {
+        let near = next.saturating_sub(RESTORE_KEY_GAP)..next.saturating_add(RESTORE_KEY_GAP);
+        let Some(highest) = children
+            .iter()
+            .copied()
+            .filter(|child| near.contains(child))
+            .max()
+        else {
+            return next;
+        };
+        // `highest` is at least `next - RESTORE_KEY_GAP`, so each step moves the counter up.
+        match highest
+            .checked_add(1)
+            .and_then(|after| after.checked_add(RESTORE_KEY_GAP))
+            .filter(|moved| *moved < FIRST_HARDENED)
+        {
+            Some(moved) => next = moved,
+            None => return next,
+        }
+    }
 }
 
 /// Stores the default account `m/0/0` unless an account with index 0 exists.
@@ -592,6 +655,77 @@ mod tests {
         assert_eq!(
             key.to_bip32_path(),
             format!("m/0/0/{}", KEY_START_FLOOR + 5)
+        );
+    }
+
+    const COUNTER: u32 = KEY_START_FLOOR + 5_000;
+    const GAP: u32 = RESTORE_KEY_GAP;
+
+    #[test]
+    fn a_found_key_just_above_the_counter_moves_it_a_gap_past_that_key() {
+        assert_eq!(past_found_keys(COUNTER, &[COUNTER + 3]), COUNTER + 4 + GAP);
+    }
+
+    #[test]
+    fn a_found_key_just_below_the_counter_moves_it_a_gap_past_that_key() {
+        assert_eq!(past_found_keys(COUNTER, &[COUNTER - 3]), COUNTER - 2 + GAP);
+    }
+
+    #[test]
+    fn a_found_key_near_the_moved_counter_moves_it_again() {
+        let first = COUNTER + 10;
+        let second = first + 1 + GAP + 100;
+        let third = second + GAP - 1;
+        assert_eq!(
+            past_found_keys(COUNTER, &[third, first, second, COUNTER - GAP - 1]),
+            third + 1 + GAP
+        );
+    }
+
+    #[test]
+    fn found_keys_a_gap_or_more_away_leave_the_counter() {
+        assert_eq!(
+            past_found_keys(COUNTER, &[COUNTER + GAP, COUNTER - GAP - 1, 0]),
+            COUNTER
+        );
+        assert_eq!(past_found_keys(COUNTER, &[]), COUNTER);
+        assert_eq!(past_found_keys(0, &[GAP]), 0);
+    }
+
+    #[test]
+    fn a_counter_that_would_reach_the_hardened_range_stays() {
+        let near_the_end = FIRST_HARDENED - GAP;
+        assert_eq!(
+            past_found_keys(near_the_end, &[near_the_end + 1]),
+            near_the_end
+        );
+        assert_eq!(
+            past_found_keys(near_the_end, &[near_the_end - 2]),
+            FIRST_HARDENED - 1
+        );
+    }
+
+    #[test]
+    fn found_keys_count_only_unhardened_output_keys_of_the_account() {
+        let key = |account: u32, child: u32| {
+            KeyId(
+                Identifier::new(3, [account, 0, child, 0])
+                    .unwrap()
+                    .to_bytes(),
+            )
+        };
+        assert_eq!(
+            child_of(AccountIndex(0), &key(0, COUNTER + 1)),
+            Some(COUNTER + 1)
+        );
+        assert_eq!(child_of(AccountIndex(0), &key(1, COUNTER + 1)), None);
+        assert_eq!(child_of(AccountIndex(0), &key(0, FIRST_HARDENED)), None);
+        assert_eq!(
+            child_of(
+                AccountIndex(0),
+                &KeyId(Identifier::new(2, [0, 0, 0, 0]).unwrap().to_bytes())
+            ),
+            None
         );
     }
 

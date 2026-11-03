@@ -3,6 +3,7 @@ use std::sync::{Arc, OnceLock, PoisonError, RwLock};
 
 use lepic_keychain::{Seed, WalletSeedError, WalletSeedFile};
 use lepic_node::NodeApi;
+use lepic_primitives::amount::Height;
 use lepic_store::WalletStore;
 use tokio::sync::broadcast;
 use tracing::{Dispatch, Span, debug, dispatcher, info, instrument};
@@ -140,17 +141,33 @@ where
     }
 
     /// Recreates a wallet from its recovery phrase and unlocks it. Outputs on chain are found
-    /// by a later scan. A data directory that already holds this wallet's database is reused.
+    /// by a later scan from genesis. A data directory that already holds this wallet's database
+    /// is reused.
     ///
     /// Fails with [`WalletError::Mnemonic`] for a phrase that is not valid BIP39 English, and
     /// otherwise as [`Wallet::create`] does.
     #[instrument(skip_all, fields(wallet = %self.config.name))]
     pub async fn restore(&self, password: Password, phrase: &str) -> Result<(), WalletError> {
+        self.restore_from_height(password, phrase, Height::ZERO)
+            .await
+    }
+
+    /// [`Wallet::restore`] of a wallet with no output below `scan_from`: a scan from that
+    /// height, or from below it, to the tip completes the restore, and outputs older than it
+    /// are not found until a scan from genesis. A database the restore reuses keeps the restore
+    /// scan it waited for. Fails as [`Wallet::restore`] does.
+    #[instrument(skip_all, fields(wallet = %self.config.name))]
+    pub async fn restore_from_height(
+        &self,
+        password: Password,
+        phrase: &str,
+        scan_from: Height,
+    ) -> Result<(), WalletError> {
         self.ensure_locked()?;
         let seed = Seed::from_mnemonic(phrase).map_err(WalletError::Mnemonic)?;
-        self.install_new(password, seed, SeedSource::Recovered)
+        self.install_new(password, seed, SeedSource::Recovered { scan_from })
             .await?;
-        info!("wallet restored");
+        info!(height = %scan_from, "wallet restored");
         Ok(())
     }
 
@@ -181,8 +198,14 @@ where
                 Ok(seed)
             })
             .await?;
-        self.install_new(password, seed, SeedSource::Recovered)
-            .await?;
+        self.install_new(
+            password,
+            seed,
+            SeedSource::Recovered {
+                scan_from: Height::ZERO,
+            },
+        )
+        .await?;
         info!("wallet imported");
         Ok(())
     }
@@ -237,15 +260,27 @@ where
     }
 
     /// Whether the database was rebuilt from the seed, by [`Wallet::restore`],
-    /// [`Wallet::import_wallet_seed`] or [`Wallet::open`] on a missing database, and no scan from
-    /// genesis has completed since. Until one does, receiving and issuing invoices fail with
-    /// [`WalletError::RestoreScanRequired`]. Fails with [`WalletError::Locked`].
+    /// [`Wallet::restore_from_height`], [`Wallet::import_wallet_seed`] or [`Wallet::open`] on a
+    /// missing database, and no scan from [`Wallet::restore_scan_start`] or below has reached
+    /// the tip since. Until one does, receiving, issuing invoices and sends with change fail
+    /// with [`WalletError::RestoreScanRequired`]. Fails with [`WalletError::Locked`].
     #[instrument(skip_all, fields(wallet = %self.config.name))]
     pub fn restore_scan_required(&self) -> Result<bool, WalletError> {
         let session = self.session()?;
         session
             .store
             .read(|repos| Ok(lifecycle::restore_scan_pending(repos)?))
+    }
+
+    /// The height the pending restore scan must start at or below to complete it: the start of
+    /// [`Wallet::restore_from_height`], genesis for every other rebuilt database. `None` when
+    /// [`Wallet::restore_scan_required`] is false. Fails with [`WalletError::Locked`].
+    #[instrument(skip_all, fields(wallet = %self.config.name))]
+    pub fn restore_scan_start(&self) -> Result<Option<Height>, WalletError> {
+        let session = self.session()?;
+        session
+            .store
+            .read(|repos| Ok(lifecycle::restore_scan_start(repos)?))
     }
 
     /// How the database was found on disk when the wallet was unlocked: encrypted, moved into
