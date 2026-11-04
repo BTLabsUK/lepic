@@ -9,8 +9,9 @@ use lepic_primitives::amount::Amount;
 use lepic_transport::file::{FILE, FileTransport, response_path};
 use lepic_transport::transport::{Exchange as _, Location};
 use lepic_wallet::epicbox_invoice::InvoiceExpiry;
-use lepic_wallet::invoice::InvoiceRequest;
+use lepic_wallet::invoice::{InvoiceRequest, PaidInvoice};
 use lepic_wallet::send::Delivery;
+use lepic_wallet::slate::WireSlate;
 
 use super::{APP_TTL_BLOCKS, DEFAULT_ACCOUNT, ScratchFile, Session, invalid, transport_error};
 use crate::api::error::{WalletError, WalletErrorKind};
@@ -98,27 +99,32 @@ impl Session {
         options: Option<SendOptions>,
         write_response: bool,
     ) -> Result<PaidInvoiceSlate, WalletError> {
-        let request = Self::pay_request(amount, minimum_confirmations, message, options)?;
         let file = FileTransport::new();
         let wire = file
             .import(&Location::File(path.to_owned()))
             .await
             .map_err(|error| transport_error(&error))?;
-        let paid = self.engine.pay_invoice(FILE, &wire, request).await?;
+        let paid = self
+            .pay_invoice_wire(&wire, amount, minimum_confirmations, message, options)
+            .await?;
         if write_response {
             file.export(&paid.reply, &Location::File(response_path(path)))
                 .await
                 .map_err(|error| transport_error(&error))?;
         }
-        let json = String::from_utf8(paid.reply.as_bytes().to_vec())
-            .map_err(|_| WalletError::new(WalletErrorKind::InvalidSlate, "reply is not text"))?;
-        Ok(PaidInvoiceSlate {
-            tx_id: paid.tx_id.0,
-            slate_id: paid.slate.id().to_string(),
-            amount: paid.slate.amount().value(),
-            fee: paid.slate.fee().value(),
-            json,
-        })
+        paid_invoice_slate(&paid)
+    }
+
+    async fn pay_invoice_wire(
+        &self,
+        wire: &WireSlate,
+        amount: u64,
+        minimum_confirmations: u64,
+        message: Option<String>,
+        options: Option<SendOptions>,
+    ) -> Result<PaidInvoice, WalletError> {
+        let request = Self::pay_request(amount, minimum_confirmations, message, options)?;
+        Ok(self.engine.pay_invoice(FILE, wire, request).await?)
     }
 
     pub(crate) async fn pay_invoice_slate(
@@ -129,15 +135,23 @@ impl Session {
         message: Option<String>,
         options: Option<SendOptions>,
     ) -> Result<PaidInvoiceSlate, WalletError> {
-        let scratch = ScratchFile::with_contents(&self.data_dir, json).await?;
-        self.pay_invoice_file(
-            &scratch.path,
-            amount,
-            minimum_confirmations,
-            message,
-            options,
-            false,
+        let wire = super::slate_text_wire(json)?;
+        paid_invoice_slate(
+            &self
+                .pay_invoice_wire(&wire, amount, minimum_confirmations, message, options)
+                .await?,
         )
-        .await
     }
+}
+
+fn paid_invoice_slate(paid: &PaidInvoice) -> Result<PaidInvoiceSlate, WalletError> {
+    let json = String::from_utf8(paid.reply.as_bytes().to_vec())
+        .map_err(|_| WalletError::new(WalletErrorKind::InvalidSlate, "reply is not text"))?;
+    Ok(PaidInvoiceSlate {
+        tx_id: paid.tx_id.0,
+        slate_id: paid.slate.id().to_string(),
+        amount: paid.slate.amount().value(),
+        fee: paid.slate.fee().value(),
+        json,
+    })
 }

@@ -46,9 +46,9 @@ use lepic_wallet::selection::{
 };
 use lepic_wallet::self_send::SelfSent;
 use lepic_wallet::send::{Delivery, SendRequest, SentSlate};
-use lepic_wallet::slate::WireSlate;
+use lepic_wallet::slate::{MediaType, WireSlate};
 use lepic_wallet::{
-    Clock, DATABASE_FILE, ENCRYPTED_DATABASE_FILE, Event, NodeEndpoint, Password, Ports,
+    Clock, DATABASE_FILE, ENCRYPTED_DATABASE_FILE, Event, NodeEndpoint, Password, Ports, Received,
     ReceiveRequest, SessionState, SharedRng, Wallet, WalletName, WordCount,
 };
 use rand::SeedableRng;
@@ -1407,28 +1407,26 @@ impl Session {
             .import(&Location::File(path.to_owned()))
             .await
             .map_err(|error| transport_error(&error))?;
-        let received = self
-            .engine
-            .receive(FILE, &wire, ReceiveRequest::default())
-            .await?;
+        let received = self.receive_wire(&wire).await?;
         if write_response {
             file.export(&received.reply, &Location::File(response_path(path)))
                 .await
                 .map_err(|error| transport_error(&error))?;
         }
-        let json = String::from_utf8(received.reply.as_bytes().to_vec())
-            .map_err(|_| WalletError::new(WalletErrorKind::InvalidSlate, "reply is not text"))?;
-        Ok(ReceivedSlate {
-            tx_id: received.tx_id.0,
-            slate_id: received.slate.id().to_string(),
-            json,
-            repeated: received.repeated,
-        })
+        received_slate(&received)
     }
 
+    async fn receive_wire(&self, wire: &WireSlate) -> Result<Received, WalletError> {
+        Ok(self
+            .engine
+            .receive(FILE, wire, ReceiveRequest::default())
+            .await?)
+    }
+
+    /// Signs the S1 in `json`, which is decoded in memory.
     pub(crate) async fn receive_slate(&self, json: String) -> Result<ReceivedSlate, WalletError> {
-        let scratch = ScratchFile::with_contents(&self.data_dir, json).await?;
-        self.receive_file(&scratch.path, false).await
+        let wire = slate_text_wire(json)?;
+        received_slate(&self.receive_wire(&wire).await?)
     }
 
     /// Finalizes the S2 of a send, or the I2 of an invoice this wallet issued, in the file at
@@ -1438,13 +1436,17 @@ impl Session {
             .import(&Location::File(path.to_owned()))
             .await
             .map_err(|error| transport_error(&error))?;
-        let finalized = if self.is_invoice_payment(&wire) {
+        self.finalize_wire(&wire).await
+    }
+
+    async fn finalize_wire(&self, wire: &WireSlate) -> Result<FinalizedTx, WalletError> {
+        let finalized = if self.is_invoice_payment(wire) {
             self.engine
-                .finalize_invoice(FILE, &wire, Propagation::Fluff)
+                .finalize_invoice(FILE, wire, Propagation::Fluff)
                 .await?
         } else {
             self.engine
-                .finalize(FILE, &wire, Propagation::Fluff)
+                .finalize(FILE, wire, Propagation::Fluff)
                 .await?
         };
         Ok(FinalizedTx {
@@ -1481,8 +1483,8 @@ impl Session {
     }
 
     pub(crate) async fn finalize_slate(&self, json: String) -> Result<FinalizedTx, WalletError> {
-        let scratch = ScratchFile::with_contents(&self.data_dir, json).await?;
-        self.finalize_file(&scratch.path).await
+        let wire = slate_text_wire(json)?;
+        self.finalize_wire(&wire).await
     }
 
     pub(crate) async fn repost(&self, tx_id: u32) -> Result<(), WalletError> {
@@ -2377,8 +2379,30 @@ fn listener_event(event: &Event) -> Option<ListenerEvent> {
     })
 }
 
-/// A slate file in the wallet's directory that exists only for one call, so text slates go
-/// through the file method's checks. Removed when dropped.
+/// The slate text as the wire slate the file transport reads: JSON, bounded like a file.
+fn slate_text_wire(json: String) -> Result<WireSlate, WalletError> {
+    if json.len() > MAX_SLATE_TEXT_LEN {
+        return Err(WalletError::new(
+            WalletErrorKind::InvalidSlate,
+            "slate text is longer than any slate",
+        ));
+    }
+    Ok(WireSlate::binary(MediaType::JSON, json.into_bytes()))
+}
+
+fn received_slate(received: &Received) -> Result<ReceivedSlate, WalletError> {
+    let json = String::from_utf8(received.reply.as_bytes().to_vec())
+        .map_err(|_| WalletError::new(WalletErrorKind::InvalidSlate, "reply is not text"))?;
+    Ok(ReceivedSlate {
+        tx_id: received.tx_id.0,
+        slate_id: received.slate.id().to_string(),
+        json,
+        repeated: received.repeated,
+    })
+}
+
+/// A slate file in the wallet's directory that exists only for one call, where the engine can
+/// only write a slate to a file (`Delivery::Export`). Removed when dropped.
 struct ScratchFile {
     path: PathBuf,
 }
@@ -2392,20 +2416,6 @@ impl ScratchFile {
         Ok(Self {
             path: data_dir.join(format!(".lepic-{name}.slate")),
         })
-    }
-
-    async fn with_contents(data_dir: &Path, contents: String) -> Result<Self, WalletError> {
-        if contents.len() > MAX_SLATE_TEXT_LEN {
-            return Err(WalletError::new(
-                WalletErrorKind::InvalidSlate,
-                "slate text is longer than any slate",
-            ));
-        }
-        let file = Self::new(data_dir)?;
-        tokio::fs::write(&file.path, contents)
-            .await
-            .map_err(|error| io("writing a slate file", &error))?;
-        Ok(file)
     }
 
     async fn read(&self) -> Result<String, WalletError> {
