@@ -25,7 +25,7 @@ record that supersedes the old one; accepted records are not rewritten.
 | [0017](0017-foreign-api-over-http.md) | The wallet foreign API over HTTP in its own crate | accepted |
 | [0018](0018-tor-on-desktop.md) | Tor on desktop through a bundled tor child process | accepted |
 | [0019](0019-import-epic-wallet-history.md) | Import the transaction history of an epic-wallet wallet, reconciled with the scan | accepted |
-| [0020](0020-reference-epic-wallet-4-1.md) | Reference wallet and node move to epic-wallet v4.1.0 | accepted |
+| [0020](0020-reference-epic-wallet-4-1.md) | Reference wallet and node move to epic-wallet v4.1.0 | accepted, node row for interop and `upstream.toml` superseded by 0038 |
 | [0021](0021-epicbox-over-tor.md) | Epicbox over Tor | accepted |
 | [0022](0022-node-over-tor.md) | Node over Tor | accepted |
 | [0023](0023-binding-in-its-own-repository.md) | The Flutter binding lives in its own repository | accepted |
@@ -41,6 +41,7 @@ record that supersedes the old one; accepted records are not rewritten.
 | [0033](0033-key-and-domain-registry.md) | One registry of seed-derived keys and signature domains | proposed |
 | [0034](0034-trust-versioning-and-probing.md) | Trust, versioning and probing between Epic wallets | proposed |
 | [0035](0035-restore-from-a-start-height.md) | Restore from a start height | accepted |
+| [0038](0038-reference-node-4-1-2.md) | Reference node moves to epic v4.1.2 for interop and `upstream.toml` | accepted |
 
 Template:
 
