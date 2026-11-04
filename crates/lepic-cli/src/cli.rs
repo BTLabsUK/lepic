@@ -277,7 +277,12 @@ takes up to about two and a half minutes before the send fails.
 With --slate-id, a send made again under the same id, after a crash or a lost reply, sends
 nothing: it reports the first send with repeated: true and whether it was delivered (exit 0),
 or fails with code 7 when the account, amount, destination or transport differ. An undelivered
-first send is delivered with `lepic tx resend`. `lepic tx show --slate-id` finds the send.";
+first send is delivered with `lepic tx resend`. `lepic tx show --slate-id` finds the send.
+
+To a contact, --to-contact <ID> from `lepic contact list`, the slate is sealed to the contact and
+queued in its mailbox, then posted at once when the relay answers; `lepic contact collect` posts
+what is still queued and takes the answer. A send the contact cannot take locks nothing, and one
+that cannot be queued is cancelled.";
 
 #[derive(Debug, Args)]
 pub struct SendArgs {
@@ -285,7 +290,10 @@ pub struct SendArgs {
     #[arg(value_name = "AMOUNT")]
     pub amount: String,
     #[command(flatten)]
-    pub destination: DestinationArgs,
+    pub destination: SendDestinationArgs,
+    /// What the slate is for
+    #[arg(long, value_enum, conflicts_with_all = ["to", "to_file"])]
+    pub purpose: Option<PurposeArg>,
     #[command(flatten)]
     pub plain_http: PlainHttpArg,
     #[command(flatten)]
@@ -350,6 +358,22 @@ pub struct PlainHttpArg {
     /// Allow an http:// address on another computer, so the slate travels unencrypted
     #[arg(long)]
     pub allow_plain_http: bool,
+}
+
+/// Where a send goes: the destinations of [`DestinationArgs`], or a paired contact.
+#[derive(Debug, Args)]
+#[group(required = true, multiple = false)]
+pub struct SendDestinationArgs {
+    /// Epicbox address the slate goes to, or for a send the http(s):// or onion address of a
+    /// listening wallet
+    #[arg(long, value_name = "ADDRESS")]
+    pub to: Option<String>,
+    /// Write the slate to this file, as V3 slate JSON
+    #[arg(long, value_name = "FILE")]
+    pub to_file: Option<PathBuf>,
+    /// Pay a paired contact through its mailbox
+    #[arg(long, value_name = "CONTACT_ID")]
+    pub to_contact: Option<String>,
 }
 
 #[derive(Debug, Args)]

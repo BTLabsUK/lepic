@@ -2,6 +2,8 @@
 //! `lepic contact`: pairing with contacts (RFC 0002) and invoices and slates exchanged with them
 //! through their mailboxes.
 
+use std::path::{Path, PathBuf};
+
 use lepic_primitives::amount::Amount;
 use lepic_store::TxId;
 use lepic_store::{AccountIndex, ContactId, ContactState, SealMode};
@@ -9,6 +11,7 @@ use lepic_transport::file::response_path;
 use lepic_wallet::ReceiveRequest;
 use lepic_wallet::event::SlateId;
 use lepic_wallet::invoice::InvoiceRequest;
+use lepic_wallet::send::{SendRequest, SentSlate};
 use lepic_wallet::slate::Stage;
 use lepic_wallet_contacts::{
     AcceptRequest, CardRequest, CollectTrigger, ContactKind, ContactRelays, ContactView,
@@ -39,7 +42,7 @@ use crate::output::{
 /// Contacts belong to the default account.
 const CONTACT_ACCOUNT: AccountIndex = AccountIndex(0);
 
-fn contact_id(text: &str) -> Result<ContactId, CliError> {
+pub(super) fn contact_id(text: &str) -> Result<ContactId, CliError> {
     let text = text.trim();
     if text.len() != 32 || !text.bytes().all(|byte| byte.is_ascii_hexdigit()) {
         return Err(CliError::ContactId);
@@ -68,7 +71,7 @@ fn kind_name(kind: ContactKind) -> &'static str {
     }
 }
 
-fn purpose(purpose: PurposeArg) -> Purpose {
+pub(super) fn purpose(purpose: PurposeArg) -> Purpose {
     match purpose {
         PurposeArg::Payment => Purpose::Payment,
         PurposeArg::Deposit => Purpose::DepositRequest,
@@ -169,6 +172,65 @@ fn relays<N: lepic_node::NodeApi + 'static>(
         RelayMode::Online
     };
     ContactRelays::new(opened.epicbox.clone(), mode).with_meeting(meeting.to_vec())
+}
+
+/// Pays the contact `contact_id` through its mailbox, for `lepic tx send --to-contact`. The S1
+/// passes through a file in the wallet's directory that is removed afterwards.
+pub(super) async fn send_to_contact<N: lepic_node::NodeApi + 'static>(
+    opened: &Opened<N>,
+    contact_id: ContactId,
+    request: SendRequest,
+    purpose: Option<Purpose>,
+    data_dir: &Path,
+) -> Result<SentSlate, CliError> {
+    let relays = ContactRelays::new(opened.epicbox.clone(), RelayMode::Online);
+    let slate_file = SlateFile::new(data_dir)?;
+    Ok(opened
+        .wallet
+        .contact_book()
+        .contact_send(
+            &relays,
+            contact_id,
+            request,
+            slate_file.path.clone(),
+            purpose,
+        )
+        .await?)
+}
+
+/// A slate file that exists only for one send, removed when dropped, also when the send is
+/// interrupted.
+struct SlateFile {
+    path: PathBuf,
+}
+
+impl SlateFile {
+    fn new(data_dir: &Path) -> Result<Self, CliError> {
+        let name: [u8; 8] = super::random_bytes()?;
+        let name: String = name.iter().map(|byte| format!("{byte:02x}")).collect();
+        Ok(Self {
+            path: data_dir.join(format!(".lepic-{name}.slate")),
+        })
+    }
+}
+
+impl Drop for SlateFile {
+    fn drop(&mut self) {
+        // Absent when the send stopped before writing it.
+        let _ = std::fs::remove_file(&self.path);
+    }
+}
+
+/// The contact the transaction `tx_id` was sealed to or from, if any.
+pub(super) async fn contact_of<N: lepic_node::NodeApi + 'static>(
+    opened: &Opened<N>,
+    tx_id: TxId,
+) -> Result<Option<ContactId>, CliError> {
+    Ok(opened
+        .wallet
+        .contact_book()
+        .contact_of_transaction(tx_id)
+        .await?)
 }
 
 /// The longest sealed text read from a file or standard input.

@@ -611,6 +611,14 @@ or `contact decline <SLATE_ID>`, which tells the contact.
 `contact invoice <ID> <AMOUNT>` invoices a contact. `contact collect` also sends what the outbox
 holds. `contact export <FILE>` and `contact import <FILE>` carry the pairings in a backup.
 
+`tx send <AMOUNT> --to-contact <ID>` pays a contact through its mailbox: the slate is sealed to
+the contact, queued in the outbox and posted at once when the relay answers. `--purpose
+withdrawal` (or `payment`, `refund`, ...) tells the contact what the payment is for. A contact
+that cannot take the slate is refused before anything is locked, and a send that cannot be
+queued is cancelled. `contact collect` posts what is still queued and finalizes the answer.
+`--slate-id` works as for any send; a repeat must name the same contact. The send is stored with
+the `file` transport, since the slate leaves as a sealed file.
+
 ## Transactions
 
 ```

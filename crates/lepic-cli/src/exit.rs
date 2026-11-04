@@ -333,6 +333,7 @@ fn contact_kind(error: &ContactError) -> ErrorKind {
         ContactError::Invoice(error) => invoice_kind(error),
         ContactError::Receive(error) => receive_kind(error),
         ContactError::Finalize(error) => finalize_kind(error),
+        ContactError::Send(error) => send_kind(error),
         ContactError::Offline | ContactError::EpicboxOff | ContactError::NetworkMismatch => {
             ErrorKind::Config
         }

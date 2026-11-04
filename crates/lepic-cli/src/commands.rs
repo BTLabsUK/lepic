@@ -20,7 +20,7 @@ use lepic_node::{NodeApi, NodeClient, Propagation, RpcTransport};
 use lepic_primitives::amount::Height;
 use lepic_primitives::params::Network;
 use lepic_store::{
-    ChainCheck, ImportedKind, OutboxStatus, Repositories, SlateStage, StoredTransaction,
+    ChainCheck, ContactId, ImportedKind, OutboxStatus, Repositories, SlateStage, StoredTransaction,
     TxDirection, TxId, WalletStore,
 };
 use lepic_tor::{SocksProxy, TorProcess, TorSettings, TorState};
@@ -60,8 +60,8 @@ use crate::cli::{
     Command, DestinationArgs, EpicboxCommand, FinalizeArgs, HttpCommand, HttpListenArgs,
     ImportHistoryArgs, ImportSeedArgs, InitArgs, InvoiceCommand, IssueArgs, ListingArgs,
     NodeCommand, PayArgs, PostArgs, ReceiveArgs, ResendArgs, RestoreArgs, ScanArgs, SelectionArg,
-    SendArgs, SpendArgs, TorBinaryArgs, TorCommand, TorListenArgs, TxCommand, WalletCommand,
-    WalletScanArgs, WordsArg,
+    SendArgs, SendDestinationArgs, SpendArgs, TorBinaryArgs, TorCommand, TorListenArgs, TxCommand,
+    WalletCommand, WalletScanArgs, WordsArg,
 };
 use crate::exit::{CliError, ErrorKind};
 use crate::host::{Host, HostNode};
@@ -646,8 +646,8 @@ impl<H: Host> Run<'_, H> {
     async fn send(&mut self, args: SendArgs) -> Result<Report, CliError> {
         let amount = parse_amount(&args.amount)?;
         let spend = Spend::from_args(&args.spend)?;
-        let (delivery, destination) =
-            self.delivery(args.destination, args.plain_http.allow_plain_http)?;
+        let (payee, destination) =
+            self.payee(args.destination, args.plain_http.allow_plain_http)?;
         let slate_id = args
             .slate_id
             .slate_id
@@ -659,19 +659,21 @@ impl<H: Host> Run<'_, H> {
         if let Some(slate_id) = slate_id
             && let Some(first) = opened.wallet.sent_with_slate(slate_id).await?
         {
+            let first_contact = contact::contact_of(&opened, first.transaction.id).await?;
             return repeated_send(
                 &first,
+                first_contact,
                 slate_id,
                 account.index,
                 amount,
-                &delivery,
+                &payee,
                 destination,
             );
         }
-        if delivery.transport() == TRANSPORT_ID {
+        let transport = payee.transport();
+        if transport == TRANSPORT_ID {
             opened.wallet.epicbox_attach(&opened.epicbox)?;
         }
-        let transport = delivery.transport();
         let request = SendRequest {
             minimum_confirmations: spend.minimum_confirmations,
             change_outputs: spend.change_outputs,
@@ -696,8 +698,15 @@ impl<H: Host> Run<'_, H> {
         let sent_slate = request.slate_id;
         self.graceful.store(true, Ordering::SeqCst);
         let mut interrupt = self.interrupt.clone();
+        let purpose = args.purpose.map(contact::purpose);
+        let data_dir = &self.settings.data_dir;
         let sending = async {
-            let sent = opened.wallet.send(request, delivery).await?;
+            let sent = match payee {
+                Payee::Delivery(delivery) => opened.wallet.send(request, delivery).await?,
+                Payee::Contact(id) => {
+                    contact::send_to_contact(&opened, id, request, purpose, data_dir).await?
+                }
+            };
             let state = finalize_direct_reply(
                 &opened,
                 transport,
@@ -949,6 +958,27 @@ impl<H: Host> Run<'_, H> {
             repeated: counts.repeated.load(Ordering::Relaxed),
             refused: counts.refused.load(Ordering::Relaxed),
         }))
+    }
+
+    /// Where a send goes, and how the report names it: a contact by its id, anything else as
+    /// [`Self::delivery`] parses it.
+    fn payee(
+        &self,
+        destination: SendDestinationArgs,
+        allow_plain_http: bool,
+    ) -> Result<(Payee, String), CliError> {
+        let SendDestinationArgs {
+            to,
+            to_file,
+            to_contact,
+        } = destination;
+        if let Some(text) = to_contact {
+            let id = contact::contact_id(&text)?;
+            return Ok((Payee::Contact(id), id.to_string()));
+        }
+        let (delivery, destination) =
+            self.delivery(DestinationArgs { to, to_file }, allow_plain_http)?;
+        Ok((Payee::Delivery(delivery), destination))
     }
 
     /// Where a first slate goes, and how the report names it. An address is parsed here,
@@ -1355,13 +1385,18 @@ fn start_from_confirmed_tip<T: RpcTransport + Clone + 'static>(
 
 /// A random version-4 slate id, drawn as the engine draws one.
 fn drawn_slate_id() -> Result<SlateId, CliError> {
+    random_bytes().map(SlateId::from_random_bytes)
+}
+
+/// Bytes from the system's random source.
+fn random_bytes<const N: usize>() -> Result<[u8; N], CliError> {
     let mut rng = StdRng::try_from_rng(&mut SysRng).map_err(|error| CliError::Io {
         what: "seed the random number generator",
         source: std::io::Error::other(error),
     })?;
-    let mut id = [0u8; 16];
-    rng.fill_bytes(&mut id);
-    Ok(SlateId::from_random_bytes(id))
+    let mut bytes = [0u8; N];
+    rng.fill_bytes(&mut bytes);
+    Ok(bytes)
 }
 
 /// A slate id for `tx send --slate-id`. It travels in the slate, so only a random version-4
@@ -1377,15 +1412,33 @@ fn caller_slate_id(text: &str) -> Result<SlateId, CliError> {
     Ok(slate_id)
 }
 
+/// Where a send goes: through a transport, or to a paired contact's mailbox.
+enum Payee {
+    Delivery(Delivery),
+    Contact(ContactId),
+}
+
+impl Payee {
+    /// The transport the send is stored with: a contact's slate leaves as a file to seal.
+    const fn transport(&self) -> lepic_transport::transport::TransportId {
+        match self {
+            Self::Delivery(delivery) => delivery.transport(),
+            Self::Contact(_) => FILE,
+        }
+    }
+}
+
 /// The report of a send made before under the same slate id: nothing is sent again. A first
 /// send with another account, amount, transport or destination is refused, since the caller
-/// asked for a payment that was not made. A file export records no destination to compare.
+/// asked for a payment that was not made. A file export records no destination to compare; a
+/// send to a contact compares the contact.
 fn repeated_send(
     first: &TransactionDetails,
+    first_contact: Option<ContactId>,
     slate_id: SlateId,
     account: lepic_store::AccountIndex,
     amount: lepic_primitives::amount::Amount,
-    delivery: &Delivery,
+    payee: &Payee,
     destination: String,
 ) -> Result<Report, CliError> {
     let entry = &first.transaction.entry;
@@ -1396,11 +1449,12 @@ fn repeated_send(
         .value()
         .checked_sub(entry.amount_credited.value())
         .and_then(|value| value.checked_sub(fee));
-    let to_same = match delivery {
-        Delivery::Deliver { to, .. } => first.counterparty.as_ref() == Some(to),
-        Delivery::Export { .. } => true,
+    let to_same = match payee {
+        Payee::Delivery(Delivery::Deliver { to, .. }) => first.counterparty.as_ref() == Some(to),
+        Payee::Delivery(Delivery::Export { .. }) => first_contact.is_none(),
+        Payee::Contact(id) => first_contact == Some(*id),
     };
-    let transport = delivery.transport();
+    let transport = payee.transport();
     if entry.account != account
         || sent != Some(amount.value())
         || entry.transport.as_deref() != Some(transport.as_str())
