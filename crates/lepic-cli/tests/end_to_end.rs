@@ -59,27 +59,19 @@ fn send_receive_and_finalize_through_files() {
     assert_eq!(info["accounts"][0]["spendable"], "10.00000000");
 
     let slate = sender.path("payment.slate");
+    let send = ["tx", "send", "1.5", "--to-file", slate.to_str().unwrap()];
     let sent = sender
-        .run(
-            &host,
-            &[
-                "tx",
-                "send",
-                "1.5",
-                "--to-file",
-                slate.to_str().unwrap(),
-                "-m",
-                "thanks",
-            ],
-        )
+        .run(&host, &[send.as_slice(), &["-m", "thanks"]].concat())
         .ok()
         .json();
     assert_eq!(
         keys(&sent),
         [
             "amount",
+            "delivered",
             "destination",
             "fee",
+            "repeated",
             "slate_id",
             "state",
             "transport",
@@ -546,6 +538,64 @@ fn a_send_to_an_invalid_address_stores_nothing() {
     );
     let info = sender.run(&host, &["wallet", "info"]).ok().json();
     assert_eq!(info["accounts"][0]["locked"], "0.00000000");
+}
+
+#[test]
+fn a_send_made_again_under_its_slate_id_sends_nothing() {
+    let (host, sender, receiver) = two_wallets();
+    let address = receiver.run(&host, &["wallet", "address"]).ok().json();
+    let address = text(&address, "address").to_owned();
+    let slate_id = "8a6e2f0c-4b1d-4c3e-9f2a-7d5b6c8e9f01";
+    let send = |amount: &str, to: &str| {
+        sender.run(
+            &host,
+            &["tx", "send", amount, "--to", to, "--slate-id", slate_id],
+        )
+    };
+
+    let sent = send("2", &address).ok().json();
+    assert_eq!(sent["slate_id"], slate_id);
+    assert_eq!(sent["repeated"], false);
+    assert_eq!(sent["delivered"], true);
+
+    let again = send("2", &address).ok().json();
+    assert_eq!(again["repeated"], true, "{again}");
+    assert_eq!(again["delivered"], true);
+    assert_eq!(again["tx_id"], sent["tx_id"]);
+    assert_eq!(again["amount"], sent["amount"]);
+    assert_eq!(again["fee"], sent["fee"]);
+    assert_eq!(again["state"], "sent");
+
+    let other_amount = send("3", &address);
+    assert_eq!(other_amount.code, 7, "{other_amount:?}");
+    let drained = receiver.run(&host, &["epicbox", "drain"]).ok().json();
+    assert_eq!(drained["received"], 1, "{drained}");
+
+    let shown = sender
+        .run(&host, &["tx", "show", "--slate-id", slate_id])
+        .ok()
+        .json();
+    assert_eq!(shown["tx_id"], sent["tx_id"], "{shown}");
+    let unknown = sender.run(
+        &host,
+        &["tx", "show", "--slate-id", "0b6e2f0c-4b1d-4c3e-9f2a-7d5b6c8e9f01"],
+    );
+    assert_eq!(unknown.code, 6, "{unknown:?}");
+
+    // Version 1, not random: it would carry whatever the caller derived it from.
+    let not_random = sender.run(
+        &host,
+        &[
+            "tx",
+            "send",
+            "1",
+            "--to",
+            &address,
+            "--slate-id",
+            "8a6e2f0c-4b1d-1c3e-9f2a-7d5b6c8e9f01",
+        ],
+    );
+    assert_eq!(not_random.code, 2, "{not_random:?}");
 }
 
 #[test]

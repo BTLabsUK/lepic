@@ -319,9 +319,18 @@ impl<H: Host> Run<'_, H> {
                 }))
             }
             TxCommand::Show(args) => {
+                let slate_id = args.slate_id.slate_id.as_deref().map(SlateId::parse);
                 let opened = self.open().await?;
-                let tx_id = TxId(args.tx_id);
-                let details = opened.wallet.transaction_details(tx_id).await?;
+                let details = match (args.tx_id, slate_id) {
+                    (Some(tx_id), _) => opened.wallet.transaction_details(TxId(tx_id)).await?,
+                    (None, Some(Ok(slate_id))) => opened
+                        .wallet
+                        .sent_with_slate(slate_id)
+                        .await?
+                        .ok_or(CliError::NoSendWithSlate)?,
+                    (None, Some(Err(_))) => return Err(CliError::SlateId),
+                    (None, None) => return Err(CliError::NoSendWithSlate),
+                };
                 let report = opened.store()?.read(|repos| show(repos, &details))?;
                 Ok(Report::Show(report))
             }
@@ -638,8 +647,19 @@ impl<H: Host> Run<'_, H> {
         let spend = Spend::from_args(&args.spend)?;
         let (delivery, destination) =
             self.delivery(args.destination, args.plain_http.allow_plain_http)?;
+        let slate_id = args
+            .slate_id
+            .slate_id
+            .as_deref()
+            .map(caller_slate_id)
+            .transpose()?;
         let opened = self.open().await?;
         let account = opened.wallet.account(&args.account.account)?;
+        if let Some(slate_id) = slate_id
+            && let Some(first) = opened.wallet.sent_with_slate(slate_id).await?
+        {
+            return repeated_send(&first, slate_id, account.index, amount, &delivery, destination);
+        }
         if delivery.transport() == TRANSPORT_ID {
             opened.wallet.epicbox_attach(&opened.epicbox)?;
         }
@@ -650,6 +670,7 @@ impl<H: Host> Run<'_, H> {
             strategy: spend.strategy,
             ttl_blocks: spend.ttl_blocks,
             message: args.message.message,
+            slate_id,
             ..SendRequest::new(account.index, amount)
         };
         if transport == lepic_tor::TRANSPORT_ID {
@@ -684,6 +705,8 @@ impl<H: Host> Run<'_, H> {
             transport: transport.to_string(),
             destination,
             state,
+            repeated: false,
+            delivered: true,
         }))
     }
 
@@ -1292,6 +1315,63 @@ fn start_from_confirmed_tip<T: RpcTransport + Clone + 'static>(
         .clone()
         .with_known_tip(tip.height, seen_ago);
     Ok(())
+}
+
+/// A slate id for `tx send --slate-id`. It travels in the slate, so only a random version-4
+/// UUID is taken: one derived from a user or an order id would leak it to the receiver.
+fn caller_slate_id(text: &str) -> Result<SlateId, CliError> {
+    let slate_id = SlateId::parse(text).map_err(|_| CliError::SlateId)?;
+    let bytes = slate_id.as_bytes();
+    let version = bytes.get(6).map(|byte| byte >> 4);
+    let variant = bytes.get(8).map(|byte| byte & 0xc0);
+    if version != Some(4) || variant != Some(0x80) {
+        return Err(CliError::NotRandomSlateId);
+    }
+    Ok(slate_id)
+}
+
+/// The report of a send made before under the same slate id: nothing is sent again. A first
+/// send with another account, amount, transport or destination is refused, since the caller
+/// asked for a payment that was not made. A file export records no destination to compare.
+fn repeated_send(
+    first: &TransactionDetails,
+    slate_id: SlateId,
+    account: lepic_store::AccountIndex,
+    amount: lepic_primitives::amount::Amount,
+    delivery: &Delivery,
+    destination: String,
+) -> Result<Report, CliError> {
+    let entry = &first.transaction.entry;
+    let tx_id = first.transaction.id;
+    let fee = entry.fee.map_or(0, lepic_primitives::amount::Fee::value);
+    let sent = entry
+        .amount_debited
+        .value()
+        .checked_sub(entry.amount_credited.value())
+        .and_then(|value| value.checked_sub(fee));
+    let to_same = match delivery {
+        Delivery::Deliver { to, .. } => first.counterparty.as_ref() == Some(to),
+        Delivery::Export { .. } => true,
+    };
+    let transport = delivery.transport();
+    if entry.account != account
+        || sent != Some(amount.value())
+        || entry.transport.as_deref() != Some(transport.as_str())
+        || !to_same
+    {
+        return Err(CliError::SlateIdReused { tx_id: tx_id.0 });
+    }
+    Ok(Report::Send(SendReport {
+        tx_id: tx_id.0,
+        slate_id: slate_id.to_string(),
+        amount: format_amount(amount),
+        fee: format_units(fee),
+        transport: transport.to_string(),
+        destination,
+        state: state_name(entry.state),
+        repeated: true,
+        delivered: !first.undelivered,
+    }))
 }
 
 /// Whether a send over `transport` gets its answer in the same exchange.

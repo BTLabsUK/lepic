@@ -260,7 +260,7 @@ its change is back in the balance. Later, a refresh finds it by its change.")]
     /// List the transactions of an account
     List(ListArgs),
     /// Show one transaction
-    Show(TxIdArgs),
+    Show(TxShowArgs),
 }
 
 const SEND_HTTP_HELP: &str = "\
@@ -272,7 +272,12 @@ missing port is 3415 for http and 443 for https. Plain http goes only to this co
 To an onion address, `<56 characters>.onion` with or without http://, the wallet's own tor is
 started from --tor-binary for the send and stopped after it, and the other wallet, `lepic tor
 listen` or any wallet receiving over Tor, answers at once. Reaching an onion that is not online
-takes up to about two and a half minutes before the send fails.";
+takes up to about two and a half minutes before the send fails.
+
+With --slate-id, a send made again under the same id, after a crash or a lost reply, sends
+nothing: it reports the first send with repeated: true and whether it was delivered (exit 0),
+or fails with code 7 when the account, amount, destination or transport differ. An undelivered
+first send is delivered with `lepic tx resend`. `lepic tx show --slate-id` finds the send.";
 
 #[derive(Debug, Args)]
 pub struct SendArgs {
@@ -293,6 +298,16 @@ pub struct SendArgs {
     pub message: MessageArg,
     #[command(flatten)]
     pub spend: SpendArgs,
+    #[command(flatten)]
+    pub slate_id: SendSlateIdArg,
+}
+
+/// The slate id a caller gives a send so that sending again cannot pay twice.
+#[derive(Debug, Args)]
+pub struct SendSlateIdArg {
+    /// Slate id of the send: a random version-4 UUID the caller stores before sending
+    #[arg(long, value_name = "SLATE_ID")]
+    pub slate_id: Option<String>,
 }
 
 /// How a payment chooses and spends its inputs.
@@ -412,6 +427,15 @@ pub struct FluffArg {
     /// is posted
     #[arg(long)]
     pub fluff: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct TxShowArgs {
+    /// Local transaction id, as `tx list` shows it
+    #[arg(value_name = "TX_ID", required_unless_present = "slate_id")]
+    pub tx_id: Option<u32>,
+    #[command(flatten)]
+    pub slate_id: SendSlateIdArg,
 }
 
 #[derive(Debug, Args)]

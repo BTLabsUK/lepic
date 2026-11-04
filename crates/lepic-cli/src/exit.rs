@@ -141,6 +141,15 @@ pub enum CliError {
     NoDestination,
     #[error("slate id is not of the form xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx")]
     SlateId,
+    #[error("--slate-id must be a random version-4 uuid, made for this send")]
+    NotRandomSlateId,
+    #[error(
+        "slate id belongs to transaction {tx_id}, sent with another account, amount, \
+         destination or transport"
+    )]
+    SlateIdReused { tx_id: u32 },
+    #[error("no send of this wallet has that slate id")]
+    NoSendWithSlate,
     #[error("--reply-file applies to an invoice slate file, not to a parked invoice")]
     ReplyFileForParked,
     #[error("start height {start} is above the node's tip {tip}")]
@@ -204,6 +213,7 @@ impl CliError {
             | Self::Zero { .. }
             | Self::NoDestination
             | Self::SlateId
+            | Self::NotRandomSlateId
             | Self::ReplyFileForParked
             | Self::StartAboveTip { .. }
             | Self::Address(_)
@@ -221,6 +231,8 @@ impl CliError {
             Self::HttpReplyLost { .. } => ErrorKind::Incomplete,
             Self::Wallet(error) => wallet_kind(error),
             Self::DataDirInUse => ErrorKind::WalletState,
+            Self::SlateIdReused { .. } => ErrorKind::Rejected,
+            Self::NoSendWithSlate => ErrorKind::NotFound,
             Self::Send(error) => send_kind(error),
             Self::Receive(error) => receive_kind(error),
             Self::Finalize(error) => finalize_kind(error),
@@ -288,7 +300,8 @@ fn send_kind(error: &SendError) -> ErrorKind {
         | SendError::Unrepresentable(_)
         | SendError::ProofAddress(_)
         | SendError::NotResendable { .. }
-        | SendError::PayeeMismatch { .. } => ErrorKind::Rejected,
+        | SendError::PayeeMismatch { .. }
+        | SendError::SlateIdTaken { .. } => ErrorKind::Rejected,
         SendError::UnknownTransport { .. }
         | SendError::CannotDeliver { .. }
         | SendError::CannotExport { .. } => ErrorKind::Transport,
@@ -607,6 +620,9 @@ mod tests {
                 ErrorKind::Rejected,
             ),
             (CliError::SlateId, ErrorKind::Usage),
+            (CliError::NotRandomSlateId, ErrorKind::Usage),
+            (CliError::SlateIdReused { tx_id: 1 }, ErrorKind::Rejected),
+            (CliError::NoSendWithSlate, ErrorKind::NotFound),
             (CliError::ReplyFileForParked, ErrorKind::Usage),
             (
                 CliError::StartAboveTip { start: 9, tip: 8 },

@@ -156,8 +156,13 @@ pub struct SendReport {
     /// The Epicbox address, the file path or the HTTP endpoint the slate went to.
     pub destination: String,
     /// `sent`, or `posted` when the receiver answered over HTTP and the transaction was
-    /// finalized and posted in the same command.
+    /// finalized and posted in the same command. For a repeat, the first send's state now.
     pub state: &'static str,
+    /// The send was made before under the same `--slate-id`; this run sent nothing.
+    pub repeated: bool,
+    /// Whether a delivery attempt got the slate to the other party. Only a repeat can report
+    /// `false`; `tx resend` delivers it.
+    pub delivered: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -985,6 +990,17 @@ fn write_wallet_human(out: &mut Vec<u8>, report: &Report) -> std::io::Result<()>
 /// A report on one transaction or the transaction list. Writes nothing for any other.
 fn write_transaction_human(out: &mut Vec<u8>, report: &Report) -> std::io::Result<()> {
     match report {
+        Report::Send(r) if r.repeated && !r.delivered => writeln!(
+            out,
+            "Transaction {} was made before under slate {} and is {}; nothing was sent now. It \
+             is not delivered yet: run `lepic tx resend {}`.",
+            r.tx_id, r.slate_id, r.state, r.tx_id
+        ),
+        Report::Send(r) if r.repeated => writeln!(
+            out,
+            "Transaction {} was made before under slate {} and is {}; nothing was sent now.",
+            r.tx_id, r.slate_id, r.state
+        ),
         Report::Send(r) if r.state == "posted" => writeln!(
             out,
             "Transaction {} sent {} EPIC (fee {}) by {} to {}, finalized and posted.\nSlate {}.",
@@ -1589,11 +1605,15 @@ mod tests {
                     transport: text("file"),
                     destination: text("f"),
                     state: "sent",
+                    repeated: false,
+                    delivered: true,
                 }),
                 vec![
                     "amount",
+                    "delivered",
                     "destination",
                     "fee",
+                    "repeated",
                     "slate_id",
                     "state",
                     "transport",

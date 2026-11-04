@@ -394,6 +394,16 @@ lepic tx resend 3 --to-file pay-alice.slate
 lepic tx cancel 3
 ```
 
+A program that pays, such as a faucet, can make a send safe to repeat: it draws a random
+version-4 UUID, stores it with its own record of the payment, and passes it as `--slate-id`. If
+the program does not learn how the send ended, it runs the same command again. A send already
+made under that id is not made again: `lepic` exits 0 with the first send's `tx_id`, amount, fee
+and current `state`, `"repeated": true`, and `"delivered"`, which is `false` while the slate
+still has to be resent. The same id with another account, amount, destination or transport is
+refused with exit code 7. A slate id stays taken after the send is cancelled or expires.
+`lepic tx show --slate-id <UUID>` shows the send made under an id (exit 6 when there is none).
+The slate id travels in the slate, so never derive it from a user or order id.
+
 `tx cancel` of a transaction the other party can still complete on its own (a finalized send, an
 invoice you paid, a payment you received and answered) first asks the node, and is refused with
 exit code 7 while its pool or chain already holds it. After a cancel, refreshes still look for
@@ -612,7 +622,7 @@ $ lepic tx list
 
 States: `sent` (S1 or I2 handed over), `received` (S2 or I1 answered, waiting for the other side),
 `finalized`, `posted` (with the node), `confirmed` (in a block), `cancelled`, `expired`.
-`lepic tx show <ID>` adds the slate id, timestamps, the slate stages stored, the final kernel's
+`lepic tx show <ID>` (or `--slate-id <UUID>` for a send) adds the slate id, timestamps, the slate stages stored, the final kernel's
 excess (`Kernel`, JSON `kernel_excess`, in hex) and the block height the transaction was
 confirmed at (`Confirmed at`, JSON `confirmed_height`). The kernel is known once this wallet has
 finalized the transaction or paid the invoice, so not for a payment taken by `tx receive` or one
