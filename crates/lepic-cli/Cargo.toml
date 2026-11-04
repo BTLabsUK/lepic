@@ -15,6 +15,10 @@ path = "src/lib.rs"
 name = "lepic"
 path = "src/main.rs"
 
+[features]
+# Says in the wallet's marker that this host runs a contact directory (ADR 0034).
+directory-host = []
+
 [dependencies]
 clap = { workspace = true, features = ["std", "derive", "help", "usage", "error-context"] }
 jiff = { workspace = true, features = ["std"] }

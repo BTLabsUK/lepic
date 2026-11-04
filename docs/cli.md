@@ -30,6 +30,9 @@ so; add it, for example with `export PATH="$HOME/.local/bin:$PATH"` in your shel
 the result with `lepic --version`. Run the same command again to upgrade; a running `lepic` keeps
 working while the file is replaced.
 
+A host that runs a contact directory builds with `cargo build --release -p lepic-cli --features
+directory-host`; its wallets then claim the directory bit (32) in their marker.
+
 ## Before the first wallet: network, node and relay
 
 Every command runs on one chain, chosen with `--network mainnet` (the default) or

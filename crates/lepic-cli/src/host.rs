@@ -25,6 +25,13 @@ pub type Interrupt = Pin<Box<dyn Future<Output = ()> + Send>>;
 /// The node client a [`Host`] hands out.
 pub type HostNode<H> = NodeClient<<H as Host>::Transport>;
 
+/// The host feature bits the wallet's marker claims: the directory bit when built with the
+/// `directory-host` feature, none otherwise.
+#[cfg(feature = "directory-host")]
+pub const HOST_FEATURES: u32 = lepic_epicbox::marker::features::DIRECTORY;
+#[cfg(not(feature = "directory-host"))]
+pub const HOST_FEATURES: u32 = 0;
+
 /// Longer than any node API secret.
 const MAX_API_SECRET_LEN: u64 = 1024;
 
@@ -291,6 +298,16 @@ mod tests {
     use secrecy::ExposeSecret as _;
 
     use super::*;
+
+    #[test]
+    fn the_directory_bit_is_claimed_only_with_the_directory_host_feature() {
+        let expected = if cfg!(feature = "directory-host") {
+            32
+        } else {
+            0
+        };
+        assert_eq!(HOST_FEATURES, expected);
+    }
 
     #[test]
     fn the_longest_api_secret_is_read_without_moving_the_buffer() {
