@@ -90,7 +90,7 @@ mod tor;
 
 #[cfg(test)]
 pub(crate) use http::HttpReport;
-#[cfg(test)]
+#[cfg(all(test, unix))]
 #[cfg(feature = "tor")]
 pub(crate) use tor::TorReport;
 mod invoice;

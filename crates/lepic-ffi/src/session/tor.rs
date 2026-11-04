@@ -807,7 +807,7 @@ impl Session {
         self.node_tor.attach_socks(lepic_tor::FixedSocks(socks));
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     pub(crate) fn send_through_tor(&self) -> bool {
         *self.send_tor.active().borrow()
     }
@@ -817,18 +817,18 @@ impl Session {
         *self.relay_tor.active().borrow()
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     pub(crate) fn node_through_tor(&self) -> bool {
         *self.node_tor.active().borrow()
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     pub(crate) fn set_tor_timings(&self, timings: lepic_tor::TorTimings) {
         *lock(&self.tor_timings) = Some(timings);
     }
 
     /// Whether the running tor has a listener behind its onion.
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     pub(crate) fn tor_listener_runs(&self) -> bool {
         matches!(&*lock(&self.tor_slot), TorSlot::Running(run) if run.listener.is_some())
     }
