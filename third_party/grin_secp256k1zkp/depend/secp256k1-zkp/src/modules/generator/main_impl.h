@@ -199,6 +199,7 @@ static int secp256k1_generator_generate_internal(const secp256k1_context* ctx, s
         ret = !overflow;
         CHECK(ret);
         secp256k1_ecmult_gen(&ctx->ecmult_gen_ctx, &accum, &blind);
+        secp256k1_scalar_clear(&blind);
     }
 
     secp256k1_sha256_initialize(&sha256);

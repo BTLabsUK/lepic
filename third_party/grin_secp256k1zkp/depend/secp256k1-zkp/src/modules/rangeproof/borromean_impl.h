@@ -197,7 +197,7 @@ int secp256k1_borromean_sign(const secp256k1_ecmult_context* ecmult_ctx, const s
     secp256k1_scalar_clear(&ens);
     secp256k1_ge_clear(&rge);
     secp256k1_gej_clear(&rgej);
-    memset(tmp, 0, 33);
+    secp256k1_memclear(tmp, 33);
     return 1;
 }
 

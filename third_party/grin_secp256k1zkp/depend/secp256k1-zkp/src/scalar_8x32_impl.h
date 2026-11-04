@@ -37,14 +37,7 @@
 #define SECP256K1_N_H_7 ((uint32_t)0x7FFFFFFFUL)
 
 SECP256K1_INLINE static void secp256k1_scalar_clear(secp256k1_scalar *r) {
-    r->d[0] = 0;
-    r->d[1] = 0;
-    r->d[2] = 0;
-    r->d[3] = 0;
-    r->d[4] = 0;
-    r->d[5] = 0;
-    r->d[6] = 0;
-    r->d[7] = 0;
+    secp256k1_memclear(r, sizeof(secp256k1_scalar));
 }
 
 SECP256K1_INLINE static void secp256k1_scalar_set_int(secp256k1_scalar *r, unsigned int v) {

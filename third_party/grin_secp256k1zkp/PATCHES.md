@@ -78,6 +78,21 @@ was checked with fixed-vector and mainnet-data comparisons of the old and new bu
    and its `secp256k1.c` hunk, which targets a `scalar_cmov` the vendored tree lacks. The
    selected point is the same for every odd `n`.
 
+14. bitcoin-core/secp256k1 `1c081262`, `9bb368d1`, `97c57f4`, `99cc9fd6` and `765ef533`
+   (PR 1579); ElementsProject/secp256k1-zkp `e3bddfa7`, `a69a662d` and `d3cb785c`: `src/util.h`
+   gains `secp256k1_memclear` (`SecureZeroMemory` under MSVC, otherwise `memset` followed by an
+   asm memory barrier, or a volatile function pointer). `scalar_clear`, `fe_clear`, `gej_clear`
+   and `ge_clear` use it, as do the `memset` calls that wipe nonce, key and HMAC buffers in
+   `secp256k1.c`, `ecmult_gen_impl.h`, `hash_impl.h` and the recovery module; `ecmult_wnaf`
+   zeroes its array in a loop. Added wipes follow the same commits: `pj` in
+   `secp256k1_ec_pubkey_create`, `rj` in `secp256k1_schnorrsig_sign`, the ECDH intermediates,
+   the aggsig nonce buffer and context nonces, the generator blind, the `blind_sum` overflow
+   path, the borromean temp buffer and the rangeproof sign, rewind and verify exit paths.
+   Not taken: the `VERIFY` checkmem hook (no `checkmem.h` here), the hash state `_clear`
+   functions (`e7d3844`, `349e6ab`; no net effect over 9bb368d1), and the surjection and
+   whitelist modules, which are not compiled. Only writes of zero to buffers that are not read
+   again are added or changed, so every output is the same.
+
 ## Build changes (`build.rs`)
 
 Each one is a change to how the C library is compiled, not to its source.
