@@ -43,6 +43,10 @@ was checked with fixed-vector and mainnet-data comparisons of the old and new bu
    `secp256k1_der_read_len` checks the parsed length against the remaining input without a sum
    that could wrap. Well-formed DER parses as before; only a malformed length can change from
    accepted to rejected. Not used by Epic consensus.
+7. bitcoin-core/secp256k1 `9570f674` (PR 879): `src/ecdsa_impl.h`,
+   `contrib/lax_der_parsing.c` and `contrib/lax_der_privatekey_parsing.c` (vendored, not
+   compiled) skip the `memcpy` when a DER component has zero bytes, instead of passing a pointer
+   past the buffer to a zero-length copy.
 
 ## Build changes (`build.rs`)
 
