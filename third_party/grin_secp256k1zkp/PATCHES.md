@@ -89,6 +89,11 @@ builds.
    upstream regression test. From EpicCash/rust-secp256k1-zkp commit `3028f01` ("harden
    deser/tests"), the same bound as mimblewimble/rust-secp256k1-zkp `af84dd4`. Every proof that
    deserialised before still does, to the same bytes.
+5. `src/macros.rs`: `Clone` for the array newtypes (`SecretKey`, `PublicKey`, `Signature`,
+   `Message` and the rest) copies the inner array instead of writing through a `&mut` into
+   `MaybeUninit` memory. From mimblewimble/rust-secp256k1-zkp commit `6877373` ("zero-init
+   instead of uninit"), the `macros.rs` `Clone` hunk; the rest of that commit is already covered
+   by the fork's own `18f836b`. Same bytes.
 
 Nothing else differs from 42fcb29 and the changes listed here. This file is the only addition.
 
