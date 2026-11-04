@@ -1366,17 +1366,23 @@ mod tests {
     fn torrc_has_private_ports_cookie_auth_and_an_owner() {
         let paths = TorPaths::new(Path::new("/w/tor"));
         let torrc = build_torrc(&paths, 4242).unwrap();
+        let quoted = |name: &str| torrc_quote(&Path::new("/w/tor").join(name)).unwrap();
         assert_eq!(
             torrc,
-            "SocksPort auto ExtendedErrors IsolateSOCKSAuth\n\
-             ControlPort auto\n\
-             ControlPortWriteToFile \"/w/tor/control.txt\"\n\
-             CookieAuthentication 1\n\
-             CookieAuthFile \"/w/tor/control.cookie\"\n\
-             DataDirectory \"/w/tor/data\"\n\
-             __OwningControllerProcess 4242\n\
-             Log notice stdout\n\
-             AvoidDiskWrites 1\n"
+            format!(
+                "SocksPort auto ExtendedErrors IsolateSOCKSAuth\n\
+                 ControlPort auto\n\
+                 ControlPortWriteToFile {}\n\
+                 CookieAuthentication 1\n\
+                 CookieAuthFile {}\n\
+                 DataDirectory {}\n\
+                 __OwningControllerProcess 4242\n\
+                 Log notice stdout\n\
+                 AvoidDiskWrites 1\n",
+                quoted("control.txt"),
+                quoted("control.cookie"),
+                quoted("data"),
+            )
         );
     }
 
