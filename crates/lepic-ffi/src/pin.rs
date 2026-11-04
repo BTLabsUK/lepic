@@ -20,14 +20,13 @@ use lepic_keychain::vault::{MAX_VAULT_LEN, SecretName};
 use lepic_keychain::{
     KdfParams, MemoryVaultStorage, SecretBytes, SecretStore as _, Vault, VaultError,
 };
-use rand::SeedableRng;
-use rand::rngs::StdRng;
 use sha2::{Digest as _, Sha256};
 use tokio::sync::Mutex;
 use zeroize::Zeroizing;
 
 use crate::api::error::{WalletError, WalletErrorKind};
 use crate::api::secret_store::AppSecretStore;
+use crate::vault_port::{blocking, rng};
 
 const PASSWORD_SECRET: &str = "app/wallet-password";
 
@@ -245,10 +244,6 @@ fn bad_key() -> WalletError {
         WalletErrorKind::SecretStore,
         "the pin key in the app's store is damaged",
     )
-}
-
-fn rng() -> Result<StdRng, WalletError> {
-    StdRng::try_from_rng(&mut getrandom::SysRng).map_err(|error| other(&error))
 }
 
 fn damaged() -> WalletError {
@@ -552,15 +547,6 @@ pub(crate) async fn forget(store: &AppSecretStore) -> Result<(), WalletError> {
     store.delete(KEY_KEY).await?;
     store.delete(PENDING_KEY_KEY).await?;
     store.delete(FAILURES_KEY).await
-}
-
-/// Runs sealing work on the blocking pool, where Argon2 does not stall the runtime.
-async fn blocking<T: Send + 'static>(
-    work: impl FnOnce() -> Result<T, WalletError> + Send + 'static,
-) -> Result<T, WalletError> {
-    tokio::task::spawn_blocking(work)
-        .await
-        .map_err(|_| WalletError::new(WalletErrorKind::Panic, "sealing failed inside lepic"))?
 }
 
 #[cfg(test)]

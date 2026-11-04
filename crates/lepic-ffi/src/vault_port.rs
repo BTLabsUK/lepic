@@ -78,6 +78,21 @@ impl VaultBytes {
     }
 }
 
+/// A random source for a vault, seeded from the operating system.
+pub(crate) fn rng() -> Result<StdRng, WalletError> {
+    StdRng::try_from_rng(&mut getrandom::SysRng)
+        .map_err(|error| WalletError::new(WalletErrorKind::Other, error.to_string()))
+}
+
+/// Runs vault work on the blocking pool, where Argon2 does not stall the runtime.
+pub(crate) async fn blocking<T: Send + 'static>(
+    work: impl FnOnce() -> Result<T, WalletError> + Send + 'static,
+) -> Result<T, WalletError> {
+    tokio::task::spawn_blocking(work)
+        .await
+        .map_err(|_| WalletError::new(WalletErrorKind::Panic, "vault failed inside lepic"))?
+}
+
 /// The vault bytes in `text` as the app's store holds them.
 pub(crate) fn decode(text: &str) -> Result<Vec<u8>, WalletError> {
     let damaged = || WalletError::new(WalletErrorKind::SecretStore, "stored vault is damaged");
