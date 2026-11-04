@@ -33,6 +33,10 @@ static size_t secp256k1_scratch_max_allocation(const secp256k1_scratch* scratch,
     for (i = 0; i < scratch->frame; i++) {
         allocated += scratch->frame_size[i];
     }
+    /* Ensure that multiplication will not wrap around */
+    if (objects > SIZE_MAX/ALIGNMENT) {
+        return 0;
+    }
     if (scratch->max_size - allocated <= objects * ALIGNMENT) {
         return 0;
     }
@@ -66,7 +70,14 @@ static void secp256k1_scratch_deallocate_frame(secp256k1_scratch* scratch) {
 static void *secp256k1_scratch_alloc(secp256k1_scratch* scratch, size_t size) {
     void *ret;
     size_t frame = scratch->frame - 1;
-    size = ROUND_TO_ALIGN(size);
+    size_t rounded_size;
+
+    rounded_size = ROUND_TO_ALIGN(size);
+    /* Check that rounding did not wrap around */
+    if (rounded_size < size) {
+        return NULL;
+    }
+    size = rounded_size;
 
     if (scratch->frame == 0 || size + scratch->offset[frame] > scratch->frame_size[frame]) {
         return NULL;

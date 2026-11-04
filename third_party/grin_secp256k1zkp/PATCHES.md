@@ -93,6 +93,13 @@ was checked with fixed-vector and mainnet-data comparisons of the old and new bu
    whitelist modules, which are not compiled. Only writes of zero to buffers that are not read
    again are added or changed, so every output is the same.
 
+15. bitcoin-core/secp256k1 `4edaf06f` and `8ecc6ce5` (PR 648): `src/scratch_impl.h`,
+   `secp256k1_scratch_max_allocation` returns 0 when `objects * ALIGNMENT` would wrap (the
+   vendored code multiplies by `ALIGNMENT`, upstream by `ALIGNMENT - 1`, so the bound here is
+   `SIZE_MAX / ALIGNMENT`), and `secp256k1_scratch_alloc` returns NULL when rounding the size
+   up to the alignment wraps. Callers pass at most `2 + n_proofs` objects and sizes far below
+   the bound, so their results are unchanged.
+
 ## Build changes (`build.rs`)
 
 Each one is a change to how the C library is compiled, not to its source.
