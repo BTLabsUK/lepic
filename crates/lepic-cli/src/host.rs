@@ -160,6 +160,7 @@ fn cli_tor(settings: &Settings) -> Option<Arc<CliTor>> {
                 settings.tuning.tor_timings(),
             );
             tor.lib_dir.clone_from(lib_dir);
+            tor.withheld_env = vec![crate::secret::PASSWORD_ENV.to_owned()];
             Some(tor)
         }
     };

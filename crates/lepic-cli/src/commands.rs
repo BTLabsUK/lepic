@@ -801,6 +801,7 @@ impl<H: Host> Run<'_, H> {
             self.settings.tuning.tor_timings(),
         );
         settings.lib_dir.clone_from(&binary.lib_dir);
+        settings.withheld_env = vec![crate::secret::PASSWORD_ENV.to_owned()];
         Ok(TorProcess::start(settings))
     }
 

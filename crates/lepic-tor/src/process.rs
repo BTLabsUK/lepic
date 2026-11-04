@@ -119,6 +119,8 @@ pub struct TorSettings {
     /// users out.
     pub data_dir: PathBuf,
     pub timings: TorTimings,
+    /// Environment variables tor does not inherit, such as one the host read a secret from.
+    pub withheld_env: Vec<String>,
 }
 
 impl TorSettings {
@@ -128,6 +130,7 @@ impl TorSettings {
             lib_dir: None,
             data_dir,
             timings,
+            withheld_env: Vec::new(),
         }
     }
 }
@@ -1135,6 +1138,9 @@ async fn launch(settings: &TorSettings, socks: &SharedSocks) -> Result<Running, 
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
+    for name in &settings.withheld_env {
+        command.env_remove(name);
+    }
     if let Some(lib_dir) = &settings.lib_dir
         && cfg!(target_os = "linux")
     {
