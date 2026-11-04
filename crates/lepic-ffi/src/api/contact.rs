@@ -897,15 +897,20 @@ impl EpicWallet {
         .await
     }
 
-    /// Sends `payload`, at most 64 KiB, to the paired contact `contact_id`: sealed to its keys
-    /// and signed with this pairing's, queued in the outbox and posted at once when the mode is
-    /// `Online`; the outbox retries it as it retries slates and lists it with the returned id
-    /// as `slate_id`. The contact's wallet keeps it once under that id, raises
+    /// Sends `payload`, at most 64 KiB, to `contact_id`, a contact or a private pairing: sealed
+    /// to its keys and signed with this pairing's, queued in the outbox and posted at once when
+    /// the mode is `Online`; the outbox retries it as it retries slates and lists it with the
+    /// returned id as `slate_id`. The other wallet keeps it once under that id, raises
     /// `ContactPayload` and returns it from [`EpicWallet::contact_payloads`]. LEPIC never reads
     /// the bytes; the app gives them their meaning.
     ///
-    /// Fails with `InvalidArgument` for a larger payload, and `ContactNotFound` for a contact
-    /// that is not paired.
+    /// A contact pairing carries payloads once both sides have heard each other (paired or
+    /// verified); a private pairing once both sides matched the words check. Arriving payloads
+    /// wait on the relay until the pairing is open for them here.
+    ///
+    /// Fails with `InvalidArgument` for a larger payload, `ContactNotVerified` for a pairing
+    /// not open for payloads yet, `PairingEnded` for an ended contact pairing, and
+    /// `ContactNotFound` for no such pairing.
     pub async fn contact_post_payload(
         &self,
         contact_id: String,
@@ -920,8 +925,9 @@ impl EpicWallet {
         .await
     }
 
-    /// The payloads contacts sent that the app has not acknowledged, oldest first, at most 256:
-    /// while that many wait, newer ones stay on the relay. Kept across restarts.
+    /// The payloads contacts and private pairings sent that the app has not acknowledged, oldest
+    /// first: at most 256 from the private pairings together and 32 from each contact; while
+    /// that many wait, newer ones from the same side stay on the relay. Kept across restarts.
     pub async fn contact_payloads(&self) -> Result<Vec<ContactPayloadView>, WalletError> {
         self.run("contact_payloads", |session| async move {
             session.contact_payloads().await

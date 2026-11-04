@@ -34,7 +34,7 @@ use lepic_wallet::event::{ContactChange, ContactEvent, ContactUpdate, FailedPair
 use lepic_wallet_contacts::{
     AcceptRequest, CardRequest, CollectTrigger, ContactError, ContactRelays, InviteExpiry,
     InviteRequest, KeyCheckStart, KeysDecision, LinkOutcome, PairingClass, PairingEndReason,
-    PairingFailure, PairingStatus, RelayMode, SasDecision, WalletContacts,
+    PairingFailure, PairingStatus, PayloadId, RelayMode, SasDecision, WalletContacts,
 };
 use rand::SeedableRng;
 use world::{Party, World};
@@ -3060,17 +3060,8 @@ fn two_installs_of_one_phrase_pair_privately_and_pass_payloads_both_ways() {
 }
 
 #[test]
-fn payloads_wait_for_the_words_check_and_never_travel_over_a_contact() {
+fn payloads_over_a_private_pairing_wait_for_the_words_check() {
     let world = World::new();
-    let (anna_side, _) = world.pair_by_link();
-    assert!(matches!(
-        world.block_on(world.issuer.wallet.contact_book().contact_post_payload(
-            &relays(&world.issuer),
-            anna_side,
-            vec![1],
-        )),
-        Err(ContactError::WrongClass)
-    ));
     let twin = world.issuer_twin();
     let invite = world
         .block_on(world.issuer.wallet.contact_book().pairing_invite(
@@ -3157,6 +3148,173 @@ fn a_payload_reaches_the_paired_contact_once_and_stays_until_acknowledged() {
         )),
         Err(ContactError::TooLarge { .. })
     ));
+}
+
+/// The issuer and the payer pair by link and both match the words. Returns the two contact
+/// ids, the issuer's first.
+fn verified_pair(world: &World) -> (ContactId, ContactId) {
+    let (anna_side, ben_side) = world.pair_by_link();
+    for (party, id) in [(&world.issuer, anna_side), (&world.payer, ben_side)] {
+        world
+            .block_on(party.wallet.contact_book().pairing_sas(
+                &relays(party),
+                id,
+                SasDecision::Match,
+            ))
+            .unwrap();
+    }
+    world.collect(&world.issuer);
+    world.collect(&world.payer);
+    (anna_side, ben_side)
+}
+
+fn post_payload(world: &World, party: &Party, contact: ContactId, payload: &[u8]) -> PayloadId {
+    world
+        .block_on(party.wallet.contact_book().contact_post_payload(
+            &relays(party),
+            contact,
+            payload.to_vec(),
+        ))
+        .unwrap()
+}
+
+#[test]
+fn verified_contacts_pass_payloads_both_ways() {
+    let world = World::new();
+    let (anna_side, ben_side) = verified_pair(&world);
+    let mut ben_events = world.payer.wallet.subscribe();
+
+    let to_ben = post_payload(&world, &world.issuer, anna_side, b"directory hello");
+    world.collect(&world.payer);
+    let kept = payloads(&world, &world.payer);
+    assert_eq!(kept.len(), 1);
+    assert_eq!(
+        (kept[0].id, kept[0].contact_id, kept[0].payload.as_slice()),
+        (to_ben, ben_side, b"directory hello".as_slice())
+    );
+    let arrived = events(&mut ben_events)
+        .into_iter()
+        .filter(|event| matches!(event, Event::ContactPayload(_)))
+        .count();
+    assert_eq!(arrived, 1);
+
+    let to_anna = post_payload(&world, &world.payer, ben_side, b"back");
+    world.collect(&world.issuer);
+    let kept = payloads(&world, &world.issuer);
+    assert_eq!(kept.len(), 1);
+    assert_eq!(
+        (kept[0].id, kept[0].contact_id, kept[0].payload.as_slice()),
+        (to_anna, anna_side, b"back".as_slice())
+    );
+    assert_eq!(
+        world
+            .block_on(
+                world
+                    .payer
+                    .wallet
+                    .contact_book()
+                    .contact_payloads_ack(&[to_ben])
+            )
+            .unwrap(),
+        1
+    );
+    assert!(payloads(&world, &world.payer).is_empty());
+}
+
+/// A directory's first record reaches the wallet right after the pairing, before either side
+/// compared the words, and the wallet can answer over it.
+#[test]
+fn a_contact_payload_passes_once_paired_before_any_words_check() {
+    let world = World::new();
+    let (anna_side, ben_side) = world.pair_by_link();
+    for (party, id) in [(&world.issuer, anna_side), (&world.payer, ben_side)] {
+        assert_eq!(world_view(&world, party, id).state, ContactState::Paired);
+    }
+
+    let hello = post_payload(&world, &world.issuer, anna_side, b"dir-hello");
+    world.collect(&world.payer);
+    let kept = payloads(&world, &world.payer);
+    assert_eq!(kept.len(), 1);
+    assert_eq!(
+        (kept[0].id, kept[0].contact_id, kept[0].payload.as_slice()),
+        (hello, ben_side, b"dir-hello".as_slice())
+    );
+    post_payload(&world, &world.payer, ben_side, b"answer");
+    world.collect(&world.issuer);
+    let kept = payloads(&world, &world.issuer);
+    assert_eq!(kept.len(), 1);
+    assert_eq!(kept[0].payload, b"answer");
+}
+
+/// A contact pairing still in progress carries no payloads.
+#[test]
+fn a_contact_payload_is_refused_while_the_pairing_is_pending() {
+    let world = World::new();
+    let invite = world
+        .block_on(
+            world
+                .issuer
+                .wallet
+                .contact_book()
+                .pairing_invite(&relays(&world.issuer), invite_request("Anna")),
+        )
+        .unwrap();
+    assert!(matches!(
+        world.block_on(world.issuer.wallet.contact_book().contact_post_payload(
+            &relays(&world.issuer),
+            invite.contact_id,
+            vec![1],
+        )),
+        Err(ContactError::NotVerified)
+    ));
+}
+
+/// One contact fills only its own share: past it, its payloads stay on the relay while a
+/// linked device's still arrive, and they come in once the host acknowledges some.
+#[test]
+fn a_contact_over_its_payload_cap_waits_on_the_relay_and_leaves_room_for_linked_devices() {
+    let cap = lepic_wallet_contacts::MAX_KEPT_PAYLOADS_PER_CONTACT;
+    let world = World::new();
+    let (anna_side, ben_side) = verified_pair(&world);
+    let twin = world.issuer_twin();
+    let (_, desk) = private_pair(&world, &world.issuer, &twin);
+
+    for n in 0..=cap {
+        post_payload(&world, &world.payer, ben_side, &[u8::try_from(n).unwrap()]);
+    }
+    let linked = post_payload(&world, &twin, desk, b"linked");
+    world.collect(&world.issuer);
+    let kept = payloads(&world, &world.issuer);
+    assert_eq!(kept.len(), cap.checked_add(1).unwrap());
+    let from_contact: Vec<_> = kept
+        .iter()
+        .filter(|payload| payload.contact_id == anna_side)
+        .collect();
+    assert_eq!(from_contact.len(), cap);
+    assert!(kept.iter().any(|payload| payload.id == linked));
+
+    let first = from_contact[0].id;
+    assert_eq!(
+        world
+            .block_on(
+                world
+                    .issuer
+                    .wallet
+                    .contact_book()
+                    .contact_payloads_ack(&[first])
+            )
+            .unwrap(),
+        1
+    );
+    world.collect(&world.issuer);
+    let mut bytes: Vec<u8> = payloads(&world, &world.issuer)
+        .into_iter()
+        .filter(|payload| payload.contact_id == anna_side)
+        .flat_map(|payload| payload.payload)
+        .collect();
+    bytes.sort_unstable();
+    assert_eq!(bytes.len(), cap);
+    assert_eq!(bytes.last(), Some(&u8::try_from(cap).unwrap()));
 }
 
 /// The key of an Epicbox address text.

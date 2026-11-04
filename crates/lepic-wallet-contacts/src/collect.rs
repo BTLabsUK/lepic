@@ -1444,12 +1444,11 @@ fn timed(kind: MessageType) -> bool {
 }
 
 /// Whether a pairing carries a message of `kind`: a private pairing carries the host app's
-/// payloads and the unpaired notice only; a contact never carries payloads.
+/// payloads and the unpaired notice only; a contact carries every kind, payloads included.
 fn carries(private: bool, kind: MessageType) -> bool {
     match (private, kind) {
-        (true, MessageType::AppPayload | MessageType::Notice) => true,
-        (true, _) | (false, MessageType::AppPayload) => false,
-        (false, _) => true,
+        (true, MessageType::AppPayload | MessageType::Notice) | (false, _) => true,
+        (true, _) => false,
     }
 }
 

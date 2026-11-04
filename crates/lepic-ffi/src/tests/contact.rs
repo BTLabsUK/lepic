@@ -171,10 +171,11 @@ async fn a_payload_goes_to_the_paired_contact_and_waits_for_its_ack() {
     let anna = world.wallet().await;
     let ben = world.wallet().await;
     let (contact, _) = pair(&anna, &ben).await;
-    assert_eq!(
-        kind(anna.contact_post_payload(contact, vec![1], Online).await),
-        WalletErrorKind::WrongPairingClass
-    );
+    // A contact pairing carries payloads once paired, before the words check.
+    let to_contact = anna
+        .contact_post_payload(contact, vec![1], Online)
+        .await
+        .unwrap();
     let invite = anna
         .pairing_invite(
             "Phone".to_owned(),
@@ -227,6 +228,16 @@ async fn a_payload_goes_to_the_paired_contact_and_waits_for_its_ack() {
     ben.contacts_collect(CollectTrigger::Open, Online, None)
         .await
         .unwrap();
+    let from_contact = ben.contact_payloads().await.unwrap();
+    assert_eq!(from_contact.len(), 1);
+    assert_eq!(
+        (
+            from_contact[0].id.as_str(),
+            from_contact[0].payload.as_slice()
+        ),
+        (to_contact.as_str(), [1].as_slice())
+    );
+    assert_eq!(ben.contact_payloads_ack(vec![to_contact]).await.unwrap(), 1);
     let (anna_side, ben_side) = (invite.contact_id, answer.contact_id);
     for (wallet, id) in [(&anna, &anna_side), (&ben, &ben_side)] {
         let private = wallet.private_pairings().await.unwrap();

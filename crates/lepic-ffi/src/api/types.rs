@@ -1156,7 +1156,8 @@ pub struct InvitePreview {
 /// Which kind of pairing an invite makes. Values are only added, at the end.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PairingClass {
-    /// A contact: slates, invoices and notices, listed by `EpicWallet::contacts`.
+    /// A contact: slates, invoices and notices, and the app's payloads once both sides have
+    /// heard each other (paired or verified); listed by `EpicWallet::contacts`.
     Contact,
     /// Two wallets of one owner: only the app's payloads (`EpicWallet::contact_post_payload`),
     /// listed by `EpicWallet::private_pairings` and nowhere else. Its invite travels by QR or

@@ -64,7 +64,10 @@ pub use pairing::{
     AcceptOutcome, AcceptRequest, CardOffer, CardRequest, InviteExpiry, InviteOffer, InvitePreview,
     InviteRequest, LinkOutcome, SasDecision,
 };
-pub use payload::{ContactPayload, MAX_APP_PAYLOAD_LEN, MAX_KEPT_PAYLOADS, PayloadId};
+pub use payload::{
+    ContactPayload, MAX_APP_PAYLOAD_LEN, MAX_KEPT_PAYLOADS, MAX_KEPT_PAYLOADS_PER_CONTACT,
+    PayloadId,
+};
 pub use relay::{MAX_MEETING_RELAYS, meeting_host, meeting_relays};
 pub use requests::{MAX_LIVE_REQUESTS, MAX_SETTLED_REQUESTS, PairRequestView, REQUEST_EXPIRY};
 pub use sealed::{SEAL_LAPSE, SealedAnswer, SealedPayment, SealedReceived, SealedSlate};
@@ -300,7 +303,8 @@ pub enum ContactError {
     UnknownContact,
     #[error("no such pairing in progress")]
     UnknownPairing,
-    /// Invoices can be allowed only from a contact whose SAS the user confirmed.
+    /// Invoices can be allowed only from a contact whose SAS the user confirmed. Payloads pass
+    /// over a contact pairing once paired, over a private pairing once verified.
     #[error("the contact is not verified")]
     NotVerified,
     /// The relay could not be reached or broke off. Nothing that was not stored is lost.
