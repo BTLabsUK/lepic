@@ -431,15 +431,9 @@ fn relay(lookup: &Lookup<'_>, servers: &Servers) -> Result<RelayEndpoint, Settin
 
 const SECONDS_PER_HOUR: u64 = 60 * 60;
 
-/// The most hours of `invoice_expiry_hours`; the CLI enforces it, the library takes any window.
-const MAX_EXPIRY_HOURS: u64 = 48;
-
-/// A whole number of hours from 1 to [`MAX_EXPIRY_HOURS`] as an invoice expiry.
+/// A whole number of hours, at least 1, as an invoice expiry. The CLI sets no upper bound.
 fn parse_expiry_hours(text: &str) -> Option<InvoiceExpiry> {
-    let hours: u64 = text
-        .parse()
-        .ok()
-        .filter(|hours| *hours <= MAX_EXPIRY_HOURS)?;
+    let hours: u64 = text.parse().ok()?;
     let seconds = hours.checked_mul(SECONDS_PER_HOUR)?;
     InvoiceExpiry::new(std::time::Duration::from_secs(seconds)).ok()
 }
@@ -680,14 +674,18 @@ mod tests {
     }
 
     #[test]
-    fn invoice_expiry_is_whole_hours_from_one_to_two_days() {
+    fn invoice_expiry_is_whole_hours_of_at_least_one() {
         let hours = |h: u64| Some(std::time::Duration::from_secs(h * SECONDS_PER_HOUR));
         assert_eq!(parse_expiry_hours("1").map(InvoiceExpiry::window), hours(1));
         assert_eq!(
             parse_expiry_hours("48").map(InvoiceExpiry::window),
             hours(48)
         );
-        for bad in ["0", "49", "-1", "1.5", "", "24h", "18446744073709551615"] {
+        assert_eq!(
+            parse_expiry_hours("720").map(InvoiceExpiry::window),
+            hours(720)
+        );
+        for bad in ["0", "-1", "1.5", "", "24h", "18446744073709551615"] {
             assert!(parse_expiry_hours(bad).is_none(), "{bad}");
         }
     }

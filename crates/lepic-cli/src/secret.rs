@@ -16,10 +16,6 @@ use crate::settings::Env;
 
 pub const PASSWORD_ENV: &str = "LEPIC_PASSWORD";
 
-/// The fewest characters a password set on a new wallet has. The CLI checks it itself; the
-/// library takes any password.
-pub const MIN_NEW_PASSWORD_LEN: usize = 8;
-
 /// Longer than any password or recovery phrase a person types.
 pub const MAX_SECRET_LEN: usize = 4096;
 
@@ -34,8 +30,8 @@ pub enum SecretError {
     NotUtf8 { what: &'static str },
     #[error("the two passwords differ")]
     Mismatch,
-    #[error("a new wallet password needs at least {min} characters")]
-    TooShort { min: usize },
+    #[error("a new wallet password cannot be empty")]
+    EmptyNew,
     #[error("a hidden prompt is not available here; pipe the {what} to standard input")]
     NoHiddenPrompt { what: &'static str },
     #[error("the password file {} can be read by other users; make it owner-only (chmod 600)", path.display())]
@@ -84,29 +80,27 @@ impl SecretInput {
 
     /// The wallet password: the first line of `file`, else `LEPIC_PASSWORD`, else the prompt or
     /// a line of input. `LEPIC_PASSWORD` is removed from `env` either way. A new password must
-    /// have [`MIN_NEW_PASSWORD_LEN`] characters and is asked for twice at a terminal.
+    /// be non-empty and is asked for twice at a terminal; the CLI sets no other rule.
     pub async fn wallet_password(
         &mut self,
         env: &mut Env,
         file: Option<&Path>,
         new: bool,
     ) -> Result<Zeroizing<String>, SecretError> {
-        let long_enough = |password: Zeroizing<String>| {
-            if new && password.chars().count() < MIN_NEW_PASSWORD_LEN {
-                return Err(SecretError::TooShort {
-                    min: MIN_NEW_PASSWORD_LEN,
-                });
+        let non_empty = |password: Zeroizing<String>| {
+            if new && password.is_empty() {
+                return Err(SecretError::EmptyNew);
             }
             Ok(password)
         };
         let from_env = env.take(PASSWORD_ENV);
         if let Some(path) = file {
-            return long_enough(read_password_file(path)?);
+            return non_empty(read_password_file(path)?);
         }
         if let Some(password) = from_env {
-            return long_enough(password);
+            return non_empty(password);
         }
-        let password = long_enough(self.read("wallet password", "Wallet password: ").await?)?;
+        let password = non_empty(self.read("wallet password", "Wallet password: ").await?)?;
         if new && self.terminal {
             let again = self
                 .read("wallet password", "Repeat the wallet password: ")
@@ -327,26 +321,24 @@ mod tests {
     }
 
     #[test]
-    fn a_new_password_shorter_than_the_minimum_is_refused_from_every_source() {
-        let short = "x".repeat(MIN_NEW_PASSWORD_LEN - 1);
-        let mut env = Env::new([(PASSWORD_ENV.to_owned(), short.clone())]);
-        let mut input = input(&format!("{short}\n"));
+    fn an_empty_new_password_is_refused_from_every_source() {
+        let mut env = Env::new([(PASSWORD_ENV.to_owned(), String::new())]);
+        let mut input = input("\n");
         block_on(async {
             assert!(matches!(
                 input.wallet_password(&mut env, None, true).await,
-                Err(SecretError::TooShort { .. })
+                Err(SecretError::EmptyNew)
             ));
             assert!(matches!(
                 input.wallet_password(&mut env, None, true).await,
-                Err(SecretError::TooShort { .. })
+                Err(SecretError::EmptyNew)
             ));
         });
     }
 
-    /// The minimum applies to new passwords only, so a wallet whose password is shorter keeps
-    /// opening.
+    /// A short password is read as it is, for a new wallet or an existing one.
     #[test]
-    fn an_existing_short_password_is_read_to_open_a_wallet() {
+    fn a_short_password_is_read_as_it_is() {
         let mut env = Env::new([(PASSWORD_ENV.to_owned(), "pw".to_owned())]);
         let mut input = input("pw\n");
         block_on(async {

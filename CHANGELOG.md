@@ -80,10 +80,13 @@ Conventional Commit messages at release time.
 
 ### Removed
 
+- `lepic-cli`'s minimum of 8 characters for a new wallet password (an empty one is still
+  refused) and its cap of 48 hours on `invoice_expiry_hours`: limits belong to the consumer,
+  not the CLI. `lepic contact move --apply` stays.
 - `Password::MIN_NEW_LEN` and `Password::is_long_enough_to_set` (`lepic-wallet`), the password
   length check of `lepic-ffi`, `MINIMUM_CONFIRMATIONS_RANGE` and its upper bound of 30, and
   `WalletConfig.transports` (ADR 0036). The host checks the password length and the depth it
-  allows; `lepic-cli` checks 8 characters itself.
+  allows.
 - `Wallet::self_send`, `Wallet::spend_outputs_to_self`, `Wallet::estimate_self_send`,
   `SelfSendShape` and `SplitCount` in `lepic-wallet`, and `estimate_split`, `split_outputs`,
   `estimate_consolidate`, `consolidate_outputs` and `spend_outputs_to_self` in `lepic-ffi`:

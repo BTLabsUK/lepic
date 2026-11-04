@@ -241,7 +241,7 @@ impl CliError {
                 | SecretError::PasswordFileEmpty { .. }
                 | SecretError::PasswordFile { .. },
             ) => ErrorKind::Config,
-            Self::Secret(SecretError::Mismatch | SecretError::TooShort { .. }) => {
+            Self::Secret(SecretError::Mismatch | SecretError::EmptyNew) => {
                 ErrorKind::Rejected
             }
             Self::Secret(_)

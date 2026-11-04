@@ -20,8 +20,8 @@ on 2026-11-04 that policy values are host parameters.
   `LepicRuntime::with_pin_settings`, every field an `Option`. An out-of-range value fails with
   `InvalidArgument` when the wallet is created, restored or opened.
 - Two checks leave the library, because the hosts enforce them: the minimum length of a new
-  password (8) and the upper bound of 30 on minimum confirmations. `lepic-cli` checks the
-  password length itself. Core keeps only that the confirmation count is at least 1. This
+  password (8) and the upper bound of 30 on minimum confirmations. `lepic-cli` sets no
+  password length rule and no cap on the invoice expiry (the owner, 2026-11-04). Core keeps only that the confirmation count is at least 1. This
   supersedes ADR 0027 for the cap; its default of 6 and the per-wallet setting stand.
 - Constants that guard the engine stay in core: the payer's lag cap (525,600 blocks), the
   ceiling on the invoice TTL lead (525,600 blocks), and the 1 minimum.

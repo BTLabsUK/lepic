@@ -73,7 +73,7 @@ Each setting comes from, in order: a flag, its environment variable, the config 
 | `output` | `LEPIC_OUTPUT` | `--output` | `human` |
 | `log_level` | `LEPIC_LOG_LEVEL` | `--log-level` | `warn` |
 | `log_format` | `LEPIC_LOG_FORMAT` | `--log-format` | `compact` |
-| `invoice_expiry_hours` | `LEPIC_INVOICE_EXPIRY_HOURS` | | `24`, at most `48` |
+| `invoice_expiry_hours` | `LEPIC_INVOICE_EXPIRY_HOURS` | | `24` |
 | `settings_file` | `LEPIC_SETTINGS` | `--settings` | `~/.lepic/settings.toml` |
 
 The config file is `~/.lepic/config.toml` when it exists, or the file `--config` or `LEPIC_CONFIG`
@@ -551,7 +551,7 @@ exchange whose slate came marked, to a wallet that has shown it runs LEPIC in th
 because `epic-wallet` cannot read them; they are counted as
 `notices` and, with human output, shown on stderr.
 
-Unpaid invoices expire after `invoice_expiry_hours`, 24 unless set, at most 48. Each `epicbox
+Unpaid invoices expire after `invoice_expiry_hours`, 24 unless set. Each `epicbox
 drain`, and `epicbox listen` when it starts and every few minutes while it runs, deletes parked
 invoices that were not paid in time, and cancels invoices this wallet issued that nobody paid,
 which drops the output and keys they reserved, so a late payment is refused. A payment of an
