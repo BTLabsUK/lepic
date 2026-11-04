@@ -832,6 +832,37 @@ fn a_relay_move_is_asked_only_by_an_update_and_never_by_a_plain_card() {
     );
 }
 
+/// A collect forgets the hold counts of messages first held more than a day ago, and any it
+/// cannot read, and keeps the rest.
+#[test]
+fn a_collect_forgets_hold_counts_a_day_old() {
+    let world = World::new();
+    world.pair_for_invoices(ContactKind::Exchange);
+    let now =
+        u64::try_from(lepic_wallet::ports::Clock::now(&world.payer.clock).as_second()).unwrap();
+    let rows = [
+        ("contact.held.01", format!("{now}:1")),
+        ("contact.held.02", format!("{}:3", now - 2 * 24 * 60 * 60)),
+        ("contact.held.03", "damaged".to_owned()),
+    ];
+    world.payer.write(|repos| {
+        for (key, value) in &rows {
+            repos.put_setting(key, value)?;
+        }
+        Ok(())
+    });
+
+    world.collect(&world.payer);
+
+    let kept = world
+        .payer
+        .read(|repos| repos.settings_with_prefix("contact.held."));
+    assert_eq!(
+        kept,
+        vec![("contact.held.01".to_owned(), format!("{now}:1"))]
+    );
+}
+
 /// The party's keys for its contact `contact`, as the wallet derives them.
 fn keys_for(party: &Party, contact: ContactId) -> lepic_wallet_contacts::ContactKeys {
     let record = party.read(|repos| repos.contact(contact)).unwrap();

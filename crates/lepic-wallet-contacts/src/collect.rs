@@ -119,6 +119,10 @@ const MAX_HOLD_ATTEMPTS: u32 = 3;
 /// How long after a mailbox message was first held it is still kept, as for the payments inbox.
 const HOLD_PATIENCE: Duration = Duration::from_secs(3 * 60);
 
+/// A hold count is forgotten this long after the message was first held, whether or not it came
+/// back: one that never comes back would otherwise keep its row forever.
+const HELD_FORGOTTEN: Duration = Duration::from_secs(24 * 60 * 60);
+
 /// The setting that marks a contact whose envelopes carry their send time: from then on one
 /// without it is refused.
 pub(crate) fn stamped_key(contact_id: ContactId) -> String {
@@ -761,15 +765,23 @@ where
         .await
     }
 
-    /// Forgets envelopes seen longer ago than a relay keeps a message, and a little longer.
+    /// Forgets envelopes seen longer ago than a relay keeps a message, and a little longer, and
+    /// the hold counts of messages first held longer ago than [`HELD_FORGOTTEN`].
     async fn forget_old_envelopes(&self) -> Result<(), ContactError> {
         let session = self.wallet.session()?;
         self.contact_work(move |ports, _| {
             let now = ports.clock.now();
             let cutoff = now.checked_sub(SEEN_LIFETIME).unwrap_or(now);
-            session
-                .store
-                .write(|repos| repos.forget_envelopes_before(cutoff))?;
+            let seconds = u64::try_from(now.as_second()).unwrap_or(0);
+            session.store.write(|repos| {
+                repos.forget_envelopes_before(cutoff)?;
+                for (key, value) in repos.settings_with_prefix(HELD_PREFIX)? {
+                    if hold_forgotten(&value, seconds) {
+                        repos.delete_setting(&key)?;
+                    }
+                }
+                Ok::<_, StoreError>(())
+            })?;
             Ok(())
         })
         .await
@@ -1700,6 +1712,19 @@ fn hold_expired(first: u64, holds: u32, now: u64) -> bool {
         || first > now.saturating_add(HOLD_PATIENCE.as_secs())
 }
 
+/// Whether the hold count `value` (`first-seen seconds:holds`) may be forgotten at `now`: first
+/// held longer ago than [`HELD_FORGOTTEN`], ahead of a clock set back, or unreadable.
+fn hold_forgotten(value: &str, now: u64) -> bool {
+    let Some(first) = value
+        .split_once(':')
+        .and_then(|(first, _)| first.parse::<u64>().ok())
+    else {
+        return true;
+    };
+    now.saturating_sub(first) > HELD_FORGOTTEN.as_secs()
+        || first > now.saturating_add(HOLD_PATIENCE.as_secs())
+}
+
 /// Hands each drained message to the engine and acknowledges it once its effect is stored.
 struct Collector<'a, N, S: StoreOpener, V> {
     wallet: &'a ContactBook<'a, N, S, V>,
@@ -1825,6 +1850,23 @@ mod tests {
         assert!(!hold_expired(now, MAX_HOLD_ATTEMPTS, now + 10));
         assert!(hold_expired(now, MAX_HOLD_ATTEMPTS + 1, now));
         assert!(hold_expired(now, 1, now + HOLD_PATIENCE.as_secs()));
+    }
+
+    #[test]
+    fn a_hold_count_is_forgotten_a_day_after_the_first_hold() {
+        let first = 1_000_000;
+        let forgotten = HELD_FORGOTTEN.as_secs();
+        assert!(!hold_forgotten(
+            &format!("{first}:1"),
+            first + HOLD_PATIENCE.as_secs()
+        ));
+        assert!(!hold_forgotten(&format!("{first}:3"), first + forgotten));
+        assert!(hold_forgotten(&format!("{first}:3"), first + forgotten + 1));
+        assert!(hold_forgotten(
+            &format!("{first}:1"),
+            first - HOLD_PATIENCE.as_secs() - 1
+        ));
+        assert!(hold_forgotten("damaged", first));
     }
 
     #[test]
