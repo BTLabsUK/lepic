@@ -36,6 +36,9 @@ was checked with fixed-vector and mainnet-data comparisons of the old and new bu
    `secp256k1_ge_set_gej_var` and `secp256k1_ge_set_all_gej_var` set every field (through
    `secp256k1_ge_set_infinity`) when an input is the point at infinity, instead of leaving `x`
    and `y` uninitialised. Callers in this tree check the flag first, so results are unchanged.
+5. bitcoin-core/secp256k1 `e6d01e93` (PR 607): `src/ecmult_impl.h`, the three Pippenger
+   bucket-table sizes are computed as `sizeof(...) << bucket_window` instead of
+   `(1 << bucket_window) * sizeof(...)`, so the shift happens in `size_t`. Same values.
 
 ## Build changes (`build.rs`)
 
