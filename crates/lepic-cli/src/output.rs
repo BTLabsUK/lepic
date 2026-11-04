@@ -461,6 +461,8 @@ pub struct ContactReport {
     pub allow_invoices: bool,
     pub seal: String,
     pub home_relay: Option<String>,
+    /// The relay host the contact asked to move to, until `contact move` applies it.
+    pub requested_relay: Option<String>,
     pub lapsed: bool,
 }
 
@@ -695,6 +697,9 @@ fn write_contact(out: &mut Vec<u8>, contact: &ContactReport) -> std::io::Result<
     }
     if !contact.sas.is_empty() {
         writeln!(out, "    check: {}", contact.sas.join(" · "))?;
+    }
+    if let Some(host) = &contact.requested_relay {
+        writeln!(out, "    asks to move to relay {}", printable(host))?;
     }
     if contact.lapsed {
         writeln!(out, "    not heard from in 90 days")?;
@@ -1953,6 +1958,7 @@ mod tests {
                     allow_invoices: false,
                     seal: text("on"),
                     home_relay: None,
+                    requested_relay: None,
                     lapsed: false,
                 }),
                 vec![
@@ -1963,6 +1969,7 @@ mod tests {
                     "kind",
                     "label",
                     "lapsed",
+                    "requested_relay",
                     "sas",
                     "seal",
                     "state",

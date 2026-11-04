@@ -89,6 +89,7 @@ fn the_tree_has_every_planned_command() {
         "contact list",
         "contact remove",
         "contact label",
+        "contact move",
         "contact allow-invoices",
         "contact invoice",
         "contact invoices",

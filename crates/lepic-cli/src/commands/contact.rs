@@ -24,10 +24,10 @@ use crate::amount::{format_amount, format_fee, parse_amount};
 use crate::cli::{
     ContactAcceptArgs, ContactArgs, ContactCardArgs, ContactCommand, ContactEnterArgs,
     ContactExportArgs, ContactImportArgs, ContactInviteArgs, ContactInvoiceArgs,
-    ContactKeyCheckArgs, ContactKeysArgs, ContactKindArg, ContactLabelArgs, ContactOpenSealedArgs,
-    ContactPayArgs, ContactPlainArgs, ContactRequestArgs, ContactSasArgs, ContactSealArgs,
-    ContactSendSlateArgs, ContactSlateIdArg, ContactSwitchArgs, InviteExpiryArg, KeysArg, OnOffArg,
-    PurposeArg, SasArg,
+    ContactKeyCheckArgs, ContactKeysArgs, ContactKindArg, ContactLabelArgs, ContactMoveArgs,
+    ContactOpenSealedArgs, ContactPayArgs, ContactPlainArgs, ContactRequestArgs, ContactSasArgs,
+    ContactSealArgs, ContactSendSlateArgs, ContactSlateIdArg, ContactSwitchArgs, InviteExpiryArg,
+    KeysArg, OnOffArg, PurposeArg, SasArg,
 };
 use crate::exit::CliError;
 use crate::host::Host;
@@ -153,6 +153,7 @@ fn contact_report(view: &ContactView) -> ContactReport {
         }
         .to_owned(),
         home_relay: view.home_relay.clone(),
+        requested_relay: view.requested_relay.clone(),
         lapsed: view.lapsed,
     }
 }
@@ -327,6 +328,7 @@ impl<H: Host> Run<'_, H> {
             ContactCommand::Plain(args) => plain(&opened, args).await?,
             ContactCommand::OpenSealed(args) => open_sealed(&opened, args).await?,
             ContactCommand::Label(args) => label(&opened, args).await?,
+            ContactCommand::Move(args) => move_relay(&opened, args).await?,
             ContactCommand::Remove(args) => {
                 let id = contact_id(&args.contact)?;
                 Report::ContactRemove(ContactRemoveReport {
@@ -657,6 +659,22 @@ async fn label<N: lepic_node::NodeApi + 'static>(
     wallet
         .contact_book()
         .contact_set_label(id, args.label)
+        .await?;
+    Ok(Report::Contact(contact_report(
+        &wallet.contact_book().contact(id).await?,
+    )))
+}
+
+/// `lepic contact move`: moves our mailbox with this contact to the relay it asked for.
+async fn move_relay<N: lepic_node::NodeApi + 'static>(
+    opened: &Opened<N>,
+    args: ContactMoveArgs,
+) -> Result<Report, CliError> {
+    let wallet = &opened.wallet;
+    let id = contact_id(&args.contact.contact)?;
+    wallet
+        .contact_book()
+        .apply_relay_move(id, args.apply.trim())
         .await?;
     Ok(Report::Contact(contact_report(
         &wallet.contact_book().contact(id).await?,

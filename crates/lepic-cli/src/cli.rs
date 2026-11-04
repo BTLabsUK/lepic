@@ -727,6 +727,8 @@ with `lepic contact accept`.")]
     Remove(ContactIdArg),
     /// Give a contact your own name for it
     Label(ContactLabelArgs),
+    /// Move to the relay a contact asked for; `contact list` shows the request
+    Move(ContactMoveArgs),
     /// Allow or stop invoices from a verified contact
     AllowInvoices(ContactSwitchArgs),
     /// Invoice a paired contact through its mailbox
@@ -950,6 +952,15 @@ pub struct ContactLabelArgs {
     /// Your name for the contact
     #[arg(value_name = "LABEL")]
     pub label: String,
+}
+
+#[derive(Debug, Args)]
+pub struct ContactMoveArgs {
+    #[command(flatten)]
+    pub contact: ContactIdArg,
+    /// The relay host the contact asked for, as `contact list` shows it
+    #[arg(long = "apply", value_name = "HOST")]
+    pub apply: String,
 }
 
 #[derive(Debug, Args)]

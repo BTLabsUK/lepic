@@ -606,6 +606,10 @@ reply or confirm link sent by hand. In person, each side runs `contact show-card
 pair, at its Epicbox address; it is sent only to a key that ran LEPIC within 30 days and claims
 pair requests, and the pairing completes verified when the answer proves that address.
 
+A contact that moves to another relay asks for it in an update; `contact list` then shows
+`asks to move to relay <HOST>`, and `contact move <ID> --apply <HOST>` moves this wallet's
+mailbox with it there. Until then the contact's mailbox stays where it was.
+
 `contact allow-invoices <ID> on` lets a verified contact send invoices; they arrive with
 `contact collect` and wait in `contact invoices` until `contact pay-invoice <SLATE_ID> <AMOUNT>`
 or `contact decline <SLATE_ID>`, which tells the contact.
