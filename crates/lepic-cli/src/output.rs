@@ -64,6 +64,9 @@ pub enum Report {
     ContactInvoices(ContactInvoiceListReport),
     ContactExport(ContactExportReport),
     ContactImport(ContactImportReport),
+    ContactPayloadPost(ContactPayloadPostReport),
+    ContactPayloadList(ContactPayloadListReport),
+    ContactPayloadAck(ContactPayloadAckReport),
 }
 
 #[derive(Serialize)]
@@ -568,6 +571,33 @@ pub struct ContactImportReport {
     pub skipped_conflict: usize,
 }
 
+#[derive(Debug, Serialize)]
+pub struct ContactPayloadPostReport {
+    pub contact_id: String,
+    /// The id the other wallet keeps the payload under, 32 lowercase hex digits.
+    pub payload_id: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ContactPayloadListReport {
+    pub payloads: Vec<ContactPayloadReport>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ContactPayloadReport {
+    pub id: String,
+    pub contact_id: String,
+    pub received_at: String,
+    /// The bytes as lowercase hex.
+    pub payload: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ContactPayloadAckReport {
+    /// How many kept payloads were forgotten.
+    pub acknowledged: usize,
+}
+
 /// What `serve` did before it was stopped.
 #[derive(Debug, Serialize)]
 pub struct ServeReport {
@@ -954,7 +984,10 @@ fn write_human(out: &mut Vec<u8>, report: &Report) -> std::io::Result<()> {
         | Report::ContactInvoiceIssue(_)
         | Report::ContactInvoices(_)
         | Report::ContactExport(_)
-        | Report::ContactImport(_) => write_contact_human(out, report),
+        | Report::ContactImport(_)
+        | Report::ContactPayloadPost(_)
+        | Report::ContactPayloadList(_)
+        | Report::ContactPayloadAck(_) => write_contact_human(out, report),
     }
 }
 
@@ -1517,6 +1550,25 @@ fn write_contact_human(out: &mut Vec<u8>, report: &Report) -> std::io::Result<()
             "{} pairings restored; {} were here already and {} clashed with another.",
             r.imported, r.skipped_existing, r.skipped_conflict
         ),
+        Report::ContactPayloadPost(r) => {
+            writeln!(out, "Payload {} queued for {}.", r.payload_id, r.contact_id)
+        }
+        Report::ContactPayloadList(r) => {
+            if r.payloads.is_empty() {
+                return writeln!(out, "No payloads wait.");
+            }
+            for payload in &r.payloads {
+                writeln!(
+                    out,
+                    "{}  from {}  {}\n    {}",
+                    payload.id, payload.contact_id, payload.received_at, payload.payload
+                )?;
+            }
+            Ok(())
+        }
+        Report::ContactPayloadAck(r) => {
+            writeln!(out, "{} payload(s) acknowledged.", r.acknowledged)
+        }
         _ => Ok(()),
     }
 }
@@ -2127,6 +2179,21 @@ mod tests {
                     skipped_conflict: 0,
                 }),
                 vec!["imported", "skipped_conflict", "skipped_existing"],
+            ),
+            (
+                Report::ContactPayloadPost(ContactPayloadPostReport {
+                    contact_id: text("c"),
+                    payload_id: text("p"),
+                }),
+                vec!["contact_id", "payload_id"],
+            ),
+            (
+                Report::ContactPayloadList(ContactPayloadListReport { payloads: vec![] }),
+                vec!["payloads"],
+            ),
+            (
+                Report::ContactPayloadAck(ContactPayloadAckReport { acknowledged: 1 }),
+                vec!["acknowledged"],
             ),
             (
                 Report::HttpListen(HttpListenReport {

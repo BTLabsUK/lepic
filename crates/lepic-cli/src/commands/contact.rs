@@ -15,8 +15,9 @@ use lepic_wallet::send::{SendRequest, SentSlate};
 use lepic_wallet::slate::Stage;
 use lepic_wallet_contacts::{
     AcceptRequest, CardRequest, CollectTrigger, ContactKind, ContactRelays, ContactView,
-    InviteExpiry, InviteRequest, InvoiceDetails, KeysDecision, LinkOutcome, PairingClass,
-    PairingFailure, Purpose, Refusal, RelayMode, SasDecision, SealedAnswer, WalletContacts,
+    InviteExpiry, InviteRequest, InvoiceDetails, KeysDecision, LinkOutcome, MAX_APP_PAYLOAD_LEN,
+    PairingClass, PairingFailure, PayloadId, Purpose, Refusal, RelayMode, SasDecision,
+    SealedAnswer, WalletContacts,
 };
 
 use super::{Opened, Run, Spend};
@@ -25,9 +26,10 @@ use crate::cli::{
     ContactAcceptArgs, ContactArgs, ContactCardArgs, ContactCommand, ContactEnterArgs,
     ContactExportArgs, ContactImportArgs, ContactInviteArgs, ContactInvoiceArgs,
     ContactKeyCheckArgs, ContactKeysArgs, ContactKindArg, ContactLabelArgs, ContactMoveArgs,
-    ContactMoveHomeArgs, ContactOpenSealedArgs, ContactPayArgs, ContactPlainArgs,
-    ContactRequestArgs, ContactSasArgs, ContactSealArgs, ContactSendSlateArgs, ContactSlateIdArg,
-    ContactSwitchArgs, InviteExpiryArg, KeysArg, OnOffArg, PurposeArg, SasArg,
+    ContactMoveHomeArgs, ContactOpenSealedArgs, ContactPayArgs, ContactPayloadArgs,
+    ContactPayloadCommand, ContactPayloadPostArgs, ContactPlainArgs, ContactRequestArgs,
+    ContactSasArgs, ContactSealArgs, ContactSendSlateArgs, ContactSlateIdArg, ContactSwitchArgs,
+    InviteExpiryArg, KeysArg, OnOffArg, PurposeArg, SasArg,
 };
 use crate::exit::CliError;
 use crate::host::Host;
@@ -36,8 +38,9 @@ use crate::output::{
     ContactExportReport, ContactFailureReport, ContactImportReport, ContactInviteReport,
     ContactInvoiceIssueReport, ContactInvoiceListReport, ContactInvoiceReport,
     ContactKeyCheckReport, ContactLinkReport, ContactListReport, ContactMoveHomeReport,
-    ContactPreviewReport, ContactRemoveReport, ContactReport, ContactSlateReport,
-    InvoiceDeclineReport, InvoicePayReport, Report,
+    ContactPayloadAckReport, ContactPayloadListReport, ContactPayloadPostReport,
+    ContactPayloadReport, ContactPreviewReport, ContactRemoveReport, ContactReport,
+    ContactSlateReport, InvoiceDeclineReport, InvoicePayReport, Report,
 };
 
 /// Contacts belong to the default account.
@@ -354,6 +357,7 @@ impl<H: Host> Run<'_, H> {
             ContactCommand::Decline(args) => decline(&opened, &relays, args).await?,
             ContactCommand::Export(args) => export(&opened, args).await?,
             ContactCommand::Import(args) => import(&opened, args).await?,
+            ContactCommand::Payload(args) => payload(&opened, &relays, args).await?,
         })
     }
 }
@@ -853,6 +857,91 @@ async fn import<N: lepic_node::NodeApi + 'static>(
         skipped_existing: summary.skipped_existing,
         skipped_conflict: summary.skipped_conflict,
     }))
+}
+
+/// `lepic contact payload`: posts, lists and acknowledges the host app's payloads. LEPIC never
+/// reads the bytes, and the CLI adds no rule of its own to what the wallet allows.
+async fn payload<N: lepic_node::NodeApi + 'static>(
+    opened: &Opened<N>,
+    relays: &ContactRelays,
+    args: ContactPayloadArgs,
+) -> Result<Report, CliError> {
+    let book = opened.wallet.contact_book();
+    Ok(match args.command {
+        ContactPayloadCommand::Post(args) => {
+            let id = contact_id(&args.contact.contact)?;
+            let bytes = payload_bytes(&args)?;
+            let payload_id = book.contact_post_payload(relays, id, bytes).await?;
+            Report::ContactPayloadPost(ContactPayloadPostReport {
+                contact_id: id.to_string(),
+                payload_id: payload_id.to_string(),
+            })
+        }
+        ContactPayloadCommand::List => Report::ContactPayloadList(ContactPayloadListReport {
+            payloads: book
+                .contact_payloads()
+                .await?
+                .into_iter()
+                .map(|kept| ContactPayloadReport {
+                    id: kept.id.to_string(),
+                    contact_id: kept.contact_id.to_string(),
+                    received_at: kept.received_at.to_string(),
+                    payload: to_hex(&kept.payload),
+                })
+                .collect(),
+        }),
+        ContactPayloadCommand::Ack(args) => {
+            let ids = args
+                .ids
+                .iter()
+                .map(|text| PayloadId::parse(text.trim()).ok_or(CliError::PayloadId))
+                .collect::<Result<Vec<_>, _>>()?;
+            Report::ContactPayloadAck(ContactPayloadAckReport {
+                acknowledged: book.contact_payloads_ack(&ids).await?,
+            })
+        }
+    })
+}
+
+/// The bytes `--hex` or `--file` gives. A file is read up to one byte past the largest
+/// payload, so the wallet refuses a larger one without the whole file in memory.
+fn payload_bytes(args: &ContactPayloadPostArgs) -> Result<Vec<u8>, CliError> {
+    use std::io::Read as _;
+    if let Some(path) = &args.file {
+        let mut bytes = Vec::new();
+        let limit = u64::try_from(MAX_APP_PAYLOAD_LEN)
+            .unwrap_or(u64::MAX)
+            .saturating_add(1);
+        std::fs::File::open(path)
+            .and_then(|file| file.take(limit).read_to_end(&mut bytes))
+            .map_err(CliError::io("read the payload file"))?;
+        return Ok(bytes);
+    }
+    from_hex(args.hex.as_deref().unwrap_or_default())
+}
+
+fn from_hex(text: &str) -> Result<Vec<u8>, CliError> {
+    let text = text.trim();
+    if !text.len().is_multiple_of(2) || !text.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err(CliError::PayloadHex);
+    }
+    text.as_bytes()
+        .chunks(2)
+        .map(|pair| {
+            std::str::from_utf8(pair)
+                .ok()
+                .and_then(|pair| u8::from_str_radix(pair, 16).ok())
+                .ok_or(CliError::PayloadHex)
+        })
+        .collect()
+}
+
+fn to_hex(bytes: &[u8]) -> String {
+    bytes.iter().fold(String::new(), |mut text, byte| {
+        use std::fmt::Write as _;
+        let _ = write!(text, "{byte:02x}");
+        text
+    })
 }
 
 /// `lepic contact collect`: runs one collecting cycle.

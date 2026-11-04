@@ -627,6 +627,14 @@ or `contact decline <SLATE_ID>`, which tells the contact.
 `contact invoice <ID> <AMOUNT>` invoices a contact. `contact collect` also sends what the outbox
 holds. `contact export <FILE>` and `contact import <FILE>` carry the pairings in a backup.
 
+`contact payload post <ID> --hex <HEX>` (or `--file <FILE>`) sends the host app's bytes, at
+most 64 KiB, to a paired contact or a verified private pairing, and prints the payload's id; LEPIC
+never reads them. `contact collect`, or `serve` on its own, takes arriving payloads; `contact
+payload list` shows each one's id, contact, arrival time and bytes as hex until `contact payload
+ack <ID>...` forgets it. At most 32 wait per contact (256 from private pairings); more stay on the
+relay until some are acknowledged. Through `--service`, `serve` reads the `--file` path, so give
+an absolute one; the request holds at most 64 KiB, so `--hex` carries about half that.
+
 `tx send <AMOUNT> --to-contact <ID>` pays a contact through its mailbox: the slate is sealed to
 the contact, queued in the outbox and posted at once when the relay answers. `--purpose
 withdrawal` (or `payment`, `refund`, ...) tells the contact what the payment is for. A contact
