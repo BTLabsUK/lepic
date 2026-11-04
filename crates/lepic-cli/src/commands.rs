@@ -110,7 +110,7 @@ struct Opened<N: NodeApi + 'static> {
     /// one send at a time can use.
     tor_gate: Arc<tokio::sync::Mutex<()>>,
     /// Held until the command ends; `None` when the data directory does not exist.
-    _lock: Option<std::fs::File>,
+    _lock: Option<lepic_store::DataDirLock>,
 }
 
 /// A tor started for one send, and the hold on the wallet's tor transport it keeps until stopped.
@@ -455,7 +455,7 @@ impl<H: Host> Run<'_, H> {
 
     async fn init(&mut self, args: &InitArgs) -> Result<Report, CliError> {
         let password = self.new_password().await?;
-        let wallet = self.prepare(true)?;
+        let wallet = self.prepare(true).await?;
         let phrase = wallet
             .wallet
             .create(password, word_count(args.words))
@@ -474,7 +474,7 @@ impl<H: Host> Run<'_, H> {
             .read("recovery phrase", "Recovery phrase: ")
             .await?;
         let password = self.new_password().await?;
-        let opened = self.prepare(true)?;
+        let opened = self.prepare(true).await?;
         let scan_from = Height::new(args.from_height.unwrap_or(0));
         opened
             .wallet
@@ -491,7 +491,7 @@ impl<H: Host> Run<'_, H> {
             .read("wallet.seed password", "Password of the wallet.seed file: ")
             .await?;
         let password = self.new_password().await?;
-        let opened = self.prepare(true)?;
+        let opened = self.prepare(true).await?;
         opened
             .wallet
             .import_wallet_seed(password, &file, password_from(file_password))
@@ -1307,19 +1307,19 @@ impl<H: Host> Run<'_, H> {
                 false,
             )
             .await?;
-        let opened = self.prepare(false)?;
+        let opened = self.prepare(false).await?;
         opened.wallet.open(password_from(password)).await?;
         start_from_confirmed_tip(&opened.wallet)?;
         Ok(opened)
     }
 
     /// A locked wallet handle on the data directory, which a new wallet creates.
-    fn prepare(&self, create_dir: bool) -> Result<Opened<HostNode<H>>, CliError> {
+    async fn prepare(&self, create_dir: bool) -> Result<Opened<HostNode<H>>, CliError> {
         if create_dir {
             create_private_dir(&self.settings.data_dir)?;
         }
         check_private_dir(&self.settings.data_dir)?;
-        let lock = lock_data_dir(&self.settings.data_dir)?;
+        let lock = lock_data_dir(&self.settings.data_dir).await?;
         let tls = webpki_tls_config().map_err(|error| CliError::Io {
             what: "set up tls for http",
             source: std::io::Error::other(error),
@@ -1856,44 +1856,22 @@ fn check_private_dir(_: &Path) -> Result<(), CliError> {
     Ok(())
 }
 
-/// The file in a data directory that holds the directory lock, the same one the mobile binding
-/// takes, so a CLI command and an app never open one database at once. It stays when the lock
-/// is released: removing it would let two openers lock different files.
-const LOCK_FILE: &str = ".lepic.lock";
-
-/// An exclusive OS lock on [`LOCK_FILE`], released when the file is closed. A missing data
-/// directory holds no wallet to protect and is left to the wallet to report. A symbolic link in
-/// place of the lock file is refused rather than followed, so the lock never creates a file
-/// elsewhere. Any failure other than another holder fails closed.
-fn lock_data_dir(dir: &Path) -> Result<Option<std::fs::File>, CliError> {
-    let mut options = std::fs::File::options();
-    options.create(true).truncate(false).write(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt as _;
-        options.custom_flags(lepic_transport::file::O_NOFOLLOW);
-    }
-    let file = match options.open(dir.join(LOCK_FILE)) {
-        Ok(file) => file,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(error) => return Err(CliError::io("open the data directory lock")(error)),
-    };
-    // While the holder copies a plain database into an encrypted one, the copy is waited for.
-    let started = std::time::Instant::now();
-    loop {
-        match file.try_lock() {
-            Ok(()) => return Ok(Some(file)),
-            Err(std::fs::TryLockError::WouldBlock)
-                if lepic_store::migration_in_progress(dir)
-                    && started.elapsed() < MIGRATION_WAIT =>
-            {
-                std::thread::sleep(std::time::Duration::from_millis(100));
-            }
-            Err(std::fs::TryLockError::WouldBlock) => return Err(CliError::DataDirInUse),
-            Err(std::fs::TryLockError::Error(error)) => {
-                return Err(CliError::io("lock the data directory")(error));
-            }
+/// The directory lock of `dir`, the same one the mobile binding takes, so a CLI command and an
+/// app never open one database at once. A missing data directory holds no wallet to protect and
+/// is left to the wallet to report. While the holder copies a plain database into an encrypted
+/// one, the copy is waited for.
+async fn lock_data_dir(dir: &Path) -> Result<Option<lepic_store::DataDirLock>, CliError> {
+    use lepic_store::DataDirLockError;
+    match lepic_store::lock_data_dir(dir, MIGRATION_WAIT).await {
+        Ok(lock) => Ok(Some(lock)),
+        Err(DataDirLockError::Open(error)) if error.kind() == std::io::ErrorKind::NotFound => {
+            Ok(None)
         }
+        Err(DataDirLockError::Busy) => Err(CliError::DataDirInUse),
+        Err(DataDirLockError::Open(error)) => {
+            Err(CliError::io("open the data directory lock")(error))
+        }
+        Err(DataDirLockError::Lock(error)) => Err(CliError::io("lock the data directory")(error)),
     }
 }
 
@@ -2174,30 +2152,6 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(mode)).unwrap();
         dir
-    }
-
-    /// A second opener waits for a holder that copies the plain database into an encrypted
-    /// one, and is refused at once by a holder that does not.
-    #[test]
-    fn a_second_opener_waits_only_while_a_copy_is_in_progress() {
-        let dir = with_mode(0o700);
-        let held = lock_data_dir(dir.path()).unwrap().unwrap();
-        assert!(matches!(
-            lock_data_dir(dir.path()),
-            Err(CliError::DataDirInUse)
-        ));
-
-        std::fs::write(dir.path().join("wallet.enc.sqlite3.tmp"), b"").unwrap();
-        assert!(lepic_store::migration_in_progress(dir.path()));
-        let release = std::thread::spawn(move || {
-            std::thread::sleep(std::time::Duration::from_millis(300));
-            drop(held);
-        });
-        let started = std::time::Instant::now();
-        let second = lock_data_dir(dir.path()).unwrap();
-        assert!(second.is_some());
-        assert!(started.elapsed() >= std::time::Duration::from_millis(250));
-        release.join().unwrap();
     }
 
     #[test]

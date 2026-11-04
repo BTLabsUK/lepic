@@ -18,16 +18,18 @@ serde = { workspace = true, features = ["derive", "std"], optional = true }
 serde_json = { workspace = true, features = ["std"], optional = true }
 sha2 = { workspace = true, optional = true }
 thiserror.workspace = true
+tokio = { workspace = true, features = ["time"], optional = true }
 tracing = { workspace = true, features = ["std"], optional = true }
 uuid.workspace = true
 zeroize = { workspace = true, features = ["alloc"] }
 
 [features]
 default = ["sqlite"]
-sqlite = ["dep:rusqlite", "dep:serde", "dep:serde_json", "dep:sha2", "dep:tracing"]
+sqlite = ["dep:rusqlite", "dep:serde", "dep:serde_json", "dep:sha2", "dep:tokio", "dep:tracing"]
 
 [dev-dependencies]
 tempfile.workspace = true
+tokio = { workspace = true, features = ["macros", "rt", "time"] }
 
 [[test]]
 name = "sqlite"
