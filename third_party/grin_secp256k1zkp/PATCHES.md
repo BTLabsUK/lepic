@@ -13,19 +13,19 @@ Only what `build.rs` compiles and includes is kept, with the licence and fork no
 `.git`, CI files, `fuzz/`, the C tests and benchmarks, `src/java`, `src/asm`, `sage/`, `obj/`,
 `build-aux/` and the autotools files.
 
-## Patches
+## C library patches (`depend/secp256k1-zkp`)
 
-One, taken from upstream mimblewimble/secp256k1-zkp commit
-`0eefcedc1fec37d54e53bac4e535afa47d6774fa` ("fix scratch leak"):
+Each item is one upstream commit applied to the compiled files only; the upstream commits' test
+changes are not applied because the C tests are not built here. None changes any byte an
+operation produces, or the accept/reject verdict of any commitment, proof or signature; that
+was checked with fixed-vector and mainnet-data comparisons of the old and new builds.
 
-- `depend/secp256k1-zkp/src/modules/bulletproofs/rangeproof_impl.h`: two added lines, a
-  `secp256k1_scratch_deallocate_frame(scratch);` before each early `return 0;` that follows a
-  failed `secp256k1_bulletproof_deserialize_point` in
-  `secp256k1_bulletproof_rangeproof_verify_impl`. The file is byte-identical to upstream's at
-  0eefced. A proof with an invalid point is still rejected with the same return value; only the
-  verifier's scratch frame is now released.
-
-The upstream commit's new C test (`tests_impl.h`) is not applied: the C tests are not built here.
+1. mimblewimble/secp256k1-zkp `0eefcedc1fec37d54e53bac4e535afa47d6774fa` ("fix scratch leak"):
+   `src/modules/bulletproofs/rangeproof_impl.h`, two added lines, a
+   `secp256k1_scratch_deallocate_frame(scratch);` before each early `return 0;` that follows a
+   failed `secp256k1_bulletproof_deserialize_point` in
+   `secp256k1_bulletproof_rangeproof_verify_impl`. A proof with an invalid point is still
+   rejected with the same return value; only the verifier's scratch frame is now released.
 
 ## Build changes (`build.rs`)
 
