@@ -725,9 +725,12 @@ that `serve` holds.
 
 A command that reads a secret from stdin fails, as `serve` gives every request an empty stdin.
 
-On SIGINT or SIGTERM `serve` stops accepting connections and stops the listener. Running requests
-get 30 seconds, then are dropped. It then locks the wallet, removes the socket and releases the
-lock. Its report names the socket, the number of requests served and what the listener received.
+On SIGINT or SIGTERM `serve` stops accepting connections and stops the listener. Each running
+request is interrupted as Ctrl-C interrupts the command run on its own, and `serve` waits for every
+one to answer: most end at once with exit code 12, and a `tx send` that may have stored its
+transaction answers with its `tx_id`. A request still being read is closed unanswered. A second
+signal does nothing, as for any `lepic` command; SIGKILL ends `serve` at once. It then locks the
+wallet, removes the socket and releases the lock. Its report names the socket, the number of requests served and what the listener received.
 
 The protocol is local to the CLI and may change: one request per connection, one JSON line
 `{"args":[...]}` of at most 64 KiB, answered by one JSON object `{"code":0,"stdout":"","stderr":""}`.

@@ -19,11 +19,11 @@ use lepic_primitives::params::Network;
 use lepic_wallet::inbox::{InboxError, InboxSummary, ListenHandle};
 use lepic_wallet_contacts::CollectTrigger;
 use tokio::net::UnixStream;
-use tokio::sync::{Notify, watch};
-use tokio::time::{Instant, MissedTickBehavior};
+use tokio::sync::watch;
+use tokio::time::MissedTickBehavior;
 
 use super::{
-    InvoiceSweep, LISTEN_GRACE, Opened, Run, contact, finish_listen, inbox_report, listen_and_sweep,
+    InvoiceSweep, Opened, Run, abort_on, contact, finish_listen, inbox_report, listen_and_sweep,
 };
 use crate::Console;
 use crate::cli::{
@@ -113,12 +113,19 @@ struct Service<'a, H: Host> {
     host: &'a H,
     settings: &'a Settings,
     held: Arc<Opened<HostNode<H>>>,
+    /// Turns true when serve stops, which interrupts every request as Ctrl-C interrupts a command.
+    interrupt: watch::Receiver<bool>,
 }
 
 impl<H: Host> Service<'_, H> {
     /// Reads one request from `stream`, runs it and sends the reply.
     async fn connection(&self, mut stream: UnixStream, served: &Cell<u32>) {
-        let reply = match service::read_request(&mut stream).await {
+        let mut interrupt = self.interrupt.clone();
+        let request = tokio::select! {
+            request = service::read_request(&mut stream) => request,
+            Ok(_) = interrupt.wait_for(|stopped| *stopped) => return,
+        };
+        let reply = match request {
             Ok(Request { args }) => self.answer(args).await,
             Err(error) => {
                 let stderr = Capture::default();
@@ -206,17 +213,19 @@ impl<H: Host> Service<'_, H> {
         settings: &Settings,
         console: &mut Console,
     ) -> Result<Report, CliError> {
-        // Kept so the request's interrupt never fires: serve ends a request only by dropping it.
-        let (_hold, interrupt) = watch::channel(false);
+        let graceful = Arc::new(AtomicBool::new(false));
         let mut run = Run {
             host: self.host,
             settings,
             console,
-            interrupt,
-            graceful: Arc::new(AtomicBool::new(false)),
+            interrupt: self.interrupt.clone(),
+            graceful: Arc::clone(&graceful),
             held: Some(Arc::clone(&self.held)),
         };
-        run.dispatch(command).await
+        tokio::select! {
+            result = run.dispatch(command) => result,
+            () = abort_on(self.interrupt.clone(), &graceful) => Err(CliError::Interrupted),
+        }
     }
 }
 
@@ -230,10 +239,6 @@ impl<'a> Connections<'a> {
 
     fn is_empty(&self) -> bool {
         self.0.is_empty()
-    }
-
-    fn clear(&mut self) {
-        self.0.clear();
     }
 
     /// Completes when a request has ended; pending while there is none.
@@ -287,15 +292,14 @@ async fn maintain<N: NodeApi + 'static>(
     }
 }
 
-/// Listens, maintains the wallet and answers requests until `stop` is notified and the listener
-/// and the requests have ended. Requests still running [`LISTEN_GRACE`] after the stop are
-/// dropped. Ends early, with the listener's result, when the listener fails.
+/// Listens, maintains the wallet and answers requests until `stop` turns true and the listener
+/// and the requests have ended. The stop interrupts the requests, and a failed listener sets it.
 async fn serving<H: Host>(
     service: &Service<'_, H>,
     listening: &Listening,
     handle: &ListenHandle,
     swept: &Mutex<Option<InvoiceSweep>>,
-    stop: &Notify,
+    stop: &watch::Sender<bool>,
     served: &Cell<u32>,
 ) -> Result<InboxSummary, InboxError> {
     let opened = &*service.held;
@@ -303,26 +307,21 @@ async fn serving<H: Host>(
     let maintenance = maintain(opened, &service.settings.servers.meeting_relays);
     tokio::pin!(listener, maintenance);
     let mut connections = Connections(Vec::new());
+    let mut stopped = stop.subscribe();
     let mut ended = None;
-    let mut interrupted = false;
-    let mut deadline: Option<Instant> = None;
     loop {
         match ended {
             Some(result) if connections.is_empty() => return result,
             _ => {}
         }
-        if deadline.is_none() && (interrupted || ended.is_some()) {
-            deadline = Some(
-                Instant::now()
-                    .checked_add(LISTEN_GRACE)
-                    .unwrap_or_else(Instant::now),
-            );
-        }
-        let stopping = deadline.is_some();
+        let stopping = *stop.borrow();
         tokio::select! {
-            result = &mut listener, if ended.is_none() => ended = Some(result),
+            result = &mut listener, if ended.is_none() => {
+                ended = Some(result);
+                stop.send_replace(true);
+            }
             never = &mut maintenance, if !stopping => match never {},
-            () = stop.notified(), if !interrupted => interrupted = true,
+            Ok(_) = stopped.wait_for(|stopped| *stopped), if !stopping => {}
             accepted = listening.accept(), if !stopping => match accepted {
                 Ok(stream) if listening.is_this_user(&stream) => {
                     connections.push(service.connection(stream, served));
@@ -334,12 +333,6 @@ async fn serving<H: Host>(
                 }
             },
             () = connections.next(), if !connections.is_empty() => {}
-            () = tokio::time::sleep_until(deadline.unwrap_or_else(Instant::now)),
-                if stopping && !connections.is_empty() =>
-            {
-                tracing::warn!("requests still running at shutdown dropped");
-                connections.clear();
-            }
         }
     }
 }
@@ -355,12 +348,13 @@ impl<H: Host> Run<'_, H> {
         opened.wallet.epicbox_attach(&opened.epicbox)?;
         let handle = ListenHandle::new();
         let swept = Mutex::new(Some(InvoiceSweep::default()));
-        let stop = Notify::new();
+        let stop = watch::Sender::new(false);
         let served = Cell::new(0);
         let service = Service {
             host: self.host,
             settings: self.settings,
             held: Arc::clone(&opened),
+            interrupt: stop.subscribe(),
         };
         let result = self
             .until_interrupted(
@@ -368,7 +362,7 @@ impl<H: Host> Run<'_, H> {
                 serving(&service, &listening, &handle, &swept, &stop, &served),
                 || {
                     finish_listen(&handle);
-                    stop.notify_one();
+                    stop.send_replace(true);
                 },
             )
             .await;
