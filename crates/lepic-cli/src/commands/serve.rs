@@ -2,7 +2,7 @@
 //! `lepic serve`: holds one unlocked wallet, does what `epicbox listen` does, and answers other
 //! commands that arrive on a local socket.
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::convert::Infallible;
 use std::future::Future;
 use std::io::{BufReader, Write};
@@ -13,6 +13,7 @@ use std::task::Poll;
 use std::time::Duration;
 
 use clap::Parser as _;
+use jiff::Timestamp;
 use lepic_epicbox::RelayEndpoint;
 use lepic_node::NodeApi;
 use lepic_primitives::params::Network;
@@ -28,11 +29,11 @@ use super::{
 use crate::Console;
 use crate::cli::{
     Cli, Command, ContactArgs, ContactCommand, EpicboxCommand, HttpCommand, NetworkArg, OutputArg,
-    ServeArgs, TorCommand, WalletCommand,
+    ServeArgs, ServeCommand, TorCommand, WalletCommand,
 };
 use crate::exit::CliError;
 use crate::host::{Host, HostNode};
-use crate::output::{Report, ServeReport, render};
+use crate::output::{MaintenanceReport, Report, ServeReport, ServeStatusReport, render};
 use crate::secret::SecretInput;
 use crate::service::{self, Listening, Reply, Request};
 use crate::settings::{Env, OutputFormat, Settings};
@@ -94,7 +95,7 @@ fn refusal(cli: &Cli, settings: &Settings) -> Option<CliError> {
         Command::Wallet(WalletCommand::Init(_)) => "wallet init",
         Command::Wallet(WalletCommand::Restore(_)) => "wallet restore",
         Command::Wallet(WalletCommand::ImportSeed(_)) => "wallet import-seed",
-        Command::Serve(_) => "serve",
+        Command::Serve(ServeArgs { command: None, .. }) => "serve",
         Command::Epicbox(EpicboxCommand::Listen) => "epicbox listen",
         Command::Http(HttpCommand::Listen(_)) => "http listen",
         Command::Tor(TorCommand::Listen(_)) => "tor listen",
@@ -108,6 +109,43 @@ fn refusal(cli: &Cli, settings: &Settings) -> Option<CliError> {
     Some(CliError::ServiceRefused { what })
 }
 
+/// How one maintenance task went since serve started, for `serve status`.
+#[derive(Default)]
+struct TaskStatus {
+    failures: u32,
+    error: Option<String>,
+    succeeded_at: Option<Timestamp>,
+}
+
+impl TaskStatus {
+    fn record<E: std::error::Error + 'static>(&mut self, result: Result<(), E>, now: Timestamp) {
+        match result {
+            Ok(()) => {
+                self.failures = 0;
+                self.succeeded_at = Some(now);
+            }
+            Err(error) => {
+                self.failures = self.failures.saturating_add(1);
+                self.error = Some(lepic_telemetry::ErrorChain(&error).to_string());
+            }
+        }
+    }
+
+    fn report(&self) -> MaintenanceReport {
+        MaintenanceReport {
+            consecutive_failures: self.failures,
+            last_error: self.error.clone(),
+            last_success: self.succeeded_at.map(|at| at.to_string()),
+        }
+    }
+}
+
+#[derive(Default)]
+struct Maintenance {
+    refresh: TaskStatus,
+    collect: TaskStatus,
+}
+
 /// The wallet serve holds, and what a request needs to run a command on it.
 struct Service<'a, H: Host> {
     host: &'a H,
@@ -115,6 +153,7 @@ struct Service<'a, H: Host> {
     held: Arc<Opened<HostNode<H>>>,
     /// Turns true when serve stops, which interrupts every request as Ctrl-C interrupts a command.
     interrupt: watch::Receiver<bool>,
+    maintenance: RefCell<Maintenance>,
 }
 
 impl<H: Host> Service<'_, H> {
@@ -213,6 +252,17 @@ impl<H: Host> Service<'_, H> {
         settings: &Settings,
         console: &mut Console,
     ) -> Result<Report, CliError> {
+        if let Command::Serve(ServeArgs {
+            command: Some(ServeCommand::Status),
+            ..
+        }) = command
+        {
+            let maintenance = self.maintenance.borrow();
+            return Ok(Report::ServeStatus(ServeStatusReport {
+                refresh: maintenance.refresh.report(),
+                collect: maintenance.collect.report(),
+            }));
+        }
         let graceful = Arc::new(AtomicBool::new(false));
         let mut run = Run {
             host: self.host,
@@ -257,11 +307,12 @@ impl<'a> Connections<'a> {
     }
 }
 
-/// Collects the contact mailboxes and refreshes the wallet, each on its interval. A failure is
-/// logged and the next tick tries again.
+/// Collects the contact mailboxes and refreshes the wallet, each on its interval, and records how
+/// each went in `status`. A failure is logged and the next tick tries again.
 async fn maintain<N: NodeApi + 'static>(
     opened: &Opened<N>,
     meeting: &[RelayEndpoint],
+    status: &RefCell<Maintenance>,
 ) -> Infallible {
     let mut collect = tokio::time::interval(COLLECT_INTERVAL);
     collect.set_missed_tick_behavior(MissedTickBehavior::Delay);
@@ -273,20 +324,25 @@ async fn maintain<N: NodeApi + 'static>(
             _ = collect.tick() => {
                 let cycle = contact::collect_online(opened, meeting, trigger).await;
                 trigger = CollectTrigger::Foreground;
-                if let Err(error) = cycle {
+                if let Err(error) = &cycle {
                     tracing::warn!(
-                        error = %lepic_telemetry::ErrorChain(&error),
+                        error = %lepic_telemetry::ErrorChain(error),
                         "contact collect failed"
                     );
                 }
+                let now = opened.wallet.ports().clock.now();
+                status.borrow_mut().collect.record(cycle, now);
             }
             _ = refresh.tick() => {
-                if let Err(error) = opened.wallet.refresh().await {
+                let refreshed = opened.wallet.refresh().await.map(drop);
+                if let Err(error) = &refreshed {
                     tracing::warn!(
-                        error = %lepic_telemetry::ErrorChain(&error),
+                        error = %lepic_telemetry::ErrorChain(error),
                         "wallet refresh failed"
                     );
                 }
+                let now = opened.wallet.ports().clock.now();
+                status.borrow_mut().refresh.record(refreshed, now);
             }
         }
     }
@@ -304,7 +360,11 @@ async fn serving<H: Host>(
 ) -> Result<InboxSummary, InboxError> {
     let opened = &*service.held;
     let listener = listen_and_sweep(opened, handle, service.settings.invoice_expiry, swept);
-    let maintenance = maintain(opened, &service.settings.servers.meeting_relays);
+    let maintenance = maintain(
+        opened,
+        &service.settings.servers.meeting_relays,
+        &service.maintenance,
+    );
     tokio::pin!(listener, maintenance);
     let mut connections = Connections(Vec::new());
     let mut stopped = stop.subscribe();
@@ -339,6 +399,11 @@ async fn serving<H: Host>(
 
 impl<H: Host> Run<'_, H> {
     pub(super) async fn serve(&mut self, args: ServeArgs) -> Result<Report, CliError> {
+        if let Some(ServeCommand::Status) = args.command {
+            return Err(CliError::ServiceOnly {
+                what: "serve status",
+            });
+        }
         let path = args
             .socket
             .unwrap_or_else(|| service::default_socket(&self.settings.data_dir));
@@ -355,6 +420,7 @@ impl<H: Host> Run<'_, H> {
             settings: self.settings,
             held: Arc::clone(&opened),
             interrupt: stop.subscribe(),
+            maintenance: RefCell::default(),
         };
         let result = self
             .until_interrupted(

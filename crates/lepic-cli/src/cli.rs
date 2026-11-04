@@ -146,10 +146,23 @@ while it runs, and answers other lepic commands on a local socket: run them with
 user that runs it can use the socket. Ctrl-C or SIGTERM stops it.";
 
 #[derive(Debug, Args)]
+#[command(args_conflicts_with_subcommands = true)]
 pub struct ServeArgs {
+    #[command(subcommand)]
+    pub command: Option<ServeCommand>,
     /// Unix socket to listen on [default: lepic.sock in the data directory]
     #[arg(long, value_name = "SOCKET")]
     pub socket: Option<PathBuf>,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum ServeCommand {
+    /// Show how the running serve's refreshes and contact collects went
+    #[command(after_help = "\
+Answers only through a running serve: `lepic --service serve status`. For the wallet refresh and
+the contact collect it shows the failures since the last success, the last error and when the
+task last succeeded. serve only reports them; it keeps retrying every minute.")]
+    Status,
 }
 
 #[derive(Debug, Subcommand)]

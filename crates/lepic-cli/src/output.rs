@@ -39,6 +39,7 @@ pub enum Report {
     InvoiceDecline(InvoiceDeclineReport),
     Inbox(InboxReport),
     Serve(ServeReport),
+    ServeStatus(ServeStatusReport),
     EpicboxStatus(EpicboxStatusReport),
     Peer(PeerReport),
     HttpListen(HttpListenReport),
@@ -560,6 +561,24 @@ pub struct ServeReport {
     pub inbox: InboxReport,
 }
 
+/// How the maintenance of a running `serve` went: `serve status`.
+#[derive(Debug, Serialize)]
+pub struct ServeStatusReport {
+    pub refresh: MaintenanceReport,
+    pub collect: MaintenanceReport,
+}
+
+/// One maintenance task of `serve`, since it started.
+#[derive(Debug, Serialize)]
+pub struct MaintenanceReport {
+    /// Failures since the last success.
+    pub consecutive_failures: u32,
+    /// The error of the latest failure, kept after a success; `null` before any failure.
+    pub last_error: Option<String>,
+    /// `null` before the first success.
+    pub last_success: Option<String>,
+}
+
 /// What `http listen` did before it was stopped.
 #[derive(Debug, Serialize)]
 pub struct HttpListenReport {
@@ -894,6 +913,7 @@ fn write_human(out: &mut Vec<u8>, report: &Report) -> std::io::Result<()> {
         | Report::Peer(_) => write_invoice_human(out, report),
         Report::Inbox(_)
         | Report::Serve(_)
+        | Report::ServeStatus(_)
         | Report::HttpListen(_)
         | Report::TorAddress(_)
         | Report::TorListen(_)
@@ -1257,6 +1277,23 @@ fn write_invoice_human(out: &mut Vec<u8>, report: &Report) -> std::io::Result<()
     }
 }
 
+fn write_maintenance(
+    out: &mut Vec<u8>,
+    name: &str,
+    task: &MaintenanceReport,
+) -> std::io::Result<()> {
+    let success = task.last_success.as_deref().unwrap_or("never");
+    write!(
+        out,
+        "{name}  {} failures in a row, last success {success}",
+        task.consecutive_failures
+    )?;
+    match &task.last_error {
+        Some(error) => writeln!(out, ", last error: {error}"),
+        None => writeln!(out),
+    }
+}
+
 /// An inbox, listener, Tor or Epicbox report. Writes nothing for any other.
 fn write_transport_human(out: &mut Vec<u8>, report: &Report) -> std::io::Result<()> {
     match report {
@@ -1264,6 +1301,10 @@ fn write_transport_human(out: &mut Vec<u8>, report: &Report) -> std::io::Result<
         Report::Serve(r) => {
             writeln!(out, "Served {} requests on {}.", r.requests, r.socket)?;
             write_inbox(out, &r.inbox)
+        }
+        Report::ServeStatus(r) => {
+            write_maintenance(out, "Refresh", &r.refresh)?;
+            write_maintenance(out, "Collect", &r.collect)
         }
         Report::HttpListen(r) => writeln!(
             out,

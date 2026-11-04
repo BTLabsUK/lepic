@@ -695,7 +695,19 @@ prompt) and holds `.lepic.lock` until it stops. While it runs it also:
   everything at once);
 - refreshes the wallet from the node at start and every minute.
 
-A failed tick is logged at `warn` and never ends `serve`.
+A failed tick is logged at `warn` and never ends `serve`. `lepic --service serve status` shows,
+for the refresh and the collect, the failures since the last success, the last error and the time
+of the last success; `serve` only reports them and keeps trying every minute. Without `--service`,
+`serve status` exits with code 2 (`usage`).
+
+```
+$ lepic --service serve status
+Refresh  0 failures in a row, last success 2026-11-04T10:15:02Z
+Collect  3 failures in a row, last success 2026-11-04T10:12:01Z, last error: ...
+```
+
+With `--output json`, each of `refresh` and `collect` holds `consecutive_failures`, `last_error`
+(`null` before any failure, kept after a success) and `last_success` (`null` before the first).
 
 The socket is `<data_dir>/lepic.sock`; `--socket <PATH>` picks another. The path must fit a Unix
 socket (107 bytes on Linux), or `serve` exits with a usage error that names `--socket`. The socket
@@ -715,7 +727,8 @@ accepted and ignored, because `serve` logs to its own stderr.
 `serve` refuses with exit code 2 (`usage`) what cannot work inside it:
 
 - `wallet init`, `wallet restore` and `wallet import-seed`;
-- `serve`, `epicbox listen`, `http listen` and `tor listen`, because `serve` owns the process;
+- `serve` (but not `serve status`), `epicbox listen`, `http listen` and `tor listen`, because
+  `serve` owns the process;
 - `contact open-sealed -`, which would read the stdin of `serve`;
 - `--network` with another network than `serve` opened, and `--service`.
 

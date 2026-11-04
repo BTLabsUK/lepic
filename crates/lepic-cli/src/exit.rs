@@ -216,6 +216,8 @@ pub enum CliError {
     ServiceRefused { what: &'static str },
     #[error("{option} cannot change what lepic serve opened")]
     ServiceOption { option: &'static str },
+    #[error("{what} answers only through lepic --service")]
+    ServiceOnly { what: &'static str },
     #[error("the request to lepic serve is refused: {reason}")]
     ServiceRequest { reason: &'static str },
     #[error("the socket path {} is too long for a unix socket", path.display())]
@@ -257,6 +259,7 @@ impl CliError {
             | Self::ContactId
             | Self::ServiceRefused { .. }
             | Self::ServiceOption { .. }
+            | Self::ServiceOnly { .. }
             | Self::ServiceRequest { .. }
             | Self::SocketPathTooLong { .. }
             | Self::SocketPathTaken { .. }
