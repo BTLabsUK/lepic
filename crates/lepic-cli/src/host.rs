@@ -5,6 +5,7 @@ use std::future::Future;
 use std::io::Read as _;
 use std::pin::Pin;
 use std::sync::Arc;
+use std::time::Duration;
 
 use lepic_epicbox::tunnel::OnionRoutes;
 use lepic_epicbox::tunnel::{Tunnel, TunnelConnector};
@@ -45,6 +46,12 @@ pub trait Host {
     /// Resolves when the user asks the command to stop. Called once per command, inside its
     /// runtime, before anything is read, so that an interrupt at a prompt reaches the CLI.
     fn interrupted(&self) -> Interrupt;
+
+    /// How often `lepic serve` collects the contact mailboxes and refreshes the wallet, as the
+    /// app's foreground tick does. Tests shorten it.
+    fn maintenance_interval(&self) -> Duration {
+        Duration::from_secs(60)
+    }
 }
 
 /// The node over HTTP, the relay over TCP and TLS, Ctrl-C.

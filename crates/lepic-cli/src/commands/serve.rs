@@ -38,13 +38,6 @@ use crate::secret::SecretInput;
 use crate::service::{self, Listening, Reply, Request};
 use crate::settings::{Env, OutputFormat, Settings};
 
-/// How often serve collects the contact mailboxes, as the app's foreground tick does: relay
-/// backoff and outbox retry times are kept. The first cycle, at start, tries everything at once.
-const COLLECT_INTERVAL: Duration = Duration::from_secs(60);
-
-/// How often serve refreshes the wallet against the node, and once when it starts.
-const REFRESH_INTERVAL: Duration = Duration::from_secs(60);
-
 /// Output a request's command wrote, read back for the reply.
 #[derive(Clone, Default)]
 struct Capture(Arc<Mutex<Vec<u8>>>);
@@ -307,16 +300,19 @@ impl<'a> Connections<'a> {
     }
 }
 
-/// Collects the contact mailboxes and refreshes the wallet, each on its interval, and records how
-/// each went in `status`. A failure is logged and the next tick tries again.
+/// Collects the contact mailboxes and refreshes the wallet, each every `every` and once at start,
+/// and records how each went in `status`. Relay backoff and outbox retry times are kept between
+/// collects; the first, at start, tries everything at once. A failure is logged and the next
+/// tick tries again.
 async fn maintain<N: NodeApi + 'static>(
     opened: &Opened<N>,
     meeting: &[RelayEndpoint],
+    every: Duration,
     status: &RefCell<Maintenance>,
 ) -> Infallible {
-    let mut collect = tokio::time::interval(COLLECT_INTERVAL);
+    let mut collect = tokio::time::interval(every);
     collect.set_missed_tick_behavior(MissedTickBehavior::Delay);
-    let mut refresh = tokio::time::interval(REFRESH_INTERVAL);
+    let mut refresh = tokio::time::interval(every);
     refresh.set_missed_tick_behavior(MissedTickBehavior::Delay);
     let mut trigger = CollectTrigger::Open;
     loop {
@@ -363,6 +359,7 @@ async fn serving<H: Host>(
     let maintenance = maintain(
         opened,
         &service.settings.servers.meeting_relays,
+        service.host.maintenance_interval(),
         &service.maintenance,
     );
     tokio::pin!(listener, maintenance);
