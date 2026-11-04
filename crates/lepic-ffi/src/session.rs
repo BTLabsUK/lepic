@@ -496,6 +496,7 @@ fn session_transports(
 }
 
 /// The locked engine of a session on `data_dir`, with the contact engine installed.
+#[allow(clippy::too_many_arguments)] // Each is one input of the session's engine.
 fn engine(
     runtime: &Arc<RuntimeInner>,
     config: &WalletConfig,

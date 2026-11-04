@@ -12,12 +12,11 @@ use lepic_primitives::amount::{Amount, Height};
 use lepic_primitives::output::{OutputFeatures, OutputIdentifier};
 use lepic_primitives::params::Network;
 use lepic_store::{AccountIndex, KeyId, OutputRecord, OutputStatus, StoreKeys, WalletStore};
-use lepic_transport::transport::TransportId;
 use lepic_wallet::lifecycle::PhraseCheck;
 use lepic_wallet::scan::{ScanCancel, ScanOptions, ScanStart};
 use lepic_wallet::{
-    AccountError, ConfigError, DEFAULT_ACCOUNT_LABEL, Event, SecretVault, SessionState,
-    SqliteStores, StoreOpener, Wallet, WalletError, WordCount, lifecycle,
+    AccountError, DEFAULT_ACCOUNT_LABEL, Event, SecretVault, SessionState, SqliteStores,
+    StoreOpener, Wallet, WalletError, WordCount, lifecycle,
 };
 use support::{Harness, TestStore, TestVault, WALLET_SEED_VECTOR, password, vector_text};
 use tokio::sync::broadcast::Receiver;
