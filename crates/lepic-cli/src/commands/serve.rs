@@ -15,6 +15,7 @@ use std::time::Duration;
 use clap::Parser as _;
 use lepic_epicbox::RelayEndpoint;
 use lepic_node::NodeApi;
+use lepic_primitives::params::Network;
 use lepic_wallet::inbox::{InboxError, InboxSummary, ListenHandle};
 use tokio::net::UnixStream;
 use tokio::sync::{Notify, watch};
@@ -25,8 +26,8 @@ use super::{
 };
 use crate::Console;
 use crate::cli::{
-    Cli, Command, ContactArgs, ContactCommand, EpicboxCommand, HttpCommand, OutputArg, ServeArgs,
-    TorCommand, WalletCommand,
+    Cli, Command, ContactArgs, ContactCommand, EpicboxCommand, HttpCommand, NetworkArg, OutputArg,
+    ServeArgs, TorCommand, WalletCommand,
 };
 use crate::exit::CliError;
 use crate::host::{Host, HostNode};
@@ -67,13 +68,19 @@ impl Capture {
 }
 
 /// The commands that cannot run through serve, and the options that would change what it opened.
-fn refusal(cli: &Cli) -> Option<CliError> {
+/// `--data-dir`, `--config` and `--settings` only say where a client found the socket, so they are
+/// ignored; `--network` passes when it names the network serve opened.
+fn refusal(cli: &Cli, settings: &Settings) -> Option<CliError> {
     let global = &cli.global;
+    let other_network = global.network.is_some_and(|network| {
+        let network = match network {
+            NetworkArg::Mainnet => Network::Mainnet,
+            NetworkArg::Floonet => Network::Floonet,
+        };
+        network != settings.network
+    });
     let option = [
-        (global.data_dir.is_some(), "--data-dir"),
-        (global.network.is_some(), "--network"),
-        (global.config.is_some(), "--config"),
-        (global.settings.is_some(), "--settings"),
+        (other_network, "--network"),
         (global.service.is_some(), "--service"),
     ]
     .into_iter()
@@ -176,7 +183,7 @@ impl<H: Host> Service<'_, H> {
             Some(OutputArg::Json) => settings.output = OutputFormat::Json,
             None => {}
         }
-        let result = match refusal(&cli) {
+        let result = match refusal(&cli, self.settings) {
             Some(error) => Err(error),
             None => self.command(cli.command, &settings, console).await,
         };

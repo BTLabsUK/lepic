@@ -78,7 +78,6 @@ fn serve_answers_commands_and_stops_on_interrupt() {
             vec!["wallet", "init"],
             vec!["serve"],
             vec!["epicbox", "listen"],
-            vec!["--data-dir", "elsewhere", "wallet", "info"],
         ] {
             let mut args = vec![service.as_str()];
             args.extend(refused);
@@ -86,6 +85,25 @@ fn serve_answers_commands_and_stops_on_interrupt() {
             assert_eq!(outcome.code, 2, "{outcome:?}");
             assert_eq!(outcome.json()["error"]["kind"], "usage", "{outcome:?}");
         }
+
+        // The client's own location options say where it found the socket; serve ignores them.
+        let data_dir = wallet.data_dir().display().to_string();
+        let located = wallet.run(
+            &host,
+            &[
+                "--data-dir",
+                &data_dir,
+                "--network",
+                "floonet",
+                &service,
+                "tx",
+                "list",
+            ],
+        );
+        assert_eq!(located.ok().json(), listed);
+        let other = wallet.run(&host, &["--network", "mainnet", &service, "tx", "list"]);
+        assert_eq!(other.code, 2, "{other:?}");
+        assert_eq!(other.json()["error"]["kind"], "usage", "{other:?}");
 
         let garbled = raw_request(&socket, "not json\n");
         assert_eq!(garbled["code"], 2, "{garbled}");
@@ -96,7 +114,7 @@ fn serve_answers_commands_and_stops_on_interrupt() {
 
     let report = served.ok().json();
     assert_eq!(keys(&report), ["inbox", "requests", "socket"]);
-    assert_eq!(report["requests"], 8, "{report}");
+    assert_eq!(report["requests"], 9, "{report}");
     assert!(!socket.exists());
     // The lock is released: a one-shot command opens the wallet again.
     host.interrupt_when = None;

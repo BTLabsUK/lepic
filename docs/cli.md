@@ -710,8 +710,11 @@ accepted and ignored, because `serve` logs to its own stderr.
 - `wallet init`, `wallet restore` and `wallet import-seed`;
 - `serve`, `epicbox listen`, `http listen` and `tor listen`, because `serve` owns the process;
 - `contact open-sealed -`, which would read the stdin of `serve`;
-- the options `--data-dir`, `--network`, `--config`, `--settings` and `--service`, which would
-  change what `serve` opened.
+- `--network` with another network than `serve` opened, and `--service`.
+
+`--data-dir`, `--config` and `--settings` in a request are ignored: the socket picks the wallet, so
+`lepic --data-dir /srv/faucet --service tx list` finds the socket there and runs on whatever wallet
+that `serve` holds.
 
 A command that reads a secret from stdin fails, as `serve` gives every request an empty stdin.
 
