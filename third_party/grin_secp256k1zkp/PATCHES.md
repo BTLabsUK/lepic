@@ -52,6 +52,10 @@ was checked with fixed-vector and mainnet-data comparisons of the old and new bu
    targets. Identical digests for every input below 4 GiB.
 9. bitcoin-core/secp256k1 `960ba5f9` (PR 1729): `src/hash_impl.h`, the RFC6979 generate
    loop keeps the remaining length in a `size_t` instead of an `int`. Same output.
+10. bitcoin-core/secp256k1 `93d343bf` (PR 732): `src/ecdsa_impl.h`,
+   `secp256k1_ecdsa_sig_sign` checks a zero `r` and an overflowing `x` at run time again
+   instead of in `VERIFY_CHECK`s that this build compiles away. The conditions are
+   cryptographically unreachable, so no signature changes.
 
 ## Build changes (`build.rs`)
 
