@@ -126,6 +126,7 @@ fn a_send_to_a_contact_this_wallet_does_not_hold_stores_nothing() {
         &["tx", "send", "1", "--to-contact", "not-a-contact-id"],
     );
     assert_eq!((outcome.code, error_kind(&outcome).as_str()), (2, "usage"));
+    let slate_file = wallet.path("x.slate");
     let outcome = wallet.run(
         &host,
         &[
@@ -133,7 +134,7 @@ fn a_send_to_a_contact_this_wallet_does_not_hold_stores_nothing() {
             "send",
             "1",
             "--to-file",
-            "x.slate",
+            slate_file.to_str().unwrap(),
             "--purpose",
             "withdrawal",
         ],
