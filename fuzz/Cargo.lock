@@ -1250,6 +1250,7 @@ dependencies = [
 name = "lepic-transport"
 version = "0.1.0"
 dependencies = [
+ "lepic-primitives",
  "lepic-slate",
  "serde",
  "serde_json",

@@ -28,11 +28,6 @@ use crate::transport::{BoxFuture, Exchange, Location, Transport, TransportId};
 
 pub const FILE: TransportId = TransportId::new("file");
 
-/// This platform's `O_NOFOLLOW`, for hosts that also open files they must not reach through a
-/// symbolic link.
-#[cfg(unix)]
-pub const O_NOFOLLOW: i32 = open_flags::O_NOFOLLOW;
-
 /// `version` and `orig_version` of every file LEPIC writes. A reader dispatches on `version`
 /// (`Slate::deserialize_upgrade` upstream), so a V3-shaped file must say 3 or its TTL and payment
 /// proof are dropped on read.
@@ -188,7 +183,7 @@ async fn write_slate_file(path: &Path, wire: &WireSlate) -> Result<(), FileError
     let mut options = tokio::fs::OpenOptions::new();
     options.write(true).create(true).truncate(true);
     #[cfg(unix)]
-    options.custom_flags(open_flags::O_NOFOLLOW);
+    options.custom_flags(lepic_primitives::open_flags::O_NOFOLLOW);
     let mut file = options
         .open(path)
         .await
@@ -260,77 +255,9 @@ async fn open_for_reading(path: &Path) -> std::io::Result<tokio::fs::File> {
     let mut options = tokio::fs::OpenOptions::new();
     options.read(true);
     #[cfg(unix)]
-    options.custom_flags(open_flags::O_NONBLOCK);
+    options.custom_flags(lepic_primitives::open_flags::O_NONBLOCK);
     options.open(path).await
 }
-
-// `O_NONBLOCK` and `O_NOFOLLOW` from the platform headers. Their values differ between kernels
-// and, on Linux, between architectures. A Unix target not listed here fails to build rather than
-// lose either guard.
-#[cfg(all(
-    any(target_os = "linux", target_os = "android"),
-    any(
-        target_arch = "x86",
-        target_arch = "x86_64",
-        target_arch = "riscv64",
-        target_arch = "s390x",
-        target_arch = "loongarch64"
-    )
-))]
-mod open_flags {
-    pub(super) const O_NONBLOCK: i32 = 0o4000;
-    pub(super) const O_NOFOLLOW: i32 = 0o400000;
-}
-
-#[cfg(all(
-    any(target_os = "linux", target_os = "android"),
-    any(
-        target_arch = "arm",
-        target_arch = "aarch64",
-        target_arch = "powerpc64"
-    )
-))]
-mod open_flags {
-    pub(super) const O_NONBLOCK: i32 = 0o4000;
-    pub(super) const O_NOFOLLOW: i32 = 0o100000;
-}
-
-#[cfg(any(
-    target_vendor = "apple",
-    target_os = "freebsd",
-    target_os = "netbsd",
-    target_os = "openbsd",
-    target_os = "dragonfly"
-))]
-mod open_flags {
-    pub(super) const O_NONBLOCK: i32 = 0x0004;
-    pub(super) const O_NOFOLLOW: i32 = 0x0100;
-}
-
-#[cfg(all(
-    unix,
-    not(any(
-        all(
-            any(target_os = "linux", target_os = "android"),
-            any(
-                target_arch = "x86",
-                target_arch = "x86_64",
-                target_arch = "riscv64",
-                target_arch = "s390x",
-                target_arch = "loongarch64",
-                target_arch = "arm",
-                target_arch = "aarch64",
-                target_arch = "powerpc64"
-            )
-        ),
-        target_vendor = "apple",
-        target_os = "freebsd",
-        target_os = "netbsd",
-        target_os = "openbsd",
-        target_os = "dragonfly"
-    ))
-))]
-compile_error!("the file transport does not know O_NONBLOCK and O_NOFOLLOW for this Unix target");
 
 #[cfg(test)]
 mod tests {

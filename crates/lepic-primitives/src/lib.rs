@@ -9,6 +9,8 @@ pub mod fee;
 pub mod hash;
 pub mod input;
 pub mod kernel;
+#[cfg(unix)]
+pub mod open_flags;
 pub mod output;
 pub mod params;
 pub mod ser;

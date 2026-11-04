@@ -49,7 +49,7 @@ pub fn try_lock_data_dir(dir: &Path) -> Result<DataDirLock, DataDirLockError> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt as _;
-        options.custom_flags(crate::file::O_NOFOLLOW);
+        options.custom_flags(lepic_primitives::open_flags::O_NOFOLLOW);
     }
     let file = options
         .open(dir.join(LOCK_FILE))
