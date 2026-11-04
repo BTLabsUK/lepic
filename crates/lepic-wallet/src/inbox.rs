@@ -36,8 +36,6 @@ mod listing;
 
 use listing::ListingRoute;
 
-use std::error::Error as StdError;
-use std::fmt;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
@@ -49,6 +47,7 @@ use lepic_epicbox::{
     Subscription, TRANSPORT_ID,
 };
 use lepic_node::{NodeApi, Propagation};
+use lepic_primitives::error_chain::ErrorChain;
 use lepic_primitives::params::Network;
 use lepic_slate::codec::WireSlate;
 use lepic_slate::model::Slate;
@@ -90,8 +89,6 @@ const ADDRESS_ACCOUNT: AccountIndex = AccountIndex(0);
 
 /// `epic-wallet`'s Epicbox listener posts finalized transactions without fluff.
 const POST_PROPAGATION: Propagation = Propagation::Stem;
-
-const MAX_ERROR_SOURCES: usize = 8;
 
 /// Settling messages prunes the relay inbox at most this often, on the wallet clock.
 const PRUNE_INTERVAL: Duration = Duration::from_secs(60 * 60);
@@ -375,20 +372,6 @@ pub enum Hold {
 impl From<StoreError> for Hold {
     fn from(error: StoreError) -> Self {
         Self::Wallet(WalletError::Store(error))
-    }
-}
-
-/// Displays an error with its source chain, for the `error` log field.
-pub struct ErrorChain<'a>(pub &'a (dyn StdError + 'static));
-
-impl fmt::Display for ErrorChain<'_> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.0)?;
-        let sources = std::iter::successors(self.0.source(), |&error| error.source());
-        for source in sources.take(MAX_ERROR_SOURCES) {
-            write!(f, ": {source}")?;
-        }
-        Ok(())
     }
 }
 

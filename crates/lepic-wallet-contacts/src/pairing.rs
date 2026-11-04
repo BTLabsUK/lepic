@@ -548,7 +548,7 @@ where
             {
                 Ok(()) => true,
                 Err(error) => {
-                    warn!(peer_relay = %host_text(&home), error = %lepic_wallet::inbox::ErrorChain(&error), "pairing reply not posted");
+                    warn!(peer_relay = %host_text(&home), error = %lepic_primitives::error_chain::ErrorChain(&error), "pairing reply not posted");
                     false
                 }
             };
@@ -818,7 +818,7 @@ where
         if relays.mode == super::RelayMode::Online
             && let Err(error) = self.deliver_status(relays, false).await
         {
-            warn!(error = %lepic_wallet::inbox::ErrorChain(&error), "pairing status not delivered");
+            warn!(error = %lepic_primitives::error_chain::ErrorChain(&error), "pairing status not delivered");
         }
         Ok(())
     }
@@ -918,7 +918,7 @@ where
                 .map_err(|_| ContactError::RelayAddress)?;
             let onion = invite.fields().onion.as_ref().map(RelayHost::as_str);
             if let Err(error) = post_envelope(relays, &from, &to, onion, &reply).await {
-                debug!(error = %lepic_wallet::inbox::ErrorChain(&error), "pairing reply not posted again");
+                debug!(error = %lepic_primitives::error_chain::ErrorChain(&error), "pairing reply not posted again");
             }
         }
         Ok(())
@@ -959,7 +959,7 @@ where
             .await
         };
         if let Err(error) = posted.await {
-            warn!(error = %lepic_wallet::inbox::ErrorChain(&error), "pairing refusal not posted");
+            warn!(error = %lepic_primitives::error_chain::ErrorChain(&error), "pairing refusal not posted");
         }
     }
 

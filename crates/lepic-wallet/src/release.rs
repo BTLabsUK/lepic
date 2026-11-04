@@ -35,7 +35,6 @@ use uuid::Uuid;
 use crate::cancel::{cancel_partner, drop_holdings, pool_holds, self_send_partner};
 use crate::chain;
 use crate::error::WalletError;
-use crate::inbox::ErrorChain;
 use crate::lifecycle::Session;
 use crate::other_wallet;
 use crate::ports::{SecretVault, StoreOpener};
@@ -44,6 +43,7 @@ use crate::refresh::{
 };
 use crate::state::{StateChange, apply_transition, confirm_released, state_name};
 use crate::wallet::Wallet;
+use lepic_primitives::error_chain::ErrorChain;
 
 /// Blocks after finalizing that a send's kernel must still be missing before it may be
 /// released: a day of blocks, the wait the Epic Cash app applies.

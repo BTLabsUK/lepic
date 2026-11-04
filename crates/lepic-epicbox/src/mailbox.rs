@@ -15,14 +15,14 @@ use std::io;
 use std::sync::Arc;
 use std::time::Duration;
 
+use lepic_primitives::error_chain::ErrorChain;
 use lepic_transport::transport::BoxFuture;
 use tokio::time::{Instant, timeout, timeout_at};
 use tracing::{Instrument, debug, info, info_span, warn};
 
 use crate::address::EpicboxAddress;
 use crate::client::{
-    Awaiting, ClientContext, ClientError, ClientSettings, ErrorChain, Identity, TRANSPORT_ID,
-    post_frame, seal,
+    Awaiting, ClientContext, ClientError, ClientSettings, Identity, TRANSPORT_ID, post_frame, seal,
 };
 use crate::client_inbox::RejectionReason;
 use crate::crypto::ReceivedMessage;

@@ -1076,15 +1076,15 @@ where
                     Err(error) => Err(error),
                 };
                 if let Err(error) = marked {
-                    warn!(error = %crate::inbox::ErrorChain(&error), "send spent elsewhere not marked");
+                    warn!(error = %lepic_primitives::error_chain::ErrorChain(&error), "send spent elsewhere not marked");
                 }
             }
             Err(error) => {
-                warn!(error = %crate::inbox::ErrorChain(&error), "refused transaction not cancelled");
+                warn!(error = %lepic_primitives::error_chain::ErrorChain(&error), "refused transaction not cancelled");
             }
         }
         if let Err(error) = self.refresh().await {
-            warn!(error = %crate::inbox::ErrorChain(&error), "refresh after a refused transaction failed");
+            warn!(error = %lepic_primitives::error_chain::ErrorChain(&error), "refresh after a refused transaction failed");
         }
     }
 
@@ -1194,7 +1194,7 @@ where
         self.emit(crate::Event::NotPosted(crate::event::NotPosted {
             tx_id,
             slate_id: finalized.slate.id(),
-            reason: crate::inbox::ErrorChain(source).to_string(),
+            reason: lepic_primitives::error_chain::ErrorChain(source).to_string(),
         }));
     }
 

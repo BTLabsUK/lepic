@@ -345,7 +345,7 @@ where
                 Ok(Ok(true)) => info!("unpaired notice posted"),
                 Ok(Ok(false)) => {}
                 Ok(Err(error)) => {
-                    warn!(error = %lepic_wallet::inbox::ErrorChain(&error), "unpaired notice not posted");
+                    warn!(error = %lepic_primitives::error_chain::ErrorChain(&error), "unpaired notice not posted");
                 }
                 Err(_) => warn!("unpaired notice not posted in time"),
             }

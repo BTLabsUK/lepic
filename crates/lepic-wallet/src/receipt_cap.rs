@@ -14,10 +14,10 @@ use tracing::{debug, info, instrument, warn};
 use uuid::Uuid;
 
 use crate::error::WalletError;
-use crate::inbox::ErrorChain;
 use crate::ports::{SecretVault, StoreOpener};
 use crate::receive::{ReceiveError, ReceiveRequest, Received, check_proposal, legacy_codecs};
 use crate::wallet::Wallet;
+use lepic_primitives::error_chain::ErrorChain;
 
 /// Why a new S1 cannot be received under the caps.
 #[derive(Debug)]

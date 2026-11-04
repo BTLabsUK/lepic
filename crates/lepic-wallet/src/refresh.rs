@@ -19,14 +19,13 @@
 //! a separate [`Wallet::scan`] with [`crate::scan::ScanOptions::update`], run after a refresh.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::error::Error as StdError;
-use std::fmt;
 use std::sync::Arc;
 
 use jiff::Timestamp;
 use lepic_crypto::Commitment;
 use lepic_node::{NodeApi, NodeError, OutputLocation};
 use lepic_primitives::amount::{Amount, ArithmeticError, Fee, Height};
+use lepic_primitives::error_chain::ErrorChain;
 use lepic_slate::codec::{MediaType, WireSlate};
 use lepic_slate::model::Slate;
 use lepic_slate::registry::CodecRegistry;
@@ -1914,23 +1913,6 @@ pub(crate) fn decode_stored(codecs: &CodecRegistry, tx_id: TxId, bytes: &[u8]) -
             warn!(tx_id = %tx_id, error = %ErrorChain(&error), "stored slate unreadable");
             None
         }
-    }
-}
-
-/// Errors nested deeper than this are cut from a log line.
-const MAX_ERROR_SOURCES: usize = 16;
-
-/// Displays an error followed by its sources, separated by `": "`, for the `error` log field.
-struct ErrorChain<'a>(&'a (dyn StdError + 'static));
-
-impl fmt::Display for ErrorChain<'_> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.0)?;
-        let sources = std::iter::successors(self.0.source(), |&error| error.source());
-        for source in sources.take(MAX_ERROR_SOURCES) {
-            write!(f, ": {source}")?;
-        }
-        Ok(())
     }
 }
 

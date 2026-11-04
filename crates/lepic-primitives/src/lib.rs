@@ -4,6 +4,7 @@
 pub mod amount;
 pub mod committed;
 pub mod crypto_ser;
+pub mod error_chain;
 pub mod fee;
 pub mod hash;
 pub mod input;

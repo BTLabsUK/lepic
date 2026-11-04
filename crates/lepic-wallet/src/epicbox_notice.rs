@@ -38,13 +38,14 @@ use crate::event::{
     WithdrawnInvoice,
 };
 use crate::finalize::kernel_excess;
-use crate::inbox::{ErrorChain, Handled, Hold, relay_network};
+use crate::inbox::{Handled, Hold, relay_network};
 use crate::invoice::check_signed_payment;
 use crate::notice::{Notice, NoticeKind};
 use crate::peer_compat::{facts, record_marked, record_slate};
 use crate::ports::{SecretVault, StoreOpener};
 use crate::refresh::{final_kernel, stored_slate};
 use crate::wallet::Wallet;
+use lepic_primitives::error_chain::ErrorChain;
 
 /// What an accepted notice changed, for the event it raises.
 #[derive(Clone, Copy)]

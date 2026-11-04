@@ -26,8 +26,8 @@ use tracing::{debug, info, warn};
 
 use super::{ContactError, ContactRelays, LockedRng};
 use crate::ContactBook;
+use lepic_primitives::error_chain::ErrorChain;
 use lepic_wallet::event::{ContactChange, ContactUpdate, Event};
-use lepic_wallet::inbox::ErrorChain;
 use lepic_wallet::notice::{NOTICE_VERSION, notice_length, pad_object, unpaired_notice_to};
 use lepic_wallet::ports::{SecretVault, StoreOpener};
 

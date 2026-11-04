@@ -20,6 +20,7 @@ use lepic_contact::{ContactKind, Invite, PairingClass};
 use lepic_epicbox::EpicboxAddress;
 use lepic_epicbox::marker::features::PAIR_REQUESTS;
 use lepic_node::NodeApi;
+use lepic_primitives::error_chain::ErrorChain;
 use lepic_slate::codec::{MediaType, WireSlate};
 use lepic_store::{
     ContactId, ContactRecord, INVITE_ID_LEN, PAYMENTS_KEY_LEN, PairRequest, PairingRole,
@@ -29,7 +30,7 @@ use lepic_transport::transport::{Destination, Transport as _};
 use lepic_wallet::Wallet;
 use lepic_wallet::event::{Event, PairRequestNews};
 use lepic_wallet::extension::PairRequests;
-use lepic_wallet::inbox::{ErrorChain, relay_network};
+use lepic_wallet::inbox::relay_network;
 use lepic_wallet::notice::{notice_length, pair_request_to};
 use lepic_wallet::ports::{SecretVault, StoreOpener};
 use tracing::{debug, info, instrument, warn};

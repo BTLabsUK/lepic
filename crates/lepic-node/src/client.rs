@@ -23,10 +23,11 @@ use crate::api::{
     PoolTransaction, Propagation, Tip, UnspentOutputs,
 };
 use crate::decode;
-use crate::error::{ErrorChain, FieldProblem, NodeError};
+use crate::error::{FieldProblem, NodeError};
 use crate::plausible;
 use crate::rpc::{FOREIGN_ENDPOINT, encode_request};
 use crate::wire::WireTransaction;
+use lepic_primitives::error_chain::ErrorChain;
 
 /// Delivers one serialized JSON-RPC request to a node and returns the response body.
 ///

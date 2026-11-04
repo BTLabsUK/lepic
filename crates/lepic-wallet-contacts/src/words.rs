@@ -89,7 +89,7 @@ where
                     .post(&from, rendezvous.address(), posted)
                     .await;
                 if let Err(error) = &result {
-                    debug!(peer_relay = %relay.domain(), error = %lepic_wallet::inbox::ErrorChain(error), "pairing words not posted");
+                    debug!(peer_relay = %relay.domain(), error = %lepic_primitives::error_chain::ErrorChain(error), "pairing words not posted");
                 }
                 result
             });
@@ -205,7 +205,7 @@ where
             match drained {
                 Ok(_) => reached = true,
                 Err(error) => {
-                    debug!(peer_relay = %relay.domain(), error = %lepic_wallet::inbox::ErrorChain(&error), "rendezvous drain failed");
+                    debug!(peer_relay = %relay.domain(), error = %lepic_primitives::error_chain::ErrorChain(&error), "rendezvous drain failed");
                     failed = Some(error);
                 }
             }

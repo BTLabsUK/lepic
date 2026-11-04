@@ -2,13 +2,13 @@
 //! The Epicbox client (ADR 0004): settings, the wallet's relay identity, sending, and the entry
 //! points to listening and draining.
 
-use std::error::Error as StdError;
 use std::fmt;
 use std::io;
 use std::sync::Arc;
 use std::time::Duration;
 
 use lepic_crypto::{PublicKey, SecretKey};
+use lepic_primitives::error_chain::ErrorChain;
 use lepic_slate::codec::WireSlate;
 use lepic_transport::error::TransportError;
 use lepic_transport::transport::{BoxFuture, Destination, Outbound, TransportId};
@@ -25,8 +25,6 @@ use crate::session::{Connection, Connector, ProtocolVersion, RelayEndpoint, dead
 
 /// The transport id of the Epicbox method.
 pub const TRANSPORT_ID: TransportId = TransportId::new("epicbox");
-
-const MAX_ERROR_SOURCES: usize = 8;
 
 /// What the client was waiting for when the relay went quiet.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -94,20 +92,6 @@ impl From<ClientError> for TransportError {
             transport: TRANSPORT_ID,
             source: Box::new(error),
         }
-    }
-}
-
-/// Displays an error with its source chain, for the `error` log field.
-pub(crate) struct ErrorChain<'a>(pub(crate) &'a (dyn StdError + 'static));
-
-impl fmt::Display for ErrorChain<'_> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.0)?;
-        let sources = std::iter::successors(self.0.source(), |&error| error.source());
-        for source in sources.take(MAX_ERROR_SOURCES) {
-            write!(f, ": {source}")?;
-        }
-        Ok(())
     }
 }
 
