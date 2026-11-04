@@ -103,9 +103,8 @@ impl Sender {
                 .lock()
                 .unwrap_or_else(PoisonError::into_inner)
                 .take();
-            let mut config = harness.config(Network::Floonet);
+            let config = harness.config(Network::Floonet);
             for transport in extra {
-                config.transports.push(transport.id());
                 registry.register(transport).unwrap();
             }
             (config, registry)

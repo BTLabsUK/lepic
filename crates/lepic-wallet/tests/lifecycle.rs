@@ -12,12 +12,11 @@ use lepic_primitives::amount::{Amount, Height};
 use lepic_primitives::output::{OutputFeatures, OutputIdentifier};
 use lepic_primitives::params::Network;
 use lepic_store::{AccountIndex, KeyId, OutputRecord, OutputStatus, StoreKeys, WalletStore};
-use lepic_transport::transport::TransportId;
 use lepic_wallet::lifecycle::PhraseCheck;
 use lepic_wallet::scan::{ScanCancel, ScanOptions, ScanStart};
 use lepic_wallet::{
-    AccountError, ConfigError, DEFAULT_ACCOUNT_LABEL, Event, SecretVault, SessionState,
-    SqliteStores, StoreOpener, Wallet, WalletError, WordCount, lifecycle,
+    AccountError, DEFAULT_ACCOUNT_LABEL, Event, SecretVault, SessionState, SqliteStores,
+    StoreOpener, Wallet, WalletError, WordCount, lifecycle,
 };
 use support::{Harness, TestStore, TestVault, WALLET_SEED_VECTOR, password, vector_text};
 use tokio::sync::broadcast::Receiver;
@@ -820,21 +819,6 @@ fn account_labels_are_validated_and_unique() {
     ));
     let account = wallet.create_account("savings").unwrap();
     assert_eq!(account.parent_key_id().unwrap().to_bip32_path(), "m/1/0");
-}
-
-#[test]
-fn configuration_naming_an_unregistered_transport_is_refused() {
-    let harness = Harness::new();
-    let mut config = harness.config(Network::Mainnet);
-    config.transports.push(TransportId::new("epicbox"));
-
-    let result = Wallet::new(config, harness.ports(TestVault::default()));
-
-    assert!(matches!(
-        result,
-        Err(WalletError::Config(ConfigError::UnknownTransport { transport }))
-            if transport == TransportId::new("epicbox")
-    ));
 }
 
 #[test]

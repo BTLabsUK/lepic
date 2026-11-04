@@ -8,17 +8,29 @@ async fn the_node_tip_carries_readiness_when_the_node_knows_it_and_the_tip_time(
     let fixture = Fixture::new();
     fixture.chain.set_height(30);
 
-    let old = crate::api::wallet::node_tip(&fixture.runtime, fixture.config())
-        .await
-        .unwrap();
+    let old = crate::api::wallet::node_tip(
+        &fixture.runtime,
+        fixture.config(),
+        crate::api::types::NodeRoute { socks: None },
+    )
+    .await
+    .unwrap();
     fixture.chain.set_node_ready_for_txs(Some(false));
-    let syncing = crate::api::wallet::node_tip(&fixture.runtime, fixture.config())
-        .await
-        .unwrap();
+    let syncing = crate::api::wallet::node_tip(
+        &fixture.runtime,
+        fixture.config(),
+        crate::api::types::NodeRoute { socks: None },
+    )
+    .await
+    .unwrap();
     fixture.chain.set_node_ready_for_txs(Some(true));
-    let ready = crate::api::wallet::node_tip(&fixture.runtime, fixture.config())
-        .await
-        .unwrap();
+    let ready = crate::api::wallet::node_tip(
+        &fixture.runtime,
+        fixture.config(),
+        crate::api::types::NodeRoute { socks: None },
+    )
+    .await
+    .unwrap();
 
     assert_eq!(old.height, 30);
     assert_eq!(
@@ -32,9 +44,13 @@ async fn the_node_tip_carries_readiness_when_the_node_knows_it_and_the_tip_time(
     let block_time = ready.tip_time_ms.unwrap();
     assert_eq!(old.tip_time_ms, Some(block_time));
     fixture.chain.set_height(31);
-    let next = crate::api::wallet::node_tip(&fixture.runtime, fixture.config())
-        .await
-        .unwrap();
+    let next = crate::api::wallet::node_tip(
+        &fixture.runtime,
+        fixture.config(),
+        crate::api::types::NodeRoute { socks: None },
+    )
+    .await
+    .unwrap();
     assert!(
         next.tip_time_ms.unwrap() > block_time,
         "a later block, a later time"

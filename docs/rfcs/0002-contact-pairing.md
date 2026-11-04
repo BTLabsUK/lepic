@@ -227,6 +227,10 @@ optional fields, covered by the signature). The signature, tag `FF`, is last.
 > update; a value of another length is skipped like any unknown extension. Both extensions are
 > signed like every field before tag `FF`. The MAC input and the errors are in 6.1.
 
+> **Amended by ADR 0040.** Type `09` is a contact check: signed, empty body, between paired
+> contacts only (8.5). A reader that predates it refuses the type as malformed before it checks
+> the signature, so the envelope is acknowledged, attributed to nobody and left unanswered.
+
 Signing input: `"epic-seal/1 sig" || header (16 bytes) || recipient X25519 public key || every
 inner field before tag FF, exactly as encoded`. The recipient key binds the signature to this
 recipient, so a contact cannot re-seal our signed message to a third party.
@@ -743,26 +747,51 @@ isn't answering". Signing a withdrawal or paying an invoice needs the wallet unl
 collecting on open fits the flows: nothing is lost while the app is closed, because the relay keeps
 messages 7 days.
 
-#### 8.5 A service moves its home relay
+#### 8.5 A contact moves to another relay
 
-That is rare and is the service's job. It keeps the old relay running at least 7 days, and sends
-each customer one contact update (type `05`, its new card with the new mailbox, higher `seq`,
-signed) to the customer's mailbox on the old home relay. The customer's wallet then delivers to the
-new mailbox and drains its own mailbox on both relays for 7 days. A person moving a pairing's home
-relay re-pairs; the protocol does not offer it.
+A service may move its home relay; that is rare and is the service's job. It keeps the old relay
+running at least 7 days, and sends each customer one contact update (type `05`, its new card with
+the new mailbox, higher `seq`, signed) to the customer's mailbox on the old home relay. What the
+contact is (its card's kind) plays no part on the receiving side: any contact's update is treated
+the same way.
+
+The receiving wallet never follows a move by itself. An update whose card names a mailbox on the
+same relay is applied at once. An update whose card names a mailbox on another relay is stored as
+the contact's card, the mailbox in use stays, and the wallet reports the request to the host
+(`ContactRelayMoveRequested`, with the contact and the relay as `domain:port`; the contact view
+shows it as `requested_relay` until it is applied). Which relays to follow is the host's choice.
+When the host applies the move (`apply_relay_move`), the wallet delivers to the new mailbox, moves
+its own mailbox for the contact to that relay, queues its new card to the contact in a `05` in the
+same write, and drains its own mailbox on both relays for 7 days. A move the host does not apply
+changes nothing: messages keep going to the old relay.
 
 Limits on updates, on the receiver (wallet and kit):
 
 - accepted only from a paired key with a valid signature, and only with a `seq` above the stored
-  one; the same card again is ignored;
+  one; the same card again is ignored and reports nothing again;
 - at most 3 per contact per day and 100 per hour in total; extra ones are acknowledged and dropped,
-  and the contact's next envelope (tag 07 carries the card) heals anything dropped;
-- a card replaces the stored one only with the same enc, sig and hint keys; nothing but the user's
-  "Use the new keys" (7.8) changes a contact's keys;
-- a move of the home relay comes only in a 05 within these limits, never changes the contact's
-  kind, and goes only to a built-in relay or a named host on port 443 (no address literals). A
-  person's mailbox stays where it is. Our own new card for the moved relationship is queued to
-  the service in the same write.
+  and the card in the contact's next envelope (tag 07) heals a dropped change of name or
+  payments address, but never a dropped move: a card that names another mailbox is ignored
+  outside a 05 update, so the contact sends the move again as a new 05 with a higher `seq`;
+- a card replaces the stored one only with the same enc, sig and hint keys and the same kind;
+  nothing but the user's "Use the new keys" (7.8) changes a contact's keys;
+- a move to another relay comes only in a 05 within these limits and takes effect only when the
+  host applies it.
+
+> **Amended by ADR 0040.** A wallet or service moves its own home relay with
+> `contacts_move_home(host)`: each paired contact pairing that has not ended gets one `05` with
+> the card naming its mailbox on `host`, queued for the mailbox the contact reads now, and the
+> mover's mailbox for it moves to `host` in the same write. The mover announces once and does
+> not drain: the old mailboxes are not read again and nothing waits for contacts, so the old
+> relay need not keep running for them. A contact that misses the update stops reaching the
+> mover and pairs again. Private pairings and pairings in progress keep their relay.
+>
+> A contact check (type `09`) asks a paired contact for its current card. A wallet that takes
+> one from a paired contact whose pairing has not ended answers with a `05`: its current card,
+> `seq` raised by one, through its outbox, within a pace per contact the host sets (by default
+> one an hour and three a day; checks beyond it are acknowledged and dropped). The answer is
+> taken as any update under the limits below: it sets the heard time, refreshes a card on the
+> same relay, and reports a card on another relay as a move request.
 
 A user's own relay switch needs no update because of 8.3, so the flood of "my relay changed"
 notices that per-wallet addresses would need cannot happen. Section 15 has the remaining abuse
@@ -904,8 +933,10 @@ per mailbox per drain, 50 mailboxes per collecting cycle.
 `PairingReplied`, `PairingConfirmed`, `PairingFailed{reason}`, `ContactUpdated`,
 `ContactKeysRestored`, `ContactKeysChanged`, `SealedReceived`, `SealedUnopenable`, `InvoiceFromContact`,
 `WithdrawalFromContact`, `HomeRelayUnreachable`, `OutboxDelivered`, `OutboxStuck`,
-`ContactPaymentFinalized` for the contact's answer to a send through its mailbox (9.1), and the
-existing `InvoiceFinalized` for a contact's payment. Event fields carry ids and labels, never keys or
+`ContactPaymentFinalized` for the contact's answer to a send through its mailbox (9.1),
+`ContactRelayMoveRequested` (ADR 0039) for a move a contact asked for, also the answer to a check
+from a contact that moved (ADR 0040), and the existing `InvoiceFinalized` for a contact's payment.
+A check's answer raises no event of its own: it shows as the contact's heard time and card. Event fields carry ids and labels, never keys or
 secrets. `SealedUnopenable` is raised at most once per contact per cycle. A collect also returns
 the pairings that ended and why.
 
@@ -1173,7 +1204,7 @@ new SAS domain string.
 | A card QR photographed in person | The first collect moves the mailbox to a new `box_salt` (7.4) | The hint key in the shown card links envelopes to that contact |
 | Forged invoice | Must arrive in the contact's own mailbox, sealed and signed by that contact, with invoices allowed | A contact you allowed can still request; nothing pays without the PIN |
 | Spam or DoS against a service from many paired keys | Each pairing needs a logged-in account and an invite (3 open per account); per-key and global rate limits (13.4); only hint-matched envelopes are opened; revocation | An attacker with many accounts costs the service drains and hint lookups, bounded per message |
-| Flood of address or relay updates | None needed for relay switches (8.3); home relay moves only from services, signed, higher `seq` only, 3 a day per contact, 100 an hour in total (8.5) | none |
+| Flood of address or relay updates | None needed for relay switches (8.3); updates signed, higher `seq` only, 3 a day per contact, 100 an hour in total; a move to another relay is only reported, and the host decides whether to follow (8.5) | A contact can ask its host to follow it to a relay of its choosing; the host shows the request or follows only relays it trusts |
 | Spam into a wallet's contact mailbox | Only the contact knows the mailbox; per-drain read limit and per-contact invoice caps; turning invoices off or removing the pairing stops it | A contact you paired with can annoy you until you remove it |
 | Downgrade to plain | Between contacts the sender seals by policy, not by a signal the channel could strip; plain only by the user's "Send as plain"; a plain payload in a contact mailbox is dropped | An attacker who strips the reply key from an unpaired plain S1 gets a plain S2, as today |
 | Key reuse and linking | Contact keys and mailboxes share nothing with Epicbox, Tor or proofs; one set per slot | Two installs on one seed that meet in one slot give its two contacts the same keys (2.2). A person's card may carry the ordinary payments address (tag 09), the same for every contact; leave it out to stay unlinkable. A push service links mailboxes registered under one device token (8.6) |

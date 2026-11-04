@@ -12,7 +12,9 @@
 //! of file and paste slates. The engine keeps no contact code of its own.
 
 mod address_proof;
+mod check;
 mod collect;
+mod hex;
 mod invoices;
 mod key_schedule;
 mod keycheck;
@@ -227,6 +229,10 @@ pub struct ContactView {
     /// When an envelope from the contact was last opened, if ever: of a contact's several
     /// pairings, the one it uses is the one heard from last.
     pub last_sealed_in: Option<Timestamp>,
+    /// The relay, `domain:port`, a contact update asked to move to and the contact has not
+    /// been moved to: derived from the stored card and the mailbox in use. Apply it with
+    /// [`ContactBook::apply_relay_move`].
+    pub requested_relay: Option<String>,
     /// The contact removed this pairing on its side and said so: nothing sent through it
     /// arrives any more. The same as `ended_reason` being [`PairingEndReason::Unpaired`].
     pub removed_by_peer: bool,
@@ -324,6 +330,17 @@ pub enum ContactError {
     Invoice(#[source] lepic_wallet::invoice::InvoiceError),
     #[error("slate was not finalized")]
     Finalize(#[source] lepic_wallet::finalize::FinalizeError),
+    #[error("payment was not sent")]
+    Send(#[source] lepic_wallet::send::SendError),
+    /// A payment to a contact was stored and its inputs locked, a later step failed, and
+    /// cancelling it failed as well: it stays stored until it is cancelled with
+    /// `Wallet::cancel` or sent again. `cause` is what failed first.
+    #[error("{cause}; transaction {tx_id} is still stored and could not be cancelled: {cancel}")]
+    NotCancelled {
+        tx_id: lepic_store::TxId,
+        cause: Box<ContactError>,
+        cancel: WalletError,
+    },
     /// The text is larger than this call reads.
     #[error("text is larger than {max} bytes")]
     TooLarge { max: usize },
@@ -353,6 +370,9 @@ pub enum ContactError {
     /// The pairing ended: nothing new goes through it.
     #[error("the pairing ended")]
     Ended,
+    /// The inviter's card names another kind than its invite did: nothing is stored.
+    #[error("the card names another kind than the invite")]
+    KindDiffers,
     /// The key did not run LEPIC lately, answered unmarked since, or never claimed pair
     /// requests: nothing is sent to it.
     #[error("the peer is not proven to take pairing requests")]
@@ -373,6 +393,10 @@ pub enum ContactError {
     /// The contact's wallet has not been heard in this pairing yet.
     #[error("the pairing waits for the contact's wallet")]
     Waiting,
+    /// The relay given is not the one the contact's stored card asked to move to, or the
+    /// contact asked for no move.
+    #[error("the contact asked for no move to this relay")]
+    RelayMoveNotRequested,
 }
 
 impl From<StoreError> for ContactError {

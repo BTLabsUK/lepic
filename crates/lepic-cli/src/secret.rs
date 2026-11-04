@@ -1,14 +1,14 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Secrets come from `LEPIC_PASSWORD` (the wallet password only), a prompt with echo off when
-//! standard input is a terminal, or one line of standard input each. Never from arguments, which
+//! Secrets come from the password file or `LEPIC_PASSWORD` (the wallet password only), a prompt
+//! with echo off when standard input is a terminal, or one line of standard input each. Never from arguments, which
 //! other users can read from the process table and shells write to history.
 
 use std::io::{self, BufRead, Read as _, Write};
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError};
 
 use tokio::sync::oneshot;
 
-use lepic_wallet::Password;
 use thiserror::Error;
 use zeroize::Zeroizing;
 
@@ -30,10 +30,20 @@ pub enum SecretError {
     NotUtf8 { what: &'static str },
     #[error("the two passwords differ")]
     Mismatch,
-    #[error("a new wallet password needs at least {min} characters")]
-    TooShort { min: usize },
+    #[error("a new wallet password cannot be empty")]
+    EmptyNew,
     #[error("a hidden prompt is not available here; pipe the {what} to standard input")]
     NoHiddenPrompt { what: &'static str },
+    #[error("the password file {} can be read by other users; make it owner-only (chmod 600)", path.display())]
+    PasswordFileOpen { path: PathBuf },
+    #[error("the password file {} holds no password", path.display())]
+    PasswordFileEmpty { path: PathBuf },
+    #[error("reading the password file {} failed", path.display())]
+    PasswordFile {
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
     #[error("reading the {what} failed")]
     Io {
         what: &'static str,
@@ -68,26 +78,29 @@ impl SecretInput {
         }
     }
 
-    /// The wallet password: `LEPIC_PASSWORD`, which is removed from `env` once read, else the
-    /// prompt or a line of input. A new password must have [`Password::MIN_NEW_LEN`] characters
-    /// and is asked for twice at a terminal.
+    /// The wallet password: the first line of `file`, else `LEPIC_PASSWORD`, else the prompt or
+    /// a line of input. `LEPIC_PASSWORD` is removed from `env` either way. A new password must
+    /// be non-empty and is asked for twice at a terminal; the CLI sets no other rule.
     pub async fn wallet_password(
         &mut self,
         env: &mut Env,
+        file: Option<&Path>,
         new: bool,
     ) -> Result<Zeroizing<String>, SecretError> {
-        let long_enough = |password: Zeroizing<String>| {
-            if new && !Password::is_long_enough_to_set(&password) {
-                return Err(SecretError::TooShort {
-                    min: Password::MIN_NEW_LEN,
-                });
+        let non_empty = |password: Zeroizing<String>| {
+            if new && password.is_empty() {
+                return Err(SecretError::EmptyNew);
             }
             Ok(password)
         };
-        if let Some(password) = env.take(PASSWORD_ENV) {
-            return long_enough(password);
+        let from_env = env.take(PASSWORD_ENV);
+        if let Some(path) = file {
+            return non_empty(read_password_file(path)?);
         }
-        let password = long_enough(self.read("wallet password", "Wallet password: ").await?)?;
+        if let Some(password) = from_env {
+            return non_empty(password);
+        }
+        let password = non_empty(self.read("wallet password", "Wallet password: ").await?)?;
         if new && self.terminal {
             let again = self
                 .read("wallet password", "Repeat the wallet password: ")
@@ -152,15 +165,61 @@ fn read_line(
     if read == 0 {
         return Err(SecretError::Missing { what });
     }
-    let content = bytes
-        .strip_suffix(b"\n")
-        .map(|line| line.strip_suffix(b"\r").unwrap_or(line))
-        .unwrap_or(&bytes);
+    first_line(&bytes, what)
+}
+
+/// The first line of `bytes`, without its line ending.
+fn first_line(bytes: &[u8], what: &'static str) -> Result<Zeroizing<String>, SecretError> {
+    let line = bytes.split(|byte| *byte == b'\n').next().unwrap_or(bytes);
+    let content = line.strip_suffix(b"\r").unwrap_or(line);
     if content.len() > MAX_SECRET_LEN {
         return Err(SecretError::TooLong { what });
     }
     let text = std::str::from_utf8(content).map_err(|_| SecretError::NotUtf8 { what })?;
     Ok(Zeroizing::new(text.to_owned()))
+}
+
+/// The wallet password from the first line of a file only its owner can read, the way a service
+/// manager hands a secret to a service without putting it in the environment. See
+/// [`readable_by_others`] for the modes taken.
+fn read_password_file(path: &Path) -> Result<Zeroizing<String>, SecretError> {
+    let failed = |source| SecretError::PasswordFile {
+        path: path.to_owned(),
+        source,
+    };
+    let file = std::fs::File::open(path).map_err(failed)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt as _;
+        let metadata = file.metadata().map_err(failed)?;
+        if readable_by_others(metadata.mode(), metadata.uid()) {
+            return Err(SecretError::PasswordFileOpen {
+                path: path.to_owned(),
+            });
+        }
+    }
+    let limit = u64::try_from(MAX_SECRET_LEN)
+        .unwrap_or(u64::MAX)
+        .saturating_add(1);
+    let mut bytes = line_buffer();
+    file.take(limit).read_to_end(&mut bytes).map_err(failed)?;
+    let password = first_line(&bytes, "wallet password")?;
+    if password.is_empty() {
+        return Err(SecretError::PasswordFileEmpty {
+            path: path.to_owned(),
+        });
+    }
+    Ok(password)
+}
+
+/// Whether a file of `mode` owned by `owner` may be read by users the owner did not choose. A file
+/// root owns may be readable by its group, or by users an access list names, as a systemd
+/// credential is: only root granted that. A file anyone else owns must be owner-only.
+#[cfg(unix)]
+const fn readable_by_others(mode: u32, owner: u32) -> bool {
+    let by_group = mode & 0o070 != 0 && owner != 0;
+    let by_anyone = mode & 0o007 != 0;
+    by_group || by_anyone
 }
 
 /// Holds the most a read takes, the longest secret and one byte more, from the start: a growing
@@ -254,7 +313,7 @@ mod tests {
         let mut input = input("from stdin\n");
         block_on(async {
             assert_eq!(
-                *input.wallet_password(&mut env, true).await.unwrap(),
+                *input.wallet_password(&mut env, None, true).await.unwrap(),
                 "from env"
             );
             assert_eq!(*input.read("next", "").await.unwrap(), "from stdin");
@@ -262,31 +321,36 @@ mod tests {
     }
 
     #[test]
-    fn a_new_password_shorter_than_the_minimum_is_refused_from_every_source() {
-        let short = "x".repeat(Password::MIN_NEW_LEN - 1);
-        let mut env = Env::new([(PASSWORD_ENV.to_owned(), short.clone())]);
-        let mut input = input(&format!("{short}\n"));
-        block_on(async {
-            assert!(matches!(
-                input.wallet_password(&mut env, true).await,
-                Err(SecretError::TooShort { .. })
-            ));
-            assert!(matches!(
-                input.wallet_password(&mut env, true).await,
-                Err(SecretError::TooShort { .. })
-            ));
-        });
+    fn an_empty_new_password_is_refused_from_every_source() {
+        // An empty variable counts as unset, so the empty line on standard input is read.
+        let vars: [Vec<(String, String)>; 2] =
+            [vec![(PASSWORD_ENV.to_owned(), String::new())], vec![]];
+        for vars in vars {
+            let mut env = Env::new(vars);
+            let mut input = input("\n");
+            block_on(async {
+                assert!(matches!(
+                    input.wallet_password(&mut env, None, true).await,
+                    Err(SecretError::EmptyNew)
+                ));
+            });
+        }
     }
 
-    /// The minimum applies to new passwords only, so a wallet whose password is shorter keeps
-    /// opening.
+    /// A short password is read as it is, for a new wallet or an existing one.
     #[test]
-    fn an_existing_short_password_is_read_to_open_a_wallet() {
+    fn a_short_password_is_read_as_it_is() {
         let mut env = Env::new([(PASSWORD_ENV.to_owned(), "pw".to_owned())]);
         let mut input = input("pw\n");
         block_on(async {
-            assert_eq!(*input.wallet_password(&mut env, false).await.unwrap(), "pw");
-            assert_eq!(*input.wallet_password(&mut env, false).await.unwrap(), "pw");
+            assert_eq!(
+                *input.wallet_password(&mut env, None, false).await.unwrap(),
+                "pw"
+            );
+            assert_eq!(
+                *input.wallet_password(&mut env, None, false).await.unwrap(),
+                "pw"
+            );
         });
     }
 
@@ -295,13 +359,93 @@ mod tests {
         let mut env = Env::new([(PASSWORD_ENV.to_owned(), "from env".to_owned())]);
         let mut input = input("from stdin\n");
         block_on(async {
-            input.wallet_password(&mut env, false).await.unwrap();
+            input.wallet_password(&mut env, None, false).await.unwrap();
             assert_eq!(env.get(PASSWORD_ENV), None);
             assert_eq!(
-                *input.wallet_password(&mut env, false).await.unwrap(),
+                *input.wallet_password(&mut env, None, false).await.unwrap(),
                 "from stdin"
             );
         });
+    }
+
+    fn password_file(text: &str, mode: u32) -> tempfile::NamedTempFile {
+        let mut file = tempfile::NamedTempFile::new().unwrap();
+        file.write_all(text.as_bytes()).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            std::fs::set_permissions(file.path(), std::fs::Permissions::from_mode(mode)).unwrap();
+        }
+        #[cfg(not(unix))]
+        let _ = mode;
+        file
+    }
+
+    #[test]
+    fn the_password_file_wins_and_the_variable_is_still_removed() {
+        let file = password_file("from file\nignored\n", 0o600);
+        let mut env = Env::new([(PASSWORD_ENV.to_owned(), "from env".to_owned())]);
+        let mut input = input("from stdin\n");
+        block_on(async {
+            assert_eq!(
+                *input
+                    .wallet_password(&mut env, Some(file.path()), true)
+                    .await
+                    .unwrap(),
+                "from file"
+            );
+            assert_eq!(env.get(PASSWORD_ENV), None);
+            assert_eq!(*input.read("next", "").await.unwrap(), "from stdin");
+        });
+    }
+
+    #[test]
+    fn an_empty_or_missing_password_file_is_refused() {
+        let empty = password_file("\n", 0o600);
+        let mut input = input("");
+        block_on(async {
+            assert!(matches!(
+                input
+                    .wallet_password(&mut Env::default(), Some(empty.path()), false)
+                    .await,
+                Err(SecretError::PasswordFileEmpty { .. })
+            ));
+            assert!(matches!(
+                input
+                    .wallet_password(
+                        &mut Env::default(),
+                        Some(Path::new("/nonexistent/pw")),
+                        false
+                    )
+                    .await,
+                Err(SecretError::PasswordFile { .. })
+            ));
+        });
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_password_file_other_users_can_read_is_refused() {
+        let file = password_file("secret\n", 0o640);
+        let mut input = input("");
+        block_on(async {
+            assert!(matches!(
+                input
+                    .wallet_password(&mut Env::default(), Some(file.path()), false)
+                    .await,
+                Err(SecretError::PasswordFileOpen { .. })
+            ));
+        });
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_root_owned_file_may_be_read_by_its_group_but_never_by_anyone() {
+        assert!(!readable_by_others(0o100_600, 1000));
+        assert!(readable_by_others(0o100_640, 1000));
+        assert!(!readable_by_others(0o100_440, 0));
+        assert!(readable_by_others(0o100_444, 0));
+        assert!(readable_by_others(0o100_604, 1000));
     }
 
     #[test]

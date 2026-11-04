@@ -21,10 +21,10 @@ maintainer's approval and a note in the change that makes it.
 
 ## Non-goals for 1.0
 
-Mining, running a node, Keybase, an owner JSON-RPC server, the emoji method, transactions with more
-than two parties. Direct transactions (HTTP send, the HTTP listener's foreign API, Tor) are in scope
-(ADR 0017), and so is importing an `epic-wallet` wallet's transaction history, read-only and
-reconciled with the scan (ADR 0019); funds still come from the seed and the scan.
+Mining, running a node, Keybase, the emoji method, transactions with more than two parties. Direct
+transactions (HTTP send, the HTTP listener's foreign API, Tor) are in scope (ADR 0017), and so is
+importing an `epic-wallet` wallet's transaction history, read-only and reconciled with the scan
+(ADR 0019); funds still come from the seed and the scan.
 
 ## Minimal and unopinionated
 

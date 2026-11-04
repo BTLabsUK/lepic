@@ -477,11 +477,6 @@ fn count(len: usize) -> u64 {
     u64::try_from(len).unwrap_or(u64::MAX)
 }
 
-/// The codecs a legacy transport policy decodes with, at the network's base fee.
-fn legacy_codecs(base_fee: Fee) -> Result<CodecRegistry, FinalizeError> {
-    Ok(codecs::legacy(base_fee))
-}
-
 /// What the store transaction of a finalize runs with, so it needs no `Ports`.
 struct FinalizeEnvironment {
     network: Network,
@@ -941,7 +936,7 @@ where
             .ok_or(FinalizeError::UnknownTransport { transport })?
             .policy();
         let s2 = policy
-            .decode(&legacy_codecs(base_fee)?, wire)
+            .decode(&codecs::legacy(base_fee), wire)
             .map_err(FinalizeError::Decode)?;
         let span = Span::current();
         span.record("slate_id", tracing::field::display(s2.id()));
@@ -1076,15 +1071,15 @@ where
                     Err(error) => Err(error),
                 };
                 if let Err(error) = marked {
-                    warn!(error = %crate::inbox::ErrorChain(&error), "send spent elsewhere not marked");
+                    warn!(error = %lepic_primitives::error_chain::ErrorChain(&error), "send spent elsewhere not marked");
                 }
             }
             Err(error) => {
-                warn!(error = %crate::inbox::ErrorChain(&error), "refused transaction not cancelled");
+                warn!(error = %lepic_primitives::error_chain::ErrorChain(&error), "refused transaction not cancelled");
             }
         }
         if let Err(error) = self.refresh().await {
-            warn!(error = %crate::inbox::ErrorChain(&error), "refresh after a refused transaction failed");
+            warn!(error = %lepic_primitives::error_chain::ErrorChain(&error), "refresh after a refused transaction failed");
         }
     }
 
@@ -1165,8 +1160,7 @@ where
         let candidates = {
             let session = Arc::clone(session);
             self.blocking(move |_, config| {
-                let codecs =
-                    crate::refresh::legacy_codecs(config.network.params().default_base_fee());
+                let codecs = codecs::legacy(config.network.params().default_base_fee());
                 Ok(session
                     .store
                     .read(|repos| own_spenders(repos, &codecs, tx_id, &gone)))
@@ -1186,6 +1180,16 @@ where
             }
         }
         Ok(None)
+    }
+
+    /// Tells the host that the node did not take `tx_id`, so it can decide when to push it
+    /// again. Nothing is retried here.
+    fn raise_not_posted(&self, tx_id: TxId, finalized: &FinalizedSlate, source: &NodeError) {
+        self.emit(crate::Event::NotPosted(crate::event::NotPosted {
+            tx_id,
+            slate_id: finalized.slate.id(),
+            reason: lepic_primitives::error_chain::ErrorChain(source).to_string(),
+        }));
     }
 
     /// Hands the transaction to the node, then records the transaction as posted. A node whose
@@ -1234,6 +1238,7 @@ where
                 }
                 None if pool_refused(&source) => {
                     let Some(spent) = self.spent_inputs(tx_id, finalized).await else {
+                        self.raise_not_posted(tx_id, finalized, &source);
                         return Err(PushFailure::NotPosted(source));
                     };
                     match spent {
@@ -1245,7 +1250,10 @@ where
                     }
                     return Err(PushFailure::Unminable { source, spent });
                 }
-                None => return Err(PushFailure::NotPosted(source)),
+                None => {
+                    self.raise_not_posted(tx_id, finalized, &source);
+                    return Err(PushFailure::NotPosted(source));
+                }
             },
         };
         let change = self

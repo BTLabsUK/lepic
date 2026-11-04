@@ -6,7 +6,7 @@ use lepic_crypto::Commitment;
 use lepic_epicbox::TRANSPORT_ID as EPICBOX;
 use lepic_node::NodeApi;
 use lepic_primitives::amount::Height;
-use lepic_slate::model::Slate;
+use lepic_slate::model::{Slate, SlateId};
 use lepic_slate::registry::CodecRegistry;
 use lepic_slate::role::Role;
 use lepic_store::{
@@ -18,13 +18,13 @@ use tracing::instrument;
 use uuid::Uuid;
 
 use crate::account::AccountError;
+use crate::codecs;
 use crate::epicbox_invoice::display_message;
 use crate::epicbox_notice::{cancelled_report, posted_report};
 use crate::error::WalletError;
 use crate::legacy_history::{self, TxOrigin};
 use crate::ports::{SecretVault, StoreOpener};
 use crate::receive::verify_message;
-use crate::refresh::legacy_codecs;
 use crate::release::release_check_with;
 use crate::scan::{ScanFound, found_output, scan_found};
 use crate::slate_cache::{SlateCache, Stages};
@@ -205,7 +205,7 @@ where
         tx_id: TxId,
     ) -> Result<TransactionDetails, WalletError> {
         let session = self.session()?;
-        let codecs = legacy_codecs(self.config().network.params().default_base_fee());
+        let codecs = codecs::legacy(self.config().network.params().default_base_fee());
         self.blocking(move |ports, _| {
             let now = ports.clock.now();
             session.store.read(|repos| {
@@ -220,6 +220,30 @@ where
         .await
     }
 
+    /// This wallet's send made under `slate_id`, with its details, as for a caller that gave
+    /// the send its slate id and lost the reply. Reads only the store. Fails with
+    /// [`WalletError::Locked`].
+    #[instrument(skip_all, fields(wallet = %self.config().name, slate_id = %slate_id))]
+    pub async fn sent_with_slate(
+        &self,
+        slate_id: SlateId,
+    ) -> Result<Option<TransactionDetails>, WalletError> {
+        let session = self.session()?;
+        let codecs = codecs::legacy(self.config().network.params().default_base_fee());
+        let uuid = Uuid::from_bytes(*slate_id.as_bytes());
+        self.blocking(move |ports, _| {
+            let now = ports.clock.now();
+            session.store.read(|repos| {
+                let Some(stored) = repos.transaction_by_slate(uuid, TxDirection::Outgoing)? else {
+                    return Ok(None);
+                };
+                let mut outbox = PendingOutbox::default();
+                details(repos, &codecs, &session.slates, &mut outbox, stored, now).map(Some)
+            })
+        })
+        .await
+    }
+
     /// Every stored transaction of `account` with its details, newest first: in the reverse of
     /// the order they were stored in. Reads only the store. Fails with [`WalletError::Locked`]
     /// or an [`AccountError::UnknownAccount`].
@@ -229,7 +253,7 @@ where
         account: AccountIndex,
     ) -> Result<Vec<TransactionDetails>, WalletError> {
         let session = self.session()?;
-        let codecs = legacy_codecs(self.config().network.params().default_base_fee());
+        let codecs = codecs::legacy(self.config().network.params().default_base_fee());
         self.blocking(move |ports, _| {
             let now = ports.clock.now();
             session.store.read(|repos| {

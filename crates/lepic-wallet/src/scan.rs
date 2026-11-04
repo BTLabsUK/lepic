@@ -38,13 +38,14 @@ use tracing::{debug, info, instrument, warn};
 use crate::account::{FIRST_HARDENED, OWN_KEY_WINDOW, key_counter_start, move_past_found_keys};
 use crate::cancel::{drop_holdings, self_send_partner};
 use crate::chain::{self, ChainPosition, ImplausibleNodeData};
+use crate::codecs;
 use crate::error::WalletError;
 use crate::event::{Event, SyncProgress};
 use crate::legacy_history::{self, block_times};
 use crate::lifecycle::{self, Session};
 use crate::other_wallet;
 use crate::ports::{SecretVault, StoreOpener};
-use crate::refresh::{KernelAt, final_kernel, legacy_codecs, pending_kernel};
+use crate::refresh::{KernelAt, final_kernel, pending_kernel};
 use crate::release::record_watch;
 use crate::state::{StateChange, apply_transition, is_final};
 use crate::wallet::Wallet;
@@ -606,7 +607,7 @@ where
         let outcome = {
             let session = Arc::clone(session);
             self.blocking(move |_, config| {
-                let codecs = legacy_codecs(config.network.params().default_base_fee());
+                let codecs = codecs::legacy(config.network.params().default_base_fee());
                 let ending = Ending {
                     now,
                     tip: block.height,
@@ -722,7 +723,7 @@ where
         }
         let now = self.ports().clock.now();
         self.blocking(move |_, config| {
-            let codecs = legacy_codecs(config.network.params().default_base_fee());
+            let codecs = codecs::legacy(config.network.params().default_base_fee());
             let ending = Ending {
                 now,
                 tip,
@@ -1415,7 +1416,7 @@ mod tests {
                 Ok::<_, StoreError>(tx_id)
             })
             .unwrap();
-        let codecs = legacy_codecs(Network::Floonet.params().default_base_fee());
+        let codecs = codecs::legacy(Network::Floonet.params().default_base_fee());
         let ending = Ending {
             now,
             tip: Height::new(100),

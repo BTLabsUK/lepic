@@ -587,6 +587,7 @@ mod refusal_tests {
 
     fn config(node_url: &str) -> WalletConfig {
         WalletConfig {
+            policy: Default::default(),
             data_dir: String::new(),
             chain: crate::api::types::Chain::Floonet,
             node_url: node_url.to_owned(),

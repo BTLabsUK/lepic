@@ -108,7 +108,7 @@ pub enum WalletErrorKind {
     /// The transaction would spend more inputs or make more outputs than a transaction may
     /// hold. Nothing was stored; send a smaller amount, or consolidate first.
     TooHeavy,
-    /// `consolidate_outputs` found fewer than two spendable outputs, so there is nothing to
+    /// `send_to_self` found fewer than two spendable outputs, so there is nothing to
     /// merge. Nothing was stored.
     NothingToConsolidate,
     /// The invoice was already paid: this wallet holds its payment, or finalized it. Nothing
@@ -242,6 +242,13 @@ pub enum WalletErrorKind {
     /// its key check refuses it. Nothing was changed or moved. Recover with the phrase only
     /// if it is this wallet's; the database is kept.
     WrongKey,
+    /// The inviter's card names another contact kind than its invite did. Nothing was stored;
+    /// pair again.
+    PairingKindDiffers,
+    /// The relay given to `EpicWallet::contact_apply_relay_move` is not the one the contact
+    /// asked to move to (`ContactView::requested_relay`), or the contact asked for no move.
+    /// Nothing changed.
+    RelayMoveNotRequested,
 }
 
 impl WalletErrorKind {
@@ -332,6 +339,8 @@ impl WalletErrorKind {
             // 83 to 88 belong to the pairing kinds.
             Self::ForeignProofAddress => 89,
             Self::WrongKey => 90,
+            Self::PairingKindDiffers => 91,
+            Self::RelayMoveNotRequested => 92,
         }
     }
 }
@@ -344,6 +353,10 @@ pub struct WalletError {
     /// `kind.code()`, for apps that store or transmit the error.
     pub code: u32,
     pub message: String,
+    /// The transaction a failed call stored and left behind with its inputs locked, when a
+    /// later step failed or the call's own clean-up cancel failed: cancel it with
+    /// `cancel_transaction`, or try its step again. `None` when nothing was left behind.
+    pub tx_id: Option<u32>,
 }
 
 impl std::fmt::Display for WalletError {
@@ -361,7 +374,14 @@ impl WalletError {
             kind,
             code: kind.code(),
             message: display_error_message(&message.into()),
+            tx_id: None,
         }
+    }
+
+    /// This error, naming the transaction the call left stored with its inputs locked.
+    pub(crate) fn with_tx(mut self, tx_id: u32) -> Self {
+        self.tx_id = Some(tx_id);
+        self
     }
 
     /// `error` and its sources as the message, each entry cleaned and bounded on its own.
@@ -446,8 +466,22 @@ fn app_data_kind(error: &AppDataError) -> WalletErrorKind {
 
 impl From<SendError> for WalletError {
     fn from(error: SendError) -> Self {
-        let kind = match &error {
-            SendError::Wallet(inner) => return Self::from_inner(inner, &error),
+        // A slate stored but not delivered keeps its inputs locked until it is sent again or
+        // cancelled, so the caller needs the transaction.
+        let left_behind = match &error {
+            SendError::Undelivered { tx_id, .. } => Some(tx_id.0),
+            _ => None,
+        };
+        let mut wallet_error = Self::from_send(&error);
+        wallet_error.tx_id = left_behind;
+        wallet_error
+    }
+}
+
+impl WalletError {
+    fn from_send(error: &SendError) -> Self {
+        let kind = match error {
+            SendError::Wallet(inner) => return Self::from_inner(inner, error),
             SendError::Node(_) => WalletErrorKind::NodeUnreachable,
             SendError::Selection(SelectionError::NotEnoughFunds { .. }) => {
                 WalletErrorKind::NotEnoughFunds
@@ -469,7 +503,7 @@ impl From<SendError> for WalletError {
             SendError::Unrepresentable(_) => WalletErrorKind::InvalidSlate,
             _ => WalletErrorKind::Other,
         };
-        Self::chained(kind, &error)
+        Self::chained(kind, error)
     }
 }
 
@@ -628,11 +662,29 @@ impl From<ContactError> for WalletError {
     fn from(error: ContactError) -> Self {
         use ContactError as E;
         use WalletErrorKind as K;
+        // What failed first names the kind; the transaction is the one left stored, and the
+        // failed cancel is in the message.
+        let error = match error {
+            E::NotCancelled {
+                tx_id,
+                cause,
+                cancel,
+            } => {
+                let mut mapped = Self::from(*cause);
+                mapped.message = display_error_message(&format!(
+                    "{}; transaction {tx_id} is still stored and could not be cancelled: {cancel}",
+                    mapped.message
+                ));
+                return mapped.with_tx(tx_id.0);
+            }
+            other => other,
+        };
         let kind = match error {
             E::Wallet(inner) => return inner.into(),
             E::Receive(inner) => return inner.into(),
             E::Invoice(inner) => return inner.into(),
             E::Finalize(inner) => return inner.into(),
+            E::Send(inner) => return inner.into(),
             ref other => match other {
                 E::Offline => K::ContactsOffline,
                 E::EpicboxOff => K::EpicboxOff,
@@ -660,12 +712,14 @@ impl From<ContactError> for WalletError {
                 E::WrongClass => K::WrongPairingClass,
                 E::OtherAddress => K::OtherAddress,
                 E::AddressProofMissing => K::AddressProofMissing,
+                E::KindDiffers => K::PairingKindDiffers,
                 E::PeerNotProven => K::PeerNotProven,
                 E::PairingInProgress => K::PairingInProgress,
                 E::Crossed => K::PairingCrossed,
                 E::InviteDismissed => K::InviteDismissed,
                 E::Ended => K::PairingEnded,
                 E::Waiting => K::PairingWaiting,
+                E::RelayMoveNotRequested => K::RelayMoveNotRequested,
                 E::Post(_) => K::TransportFailed,
                 _ => K::Other,
             },
@@ -804,6 +858,8 @@ mod tests {
             (K::PairingWaiting, 88),
             (K::ForeignProofAddress, 89),
             (K::WrongKey, 90),
+            (K::PairingKindDiffers, 91),
+            (K::RelayMoveNotRequested, 92),
         ];
         for (kind, code) in expected {
             assert_eq!(kind.code(), code, "{kind:?}");
@@ -1131,12 +1187,14 @@ mod tests {
             (E::DoesNotPayInvoices, K::ContactRefusesInvoices),
             (E::OtherAddress, K::OtherAddress),
             (E::AddressProofMissing, K::AddressProofMissing),
+            (E::KindDiffers, K::PairingKindDiffers),
             (E::PeerNotProven, K::PeerNotProven),
             (E::PairingInProgress, K::PairingInProgress),
             (E::Crossed, K::PairingCrossed),
             (E::InviteDismissed, K::InviteDismissed),
             (E::Ended, K::PairingEnded),
             (E::Waiting, K::PairingWaiting),
+            (E::RelayMoveNotRequested, K::RelayMoveNotRequested),
             (E::NetworkMismatch, K::InvalidArgument),
             (E::TooLarge { max: 1 }, K::InvalidArgument),
             (E::Wallet(lepic_wallet::WalletError::Locked), K::Locked),

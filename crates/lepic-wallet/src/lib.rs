@@ -52,7 +52,7 @@ mod twin_answer;
 mod wallet;
 
 pub use account::{Account, AccountError, AccountLabel, DEFAULT_ACCOUNT_LABEL};
-pub use config::{ConfigError, NodeEndpoint, WalletConfig, WalletName};
+pub use config::{ConfigError, NodeEndpoint, WalletConfig, WalletName, WalletPolicy};
 pub use error::WalletError;
 pub use event::{Event, SessionState};
 pub use finalize::{FinalizeError, Finalized};

@@ -87,9 +87,25 @@ pub fn hint(error: &CliError, settings: Option<&Settings>) -> Option<String> {
         CliError::DataDirInUse => {
             return Some(
                 "another lepic command, such as `lepic epicbox listen`, is using this wallet; \
-                 stop it or wait for it to end"
+                 stop it or wait for it to end. If it is `lepic serve`, run this command with \
+                 --service"
                     .to_owned(),
             );
+        }
+        CliError::ServiceUnavailable { .. } => {
+            return Some(
+                "start `lepic serve` for this data directory, or give the socket it listens on \
+                 as --service=SOCKET"
+                    .to_owned(),
+            );
+        }
+        CliError::SocketPathTooLong { .. } => {
+            return Some(
+                "give a shorter path: --socket for serve, --service=SOCKET for a client".to_owned(),
+            );
+        }
+        CliError::SocketPathTaken { .. } => {
+            return Some("remove the file or give another path with --socket".to_owned());
         }
         CliError::SharedDataDir => {
             return settings.map(|settings| {
@@ -329,7 +345,9 @@ mod tests {
             CliError::Send(SendError::Wallet(WalletError::NoWallet)),
         ] {
             let text = hint_for(&error);
-            assert!(text.contains("no floonet wallet in /w"), "{text}");
+            let wallet_dir = std::path::absolute("/w").unwrap();
+            let named = format!("no floonet wallet in {}", wallet_dir.display());
+            assert!(text.contains(&named), "{text}");
             assert!(text.contains("lepic wallet init"), "{text}");
         }
     }

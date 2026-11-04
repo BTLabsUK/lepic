@@ -19,6 +19,9 @@ LEPIC_ADDRESS=""
 PEER_ADDRESS=""
 PEER_KEY=""
 EPICBOX_SEND_TX=""
+# The service's and the payer's contact ids of their pairing, set by the pairing step.
+SERVICE_SIDE=""
+PAYER_SIDE=""
 
 fail() {
     DETAIL="$*"
@@ -686,6 +689,8 @@ payer_collect_shows() {
 # posts; the payer never finalizes and hears that it was posted.
 step_invoice_lepic_over_epicbox() {
     local invite link service_side accepted payer_side
+    SERVICE_SIDE=""
+    PAYER_SIDE=""
     invite="$(lepic contact invite --name Service)" || fail "contact invite failed" || return 1
     link="$(jq -r .link <<<"${invite}")"
     service_side="$(jq -r .contact_id <<<"${invite}")"
@@ -747,7 +752,93 @@ step_invoice_lepic_over_epicbox() {
     check_lepic_total || return 1
     (($(payer_balance total) == $(to_units 3) - $(to_units 0.6) - fee)) ||
         fail "payer total $(payer_balance total) units after paying" || return 1
+    SERVICE_SIDE="${service_side}"
+    PAYER_SIDE="${payer_side}"
     DETAIL="paired by invite, words matched, invoices allowed; I1 through the mailboxes paid once, finalized and posted by the service; payer heard posted; ${slate_id} confirmed"
+}
+
+# When the service last heard from the payer, by its contact list; "never" before the first.
+lepic_heard_payer() {
+    lepic contact list |
+        jq -r --arg id "${SERVICE_SIDE}" '.contacts[] | select(.contact_id == $id) | .last_heard // "never"'
+}
+
+# The payer's `serve status` shows a collect and a refresh that succeeded, none failing since.
+payer_serve_healthy() {
+    payer --service="$1" serve status | jq -e '
+        [.collect, .refresh] | all(.consecutive_failures == 0 and .last_success != null)' >/dev/null
+}
+
+# The service checks its paired payer while the payer runs `lepic serve`: the serve's first
+# collect takes the check and answers with the payer's card, and the service hears the payer
+# again. `serve status` shows the collect and the refresh succeeding, and serve stops cleanly on
+# Ctrl-C.
+step_contact_check_answered_by_serve() {
+    [[ -n "${SERVICE_SIDE}" ]] || fail "no pairing from the earlier step" || return 1
+    local heard socket="${STATE_DIR}/payer-serve.sock"
+    heard="$(lepic_heard_payer)" || fail "contact list failed" || return 1
+    lepic contact check "${SERVICE_SIDE}" >/dev/null || fail "contact check failed" || return 1
+    # Started without the lepic_env function, so $! is lepic itself and the Ctrl-C reaches it.
+    env -i PATH="${PATH}" HOME="${STATE_DIR}/home" LEPIC_CONFIG="${STATE_DIR}/config.toml" \
+        LEPIC_PASSWORD="${LEPIC_PASSWORD_VALUE}" "${LEPIC_BIN}" --data-dir "${STATE_DIR}/payer" \
+        serve --socket "${socket}" >"${STATE_DIR}/payer-serve.out" 2>"${STATE_DIR}/payer-serve.err" </dev/null &
+    local serve_pid=$!
+    stop_serve() {
+        kill -INT "${serve_pid}" 2>/dev/null
+        local status=0
+        wait "${serve_pid}" || status=$?
+        cat "${STATE_DIR}/payer-serve.err" >>"${RUN_LOG}"
+        return "${status}"
+    }
+    wait_until "the payer serving" 30 test -S "${socket}" ||
+        { stop_serve; fail "the payer's serve did not start: $(tail -3 "${STATE_DIR}/payer-serve.err")"; } || return 1
+    collect_until lepic 60 '[[ "$(lepic_heard_payer)" != "${heard}" ]]' ||
+        { stop_serve; fail "the service never heard the payer answer (last heard ${heard})"; } || return 1
+    local now
+    now="$(lepic_heard_payer)"
+    wait_until "the payer's serve healthy" 30 payer_serve_healthy "${socket}" ||
+        { stop_serve; fail "serve status: $(payer --service="${socket}" serve status)"; } || return 1
+    stop_serve || fail "serve exited non-zero on Ctrl-C" || return 1
+    [[ ! -e "${socket}" ]] || fail "serve left its socket behind" || return 1
+    DETAIL="check answered by the payer's serve, service last heard the payer ${heard} then ${now}; serve status collect and refresh ok; serve stopped on Ctrl-C"
+}
+
+# lepic with extra variables (NAME=value ...) before the arguments, its exit code and output in
+# LIMIT_STATUS and LIMIT_OUTPUT, reading `stdin`.
+LIMIT_STATUS=0
+LIMIT_OUTPUT=""
+lepic_with() {
+    local stdin="$1" vars=()
+    shift
+    while [[ "${1:-}" == *=* ]]; do
+        vars+=("$1")
+        shift
+    done
+    LIMIT_STATUS=0
+    LIMIT_OUTPUT="$(printf '%s' "${stdin}" | lepic_env "${vars[@]}" "${LEPIC_BIN}" --output json "$@" 2>>"${RUN_LOG}")" ||
+        LIMIT_STATUS=$?
+    printf 'lepic %s exited %d: %s\n' "$*" "${LIMIT_STATUS}" "${LIMIT_OUTPUT}" >>"${RUN_LOG}"
+}
+
+# The CLI keeps no limits of its own: a two-letter password makes and opens a wallet, and an
+# invoice expiry of 72 hours runs a drain. Only what cannot work is refused: an empty password
+# for a new wallet (exit 7) and an expiry of no hours (exit 3).
+step_cli_limits() {
+    local short="${STATE_DIR}/short-password"
+    lepic_with "" LEPIC_PASSWORD=pw --data-dir "${short}" wallet init --words 12
+    ((LIMIT_STATUS == 0)) || fail "wallet init with a short password exited ${LIMIT_STATUS}" || return 1
+    lepic_with "" LEPIC_PASSWORD=pw --data-dir "${short}" wallet info
+    ((LIMIT_STATUS == 0)) || fail "wallet info with a short password exited ${LIMIT_STATUS}" || return 1
+    lepic_with "" LEPIC_PASSWORD=pw LEPIC_INVOICE_EXPIRY_HOURS=72 --data-dir "${short}" epicbox drain
+    ((LIMIT_STATUS == 0)) && jq -e '.expired | type == "object"' <<<"${LIMIT_OUTPUT}" >/dev/null ||
+        fail "drain with a 72 h expiry: ${LIMIT_STATUS} ${LIMIT_OUTPUT}" || return 1
+    lepic_with "" LEPIC_PASSWORD=pw LEPIC_INVOICE_EXPIRY_HOURS=0 --data-dir "${short}" epicbox drain
+    ((LIMIT_STATUS == 3)) || fail "an expiry of 0 hours exited ${LIMIT_STATUS}" || return 1
+    # An empty LEPIC_PASSWORD counts as unset, so the empty line on standard input is read.
+    lepic_with $'\n' LEPIC_PASSWORD= --data-dir "${STATE_DIR}/empty-password" wallet init
+    ((LIMIT_STATUS == 7)) && jq -e '.error.kind == "rejected"' <<<"${LIMIT_OUTPUT}" >/dev/null ||
+        fail "an empty password: ${LIMIT_STATUS} ${LIMIT_OUTPUT}" || return 1
+    DETAIL="2-letter password made and opened a wallet; 72 h expiry drained; 0 h refused (3); empty password refused (7)"
 }
 
 # lepic sends to the second lepic wallet over Epicbox while that wallet listens. Both slates
@@ -864,6 +955,8 @@ STEPS=(
     "wallet import-seed:step_import_seed"
     "a second lepic wallet funded by file:step_fund_payer"
     "lepic invoices lepic by epicbox:step_invoice_lepic_over_epicbox"
+    "lepic serve answers a contact check:step_contact_check_answered_by_serve"
+    "no CLI limits on password or expiry:step_cli_limits"
     "lepic sends to lepic by epicbox, posted notice:step_send_to_lepic_over_epicbox"
     "epic-wallet bounces an epicbox invoice:step_stock_listener_bounces_invoice"
 )

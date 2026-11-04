@@ -14,6 +14,7 @@ mod support;
 use std::sync::Arc;
 
 use lepic_epicbox::EpicboxAddress;
+use lepic_epicbox::mock_relay::Unanswered;
 use lepic_node::LocatedKernel;
 use lepic_node::mock::ChainOutput;
 use lepic_primitives::amount::Height;
@@ -59,27 +60,19 @@ fn send_receive_and_finalize_through_files() {
     assert_eq!(info["accounts"][0]["spendable"], "10.00000000");
 
     let slate = sender.path("payment.slate");
+    let send = ["tx", "send", "1.5", "--to-file", slate.to_str().unwrap()];
     let sent = sender
-        .run(
-            &host,
-            &[
-                "tx",
-                "send",
-                "1.5",
-                "--to-file",
-                slate.to_str().unwrap(),
-                "-m",
-                "thanks",
-            ],
-        )
+        .run(&host, &[send.as_slice(), &["-m", "thanks"]].concat())
         .ok()
         .json();
     assert_eq!(
         keys(&sent),
         [
             "amount",
+            "delivered",
             "destination",
             "fee",
+            "repeated",
             "slate_id",
             "state",
             "transport",
@@ -429,6 +422,48 @@ fn listen_handles_a_waiting_slate_and_stops_when_interrupted() {
 }
 
 #[test]
+fn an_interrupted_listen_settles_the_slate_in_hand_first() {
+    let (mut host, sender, receiver) = two_wallets();
+    let address = receiver.run(&host, &["wallet", "address"]).ok().json();
+    sender
+        .run(
+            &host,
+            &["tx", "send", "1", "--to", text(&address, "address")],
+        )
+        .ok();
+    let relay = host.relay.clone();
+    let inbox =
+        EpicboxAddress::parse(text(&address, "address"), lepic_epicbox::Network::Floonet).unwrap();
+    let watched = relay.clone();
+    let watched_inbox = inbox.clone();
+    host.interrupt_when = Some(Arc::new(move || watched.in_hand(&watched_inbox) == 1));
+    let listened = receiver.run(&host, &["epicbox", "listen"]).ok().json();
+    assert_eq!(listened["received"], 1, "{listened}");
+    assert_eq!(relay.pending(&inbox), 0);
+}
+
+#[test]
+fn an_interrupted_send_names_the_transaction_it_stored() {
+    let (mut host, sender, receiver) = two_wallets();
+    let address = receiver.run(&host, &["wallet", "address"]).ok().json();
+    let relay = host.relay.clone();
+    relay.set_unanswered(Unanswered::PostSlate, true);
+    let watched = relay.clone();
+    host.interrupt_when = Some(Arc::new(move || watched.received("PostSlate") >= 1));
+    let interrupted = sender.run(
+        &host,
+        &["tx", "send", "1", "--to", text(&address, "address")],
+    );
+    assert_eq!(interrupted.code, 12, "{interrupted:?}");
+    let error = interrupted.json();
+    let tx_id = error["error"]["tx_id"].as_u64().unwrap().to_string();
+
+    host.interrupt_when = None;
+    let shown = sender.run(&host, &["tx", "show", &tx_id]).ok().json();
+    assert_eq!(shown["state"], "sent", "{shown}");
+}
+
+#[test]
 fn issue_pay_and_finalize_an_invoice_through_files() {
     let (host, payer, issuer) = two_wallets();
     let invoice = issuer.path("invoice.slate");
@@ -525,6 +560,69 @@ fn a_send_to_an_invalid_address_stores_nothing() {
     );
     let info = sender.run(&host, &["wallet", "info"]).ok().json();
     assert_eq!(info["accounts"][0]["locked"], "0.00000000");
+}
+
+#[test]
+fn a_send_made_again_under_its_slate_id_sends_nothing() {
+    let (host, sender, receiver) = two_wallets();
+    let address = receiver.run(&host, &["wallet", "address"]).ok().json();
+    let address = text(&address, "address").to_owned();
+    let slate_id = "8a6e2f0c-4b1d-4c3e-9f2a-7d5b6c8e9f01";
+    let send = |amount: &str, to: &str| {
+        sender.run(
+            &host,
+            &["tx", "send", amount, "--to", to, "--slate-id", slate_id],
+        )
+    };
+
+    let sent = send("2", &address).ok().json();
+    assert_eq!(sent["slate_id"], slate_id);
+    assert_eq!(sent["repeated"], false);
+    assert_eq!(sent["delivered"], true);
+
+    let again = send("2", &address).ok().json();
+    assert_eq!(again["repeated"], true, "{again}");
+    assert_eq!(again["delivered"], true);
+    assert_eq!(again["tx_id"], sent["tx_id"]);
+    assert_eq!(again["amount"], sent["amount"]);
+    assert_eq!(again["fee"], sent["fee"]);
+    assert_eq!(again["state"], "sent");
+
+    let other_amount = send("3", &address);
+    assert_eq!(other_amount.code, 7, "{other_amount:?}");
+    let drained = receiver.run(&host, &["epicbox", "drain"]).ok().json();
+    assert_eq!(drained["received"], 1, "{drained}");
+
+    let shown = sender
+        .run(&host, &["tx", "show", "--slate-id", slate_id])
+        .ok()
+        .json();
+    assert_eq!(shown["tx_id"], sent["tx_id"], "{shown}");
+    let unknown = sender.run(
+        &host,
+        &[
+            "tx",
+            "show",
+            "--slate-id",
+            "0b6e2f0c-4b1d-4c3e-9f2a-7d5b6c8e9f01",
+        ],
+    );
+    assert_eq!(unknown.code, 6, "{unknown:?}");
+
+    // Version 1, not random: it would carry whatever the caller derived it from.
+    let not_random = sender.run(
+        &host,
+        &[
+            "tx",
+            "send",
+            "1",
+            "--to",
+            &address,
+            "--slate-id",
+            "8a6e2f0c-4b1d-1c3e-9f2a-7d5b6c8e9f01",
+        ],
+    );
+    assert_eq!(not_random.code, 2, "{not_random:?}");
 }
 
 #[test]
@@ -664,4 +762,50 @@ fn listen_shows_each_slate_it_receives() {
             .contains("transaction 1 received 1.00000000 EPIC"),
         "{listened:?}"
     );
+}
+
+/// The CLI keeps no policy of its own: a short password and an invoice expiry beyond 48 hours
+/// are taken as given. Only what cannot work is refused: an empty password for a new wallet and
+/// an expiry of no hours.
+#[test]
+fn the_cli_takes_short_passwords_and_long_expiries_and_refuses_an_empty_password() {
+    let host = TestHost::new();
+    let short = Instance::new("a b");
+    short.run(&host, &["wallet", "init"]).ok();
+    short.run(&host, &["wallet", "info"]).ok();
+
+    let mut env = short.env();
+    env.push(("LEPIC_INVOICE_EXPIRY_HOURS".to_owned(), "72".to_owned()));
+    let drained = short
+        .run_with(&host, &["epicbox", "drain"], env.clone(), "")
+        .ok()
+        .json();
+    assert!(drained["expired"].is_object(), "{drained}");
+    env.retain(|(name, _)| name != "LEPIC_INVOICE_EXPIRY_HOURS");
+    env.push(("LEPIC_INVOICE_EXPIRY_HOURS".to_owned(), "0".to_owned()));
+    let none = short.run_with(&host, &["epicbox", "drain"], env, "");
+    assert_eq!(none.code, 3, "{none:?}");
+    assert_eq!(none.json()["error"]["kind"], "config", "{none:?}");
+
+    // An empty LEPIC_PASSWORD counts as unset, so the empty line on standard input is read.
+    let empty = Instance::new("not used");
+    let mut env = empty.env();
+    env.retain(|(name, _)| name != "LEPIC_PASSWORD");
+    for (env, stdin) in [
+        (
+            [
+                env.clone(),
+                vec![("LEPIC_PASSWORD".to_owned(), String::new())],
+            ]
+            .concat(),
+            "\n",
+        ),
+        (env.clone(), "\n"),
+    ] {
+        let refused = support::run_in(&host, &["wallet", "init"], env, stdin);
+        assert_eq!(refused.code, 7, "{refused:?}");
+        assert_eq!(refused.json()["error"]["kind"], "rejected", "{refused:?}");
+    }
+    // Nothing was created.
+    assert_ne!(empty.run(&host, &["wallet", "info"]).code, 0);
 }

@@ -22,31 +22,33 @@ use crate::amount::AmountError;
 use crate::secret::SecretError;
 use crate::settings::SettingsError;
 
-/// What kind of failure ended a command. The discriminant is the exit code.
+/// What kind of failure ended a command. [`ErrorKind::exit_code`] is the exit code;
+/// `ServiceUnavailable` shares code 5 with `WalletState`, the other way a wallet cannot be used.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(u8)]
 pub enum ErrorKind {
-    Internal = 1,
-    Usage = 2,
-    Config = 3,
-    WrongPassword = 4,
-    WalletState = 5,
-    NotFound = 6,
-    Rejected = 7,
-    InsufficientFunds = 8,
-    Node = 9,
-    Transport = 10,
-    Incomplete = 11,
-    Interrupted = 12,
+    Internal,
+    Usage,
+    Config,
+    WrongPassword,
+    WalletState,
+    ServiceUnavailable,
+    NotFound,
+    Rejected,
+    InsufficientFunds,
+    Node,
+    Transport,
+    Incomplete,
+    Interrupted,
 }
 
 impl ErrorKind {
-    pub const ALL: [Self; 12] = [
+    pub const ALL: [Self; 13] = [
         Self::Internal,
         Self::Usage,
         Self::Config,
         Self::WrongPassword,
         Self::WalletState,
+        Self::ServiceUnavailable,
         Self::NotFound,
         Self::Rejected,
         Self::InsufficientFunds,
@@ -57,7 +59,20 @@ impl ErrorKind {
     ];
 
     pub const fn exit_code(self) -> u8 {
-        self as u8
+        match self {
+            Self::Internal => 1,
+            Self::Usage => 2,
+            Self::Config => 3,
+            Self::WrongPassword => 4,
+            Self::WalletState | Self::ServiceUnavailable => 5,
+            Self::NotFound => 6,
+            Self::Rejected => 7,
+            Self::InsufficientFunds => 8,
+            Self::Node => 9,
+            Self::Transport => 10,
+            Self::Incomplete => 11,
+            Self::Interrupted => 12,
+        }
     }
 
     /// The `kind` field of a JSON error.
@@ -68,6 +83,7 @@ impl ErrorKind {
             Self::Config => "config",
             Self::WrongPassword => "wrong_password",
             Self::WalletState => "wallet_state",
+            Self::ServiceUnavailable => "service_unavailable",
             Self::NotFound => "not_found",
             Self::Rejected => "rejected",
             Self::InsufficientFunds => "insufficient_funds",
@@ -88,6 +104,7 @@ Exit codes:
    3  config: invalid settings or config file
    4  wrong_password: the password did not unlock the wallet
    5  wallet_state: no wallet, a wallet already exists, it is in use, or it belongs elsewhere
+   5  service_unavailable: nothing answers at the --service socket; start `lepic serve`
    6  not_found: no such transaction, slate or account
    7  rejected: the slate or request was refused; nothing was stored
    8  insufficient_funds: not enough spendable funds
@@ -141,6 +158,15 @@ pub enum CliError {
     NoDestination,
     #[error("slate id is not of the form xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx")]
     SlateId,
+    #[error("--slate-id must be a random version-4 uuid, made for this send")]
+    NotRandomSlateId,
+    #[error(
+        "slate id belongs to transaction {tx_id}, sent with another account, amount, \
+         destination or transport"
+    )]
+    SlateIdReused { tx_id: u32 },
+    #[error("no send of this wallet has that slate id")]
+    NoSendWithSlate,
     #[error("--reply-file applies to an invoice slate file, not to a parked invoice")]
     ReplyFileForParked,
     #[error("start height {start} is above the node's tip {tip}")]
@@ -157,6 +183,11 @@ pub enum CliError {
     },
     #[error("stopped before it finished")]
     Interrupted,
+    #[error(
+        "stopped after transaction {tx_id} was stored, before its delivery was known: \
+         run `lepic tx show {tx_id}`"
+    )]
+    SendInterrupted { tx_id: u32 },
     #[error("other users can access the data directory")]
     SharedDataDir,
     #[error("another lepic process is using the data directory")]
@@ -179,6 +210,22 @@ pub enum CliError {
     Contact(#[from] ContactError),
     #[error("contact id is not 32 hex digits")]
     ContactId,
+    #[error("no lepic serve answers at {}", path.display())]
+    ServiceUnavailable { path: std::path::PathBuf },
+    #[error("{what} cannot run through lepic serve")]
+    ServiceRefused { what: &'static str },
+    #[error("{option} cannot change what lepic serve opened")]
+    ServiceOption { option: &'static str },
+    #[error("{what} answers only through lepic --service")]
+    ServiceOnly { what: &'static str },
+    #[error("the request to lepic serve is refused: {reason}")]
+    ServiceRequest { reason: &'static str },
+    #[error("the socket path {} is too long for a unix socket", path.display())]
+    SocketPathTooLong { path: std::path::PathBuf },
+    #[error("{} exists and is not a socket", path.display())]
+    SocketPathTaken { path: std::path::PathBuf },
+    #[error("lepic serve and --service need unix sockets, which this system does not offer")]
+    ServiceUnsupported,
 }
 
 impl CliError {
@@ -188,15 +235,21 @@ impl CliError {
 
     pub fn kind(&self) -> ErrorKind {
         match self {
-            Self::Settings(_) | Self::Telemetry(_) | Self::SharedDataDir => ErrorKind::Config,
-            Self::Secret(SecretError::Mismatch | SecretError::TooShort { .. }) => {
-                ErrorKind::Rejected
-            }
+            Self::Settings(_)
+            | Self::Telemetry(_)
+            | Self::SharedDataDir
+            | Self::Secret(
+                SecretError::PasswordFileOpen { .. }
+                | SecretError::PasswordFileEmpty { .. }
+                | SecretError::PasswordFile { .. },
+            ) => ErrorKind::Config,
+            Self::Secret(SecretError::Mismatch | SecretError::EmptyNew) => ErrorKind::Rejected,
             Self::Secret(_)
             | Self::Amount(_)
             | Self::Zero { .. }
             | Self::NoDestination
             | Self::SlateId
+            | Self::NotRandomSlateId
             | Self::ReplyFileForParked
             | Self::StartAboveTip { .. }
             | Self::Address(_)
@@ -204,7 +257,15 @@ impl CliError {
             | Self::InvoiceOverHttp
             | Self::OnionAddress(_)
             | Self::ContactId
+            | Self::ServiceRefused { .. }
+            | Self::ServiceOption { .. }
+            | Self::ServiceOnly { .. }
+            | Self::ServiceRequest { .. }
+            | Self::SocketPathTooLong { .. }
+            | Self::SocketPathTaken { .. }
+            | Self::ServiceUnsupported
             | Self::TorBinaryNeeded => ErrorKind::Usage,
+            Self::ServiceUnavailable { .. } => ErrorKind::ServiceUnavailable,
             Self::Contact(error) => contact_kind(error),
             Self::Tor(failure) if failure.kind == lepic_tor::FailureKind::Missing => {
                 ErrorKind::Config
@@ -214,6 +275,8 @@ impl CliError {
             Self::HttpReplyLost { .. } => ErrorKind::Incomplete,
             Self::Wallet(error) => wallet_kind(error),
             Self::DataDirInUse => ErrorKind::WalletState,
+            Self::SlateIdReused { .. } => ErrorKind::Rejected,
+            Self::NoSendWithSlate => ErrorKind::NotFound,
             Self::Send(error) => send_kind(error),
             Self::Receive(error) => receive_kind(error),
             Self::Finalize(error) => finalize_kind(error),
@@ -225,7 +288,9 @@ impl CliError {
             Self::Refresh(RefreshError::Node(_) | RefreshError::Implausible(_))
             | Self::Scan(ScanError::Node(_) | ScanError::Implausible(_))
             | Self::Node(_) => ErrorKind::Node,
-            Self::Scan(ScanError::Cancelled) | Self::Interrupted => ErrorKind::Interrupted,
+            Self::Scan(ScanError::Cancelled) | Self::Interrupted | Self::SendInterrupted { .. } => {
+                ErrorKind::Interrupted
+            }
             Self::Transport(_) | Self::SlateFile { .. } => ErrorKind::Transport,
             Self::Refresh(_)
             | Self::Scan(_)
@@ -239,6 +304,16 @@ impl CliError {
     /// terminal. Repeated texts, as when a wrapper prints its source, appear once.
     pub fn chain(&self) -> Vec<String> {
         display_error_chain(self)
+    }
+
+    /// The stored transaction the error is about, for a script to resend, cancel or show.
+    pub const fn tx_id(&self) -> Option<u32> {
+        match self {
+            Self::SendInterrupted { tx_id }
+            | Self::SlateIdReused { tx_id }
+            | Self::HttpReplyLost { tx_id } => Some(*tx_id),
+            _ => None,
+        }
     }
 }
 
@@ -281,7 +356,8 @@ fn send_kind(error: &SendError) -> ErrorKind {
         | SendError::Unrepresentable(_)
         | SendError::ProofAddress(_)
         | SendError::NotResendable { .. }
-        | SendError::PayeeMismatch { .. } => ErrorKind::Rejected,
+        | SendError::PayeeMismatch { .. }
+        | SendError::SlateIdTaken { .. } => ErrorKind::Rejected,
         SendError::UnknownTransport { .. }
         | SendError::CannotDeliver { .. }
         | SendError::CannotExport { .. } => ErrorKind::Transport,
@@ -296,6 +372,7 @@ fn contact_kind(error: &ContactError) -> ErrorKind {
         ContactError::Invoice(error) => invoice_kind(error),
         ContactError::Receive(error) => receive_kind(error),
         ContactError::Finalize(error) => finalize_kind(error),
+        ContactError::Send(error) => send_kind(error),
         ContactError::Offline | ContactError::EpicboxOff | ContactError::NetworkMismatch => {
             ErrorKind::Config
         }
@@ -327,8 +404,11 @@ fn contact_kind(error: &ContactError) -> ErrorKind {
         | ContactError::Ended
         | ContactError::Waiting
         | ContactError::OtherAddress
-        | ContactError::AddressProofMissing => ErrorKind::Rejected,
+        | ContactError::KindDiffers
+        | ContactError::AddressProofMissing
+        | ContactError::RelayMoveNotRequested => ErrorKind::Rejected,
         ContactError::Post(_) => ErrorKind::Transport,
+        ContactError::NotCancelled { cause, .. } => contact_kind(cause),
         _ => ErrorKind::Internal,
     }
 }
@@ -451,10 +531,15 @@ mod tests {
 
     #[test]
     fn exit_codes_are_distinct_and_never_zero() {
-        let mut codes: Vec<u8> = ErrorKind::ALL.iter().map(|kind| kind.exit_code()).collect();
+        let mut codes: Vec<u8> = ErrorKind::ALL
+            .iter()
+            .filter(|kind| **kind != ErrorKind::ServiceUnavailable)
+            .map(|kind| kind.exit_code())
+            .collect();
         codes.sort_unstable();
         codes.dedup();
-        assert_eq!(codes.len(), ErrorKind::ALL.len());
+        assert_eq!(codes.len(), ErrorKind::ALL.len() - 1);
+        assert_eq!(ErrorKind::ServiceUnavailable.exit_code(), 5);
         assert!(!codes.contains(&0));
     }
 
@@ -530,6 +615,10 @@ mod tests {
             (AmountError::Syntax.into(), ErrorKind::Usage),
             (CliError::Interrupted, ErrorKind::Interrupted),
             (
+                CliError::SendInterrupted { tx_id: 2 },
+                ErrorKind::Interrupted,
+            ),
+            (
                 RefreshError::Implausible(ImplausibleNodeData::TipTooHigh {
                     tip: Height::new(2),
                     limit: Height::new(1),
@@ -586,6 +675,12 @@ mod tests {
             (ReceiveError::ZeroAmount.into(), ErrorKind::Rejected),
             (CliError::DataDirInUse, ErrorKind::WalletState),
             (
+                CliError::ServiceUnavailable {
+                    path: "lepic.sock".into(),
+                },
+                ErrorKind::ServiceUnavailable,
+            ),
+            (
                 InvoiceError::NotParked {
                     slate_id: lepic_wallet::event::SlateId::from_bytes([1; 16]),
                 }
@@ -600,6 +695,9 @@ mod tests {
                 ErrorKind::Rejected,
             ),
             (CliError::SlateId, ErrorKind::Usage),
+            (CliError::NotRandomSlateId, ErrorKind::Usage),
+            (CliError::SlateIdReused { tx_id: 1 }, ErrorKind::Rejected),
+            (CliError::NoSendWithSlate, ErrorKind::NotFound),
             (CliError::ReplyFileForParked, ErrorKind::Usage),
             (
                 CliError::StartAboveTip { start: 9, tip: 8 },

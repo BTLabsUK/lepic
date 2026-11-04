@@ -5,6 +5,7 @@ use std::future::Future;
 use std::io::Read as _;
 use std::pin::Pin;
 use std::sync::Arc;
+use std::time::Duration;
 
 use lepic_epicbox::tunnel::OnionRoutes;
 use lepic_epicbox::tunnel::{Tunnel, TunnelConnector};
@@ -45,6 +46,12 @@ pub trait Host {
     /// Resolves when the user asks the command to stop. Called once per command, inside its
     /// runtime, before anything is read, so that an interrupt at a prompt reaches the CLI.
     fn interrupted(&self) -> Interrupt;
+
+    /// How often `lepic serve` collects the contact mailboxes and refreshes the wallet, as the
+    /// app's foreground tick does. Tests shorten it.
+    fn maintenance_interval(&self) -> Duration {
+        Duration::from_secs(60)
+    }
 }
 
 /// The node over HTTP, the relay over TCP and TLS, Ctrl-C.
@@ -105,20 +112,22 @@ impl Host for ProcessHost {
         KdfParams::DEFAULT
     }
 
-    /// The handler is installed here, not on first poll, so no Ctrl-C between this call and
-    /// the first prompt can end the process with echo off. Without a handler the command runs
-    /// until it ends on its own.
+    /// Ctrl-C or SIGTERM, the signal a service manager stops a service with. The handlers are
+    /// installed here, not on first poll, so no signal between this call and the first prompt
+    /// can end the process with echo off. A signal whose handler cannot be installed is not
+    /// waited for.
     #[cfg(unix)]
     fn interrupted(&self) -> Interrupt {
         use tokio::signal::unix::{SignalKind, signal};
-        match signal(SignalKind::interrupt()) {
-            Ok(mut interrupt) => Box::pin(async move {
-                if interrupt.recv().await.is_none() {
-                    std::future::pending::<()>().await;
-                }
-            }),
-            Err(_) => Box::pin(std::future::pending()),
-        }
+        let mut interrupt = signal(SignalKind::interrupt()).ok();
+        let mut terminate = signal(SignalKind::terminate()).ok();
+        Box::pin(async move {
+            tokio::select! {
+                Some(()) = next_signal(interrupt.as_mut()) => {}
+                Some(()) = next_signal(terminate.as_mut()) => {}
+                else => std::future::pending::<()>().await,
+            }
+        })
     }
 
     #[cfg(not(unix))]
@@ -129,6 +138,12 @@ impl Host for ProcessHost {
             }
         })
     }
+}
+
+/// The next delivery of `signal`; `None` when it has no handler or its stream ended.
+#[cfg(unix)]
+async fn next_signal(signal: Option<&mut tokio::signal::unix::Signal>) -> Option<()> {
+    signal?.recv().await
 }
 
 /// The directory inside the data directory that holds the files of the relay's tor, apart from
@@ -152,6 +167,7 @@ fn cli_tor(settings: &Settings) -> Option<Arc<CliTor>> {
                 settings.tuning.tor_timings(),
             );
             tor.lib_dir.clone_from(lib_dir);
+            tor.withheld_env = vec![crate::secret::PASSWORD_ENV.to_owned()];
             Some(tor)
         }
     };

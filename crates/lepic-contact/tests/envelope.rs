@@ -354,7 +354,7 @@ fn inner_rejections_have_their_own_errors() {
             Malformed::MissingField { tag: 0x02 }.into(),
         ),
         (
-            [field(0x01, &[9]), field(0x02, b"{}")].concat(),
+            [field(0x01, &[0x0a]), field(0x02, b"{}")].concat(),
             Malformed::FieldValue { tag: 0x01 }.into(),
         ),
         (

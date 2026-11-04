@@ -44,6 +44,11 @@ pub const SETTINGS: &[(&str, &str, &str)] = &[
         "file holding the node's foreign api secret",
     ),
     (
+        "password_file",
+        "LEPIC_PASSWORD_FILE",
+        "file holding the wallet password, readable by its owner only",
+    ),
+    (
         "epicbox_relay",
         "LEPIC_EPICBOX_RELAY",
         "relay as wss://host[:port], or ws://host[:port] for a loopback host",
@@ -240,6 +245,8 @@ pub struct Settings {
     pub output: OutputFormat,
     pub node: NodeEndpoint,
     pub node_api_secret_file: Option<PathBuf>,
+    /// Read for the wallet password before `LEPIC_PASSWORD` and the prompt.
+    pub password_file: Option<PathBuf>,
     pub relay: RelayEndpoint,
     /// The servers of the settings file and the built-in configuration.
     pub servers: Servers,
@@ -357,6 +364,7 @@ impl Settings {
             },
             node,
             node_api_secret_file: lookup.path("node_api_secret_file")?,
+            password_file: lookup.path("password_file")?,
             relay,
             servers,
             tuning: config.tuning,
@@ -423,7 +431,7 @@ fn relay(lookup: &Lookup<'_>, servers: &Servers) -> Result<RelayEndpoint, Settin
 
 const SECONDS_PER_HOUR: u64 = 60 * 60;
 
-/// A whole number of hours the engine accepts as an invoice expiry.
+/// A whole number of hours, at least 1, as an invoice expiry. The CLI sets no upper bound.
 fn parse_expiry_hours(text: &str) -> Option<InvoiceExpiry> {
     let hours: u64 = text.parse().ok()?;
     let seconds = hours.checked_mul(SECONDS_PER_HOUR)?;
@@ -666,14 +674,18 @@ mod tests {
     }
 
     #[test]
-    fn invoice_expiry_is_whole_hours_from_one_to_two_days() {
+    fn invoice_expiry_is_whole_hours_of_at_least_one() {
         let hours = |h: u64| Some(std::time::Duration::from_secs(h * SECONDS_PER_HOUR));
         assert_eq!(parse_expiry_hours("1").map(InvoiceExpiry::window), hours(1));
         assert_eq!(
             parse_expiry_hours("48").map(InvoiceExpiry::window),
             hours(48)
         );
-        for bad in ["0", "49", "-1", "1.5", "", "24h", "18446744073709551615"] {
+        assert_eq!(
+            parse_expiry_hours("720").map(InvoiceExpiry::window),
+            hours(720)
+        );
+        for bad in ["0", "-1", "1.5", "", "24h", "18446744073709551615"] {
             assert!(parse_expiry_hours(bad).is_none(), "{bad}");
         }
     }

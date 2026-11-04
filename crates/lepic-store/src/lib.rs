@@ -10,8 +10,11 @@ mod contact;
 #[cfg(feature = "sqlite")]
 mod contact_backup;
 mod context;
+#[cfg(feature = "sqlite")]
+mod dir_lock;
 mod encoding;
 mod error;
+pub mod file;
 #[cfg(feature = "sqlite")]
 #[doc(hidden)]
 pub mod fuzz;
@@ -53,6 +56,8 @@ pub use contact_backup::{
 pub use context::{
     CONTEXT_KEY_LEN, ContextKey, ContextRepository, ParticipantId, PrivateContext, StoreKeys,
 };
+#[cfg(feature = "sqlite")]
+pub use dir_lock::{DataDirLock, DataDirLockError, LOCK_FILE, lock_data_dir, try_lock_data_dir};
 pub use error::{DatabaseError, Record, StoreError};
 pub use imported::{
     ChainCheck, ImportedKind, ImportedMessage, ImportedOutput, ImportedOutputStatus,

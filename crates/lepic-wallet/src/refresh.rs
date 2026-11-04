@@ -19,15 +19,13 @@
 //! a separate [`Wallet::scan`] with [`crate::scan::ScanOptions::update`], run after a refresh.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::error::Error as StdError;
-use std::fmt;
-use std::ops::RangeInclusive;
 use std::sync::Arc;
 
 use jiff::Timestamp;
 use lepic_crypto::Commitment;
 use lepic_node::{NodeApi, NodeError, OutputLocation};
-use lepic_primitives::amount::{Amount, ArithmeticError, Fee, Height};
+use lepic_primitives::amount::{Amount, ArithmeticError, Height};
+use lepic_primitives::error_chain::ErrorChain;
 use lepic_slate::codec::{MediaType, WireSlate};
 use lepic_slate::model::Slate;
 use lepic_slate::registry::CodecRegistry;
@@ -41,6 +39,7 @@ use uuid::Uuid;
 
 use crate::cancel::{cancel_partner, drop_holdings, pool_kernels, self_send_partner};
 use crate::chain::{self, ChainPosition, ImplausibleNodeData};
+use crate::codecs;
 use crate::epicbox_invoice::epicbox_invoice_payment;
 use crate::error::WalletError;
 use crate::event::{Balance, Event, SlateId, SupersededReceive};
@@ -59,13 +58,10 @@ use crate::state::{StateChange, apply_transition, is_final};
 use crate::wallet::Wallet;
 
 /// Confirmations an unspent output needs to count as spendable, and to be selected for a send,
-/// in a wallet that has not set its own ([`Wallet::set_minimum_confirmations`]): 6. The old GUI
+/// in a wallet that has not set its own ([`Wallet::set_minimum_confirmations`]), when the host
+/// chose no other ([`crate::WalletPolicy::default_minimum_confirmations`]): 6. The old GUI
 /// wallet counted 3 and `epic-wallet` defaults to 10; ADR 0027 gives the reasons.
 pub const DEFAULT_MINIMUM_CONFIRMATIONS: u64 = 6;
-
-/// The values [`Wallet::set_minimum_confirmations`] accepts: 1 is the fastest, and nothing
-/// deeper than 30 blocks is useful on Epic Cash (ADR 0027).
-pub const MINIMUM_CONFIRMATIONS_RANGE: RangeInclusive<u64> = 1..=30;
 
 pub(crate) const MINIMUM_CONFIRMATIONS_SETTING: &str = "wallet.minimum_confirmations";
 
@@ -369,7 +365,7 @@ where
         summary: &mut RefreshSummary,
     ) -> Result<BTreeSet<TxId>, RefreshError> {
         let node = &self.ports().node;
-        let codecs = legacy_codecs(self.config().network.params().default_base_fee());
+        let codecs = codecs::legacy(self.config().network.params().default_base_fee());
         let lookups = {
             let session = Arc::clone(session);
             self.blocking(move |_, _| {
@@ -423,7 +419,7 @@ where
         summary: &mut RefreshSummary,
     ) -> Result<(), RefreshError> {
         let node = &self.ports().node;
-        let codecs = legacy_codecs(self.config().network.params().default_base_fee());
+        let codecs = codecs::legacy(self.config().network.params().default_base_fee());
         let candidates = {
             let session = Arc::clone(session);
             let height = tip.height;
@@ -446,7 +442,7 @@ where
             chain::check_agreement(tip.height, second.height)?;
         }
         let cleared = self.not_held(&candidates, tip).await?;
-        let codecs = legacy_codecs(self.config().network.params().default_base_fee());
+        let codecs = codecs::legacy(self.config().network.params().default_base_fee());
         let changes = {
             let session = Arc::clone(session);
             let height = tip.height;
@@ -477,7 +473,11 @@ where
     async fn emit_balances(&self, session: &Arc<Session<S::Store>>) -> Result<(), RefreshError> {
         let session = Arc::clone(session);
         let balances = self
-            .blocking(move |_, _| Ok(session.store.read(balances)))
+            .blocking(move |_, config| {
+                Ok(session
+                    .store
+                    .read(|repos| balances(repos, config.policy.default_minimum_confirmations)))
+            })
             .await??;
         for balance in balances {
             self.emit(Event::Balance(balance));
@@ -506,7 +506,7 @@ where
         now: Timestamp,
         summary: &mut RefreshSummary,
     ) -> Result<(), RefreshError> {
-        let codecs = legacy_codecs(self.config().network.params().default_base_fee());
+        let codecs = codecs::legacy(self.config().network.params().default_base_fee());
         let mut waiting = {
             let session = Arc::clone(session);
             self.blocking(move |_, _| {
@@ -602,7 +602,7 @@ where
         now: Timestamp,
         summary: &mut RefreshSummary,
     ) -> Result<(), RefreshError> {
-        let codecs = legacy_codecs(self.config().network.params().default_base_fee());
+        let codecs = codecs::legacy(self.config().network.params().default_base_fee());
         let posts = {
             let session = Arc::clone(session);
             self.blocking(move |_, _| Ok(session.store.read(|repos| pending_posts(repos, &codecs))))
@@ -803,7 +803,7 @@ where
         now: Timestamp,
         summary: &mut RefreshSummary,
     ) -> Result<(), RefreshError> {
-        let codecs = legacy_codecs(self.config().network.params().default_base_fee());
+        let codecs = codecs::legacy(self.config().network.params().default_base_fee());
         let (height, due) = {
             let session = Arc::clone(session);
             self.blocking(move |_, _| {
@@ -988,7 +988,7 @@ where
                 account,
                 &outputs,
                 balance_height(repos)?,
-                minimum_confirmations(repos)?,
+                minimum_confirmations(repos, self.default_minimum())?,
                 &apart,
             )
             .map_err(WalletError::Balance)
@@ -996,8 +996,9 @@ where
     }
 
     /// The confirmations an output needs to count as spendable in [`Wallet::balance`] and to be
-    /// selected for a send: the stored setting, or [`DEFAULT_MINIMUM_CONFIRMATIONS`] for a
-    /// wallet that never set one. Reads only the store.
+    /// selected for a send: the stored setting, or the policy's default
+    /// ([`DEFAULT_MINIMUM_CONFIRMATIONS`] unless the host chose another) for a wallet that never
+    /// set one. Reads only the store.
     ///
     /// Fails with [`WalletError::Locked`].
     #[instrument(skip_all, fields(wallet = %self.config().name))]
@@ -1005,24 +1006,33 @@ where
         let session = self.session()?;
         session
             .store
-            .read(|repos| Ok(minimum_confirmations(repos)?))
+            .read(|repos| Ok(minimum_confirmations(repos, self.default_minimum())?))
+    }
+
+    fn default_minimum(&self) -> u64 {
+        self.config().policy.default_minimum_confirmations
     }
 
     /// Stores the wallet's minimum confirmations, then re-splits the balance of every account
     /// at the stored tip and emits one [`Event::Balance`] for each, without asking the node.
     ///
-    /// Fails with [`WalletError::MinimumConfirmationsOutOfRange`] outside
-    /// [`MINIMUM_CONFIRMATIONS_RANGE`], or [`WalletError::Locked`].
+    /// Fails with [`WalletError::MinimumConfirmationsOutOfRange`] for 0, which would spend
+    /// unconfirmed outputs, or [`WalletError::Locked`]. There is no upper bound: the host
+    /// decides how deep it lets its users ask, and a count above what the chain has makes
+    /// nothing spendable.
     #[instrument(skip_all, fields(wallet = %self.config().name))]
     pub fn set_minimum_confirmations(&self, count: u64) -> Result<(), WalletError> {
-        if !MINIMUM_CONFIRMATIONS_RANGE.contains(&count) {
+        if count == 0 {
             return Err(WalletError::MinimumConfirmationsOutOfRange { count });
         }
         let session = self.session()?;
         session
             .store
             .write(|repos| repos.put_setting(MINIMUM_CONFIRMATIONS_SETTING, &count.to_string()))?;
-        let balances = session.store.read(account_balances)?;
+        let default = self.default_minimum();
+        let balances = session
+            .store
+            .read(|repos| account_balances(repos, default))?;
         for balance in balances {
             self.emit(Event::Balance(balance));
         }
@@ -1042,7 +1052,7 @@ where
                 return Err(crate::AccountError::UnknownAccount(account).into());
             }
             let height = balance_height(repos)?;
-            let minimum = minimum_confirmations(repos)?;
+            let minimum = minimum_confirmations(repos, self.default_minimum())?;
             let outputs = repos.outputs(account, None)?;
             let apart = counted_apart(repos, &outputs)?;
             Ok(outputs
@@ -1127,13 +1137,16 @@ where
     }
 }
 
-/// The wallet's minimum confirmations; an absent or unreadable setting reads as the default.
-pub(crate) fn minimum_confirmations(repos: &dyn Repositories) -> Result<u64, StoreError> {
+/// The wallet's minimum confirmations; an absent or unreadable setting reads as `default`.
+pub(crate) fn minimum_confirmations(
+    repos: &dyn Repositories,
+    default: u64,
+) -> Result<u64, StoreError> {
     Ok(repos
         .setting(MINIMUM_CONFIRMATIONS_SETTING)?
         .and_then(|text| text.parse().ok())
-        .filter(|count| MINIMUM_CONFIRMATIONS_RANGE.contains(count))
-        .unwrap_or(DEFAULT_MINIMUM_CONFIRMATIONS))
+        .filter(|count| *count >= 1)
+        .unwrap_or(default))
 }
 
 /// `request` as a spend from this wallet runs it: never with fewer confirmations than the
@@ -1146,7 +1159,7 @@ pub(crate) fn with_spend_confirmations(
     let stored = repos
         .setting(MINIMUM_CONFIRMATIONS_SETTING)?
         .and_then(|text| text.parse().ok())
-        .filter(|count| MINIMUM_CONFIRMATIONS_RANGE.contains(count));
+        .filter(|count| *count >= 1);
     request.minimum_confirmations = request
         .minimum_confirmations
         .max(stored.unwrap_or(1))
@@ -1904,28 +1917,6 @@ pub(crate) fn decode_stored(codecs: &CodecRegistry, tx_id: TxId, bytes: &[u8]) -
     }
 }
 
-/// Errors nested deeper than this are cut from a log line.
-const MAX_ERROR_SOURCES: usize = 16;
-
-/// Displays an error followed by its sources, separated by `": "`, for the `error` log field.
-struct ErrorChain<'a>(&'a (dyn StdError + 'static));
-
-impl fmt::Display for ErrorChain<'_> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.0)?;
-        let sources = std::iter::successors(self.0.source(), |&error| error.source());
-        for source in sources.take(MAX_ERROR_SOURCES) {
-            write!(f, ": {source}")?;
-        }
-        Ok(())
-    }
-}
-
-/// The codecs stored slates are written in, in the detection order `receive` uses.
-pub(crate) fn legacy_codecs(base_fee: Fee) -> CodecRegistry {
-    crate::codecs::legacy(base_fee)
-}
-
 /// The height balances are computed at: the highest tip a refresh or scan confirmed, or zero
 /// before any. A tip held as pending does not count, so the balance a refresh reports equals
 /// what [`Wallet::balance`] reads from the store afterwards.
@@ -1942,13 +1933,16 @@ pub(crate) fn balance_height(repos: &dyn Repositories) -> Result<Height, StoreEr
 
 /// The balance of every account at [`balance_height`], in the categories of upstream's
 /// `retrieve_info`.
-fn balances(repos: &dyn Repositories) -> Result<Vec<Balance>, RefreshError> {
-    Ok(account_balances(repos)?)
+fn balances(repos: &dyn Repositories, default_minimum: u64) -> Result<Vec<Balance>, RefreshError> {
+    Ok(account_balances(repos, default_minimum)?)
 }
 
-fn account_balances(repos: &dyn Repositories) -> Result<Vec<Balance>, WalletError> {
+fn account_balances(
+    repos: &dyn Repositories,
+    default_minimum: u64,
+) -> Result<Vec<Balance>, WalletError> {
     let height = balance_height(repos)?;
-    let minimum = minimum_confirmations(repos)?;
+    let minimum = minimum_confirmations(repos, default_minimum)?;
     let mut balances = Vec::new();
     for account in repos.accounts()? {
         let outputs = repos.outputs(account.index, None)?;

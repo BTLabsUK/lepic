@@ -279,9 +279,9 @@ impl EncryptedMessage {
     pub fn to_json(&self) -> Result<String, MessageError> {
         serde_json::to_string(&MessageJson {
             destination: self.destination.clone(),
-            encrypted_message: hex_encode(&self.ciphertext).into(),
-            salt: hex_encode(&self.salt.0).into(),
-            nonce: hex_encode(&self.nonce.0).into(),
+            encrypted_message: lepic_crypto::hex::encode(&self.ciphertext).into(),
+            salt: lepic_crypto::hex::encode(&self.salt.0).into(),
+            nonce: lepic_crypto::hex::encode(&self.nonce.0).into(),
         })
         .map_err(|error| MessageError::Json(error.into()))
     }
@@ -394,28 +394,9 @@ impl ReceivedMessage {
     }
 }
 
-fn hex_encode(bytes: &[u8]) -> String {
-    const DIGITS: &[u8; 16] = b"0123456789abcdef";
-    let mut text = String::with_capacity(bytes.len().saturating_mul(2));
-    for byte in bytes {
-        for nibble in [byte >> 4, byte & 0x0f] {
-            text.push(char::from(
-                DIGITS.get(usize::from(nibble)).copied().unwrap_or(b'0'),
-            ));
-        }
-    }
-    text
-}
-
 fn hex_decode(text: &str, field: MessageField) -> Result<Vec<u8>, MessageError> {
-    let (pairs, rest) = text.as_bytes().as_chunks::<2>();
-    if !rest.is_empty() {
-        return Err(MessageError::InvalidHex { field });
-    }
-    pairs
-        .iter()
-        .map(|[high, low]| Ok(nibble(*high, field)?.wrapping_shl(4) | nibble(*low, field)?))
-        .collect()
+    lepic_crypto::hex::decode_bounded(text, 0, usize::MAX)
+        .map_err(|_| MessageError::InvalidHex { field })
 }
 
 fn hex_decode_array<const N: usize>(
@@ -428,13 +409,6 @@ fn hex_decode_array<const N: usize>(
         expected: N,
         actual: bytes.len(),
     })
-}
-
-fn nibble(digit: u8, field: MessageField) -> Result<u8, MessageError> {
-    char::from(digit)
-        .to_digit(16)
-        .and_then(|value| u8::try_from(value).ok())
-        .ok_or(MessageError::InvalidHex { field })
 }
 
 #[cfg(test)]
@@ -469,7 +443,7 @@ mod tests {
     #[test]
     fn hex_round_trips_every_byte() {
         let bytes: Vec<u8> = (0..=255).collect();
-        let text = hex_encode(&bytes);
+        let text = lepic_crypto::hex::encode(&bytes);
         assert_eq!(hex_decode(&text, MessageField::Salt).unwrap(), bytes);
         assert_eq!(
             hex_decode(&text.to_uppercase(), MessageField::Salt).unwrap(),

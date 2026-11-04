@@ -508,7 +508,7 @@ fn copy_plain(
     //    fails this open, and the next one opens the encrypted database.
     rename_retrying(&copy, &encrypted, fs_rename)
         .map_err(io("switch to the encrypted database"))?;
-    cipher::sync_folder(&encrypted)
+    crate::file::sync_folder(&encrypted)
         .map_err(io("switch to the encrypted database"))
         .map_err(Failure::AfterSwitch)?;
     step(faults, Step::Switched, &copy).map_err(after_switch)?;
@@ -906,7 +906,7 @@ fn move_plain(plain: &Path, aside: &Path, rename: Rename) -> Result<(), StoreErr
     }
     rename_retrying(plain, aside, rename).map_err(io("set the plain database aside"))?;
     remove_if_present(&with_suffix(plain, "-shm"))?;
-    cipher::sync_folder(plain).map_err(io("set the plain database aside"))
+    crate::file::sync_folder(plain).map_err(io("set the plain database aside"))
 }
 
 /// How a file is renamed: [`fs_rename`], or in tests one that fails.

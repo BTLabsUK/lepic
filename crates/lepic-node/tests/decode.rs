@@ -206,18 +206,6 @@ fn ready_for_txs_reads_the_flag_and_refuses_anything_else() {
     }
 }
 
-#[cfg(test)]
-fn display_chain(error: &(dyn std::error::Error + 'static)) -> String {
-    let mut text = error.to_string();
-    let mut source = error.source();
-    while let Some(next) = source {
-        text.push_str(": ");
-        text.push_str(&next.to_string());
-        source = next.source();
-    }
-    text
-}
-
 #[test]
 fn malformed_response_errors_carry_none_of_the_node_text() {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -239,7 +227,7 @@ fn malformed_response_errors_carry_none_of_the_node_text() {
         matches!(error, lepic_node::NodeError::MalformedResponse { .. }),
         "{error:?}"
     );
-    let text = display_chain(&error);
+    let text = lepic_primitives::error_chain::ErrorChain(&error).to_string();
     assert!(!text.contains('\u{1b}'), "{text:?}");
     assert!(!text.contains('\u{202e}'), "{text:?}");
     assert!(!text.contains("xxx"), "{text:?}");

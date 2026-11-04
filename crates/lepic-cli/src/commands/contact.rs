@@ -2,6 +2,8 @@
 //! `lepic contact`: pairing with contacts (RFC 0002) and invoices and slates exchanged with them
 //! through their mailboxes.
 
+use std::path::{Path, PathBuf};
+
 use lepic_primitives::amount::Amount;
 use lepic_store::TxId;
 use lepic_store::{AccountIndex, ContactId, ContactState, SealMode};
@@ -9,6 +11,7 @@ use lepic_transport::file::response_path;
 use lepic_wallet::ReceiveRequest;
 use lepic_wallet::event::SlateId;
 use lepic_wallet::invoice::InvoiceRequest;
+use lepic_wallet::send::{SendRequest, SentSlate};
 use lepic_wallet::slate::Stage;
 use lepic_wallet_contacts::{
     AcceptRequest, CardRequest, CollectTrigger, ContactKind, ContactRelays, ContactView,
@@ -21,25 +24,26 @@ use crate::amount::{format_amount, format_fee, parse_amount};
 use crate::cli::{
     ContactAcceptArgs, ContactArgs, ContactCardArgs, ContactCommand, ContactEnterArgs,
     ContactExportArgs, ContactImportArgs, ContactInviteArgs, ContactInvoiceArgs,
-    ContactKeyCheckArgs, ContactKeysArgs, ContactKindArg, ContactLabelArgs, ContactOpenSealedArgs,
-    ContactPayArgs, ContactPlainArgs, ContactRequestArgs, ContactSasArgs, ContactSealArgs,
-    ContactSendSlateArgs, ContactSlateIdArg, ContactSwitchArgs, InviteExpiryArg, KeysArg, OnOffArg,
-    PurposeArg, SasArg,
+    ContactKeyCheckArgs, ContactKeysArgs, ContactKindArg, ContactLabelArgs, ContactMoveArgs,
+    ContactMoveHomeArgs, ContactOpenSealedArgs, ContactPayArgs, ContactPlainArgs,
+    ContactRequestArgs, ContactSasArgs, ContactSealArgs, ContactSendSlateArgs, ContactSlateIdArg,
+    ContactSwitchArgs, InviteExpiryArg, KeysArg, OnOffArg, PurposeArg, SasArg,
 };
 use crate::exit::CliError;
-use crate::host::{Host, HostNode};
+use crate::host::Host;
 use crate::output::{
-    ContactAcceptReport, ContactCardReport, ContactCollectReport, ContactExportReport,
-    ContactFailureReport, ContactImportReport, ContactInviteReport, ContactInvoiceIssueReport,
-    ContactInvoiceListReport, ContactInvoiceReport, ContactKeyCheckReport, ContactLinkReport,
-    ContactListReport, ContactPreviewReport, ContactRemoveReport, ContactReport,
-    ContactSlateReport, InvoiceDeclineReport, InvoicePayReport, Report,
+    ContactAcceptReport, ContactCardReport, ContactCheckReport, ContactCollectReport,
+    ContactExportReport, ContactFailureReport, ContactImportReport, ContactInviteReport,
+    ContactInvoiceIssueReport, ContactInvoiceListReport, ContactInvoiceReport,
+    ContactKeyCheckReport, ContactLinkReport, ContactListReport, ContactMoveHomeReport,
+    ContactPreviewReport, ContactRemoveReport, ContactReport, ContactSlateReport,
+    InvoiceDeclineReport, InvoicePayReport, Report,
 };
 
 /// Contacts belong to the default account.
 const CONTACT_ACCOUNT: AccountIndex = AccountIndex(0);
 
-fn contact_id(text: &str) -> Result<ContactId, CliError> {
+pub(super) fn contact_id(text: &str) -> Result<ContactId, CliError> {
     let text = text.trim();
     if text.len() != 32 || !text.bytes().all(|byte| byte.is_ascii_hexdigit()) {
         return Err(CliError::ContactId);
@@ -68,7 +72,7 @@ fn kind_name(kind: ContactKind) -> &'static str {
     }
 }
 
-fn purpose(purpose: PurposeArg) -> Purpose {
+pub(super) fn purpose(purpose: PurposeArg) -> Purpose {
     match purpose {
         PurposeArg::Payment => Purpose::Payment,
         PurposeArg::Deposit => Purpose::DepositRequest,
@@ -96,6 +100,7 @@ fn failure_name(reason: PairingFailure) -> &'static str {
         PairingFailure::Expired => "expired",
         PairingFailure::NotConfirmed => "not-confirmed",
         PairingFailure::ChangedOnTheWay => "changed-on-the-way",
+        PairingFailure::KindDiffers => "kind-differs",
         PairingFailure::Refused(Refusal::AlreadyUsed) => "refused-already-used",
         PairingFailure::Refused(Refusal::Expired) => "refused-expired",
         PairingFailure::Refused(Refusal::CancelledByInviter) => "refused-cancelled",
@@ -149,7 +154,9 @@ fn contact_report(view: &ContactView) -> ContactReport {
         }
         .to_owned(),
         home_relay: view.home_relay.clone(),
+        requested_relay: view.requested_relay.clone(),
         lapsed: view.lapsed,
+        last_heard: view.last_sealed_in.map(|at| at.to_string()),
     }
 }
 
@@ -169,6 +176,65 @@ fn relays<N: lepic_node::NodeApi + 'static>(
         RelayMode::Online
     };
     ContactRelays::new(opened.epicbox.clone(), mode).with_meeting(meeting.to_vec())
+}
+
+/// Pays the contact `contact_id` through its mailbox, for `lepic tx send --to-contact`. The S1
+/// passes through a file in the wallet's directory that is removed afterwards.
+pub(super) async fn send_to_contact<N: lepic_node::NodeApi + 'static>(
+    opened: &Opened<N>,
+    contact_id: ContactId,
+    request: SendRequest,
+    purpose: Option<Purpose>,
+    data_dir: &Path,
+) -> Result<SentSlate, CliError> {
+    let relays = ContactRelays::new(opened.epicbox.clone(), RelayMode::Online);
+    let slate_file = SlateFile::new(data_dir)?;
+    Ok(opened
+        .wallet
+        .contact_book()
+        .contact_send(
+            &relays,
+            contact_id,
+            request,
+            slate_file.path.clone(),
+            purpose,
+        )
+        .await?)
+}
+
+/// A slate file that exists only for one send, removed when dropped, also when the send is
+/// interrupted.
+struct SlateFile {
+    path: PathBuf,
+}
+
+impl SlateFile {
+    fn new(data_dir: &Path) -> Result<Self, CliError> {
+        let name: [u8; 8] = super::random_bytes()?;
+        let name: String = name.iter().map(|byte| format!("{byte:02x}")).collect();
+        Ok(Self {
+            path: data_dir.join(format!(".lepic-{name}.slate")),
+        })
+    }
+}
+
+impl Drop for SlateFile {
+    fn drop(&mut self) {
+        // Absent when the send stopped before writing it.
+        let _ = std::fs::remove_file(&self.path);
+    }
+}
+
+/// The contact the transaction `tx_id` was sealed to or from, if any.
+pub(super) async fn contact_of<N: lepic_node::NodeApi + 'static>(
+    opened: &Opened<N>,
+    tx_id: TxId,
+) -> Result<Option<ContactId>, CliError> {
+    Ok(opened
+        .wallet
+        .contact_book()
+        .contact_of_transaction(tx_id)
+        .await?)
 }
 
 /// The longest sealed text read from a file or standard input.
@@ -198,7 +264,8 @@ fn write_or_print(
 ) -> Result<(Option<String>, Option<String>), CliError> {
     match out {
         Some(path) => {
-            std::fs::write(&path, text).map_err(CliError::io("write the slate file"))?;
+            lepic_store::file::write_owner_only_atomic(&path, text.as_bytes())
+                .map_err(CliError::io("write the slate file"))?;
             Ok((Some(path.display().to_string()), None))
         }
         None => Ok((None, Some(text))),
@@ -214,7 +281,7 @@ fn answer_text(answer: SealedAnswer) -> String {
 
 impl<H: Host> Run<'_, H> {
     pub(super) async fn contact(&mut self, args: ContactArgs) -> Result<Report, CliError> {
-        let opened: Opened<HostNode<H>> = self.open().await?;
+        let opened = self.open().await?;
         let wallet = &opened.wallet;
         let relays = relays(&opened, &args, &self.settings.servers.meeting_relays);
         Ok(match args.command {
@@ -234,7 +301,7 @@ impl<H: Host> Run<'_, H> {
             ContactCommand::Enter(args) => enter(&opened, &relays, args).await?,
             ContactCommand::Collect => {
                 let events = wallet.subscribe();
-                let report = collect(&opened, &relays).await?;
+                let report = collect(&opened, &relays, CollectTrigger::Pull).await?;
                 self.show_invoice_events(events);
                 report
             }
@@ -264,6 +331,15 @@ impl<H: Host> Run<'_, H> {
             ContactCommand::Plain(args) => plain(&opened, args).await?,
             ContactCommand::OpenSealed(args) => open_sealed(&opened, args).await?,
             ContactCommand::Label(args) => label(&opened, args).await?,
+            ContactCommand::Move(args) => move_relay(&opened, args).await?,
+            ContactCommand::MoveHome(args) => move_home(&opened, &relays, args).await?,
+            ContactCommand::Check(args) => {
+                let id = contact_id(&args.contact)?;
+                wallet.contact_book().contact_check(&relays, id).await?;
+                Report::ContactCheck(ContactCheckReport {
+                    contact_id: id.to_string(),
+                })
+            }
             ContactCommand::Remove(args) => {
                 let id = contact_id(&args.contact)?;
                 Report::ContactRemove(ContactRemoveReport {
@@ -600,6 +676,39 @@ async fn label<N: lepic_node::NodeApi + 'static>(
     )))
 }
 
+/// `lepic contact move`: moves our mailbox with this contact to the relay it asked for.
+async fn move_relay<N: lepic_node::NodeApi + 'static>(
+    opened: &Opened<N>,
+    args: ContactMoveArgs,
+) -> Result<Report, CliError> {
+    let wallet = &opened.wallet;
+    let id = contact_id(&args.contact.contact)?;
+    wallet
+        .contact_book()
+        .apply_relay_move(id, args.apply.trim())
+        .await?;
+    Ok(Report::Contact(contact_report(
+        &wallet.contact_book().contact(id).await?,
+    )))
+}
+
+/// `lepic contact move-home`: moves the wallet's own home relay for every paired contact.
+async fn move_home<N: lepic_node::NodeApi + 'static>(
+    opened: &Opened<N>,
+    relays: &ContactRelays,
+    args: ContactMoveHomeArgs,
+) -> Result<Report, CliError> {
+    let moved = opened
+        .wallet
+        .contact_book()
+        .contacts_move_home(relays, &args.host)
+        .await?;
+    Ok(Report::ContactMoveHome(ContactMoveHomeReport {
+        home_relay: args.host.trim().to_ascii_lowercase(),
+        moved,
+    }))
+}
+
 /// `lepic contact allow-invoices`: lets a contact send invoices, or stops it.
 async fn allow_invoices<N: lepic_node::NodeApi + 'static>(
     opened: &Opened<N>,
@@ -723,7 +832,8 @@ async fn export<N: lepic_node::NodeApi + 'static>(
 ) -> Result<Report, CliError> {
     let wallet = &opened.wallet;
     let document = wallet.contact_book().contacts_export().await?;
-    std::fs::write(&args.file, document).map_err(CliError::io("write the contact backup"))?;
+    lepic_store::file::write_owner_only_atomic(&args.file, document.as_bytes())
+        .map_err(CliError::io("write the contact backup"))?;
     Ok(Report::ContactExport(ContactExportReport {
         file: args.file.display().to_string(),
     }))
@@ -749,12 +859,13 @@ async fn import<N: lepic_node::NodeApi + 'static>(
 async fn collect<N: lepic_node::NodeApi + 'static>(
     opened: &Opened<N>,
     relays: &ContactRelays,
+    trigger: CollectTrigger,
 ) -> Result<Report, CliError> {
     let wallet = &opened.wallet;
     // The cycle runs the outbox itself, every queued entry at once.
     let collected = wallet
         .contact_book()
-        .contacts_collect(relays, CollectTrigger::Pull)
+        .contacts_collect(relays, trigger)
         .await?;
     Ok(Report::ContactCollect(ContactCollectReport {
         mailboxes: collected.mailboxes,
@@ -771,6 +882,18 @@ async fn collect<N: lepic_node::NodeApi + 'static>(
             .collect(),
         unreachable: collected.unreachable,
     }))
+}
+
+/// One collecting cycle on the Epicbox transport and the meeting relays, for `lepic serve`.
+#[cfg(unix)]
+pub(super) async fn collect_online<N: lepic_node::NodeApi + 'static>(
+    opened: &Opened<N>,
+    meeting: &[lepic_epicbox::RelayEndpoint],
+    trigger: CollectTrigger,
+) -> Result<(), CliError> {
+    let relays = ContactRelays::new(opened.epicbox.clone(), RelayMode::Online)
+        .with_meeting(meeting.to_vec());
+    collect(opened, &relays, trigger).await.map(drop)
 }
 
 /// `lepic contact invoices`: lists the contacts' invoices waiting for the user.

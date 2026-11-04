@@ -65,6 +65,10 @@ pub struct WalletConfig {
     /// (linked-device forwarding) and 5 (directory), and ignores the rest. Read when a wallet
     /// is created, restored or opened.
     pub host_features: u32,
+    /// Limits and presets that are the app's to choose. [`HostPolicy::default`], every field
+    /// `None`, is what LEPIC did before they were fields. Read when a wallet is created,
+    /// restored or opened.
+    pub policy: crate::api::policy::HostPolicy,
 }
 
 /// The app configuration's `[node]`, `[epicbox]`, `[http]` and `[tor]` tuning keys. Every
@@ -623,8 +627,7 @@ pub struct FeeEstimate {
     pub change_outputs: u32,
 }
 
-/// A send to the wallet itself, from `EpicWallet::split_outputs` and
-/// `EpicWallet::consolidate_outputs`, finalized and posted.
+/// A send to the wallet itself, from `EpicWallet::send_to_self`, finalized and posted.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SelfSentTx {
     /// The outgoing transaction: it spent the inputs and holds the change outputs.
@@ -637,6 +640,55 @@ pub struct SelfSentTx {
     pub input_count: u32,
     /// How many outputs it made: the received one and the change.
     pub output_count: u32,
+}
+
+/// The outputs `EpicWallet::send_to_self` spends.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SelfInputs {
+    /// Every output that may be spent, the smallest first, at most 500 of them: a wallet with
+    /// more spends the 500 smallest and keeps the rest spendable.
+    All,
+    /// The fewest of the smallest outputs that cover the amounts and the fee, at most 500.
+    /// Only with [`SelfOutputs::Amounts`].
+    Smallest,
+    /// Exactly the outputs [`SelfSendRequest::named`] names, and nothing else.
+    Named,
+}
+
+/// The outputs `EpicWallet::send_to_self` makes, from 1 to 10 in all.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SelfOutputs {
+    /// [`SelfSendRequest::count`] outputs of nearly equal value, the inputs' value less the
+    /// fee, the last one also taking the remainder: 1 merges the inputs into one.
+    Count,
+    /// One output per entry of [`SelfSendRequest::amounts`], and what the inputs hold beyond
+    /// the amounts and the fee as one more output when it is above zero.
+    Amounts,
+}
+
+/// What `EpicWallet::send_to_self` spends and makes. Split, merge and spend-back tools are
+/// built on it: a split into `n` is `All` with `Count` `n`, a merge `All` with `Count` 1.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SelfSendRequest {
+    pub inputs: SelfInputs,
+    /// The outputs `Named` spends, by `WalletOutput.commitment`; empty for the others.
+    pub named: Vec<String>,
+    pub outputs: SelfOutputs,
+    /// The outputs `Count` makes, 1 to 10; 0 for `Amounts`.
+    pub count: u32,
+    /// The base units of each output `Amounts` makes, 1 to 10 of them, each at least 1; empty
+    /// for `Count`.
+    pub amounts: Vec<u64>,
+}
+
+/// How `node_tip` reaches the node. The host states it every time; there is no default.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NodeRoute {
+    /// The SOCKS5 proxy the host runs, such as its tor, as a loopback `ip:port`: the request
+    /// goes through it with the node's name for the proxy to resolve, so an onion node works,
+    /// and never directly. `None` goes directly. A loopback node is reached directly either
+    /// way, as an open wallet reaches it.
+    pub socks: Option<String>,
 }
 
 /// How a send chooses the outputs it spends, as `epic-wallet send --selection_strategy`.
@@ -971,6 +1023,10 @@ pub struct ContactView {
     /// The contact removed this pairing on its side and said so: nothing sent through it
     /// arrives any more. Offer to remove it here too.
     pub removed_by_peer: bool,
+    /// `domain:port` of the relay the contact asked to move to, while messages still go to the
+    /// relay in use; `None` when it asked for no move. Apply it with
+    /// `EpicWallet::contact_apply_relay_move`.
+    pub requested_relay: Option<String>,
     /// The contact's payments address, `key@relay`, only when an address proof of this
     /// pairing verified over a card naming it. A later proof that fails keeps it; `None` for a
     /// contact that proved none.
@@ -1385,6 +1441,8 @@ pub struct ContactImportSummary {
 pub enum PairingFailureReason {
     /// Something changed the invite on the way. Nothing was stored; pair again.
     ChangedOnTheWay,
+    /// The inviter's card named another kind than its invite did: nothing was stored.
+    KindDiffers,
     /// The invite expired before a reply came.
     Expired,
     /// This wallet answered and no confirmation came in time, or, as the inviter, its
@@ -1608,6 +1666,16 @@ pub enum WalletEventKind {
     /// `sender` are set. Read it with `EpicWallet::pairing_requests`; dismiss a request from
     /// anyone not in the address book with `EpicWallet::pairing_request_dismiss`.
     PairingRequested,
+    /// The node did not take a finalized transaction: `tx_id`, `slate_id` and `message` (why)
+    /// are set. The transaction stays finalized, its inputs locked; nothing is retried. Call
+    /// `EpicWallet::repost_transaction` when the connection is back, or cancel it.
+    NotPosted,
+    /// The contact `contact_id` sent newer details that name its mailbox on another relay,
+    /// `relay` (`domain:port`). The details were stored, with a `ContactUpdated`, and messages
+    /// still go to the relay in use. Whether to follow is the app's choice: apply the move with
+    /// `EpicWallet::contact_apply_relay_move`. Raised once per newer card; after a restart,
+    /// `ContactView::requested_relay` still shows the request.
+    ContactRelayMoveRequested,
 }
 
 /// How a key check from `EpicWallet::contact_key_check` stands.
@@ -1649,14 +1717,15 @@ pub struct WalletEvent {
     pub contact_id: Option<String>,
     /// Why a pairing ended, for `PairingFailed`.
     pub pairing_failure: Option<PairingFailureReason>,
-    /// `domain:port`, for `HomeRelayUnreachable`.
+    /// `domain:port`, for `HomeRelayUnreachable` and `ContactRelayMoveRequested`.
     pub relay: Option<String>,
     /// For `InvoiceFromContact`, as the contact gave them.
     pub purpose: Option<SlatePurpose>,
     pub reference: Option<String>,
     /// Unix seconds; advisory.
     pub expires: Option<u64>,
-    /// For `InvoiceFromContact`, the issuer's message as `ContactInvoiceView.message` gives it.
+    /// For `InvoiceFromContact`, the issuer's message as `ContactInvoiceView.message` gives it;
+    /// for `NotPosted`, why the node did not take the transaction.
     pub message: Option<String>,
     /// For `NoticeUnmatched`: what the notice says.
     pub notice_kind: Option<String>,
@@ -1714,6 +1783,7 @@ mod tests {
     #[test]
     fn wallet_config_debug_redacts_the_node_api_secret() {
         let config = WalletConfig {
+            policy: Default::default(),
             data_dir: "/data".to_owned(),
             chain: Chain::Floonet,
             node_url: "http://127.0.0.1:3413".to_owned(),

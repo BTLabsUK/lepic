@@ -757,6 +757,89 @@ fn a_swapped_invite_key_is_caught_by_the_commitment() {
     )));
 }
 
+/// The issuer invites as `card_kind`; the payer answers an invite that says `invite_kind`
+/// instead (the kind in an invite is not signed). Returns the payer's events and whether the
+/// payer ended up holding the contact.
+fn pair_with_invite_kind(card_kind: ContactKind, invite_kind: ContactKind) -> (Vec<Event>, bool) {
+    let world = World::new();
+    let mut payer_events = world.payer.wallet.subscribe();
+    let link = world
+        .block_on(world.issuer.wallet.contact_book().pairing_invite(
+            &relays(&world.issuer),
+            InviteRequest {
+                kind: card_kind,
+                ..invite_request("Anna")
+            },
+        ))
+        .unwrap()
+        .link;
+    let original = Invite::from_link(&link, ContactNetwork::Floonet).unwrap();
+    let relabelled = Invite::new(
+        ContactNetwork::Floonet,
+        InviteFields {
+            kind: invite_kind,
+            ..original.fields().clone()
+        },
+    )
+    .unwrap();
+    let answered = world
+        .block_on(world.payer.wallet.contact_book().pairing_accept(
+            &relays(&world.payer),
+            accept(&relabelled.to_link(), "Ben", true),
+        ))
+        .unwrap();
+    let LinkOutcome::Confirm { link: confirm, .. } = world
+        .block_on(
+            world
+                .issuer
+                .wallet
+                .contact_book()
+                .pairing_enter_link(&relays(&world.issuer), &answered.reply_link),
+        )
+        .unwrap()
+    else {
+        panic!("the issuer did not pair");
+    };
+    // A refused pairing returns the failure as well as raising the event.
+    let outcome = world.block_on(
+        world
+            .payer
+            .wallet
+            .contact_book()
+            .pairing_enter_link(&relays(&world.payer), &confirm),
+    );
+    assert_eq!(
+        matches!(outcome, Err(ContactError::KindDiffers)),
+        card_kind != invite_kind
+    );
+    let paired = !world.payer.read(|repos| repos.contacts()).is_empty();
+    (events(&mut payer_events), paired)
+}
+
+#[test]
+fn a_card_of_another_kind_than_its_invite_is_refused() {
+    let (events, paired) = pair_with_invite_kind(ContactKind::Person, ContactKind::Shop);
+    assert!(!paired, "nothing is stored");
+    assert!(events.iter().any(|event| matches!(
+        event,
+        Event::PairingFailed(FailedPairing {
+            reason: PairingFailure::KindDiffers,
+            ..
+        })
+    )));
+}
+
+#[test]
+fn a_card_of_the_kind_its_invite_says_pairs() {
+    let (events, paired) = pair_with_invite_kind(ContactKind::Shop, ContactKind::Shop);
+    assert!(paired);
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event, Event::PairingFailed(_)))
+    );
+}
+
 /// Mallory answers the invite with her own card in place of the payer's. The issuer pairs with
 /// Mallory, and its SAS differs from what the payer computes from its own card.
 #[test]
@@ -924,16 +1007,35 @@ fn contact_updates_refresh_the_card_within_three_a_day() {
     assert_eq!(updates, 3);
     assert_eq!(seq(), 4);
 
-    // A day later the next one is taken, but a person's mailbox stays on its relay: an update
-    // naming another relay is refused (RFC 0002 8.5).
+    // A day later the next one is taken. One naming another relay is stored and reported, and
+    // the mailbox stays until the host applies the move (RFC 0002 8.5).
     world.issuer.clock.advance(24 * HOUR + MINUTE);
     post_update(&world, ben_side, 6, "relay.test:8006");
     world.collect(&world.issuer);
-    assert_eq!(seq(), 4);
+    assert_eq!(seq(), 6);
     assert_eq!(peer_mailbox(), shown);
+    let moves = events(&mut issuer_events)
+        .into_iter()
+        .filter_map(|event| match event {
+            Event::ContactRelayMoveRequested(request) => Some(request),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(moves.len(), 1, "{moves:?}");
+    assert_eq!(moves[0].contact_id, anna_side);
+    assert_eq!(moves[0].host, "relay.test:8006");
+    // A newer card back on the relay asks for nothing more.
     post_update(&world, ben_side, 7, "relay.test:80");
     world.collect(&world.issuer);
     assert_eq!(seq(), 7);
+    assert_eq!(peer_mailbox(), shown);
+    assert_eq!(
+        world
+            .block_on(world.issuer.wallet.contact_book().contact(anna_side))
+            .unwrap()
+            .requested_relay,
+        None
+    );
 }
 
 /// The party's keys for its contact `contact`, as the wallet derives them.

@@ -546,57 +546,44 @@ fn a_withdrawal_through_the_mailbox_is_received_and_answered_through_the_outbox(
     assert_eq!(world.tx_state(&world.payer, sent.tx_id), TxState::Posted);
 }
 
+/// A service and a person ask for a move the same way: the update is stored and reported, and
+/// our mailbox stays until the host applies the move.
 #[test]
+fn a_service_moving_its_home_relay_moves_our_mailbox_once_applied() {
+    a_contact_moving_its_home_relay_moves_our_mailbox_once_applied(ContactKind::Exchange);
+}
+
+#[test]
+fn a_person_moving_its_home_relay_moves_our_mailbox_once_applied() {
+    a_contact_moving_its_home_relay_moves_our_mailbox_once_applied(ContactKind::Person);
+}
+
 #[allow(clippy::too_many_lines)] // A test reads best as one sequence of steps.
-fn a_service_moving_its_home_relay_moves_our_mailbox_and_keeps_the_old_one_a_week() {
+fn a_contact_moving_its_home_relay_moves_our_mailbox_once_applied(kind: ContactKind) {
     let world = World::new();
-    let (shop_side, ben_side) = world.pair_for_invoices(ContactKind::Exchange);
+    let (shop_side, ben_side) = world.pair_for_invoices(kind);
+    let mut payer_events = world.payer.wallet.subscribe();
+    let shown = world
+        .payer
+        .read(|repos| repos.contact_mailbox(ben_side))
+        .unwrap();
     // The shop's update: its card for this pairing with its mailbox on a new relay.
-    let record = world.issuer.read(|repos| repos.contact(shop_side)).unwrap();
-    let keys = lepic_wallet_contacts::contact_root(
-        &world.issuer.keychain(),
-        &lepic_keychain::Identifier::new(2, [0, 0, 0, 0]).unwrap(),
-        lepic_primitives::params::Network::Floonet,
-    )
-    .unwrap()
-    .contact_keys(record.slot, record.box_salt)
-    .unwrap();
-    let own = ContactCard::decode(&record.own_card, ContactNetwork::Floonet).unwrap();
+    let keys = keys_for(&world.issuer, shop_side);
     let signer = SigningKey::from_bytes(&keys.expose_signing_key().to_bytes());
+    let record = world.issuer.read(|repos| repos.contact(shop_side)).unwrap();
+    let own = ContactCard::decode(&record.own_card, ContactNetwork::Floonet).unwrap();
     let key_text = own.fields().mailbox.as_str().split('@').next().unwrap();
     let mut fields = own.fields().clone();
     fields.seq = 2;
     fields.mailbox =
         lepic_contact::MailboxAddress::new(&format!("{key_text}@relay2.test:80")).unwrap();
     let card = ContactCard::sign(ContactNetwork::Floonet, fields, &signer).unwrap();
-    let peer = ContactCard::decode(&record.peer.unwrap().bytes, ContactNetwork::Floonet).unwrap();
-    let envelope = lepic_contact::seal_contact_update(
-        &peer,
-        &card,
-        &signer,
-        &mut rand::rngs::StdRng::seed_from_u64(9),
-    )
-    .unwrap();
-    let from = Identity::new(
-        keys.expose_box_secret().clone(),
-        EpicboxAddress::new(
-            *keys.box_public_key(),
-            RelayNetwork::Floonet,
-            Domain::parse("relay.test").unwrap(),
-            Some(80),
-        ),
-    )
-    .unwrap();
-    let to = EpicboxAddress::parse(peer.fields().mailbox.as_str(), RelayNetwork::Floonet).unwrap();
-    world
-        .block_on(
-            MailboxClient::new(world::settings(), world.relay.connector()).post(
-                &from,
-                &to,
-                &armor(&envelope),
-            ),
-        )
-        .unwrap();
+    post_signed(
+        &world,
+        &world.issuer,
+        shop_side,
+        &Content::new(MessageType::ContactUpdate, card.as_bytes().to_vec()),
+    );
     let built_in = ContactRelays {
         meeting: vec![lepic_epicbox::RelayEndpoint::new(
             Domain::parse("relay2.test").unwrap(),
@@ -605,16 +592,93 @@ fn a_service_moving_its_home_relay_moves_our_mailbox_and_keeps_the_old_one_a_wee
         )],
         ..relays(&world.payer)
     };
+    let collect = || {
+        world
+            .block_on(
+                world
+                    .payer
+                    .wallet
+                    .contact_book()
+                    .contacts_collect(&built_in, lepic_wallet_contacts::CollectTrigger::Open),
+            )
+            .unwrap()
+    };
+    let view = || {
+        world
+            .block_on(world.payer.wallet.contact_book().contact(ben_side))
+            .unwrap()
+    };
+    let requests = |events: Vec<Event>| {
+        events
+            .into_iter()
+            .filter_map(|event| match event {
+                Event::ContactRelayMoveRequested(request) => Some(request),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
 
+    collect();
+    // The card is stored and the move reported once; nothing moved yet.
+    let moves = requests(events(&mut payer_events));
+    assert_eq!(moves.len(), 1, "{moves:?}");
+    assert_eq!(moves[0].contact_id, ben_side);
+    assert_eq!(moves[0].host, "relay2.test:80");
+    assert_eq!(
+        world
+            .payer
+            .read(|repos| repos.contact(ben_side))
+            .unwrap()
+            .peer
+            .unwrap()
+            .seq,
+        2
+    );
+    assert_eq!(
+        world
+            .payer
+            .read(|repos| repos.contact_mailbox(ben_side))
+            .unwrap(),
+        shown
+    );
+    assert_eq!(view().requested_relay.as_deref(), Some("relay2.test:80"));
+    collect();
+    assert!(requests(events(&mut payer_events)).is_empty());
+
+    // Only the host the card names is applied.
+    for other in ["relay3.test:80", "relay.test:80", ""] {
+        assert!(matches!(
+            world.block_on(
+                world
+                    .payer
+                    .wallet
+                    .contact_book()
+                    .apply_relay_move(ben_side, other)
+            ),
+            Err(lepic_wallet_contacts::ContactError::RelayMoveNotRequested)
+        ));
+    }
     world
         .block_on(
             world
                 .payer
                 .wallet
                 .contact_book()
-                .contacts_collect(&built_in, lepic_wallet_contacts::CollectTrigger::Open),
+                .apply_relay_move(ben_side, "relay2.test:80"),
         )
         .unwrap();
+    assert_eq!(view().requested_relay, None);
+    // Applied once, the move is no longer asked for.
+    assert!(matches!(
+        world.block_on(
+            world
+                .payer
+                .wallet
+                .contact_book()
+                .apply_relay_move(ben_side, "relay2.test:80")
+        ),
+        Err(lepic_wallet_contacts::ContactError::RelayMoveNotRequested)
+    ));
 
     let mailbox = world
         .payer
@@ -625,7 +689,7 @@ fn a_service_moving_its_home_relay_moves_our_mailbox_and_keeps_the_old_one_a_wee
     assert!(mailbox.our_mailbox.ends_with("@relay2.test:80"));
     let previous = mailbox.previous.unwrap();
     assert_eq!(previous.relay, "relay.test:80");
-    // Our new card went to the shop at once, in a contact update.
+    // Our new card goes to the shop in a contact update.
     let outbox = world.payer.read(|repos| repos.contact_outbox(ben_side));
     assert!(
         outbox
@@ -634,27 +698,9 @@ fn a_service_moving_its_home_relay_moves_our_mailbox_and_keeps_the_old_one_a_wee
         "{outbox:?}"
     );
     // Both mailboxes are collected while the old one is kept.
-    let report = world
-        .block_on(
-            world
-                .payer
-                .wallet
-                .contact_book()
-                .contacts_collect(&built_in, lepic_wallet_contacts::CollectTrigger::Open),
-        )
-        .unwrap();
-    assert_eq!(report.mailboxes, 2);
+    assert_eq!(collect().mailboxes, 2);
     world.payer.clock.advance(7 * 24 * HOUR + MINUTE);
-    let report = world
-        .block_on(
-            world
-                .payer
-                .wallet
-                .contact_book()
-                .contacts_collect(&built_in, lepic_wallet_contacts::CollectTrigger::Open),
-        )
-        .unwrap();
-    assert_eq!(report.mailboxes, 1);
+    assert_eq!(collect().mailboxes, 1);
     // Our card for the shop moved with it.
     let own = world
         .payer
@@ -666,13 +712,15 @@ fn a_service_moving_its_home_relay_moves_our_mailbox_and_keeps_the_old_one_a_wee
     assert_eq!(own.fields().seq, 2);
 }
 
-/// R2-05: a service's update may not move its home relay to an IP address or another port
-/// unless the relay is built in, nor change what the contact is; a card in any envelope but an
-/// update never names another mailbox.
+/// Only a contact update asks for a move, whatever relay it names; a card in any other envelope
+/// never names another mailbox, an update may not change what the contact is, and a pairing
+/// nobody asked to move keeps its mailbox.
 #[test]
-fn a_home_relay_moves_only_to_a_named_relay_and_never_by_a_plain_card() {
+#[allow(clippy::too_many_lines)] // A test reads best as one sequence of steps.
+fn a_relay_move_is_asked_only_by_an_update_and_never_by_a_plain_card() {
     let world = World::new();
     let (shop_side, ben_side) = world.pair_for_invoices(ContactKind::Exchange);
+    let mut payer_events = world.payer.wallet.subscribe();
     let keys = keys_for(&world.issuer, shop_side);
     let signer = SigningKey::from_bytes(&keys.expose_signing_key().to_bytes());
     let record = world.issuer.read(|repos| repos.contact(shop_side)).unwrap();
@@ -696,27 +744,85 @@ fn a_home_relay_moves_only_to_a_named_relay_and_never_by_a_plain_card() {
         .payer
         .read(|repos| repos.contact_mailbox(ben_side))
         .unwrap();
-    for (seq, host, kind) in [
-        (2, "10.0.0.7:443", ContactKind::Exchange),
-        (3, "relay3.test:8443", ContactKind::Exchange),
-        (4, "relay.test:80", ContactKind::Person),
-    ] {
-        post_signed(
-            &world,
-            &world.issuer,
-            shop_side,
-            &Content::new(
-                MessageType::ContactUpdate,
-                card(seq, host, kind).as_bytes().to_vec(),
-            ),
-        );
-    }
+    let seq = || {
+        world
+            .payer
+            .read(|repos| repos.contact(ben_side))
+            .unwrap()
+            .peer
+            .unwrap()
+            .seq
+    };
+    let view = || {
+        world
+            .block_on(world.payer.wallet.contact_book().contact(ben_side))
+            .unwrap()
+    };
+    let apply = |host: &str| {
+        world.block_on(
+            world
+                .payer
+                .wallet
+                .contact_book()
+                .apply_relay_move(ben_side, host),
+        )
+    };
+    let moved = |events: Vec<Event>| {
+        events
+            .iter()
+            .filter(|event| matches!(event, Event::ContactRelayMoveRequested(_)))
+            .count()
+    };
+
+    // A pairing nobody asked to move: nothing to apply, the mailbox stays as it was.
+    world.collect(&world.payer);
+    assert_eq!(view().requested_relay, None);
+    assert!(matches!(
+        apply("relay.test:80"),
+        Err(lepic_wallet_contacts::ContactError::RelayMoveNotRequested)
+    ));
+
     // A notice carrying a newer card for another relay in its tag 07.
     let mut notice = Content::new(MessageType::Notice, b"{}".to_vec());
-    notice.card = Some(card(5, "relay4.test:443", ContactKind::Exchange));
+    notice.card = Some(card(2, "relay4.test:443", ContactKind::Exchange));
     post_signed(&world, &world.issuer, shop_side, &notice);
+    // An update that changes what the contact is.
+    post_signed(
+        &world,
+        &world.issuer,
+        shop_side,
+        &Content::new(
+            MessageType::ContactUpdate,
+            card(3, "relay3.test:8443", ContactKind::Person)
+                .as_bytes()
+                .to_vec(),
+        ),
+    );
     world.collect(&world.payer);
+    assert_eq!(seq(), 1);
+    assert_eq!(moved(events(&mut payer_events)), 0);
+    assert_eq!(view().requested_relay, None);
 
+    // An update naming an address and port of its own is reported like any other.
+    post_signed(
+        &world,
+        &world.issuer,
+        shop_side,
+        &Content::new(
+            MessageType::ContactUpdate,
+            card(4, "10.0.0.7:443", ContactKind::Exchange)
+                .as_bytes()
+                .to_vec(),
+        ),
+    );
+    world.collect(&world.payer);
+    assert_eq!(seq(), 4);
+    assert_eq!(moved(events(&mut payer_events)), 1);
+    assert_eq!(view().requested_relay.as_deref(), Some("10.0.0.7:443"));
+    assert!(matches!(
+        apply("relay4.test:443"),
+        Err(lepic_wallet_contacts::ContactError::RelayMoveNotRequested)
+    ));
     assert_eq!(
         world
             .payer
@@ -724,15 +830,36 @@ fn a_home_relay_moves_only_to_a_named_relay_and_never_by_a_plain_card() {
             .unwrap(),
         shown
     );
+}
+
+/// A collect forgets the hold counts of messages first held more than a day ago, and any it
+/// cannot read, and keeps the rest.
+#[test]
+fn a_collect_forgets_hold_counts_a_day_old() {
+    let world = World::new();
+    world.pair_for_invoices(ContactKind::Exchange);
+    let now =
+        u64::try_from(lepic_wallet::ports::Clock::now(&world.payer.clock).as_second()).unwrap();
+    let rows = [
+        ("contact.held.01", format!("{now}:1")),
+        ("contact.held.02", format!("{}:3", now - 2 * 24 * 60 * 60)),
+        ("contact.held.03", "damaged".to_owned()),
+    ];
+    world.payer.write(|repos| {
+        for (key, value) in &rows {
+            repos.put_setting(key, value)?;
+        }
+        Ok(())
+    });
+
+    world.collect(&world.payer);
+
+    let kept = world
+        .payer
+        .read(|repos| repos.settings_with_prefix("contact.held."));
     assert_eq!(
-        world
-            .payer
-            .read(|repos| repos.contact(ben_side))
-            .unwrap()
-            .peer
-            .unwrap()
-            .seq,
-        1
+        kept,
+        vec![("contact.held.01".to_owned(), format!("{now}:1"))]
     );
 }
 
@@ -1017,7 +1144,10 @@ fn payments_from_one_contact_stop_at_the_open_receipt_cap() {
         .into_iter()
         .filter(|event| matches!(event, Event::WithdrawalFromContact(_)))
         .count();
-    assert_eq!(received, lepic_wallet::inbox::MAX_OPEN_RECEIPTS_PER_SENDER);
+    assert_eq!(
+        received,
+        lepic_wallet::WalletPolicy::DEFAULT.max_open_receipts_per_sender
+    );
 }
 
 /// R2-06: an outbox entry whose transaction ended is deleted, never sent.

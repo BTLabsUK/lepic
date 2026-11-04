@@ -9,6 +9,20 @@ Conventional Commit messages at release time.
 
 ### Added
 
+- Policy values as host parameters, ADR 0036: `WalletPolicy` in `lepic-wallet`'s
+  `WalletConfig`, `HostPolicy` in `lepic-ffi`'s `WalletConfig` and `PinSettings` with
+  `LepicRuntime::with_pin_settings`. They cover the default strategy, the send and invoice
+  TTLs, the change and exclusion limits, the Epicbox invoice window, the payer's TTL lead
+  cap, the open receipt caps, the default minimum confirmations and the PIN rules. Every
+  default is the value used before.
+- One send to self, ADR 0037: `Wallet::send_to_self` and `Wallet::estimate_send_to_self`
+  take a `SelfSendRequest` of inputs (`All`, `Smallest`, `Named`) and outputs (`Count`,
+  `Amounts`, the rest as one more output), 1 to 10 outputs; the estimate's fee equals the
+  send's. `lepic-ffi` gains `EpicWallet::send_to_self` and `EpicWallet::estimate_send_to_self`
+  with `SelfSendRequest`, `SelfInputs` and `SelfOutputs`.
+- `lepic-ffi`'s `node_tip` takes a `NodeRoute`: directly, or through the host's SOCKS5 proxy
+  with no fallback to a direct connection.
+
 - Restore from a start height, ADR 0035: `Wallet::restore_from_height` scans from a chosen
   height, and the wallet creates outputs once a scan from that height or below completes; its
   key counters move past the keys that scan found. `Wallet::restore_scan_start` tells where a
@@ -51,9 +65,86 @@ Conventional Commit messages at release time.
   is gone in two answers and neither the node's pool nor its chain holds its kernel. It is
   cancelled with its kernel watched, so a refused move back to the wallet is no longer posted
   again forever. An invoice this wallet issued and finalized expires at its cutoff.
+- `Event::NotPosted` (`lepic-wallet`) and `WalletEventKind::NotPosted` (`lepic-ffi`, with
+  `tx_id`, `slate_id` and `message`): a finalized transaction the node refused or could not be
+  reached for, also on the Epicbox answer and invoice paths that only logged it. The
+  transaction stays finalized; core retries nothing, and the host calls `repost_transaction`
+  when it chooses.
+- `PairingFailure::KindDiffers`, `ContactError::KindDiffers`, `PairingFailureReason::KindDiffers`
+  and `WalletErrorKind::PairingKindDiffers` (code 91): a pairing whose invite and card name
+  different contact kinds is refused when the confirm arrives, and nothing is stored.
+- `WalletError.tx_id` (`lepic-ffi`) and `ContactError::NotCancelled` (`lepic-wallet-contacts`):
+  a paste-slate send or a contact send that stored a transaction and then failed is cancelled;
+  when the cancel fails too, the error names the transaction, which stays stored with its
+  inputs locked, and the failed cancel. A stored-but-undelivered send also sets `tx_id`.
+
+- The contact check, ADR 0040: envelope type `09` asks a paired contact for its current card,
+  and the contact answers with a contact update through its outbox. `ContactBook::contact_check`,
+  `EpicWallet::contact_check` and `lepic contact check <CONTACT>` send one. Answers are paced per
+  contact by `contact_check_answers_per_hour` (default 1) and `contact_check_answers_per_day`
+  (default 3, at most 24) in `WalletPolicy` and `HostPolicy`; checks beyond them are taken and
+  dropped. A wallet that predates type `09` drops the check as malformed and does not answer.
+- A move of the wallet's own home relay, ADR 0040: `ContactBook::contacts_move_home`,
+  `EpicWallet::contacts_move_home` and `lepic contact move-home <HOST>` send every paired contact
+  our card naming our mailbox on the new relay once, in a contact update, and move our mailboxes
+  there at once. The old mailboxes are not read again; there is no drain.
+- `lepic --service serve status` shows, for serve's wallet refresh and contact collect, the
+  failures since the last success, the last error and the time of the last success.
+
+### Removed
+
+- `lepic-cli`'s minimum of 8 characters for a new wallet password (an empty one is still
+  refused) and its cap of 48 hours on `invoice_expiry_hours`: limits belong to the consumer,
+  not the CLI. `lepic contact move --apply` stays.
+- `Password::MIN_NEW_LEN` and `Password::is_long_enough_to_set` (`lepic-wallet`), the password
+  length check of `lepic-ffi`, `MINIMUM_CONFIRMATIONS_RANGE` and its upper bound of 30, and
+  `WalletConfig.transports` (ADR 0036). The host checks the password length and the depth it
+  allows.
+- `Wallet::self_send`, `Wallet::spend_outputs_to_self`, `Wallet::estimate_self_send`,
+  `SelfSendShape` and `SplitCount` in `lepic-wallet`, and `estimate_split`, `split_outputs`,
+  `estimate_consolidate`, `consolidate_outputs` and `spend_outputs_to_self` in `lepic-ffi`:
+  `send_to_self` replaces them (ADR 0037).
 
 ### Changed
 
+- Shared helpers replace copies in the core crates; behaviour is unchanged. `lepic-store`
+  gains `file::write_owner_only_atomic` (owner-only temp file, sync, rename, folder sync),
+  which the CLI now uses for the vault, slate files and contact backups, and an async
+  `lock_data_dir` with `try_lock_data_dir`, `DataDirLock` and `DataDirLockError`, which the
+  CLI and the binding both use for the data-directory claim. `lepic-primitives` gains
+  `error_chain::ErrorChain`, and the wallet, relay, node and contact crates use it.
+  `lepic_crypto::hex` replaces the local hex readers and writers in the contact and relay
+  crates. The PIN and password code in `lepic-ffi` shares one `blocking()` and `rng()`, and
+  `lepic-wallet` calls `codecs::legacy` directly.
+- **Breaking:** a contact's move to another relay is the host's choice, ADR 0039. The
+  collector no longer reads a contact's kind: an update whose card names a mailbox on the same
+  relay applies as before, and one naming another relay stores the newer card, keeps the
+  mailbox in use and raises `Event::ContactRelayMoveRequested` (contact id and `domain:port`)
+  once per card. `ContactBook::apply_relay_move` applies the move, and is refused with
+  `ContactError::RelayMoveNotRequested` for any other relay or when no move waits;
+  `ContactView::requested_relay` shows a waiting move. The rule that let only services move,
+  and only to a meeting relay or a named host on the default port, is gone. Existing contacts'
+  mailboxes are not touched. `lepic-ffi` gains `WalletEventKind::ContactRelayMoveRequested`
+  (`contact_id`, `relay`), `EpicWallet::contact_apply_relay_move`,
+  `ContactView::requested_relay` and `WalletErrorKind::RelayMoveNotRequested` (code 92).
+  The CLI's contact list shows a waiting move, and `lepic contact move <ID> --apply <HOST>`
+  applies it.
+- A contact mailbox message held on a passing error (the store, a relay or the node did not
+  answer, or the wallet is locked) is kept and its tries are not counted; only messages that fail for other reasons are
+  dropped after `contact_hold_attempts` tries (default 3, at most 10) over
+  `contact_hold_patience` (default 180 s, at most a day), now host parameters in `WalletPolicy`
+  and `HostPolicy` (`contact_hold_patience_s`).
+- `lepic serve` no longer drops requests still running at shutdown: it interrupts each one as
+  Ctrl-C would, so a `tx send` that stored its transaction answers with its `tx_id`, and it waits
+  for every reply.
+- A contact mailbox message's hold count is forgotten a day after it was first held, also when
+  the message never comes back. `SettingsRepository` gains `settings_with_prefix`.
+- A contact payment whose receive was stored but not linked to its contact is linked when the
+  sender repeats it, instead of being dropped and acknowledged. A mailbox message the handler
+  holds with `Later` is held at most 3 times or 3 minutes, as the payments inbox bounds its
+  holds; errors the collector dropped at debug level are logged at warn.
+- `delete_wallet` also removes scratch slate files, `tor-expected` and the `tor/` directory.
+  Pasted slates are decoded in memory instead of through a scratch file.
 - `lepic-ffi`'s `EpicWallet::create` and `EpicWallet::create_with_pin` take
   `restore_from_height: Option<u64>` after the mnemonic; `None` or 0 restores from genesis, and a
   height without a mnemonic is refused with `InvalidArgument`. `scan` without a start, while a

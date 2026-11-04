@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 //! The desktop secret storage: the `lepic-keychain` vault in a file in the data directory.
 
-use std::fs::{self, File, OpenOptions};
-use std::io::{self, Read as _, Write as _};
+use std::fs::File;
+use std::io::{self, Read as _};
 use std::path::{Path, PathBuf};
 
 use lepic_keychain::vault::{BackendError, MAX_VAULT_LEN};
@@ -13,8 +13,6 @@ use rand::rngs::{StdRng, SysRng};
 
 /// File name of the vault inside the data directory.
 pub const VAULT_FILE: &str = "wallet.vault";
-
-const TEMPORARY_SUFFIX: &str = ".tmp";
 
 /// The vault file, replaced atomically on every change.
 #[derive(Debug, Clone)]
@@ -45,54 +43,9 @@ impl VaultStorage for FileVaultStorage {
     }
 
     fn replace(&mut self, contents: &[u8]) -> Result<(), BackendError> {
-        let mut temporary = self.path.clone().into_os_string();
-        temporary.push(TEMPORARY_SUFFIX);
-        let temporary = PathBuf::from(temporary);
-        // A leftover from an interrupted write, or a link planted there, is removed rather than
-        // reused, so the new file is always this process's own, owner-only file.
-        if let Err(error) = fs::remove_file(&temporary)
-            && error.kind() != io::ErrorKind::NotFound
-        {
-            return Err(Box::new(error));
-        }
-        let mut file = owner_only().open(&temporary)?;
-        file.write_all(contents)?;
-        file.sync_all()?;
-        drop(file);
-        fs::rename(&temporary, &self.path)?;
-        sync_directory(&self.path)?;
+        lepic_store::file::write_owner_only_atomic(&self.path, contents)?;
         Ok(())
     }
-}
-
-#[cfg(unix)]
-fn owner_only() -> OpenOptions {
-    use std::os::unix::fs::OpenOptionsExt as _;
-    let mut options = OpenOptions::new();
-    options.write(true).create_new(true).mode(0o600);
-    options
-}
-
-#[cfg(not(unix))]
-fn owner_only() -> OpenOptions {
-    let mut options = OpenOptions::new();
-    options.write(true).create_new(true);
-    options
-}
-
-/// Makes the rename durable. Windows offers no directory handle to sync; its rename is durable
-/// once it returns on NTFS.
-#[cfg(unix)]
-fn sync_directory(path: &Path) -> io::Result<()> {
-    match path.parent() {
-        Some(dir) => File::open(dir)?.sync_all(),
-        None => Ok(()),
-    }
-}
-
-#[cfg(not(unix))]
-fn sync_directory(_: &Path) -> io::Result<()> {
-    Ok(())
 }
 
 /// The wallet's [`SecretVault`]: one vault file, keyed by the wallet password through Argon2id.
@@ -150,6 +103,8 @@ impl SecretVault for FileVault {
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+
     use lepic_keychain::{SecretBytes, SecretName, SecretStore as _};
 
     use super::*;

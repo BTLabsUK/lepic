@@ -78,6 +78,7 @@ impl World {
 
     fn config(dir: &tempfile::TempDir, relay: &str) -> WalletConfig {
         WalletConfig {
+            policy: Default::default(),
             data_dir: dir.path().to_string_lossy().into_owned(),
             chain: Chain::Floonet,
             node_url: "http://127.0.0.1:1".to_owned(),
@@ -705,6 +706,68 @@ async fn a_node_tip_asked_while_over_tor_goes_through_tor() {
         None,
         "the wallet's own node stays as it is"
     );
+}
+
+#[cfg(feature = "tor")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_node_tip_without_a_wallet_takes_the_route_the_host_gives() {
+    use crate::api::types::NodeRoute;
+    let mut world = World::new();
+    Arc::get_mut(&mut world.runtime.inner).unwrap().nodes = crate::node::NodeFactory::Http;
+    let dir = tempfile::tempdir().unwrap();
+    let config = WalletConfig {
+        node_url: "https://other.example:3413".to_owned(),
+        ..World::config(&dir, "one.example")
+    };
+    let (socks, targets) = recording_socks().await;
+    let route = |socks: Option<String>| NodeRoute { socks };
+
+    assert_eq!(
+        kind(
+            crate::api::wallet::node_tip(
+                &world.runtime,
+                config.clone(),
+                route(Some(socks.to_string()))
+            )
+            .await
+        ),
+        WalletErrorKind::NodeUnreachable,
+        "the proxy refuses, and nothing falls back to a direct connection"
+    );
+    let asked = targets.lock().unwrap().clone();
+    assert!(!asked.is_empty());
+    assert!(
+        asked
+            .iter()
+            .all(|target| *target == ("other.example".to_owned(), 3413)),
+        "by name, so the proxy resolves it: {asked:?}"
+    );
+
+    targets.lock().unwrap().clear();
+    assert_eq!(
+        kind(crate::api::wallet::node_tip(&world.runtime, config.clone(), route(None)).await),
+        WalletErrorKind::NodeUnreachable
+    );
+    assert!(
+        targets.lock().unwrap().is_empty(),
+        "direct never uses the proxy"
+    );
+
+    for address in ["not an address", "localhost:9050", "10.0.0.1:9050"] {
+        assert_eq!(
+            kind(
+                crate::api::wallet::node_tip(
+                    &world.runtime,
+                    config.clone(),
+                    route(Some(address.to_owned()))
+                )
+                .await
+            ),
+            WalletErrorKind::InvalidArgument,
+            "{address}"
+        );
+    }
+    assert!(targets.lock().unwrap().is_empty());
 }
 
 #[cfg(feature = "tor")]

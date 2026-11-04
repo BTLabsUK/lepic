@@ -11,7 +11,7 @@ use crate::error::WalletError;
 use crate::ports::{SecretVault, StoreOpener};
 use crate::refresh::with_spend_confirmations;
 use crate::selection::{
-    self, Selection, SelectionError, SelectionOptions, SelectionRequest, SelfSendShape,
+    self, Selection, SelectionError, SelectionOptions, SelectionRequest, SelfSendRequest,
 };
 use crate::send::{SendError, spendable_here};
 use crate::wallet::Wallet;
@@ -40,17 +40,18 @@ where
         self.estimate(options, amount, selection::select).await
     }
 
-    /// The inputs, outputs and fee of [`Wallet::self_send`] with `options` and `shape`, chosen
-    /// as it chooses them, with nothing locked, derived or stored. Fails as
-    /// [`Wallet::estimate_fee`] does.
+    /// The inputs, outputs and fee of [`Wallet::send_to_self`] with `options` and `request`,
+    /// chosen as it chooses them, with nothing locked, derived or stored. A send to self with
+    /// the same options and request at the same tip, with no outputs changed in between, takes
+    /// the same inputs and charges the same fee. Fails as [`Wallet::estimate_fee`] does.
     #[instrument(skip_all, fields(wallet = %self.config().name))]
-    pub async fn estimate_self_send(
+    pub async fn estimate_send_to_self(
         &self,
         options: SelectionOptions,
-        shape: SelfSendShape,
+        request: SelfSendRequest,
     ) -> Result<Selection, SendError> {
-        self.estimate(options, Amount::ZERO, move |outputs, request| {
-            selection::select_self_send(outputs, request, shape)
+        self.estimate(options, Amount::ZERO, move |outputs, selection| {
+            selection::select_to_self(outputs, selection, &request)
         })
         .await
     }

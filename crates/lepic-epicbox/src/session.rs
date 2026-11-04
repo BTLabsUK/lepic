@@ -368,7 +368,7 @@ impl Connection {
                 })?
                 .map_err(|error| {
                     let error = websocket_error(error);
-                    warn!(error = %crate::client::ErrorChain(&error), "epicbox websocket failed");
+                    warn!(error = %lepic_primitives::error_chain::ErrorChain(&error), "epicbox websocket failed");
                     error
                 })?;
             self.last_heard = Instant::now();
@@ -395,7 +395,7 @@ impl Connection {
                 Ok(RelayFrame::Unknown { .. }) => debug!("epicbox frame of unknown type ignored"),
                 Ok(frame) => return Ok(frame),
                 Err(error) => {
-                    debug!(error = %crate::client::ErrorChain(&error), "epicbox frame ignored");
+                    debug!(error = %lepic_primitives::error_chain::ErrorChain(&error), "epicbox frame ignored");
                 }
             }
         }

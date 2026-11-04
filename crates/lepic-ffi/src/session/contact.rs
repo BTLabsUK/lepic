@@ -4,12 +4,9 @@
 
 use lepic_primitives::amount::Amount;
 use lepic_store::{ContactId, ContactOutboxId, ContactOutboxState, ContactState, SealMode, TxId};
-use lepic_transport::file::FILE;
-use lepic_transport::transport::Location;
 use lepic_wallet::ReceiveRequest;
 use lepic_wallet::event::{ContactEvent, ContactSlateEvent, OutboxNews, SlateId};
-use lepic_wallet::invoice::{InvoiceRequest, PayRequest};
-use lepic_wallet::send::{Delivery, SendError};
+use lepic_wallet::invoice::InvoiceRequest;
 use lepic_wallet::slate::{Slate, Stage, WireSlate};
 use lepic_wallet_contacts::{
     AcceptRequest, CardRequest, CollectTrigger as EngineTrigger, ContactKind as EngineKind,
@@ -19,7 +16,6 @@ use lepic_wallet_contacts::{
     PairingClass as EngineClass, PairingFailure, PairingRole, Purpose, RelayMode,
     SasDecision as EngineSasDecision, SasSymbol, SealedAnswer as EngineAnswer, WalletContacts,
 };
-use tracing::{info, warn};
 
 use super::{DEFAULT_ACCOUNT, ScratchFile, Session, invalid};
 use crate::api::error::{WalletError, WalletErrorKind};
@@ -157,6 +153,7 @@ const fn engine_purpose(purpose: SlatePurpose) -> Purpose {
 pub(super) const fn failure_reason(failure: PairingFailure) -> PairingFailureReason {
     match failure {
         PairingFailure::ChangedOnTheWay => PairingFailureReason::ChangedOnTheWay,
+        PairingFailure::KindDiffers => PairingFailureReason::KindDiffers,
         PairingFailure::Expired => PairingFailureReason::Expired,
         PairingFailure::NotConfirmed => PairingFailureReason::NotConfirmed,
         PairingFailure::Refused(_) => PairingFailureReason::Refused,
@@ -234,6 +231,7 @@ fn view(view: EngineContactView) -> ContactView {
         lapsed: view.lapsed,
         last_sealed_in_ms: view.last_sealed_in.map(ms),
         removed_by_peer: view.removed_by_peer,
+        requested_relay: view.requested_relay,
         payments_address: view.payments_address,
         created_at_ms: ms(view.created_at),
         status: match view.status {
@@ -388,23 +386,6 @@ impl Session {
             ));
         }
         Ok(relays.with_meeting(lepic_wallet_contacts::meeting_relays(meeting)?))
-    }
-
-    pub(super) fn pay_request(
-        amount: u64,
-        minimum_confirmations: u64,
-        message: Option<String>,
-        options: Option<SendOptions>,
-    ) -> Result<PayRequest, WalletError> {
-        let defaults = Self::send_request_with(amount, minimum_confirmations, message, options)?;
-        Ok(PayRequest {
-            minimum_confirmations,
-            strategy: defaults.strategy,
-            change_outputs: defaults.change_outputs,
-            message: defaults.message,
-            exclude_outputs: defaults.exclude_outputs,
-            ..PayRequest::new(DEFAULT_ACCOUNT, Amount::new(amount))
-        })
     }
 
     #[allow(clippy::too_many_arguments)] // One argument per choice of the Dart call.
@@ -815,6 +796,25 @@ impl Session {
             .await?)
     }
 
+    pub(crate) async fn contacts_move_home(&self, relay: String) -> Result<u32, WalletError> {
+        let relays = self.contact_relays(ContactRelayMode::Online)?;
+        Ok(self
+            .engine
+            .contact_book()
+            .contacts_move_home(&relays, &relay)
+            .await?)
+    }
+
+    pub(crate) async fn contact_check(&self, contact_id: &str) -> Result<(), WalletError> {
+        let id = self::contact_id(contact_id)?;
+        let relays = self.contact_relays(ContactRelayMode::Online)?;
+        Ok(self
+            .engine
+            .contact_book()
+            .contact_check(&relays, id)
+            .await?)
+    }
+
     pub(crate) async fn pairing_cancel(&self, contact_id: &str) -> Result<(), WalletError> {
         let id = self::contact_id(contact_id)?;
         let pending = self.engine.contact_book().pairings_pending().await?;
@@ -857,6 +857,19 @@ impl Session {
             .engine
             .contact_book()
             .contact_set_label(id, label)
+            .await?)
+    }
+
+    pub(crate) async fn contact_apply_relay_move(
+        &self,
+        contact_id: &str,
+        relay: &str,
+    ) -> Result<(), WalletError> {
+        let id = self::contact_id(contact_id)?;
+        Ok(self
+            .engine
+            .contact_book()
+            .apply_relay_move(id, relay)
             .await?)
     }
 
@@ -968,8 +981,7 @@ impl Session {
             .await?)
     }
 
-    /// Checks the contact first, so a send it cannot take locks nothing, and cancels the send
-    /// when it cannot be queued after all.
+    /// Pays a contact through its mailbox, as the engine's `contact_send` describes.
     #[allow(clippy::too_many_arguments)] // The app's send form, one value per field.
     pub(crate) async fn contact_send(
         &self,
@@ -983,49 +995,22 @@ impl Session {
     ) -> Result<SentTx, WalletError> {
         let id = self::contact_id(contact_id)?;
         let relays = self.contact_relays(mode)?;
-        self.engine
-            .contact_book()
-            .contact_check_mailbox_send(id)
-            .await?;
+        let request =
+            self.policy
+                .send_request_with(amount, minimum_confirmations, message, options)?;
         let scratch = ScratchFile::new(&self.data_dir)?;
-        let sent = match self
-            .engine
-            .send(
-                Self::send_request_with(amount, minimum_confirmations, message, options)?,
-                Delivery::Export {
-                    transport: FILE,
-                    to: Location::File(scratch.path.clone()),
-                },
-            )
-            .await
-        {
-            Ok(sent) => super::sent_tx(&sent),
-            // Stored and locked, but the scratch file was not written: nothing reaches the
-            // contact, so the send is given up rather than left holding its inputs.
-            Err(error @ SendError::Undelivered { tx_id, .. }) => {
-                if let Err(cancel) = self.engine.cancel(tx_id).await {
-                    warn!(tx_id = %tx_id, error = %cancel, "send to a contact not written nor cancelled");
-                }
-                return Err(error.into());
-            }
-            Err(error) => return Err(error.into()),
-        };
-        let tx_id = TxId(sent.tx_id);
-        if let Err(error) = self
+        let sent = self
             .engine
             .contact_book()
-            .contact_post_slate(&relays, id, tx_id, purpose.map(engine_purpose))
-            .await
-        {
-            match self.engine.cancel(tx_id).await {
-                Ok(()) => info!(tx_id = %tx_id, "send to a contact cancelled, it was not queued"),
-                Err(cancel) => {
-                    warn!(tx_id = %tx_id, error = %cancel, "send to a contact not queued nor cancelled");
-                }
-            }
-            return Err(error.into());
-        }
-        Ok(sent)
+            .contact_send(
+                &relays,
+                id,
+                request,
+                scratch.path.clone(),
+                purpose.map(engine_purpose),
+            )
+            .await?;
+        Ok(super::sent_tx(&sent))
     }
 
     pub(crate) async fn sealed_open(&self, text: &str) -> Result<SealedSlateView, WalletError> {
@@ -1081,7 +1066,9 @@ impl Session {
         options: Option<SendOptions>,
     ) -> Result<SealedAnswer, WalletError> {
         let text = bounded(text, MAX_SEALED_TEXT, "sealed text")?;
-        let request = Self::pay_request(amount, minimum_confirmations, message, options)?;
+        let request = self
+            .policy
+            .pay_request(amount, minimum_confirmations, message, options)?;
         let done = self.engine.contact_book().sealed_pay(text, request).await?;
         answer(done.paid.tx_id, &done.paid.slate, done.answer)
     }
@@ -1211,7 +1198,9 @@ impl Session {
         mode: ContactRelayMode,
     ) -> Result<PaidInvoice, WalletError> {
         let slate_id = self::slate_id(slate_id)?;
-        let request = Self::pay_request(amount, minimum_confirmations, message, options)?;
+        let request = self
+            .policy
+            .pay_request(amount, minimum_confirmations, message, options)?;
         let relays = self.contact_relays(mode)?;
         let paid = self
             .engine
@@ -1445,6 +1434,16 @@ mod tests {
         }));
         assert_eq!(relay.kind, WalletEventKind::HomeRelayUnreachable);
         assert_eq!(relay.relay.as_deref(), Some("relay.example:443"));
+
+        let moved = mapped(&Event::ContactRelayMoveRequested(
+            lepic_wallet::event::RelayMoveRequest {
+                contact_id,
+                host: "relay2.example:443".to_owned(),
+            },
+        ));
+        assert_eq!(moved.kind, WalletEventKind::ContactRelayMoveRequested);
+        assert_eq!(moved.contact_id.as_deref(), Some(id.as_str()));
+        assert_eq!(moved.relay.as_deref(), Some("relay2.example:443"));
 
         let invoice = mapped(&Event::InvoiceFromContact(ContactInvoiceEvent {
             contact_id,

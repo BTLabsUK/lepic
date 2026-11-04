@@ -21,7 +21,7 @@ use lepic_primitives::output::OutputFeatures;
 use lepic_slate::codec::WireSlate;
 use lepic_slate::codec::legacy::v3_json::LEGACY_V3_JSON;
 use lepic_slate::error::{EncodeError, Unrepresentable};
-use lepic_slate::model::ProofAddress;
+use lepic_slate::model::{ProofAddress, SlateId};
 use lepic_slate::stage::Stage;
 use lepic_store::{OutboxStatus, OutputStatus, SlateStage, TxDirection, TxState, WalletStore};
 use lepic_transport::error::TransportError;
@@ -280,6 +280,40 @@ fn a_send_with_change_waits_for_the_restore_scan_of_a_rebuilt_database() {
     assert!(sender.transactions().is_empty());
     assert_eq!(sender.next_child(), NEXT_CHILD);
     assert!(sender.received().is_none());
+}
+
+both_stores!(a_send_with_a_given_slate_id_is_made_once);
+fn a_send_with_a_given_slate_id_is_made_once() {
+    let sender = Sender::new();
+    let slate_id = SlateId::from_random_bytes([7; 16]);
+    let once = SendRequest {
+        slate_id: Some(slate_id),
+        ..request(AMOUNT)
+    };
+    let sent = sender
+        .harness
+        .block_on(sender.wallet.send(once.clone(), to(PEER)))
+        .unwrap();
+    assert_eq!(sent.slate_id, slate_id);
+    assert_eq!(sender.received().unwrap().1.id(), slate_id);
+
+    // The funding output is locked by now, so only a check made before selection names the
+    // first send instead of failing for funds.
+    let error = sender
+        .harness
+        .block_on(sender.wallet.send(once, to(PEER)))
+        .unwrap_err();
+    assert!(
+        matches!(
+            error,
+            SendError::SlateIdTaken { slate_id: taken, sent: Some(tx_id) }
+                if taken == slate_id && tx_id == sent.tx_id
+        ),
+        "{error:?}"
+    );
+    assert_eq!(sender.transactions().len(), 1);
+    assert_eq!(sender.next_child(), NEXT_CHILD + 1);
+    assert_eq!(sender.outbox(OutboxStatus::Delivered).len(), 1);
 }
 
 both_stores!(refuses_a_send_the_outputs_cannot_cover_before_storing_anything);

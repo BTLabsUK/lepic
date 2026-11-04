@@ -42,6 +42,7 @@ impl World {
     async fn wallet(&mut self) -> EpicWallet {
         let dir = tempfile::tempdir().unwrap();
         let config = WalletConfig {
+            policy: Default::default(),
             data_dir: dir.path().to_string_lossy().into_owned(),
             chain: Chain::Floonet,
             node_url: "http://127.0.0.1:1".to_owned(),

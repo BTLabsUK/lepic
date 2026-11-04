@@ -38,6 +38,8 @@ pub enum Report {
     InvoiceList(InvoiceListReport),
     InvoiceDecline(InvoiceDeclineReport),
     Inbox(InboxReport),
+    Serve(ServeReport),
+    ServeStatus(ServeStatusReport),
     EpicboxStatus(EpicboxStatusReport),
     Peer(PeerReport),
     HttpListen(HttpListenReport),
@@ -55,6 +57,8 @@ pub enum Report {
     ContactList(ContactListReport),
     ContactRemove(ContactRemoveReport),
     ContactKeyCheck(ContactKeyCheckReport),
+    ContactCheck(ContactCheckReport),
+    ContactMoveHome(ContactMoveHomeReport),
     ContactSlate(ContactSlateReport),
     ContactInvoiceIssue(ContactInvoiceIssueReport),
     ContactInvoices(ContactInvoiceListReport),
@@ -156,8 +160,13 @@ pub struct SendReport {
     /// The Epicbox address, the file path or the HTTP endpoint the slate went to.
     pub destination: String,
     /// `sent`, or `posted` when the receiver answered over HTTP and the transaction was
-    /// finalized and posted in the same command.
+    /// finalized and posted in the same command. For a repeat, the first send's state now.
     pub state: &'static str,
+    /// The send was made before under the same `--slate-id`; this run sent nothing.
+    pub repeated: bool,
+    /// Whether a delivery attempt got the slate to the other party. Only a repeat can report
+    /// `false`; `tx resend` delivers it.
+    pub delivered: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -455,7 +464,11 @@ pub struct ContactReport {
     pub allow_invoices: bool,
     pub seal: String,
     pub home_relay: Option<String>,
+    /// The relay host the contact asked to move to, until `contact move` applies it.
+    pub requested_relay: Option<String>,
     pub lapsed: bool,
+    /// When an envelope from the contact was last opened, if ever.
+    pub last_heard: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -490,6 +503,19 @@ pub struct ContactSlateReport {
     /// The slate or the answer, when no file was written.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub text: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ContactCheckReport {
+    pub contact_id: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ContactMoveHomeReport {
+    /// The home relay moved to, `domain:port`.
+    pub home_relay: String,
+    /// How many contacts were told.
+    pub moved: u32,
 }
 
 #[derive(Debug, Serialize)]
@@ -540,6 +566,34 @@ pub struct ContactImportReport {
     pub imported: usize,
     pub skipped_existing: usize,
     pub skipped_conflict: usize,
+}
+
+/// What `serve` did before it was stopped.
+#[derive(Debug, Serialize)]
+pub struct ServeReport {
+    pub socket: String,
+    /// Requests answered, whatever their exit code.
+    pub requests: u32,
+    /// What the Epicbox listener received.
+    pub inbox: InboxReport,
+}
+
+/// How the maintenance of a running `serve` went: `serve status`.
+#[derive(Debug, Serialize)]
+pub struct ServeStatusReport {
+    pub refresh: MaintenanceReport,
+    pub collect: MaintenanceReport,
+}
+
+/// One maintenance task of `serve`, since it started.
+#[derive(Debug, Serialize)]
+pub struct MaintenanceReport {
+    /// Failures since the last success.
+    pub consecutive_failures: u32,
+    /// The error of the latest failure, kept after a success; `null` before any failure.
+    pub last_error: Option<String>,
+    /// `null` before the first success.
+    pub last_success: Option<String>,
 }
 
 /// What `http listen` did before it was stopped.
@@ -614,6 +668,8 @@ struct ErrorBody<'a> {
     exit_code: u8,
     message: &'a str,
     causes: &'a [String],
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tx_id: Option<u32>,
 }
 
 /// The text a successful command prints. A report that carries the recovery phrase is rendered
@@ -678,8 +734,14 @@ fn write_contact(out: &mut Vec<u8>, contact: &ContactReport) -> std::io::Result<
     if !contact.sas.is_empty() {
         writeln!(out, "    check: {}", contact.sas.join(" · "))?;
     }
+    if let Some(host) = &contact.requested_relay {
+        writeln!(out, "    asks to move to relay {}", printable(host))?;
+    }
     if contact.lapsed {
         writeln!(out, "    not heard from in 90 days")?;
+    }
+    if let Some(heard) = &contact.last_heard {
+        writeln!(out, "    last heard {heard}")?;
     }
     Ok(())
 }
@@ -741,6 +803,7 @@ pub fn render_error(error: &CliError, format: OutputFormat, hint: Option<&str>) 
                     exit_code: kind.exit_code(),
                     message,
                     causes,
+                    tx_id: error.tx_id(),
                 },
             })
         }
@@ -869,6 +932,8 @@ fn write_human(out: &mut Vec<u8>, report: &Report) -> std::io::Result<()> {
         | Report::InvoiceDecline(_)
         | Report::Peer(_) => write_invoice_human(out, report),
         Report::Inbox(_)
+        | Report::Serve(_)
+        | Report::ServeStatus(_)
         | Report::HttpListen(_)
         | Report::TorAddress(_)
         | Report::TorListen(_)
@@ -884,6 +949,8 @@ fn write_human(out: &mut Vec<u8>, report: &Report) -> std::io::Result<()> {
         | Report::ContactRemove(_)
         | Report::ContactSlate(_)
         | Report::ContactKeyCheck(_)
+        | Report::ContactCheck(_)
+        | Report::ContactMoveHome(_)
         | Report::ContactInvoiceIssue(_)
         | Report::ContactInvoices(_)
         | Report::ContactExport(_)
@@ -985,6 +1052,17 @@ fn write_wallet_human(out: &mut Vec<u8>, report: &Report) -> std::io::Result<()>
 /// A report on one transaction or the transaction list. Writes nothing for any other.
 fn write_transaction_human(out: &mut Vec<u8>, report: &Report) -> std::io::Result<()> {
     match report {
+        Report::Send(r) if r.repeated && !r.delivered => writeln!(
+            out,
+            "Transaction {} was made before under slate {} and is {}; nothing was sent now. It \
+             is not delivered yet: run `lepic tx resend {}`.",
+            r.tx_id, r.slate_id, r.state, r.tx_id
+        ),
+        Report::Send(r) if r.repeated => writeln!(
+            out,
+            "Transaction {} was made before under slate {} and is {}; nothing was sent now.",
+            r.tx_id, r.slate_id, r.state
+        ),
         Report::Send(r) if r.state == "posted" => writeln!(
             out,
             "Transaction {} sent {} EPIC (fee {}) by {} to {}, finalized and posted.\nSlate {}.",
@@ -1221,25 +1299,34 @@ fn write_invoice_human(out: &mut Vec<u8>, report: &Report) -> std::io::Result<()
     }
 }
 
+fn write_maintenance(
+    out: &mut Vec<u8>,
+    name: &str,
+    task: &MaintenanceReport,
+) -> std::io::Result<()> {
+    let success = task.last_success.as_deref().unwrap_or("never");
+    write!(
+        out,
+        "{name}  {} failures in a row, last success {success}",
+        task.consecutive_failures
+    )?;
+    match &task.last_error {
+        Some(error) => writeln!(out, ", last error: {error}"),
+        None => writeln!(out),
+    }
+}
+
 /// An inbox, listener, Tor or Epicbox report. Writes nothing for any other.
 fn write_transport_human(out: &mut Vec<u8>, report: &Report) -> std::io::Result<()> {
     match report {
-        Report::Inbox(r) => {
-            writeln!(
-                out,
-                "Received {}, finalized {}, repeated {}, rejected {}, held for retry {}, parked \
-                 {}, bounced {}, dropped {}, notices {}.",
-                r.received,
-                r.finalized,
-                r.repeated,
-                r.rejected,
-                r.held,
-                r.parked,
-                r.bounced,
-                r.dropped,
-                r.notices
-            )?;
-            write_expired(out, r.expired.as_ref())
+        Report::Inbox(r) => write_inbox(out, r),
+        Report::Serve(r) => {
+            writeln!(out, "Served {} requests on {}.", r.requests, r.socket)?;
+            write_inbox(out, &r.inbox)
+        }
+        Report::ServeStatus(r) => {
+            write_maintenance(out, "Refresh", &r.refresh)?;
+            write_maintenance(out, "Collect", &r.collect)
         }
         Report::HttpListen(r) => writeln!(
             out,
@@ -1259,6 +1346,24 @@ fn write_transport_human(out: &mut Vec<u8>, report: &Report) -> std::io::Result<
         }
         _ => Ok(()),
     }
+}
+
+fn write_inbox(out: &mut Vec<u8>, r: &InboxReport) -> std::io::Result<()> {
+    writeln!(
+        out,
+        "Received {}, finalized {}, repeated {}, rejected {}, held for retry {}, parked {}, \
+         bounced {}, dropped {}, notices {}.",
+        r.received,
+        r.finalized,
+        r.repeated,
+        r.rejected,
+        r.held,
+        r.parked,
+        r.bounced,
+        r.dropped,
+        r.notices
+    )?;
+    write_expired(out, r.expired.as_ref())
 }
 
 /// A pairing report. Writes nothing for any other.
@@ -1349,6 +1454,16 @@ fn write_contact_human(out: &mut Vec<u8>, report: &Report) -> std::io::Result<()
         Report::ContactRemove(r) if r.removed => writeln!(out, "Pairing {} removed.", r.contact_id),
         Report::ContactRemove(r) => writeln!(out, "No pairing {}.", r.contact_id),
         Report::ContactSlate(r) => write_contact_slate(out, r),
+        Report::ContactCheck(r) => writeln!(
+            out,
+            "Check sent to {}; `lepic contact collect` takes the answer.",
+            r.contact_id
+        ),
+        Report::ContactMoveHome(r) => writeln!(
+            out,
+            "Home relay moved to {}; {} contact(s) told. The old mailboxes are not read again.",
+            r.home_relay, r.moved
+        ),
         Report::ContactKeyCheck(r) => writeln!(
             out,
             "Key check sent over pairing {} for {}; `lepic contact collect` takes the answer.",
@@ -1589,11 +1704,15 @@ mod tests {
                     transport: text("file"),
                     destination: text("f"),
                     state: "sent",
+                    repeated: false,
+                    delivered: true,
                 }),
                 vec![
                     "amount",
+                    "delivered",
                     "destination",
                     "fee",
+                    "repeated",
                     "slate_id",
                     "state",
                     "transport",
@@ -1793,6 +1912,25 @@ mod tests {
                 ],
             ),
             (
+                Report::Serve(ServeReport {
+                    socket: text("s"),
+                    requests: 0,
+                    inbox: InboxReport {
+                        received: 0,
+                        finalized: 0,
+                        repeated: 0,
+                        rejected: 0,
+                        held: 0,
+                        parked: 0,
+                        bounced: 0,
+                        dropped: 0,
+                        notices: 0,
+                        expired: None,
+                    },
+                }),
+                vec!["inbox", "requests", "socket"],
+            ),
+            (
                 Report::EpicboxStatus(EpicboxStatusReport {
                     relay: text("r"),
                     address: text("a"),
@@ -1893,7 +2031,9 @@ mod tests {
                     allow_invoices: false,
                     seal: text("on"),
                     home_relay: None,
+                    requested_relay: None,
                     lapsed: false,
+                    last_heard: None,
                 }),
                 vec![
                     "allow_invoices",
@@ -1903,6 +2043,8 @@ mod tests {
                     "kind",
                     "label",
                     "lapsed",
+                    "last_heard",
+                    "requested_relay",
                     "sas",
                     "seal",
                     "state",
@@ -1918,6 +2060,19 @@ mod tests {
                     removed: true,
                 }),
                 vec!["contact_id", "removed"],
+            ),
+            (
+                Report::ContactCheck(ContactCheckReport {
+                    contact_id: text("c"),
+                }),
+                vec!["contact_id"],
+            ),
+            (
+                Report::ContactMoveHome(ContactMoveHomeReport {
+                    home_relay: text("h"),
+                    moved: 1,
+                }),
+                vec!["home_relay", "moved"],
             ),
             (
                 Report::ContactKeyCheck(ContactKeyCheckReport {
@@ -2384,6 +2539,17 @@ mod tests {
         assert_eq!(inner, ["causes", "exit_code", "kind", "message"]);
         assert_eq!(value["error"]["kind"], "interrupted");
         assert_eq!(value["error"]["exit_code"], 12);
+    }
+
+    #[test]
+    fn an_interrupted_send_names_its_stored_transaction() {
+        let error = CliError::SendInterrupted { tx_id: 4 };
+        let value: Value =
+            serde_json::from_str(&render_error(&error, OutputFormat::Json, None)).unwrap();
+        assert_eq!(value["error"]["tx_id"], 4);
+        assert_eq!(value["error"]["exit_code"], 12);
+        let human = render_error(&error, OutputFormat::Human, None);
+        assert!(human.contains("transaction 4 was stored"), "{human}");
     }
 
     #[test]

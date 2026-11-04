@@ -10,7 +10,7 @@ use lepic_epicbox::mock_relay::MockRelay;
 
 use super::kind;
 use crate::api::diagnostics::LogLevel;
-use crate::api::error::WalletErrorKind;
+use crate::api::error::{WalletError, WalletErrorKind};
 use crate::api::runtime::LepicRuntime;
 use crate::api::secret_store::AppSecretStore;
 use crate::api::testing::MockChain;
@@ -59,6 +59,7 @@ impl World {
     fn config(&mut self, epicbox_domain: &str) -> WalletConfig {
         let dir = tempfile::tempdir().unwrap();
         let config = WalletConfig {
+            policy: Default::default(),
             data_dir: dir.path().to_string_lossy().into_owned(),
             chain: Chain::Floonet,
             node_url: "http://127.0.0.1:1".to_owned(),
@@ -1268,6 +1269,78 @@ async fn a_mailbox_send_the_contact_never_answers_is_cancelled_and_its_late_answ
         anna.transaction(sent.tx_id).await.unwrap().status,
         crate::api::types::TxStatus::Cancelled
     );
+}
+
+/// A send given up after its slate could not be handed over is cancelled and frees its inputs;
+/// when the cancel fails too, the error names the transaction and the failed cancel.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_send_given_up_is_cancelled_and_a_failed_cancel_is_never_silent() {
+    let mut world = World::new();
+    let anna = world.funded().await;
+    let session = anna.session();
+    let slate = anna
+        .create_send_slate(9 * EPIC, 1, None, None)
+        .await
+        .unwrap();
+    let first = lepic_store::TxId(slate.tx_id);
+    let stopped = || WalletError::new(WalletErrorKind::TransportFailed, "not written");
+
+    let error = session.give_up_send(first, stopped()).await;
+    assert_eq!(error.kind, WalletErrorKind::TransportFailed);
+    assert_eq!(error.tx_id, None);
+    assert_eq!(
+        anna.transaction(slate.tx_id).await.unwrap().status,
+        crate::api::types::TxStatus::Cancelled
+    );
+    // The inputs are free again.
+    let again = anna
+        .create_send_slate(9 * EPIC, 1, None, None)
+        .await
+        .unwrap();
+
+    // A transaction the wallet cannot cancel: the error says so and names it.
+    let unknown = lepic_store::TxId(9_999);
+    let error = session.give_up_send(unknown, stopped()).await;
+    assert_eq!(error.kind, WalletErrorKind::TransportFailed);
+    assert_eq!(error.tx_id, Some(9_999));
+    assert!(error.message.contains("could not be cancelled"), "{error}");
+    assert!(error.message.contains("not written"), "{error}");
+    // The other send is untouched.
+    assert_ne!(again.tx_id, slate.tx_id);
+}
+
+fn transport_failure() -> lepic_transport::error::TransportError {
+    lepic_transport::error::TransportError::UnknownDestination {
+        transport: lepic_transport::transport::TransportId::new("test"),
+    }
+}
+
+/// A stored payment that was left behind is named in the error that reports it.
+#[test]
+fn an_error_names_the_stored_send_it_leaves_behind() {
+    let tx_id = lepic_store::TxId(12);
+    let undelivered = lepic_wallet::send::SendError::Undelivered {
+        tx_id,
+        slate_id: lepic_wallet::event::SlateId::from_bytes([7; 16]),
+        source: transport_failure(),
+    };
+    let error = WalletError::from(undelivered);
+    assert_eq!(error.kind, WalletErrorKind::TransportFailed);
+    assert_eq!(error.tx_id, Some(12));
+
+    let not_cancelled = lepic_wallet_contacts::ContactError::NotCancelled {
+        tx_id,
+        cause: Box::new(lepic_wallet_contacts::ContactError::Post(
+            transport_failure(),
+        )),
+        cancel: lepic_wallet::error::WalletError::UnknownTransaction(tx_id),
+    };
+    let error = WalletError::from(not_cancelled);
+    assert_eq!(error.kind, WalletErrorKind::TransportFailed);
+    assert_eq!(error.tx_id, Some(12));
+    assert!(error.message.contains("could not be cancelled"), "{error}");
+
+    assert_eq!(WalletError::new(WalletErrorKind::Other, "x").tx_id, None);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

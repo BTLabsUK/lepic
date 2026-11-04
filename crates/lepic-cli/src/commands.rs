@@ -20,7 +20,7 @@ use lepic_node::{NodeApi, NodeClient, Propagation, RpcTransport};
 use lepic_primitives::amount::Height;
 use lepic_primitives::params::Network;
 use lepic_store::{
-    ChainCheck, ImportedKind, OutboxStatus, Repositories, SlateStage, StoredTransaction,
+    ChainCheck, ContactId, ImportedKind, OutboxStatus, Repositories, SlateStage, StoredTransaction,
     TxDirection, TxId, WalletStore,
 };
 use lepic_tor::{SocksProxy, TorProcess, TorSettings, TorState};
@@ -48,6 +48,7 @@ use lepic_wallet::{
     Clock, Event, Password, Ports, ReceiveRequest, SharedRng, Wallet, WalletConfig, WalletError,
     WalletName, WordCount,
 };
+use rand::Rng as _;
 use rand::SeedableRng as _;
 use rand::rngs::{StdRng, SysRng};
 use tokio::sync::{broadcast, watch};
@@ -59,8 +60,8 @@ use crate::cli::{
     Command, DestinationArgs, EpicboxCommand, FinalizeArgs, HttpCommand, HttpListenArgs,
     ImportHistoryArgs, ImportSeedArgs, InitArgs, InvoiceCommand, IssueArgs, ListingArgs,
     NodeCommand, PayArgs, PostArgs, ReceiveArgs, ResendArgs, RestoreArgs, ScanArgs, SelectionArg,
-    SendArgs, SpendArgs, TorBinaryArgs, TorCommand, TorListenArgs, TxCommand, WalletCommand,
-    WalletScanArgs, WordsArg,
+    SendArgs, SendDestinationArgs, SpendArgs, TorBinaryArgs, TorCommand, TorListenArgs, TxCommand,
+    WalletCommand, WalletScanArgs, WordsArg,
 };
 use crate::exit::{CliError, ErrorKind};
 use crate::host::{Host, HostNode};
@@ -78,6 +79,8 @@ use crate::stores::{CliStores, SharedStore};
 use crate::vault::{FileVault, VAULT_FILE};
 
 mod contact;
+#[cfg(unix)]
+mod serve;
 
 /// The directory inside the data directory that holds the wallet's tor files.
 const TOR_DIR: &str = "tor";
@@ -103,8 +106,17 @@ struct Opened<N: NodeApi + 'static> {
     http: lepic_foreign::HttpTransport,
     /// Holds the answers of Tor sends until they are finalized.
     tor: lepic_tor::TorTransport,
+    /// Taken by a send over Tor for as long as its tor is attached to [`Self::tor`], which only
+    /// one send at a time can use.
+    tor_gate: Arc<tokio::sync::Mutex<()>>,
     /// Held until the command ends; `None` when the data directory does not exist.
-    _lock: Option<std::fs::File>,
+    _lock: Option<lepic_store::DataDirLock>,
+}
+
+/// A tor started for one send, and the hold on the wallet's tor transport it keeps until stopped.
+struct SendTor {
+    process: Arc<TorProcess>,
+    _gate: tokio::sync::OwnedMutexGuard<()>,
 }
 
 impl<N: NodeApi + 'static> Opened<N> {
@@ -126,6 +138,8 @@ struct Run<'a, H: Host> {
     interrupt: watch::Receiver<bool>,
     /// Set by a command that stops on its own when interrupted and reports what it did.
     graceful: Arc<AtomicBool>,
+    /// The wallet `lepic serve` holds open, which every command then uses.
+    held: Option<Arc<Opened<HostNode<H>>>>,
 }
 
 /// Runs `command` until it ends or the user interrupts it. An interrupt ends any command at
@@ -151,6 +165,7 @@ pub(crate) async fn execute<H: Host>(
         console,
         interrupt: interrupt.clone(),
         graceful: Arc::clone(&graceful),
+        held: None,
     };
     let result = tokio::select! {
         result = run.dispatch(command) => result,
@@ -179,6 +194,7 @@ impl<H: Host> Run<'_, H> {
             Command::Tor(TorCommand::Listen(args)) => self.tor_listen(args).await,
             Command::Node(NodeCommand::Status) => self.node_status().await,
             Command::Contact(args) => self.contact(args).await,
+            Command::Serve(args) => self.serve(args).await,
         }
     }
 
@@ -319,9 +335,18 @@ impl<H: Host> Run<'_, H> {
                 }))
             }
             TxCommand::Show(args) => {
+                let slate_id = args.slate_id.slate_id.as_deref().map(SlateId::parse);
                 let opened = self.open().await?;
-                let tx_id = TxId(args.tx_id);
-                let details = opened.wallet.transaction_details(tx_id).await?;
+                let details = match (args.tx_id, slate_id) {
+                    (Some(tx_id), _) => opened.wallet.transaction_details(TxId(tx_id)).await?,
+                    (None, Some(Ok(slate_id))) => opened
+                        .wallet
+                        .sent_with_slate(slate_id)
+                        .await?
+                        .ok_or(CliError::NoSendWithSlate)?,
+                    (None, Some(Err(_))) => return Err(CliError::SlateId),
+                    (None, None) => return Err(CliError::NoSendWithSlate),
+                };
                 let report = opened.store()?.read(|repos| show(repos, &details))?;
                 Ok(Report::Show(report))
             }
@@ -361,7 +386,7 @@ impl<H: Host> Run<'_, H> {
                     .until_interrupted(
                         opened.wallet.subscribe(),
                         listen_and_sweep(&opened, &handle, expiry, &swept),
-                        || handle.stop(),
+                        || finish_listen(&handle),
                     )
                     .await?;
                 let expired = swept
@@ -430,7 +455,7 @@ impl<H: Host> Run<'_, H> {
 
     async fn init(&mut self, args: &InitArgs) -> Result<Report, CliError> {
         let password = self.new_password().await?;
-        let wallet = self.prepare(true)?;
+        let wallet = self.prepare(true).await?;
         let phrase = wallet
             .wallet
             .create(password, word_count(args.words))
@@ -449,7 +474,7 @@ impl<H: Host> Run<'_, H> {
             .read("recovery phrase", "Recovery phrase: ")
             .await?;
         let password = self.new_password().await?;
-        let opened = self.prepare(true)?;
+        let opened = self.prepare(true).await?;
         let scan_from = Height::new(args.from_height.unwrap_or(0));
         opened
             .wallet
@@ -466,7 +491,7 @@ impl<H: Host> Run<'_, H> {
             .read("wallet.seed password", "Password of the wallet.seed file: ")
             .await?;
         let password = self.new_password().await?;
-        let opened = self.prepare(true)?;
+        let opened = self.prepare(true).await?;
         opened
             .wallet
             .import_wallet_seed(password, &file, password_from(file_password))
@@ -636,20 +661,42 @@ impl<H: Host> Run<'_, H> {
     async fn send(&mut self, args: SendArgs) -> Result<Report, CliError> {
         let amount = parse_amount(&args.amount)?;
         let spend = Spend::from_args(&args.spend)?;
-        let (delivery, destination) =
-            self.delivery(args.destination, args.plain_http.allow_plain_http)?;
+        let (payee, destination) =
+            self.payee(args.destination, args.plain_http.allow_plain_http)?;
+        let slate_id = args
+            .slate_id
+            .slate_id
+            .as_deref()
+            .map(caller_slate_id)
+            .transpose()?;
         let opened = self.open().await?;
         let account = opened.wallet.account(&args.account.account)?;
-        if delivery.transport() == TRANSPORT_ID {
+        if let Some(slate_id) = slate_id
+            && let Some(first) = opened.wallet.sent_with_slate(slate_id).await?
+        {
+            let first_contact = contact::contact_of(&opened, first.transaction.id).await?;
+            return repeated_send(
+                &first,
+                first_contact,
+                slate_id,
+                account.index,
+                amount,
+                &payee,
+                destination,
+            );
+        }
+        let transport = payee.transport();
+        if transport == TRANSPORT_ID {
             opened.wallet.epicbox_attach(&opened.epicbox)?;
         }
-        let transport = delivery.transport();
         let request = SendRequest {
             minimum_confirmations: spend.minimum_confirmations,
             change_outputs: spend.change_outputs,
             strategy: spend.strategy,
             ttl_blocks: spend.ttl_blocks,
             message: args.message.message,
+            // Drawn here when the caller gave none, so an interrupted send can still be found.
+            slate_id: Some(slate_id.map_or_else(drawn_slate_id, Ok)?),
             ..SendRequest::new(account.index, amount)
         };
         if transport == lepic_tor::TRANSPORT_ID {
@@ -661,8 +708,20 @@ impl<H: Host> Run<'_, H> {
                 .await?;
         }
         let tor = self.tor_for(transport, &args.tor, &opened).await?;
+        // From here the send may store its transaction, so an interrupt ends it here and reports
+        // the transaction it stored, which the caller can then resend or cancel.
+        let sent_slate = request.slate_id;
+        self.graceful.store(true, Ordering::SeqCst);
+        let mut interrupt = self.interrupt.clone();
+        let purpose = args.purpose.map(contact::purpose);
+        let data_dir = &self.settings.data_dir;
         let sending = async {
-            let sent = opened.wallet.send(request, delivery).await?;
+            let sent = match payee {
+                Payee::Delivery(delivery) => opened.wallet.send(request, delivery).await?,
+                Payee::Contact(id) => {
+                    contact::send_to_contact(&opened, id, request, purpose, data_dir).await?
+                }
+            };
             let state = finalize_direct_reply(
                 &opened,
                 transport,
@@ -672,9 +731,23 @@ impl<H: Host> Run<'_, H> {
             )
             .await?;
             Ok::<_, CliError>((sent, state))
-        }
-        .await;
+        };
+        let sending = tokio::select! {
+            result = sending => Some(result),
+            Ok(_) = interrupt.wait_for(|stopped| *stopped) => None,
+        };
         stop_tor(&opened, tor).await;
+        let Some(sending) = sending else {
+            let stored = match sent_slate {
+                Some(slate_id) => opened.wallet.sent_with_slate(slate_id).await?,
+                None => None,
+            };
+            return Err(
+                stored.map_or(CliError::Interrupted, |stored| CliError::SendInterrupted {
+                    tx_id: stored.transaction.id.0,
+                }),
+            );
+        };
         let (sent, state) = sending?;
         Ok(Report::Send(SendReport {
             tx_id: sent.tx_id.0,
@@ -684,6 +757,8 @@ impl<H: Host> Run<'_, H> {
             transport: transport.to_string(),
             destination,
             state,
+            repeated: false,
+            delivered: true,
         }))
     }
 
@@ -730,7 +805,7 @@ impl<H: Host> Run<'_, H> {
 
     /// Answers payments over HTTP until interrupted.
     async fn http_listen(&mut self, args: &HttpListenArgs) -> Result<Report, CliError> {
-        let opened = Arc::new(self.open().await?);
+        let opened = self.open().await?;
         let exposure = if args.internet {
             Exposure::Internet
         } else {
@@ -777,10 +852,11 @@ impl<H: Host> Run<'_, H> {
         transport: lepic_transport::transport::TransportId,
         binary: &TorBinaryArgs,
         opened: &Opened<N>,
-    ) -> Result<Option<Arc<TorProcess>>, CliError> {
+    ) -> Result<Option<SendTor>, CliError> {
         if transport != lepic_tor::TRANSPORT_ID {
             return Ok(None);
         }
+        let gate = Arc::clone(&opened.tor_gate).lock_owned().await;
         let tor = Arc::new(self.start_tor(binary)?);
         self.wait_for_tor(&tor).await?;
         opened.tor.attach(Arc::clone(&tor) as Arc<dyn SocksProxy>);
@@ -790,7 +866,10 @@ impl<H: Host> Run<'_, H> {
                  and a half minutes to fail.",
             );
         }
-        Ok(Some(tor))
+        Ok(Some(SendTor {
+            process: tor,
+            _gate: gate,
+        }))
     }
 
     fn start_tor(&self, binary: &TorBinaryArgs) -> Result<TorProcess, CliError> {
@@ -801,6 +880,7 @@ impl<H: Host> Run<'_, H> {
             self.settings.tuning.tor_timings(),
         );
         settings.lib_dir.clone_from(&binary.lib_dir);
+        settings.withheld_env = vec![crate::secret::PASSWORD_ENV.to_owned()];
         Ok(TorProcess::start(settings))
     }
 
@@ -841,7 +921,7 @@ impl<H: Host> Run<'_, H> {
         if args.tor.tor_binary.is_none() {
             return Err(CliError::TorBinaryNeeded);
         }
-        let opened = Arc::new(self.open().await?);
+        let opened = self.open().await?;
         let key = opened.wallet.onion_key()?;
         let onion = lepic_tor::onion_address(key.public_key());
         let counts = Arc::new(HttpCounts::default());
@@ -897,6 +977,27 @@ impl<H: Host> Run<'_, H> {
             repeated: counts.repeated.load(Ordering::Relaxed),
             refused: counts.refused.load(Ordering::Relaxed),
         }))
+    }
+
+    /// Where a send goes, and how the report names it: a contact by its id, anything else as
+    /// [`Self::delivery`] parses it.
+    fn payee(
+        &self,
+        destination: SendDestinationArgs,
+        allow_plain_http: bool,
+    ) -> Result<(Payee, String), CliError> {
+        let SendDestinationArgs {
+            to,
+            to_file,
+            to_contact,
+        } = destination;
+        if let Some(text) = to_contact {
+            let id = contact::contact_id(&text)?;
+            return Ok((Payee::Contact(id), id.to_string()));
+        }
+        let (delivery, destination) =
+            self.delivery(DestinationArgs { to, to_file }, allow_plain_http)?;
+        Ok((Payee::Delivery(delivery), destination))
     }
 
     /// Where a first slate goes, and how the report names it. An address is parsed here,
@@ -1175,35 +1276,50 @@ impl<H: Host> Run<'_, H> {
         let password = self
             .console
             .secrets
-            .wallet_password(&mut self.console.env, true)
+            .wallet_password(
+                &mut self.console.env,
+                self.settings.password_file.as_deref(),
+                true,
+            )
             .await?;
         Ok(password_from(password))
     }
 
     /// Unlocks the wallet in the data directory. A directory without a vault is reported before
     /// the password is asked for, which would otherwise be typed for nothing.
-    async fn open(&mut self) -> Result<Opened<HostNode<H>>, CliError> {
+    async fn open(&mut self) -> Result<Arc<Opened<HostNode<H>>>, CliError> {
+        if let Some(held) = &self.held {
+            return Ok(Arc::clone(held));
+        }
+        self.open_fresh().await.map(Arc::new)
+    }
+
+    async fn open_fresh(&mut self) -> Result<Opened<HostNode<H>>, CliError> {
         if !self.settings.data_dir.join(VAULT_FILE).exists() {
             return Err(WalletError::NoWallet.into());
         }
         let password = self
             .console
             .secrets
-            .wallet_password(&mut self.console.env, false)
+            .wallet_password(
+                &mut self.console.env,
+                self.settings.password_file.as_deref(),
+                false,
+            )
             .await?;
-        let opened = self.prepare(false)?;
+        let opened = self.prepare(false).await?;
         opened.wallet.open(password_from(password)).await?;
         start_from_confirmed_tip(&opened.wallet)?;
         Ok(opened)
     }
 
     /// A locked wallet handle on the data directory, which a new wallet creates.
-    fn prepare(&self, create_dir: bool) -> Result<Opened<HostNode<H>>, CliError> {
+    async fn prepare(&self, create_dir: bool) -> Result<Opened<HostNode<H>>, CliError> {
         if create_dir {
             create_private_dir(&self.settings.data_dir)?;
         }
         check_private_dir(&self.settings.data_dir)?;
-        let lock = lock_data_dir(&self.settings.data_dir)?;
+        let lock = lock_data_dir(&self.settings.data_dir).await?;
         let tls = webpki_tls_config().map_err(|error| CliError::Io {
             what: "set up tls for http",
             source: std::io::Error::other(error),
@@ -1246,12 +1362,7 @@ impl<H: Host> Run<'_, H> {
             network: self.settings.network,
             data_dir: self.settings.data_dir.clone(),
             node: self.settings.node.clone(),
-            transports: vec![
-                FILE,
-                TRANSPORT_ID,
-                lepic_foreign::TRANSPORT_ID,
-                lepic_tor::TRANSPORT_ID,
-            ],
+            policy: Default::default(),
             offline: false,
             host_features: 0,
         };
@@ -1262,8 +1373,14 @@ impl<H: Host> Run<'_, H> {
             epicbox,
             http,
             tor,
+            tor_gate: Arc::new(tokio::sync::Mutex::new(())),
             _lock: lock,
         })
+    }
+
+    #[cfg(not(unix))]
+    async fn serve(&mut self, _: crate::cli::ServeArgs) -> Result<Report, CliError> {
+        Err(CliError::ServiceUnsupported)
     }
 
     fn data_dir_text(&self) -> String {
@@ -1291,6 +1408,98 @@ fn start_from_confirmed_tip<T: RpcTransport + Clone + 'static>(
         .clone()
         .with_known_tip(tip.height, seen_ago);
     Ok(())
+}
+
+/// A random version-4 slate id, drawn as the engine draws one.
+fn drawn_slate_id() -> Result<SlateId, CliError> {
+    random_bytes().map(SlateId::from_random_bytes)
+}
+
+/// Bytes from the system's random source.
+fn random_bytes<const N: usize>() -> Result<[u8; N], CliError> {
+    let mut rng = StdRng::try_from_rng(&mut SysRng).map_err(|error| CliError::Io {
+        what: "seed the random number generator",
+        source: std::io::Error::other(error),
+    })?;
+    let mut bytes = [0u8; N];
+    rng.fill_bytes(&mut bytes);
+    Ok(bytes)
+}
+
+/// A slate id for `tx send --slate-id`. It travels in the slate, so only a random version-4
+/// UUID is taken: one derived from a user or an order id would leak it to the receiver.
+fn caller_slate_id(text: &str) -> Result<SlateId, CliError> {
+    let slate_id = SlateId::parse(text).map_err(|_| CliError::SlateId)?;
+    let bytes = slate_id.as_bytes();
+    let version = bytes.get(6).map(|byte| byte >> 4);
+    let variant = bytes.get(8).map(|byte| byte & 0xc0);
+    if version != Some(4) || variant != Some(0x80) {
+        return Err(CliError::NotRandomSlateId);
+    }
+    Ok(slate_id)
+}
+
+/// Where a send goes: through a transport, or to a paired contact's mailbox.
+enum Payee {
+    Delivery(Delivery),
+    Contact(ContactId),
+}
+
+impl Payee {
+    /// The transport the send is stored with: a contact's slate leaves as a file to seal.
+    const fn transport(&self) -> lepic_transport::transport::TransportId {
+        match self {
+            Self::Delivery(delivery) => delivery.transport(),
+            Self::Contact(_) => FILE,
+        }
+    }
+}
+
+/// The report of a send made before under the same slate id: nothing is sent again. A first
+/// send with another account, amount, transport or destination is refused, since the caller
+/// asked for a payment that was not made. A file export records no destination to compare; a
+/// send to a contact compares the contact.
+fn repeated_send(
+    first: &TransactionDetails,
+    first_contact: Option<ContactId>,
+    slate_id: SlateId,
+    account: lepic_store::AccountIndex,
+    amount: lepic_primitives::amount::Amount,
+    payee: &Payee,
+    destination: String,
+) -> Result<Report, CliError> {
+    let entry = &first.transaction.entry;
+    let tx_id = first.transaction.id;
+    let fee = entry.fee.map_or(0, lepic_primitives::amount::Fee::value);
+    let sent = entry
+        .amount_debited
+        .value()
+        .checked_sub(entry.amount_credited.value())
+        .and_then(|value| value.checked_sub(fee));
+    let to_same = match payee {
+        Payee::Delivery(Delivery::Deliver { to, .. }) => first.counterparty.as_ref() == Some(to),
+        Payee::Delivery(Delivery::Export { .. }) => first_contact.is_none(),
+        Payee::Contact(id) => first_contact == Some(*id),
+    };
+    let transport = payee.transport();
+    if entry.account != account
+        || sent != Some(amount.value())
+        || entry.transport.as_deref() != Some(transport.as_str())
+        || !to_same
+    {
+        return Err(CliError::SlateIdReused { tx_id: tx_id.0 });
+    }
+    Ok(Report::Send(SendReport {
+        tx_id: tx_id.0,
+        slate_id: slate_id.to_string(),
+        amount: format_amount(amount),
+        fee: format_units(fee),
+        transport: transport.to_string(),
+        destination,
+        state: state_name(entry.state),
+        repeated: true,
+        delivered: !first.undelivered,
+    }))
 }
 
 /// Whether a send over `transport` gets its answer in the same exchange.
@@ -1328,11 +1537,11 @@ async fn finalize_direct_reply<N: NodeApi + 'static>(
 }
 
 /// Detaches and stops the tor a send started.
-async fn stop_tor<N: NodeApi + 'static>(opened: &Opened<N>, tor: Option<Arc<TorProcess>>) {
+async fn stop_tor<N: NodeApi + 'static>(opened: &Opened<N>, tor: Option<SendTor>) {
     let Some(tor) = tor else { return };
     opened.tor.detach();
     // Dropping the last handle kills tor at once instead.
-    if let Ok(tor) = Arc::try_unwrap(tor) {
+    if let Ok(tor) = Arc::try_unwrap(tor.process) {
         tor.stop().await;
     }
 }
@@ -1647,44 +1856,22 @@ fn check_private_dir(_: &Path) -> Result<(), CliError> {
     Ok(())
 }
 
-/// The file in a data directory that holds the directory lock, the same one the mobile binding
-/// takes, so a CLI command and an app never open one database at once. It stays when the lock
-/// is released: removing it would let two openers lock different files.
-const LOCK_FILE: &str = ".lepic.lock";
-
-/// An exclusive OS lock on [`LOCK_FILE`], released when the file is closed. A missing data
-/// directory holds no wallet to protect and is left to the wallet to report. A symbolic link in
-/// place of the lock file is refused rather than followed, so the lock never creates a file
-/// elsewhere. Any failure other than another holder fails closed.
-fn lock_data_dir(dir: &Path) -> Result<Option<std::fs::File>, CliError> {
-    let mut options = std::fs::File::options();
-    options.create(true).truncate(false).write(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt as _;
-        options.custom_flags(lepic_transport::file::O_NOFOLLOW);
-    }
-    let file = match options.open(dir.join(LOCK_FILE)) {
-        Ok(file) => file,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(error) => return Err(CliError::io("open the data directory lock")(error)),
-    };
-    // While the holder copies a plain database into an encrypted one, the copy is waited for.
-    let started = std::time::Instant::now();
-    loop {
-        match file.try_lock() {
-            Ok(()) => return Ok(Some(file)),
-            Err(std::fs::TryLockError::WouldBlock)
-                if lepic_store::migration_in_progress(dir)
-                    && started.elapsed() < MIGRATION_WAIT =>
-            {
-                std::thread::sleep(std::time::Duration::from_millis(100));
-            }
-            Err(std::fs::TryLockError::WouldBlock) => return Err(CliError::DataDirInUse),
-            Err(std::fs::TryLockError::Error(error)) => {
-                return Err(CliError::io("lock the data directory")(error));
-            }
+/// The directory lock of `dir`, the same one the mobile binding takes, so a CLI command and an
+/// app never open one database at once. A missing data directory holds no wallet to protect and
+/// is left to the wallet to report. While the holder copies a plain database into an encrypted
+/// one, the copy is waited for.
+async fn lock_data_dir(dir: &Path) -> Result<Option<lepic_store::DataDirLock>, CliError> {
+    use lepic_store::DataDirLockError;
+    match lepic_store::lock_data_dir(dir, MIGRATION_WAIT).await {
+        Ok(lock) => Ok(Some(lock)),
+        Err(DataDirLockError::Open(error)) if error.kind() == std::io::ErrorKind::NotFound => {
+            Ok(None)
         }
+        Err(DataDirLockError::Busy) => Err(CliError::DataDirInUse),
+        Err(DataDirLockError::Open(error)) => {
+            Err(CliError::io("open the data directory lock")(error))
+        }
+        Err(DataDirLockError::Lock(error)) => Err(CliError::io("lock the data directory")(error)),
     }
 }
 
@@ -1709,6 +1896,21 @@ fn inbox_report(summary: InboxSummary, expired: Option<InvoiceSweep>) -> InboxRe
             cancellable: sweep.cancellable.iter().map(|tx_id| tx_id.0).collect(),
         }),
     }
+}
+
+/// How long an interrupted listen may take to settle the message in hand, as the app's listener
+/// gets when it moves to another relay; then the message is abandoned and stays on the relay.
+const LISTEN_GRACE: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// Ends a listen once the message in hand is settled and acknowledged, so a stop never leaves a
+/// slate handled but unacknowledged, and at once after [`LISTEN_GRACE`].
+fn finish_listen(handle: &ListenHandle) {
+    handle.finish();
+    let handle = handle.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(LISTEN_GRACE).await;
+        handle.stop();
+    });
 }
 
 /// How often a listen expires unpaid invoices. Expiry is counted in hours, so a sweep every
@@ -1950,30 +2152,6 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(mode)).unwrap();
         dir
-    }
-
-    /// A second opener waits for a holder that copies the plain database into an encrypted
-    /// one, and is refused at once by a holder that does not.
-    #[test]
-    fn a_second_opener_waits_only_while_a_copy_is_in_progress() {
-        let dir = with_mode(0o700);
-        let held = lock_data_dir(dir.path()).unwrap().unwrap();
-        assert!(matches!(
-            lock_data_dir(dir.path()),
-            Err(CliError::DataDirInUse)
-        ));
-
-        std::fs::write(dir.path().join("wallet.enc.sqlite3.tmp"), b"").unwrap();
-        assert!(lepic_store::migration_in_progress(dir.path()));
-        let release = std::thread::spawn(move || {
-            std::thread::sleep(std::time::Duration::from_millis(300));
-            drop(held);
-        });
-        let started = std::time::Instant::now();
-        let second = lock_data_dir(dir.path()).unwrap();
-        assert!(second.is_some());
-        assert!(started.elapsed() >= std::time::Duration::from_millis(250));
-        release.join().unwrap();
     }
 
     #[test]

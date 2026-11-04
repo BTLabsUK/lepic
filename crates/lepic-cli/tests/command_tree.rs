@@ -89,6 +89,7 @@ fn the_tree_has_every_planned_command() {
         "contact list",
         "contact remove",
         "contact label",
+        "contact move",
         "contact allow-invoices",
         "contact invoice",
         "contact invoices",
@@ -246,7 +247,7 @@ fn no_short_or_long_flag_has_two_meanings() {
 }
 
 #[test]
-fn global_options_are_exactly_the_planned_seven() {
+fn global_options_are_exactly_the_planned_eight() {
     let root = Cli::command();
     let mut globals: Vec<&str> = root
         .get_arguments()
@@ -263,6 +264,7 @@ fn global_options_are_exactly_the_planned_seven() {
             "log-level",
             "network",
             "output",
+            "service",
             "settings"
         ]
     );

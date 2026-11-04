@@ -9,30 +9,29 @@ use clap::{Args, Parser, Subcommand, ValueEnum};
 use crate::exit::EXIT_CODES_HELP;
 
 const NEW_PASSWORD_HELP: &str = "\
-The new wallet password comes from LEPIC_PASSWORD, else from a hidden prompt, else from one line
-of standard input. LEPIC_PASSWORD stays in the process environment while the command runs, where
-the same user's processes can read it; the prompt and standard input do not leave it there. A new
-wallet password has at least 8 characters.";
+The new wallet password comes from the file LEPIC_PASSWORD_FILE names, else LEPIC_PASSWORD, else
+from a hidden prompt, else from one line of standard input. LEPIC_PASSWORD stays in the process
+environment while the command runs, where the same user's processes can read it; the prompt and
+standard input do not leave it there.";
 
 const RESTORE_HELP: &str = "\
 Reads the recovery phrase, then the new wallet password unless LEPIC_PASSWORD is set, from hidden
 prompts or one line each of standard input. LEPIC_PASSWORD stays in the process environment while
-the command runs, where the same user's processes can read it. A new wallet password has at least 8
-characters.";
+the command runs, where the same user's processes can read it.";
 
 const IMPORT_SEED_HELP: &str = "\
 Reads the password of the wallet.seed file, then the new wallet password unless LEPIC_PASSWORD is
 set, from hidden prompts or one line each of standard input. LEPIC_PASSWORD stays in the process
-environment while the command runs, where the same user's processes can read it. A new wallet
-password has at least 8 characters.";
+environment while the command runs, where the same user's processes can read it.";
 
 const LONG_ABOUT: &str = "\
 A light Epic Cash wallet
 
-Commands that open the wallet read its password from LEPIC_PASSWORD, else from a hidden prompt,
-else from one line of standard input. Secrets are never taken from arguments. LEPIC_PASSWORD stays
-in the process environment while the command runs, where the same user's processes can read it;
-the prompt and standard input do not leave it there.";
+Commands that open the wallet read its password from the file LEPIC_PASSWORD_FILE names (owner-only),
+else from LEPIC_PASSWORD, else from a hidden prompt, else from one line of standard input. Secrets
+are never taken from arguments. LEPIC_PASSWORD stays in the process environment while the command
+runs, where the same user's processes can read it; the file, the prompt and standard input do not
+leave it there.";
 
 #[derive(Debug, Parser)]
 #[command(
@@ -78,6 +77,16 @@ pub struct GlobalArgs {
     /// Command output on stdout [env: LEPIC_OUTPUT] [default: human]
     #[arg(long, global = true, value_name = "FORMAT")]
     pub output: Option<OutputArg>,
+    /// Run the command on the `lepic serve` process listening at SOCKET [default: lepic.sock in
+    /// the data directory]
+    #[arg(
+        long,
+        global = true,
+        value_name = "SOCKET",
+        num_args = 0..=1,
+        require_equals = true
+    )]
+    pub service: Option<Option<PathBuf>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -124,6 +133,36 @@ pub enum Command {
     Node(NodeCommand),
     /// Pair with contacts, and exchange invoices and slates with them through their mailboxes
     Contact(ContactArgs),
+    /// Hold the wallet open and answer commands sent with --service
+    #[command(after_help = SERVE_HELP)]
+    Serve(ServeArgs),
+}
+
+const SERVE_HELP: &str = "\
+Opens the wallet once, as other commands do, and holds the data directory until it stops. It
+listens on Epicbox, expires unpaid invoices, collects contact mailboxes and refreshes the wallet
+while it runs, and answers other lepic commands on a local socket: run them with `lepic
+--service=SOCKET <command>`, or `lepic --service <command>` for the default socket. Only the
+user that runs it can use the socket. Ctrl-C or SIGTERM stops it.";
+
+#[derive(Debug, Args)]
+#[command(args_conflicts_with_subcommands = true)]
+pub struct ServeArgs {
+    #[command(subcommand)]
+    pub command: Option<ServeCommand>,
+    /// Unix socket to listen on [default: lepic.sock in the data directory]
+    #[arg(long, value_name = "SOCKET")]
+    pub socket: Option<PathBuf>,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum ServeCommand {
+    /// Show how the running serve's refreshes and contact collects went
+    #[command(after_help = "\
+Answers only through a running serve: `lepic --service serve status`. For the wallet refresh and
+the contact collect it shows the failures since the last success, the last error and when the
+task last succeeded. serve only reports them; it keeps retrying every minute.")]
+    Status,
 }
 
 #[derive(Debug, Subcommand)]
@@ -259,7 +298,7 @@ its change is back in the balance. Later, a refresh finds it by its change.")]
     /// List the transactions of an account
     List(ListArgs),
     /// Show one transaction
-    Show(TxIdArgs),
+    Show(TxShowArgs),
 }
 
 const SEND_HTTP_HELP: &str = "\
@@ -271,7 +310,17 @@ missing port is 3415 for http and 443 for https. Plain http goes only to this co
 To an onion address, `<56 characters>.onion` with or without http://, the wallet's own tor is
 started from --tor-binary for the send and stopped after it, and the other wallet, `lepic tor
 listen` or any wallet receiving over Tor, answers at once. Reaching an onion that is not online
-takes up to about two and a half minutes before the send fails.";
+takes up to about two and a half minutes before the send fails.
+
+With --slate-id, a send made again under the same id, after a crash or a lost reply, sends
+nothing: it reports the first send with repeated: true and whether it was delivered (exit 0),
+or fails with code 7 when the account, amount, destination or transport differ. An undelivered
+first send is delivered with `lepic tx resend`. `lepic tx show --slate-id` finds the send.
+
+To a contact, --to-contact <ID> from `lepic contact list`, the slate is sealed to the contact and
+queued in its mailbox, then posted at once when the relay answers; `lepic contact collect` posts
+what is still queued and takes the answer. A send the contact cannot take locks nothing, and one
+that cannot be queued is cancelled.";
 
 #[derive(Debug, Args)]
 pub struct SendArgs {
@@ -279,7 +328,10 @@ pub struct SendArgs {
     #[arg(value_name = "AMOUNT")]
     pub amount: String,
     #[command(flatten)]
-    pub destination: DestinationArgs,
+    pub destination: SendDestinationArgs,
+    /// What the slate is for
+    #[arg(long, value_enum, conflicts_with_all = ["to", "to_file"])]
+    pub purpose: Option<PurposeArg>,
     #[command(flatten)]
     pub plain_http: PlainHttpArg,
     #[command(flatten)]
@@ -292,6 +344,16 @@ pub struct SendArgs {
     pub message: MessageArg,
     #[command(flatten)]
     pub spend: SpendArgs,
+    #[command(flatten)]
+    pub slate_id: SendSlateIdArg,
+}
+
+/// The slate id a caller gives a send so that sending again cannot pay twice.
+#[derive(Debug, Args)]
+pub struct SendSlateIdArg {
+    /// Slate id of the send: a random version-4 UUID the caller stores before sending
+    #[arg(long, value_name = "SLATE_ID")]
+    pub slate_id: Option<String>,
 }
 
 /// How a payment chooses and spends its inputs.
@@ -334,6 +396,22 @@ pub struct PlainHttpArg {
     /// Allow an http:// address on another computer, so the slate travels unencrypted
     #[arg(long)]
     pub allow_plain_http: bool,
+}
+
+/// Where a send goes: the destinations of [`DestinationArgs`], or a paired contact.
+#[derive(Debug, Args)]
+#[group(required = true, multiple = false)]
+pub struct SendDestinationArgs {
+    /// Epicbox address the slate goes to, or for a send the http(s):// or onion address of a
+    /// listening wallet
+    #[arg(long, value_name = "ADDRESS")]
+    pub to: Option<String>,
+    /// Write the slate to this file, as V3 slate JSON
+    #[arg(long, value_name = "FILE")]
+    pub to_file: Option<PathBuf>,
+    /// Pay a paired contact through its mailbox
+    #[arg(long, value_name = "CONTACT_ID")]
+    pub to_contact: Option<String>,
 }
 
 #[derive(Debug, Args)]
@@ -411,6 +489,15 @@ pub struct FluffArg {
     /// is posted
     #[arg(long)]
     pub fluff: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct TxShowArgs {
+    /// Local transaction id, as `tx list` shows it
+    #[arg(value_name = "TX_ID", required_unless_present = "slate_id")]
+    pub tx_id: Option<u32>,
+    #[command(flatten)]
+    pub slate_id: SendSlateIdArg,
 }
 
 #[derive(Debug, Args)]
@@ -651,6 +738,13 @@ with `lepic contact accept`.")]
     Remove(ContactIdArg),
     /// Give a contact your own name for it
     Label(ContactLabelArgs),
+    /// Move to the relay a contact asked for; `contact list` shows the request
+    Move(ContactMoveArgs),
+    /// Move your own home relay for every paired contact; each is told once and the old
+    /// mailboxes are not read again
+    MoveHome(ContactMoveHomeArgs),
+    /// Ask a paired contact to answer with its current card; `contact collect` takes the answer
+    Check(ContactIdArg),
     /// Allow or stop invoices from a verified contact
     AllowInvoices(ContactSwitchArgs),
     /// Invoice a paired contact through its mailbox
@@ -874,6 +968,22 @@ pub struct ContactLabelArgs {
     /// Your name for the contact
     #[arg(value_name = "LABEL")]
     pub label: String,
+}
+
+#[derive(Debug, Args)]
+pub struct ContactMoveArgs {
+    #[command(flatten)]
+    pub contact: ContactIdArg,
+    /// The relay host the contact asked for, as `contact list` shows it
+    #[arg(long = "apply", value_name = "HOST")]
+    pub apply: String,
+}
+
+#[derive(Debug, Args)]
+pub struct ContactMoveHomeArgs {
+    /// The relay to move to, `domain[:port]`; set it as the wallet's Epicbox relay too
+    #[arg(value_name = "HOST")]
+    pub host: String,
 }
 
 #[derive(Debug, Args)]

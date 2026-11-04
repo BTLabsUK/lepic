@@ -32,6 +32,7 @@ use tracing::{debug, info, instrument, warn};
 use uuid::Uuid;
 
 use crate::cancel::pool_holds;
+use crate::codecs;
 use crate::error::WalletError;
 use crate::event::{BouncedInvoice, Event, ExpiredInvoice};
 use crate::inbox::{Hold, InboxError, relay_network};
@@ -39,7 +40,7 @@ use crate::invoice::{InvoiceError, PaidInvoice, PayRequest, payer_release_height
 use crate::peer_compat::PeerKind;
 use crate::ports::{SecretVault, StoreOpener};
 use crate::receive::verify_message;
-use crate::refresh::{final_kernel, last_confirmed, legacy_codecs, ttl_cutoff};
+use crate::refresh::{final_kernel, last_confirmed, ttl_cutoff};
 use crate::wallet::Wallet;
 
 /// What a peer's own messages showed about invoices, from [`Wallet::peer_capability`]: the
@@ -59,9 +60,6 @@ pub enum PeerInvoiceSupport {
 /// How long an unpaid invoice is kept by default, on either side.
 pub const DEFAULT_INVOICE_EXPIRY: Duration = Duration::from_secs(24 * 60 * 60);
 
-/// The longest an unpaid invoice may be kept.
-pub const MAX_INVOICE_EXPIRY: Duration = Duration::from_secs(48 * 60 * 60);
-
 /// The TTL a payment of a parked invoice carries when the payer sets none: about a day of
 /// blocks, the default expiry window.
 pub const DEFAULT_PAYMENT_TTL_BLOCKS: u64 = 1440;
@@ -72,10 +70,10 @@ pub const DEFAULT_PAYMENT_TTL_BLOCKS: u64 = 1440;
 pub struct InvoiceExpiry(Duration);
 
 impl InvoiceExpiry {
-    /// Fails with [`InboxError::InvoiceExpiry`] for zero or anything over
-    /// [`MAX_INVOICE_EXPIRY`].
+    /// Fails with [`InboxError::InvoiceExpiry`] for zero. The longest a host lets an invoice be
+    /// kept is its own to check.
     pub fn new(window: Duration) -> Result<Self, InboxError> {
-        if window.is_zero() || window > MAX_INVOICE_EXPIRY {
+        if window.is_zero() {
             return Err(InboxError::InvoiceExpiry);
         }
         Ok(Self(window))
@@ -485,7 +483,7 @@ where
 
 /// The legacy codecs at the network's base fee, which read every slate this wallet stores.
 pub(crate) fn stored_codecs(network: Network) -> CodecRegistry {
-    legacy_codecs(network.params().default_base_fee())
+    codecs::legacy(network.params().default_base_fee())
 }
 
 fn epicbox_decode(
@@ -629,10 +627,9 @@ mod tests {
     }
 
     #[test]
-    fn expiry_is_positive_and_at_most_two_days() {
+    fn expiry_is_positive() {
         assert!(InvoiceExpiry::new(Duration::ZERO).is_err());
-        assert!(InvoiceExpiry::new(MAX_INVOICE_EXPIRY).is_ok());
-        assert!(InvoiceExpiry::new(MAX_INVOICE_EXPIRY + Duration::from_secs(1)).is_err());
+        assert!(InvoiceExpiry::new(Duration::from_secs(48 * 60 * 60 + 1)).is_ok());
         assert_eq!(InvoiceExpiry::default().window(), DEFAULT_INVOICE_EXPIRY);
     }
 }

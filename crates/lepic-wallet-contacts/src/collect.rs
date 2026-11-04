@@ -2,6 +2,7 @@
 //! Collecting: one-off drains of the pairing mailboxes and the contact mailboxes, grouped by
 //! relay, with per-relay backoff (RFC 0002 8.2 to 8.5).
 
+use crate::hex;
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
 
@@ -30,10 +31,13 @@ use super::{
     UPDATES_PER_HOUR,
 };
 use crate::ContactBook;
+use lepic_primitives::error_chain::ErrorChain;
+use lepic_wallet::WalletPolicy;
 use lepic_wallet::event::{
-    ContactChange, ContactEvent, ContactUpdate, Event, FailedPairing, UnreachableRelay,
+    ContactChange, ContactEvent, ContactUpdate, Event, FailedPairing, RelayMoveRequest,
+    UnreachableRelay,
 };
-use lepic_wallet::inbox::{ErrorChain, relay_network};
+use lepic_wallet::inbox::relay_network;
 use lepic_wallet::ports::{SecretVault, StoreOpener};
 
 /// What started a collecting cycle (RFC 0002 8.4).
@@ -84,7 +88,8 @@ const BACKOFF: [Duration; 4] = [
 /// Contacts that had something in the last day count as active for the foreground tick.
 const ACTIVE: Duration = Duration::from_secs(24 * 60 * 60);
 
-/// After a service moved its home relay, its old one is drained this long (RFC 0002 8.5).
+/// After a contact moved to another relay, our mailbox on the old one is drained this long (RFC
+/// 0002 8.5).
 const PREVIOUS_HOME_KEPT: Duration = Duration::from_secs(7 * 24 * 60 * 60);
 
 /// A card shown in person and never scanned back is forgotten after this.
@@ -107,11 +112,18 @@ const FEW_RELAYS: usize = 3;
 const IN_PERSON_PREFIX: &str = "contact.inperson.";
 const OLD_SALT_PREFIX: &str = "contact.oldsalt.";
 const STAMPED_PREFIX: &str = "contact.stamped.";
+const HELD_PREFIX: &str = "contact.held.";
+
+/// A hold count is forgotten this long after the message was first held, whether or not it came
+/// back: one that never comes back would otherwise keep its row forever. How often and how long
+/// a failing message is held are the host's ([`WalletPolicy::contact_hold_attempts`] and
+/// [`WalletPolicy::contact_hold_patience`]), within this bound.
+const HELD_FORGOTTEN: Duration = WalletPolicy::MAX_CONTACT_HOLD_PATIENCE;
 
 /// The setting that marks a contact whose envelopes carry their send time: from then on one
 /// without it is refused.
 pub(crate) fn stamped_key(contact_id: ContactId) -> String {
-    format!("{STAMPED_PREFIX}{}", hex(&contact_id.0))
+    format!("{STAMPED_PREFIX}{}", hex::encode(&contact_id.0))
 }
 
 /// The send time to seal into an envelope sealed at `now`.
@@ -121,11 +133,11 @@ pub(crate) fn send_time(now: Timestamp) -> Option<u64> {
 
 /// The setting that marks a contact paired in person whose mailbox has not moved yet.
 pub(crate) fn in_person_key(contact_id: ContactId) -> String {
-    format!("{IN_PERSON_PREFIX}{}", hex(&contact_id.0))
+    format!("{IN_PERSON_PREFIX}{}", hex::encode(&contact_id.0))
 }
 
 fn old_salt_key(contact_id: ContactId) -> String {
-    format!("{OLD_SALT_PREFIX}{}", hex(&contact_id.0))
+    format!("{OLD_SALT_PREFIX}{}", hex::encode(&contact_id.0))
 }
 
 /// The box salt of a mailbox moved away from after an in-person pairing. It is read until the
@@ -222,10 +234,6 @@ fn envelope_hash(envelope: &[u8]) -> [u8; 32] {
     Blake2b256::digest(envelope).into()
 }
 
-fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
-}
-
 /// A relay's `domain:port`, the port explicit.
 fn relay_host(address: &EpicboxAddress) -> String {
     format!(
@@ -235,22 +243,29 @@ fn relay_host(address: &EpicboxAddress) -> String {
     )
 }
 
-/// Whether a service may move its home relay to the relay of `address`: a meeting relay, or a
-/// named host (never an IP address) on the default port.
-fn acceptable_home(address: &EpicboxAddress, relays: &ContactRelays) -> bool {
-    let port = address.port().unwrap_or(lepic_epicbox::DEFAULT_PORT);
-    let meeting = relays
-        .meeting
-        .iter()
-        .any(|known| known.domain() == address.domain() && known.port() == port);
-    let domain = address.domain().as_str();
-    let ip_literal = domain.parse::<std::net::IpAddr>().is_ok()
-        || domain
-            .trim_start_matches('[')
-            .trim_end_matches(']')
-            .parse::<std::net::Ipv6Addr>()
-            .is_ok();
-    meeting || (!ip_literal && port == lepic_epicbox::DEFAULT_PORT)
+/// The relay host the contact's stored card names when the contact asked to move there: another
+/// host than the one of the mailbox we deliver to, and than our home relay. `None` when the card
+/// names no other host or its mailbox does not parse.
+fn requested_host(
+    card: &ContactCard,
+    mailbox: &lepic_store::ContactMailbox,
+    network: lepic_primitives::params::Network,
+) -> Option<String> {
+    let parse = |text: &str| EpicboxAddress::parse(text, relay_network(network)).ok();
+    let named = relay_host(&parse(card.fields().mailbox.as_str())?);
+    let current = parse(&mailbox.peer_mailbox).map(|address| relay_host(&address));
+    (current.as_deref() != Some(named.as_str()) && named != mailbox.home_relay).then_some(named)
+}
+
+/// The relay host a contact asked to move to and has not been moved to, from its stored card
+/// and its mailbox; see [`requested_host`].
+pub(crate) fn requested_relay(
+    record: &ContactRecord,
+    mailbox: &lepic_store::ContactMailbox,
+    network: lepic_primitives::params::Network,
+) -> Option<String> {
+    let card = ContactCard::decode(&record.peer.as_ref()?.bytes, contact_network(network)).ok()?;
+    requested_host(&card, mailbox, network)
 }
 
 /// Ends the pairing in progress `pending`, past its deadline, and says what ended: `None` when
@@ -297,21 +312,6 @@ fn end_late_pairing(
     repos.delete_contact(contact_id)?;
     super::private::delete_secrets(repos, contact_id)?;
     Ok(Some(Some(FailedPairing { contact_id, reason })))
-}
-
-pub(crate) fn unhex16_pub(text: &str) -> Option<[u8; 16]> {
-    unhex16(text)
-}
-
-fn unhex16(text: &str) -> Option<[u8; 16]> {
-    if text.len() != 32 {
-        return None;
-    }
-    let mut out = [0u8; 16];
-    for (slot, pair) in out.iter_mut().zip(text.as_bytes().chunks(2)) {
-        *slot = u8::from_str_radix(std::str::from_utf8(pair).ok()?, 16).ok()?;
-    }
-    Some(out)
 }
 
 impl<N, S, V> ContactBook<'_, N, S, V>
@@ -704,15 +704,65 @@ where
         .await
     }
 
-    /// Forgets envelopes seen longer ago than a relay keeps a message, and a little longer.
+    /// Counts one more hold of the envelope with `hash` and returns whether it may still be
+    /// held: no more than [`WalletPolicy::contact_hold_attempts`] holds so far, and within
+    /// [`WalletPolicy::contact_hold_patience`] of the first. The count is kept as
+    /// `first-seen seconds:holds` under the envelope's hash.
+    async fn count_hold(&self, hash: [u8; 32]) -> Result<bool, ContactError> {
+        let session = self.wallet.session()?;
+        let policy = self.wallet.config().policy;
+        self.contact_work(move |ports, _| {
+            let now = u64::try_from(ports.clock.now().as_second()).unwrap_or(0);
+            let key = format!("{HELD_PREFIX}{}", hex::encode(&hash));
+            session.store.write(|repos| {
+                let (first, holds) = repos
+                    .setting(&key)?
+                    .and_then(|text| {
+                        let (first, holds) = text.split_once(':')?;
+                        Some((first.parse::<u64>().ok()?, holds.parse::<u32>().ok()?))
+                    })
+                    .unwrap_or((now, 0));
+                let holds = holds.saturating_add(1);
+                let expired = hold_expired(first, holds, now, &policy);
+                if expired {
+                    repos.delete_setting(&key)?;
+                } else {
+                    repos.put_setting(&key, &format!("{first}:{holds}"))?;
+                }
+                Ok::<_, ContactError>(!expired)
+            })
+        })
+        .await
+    }
+
+    /// Forgets the hold count of a settled envelope.
+    async fn clear_hold(&self, hash: [u8; 32]) -> Result<(), ContactError> {
+        let session = self.wallet.session()?;
+        self.contact_work(move |_, _| {
+            let key = format!("{HELD_PREFIX}{}", hex::encode(&hash));
+            Ok(session.store.write(|repos| repos.delete_setting(&key))?)
+        })
+        .await
+    }
+
+    /// Forgets envelopes seen longer ago than a relay keeps a message, and a little longer, and
+    /// the hold counts of messages first held longer ago than [`HELD_FORGOTTEN`].
     async fn forget_old_envelopes(&self) -> Result<(), ContactError> {
         let session = self.wallet.session()?;
+        let patience = self.wallet.config().policy.contact_hold_patience;
         self.contact_work(move |ports, _| {
             let now = ports.clock.now();
             let cutoff = now.checked_sub(SEEN_LIFETIME).unwrap_or(now);
-            session
-                .store
-                .write(|repos| repos.forget_envelopes_before(cutoff))?;
+            let seconds = u64::try_from(now.as_second()).unwrap_or(0);
+            session.store.write(|repos| {
+                repos.forget_envelopes_before(cutoff)?;
+                for (key, value) in repos.settings_with_prefix(HELD_PREFIX)? {
+                    if hold_forgotten(&value, seconds, patience) {
+                        repos.delete_setting(&key)?;
+                    }
+                }
+                Ok::<_, StoreError>(())
+            })?;
             Ok(())
         })
         .await
@@ -733,17 +783,17 @@ where
             let Some(sent_at) = sent_at else {
                 let stamped = session.store.read(|repos| repos.setting(&key))?.is_some();
                 if stamped {
-                    debug!("envelope without a send time dropped");
+                    warn!("envelope without a send time dropped");
                 }
                 return Ok(!stamped);
             };
             let now = u64::try_from(ports.clock.now().as_second()).unwrap_or(0);
             if sent_at > now.saturating_add(MAX_CLOCK_AHEAD.as_secs()) {
-                debug!("envelope sealed ahead of our clock dropped");
+                warn!("envelope sealed ahead of our clock dropped");
                 return Ok(false);
             }
             if now.saturating_sub(sent_at) > MAX_ENVELOPE_AGE.as_secs() {
-                debug!("envelope sealed too long ago dropped");
+                warn!("envelope sealed too long ago dropped");
                 return Ok(false);
             }
             session.store.write(|repos| {
@@ -820,13 +870,10 @@ where
             warn!("message of a kind its pairing does not carry dropped");
             return Ok(Handled::Stored);
         }
-        // Updates and key checks carry their own order: a card's seq, a check's open state.
-        if matches!(
-            opened.content.kind,
-            MessageType::Slate | MessageType::Notice | MessageType::AppPayload
-        ) && !self
-            .sent_recently(contact_id, opened.content.sent_at)
-            .await?
+        if timed(opened.content.kind)
+            && !self
+                .sent_recently(contact_id, opened.content.sent_at)
+                .await?
         {
             return Ok(Handled::Stored);
         }
@@ -865,7 +912,7 @@ where
         if current {
             self.forget_old_salt(contact_id).await?;
         }
-        self.dispatch_contact_message(contact_id, opened, envelope)
+        self.dispatch_contact_message(relays, contact_id, opened, envelope)
             .await
     }
 
@@ -873,6 +920,7 @@ where
     /// the contact's record as stored now.
     async fn dispatch_contact_message(
         &self,
+        relays: &ContactRelays,
         contact_id: ContactId,
         opened: Opened,
         envelope: &[u8],
@@ -897,6 +945,7 @@ where
             MessageType::KeyCheck => self.take_key_check(&record, envelope).await?,
             MessageType::KeyCheckAnswer => self.take_key_check_answer(&record, envelope).await?,
             MessageType::AppPayload => self.take_contact_payload(&record, opened.content).await?,
+            MessageType::ContactCheck => self.take_contact_check(relays, &record).await?,
             MessageType::PairingReply | MessageType::PairingConfirm => Handled::Stored,
         })
     }
@@ -947,10 +996,11 @@ where
 
     /// Replaces the contact's card with `card` when it carries the same keys and kind and a
     /// higher sequence number. Only a contact update (`update` holds the relays) may change the
-    /// card's mailbox, within the limits of RFC 0002 8.5: a person's mailbox stays on its relay,
-    /// and a service moves its home relay only to a meeting relay or a named host on the
-    /// default port. After a move, our new card goes to the contact at once in a contact update.
-    /// A card in any other envelope that names another mailbox is ignored.
+    /// card's mailbox, within the update limits of RFC 0002 8.5, and only on the same relay: a
+    /// card naming a mailbox on another relay is stored, the mailbox in use stays, and
+    /// [`Event::ContactRelayMoveRequested`] tells the host, which may apply the move with
+    /// [`ContactBook::apply_relay_move`]. What the contact is plays no part. A card in any
+    /// other envelope that names another mailbox is ignored.
     pub(crate) async fn refresh_card(
         &self,
         contact_id: ContactId,
@@ -996,18 +1046,17 @@ where
                         )
                     };
                     let before = address(repos)?;
-                    let updated =
-                        store_card_news(repos, &ports.rng, &session.keychain, network, news, now)?;
-                    let moved = updated && address(repos)? != before;
+                    let stored = store_card_news(repos, &session.keychain, network, news, now)?;
+                    let moved = stored != CardStored::Unchanged && address(repos)? != before;
                     if moved && let Some(record) = repos.contact(contact_id)? {
                         super::status::learn_from_pairing(repos, &record, network, now)?;
                     }
-                    Ok::<_, ContactError>((updated, moved))
+                    Ok::<_, ContactError>((stored, moved))
                 })
             })
             .await?;
-        let (updated, moved) = updated;
-        if updated {
+        let (stored, moved) = updated;
+        if stored != CardStored::Unchanged {
             info!("contact updated");
             self.wallet.emit(Event::ContactUpdated(ContactUpdate::of(
                 contact_id,
@@ -1020,6 +1069,54 @@ where
                 ContactChange::Address,
             )));
         }
+        if let CardStored::MoveRequested(host) = stored {
+            self.wallet
+                .emit(Event::ContactRelayMoveRequested(RelayMoveRequest {
+                    contact_id,
+                    host,
+                }));
+        }
+        Ok(())
+    }
+
+    /// Moves a contact to the relay its card asked for in a contact update, which raised
+    /// [`Event::ContactRelayMoveRequested`]: the contact's mailbox there takes our messages,
+    /// the outbox is redirected, our own card is re-signed for our mailbox on that relay and
+    /// queued for the contact in a contact update, and our previous mailbox is still collected
+    /// for seven days. Which relays to follow is the host's choice; nothing here judges `host`.
+    ///
+    /// Fails with [`ContactError::RelayMoveNotRequested`] unless `host` (`domain:port`) is the
+    /// relay of the mailbox the contact's stored card names and differs from the relay in use,
+    /// that is unless it is the contact's [`ContactView::requested_relay`];
+    /// [`ContactError::UnknownContact`]; [`ContactError::Ended`] for a pairing that ended; and as
+    /// the store does.
+    ///
+    /// [`ContactView::requested_relay`]: crate::ContactView::requested_relay
+    #[instrument(skip_all, fields(wallet = %self.wallet.config().name))]
+    pub async fn apply_relay_move(
+        &self,
+        contact_id: ContactId,
+        host: &str,
+    ) -> Result<(), ContactError> {
+        let session = self.wallet.session()?;
+        let network = self.wallet.config().network;
+        let host = host.to_owned();
+        self.contact_work(move |ports, _| {
+            let now = ports.clock.now();
+            session.store.write(|repos| {
+                store_relay_move(
+                    repos,
+                    &ports.rng,
+                    &session.keychain,
+                    network,
+                    contact_id,
+                    &host,
+                    now,
+                )
+            })
+        })
+        .await?;
+        info!("contact home relay moved");
         Ok(())
     }
 
@@ -1076,7 +1173,7 @@ where
                         )
                         .map_err(ContactError::Encode)?;
                         let old = OldSalt {
-                            salt: hex(&record.box_salt),
+                            salt: hex::encode(&record.box_salt),
                         };
                         write_json(repos, &old_salt_key(record.contact_id), &old)?;
                         let mut record = record;
@@ -1273,7 +1370,7 @@ fn contact_mailboxes(
         let old_salt = repos
             .setting(&old_salt_key(record.contact_id))?
             .and_then(|text| serde_json::from_str::<OldSalt>(&text).ok())
-            .and_then(|old| unhex16(&old.salt));
+            .and_then(|old| hex::decode_array(&old.salt).ok());
         if let Some(salt) = old_salt {
             contacts.push((
                 record.clone(),
@@ -1334,6 +1431,18 @@ fn box_keys(
     }))
 }
 
+/// Whether a message of `kind` is taken only when sealed recently. Updates and key checks
+/// carry their own order: a card's seq, a check's open state.
+fn timed(kind: MessageType) -> bool {
+    matches!(
+        kind,
+        MessageType::Slate
+            | MessageType::Notice
+            | MessageType::AppPayload
+            | MessageType::ContactCheck
+    )
+}
+
 /// Whether a pairing carries a message of `kind`: a private pairing carries the host app's
 /// payloads and the unpaired notice only; a contact never carries payloads.
 fn carries(private: bool, kind: MessageType) -> bool {
@@ -1352,16 +1461,26 @@ struct CardNews {
     extras: lepic_contact::PairingExtras,
 }
 
-/// Stores the card of `news` as [`ContactBook::refresh_card`] describes, and returns whether the
-/// record changed.
+/// What storing a card did to the contact's record.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum CardStored {
+    /// Nothing changed.
+    Unchanged,
+    /// The newer card was stored, and the mailbox moved with it when it stayed on its relay.
+    Updated,
+    /// The newer card was stored; it names a mailbox on another relay, `domain:port`, and the
+    /// mailbox stays until the host applies the move.
+    MoveRequested(String),
+}
+
+/// Stores the card of `news` as [`ContactBook::refresh_card`] describes.
 fn store_card_news(
     repos: &mut dyn Repositories,
-    rng: &lepic_wallet::SharedRng,
     keychain: &lepic_keychain::Keychain,
     network: lepic_primitives::params::Network,
     news: CardNews,
     now: Timestamp,
-) -> Result<bool, ContactError> {
+) -> Result<CardStored, ContactError> {
     let CardNews {
         contact_id,
         card,
@@ -1369,16 +1488,16 @@ fn store_card_news(
         extras,
     } = news;
     let Some(mut record) = repos.contact(contact_id)? else {
-        return Ok(false);
+        return Ok(CardStored::Unchanged);
     };
     let Some(peer) = &record.peer else {
-        return Ok(false);
+        return Ok(CardStored::Unchanged);
     };
     if !newer_card(peer, &card) {
-        return Ok(false);
+        return Ok(CardStored::Unchanged);
     }
-    let service = peer.kind != lepic_store::ContactKind::Person;
-    if relays.is_some() && !super::private::is_private(&record) {
+    let update = relays.is_some();
+    if update && !super::private::is_private(&record) {
         let proven = super::address_proof::proven_in_update(
             keychain,
             network,
@@ -1392,66 +1511,95 @@ fn store_card_news(
         }
     }
     let Some(mut mailbox) = repos.contact_mailbox(contact_id)? else {
-        return Ok(false);
+        return Ok(CardStored::Unchanged);
     };
     let peer_mailbox = card.fields().mailbox.as_str().to_owned();
     let moved = peer_mailbox != mailbox.peer_mailbox;
-    let Some(relays) = relays.as_ref() else {
+    if !update {
         if moved {
-            debug!("card naming another mailbox outside an update ignored");
-            return Ok(false);
+            warn!("card naming another mailbox outside an update ignored");
+            return Ok(CardStored::Unchanged);
         }
         record.peer = Some(peer_card(&card));
         repos.put_contact(&record)?;
-        return Ok(true);
-    };
+        return Ok(CardStored::Updated);
+    }
     if !within_update_limits(repos, contact_id, now.as_second())? {
-        debug!("contact update over the limits dropped");
-        return Ok(false);
+        warn!("contact update over the limits dropped");
+        return Ok(CardStored::Unchanged);
     }
-    let relay = EpicboxAddress::parse(&peer_mailbox, relay_network(network))
+    EpicboxAddress::parse(&peer_mailbox, relay_network(network))
         .map_err(|_| ContactError::RelayAddress)?;
-    let new_host = relay_host(&relay);
-    if !may_move(&mailbox.peer_mailbox, &relay, service, relays, network) {
-        debug!("contact update to a relay it may not move to dropped");
-        return Ok(false);
-    }
     record.peer = Some(peer_card(&card));
+    repos.put_contact(&record)?;
+    // A move to another relay waits for the host: which relays to follow is its choice.
+    if let Some(host) = requested_host(&card, &mailbox, network) {
+        info!("contact asked to move to another relay");
+        return Ok(CardStored::MoveRequested(host));
+    }
     if moved {
         repos.redirect_contact_outbox(contact_id, &peer_mailbox)?;
+        mailbox.peer_mailbox = peer_mailbox;
+        repos.put_contact_mailbox(&mailbox)?;
     }
-    let mut announce = None;
-    // A service moves its home relay with an update; people re-pair instead.
-    if service && new_host != mailbox.home_relay {
-        let (own_card, ours, signer) = moved_own_card(keychain, network, &record, &relay)?;
-        announce = Some(
-            lepic_contact::seal_contact_update(
-                &card,
-                &own_card,
-                &signer,
-                &mut super::LockedRng(&mut **rng.lock()),
-            )
-            .map_err(ContactError::Encode)?,
-        );
-        record.own_card = own_card.as_bytes().to_vec();
-        mailbox.previous = Some(lepic_store::PreviousHome {
-            relay: mailbox.home_relay.clone(),
-            peer_mailbox: mailbox.peer_mailbox.clone(),
-            our_mailbox: mailbox.our_mailbox.clone(),
-            until: now.checked_add(PREVIOUS_HOME_KEPT).unwrap_or(now),
-        });
-        mailbox.home_relay = new_host;
-        mailbox.our_mailbox = ours.to_string();
-        info!("contact home relay moved");
+    Ok(CardStored::Updated)
+}
+
+/// Moves the contact's mailbox to the one its stored card names, on the relay `host` the card
+/// asked for, in one write: the outbox is redirected, our own card is re-signed for our mailbox
+/// there and queued for the contact in a contact update, and the previous home is still
+/// drained for [`PREVIOUS_HOME_KEPT`].
+fn store_relay_move(
+    repos: &mut dyn Repositories,
+    rng: &lepic_wallet::SharedRng,
+    keychain: &lepic_keychain::Keychain,
+    network: lepic_primitives::params::Network,
+    contact_id: ContactId,
+    host: &str,
+    now: Timestamp,
+) -> Result<(), ContactError> {
+    let mut record = repos
+        .contact(contact_id)?
+        .ok_or(ContactError::UnknownContact)?;
+    let peer = record.peer.as_ref().ok_or(ContactError::UnknownContact)?;
+    let mut mailbox = repos
+        .contact_mailbox(contact_id)?
+        .ok_or(ContactError::UnknownContact)?;
+    if super::status::status_of(&record) == super::PairingStatus::Ended {
+        return Err(ContactError::Ended);
     }
+    let card = ContactCard::decode(&peer.bytes, contact_network(network))
+        .map_err(ContactError::StoredData)?;
+    if requested_host(&card, &mailbox, network).as_deref() != Some(host) {
+        return Err(ContactError::RelayMoveNotRequested);
+    }
+    let peer_mailbox = card.fields().mailbox.as_str().to_owned();
+    let relay = EpicboxAddress::parse(&peer_mailbox, relay_network(network))
+        .map_err(|_| ContactError::RelayAddress)?;
+    let (own_card, ours, signer) = moved_own_card(keychain, network, &record, &relay)?;
+    let envelope = lepic_contact::seal_contact_update(
+        &card,
+        &own_card,
+        &signer,
+        &mut super::LockedRng(&mut **rng.lock()),
+    )
+    .map_err(ContactError::Encode)?;
+    record.own_card = own_card.as_bytes().to_vec();
+    mailbox.previous = Some(lepic_store::PreviousHome {
+        relay: mailbox.home_relay.clone(),
+        peer_mailbox: mailbox.peer_mailbox.clone(),
+        our_mailbox: mailbox.our_mailbox.clone(),
+        until: now.checked_add(PREVIOUS_HOME_KEPT).unwrap_or(now),
+    });
+    mailbox.home_relay = relay_host(&relay);
+    mailbox.our_mailbox = ours.to_string();
     mailbox.peer_mailbox = peer_mailbox.clone();
+    repos.redirect_contact_outbox(contact_id, &peer_mailbox)?;
     repos.put_contact(&record)?;
     repos.put_contact_mailbox(&mailbox)?;
     // Our new mailbox reaches the contact at once, in the same write.
-    if let Some(envelope) = announce {
-        repos.enqueue_contact_outbox(&update_entry(contact_id, &envelope, peer_mailbox, now))?;
-    }
-    Ok(true)
+    repos.enqueue_contact_outbox(&update_entry(contact_id, &envelope, peer_mailbox, now))?;
+    Ok(())
 }
 
 /// Whether `card` may replace the contact's `peer` card: the same keys and kind and a higher
@@ -1463,24 +1611,7 @@ fn newer_card(peer: &lepic_store::PeerCard, card: &ContactCard) -> bool {
         && fields.seq > peer.seq
 }
 
-/// Whether a contact update may move the contact's mailbox from `old_mailbox` to one on
-/// `relay`: a person's mailbox stays on its relay, and a service moves only to a relay
-/// [`acceptable_home`] allows.
-fn may_move(
-    old_mailbox: &str,
-    relay: &EpicboxAddress,
-    service: bool,
-    relays: &ContactRelays,
-    network: lepic_primitives::params::Network,
-) -> bool {
-    let old_relay = EpicboxAddress::parse(old_mailbox, relay_network(network))
-        .ok()
-        .map(|old| relay_host(&old));
-    let other_relay = old_relay.as_deref() != Some(relay_host(relay).as_str());
-    !(other_relay && (!service || !acceptable_home(relay, relays)))
-}
-
-/// Our card re-signed for a service's move to the relay of `relay`: our mailbox there and the
+/// Our card re-signed for a move to the relay of `relay`: our mailbox there and the
 /// next sequence number. Returns the card, its mailbox and the key it is signed with.
 fn moved_own_card(
     keychain: &lepic_keychain::Keychain,
@@ -1552,7 +1683,7 @@ fn within_update_limits(
         times.retain(|at| *at > day_ago);
     }
     updates.per_contact.retain(|_, times| !times.is_empty());
-    let key = hex(&contact_id.0);
+    let key = hex::encode(&contact_id.0);
     let mine = updates.per_contact.get(&key).map_or(0, Vec::len);
     if mine >= UPDATES_PER_CONTACT_PER_DAY || updates.all.len() >= UPDATES_PER_HOUR {
         write_json(repos, UPDATES_KEY, &updates)?;
@@ -1562,6 +1693,73 @@ fn within_update_limits(
     updates.all.push(now);
     write_json(repos, UPDATES_KEY, &updates)?;
     Ok(true)
+}
+
+/// Whether a message first held at `first` (seconds) and held `holds` times by `now` may no
+/// longer be kept for the next cycle under `policy`.
+fn hold_expired(first: u64, holds: u32, now: u64, policy: &WalletPolicy) -> bool {
+    let patience = policy.contact_hold_patience.as_secs();
+    holds > policy.contact_hold_attempts
+        || now.saturating_sub(first) >= patience
+        // A clock set back since the first hold.
+        || first > now.saturating_add(patience)
+}
+
+/// Whether the hold count `value` (`first-seen seconds:holds`) may be forgotten at `now`: first
+/// held longer ago than [`HELD_FORGOTTEN`], ahead of a clock set back by more than `patience`,
+/// or unreadable.
+fn hold_forgotten(value: &str, now: u64, patience: Duration) -> bool {
+    let Some(first) = value
+        .split_once(':')
+        .and_then(|(first, _)| first.parse::<u64>().ok())
+    else {
+        return true;
+    };
+    now.saturating_sub(first) > HELD_FORGOTTEN.as_secs()
+        || first > now.saturating_add(patience.as_secs())
+}
+
+/// Whether `error` passes by itself: the node, a relay or the store did not answer, or the
+/// wallet is locked. A message that fails so is kept for the next cycle without counting a
+/// hold, as the payments inbox keeps one; any other failure counts.
+fn passes(error: &ContactError) -> bool {
+    match error {
+        ContactError::Offline | ContactError::EpicboxOff => true,
+        ContactError::Wallet(error) => chain_passes(error),
+        error => chain_passes(error),
+    }
+}
+
+/// Whether any error in the chain from `error` passes, as [`passes`] says.
+fn chain_passes(error: &(dyn std::error::Error + 'static)) -> bool {
+    let mut next = Some(error);
+    while let Some(error) = next {
+        let passing = if let Some(error) = error.downcast_ref::<lepic_wallet::WalletError>() {
+            matches!(error, lepic_wallet::WalletError::Locked)
+        } else if let Some(error) = error.downcast_ref::<StoreError>() {
+            matches!(
+                error,
+                StoreError::Database(_)
+                    | StoreError::Io { .. }
+                    | StoreError::Randomness(_)
+                    | StoreError::Poisoned
+            )
+        } else if let Some(error) = error.downcast_ref::<lepic_node::NodeError>() {
+            error.is_transient()
+        } else if let Some(error) = error.downcast_ref::<lepic_epicbox::MailboxError>() {
+            matches!(
+                error,
+                lepic_epicbox::MailboxError::Unreachable(_) | lepic_epicbox::MailboxError::Lost(_)
+            )
+        } else {
+            false
+        };
+        if passing {
+            return true;
+        }
+        next = error.source();
+    }
+    false
 }
 
 /// Hands each drained message to the engine and acknowledges it once its effect is stored.
@@ -1601,10 +1799,7 @@ where
             };
             match self.take(job, &envelope).await {
                 Ok(handled) => handled,
-                Err(error) => {
-                    warn!(error = %ErrorChain(&error), "mailbox message kept for later");
-                    Handled::Later
-                }
+                Err(error) => self.hold_or_settle(&envelope, &error).await,
             }
         })
     }
@@ -1616,6 +1811,37 @@ where
     S: StoreOpener + 'static,
     V: SecretVault + 'static,
 {
+    /// Keeps a message whose handling failed for the next cycle. A failure that passes
+    /// ([`passes`]) keeps it without counting; any other keeps it until it has been held
+    /// [`WalletPolicy::contact_hold_attempts`] times or [`WalletPolicy::contact_hold_patience`]
+    /// has passed since it was first held: then it is settled, so the relay keeps nothing
+    /// behind it waiting. An error counting the attempt itself does not stop the message being
+    /// kept.
+    async fn hold_or_settle(&self, envelope: &[u8], error: &ContactError) -> Handled {
+        if passes(error) {
+            warn!(error = %ErrorChain(error), "mailbox message kept until the failure passes");
+            return Handled::Later;
+        }
+        let hash = envelope_hash(envelope);
+        match self.wallet.count_hold(hash).await {
+            Ok(true) => {
+                warn!(error = %ErrorChain(error), "mailbox message kept for later");
+                Handled::Later
+            }
+            Ok(false) => {
+                warn!(error = %ErrorChain(error), "mailbox message dropped after being held too long");
+                if let Err(error) = self.wallet.remember(hash).await {
+                    warn!(error = %ErrorChain(&error), "dropped mailbox message not remembered");
+                }
+                Handled::Stored
+            }
+            Err(count_error) => {
+                warn!(error = %ErrorChain(error), count = %ErrorChain(&count_error), "mailbox message kept for later, holds not counted");
+                Handled::Later
+            }
+        }
+    }
+
     async fn take(&mut self, job: Job, envelope: &[u8]) -> Result<Handled, ContactError> {
         let hash = envelope_hash(envelope);
         if self.wallet.seen_before(hash).await? {
@@ -1641,6 +1867,7 @@ where
         };
         if handled == Handled::Stored {
             self.wallet.remember(hash).await?;
+            self.wallet.clear_hold(hash).await?;
         }
         Ok(handled)
     }
@@ -1652,5 +1879,86 @@ where
             _ => {}
         }
         taken.map(|_| Handled::Stored)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_message_is_held_for_a_few_tries_and_a_few_minutes() {
+        let now = 1_000_000;
+        let policy = WalletPolicy::DEFAULT;
+        let attempts = policy.contact_hold_attempts;
+        assert!(!hold_expired(now, 1, now, &policy));
+        assert!(!hold_expired(now, attempts, now + 10, &policy));
+        assert!(hold_expired(now, attempts + 1, now, &policy));
+        assert!(hold_expired(
+            now,
+            1,
+            now + policy.contact_hold_patience.as_secs(),
+            &policy
+        ));
+    }
+
+    #[test]
+    fn a_hold_count_is_forgotten_a_day_after_the_first_hold() {
+        let first = 1_000_000;
+        let forgotten = HELD_FORGOTTEN.as_secs();
+        let patience = WalletPolicy::DEFAULT.contact_hold_patience;
+        assert!(!hold_forgotten(
+            &format!("{first}:1"),
+            first + patience.as_secs(),
+            patience
+        ));
+        assert!(!hold_forgotten(
+            &format!("{first}:3"),
+            first + forgotten,
+            patience
+        ));
+        assert!(hold_forgotten(
+            &format!("{first}:3"),
+            first + forgotten + 1,
+            patience
+        ));
+        assert!(hold_forgotten(
+            &format!("{first}:1"),
+            first - patience.as_secs() - 1,
+            patience
+        ));
+        assert!(hold_forgotten("damaged", first, patience));
+    }
+
+    #[test]
+    fn a_clock_set_back_since_the_first_hold_ends_it() {
+        let first = 1_000_000;
+        let policy = WalletPolicy::DEFAULT;
+        let patience = policy.contact_hold_patience.as_secs();
+        assert!(hold_expired(first, 1, first - patience - 1, &policy));
+        assert!(!hold_expired(first, 1, first - 1, &policy));
+    }
+
+    #[test]
+    fn a_failure_that_passes_by_itself_holds_without_counting() {
+        let store = |error| ContactError::Wallet(lepic_wallet::WalletError::Store(error));
+        for passing in [
+            ContactError::Offline,
+            ContactError::EpicboxOff,
+            ContactError::Wallet(lepic_wallet::WalletError::Locked),
+            store(StoreError::Poisoned),
+        ] {
+            assert!(passes(&passing), "{passing:?}");
+        }
+        for counted in [
+            ContactError::Ended,
+            ContactError::UnknownContact,
+            store(StoreError::Corrupt {
+                record: lepic_store::Record::Contact,
+                field: "card",
+            }),
+        ] {
+            assert!(!passes(&counted), "{counted:?}");
+        }
     }
 }

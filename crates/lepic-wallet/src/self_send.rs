@@ -1,12 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Sends to the wallet itself, to split its outputs or merge them into one, as
+//! Sends to the wallet itself, to spend chosen outputs into the outputs asked for, as
 //! `epic-wallet send -m self` does through its own foreign API: the S1 is built, received into
 //! the same account and finalized in one store transaction, then posted. No transport carries
 //! the slate, so it never goes to the wallet's own Epicbox address.
 
 use std::num::NonZeroUsize;
 
-use lepic_crypto::Commitment;
 use lepic_node::{NodeApi, Propagation};
 use lepic_primitives::amount::Amount;
 use lepic_slate::codec::EncodeContext;
@@ -25,7 +24,7 @@ use crate::receive::{ReceiveError, receive_own};
 use crate::refresh::with_spend_confirmations;
 use crate::selection::{
     self, Selection, SelectionError, SelectionOptions, SelectionRequest, SelectionStrategy,
-    SelfSendShape,
+    SelfSendRequest,
 };
 use crate::send::{
     S1Randomness, S1Storage, SendError, SendRequest, block_header_version, spendable_here, store_s1,
@@ -78,58 +77,36 @@ where
     S: StoreOpener + 'static,
     V: SecretVault + 'static,
 {
-    /// Spends what [`selection::select_self_send`] chooses for `options` and `shape` into
-    /// outputs of this wallet, and posts the transaction with `propagation`. It is stored as an
-    /// outgoing entry that spent the inputs and holds the change, and an incoming entry that
-    /// holds the output of the amount, both over [`SELF`]; it confirms as any send does.
-    /// It raises [`Event::SelfSent`], never [`Event::Received`]: nothing was received from
-    /// anyone. [`Wallet::estimate_self_send`] tells what it will spend and pay.
+    /// Spends the outputs `request.inputs` names into the outputs of this wallet
+    /// `request.outputs` asks for, chosen by [`selection::select_to_self`] under `options`, and
+    /// posts the transaction with `propagation`. It is stored as an outgoing entry that spent
+    /// the inputs and holds the change, and an incoming entry that holds the output of the
+    /// amount, both over [`SELF`]; it confirms as any send does. It raises
+    /// [`Event::SelfSent`], never [`Event::Received`]: nothing was received from anyone.
+    /// [`Wallet::estimate_send_to_self`] tells what it will spend and pay. With
+    /// [`SelfInputs::Named`](crate::selection::SelfInputs::Named) nothing else is locked, so a
+    /// payment that was cancelled here, such as an invoice payment whose I2 the issuer still
+    /// holds, can no longer be mined once its inputs are spent this way.
     ///
-    /// Fails, storing nothing, as [`Wallet::send`] fails before it delivers, or with
-    /// [`SelfSendError::Receive`] or [`SelfSendError::Finalize`] when the wallet's own slate
-    /// does not check. Fails with [`FinalizeError::NotPosted`] when it was stored finalized but
-    /// the node did not take it: the inputs stay locked until [`Wallet::post`] posts it again
-    /// or [`Wallet::cancel`] cancels the outgoing entry. Fails with
+    /// Fails, storing nothing, with the [`SendError::Selection`] errors
+    /// [`selection::select_to_self`] lists, as [`Wallet::send`] fails before it delivers, or
+    /// with [`SelfSendError::Receive`] or [`SelfSendError::Finalize`] when the wallet's own
+    /// slate does not check. Fails with [`FinalizeError::NotPosted`] when it was stored
+    /// finalized but the node did not take it: the inputs stay locked until [`Wallet::post`]
+    /// posts it again or [`Wallet::cancel`] cancels the outgoing entry. Fails with
     /// [`FinalizeError::InputsSpentByOwnTransaction`] when the node refused it because another
     /// send of this wallet that the chain holds spent its inputs, and with
     /// [`FinalizeError::InputsSpentElsewhere`] when another wallet did: both entries are then
     /// cancelled, as [`Wallet::post`] describes.
     #[instrument(skip_all, fields(wallet = %self.config().name, tx_id = Empty))]
-    pub async fn self_send(
+    pub async fn send_to_self(
         &self,
         options: SelectionOptions,
-        shape: SelfSendShape,
+        request: SelfSendRequest,
         propagation: Propagation,
     ) -> Result<SelfSent, SelfSendError> {
-        self.self_send_chosen(options, propagation, move |outputs, request| {
-            selection::select_self_send(outputs, request, shape)
-        })
-        .await
-    }
-
-    /// Spends exactly the outputs `commitments` names into the outputs `shape` asks for, as
-    /// [`Wallet::self_send`] does: [`SelfSendShape::Consolidate`] makes one, and
-    /// [`SelfSendShape::Split`] makes that many of nearly equal value, so the wallet can keep
-    /// its number of coins. It posts it with `propagation`. Nothing else is locked. A payment that was cancelled here, such as an
-    /// invoice payment whose I2 the issuer still holds, can no longer be mined once its inputs
-    /// are spent this way.
-    ///
-    /// Fails, storing nothing, with [`SelectionError::NoOutputsNamed`] or
-    /// [`SelectionError::NamedOutputUnavailable`] when an output named is unknown, not unspent
-    /// with `options.minimum_confirmations`, of another account or named twice, with
-    /// [`SelectionError::NotEnoughFunds`] when their value less the fee leaves less than one
-    /// base unit for each output, and otherwise as
-    /// [`Wallet::self_send`] does.
-    #[instrument(skip_all, fields(wallet = %self.config().name, tx_id = Empty))]
-    pub async fn spend_outputs_to_self(
-        &self,
-        options: SelectionOptions,
-        commitments: Vec<Commitment>,
-        shape: SelfSendShape,
-        propagation: Propagation,
-    ) -> Result<SelfSent, SelfSendError> {
-        self.self_send_chosen(options, propagation, move |outputs, request| {
-            selection::select_named(outputs, request, &commitments, shape)
+        self.self_send_chosen(options, propagation, move |outputs, selection| {
+            selection::select_to_self(outputs, selection, &request)
         })
         .await
     }

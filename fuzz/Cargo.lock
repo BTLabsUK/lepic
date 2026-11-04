@@ -1031,6 +1031,7 @@ dependencies = [
  "futures-util",
  "getrandom 0.4.3",
  "lepic-crypto",
+ "lepic-primitives",
  "lepic-slate",
  "lepic-transport",
  "pbkdf2",
@@ -1203,6 +1204,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "thiserror",
+ "tokio",
  "tracing",
  "uuid",
  "zeroize",
@@ -1248,6 +1250,7 @@ dependencies = [
 name = "lepic-transport"
 version = "0.1.0"
 dependencies = [
+ "lepic-primitives",
  "lepic-slate",
  "serde",
  "serde_json",

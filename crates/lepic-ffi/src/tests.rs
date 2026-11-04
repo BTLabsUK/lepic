@@ -63,6 +63,7 @@ impl Fixture {
 
     fn config(&self) -> WalletConfig {
         WalletConfig {
+            policy: Default::default(),
             data_dir: self.dir.path().to_string_lossy().into_owned(),
             chain: Chain::Floonet,
             node_url: "http://127.0.0.1:1".to_owned(),
@@ -1201,50 +1202,22 @@ async fn a_short_new_pin_is_refused_before_the_old_pin_is_counted() {
     );
 }
 
-/// A password set on a new wallet needs eight characters; nothing is written before the check.
+/// LEPIC checks no password length: the host does (ADR 0036).
 #[tokio::test]
-async fn a_new_wallet_refuses_a_password_shorter_than_eight_characters() {
+async fn a_new_wallet_takes_a_password_of_any_length() {
     let fixture = Fixture::new();
-    let (file, file_password, _, _) = wallet_seed_vector();
-    for password in ["", "pw", "1234567"] {
-        let store = AppSecretStore::in_memory();
-        let created = EpicWallet::create(
-            &fixture.runtime,
-            fixture.config(),
-            &store,
-            None,
-            None,
-            password.to_owned(),
-        )
-        .await;
-        assert_eq!(
-            kind(created),
-            WalletErrorKind::InvalidArgument,
-            "{password:?}"
-        );
-        let imported = EpicWallet::import_wallet_seed(
-            &fixture.runtime,
-            fixture.config(),
-            &store,
-            file.clone(),
-            file_password.clone(),
-            password.to_owned(),
-        )
-        .await;
-        assert_eq!(
-            kind(imported),
-            WalletErrorKind::InvalidArgument,
-            "{password:?}"
-        );
-        assert_eq!(store.read(VAULT_KEY).await.unwrap(), None, "{password:?}");
-    }
-    assert!(
-        !fixture
-            .dir
-            .path()
-            .join(lepic_wallet::ENCRYPTED_DATABASE_FILE)
-            .exists()
-    );
+    let store = AppSecretStore::in_memory();
+    let wallet = EpicWallet::create(
+        &fixture.runtime,
+        fixture.config(),
+        &store,
+        None,
+        None,
+        "pw".to_owned(),
+    )
+    .await
+    .unwrap();
+    assert!(wallet.mnemonic("pw".to_owned()).await.is_ok());
 }
 
 /// A wallet whose password predates the minimum keeps opening and showing its phrase.
@@ -1640,4 +1613,28 @@ async fn delete_wallet_removes_the_encrypted_database_and_the_plain_copies() {
         .await
         .unwrap();
     assert_eq!(database_files(fixture.dir.path()), Vec::<String>::new());
+}
+
+/// What a session leaves besides the database goes with the wallet: scratch slate files, the
+/// tor expectation and tor's directory. Other files stay.
+#[tokio::test]
+async fn delete_wallet_removes_scratch_slates_and_the_tor_files() {
+    let fixture = Fixture::new();
+    let store = AppSecretStore::in_memory();
+    drop(fixture.create_with_pin(&store, PIN).await);
+    let dir = fixture.dir.path();
+    std::fs::write(dir.join(".lepic-0123456789abcdef.slate"), b"{}").unwrap();
+    std::fs::write(dir.join("tor-expected"), []).unwrap();
+    std::fs::create_dir_all(dir.join("tor").join("state")).unwrap();
+    std::fs::write(dir.join("tor").join("state").join("guards"), b"x").unwrap();
+    std::fs::write(dir.join("kept.txt"), b"x").unwrap();
+
+    crate::api::wallet::delete_wallet(&fixture.runtime, fixture.config(), &store)
+        .await
+        .unwrap();
+
+    assert!(!dir.join(".lepic-0123456789abcdef.slate").exists());
+    assert!(!dir.join("tor-expected").exists());
+    assert!(!dir.join("tor").exists());
+    assert!(dir.join("kept.txt").exists());
 }

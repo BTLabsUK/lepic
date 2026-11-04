@@ -11,7 +11,8 @@
 //! JSON. A `Subscribe` for another address switches the socket to it, and `Made` is checked
 //! against the address the socket last subscribed with, as on the public relay. Unlike the
 //! public relay it stores every message itself instead of forwarding to other domains, and its
-//! messages do not expire. Switches make it refuse or stall connections, leave
+//! messages do not expire. All domains share one queue per key, unless
+//! [`MockRelay::set_relays_apart`] makes each domain a relay of its own. Switches make it refuse or stall connections, leave
 //! chosen frames unanswered, or stop reading a connection. Tests wait on its state with
 //! [`MockRelay::wait_until`] instead of polling.
 
@@ -93,6 +94,11 @@ struct Socket {
     challenge: String,
     listener_mode: bool,
     address: Option<String>,
+    /// The relay domain the connection was made to; `None` for one served over TCP.
+    domain: Option<String>,
+    /// The queue the socket last subscribed to: its address, with the domain when relays are
+    /// apart.
+    queue: Option<String>,
     versioned: bool,
     /// The message this socket was sent and has not acknowledged.
     in_flight: Option<String>,
@@ -125,6 +131,8 @@ struct RelayState {
     post_refused: HashSet<String>,
     /// Relay domains whose posts are answered `InvalidRequest`, whatever the key.
     domains_refused: HashSet<String>,
+    /// Each domain keeps its own queues, as separate relays do.
+    apart: bool,
     stalling: bool,
     stalled: Vec<DuplexStream>,
     unanswered: HashSet<Unanswered>,
@@ -151,6 +159,7 @@ impl MockRelay {
                     refusing: false,
                     unroutable: HashSet::new(),
                     domains_refused: HashSet::new(),
+                    apart: false,
                     post_refused: HashSet::new(),
                     stalling: false,
                     stalled: Vec::new(),
@@ -179,7 +188,7 @@ impl MockRelay {
         let relay = self.clone();
         Ok(runtime.spawn(async move {
             while let Ok((stream, _)) = listener.accept().await {
-                relay.accept(stream);
+                relay.accept(stream, None);
             }
         }))
     }
@@ -218,6 +227,13 @@ impl MockRelay {
         self.update(|state| {
             state.post_refused.remove(&address.key_text());
         });
+    }
+
+    /// Keeps one queue per relay domain from now on, as separate relays do: a message posted to
+    /// `key@domain` reaches only connections made to `domain`. Off, every domain shares one
+    /// queue per key. Messages stored before the switch stay in the queue they were stored in.
+    pub fn set_relays_apart(&self, apart: bool) {
+        self.update(|state| state.apart = apart);
     }
 
     /// Accepts new connections but never answers on them, as a relay stuck mid-handshake does.
@@ -281,13 +297,14 @@ impl MockRelay {
         message: &SignedMessage,
     ) -> String {
         self.update(|state| {
+            let queue = state.queue_name(&to.key_text(), Some(to.domain().as_str()));
             let id = state.store(
-                to.key_text(),
+                queue.clone(),
                 from.to_string(),
                 message.str.clone(),
                 message.signature.to_der_hex(),
             );
-            state.pass_through(&to.key_text(), &id);
+            state.pass_through(&queue, &id);
             id
         })
     }
@@ -299,11 +316,24 @@ impl MockRelay {
 
     /// Messages for `address` not yet acknowledged with `Made`.
     pub fn pending(&self, address: &EpicboxAddress) -> usize {
-        let queue = address.key_text();
-        self.lock()
+        let state = self.lock();
+        let queue = state.queue_name(&address.key_text(), Some(address.domain().as_str()));
+        state
             .messages
             .iter()
             .filter(|m| m.queue == queue && !m.made)
+            .count()
+    }
+
+    /// Messages for `address` sent to a socket but not yet acknowledged with `Made`: in the
+    /// hands of a client.
+    pub fn in_hand(&self, address: &EpicboxAddress) -> usize {
+        let state = self.lock();
+        let queue = state.queue_name(&address.key_text(), Some(address.domain().as_str()));
+        state
+            .messages
+            .iter()
+            .filter(|m| m.queue == queue && !m.made && state.deliveries.contains_key(&m.id))
             .count()
     }
 
@@ -348,6 +378,16 @@ impl MockRelay {
         });
     }
 
+    /// Drops every message not yet acknowledged and returns how many, as the relay does with
+    /// messages it has kept for 7 days.
+    pub fn expire_all(&self) -> usize {
+        self.update(|state| {
+            let before = state.messages.len();
+            state.messages.retain(|m| m.made);
+            before.saturating_sub(state.messages.len())
+        })
+    }
+
     /// Closes every connection and keeps every stored message, as a relay restart does.
     pub fn disconnect_all(&self) {
         self.update(|state| {
@@ -389,7 +429,7 @@ impl MockRelay {
         result
     }
 
-    fn accept<S>(&self, stream: S)
+    fn accept<S>(&self, stream: S, domain: Option<String>)
     where
         S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
     {
@@ -397,10 +437,10 @@ impl MockRelay {
         let Ok(runtime) = Handle::try_current() else {
             return;
         };
-        runtime.spawn(async move { relay.run_socket(stream).await });
+        runtime.spawn(async move { relay.run_socket(stream, domain).await });
     }
 
-    async fn run_socket<S>(self, stream: S)
+    async fn run_socket<S>(self, stream: S, domain: Option<String>)
     where
         S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send,
     {
@@ -422,6 +462,8 @@ impl MockRelay {
                     challenge: String::new(),
                     listener_mode: false,
                     address: None,
+                    domain,
+                    queue: None,
                     versioned: false,
                     in_flight: None,
                     resend_attempts: 0,
@@ -490,7 +532,7 @@ struct MockConnector {
 impl Connector for MockConnector {
     fn connect<'a>(
         &'a self,
-        _endpoint: &'a RelayEndpoint,
+        endpoint: &'a RelayEndpoint,
     ) -> BoxFuture<'a, io::Result<Box<dyn RelayStream>>> {
         Box::pin(async move {
             let (client, server) = tokio::io::duplex(PIPE_CAPACITY);
@@ -504,7 +546,8 @@ impl Connector for MockConnector {
                     return Ok(Box::new(client) as Box<dyn RelayStream>);
                 }
             }
-            self.relay.accept(server);
+            self.relay
+                .accept(server, Some(endpoint.domain().as_str().to_owned()));
             Ok(Box::new(client) as Box<dyn RelayStream>)
         })
     }
@@ -567,10 +610,19 @@ impl RelayState {
 
     fn drop_socket(&mut self, id: u64) {
         if let Some(socket) = self.sockets.remove(&id)
-            && let Some(address) = socket.address
-            && self.listeners.get(&address) == Some(&id)
+            && let Some(queue) = socket.queue
+            && self.listeners.get(&queue) == Some(&id)
         {
-            self.listeners.remove(&address);
+            self.listeners.remove(&queue);
+        }
+    }
+
+    /// The queue of messages for `key` posted to `domain`: one per key, or one per key and
+    /// domain when relays are apart.
+    fn queue_name(&self, key: &str, domain: Option<&str>) -> String {
+        match domain {
+            Some(domain) if self.apart => format!("{key}@{domain}"),
+            _ => key.to_owned(),
         }
     }
 
@@ -630,6 +682,11 @@ impl RelayState {
 
     fn subscribe(&mut self, id: u64, network: Network, message: &Value) {
         let address = text_field(message, "address").to_owned();
+        let domain = self
+            .sockets
+            .get(&id)
+            .and_then(|socket| socket.domain.clone());
+        let queue = self.queue_name(&address, domain.as_deref());
         let Some(socket) = self.sockets.get_mut(&id) else {
             return;
         };
@@ -642,16 +699,18 @@ impl RelayState {
             &socket.challenge,
             text_field(message, "signature"),
         ) {
-            if socket.address.as_deref() == Some(address.as_str())
-                && self.listeners.get(&address) == Some(&id)
+            if socket.queue.as_deref() == Some(queue.as_str())
+                && self.listeners.get(&queue) == Some(&id)
             {
-                self.listeners.remove(&address);
+                self.listeners.remove(&queue);
             }
             socket.address = None;
+            socket.queue = None;
             self.send(id, error("InvalidSignature", "Invalid signature."));
             return;
         }
-        socket.address = Some(address.clone());
+        socket.address = Some(address);
+        socket.queue = Some(queue.clone());
         // The public relay retries an unacknowledged message on the same socket after a few
         // subscribes, and gives up on the address's unacknowledged messages after a few rounds.
         if socket.resend_attempts >= RESEND_AFTER && socket.resend_rounds <= RESEND_AFTER {
@@ -671,10 +730,10 @@ impl RelayState {
             socket.resend_attempts = socket.resend_attempts.saturating_add(1);
         }
         if listener_mode {
-            self.listeners.entry(address.clone()).or_insert(id);
+            self.listeners.entry(queue.clone()).or_insert(id);
         }
         if discard {
-            self.messages.retain(|m| m.queue != address || m.made);
+            self.messages.retain(|m| m.queue != queue || m.made);
         }
         if in_flight {
             self.send(id, ok());
@@ -683,7 +742,7 @@ impl RelayState {
         let oldest = self
             .messages
             .iter()
-            .find(|m| m.queue == address && !m.made)
+            .find(|m| m.queue == queue && !m.made)
             .cloned();
         match oldest {
             Some(stored) => self.deliver(id, &stored),
@@ -778,7 +837,10 @@ impl RelayState {
             self.send(id, error("InvalidRequest", "Error parsing message string."));
             return;
         };
-        let queue = encrypted.destination().public_key().to_owned();
+        let queue = self.queue_name(
+            encrypted.destination().public_key(),
+            Some(recipient.domain().as_str()),
+        );
         let msg_id = self.store(
             queue.clone(),
             from.to_owned(),
@@ -790,7 +852,11 @@ impl RelayState {
     }
 
     fn made(&mut self, id: u64, network: Network, message: &Value) {
-        let Some(address) = self.sockets.get(&id).and_then(|s| s.address.clone()) else {
+        let Some((address, queue)) = self
+            .sockets
+            .get(&id)
+            .and_then(|s| s.address.clone().zip(s.queue.clone()))
+        else {
             return;
         };
         let msg_id = text_field(message, "epicboxmsgid");
@@ -802,7 +868,7 @@ impl RelayState {
             return;
         }
         for stored in &mut self.messages {
-            if stored.queue == address && stored.id == msg_id {
+            if stored.queue == queue && stored.id == msg_id {
                 stored.made = true;
             }
         }

@@ -2,6 +2,7 @@
 //! The pairing flows (RFC 0002 7.1 to 7.6): invites, replies, confirms, pairing in person and
 //! the SAS check.
 
+use crate::hex;
 use std::time::Duration;
 
 use jiff::Timestamp;
@@ -548,7 +549,7 @@ where
             {
                 Ok(()) => true,
                 Err(error) => {
-                    warn!(peer_relay = %host_text(&home), error = %lepic_wallet::inbox::ErrorChain(&error), "pairing reply not posted");
+                    warn!(peer_relay = %host_text(&home), error = %lepic_primitives::error_chain::ErrorChain(&error), "pairing reply not posted");
                     false
                 }
             };
@@ -674,19 +675,20 @@ where
                     record.updated_at = now;
                     super::status::heard_now(&mut record, now);
                     repos.put_contact(&record)?;
-                    repos.put_contact_mailbox(&ContactMailbox {
+                    let mailbox = ContactMailbox {
                         contact_id,
                         peer_mailbox: peer.fields().mailbox.as_str().to_owned(),
                         our_mailbox: own.fields().mailbox.as_str().to_owned(),
-                        home_relay: home.clone(),
+                        home_relay: home,
                         onion: None,
                         previous: None,
                         backoff: Vec::new(),
-                    })?;
+                    };
+                    repos.put_contact_mailbox(&mailbox)?;
                     // A card QR is seen by anyone nearby: the first collect moves our mailbox.
                     repos.put_setting(&super::collect::in_person_key(contact_id), "1")?;
                     debug!(peer_relay = %peer_relay, "in-person pairing stored");
-                    Ok(super::manage::view(&record, Some(home), now))
+                    Ok(super::manage::view(&record, Some(&mailbox), network, now))
                 })
             })
             .await?;
@@ -817,7 +819,7 @@ where
         if relays.mode == super::RelayMode::Online
             && let Err(error) = self.deliver_status(relays, false).await
         {
-            warn!(error = %lepic_wallet::inbox::ErrorChain(&error), "pairing status not delivered");
+            warn!(error = %lepic_primitives::error_chain::ErrorChain(&error), "pairing status not delivered");
         }
         Ok(())
     }
@@ -917,7 +919,7 @@ where
                 .map_err(|_| ContactError::RelayAddress)?;
             let onion = invite.fields().onion.as_ref().map(RelayHost::as_str);
             if let Err(error) = post_envelope(relays, &from, &to, onion, &reply).await {
-                debug!(error = %lepic_wallet::inbox::ErrorChain(&error), "pairing reply not posted again");
+                debug!(error = %lepic_primitives::error_chain::ErrorChain(&error), "pairing reply not posted again");
             }
         }
         Ok(())
@@ -958,7 +960,7 @@ where
             .await
         };
         if let Err(error) = posted.await {
-            warn!(error = %lepic_wallet::inbox::ErrorChain(&error), "pairing refusal not posted");
+            warn!(error = %lepic_primitives::error_chain::ErrorChain(&error), "pairing refusal not posted");
         }
     }
 
@@ -1319,6 +1321,16 @@ where
             warn!("pairing confirm does not match the invite");
             return Ok(self.pairing_failed(contact_id, PairingFailure::ChangedOnTheWay));
         }
+        if confirm.card.fields().kind != invite.fields().kind {
+            self.contact_work(move |_, _| {
+                session
+                    .store
+                    .write(|repos| drop_pairing(repos, pairing_id, contact_id))
+            })
+            .await?;
+            warn!("pairing confirm card names another kind than the invite");
+            return Ok(self.pairing_failed(contact_id, PairingFailure::KindDiffers));
+        }
         let Some(sas) = confirm_sas(net, &class, &confirm, &own, &Nonce::from_bytes(n_b)) else {
             return Ok(Taken::Ignored);
         };
@@ -1472,6 +1484,7 @@ fn link_failure(reason: PairingFailure) -> Option<ContactError> {
     match reason {
         PairingFailure::OtherAddress => Some(ContactError::OtherAddress),
         PairingFailure::AddressProofMissing => Some(ContactError::AddressProofMissing),
+        PairingFailure::KindDiffers => Some(ContactError::KindDiffers),
         _ => None,
     }
 }
@@ -1922,7 +1935,7 @@ fn decide_reply(
     pending.secrets.na = None;
     pending.secrets.rc = Some(rc);
     repos.put_pending_pairing(&pending)?;
-    repos.put_setting(&confirm_key(pairing_id), &hex(&envelope))?;
+    repos.put_setting(&confirm_key(pairing_id), &hex::encode(&envelope))?;
     Ok(Decision::Confirm(envelope))
 }
 
@@ -1962,7 +1975,7 @@ fn reply_taken_again(
     let same_peer = repos.contact(contact_id)?.is_some_and(|record| {
         record.peer.as_ref().map(|card| card.sig_key) == Some(peer.sig_key().to_bytes())
     });
-    Ok(match stored.and_then(|text| unhex(&text)) {
+    Ok(match stored.and_then(|text| hex::unhex(&text)) {
         // The reply that paired, taken again: its confirm goes out again.
         Some(envelope) if same_peer => Decision::Again(envelope),
         _ => Decision::Refuse(Refusal::AlreadyUsed, may_refuse(repos, pairing_id)?),
@@ -2203,7 +2216,7 @@ const REQUEST_OUT_PREFIX: &str = "contact.requestout.";
 /// The setting that marks the invite of the pairing record `contact_id` as one this wallet sent
 /// as a pairing request, until its pairing ends.
 pub(crate) fn request_out_key(contact_id: ContactId) -> String {
-    format!("{REQUEST_OUT_PREFIX}{}", hex(&contact_id.0))
+    format!("{REQUEST_OUT_PREFIX}{}", hex::encode(&contact_id.0))
 }
 
 /// Refusals one invite sends at most, so a leaked invite cannot make the inviter post to
@@ -2212,7 +2225,7 @@ const MAX_REFUSALS_PER_INVITE: u32 = 3;
 
 /// The setting that counts the refusals an invite sent, until its pairing ends.
 pub(crate) fn refusals_key(pairing_id: PairingId) -> String {
-    format!("{REFUSALS_PREFIX}{}", hex(&pairing_id.0))
+    format!("{REFUSALS_PREFIX}{}", hex::encode(&pairing_id.0))
 }
 
 /// Ends a pairing in progress: the pending pairing, its kept confirm and its refusal count go
@@ -2232,7 +2245,7 @@ pub(crate) fn end_pending(
 
 /// The setting that marks an inviter's confirm as sent: posted, or handed out by hand.
 pub(crate) fn confirm_out_key(pairing_id: PairingId) -> String {
-    format!("{CONFIRM_OUT_PREFIX}{}", hex(&pairing_id.0))
+    format!("{CONFIRM_OUT_PREFIX}{}", hex::encode(&pairing_id.0))
 }
 
 /// Unix seconds from which an inviter refuses a reply to an invite that expires at `expires`:
@@ -2277,21 +2290,7 @@ fn may_refuse(repos: &mut dyn Repositories, pairing_id: PairingId) -> Result<boo
 
 /// The setting that keeps an inviter's confirm until its pairing ends.
 pub(crate) fn confirm_key(pairing_id: PairingId) -> String {
-    format!("{CONFIRM_PREFIX}{}", hex(&pairing_id.0))
-}
-
-fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
-}
-
-fn unhex(text: &str) -> Option<Vec<u8>> {
-    if !text.len().is_multiple_of(2) {
-        return None;
-    }
-    text.as_bytes()
-        .chunks(2)
-        .map(|pair| u8::from_str_radix(std::str::from_utf8(pair).ok()?, 16).ok())
-        .collect()
+    format!("{CONFIRM_PREFIX}{}", hex::encode(&pairing_id.0))
 }
 
 fn refuse_known_card(

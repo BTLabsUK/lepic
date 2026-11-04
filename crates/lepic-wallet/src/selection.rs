@@ -135,9 +135,21 @@ pub enum SelectionError {
     ChangeTooSmall { change: Amount, outputs: usize },
     #[error("transaction with {inputs} inputs and {outputs} outputs exceeds the weight limit")]
     TooHeavy { inputs: usize, outputs: usize },
-    /// A consolidation needs at least two spendable outputs; `outputs` were.
+    /// A merge needs at least two spendable outputs; `outputs` were. Also a send to the
+    /// wallet itself that would spend one output into one, with `outputs` 1.
     #[error("{outputs} spendable outputs are too few to consolidate")]
     NothingToConsolidate { outputs: usize },
+    /// A send to the wallet itself asked for `outputs` outputs, the remainder included, outside
+    /// 1..=[`MAX_SELF_SEND_OUTPUTS`].
+    #[error("a send to self makes from 1 to {MAX_SELF_SEND_OUTPUTS} outputs, not {outputs}")]
+    SelfSendOutputs { outputs: usize },
+    /// The amount at `position` of a send to the wallet itself is zero.
+    #[error("self-send amount {position} is zero")]
+    ZeroAmount { position: usize },
+    /// The smallest outputs are chosen to cover amounts, so a send to the wallet itself that
+    /// asks for a count of outputs cannot take them.
+    #[error("the smallest inputs need output amounts")]
+    SmallestNeedsAmounts,
     /// A spend of named outputs was given none.
     #[error("no outputs were named")]
     NoOutputsNamed,
@@ -245,143 +257,169 @@ pub fn select_max(
     best.map_or_else(|| at(1), Ok)
 }
 
-/// How many outputs a split makes: from [`SplitCount::MIN`] to [`SplitCount::MAX`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct SplitCount(NonZeroUsize);
+/// The most outputs a send to the wallet itself makes, the remainder of
+/// [`SelfOutputs::Amounts`] included.
+pub const MAX_SELF_SEND_OUTPUTS: usize = 10;
 
-impl SplitCount {
-    pub const MIN: usize = 2;
-    pub const MAX: usize = 10;
-
-    /// `None` outside [`SplitCount::MIN`]..=[`SplitCount::MAX`].
-    pub fn new(outputs: usize) -> Option<Self> {
-        (Self::MIN..=Self::MAX)
-            .contains(&outputs)
-            .then(|| NonZeroUsize::new(outputs).map(Self))
-            .flatten()
-    }
-
-    pub const fn get(self) -> usize {
-        self.0.get()
-    }
+/// The outputs a send to the wallet itself spends.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SelfInputs {
+    /// Every eligible output, the smallest first, at most the request's output limit of them.
+    /// The limit is firm here, unlike in [`select`]: a wallet with more spendable outputs than
+    /// the limit spends the smallest ones and keeps the rest spendable.
+    All,
+    /// The fewest of the smallest eligible outputs that cover the amounts and the fee, within
+    /// the request's output limit. Only with [`SelfOutputs::Amounts`].
+    Smallest,
+    /// Exactly these outputs. Each must be an unspent output of the request's account that may
+    /// be spent at the request's tip with its confirmations, named once. It makes a set of
+    /// outputs final: once they are spent, nothing signed earlier with them, for example an
+    /// invoice payment cancelled here, can be mined any more.
+    Named(Vec<Commitment>),
 }
 
-/// What a send to the wallet itself makes of the outputs it spends.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SelfSendShape {
-    /// Outputs of nearly equal value.
-    Split(SplitCount),
-    /// One output.
-    Consolidate,
+/// The outputs a send to the wallet itself makes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SelfOutputs {
+    /// The inputs' value less the fee in this many outputs of nearly equal value, the last one
+    /// also taking the remainder: 1 merges them. From 1 to [`MAX_SELF_SEND_OUTPUTS`].
+    Count(usize),
+    /// One output of each amount, of at least one base unit each, and the inputs' value less
+    /// the amounts and the fee as one more output when it is above zero.
+    Amounts(Vec<Amount>),
 }
 
-/// The selection of a send to the wallet itself: it spends the smallest eligible outputs
-/// under the request's account and confirmations, at most `request.max_outputs` of them, and
-/// makes the outputs `shape` asks for. The limit is firm here, unlike in [`select`]: a wallet
-/// with more spendable outputs than the limit spends the smallest ones and keeps the rest
-/// spendable, and a consolidation merges the rest on its next call. The request's amount,
-/// strategy and change outputs are ignored.
+/// What a send to the wallet itself spends and makes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SelfSendRequest {
+    pub inputs: SelfInputs,
+    pub outputs: SelfOutputs,
+}
+
+/// The selection of a send to the wallet itself: the inputs `to_self.inputs` names under the
+/// request's account and confirmations, and the outputs `to_self.outputs` asks for. The
+/// request's amount, strategy and change outputs are ignored, and its output limit is ignored
+/// for [`SelfInputs::Named`].
 ///
-/// The amount is the one output a send pays. For a consolidation it is the inputs' value less
-/// the fee, with no change. For a split into `n` it is the inputs' value less the fee of `n`
-/// outputs, divided by `n`, and the change is split into the other `n - 1` outputs, the last
-/// one also taking the remainder.
+/// The amount is the one output a send pays, the first of the outputs; the others are change.
 ///
 /// # Errors
 ///
-/// - [`SelectionError::NothingToConsolidate`] when fewer than two outputs are eligible for a
-///   consolidation.
-/// - [`SelectionError::NotEnoughFunds`] when the inputs cannot pay the fee and one base unit
-///   into each output.
+/// - [`SelectionError::SelfSendOutputs`] when the outputs asked for, the remainder included,
+///   are not from 1 to [`MAX_SELF_SEND_OUTPUTS`].
+/// - [`SelectionError::ZeroAmount`] for the first amount of [`SelfOutputs::Amounts`] below one
+///   base unit.
+/// - [`SelectionError::SmallestNeedsAmounts`] for [`SelfInputs::Smallest`] with
+///   [`SelfOutputs::Count`].
+/// - [`SelectionError::NothingToConsolidate`] when [`SelfInputs::All`] or
+///   [`SelfInputs::Smallest`] would spend one output into one, or fewer than one are eligible
+///   for a merge.
+/// - [`SelectionError::NoOutputsNamed`] when [`SelfInputs::Named`] names none, and
+///   [`SelectionError::NamedOutputUnavailable`] for the first output named that is unknown,
+///   not unspent, of another account, not yet spendable, or named before.
+/// - [`SelectionError::NotEnoughFunds`] when the inputs cannot pay the fee, the amounts, and
+///   one base unit into each other output.
 /// - [`SelectionError::TooHeavy`] when the transaction would exceed the weight limit.
 /// - [`SelectionError::Arithmetic`] when a sum of values overflows.
-pub fn select_self_send(
+pub fn select_to_self(
     outputs: &[OutputRecord],
     request: &SelectionRequest,
-    shape: SelfSendShape,
+    to_self: &SelfSendRequest,
+) -> Result<Selection, SelectionError> {
+    check_self_outputs(&to_self.outputs)?;
+    match &to_self.inputs {
+        SelfInputs::All => {
+            let mut eligible = eligible(outputs, request);
+            // Stable, so equal values keep the order they were given in.
+            eligible.sort_by_key(|output| output.amount);
+            eligible.truncate(request.max_outputs.get());
+            if to_self.outputs == SelfOutputs::Count(1) && eligible.len() < 2 {
+                return Err(SelectionError::NothingToConsolidate {
+                    outputs: eligible.len(),
+                });
+            }
+            let selection = shape(eligible, &to_self.outputs, request)?;
+            refuse_one_into_one(&selection)?;
+            Ok(selection)
+        }
+        SelfInputs::Smallest => {
+            let SelfOutputs::Amounts(amounts) = &to_self.outputs else {
+                return Err(SelectionError::SmallestNeedsAmounts);
+            };
+            smallest_covering(outputs, request, amounts)
+        }
+        SelfInputs::Named(named) => shape(
+            named_inputs(outputs, request, named)?,
+            &to_self.outputs,
+            request,
+        ),
+    }
+}
+
+/// The checks of [`SelfOutputs`] that need no inputs.
+fn check_self_outputs(outputs: &SelfOutputs) -> Result<(), SelectionError> {
+    let count = match outputs {
+        SelfOutputs::Count(count) => *count,
+        SelfOutputs::Amounts(amounts) => {
+            if let Some(position) = amounts.iter().position(|amount| *amount == Amount::ZERO) {
+                return Err(SelectionError::ZeroAmount { position });
+            }
+            amounts.len()
+        }
+    };
+    if (1..=MAX_SELF_SEND_OUTPUTS).contains(&count) {
+        Ok(())
+    } else {
+        Err(SelectionError::SelfSendOutputs { outputs: count })
+    }
+}
+
+/// Spending one output into one only moves it, so [`SelfInputs::All`] and
+/// [`SelfInputs::Smallest`] refuse it.
+fn refuse_one_into_one(selection: &Selection) -> Result<(), SelectionError> {
+    if selection.inputs.len() == 1 && selection.change.is_empty() {
+        return Err(SelectionError::NothingToConsolidate { outputs: 1 });
+    }
+    Ok(())
+}
+
+/// The fewest of the smallest eligible outputs, within the output limit, whose value pays
+/// `amounts` and the fee with no remainder or with a remainder of at least one base unit.
+fn smallest_covering(
+    outputs: &[OutputRecord],
+    request: &SelectionRequest,
+    amounts: &[Amount],
 ) -> Result<Selection, SelectionError> {
     let mut eligible = eligible(outputs, request);
     // Stable, so equal values keep the order they were given in.
     eligible.sort_by_key(|output| output.amount);
     eligible.truncate(request.max_outputs.get());
-    let parts = match shape {
-        SelfSendShape::Consolidate if eligible.len() < 2 => {
-            return Err(SelectionError::NothingToConsolidate {
-                outputs: eligible.len(),
-            });
+    let wanted = SelfOutputs::Amounts(amounts.to_vec());
+    let mut refused = None;
+    for count in 1..=eligible.len() {
+        let prefix = eligible.get(..count).unwrap_or_default().to_vec();
+        match shape(prefix, &wanted, request) {
+            Ok(selection) => match refuse_one_into_one(&selection) {
+                Ok(()) => return Ok(selection),
+                Err(error) => refused = Some(error),
+            },
+            Err(SelectionError::NotEnoughFunds { .. }) => {}
+            Err(error) => return Err(error),
         }
-        SelfSendShape::Consolidate => 1,
-        SelfSendShape::Split(count) => count.get(),
-    };
-    spread(eligible, parts, request)
+    }
+    match refused {
+        Some(error) => Err(error),
+        // What all of them lack, or what none of them has.
+        None => shape(eligible, &wanted, request),
+    }
 }
 
-/// A selection of `eligible` into `parts` outputs of nearly equal value, no more change than
-/// that: see [`select_self_send`] for how the value is divided.
-fn spread(
-    eligible: Vec<&OutputRecord>,
-    parts: usize,
-    request: &SelectionRequest,
-) -> Result<Selection, SelectionError> {
-    let total = sum(&eligible)?;
-    let weight = body(eligible.len(), parts)?.weight_as_block();
-    if weight > MAX_TX_WEIGHT {
-        return Err(SelectionError::TooHeavy {
-            inputs: eligible.len(),
-            outputs: parts,
-        });
-    }
-    let fee = tx_fee(eligible.len(), parts, request.base_fee)?;
-    let parts_u64 = u64::try_from(parts).map_err(|_| ArithmeticError::Overflow)?;
-    let not_enough = SelectionError::NotEnoughFunds {
-        available: total,
-        needed: fee.to_amount().checked_add(Amount::new(parts_u64))?,
-    };
-    let left = total.value().checked_sub(fee.value()).ok_or(not_enough)?;
-    let share = left
-        .checked_div(parts_u64)
-        .filter(|share| *share > 0)
-        .ok_or(not_enough)?;
-    let remainder = left.checked_rem(parts_u64).ok_or(not_enough)?;
-    let amount = Amount::new(share);
-    let change_parts = parts.checked_sub(1).ok_or(ArithmeticError::Overflow)?;
-    let mut change = vec![amount; change_parts];
-    if let Some(last) = change.last_mut() {
-        *last = last.checked_add(Amount::new(remainder))?;
-    }
-    Ok(Selection {
-        inputs: eligible.into_iter().cloned().collect(),
-        change,
-        amount,
-        fee,
-        total,
-    })
-}
-
-/// The selection of a send to the wallet itself that spends exactly the outputs `named`, in
-/// the outputs `shape` asks for: one of their value less the fee for a consolidation, or `n`
-/// of nearly equal value for a split, divided as [`select_self_send`] does. Each must be an unspent output of
-/// the request's account that may be spent at the request's tip with its confirmations, named
-/// once. The request's amount, strategy, change outputs and output limit are ignored.
-///
-/// It makes a set of outputs final: once they are spent, nothing signed earlier with them, for
-/// example an invoice payment cancelled here, can be mined any more.
-///
-/// # Errors
-///
-/// - [`SelectionError::NoOutputsNamed`] when `named` is empty.
-/// - [`SelectionError::NamedOutputUnavailable`] for the first output named that is unknown,
-///   not unspent, of another account, not yet spendable, or named before.
-/// - [`SelectionError::NotEnoughFunds`] when their value does not pay the fee and one base unit
-///   into each output.
-/// - [`SelectionError::TooHeavy`] when the transaction would exceed the weight limit.
-/// - [`SelectionError::Arithmetic`] when a sum of values overflows.
-pub fn select_named(
-    outputs: &[OutputRecord],
+/// The outputs `named`, in increasing value, as [`SelfInputs::Named`] admits them.
+fn named_inputs<'a>(
+    outputs: &'a [OutputRecord],
     request: &SelectionRequest,
     named: &[Commitment],
-    shape: SelfSendShape,
-) -> Result<Selection, SelectionError> {
+) -> Result<Vec<&'a OutputRecord>, SelectionError> {
     if named.is_empty() {
         return Err(SelectionError::NoOutputsNamed);
     }
@@ -404,11 +442,122 @@ pub fn select_named(
     }
     // Stable, so equal values keep the order they were named in.
     inputs.sort_by_key(|output| output.amount);
-    let parts = match shape {
-        SelfSendShape::Consolidate => 1,
-        SelfSendShape::Split(count) => count.get(),
+    Ok(inputs)
+}
+
+/// A selection of `inputs` into the outputs `wanted` asks for, with the fee of that many.
+fn shape(
+    inputs: Vec<&OutputRecord>,
+    wanted: &SelfOutputs,
+    request: &SelectionRequest,
+) -> Result<Selection, SelectionError> {
+    match wanted {
+        SelfOutputs::Count(parts) => spread(inputs, *parts, request),
+        SelfOutputs::Amounts(amounts) => pay_amounts(inputs, amounts, request),
+    }
+}
+
+/// A selection of `inputs` into one output per amount, and the remainder as one more output
+/// when it is above zero.
+fn pay_amounts(
+    inputs: Vec<&OutputRecord>,
+    amounts: &[Amount],
+    request: &SelectionRequest,
+) -> Result<Selection, SelectionError> {
+    let total = sum(&inputs)?;
+    let paid = amounts
+        .iter()
+        .try_fold(Amount::ZERO, |sum, amount| sum.checked_add(*amount))?;
+    let exact_fee = tx_fee(inputs.len(), amounts.len(), request.base_fee)?;
+    let exact = paid.checked_add(exact_fee.to_amount())?;
+    let with_remainder = amounts
+        .len()
+        .checked_add(1)
+        .ok_or(ArithmeticError::Overflow)?;
+    let (fee, parts, remainder) = if total == exact {
+        (exact_fee, amounts.len(), None)
+    } else {
+        let fee = tx_fee(inputs.len(), with_remainder, request.base_fee)?;
+        let needed = paid.checked_add(fee.to_amount())?;
+        let remainder = total
+            .value()
+            .checked_sub(needed.value())
+            .filter(|remainder| *remainder > 0)
+            .ok_or(SelectionError::NotEnoughFunds {
+                available: total,
+                needed: if total < exact {
+                    exact
+                } else {
+                    needed.checked_add(Amount::new(1))?
+                },
+            })?;
+        if with_remainder > MAX_SELF_SEND_OUTPUTS {
+            return Err(SelectionError::SelfSendOutputs {
+                outputs: with_remainder,
+            });
+        }
+        (fee, with_remainder, Some(Amount::new(remainder)))
     };
-    spread(inputs, parts, request)
+    check_weight(inputs.len(), parts)?;
+    let (amount, rest) = amounts
+        .split_first()
+        .ok_or(SelectionError::SelfSendOutputs {
+            outputs: amounts.len(),
+        })?;
+    let mut change = rest.to_vec();
+    change.extend(remainder);
+    Ok(Selection {
+        inputs: inputs.into_iter().cloned().collect(),
+        change,
+        amount: *amount,
+        fee,
+        total,
+    })
+}
+
+fn check_weight(inputs: usize, outputs: usize) -> Result<(), SelectionError> {
+    if body(inputs, outputs)?.weight_as_block() > MAX_TX_WEIGHT {
+        return Err(SelectionError::TooHeavy { inputs, outputs });
+    }
+    Ok(())
+}
+
+/// A selection of `inputs` into `parts` outputs of nearly equal value, no more change than
+/// that. The amount is their value less the fee of `parts` outputs, divided by `parts`, and
+/// the change is split into the other `parts - 1` outputs, the last one also taking the
+/// remainder.
+fn spread(
+    inputs: Vec<&OutputRecord>,
+    parts: usize,
+    request: &SelectionRequest,
+) -> Result<Selection, SelectionError> {
+    let total = sum(&inputs)?;
+    check_weight(inputs.len(), parts)?;
+    let fee = tx_fee(inputs.len(), parts, request.base_fee)?;
+    let parts_u64 = u64::try_from(parts).map_err(|_| ArithmeticError::Overflow)?;
+    let not_enough = SelectionError::NotEnoughFunds {
+        available: total,
+        needed: fee.to_amount().checked_add(Amount::new(parts_u64))?,
+    };
+    let left = total.value().checked_sub(fee.value()).ok_or(not_enough)?;
+    let share = left
+        .checked_div(parts_u64)
+        .filter(|share| *share > 0)
+        .ok_or(not_enough)?;
+    let remainder = left.checked_rem(parts_u64).ok_or(not_enough)?;
+    let amount = Amount::new(share);
+    let change_parts = parts.checked_sub(1).ok_or(ArithmeticError::Overflow)?;
+    let mut change = vec![amount; change_parts];
+    if let Some(last) = change.last_mut() {
+        *last = last.checked_add(Amount::new(remainder))?;
+    }
+    Ok(Selection {
+        inputs: inputs.into_iter().cloned().collect(),
+        change,
+        amount,
+        fee,
+        total,
+    })
 }
 
 /// Whether `output` may be spent at `tip`, by `epic-wallet`'s `OutputData::eligible_to_spend`.

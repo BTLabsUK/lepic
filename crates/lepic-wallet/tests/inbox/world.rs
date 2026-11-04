@@ -148,8 +148,7 @@ impl Receiver {
         let epicbox = EpicboxTransport::new(settings, RelayNetwork::Floonet, relay.connector());
         let mut transports = lepic_transport::registry::TransportRegistry::new();
         transports.register(Box::new(epicbox.clone())).unwrap();
-        let mut config = self.harness.config(Network::Floonet);
-        config.transports = vec![TRANSPORT_ID];
+        let config = self.harness.config(Network::Floonet);
         let ports: Ports<_, TestStores, TestVault> = Ports {
             transports,
             runtime,

@@ -108,6 +108,49 @@ fn an_http_address_is_refused_before_the_wallet_stores_anything() {
     assert_eq!(listed["transactions"].as_array().unwrap().len(), 1);
 }
 
+#[test]
+fn a_send_to_a_contact_this_wallet_does_not_hold_stores_nothing() {
+    let host = TestHost::new();
+    host.fund(SENDER_MNEMONIC, 0, FUNDING, 1);
+    let wallet = Instance::new("right password");
+    wallet.restore(&host, SENDER_MNEMONIC);
+
+    let unknown = "0".repeat(32);
+    let outcome = wallet.run(
+        &host,
+        &["tx", "send", "1", "--to-contact", unknown.as_str()],
+    );
+    assert_eq!(error_kind(&outcome), "not_found");
+    let outcome = wallet.run(
+        &host,
+        &["tx", "send", "1", "--to-contact", "not-a-contact-id"],
+    );
+    assert_eq!((outcome.code, error_kind(&outcome).as_str()), (2, "usage"));
+    let slate_file = wallet.path("x.slate");
+    let outcome = wallet.run(
+        &host,
+        &[
+            "tx",
+            "send",
+            "1",
+            "--to-file",
+            slate_file.to_str().unwrap(),
+            "--purpose",
+            "withdrawal",
+        ],
+    );
+    assert_eq!(outcome.code, 2);
+    assert!(outcome.stderr.contains("--purpose"), "{}", outcome.stderr);
+    let listed = wallet.run(&host, &["tx", "list"]).json();
+    assert_eq!(listed["transactions"].as_array().unwrap().len(), 1);
+    let leftovers: Vec<_> = std::fs::read_dir(wallet.data_dir())
+        .unwrap()
+        .filter_map(Result::ok)
+        .filter(|entry| entry.file_name().to_string_lossy().ends_with(".slate"))
+        .collect();
+    assert!(leftovers.is_empty(), "{leftovers:?}");
+}
+
 /// The onion of the payment-proof key of account `m/0/0`, as `epic-wallet address` derives it.
 fn onion_of(mnemonic: &str) -> String {
     let keychain = lepic_keychain::Keychain::from_mnemonic(

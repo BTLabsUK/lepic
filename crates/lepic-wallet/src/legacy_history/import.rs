@@ -1080,6 +1080,7 @@ impl ImportWorkDir {
         }
         sweep_stale(data_dir);
         let path = data_dir.join(format!("{WORK_DIR_PREFIX}{suffix}"));
+        #[allow(unused_mut)]
         let mut builder = std::fs::DirBuilder::new();
         #[cfg(unix)]
         std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);

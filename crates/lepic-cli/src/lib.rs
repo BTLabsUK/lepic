@@ -17,6 +17,7 @@ pub mod host;
 pub mod output;
 pub mod progress;
 pub mod secret;
+mod service;
 pub mod settings;
 pub mod settings_file;
 pub mod stores;
@@ -57,18 +58,15 @@ pub fn run<H: Host>(
     console: &mut Console,
 ) -> u8 {
     randomize_crypto_context();
-    let cli = match Cli::try_parse_from(args) {
+    let args: Vec<OsString> = args.into_iter().map(Into::into).collect();
+    let cli = match Cli::try_parse_from(&args) {
         Ok(cli) => cli,
         Err(error) => {
-            let informational = matches!(
-                error.kind(),
-                ClapErrorKind::DisplayHelp | ClapErrorKind::DisplayVersion
-            );
-            let text = error.render().to_string();
-            let (stream, code) = if informational {
-                (&mut console.stdout, 0)
+            let (text, code) = usage_text(&error);
+            let stream = if code == 0 {
+                &mut console.stdout
             } else {
-                (&mut console.stderr, ErrorKind::Usage.exit_code())
+                &mut console.stderr
             };
             let _ = stream.write_all(text.as_bytes());
             return code;
@@ -79,6 +77,12 @@ pub fn run<H: Host>(
         Ok(settings) => settings,
         Err(error) => return report_error(console, format, &error.into(), None),
     };
+    if let Some(socket) = &cli.global.service {
+        let socket = socket
+            .clone()
+            .unwrap_or_else(|| service::default_socket(&settings.data_dir));
+        return forward(console, &settings, &cli.global, &args, &socket);
+    }
     let text = match execute(host, cli, &settings, console) {
         Ok(text) => text,
         Err(error) => return report_error(console, settings.output, &error, Some(&settings)),
@@ -101,6 +105,44 @@ pub fn run<H: Host>(
     }
 }
 
+/// What a command line that does not parse prints, and the exit code: help and version on
+/// standard output with 0, anything else on standard error with the usage code.
+fn usage_text(error: &clap::Error) -> (String, u8) {
+    let informational = matches!(
+        error.kind(),
+        ClapErrorKind::DisplayHelp | ClapErrorKind::DisplayVersion
+    );
+    let code = if informational {
+        0
+    } else {
+        ErrorKind::Usage.exit_code()
+    };
+    (error.render().to_string(), code)
+}
+
+/// Runs the command on the `lepic serve` process at `socket` and prints what it answers. The
+/// output format this process resolved goes along, so its environment and config file apply.
+fn forward(
+    console: &mut Console,
+    settings: &Settings,
+    global: &cli::GlobalArgs,
+    args: &[OsString],
+    socket: &std::path::Path,
+) -> u8 {
+    let sent = service::request_args(args, global.output.is_none().then_some(settings.output));
+    let reply = sent.and_then(|sent| service::call(socket, sent));
+    match reply {
+        Ok(reply) => {
+            let _ = console.stdout.write_all(reply.stdout.as_bytes());
+            let _ = console.stdout.flush();
+            let _ = console.stderr.write_all(reply.stderr.as_bytes());
+            let _ = console.stderr.flush();
+            reply.code
+        }
+        Err(error) => report_error(console, settings.output, &error, Some(settings)),
+    }
+}
+
 /// Blinds the secp256k1 context before anything uses it. Nothing in the process does crypto
 /// before the first `run`, so later calls, which only tests make, find it already created.
 /// Without OS randomness it stays unblinded, which changes no result; a command that needs
@@ -111,7 +153,7 @@ fn randomize_crypto_context() {
     }
 }
 
-fn report_error(
+pub(crate) fn report_error(
     console: &mut Console,
     format: OutputFormat,
     error: &CliError,

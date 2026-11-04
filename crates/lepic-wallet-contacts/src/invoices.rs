@@ -3,6 +3,7 @@
 //! sections 11 and 12): a contact's invoice parks only when the contact is verified and allowed
 //! to send invoices, payments and answers go through the outbox, and notices travel sealed.
 
+use crate::hex;
 use lepic_wallet::contact_link::{link_slate, slate_contact, tx_contact};
 use std::time::Duration;
 
@@ -26,8 +27,8 @@ use uuid::Uuid;
 use super::keys::{contact_network, signing_key};
 use super::{ContactError, ContactRelays, LockedRng, RelayMode};
 use crate::ContactBook;
+use lepic_primitives::error_chain::ErrorChain;
 use lepic_wallet::event::{ContactInvoiceEvent, ContactSlateEvent, Event};
-use lepic_wallet::inbox::ErrorChain;
 use lepic_wallet::invoice::{InvoiceError, InvoiceRequest, IssuedInvoice, PaidInvoice, PayRequest};
 use lepic_wallet::notice::{Notice, NoticeKind, Payload, classify_text};
 use lepic_wallet::ports::{SecretVault, StoreOpener};
@@ -96,21 +97,6 @@ fn purpose_of(byte: u8) -> Option<Purpose> {
     })
 }
 
-fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
-}
-
-fn contact_from_hex(text: &str) -> Option<ContactId> {
-    let mut id = [0u8; 16];
-    if text.len() != 32 {
-        return None;
-    }
-    for (slot, pair) in id.iter_mut().zip(text.as_bytes().chunks(2)) {
-        *slot = u8::from_str_radix(std::str::from_utf8(pair).ok()?, 16).ok()?;
-    }
-    Some(ContactId(id))
-}
-
 fn uuid(slate_id: SlateId) -> Uuid {
     Uuid::from_bytes(*slate_id.as_bytes())
 }
@@ -118,7 +104,9 @@ fn uuid(slate_id: SlateId) -> Uuid {
 /// Whether the contact may start an exchange under the slate id it chose (RFC 0002 3.4): no
 /// other contact holds the id, and no transaction of this wallet uses it, but for this
 /// contact's own repeat in the `repeat` direction. A contact can never take over a slate id
-/// this wallet exchanged with someone else.
+/// this wallet exchanged with someone else. An incoming transaction that no contact is linked
+/// to yet counts as the contact's own repeat when the repeat is `Incoming`: the receive stored it
+/// and the link behind it did not follow, and the repeat links it and sends the stored S2 again.
 fn slate_free_for(
     repos: &dyn Repositories,
     slate_id: Uuid,
@@ -129,10 +117,12 @@ fn slate_free_for(
         return Ok(false);
     }
     for direction in [TxDirection::Outgoing, TxDirection::Incoming] {
-        if let Some(tx) = repos.transaction_by_slate(slate_id, direction)?
-            && (Some(direction) != repeat || tx_contact(repos, tx.id)? != Some(contact))
-        {
-            return Ok(false);
+        if let Some(tx) = repos.transaction_by_slate(slate_id, direction)? {
+            let linked = tx_contact(repos, tx.id)?;
+            let unlinked_receive = direction == TxDirection::Incoming && linked.is_none();
+            if Some(direction) != repeat || (linked != Some(contact) && !unlinked_receive) {
+                return Ok(false);
+            }
         }
     }
     Ok(true)
@@ -162,7 +152,7 @@ pub(crate) fn drop_contact_invoices(
 /// The sender key a contact's parked invoices are stored and capped under: the contact, never
 /// the mailbox its card names, which the contact chooses.
 fn contact_sender_key(contact_id: ContactId) -> String {
-    format!("contact:{}", hex(&contact_id.0))
+    format!("contact:{}", hex::encode(&contact_id.0))
 }
 
 /// `content` with our current card, sealed at `now` and signed to the contact of `record` of
@@ -348,7 +338,7 @@ where
                 let slate = codecs.decode(&wire).ok()?;
                 Some(ContactInvoice {
                     slate_id: slate.id(),
-                    contact_id: contact_from_hex(&note.contact)?,
+                    contact_id: hex::decode_array(&note.contact).ok().map(ContactId)?,
                     amount: slate.amount(),
                     purpose: note.purpose.and_then(purpose_of),
                     reference: note.reference,
@@ -808,8 +798,9 @@ where
     }
 
     /// Whether a new S1 `slate_id` from the contact fits the open receipt caps the inbox keeps
-    /// for senders (RFC 0002 12.5): at most [`lepic_wallet::inbox::MAX_OPEN_RECEIPTS_PER_SENDER`] open
-    /// from this contact and [`lepic_wallet::inbox::MAX_OPEN_RECEIPTS`] from all contacts. One received
+    /// for senders (RFC 0002 12.5): at most the wallet policy's
+    /// `max_open_receipts_per_sender` open from this contact and its `max_open_receipts` from
+    /// all contacts. One received
     /// before always fits, so its stored S2 goes back again.
     async fn contact_receipt_room(
         &self,
@@ -817,6 +808,7 @@ where
         slate_id: Uuid,
     ) -> Result<bool, ContactError> {
         let session = self.wallet.session()?;
+        let policy = self.wallet.config().policy;
         self.contact_work(move |_, _| {
             Ok(session.store.read(|repos| {
                 if repos
@@ -844,10 +836,8 @@ where
                         None => {}
                     }
                 }
-                Ok(
-                    from_contact < lepic_wallet::inbox::MAX_OPEN_RECEIPTS_PER_SENDER
-                        && from_contacts < lepic_wallet::inbox::MAX_OPEN_RECEIPTS,
-                )
+                Ok(from_contact < policy.max_open_receipts_per_sender
+                    && from_contacts < policy.max_open_receipts)
             })?)
         })
         .await
@@ -867,7 +857,7 @@ where
         let slate_uuid = uuid(slate.id());
         let bytes = wire.as_bytes().to_vec();
         let note = InvoiceNote {
-            contact: hex(&contact_id.0),
+            contact: hex::encode(&contact_id.0),
             purpose: purpose.map(purpose_byte),
             reference: reference.clone(),
             expires,
@@ -1086,5 +1076,91 @@ where
             .await?;
         }
         Ok(declined.len())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    // Tests may unwrap (docs/rules.md).
+    #![allow(clippy::unwrap_used)]
+
+    use super::*;
+    use lepic_primitives::amount::Amount;
+    use lepic_store::{AccountIndex, AccountRecord, MemoryStore, StoreKeys, TransactionEntry};
+    use lepic_wallet::contact_link::link_tx;
+
+    const ANNA: ContactId = ContactId([1; 16]);
+    const BEN: ContactId = ContactId([2; 16]);
+    const SLATE: Uuid = Uuid::from_u128(7);
+
+    fn entry(direction: TxDirection) -> TransactionEntry {
+        TransactionEntry {
+            account: AccountIndex(0),
+            direction,
+            state: TxState::Received,
+            slate_id: Some(SLATE),
+            transport: None,
+            amount_credited: Amount::new(5),
+            amount_debited: Amount::new(0),
+            fee: None,
+            created_at: Timestamp::UNIX_EPOCH,
+            updated_at: Timestamp::UNIX_EPOCH,
+        }
+    }
+
+    fn store_with(direction: TxDirection) -> (MemoryStore, TxId) {
+        let store = MemoryStore::new(StoreKeys::from_bytes([0; 32], [0; 32]));
+        let tx_id = store
+            .write(|repos| {
+                repos.put_account(&AccountRecord {
+                    index: AccountIndex(0),
+                    label: "default".to_owned(),
+                    next_child: 0,
+                })?;
+                repos.insert_transaction(&entry(direction))
+            })
+            .unwrap();
+        (store, tx_id)
+    }
+
+    fn free(store: &MemoryStore, contact: ContactId) -> bool {
+        store
+            .read(|repos| slate_free_for(repos, SLATE, contact, Some(TxDirection::Incoming)))
+            .unwrap()
+    }
+
+    #[test]
+    fn a_stored_receive_with_no_link_is_a_repeat_that_links_it() {
+        let (store, tx_id) = store_with(TxDirection::Incoming);
+        assert!(free(&store, ANNA));
+        store
+            .write(|repos| {
+                assert!(link_slate(repos, SLATE, ANNA)?);
+                link_tx(repos, tx_id, ANNA)
+            })
+            .unwrap();
+        let linked = store.read(|repos| tx_contact(repos, tx_id)).unwrap();
+        assert_eq!(linked, Some(ANNA));
+        // A repeat of a linked receive is still the contact's, and no one else's.
+        assert!(free(&store, ANNA));
+        assert!(!free(&store, BEN));
+    }
+
+    #[test]
+    fn a_receive_linked_to_another_contact_is_not_free() {
+        let (store, tx_id) = store_with(TxDirection::Incoming);
+        store
+            .write(|repos| {
+                link_slate(repos, SLATE, BEN)?;
+                link_tx(repos, tx_id, BEN)
+            })
+            .unwrap();
+        assert!(!free(&store, ANNA));
+    }
+
+    #[test]
+    fn an_unlinked_outgoing_transaction_is_never_a_repeat() {
+        let (store, _) = store_with(TxDirection::Outgoing);
+        assert!(!free(&store, ANNA));
     }
 }

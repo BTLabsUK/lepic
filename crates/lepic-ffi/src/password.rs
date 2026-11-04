@@ -11,22 +11,16 @@
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use lepic_keychain::{KdfParams, MemoryVaultStorage, SecretStore as _, Seed, Vault};
-use rand::SeedableRng;
 use rand::rngs::StdRng;
 use tracing::warn;
 use zeroize::Zeroizing;
 
 use crate::api::error::{WalletError, WalletErrorKind};
 use crate::api::secret_store::AppSecretStore;
-use crate::vault_port::{VAULT_KEY, VAULT_NEXT_KEY, decode, vault_error};
+use crate::vault_port::{VAULT_KEY, VAULT_NEXT_KEY, blocking, decode, rng, vault_error};
 
 /// A vault opened in memory, apart from the app's store.
 pub(crate) type MemoryVault = Vault<MemoryVaultStorage, StdRng>;
-
-fn rng() -> Result<StdRng, WalletError> {
-    StdRng::try_from_rng(&mut getrandom::SysRng)
-        .map_err(|error| WalletError::new(WalletErrorKind::Other, error.to_string()))
-}
 
 fn store_failed(message: &str) -> WalletError {
     WalletError::new(WalletErrorKind::SecretStore, message)
@@ -188,12 +182,4 @@ pub(crate) async fn discard_next(store: &AppSecretStore) {
     if let Err(error) = store.delete(VAULT_NEXT_KEY).await {
         warn!(error = %error, "pending vault not deleted");
     }
-}
-
-async fn blocking<T: Send + 'static>(
-    work: impl FnOnce() -> Result<T, WalletError> + Send + 'static,
-) -> Result<T, WalletError> {
-    tokio::task::spawn_blocking(work)
-        .await
-        .map_err(|_| WalletError::new(WalletErrorKind::Panic, "vault failed inside lepic"))?
 }

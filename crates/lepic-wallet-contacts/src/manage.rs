@@ -24,10 +24,14 @@ fn kind(kind: lepic_store::ContactKind) -> ContactKind {
 
 pub(crate) fn view(
     record: &ContactRecord,
-    home_relay: Option<String>,
+    mailbox: Option<&lepic_store::ContactMailbox>,
+    network: lepic_primitives::params::Network,
     now: jiff::Timestamp,
 ) -> ContactView {
     let facts = &record.facts;
+    let home_relay = mailbox.map(|mailbox| mailbox.home_relay.clone());
+    let requested_relay =
+        mailbox.and_then(|mailbox| super::collect::requested_relay(record, mailbox, network));
     ContactView {
         contact_id: record.contact_id,
         account: record.account,
@@ -47,6 +51,7 @@ pub(crate) fn view(
         lapsed: super::sealed::lapsed(record, now),
         last_sealed_in: record.last_sealed_in,
         removed_by_peer: facts.ended_reason == Some(PairingEndReason::Unpaired),
+        requested_relay,
         created_at: record.created_at,
         status: super::status::status_of(record),
         payments_address: facts.payments_address.clone(),
@@ -197,6 +202,7 @@ where
     /// left out. Fails with [`lepic_wallet::WalletError::Locked`] and as the store does.
     pub async fn contacts(&self) -> Result<Vec<ContactView>, ContactError> {
         let session = self.wallet.session()?;
+        let network = self.wallet.config().network;
         self.contact_work(move |ports, _| {
             let now = ports.clock.now();
             Ok(session.store.read(|repos| {
@@ -205,10 +211,8 @@ where
                     if record.peer.is_none() || super::private::is_private(&record) {
                         continue;
                     }
-                    let home = repos
-                        .contact_mailbox(record.contact_id)?
-                        .map(|mailbox| mailbox.home_relay);
-                    views.push(view(&record, home, now));
+                    let mailbox = repos.contact_mailbox(record.contact_id)?;
+                    views.push(view(&record, mailbox.as_ref(), network, now));
                 }
                 Ok::<_, StoreError>(views)
             })?)
@@ -265,6 +269,7 @@ where
     /// does.
     pub async fn private_pairings(&self) -> Result<Vec<ContactView>, ContactError> {
         let session = self.wallet.session()?;
+        let network = self.wallet.config().network;
         self.contact_work(move |ports, _| {
             let now = ports.clock.now();
             Ok(session.store.read(|repos| {
@@ -273,10 +278,8 @@ where
                     if !super::private::is_private(&record) {
                         continue;
                     }
-                    let home = repos
-                        .contact_mailbox(record.contact_id)?
-                        .map(|mailbox| mailbox.home_relay);
-                    views.push(view(&record, home, now));
+                    let mailbox = repos.contact_mailbox(record.contact_id)?;
+                    views.push(view(&record, mailbox.as_ref(), network, now));
                 }
                 Ok::<_, StoreError>(views)
             })?)
@@ -287,14 +290,13 @@ where
     /// One paired contact. Fails with [`ContactError::UnknownContact`].
     pub async fn contact(&self, contact_id: ContactId) -> Result<ContactView, ContactError> {
         let session = self.wallet.session()?;
+        let network = self.wallet.config().network;
         self.contact_work(move |ports, _| {
             let now = ports.clock.now();
             session.store.read(|repos| {
                 let record = paired(repos, contact_id)?;
-                let home = repos
-                    .contact_mailbox(contact_id)?
-                    .map(|mailbox| mailbox.home_relay);
-                Ok(view(&record, home, now))
+                let mailbox = repos.contact_mailbox(contact_id)?;
+                Ok(view(&record, mailbox.as_ref(), network, now))
             })
         })
         .await
@@ -343,7 +345,7 @@ where
                 Ok(Ok(true)) => info!("unpaired notice posted"),
                 Ok(Ok(false)) => {}
                 Ok(Err(error)) => {
-                    warn!(error = %lepic_wallet::inbox::ErrorChain(&error), "unpaired notice not posted");
+                    warn!(error = %lepic_primitives::error_chain::ErrorChain(&error), "unpaired notice not posted");
                 }
                 Err(_) => warn!("unpaired notice not posted in time"),
             }
@@ -497,6 +499,93 @@ where
             .await?;
         info!(count = queued, "own name given to contacts");
         Ok(queued)
+    }
+
+    /// Moves this wallet's home relay for its contacts to `host`, `domain[:port]` (RFC 0002
+    /// 8.5): every paired contact pairing that has not ended and is not at home there gets our
+    /// card naming our mailbox on `host`, once, as a contact update queued for the mailbox it
+    /// reads now, and our mailbox for it moves to `host` in the same write. Returns how many
+    /// moved.
+    ///
+    /// The move announces and does not drain: the old mailboxes are not read again, whether
+    /// or not the contact follows. A contact that takes the update sees
+    /// [`Event::ContactRelayMoveRequested`](lepic_wallet::event::Event::ContactRelayMoveRequested)
+    /// and writes to the new mailbox once it applies the move; what it sends before that, or
+    /// all of it when it never takes the update, is lost, and the pairing has to be made
+    /// again. Private pairings and pairings in progress keep their relay. New invites name the
+    /// relay of `relays`, so the host switches its own relay too.
+    ///
+    /// Fails with [`ContactError::RelayAddress`] for a host that is not a relay's name, and as
+    /// the store does.
+    #[instrument(skip_all, fields(wallet = %self.wallet.config().name))]
+    pub async fn contacts_move_home(
+        &self,
+        relays: &ContactRelays,
+        host: &str,
+    ) -> Result<u32, ContactError> {
+        self.check_contact_network(relays)?;
+        let home = super::relay::endpoint_for(&host.trim().to_ascii_lowercase(), relays)?;
+        let home_relay = super::relay::host_text(&home);
+        let network = self.wallet.config().network;
+        let features = self.wallet.config().claimed_features();
+        let session = self.wallet.session()?;
+        let payments = super::address_proof::Payments::of(&session.keychain, network, relays)?;
+        // A collect on its way would drain the mailboxes this moves away from.
+        let turn = self.wallet.contact_turn().await;
+        let moved = self
+            .contact_work(move |ports, _| {
+                let now = ports.clock.now();
+                session.store.write(|repos| {
+                    let at = super::address_proof::CardUpdate {
+                        keychain: &session.keychain,
+                        network,
+                        payments: &payments,
+                        features,
+                        now,
+                    };
+                    let mut moved = 0u32;
+                    for record in repos.contacts()? {
+                        let Some(mut mailbox) = repos.contact_mailbox(record.contact_id)? else {
+                            continue;
+                        };
+                        if mailbox.home_relay == home_relay {
+                            continue;
+                        }
+                        let keys = super::keys::contact_keys(
+                            &session.keychain,
+                            network,
+                            record.account,
+                            record.slot,
+                            record.box_salt,
+                        )?;
+                        let ours = super::keys::box_identity(&keys, network, &home)?
+                            .address()
+                            .to_string();
+                        let named = lepic_contact::MailboxAddress::new(&ours)
+                            .map_err(ContactError::Name)?;
+                        if !super::address_proof::queue_card_update(
+                            repos,
+                            &ports.rng,
+                            &at,
+                            record,
+                            |fields| fields.mailbox = named,
+                        )? {
+                            continue;
+                        }
+                        mailbox.home_relay.clone_from(&home_relay);
+                        // Only a drain left by following a contact's own move stays, to its end.
+                        mailbox.our_mailbox = ours;
+                        repos.put_contact_mailbox(&mailbox)?;
+                        moved = moved.saturating_add(1);
+                    }
+                    Ok::<_, ContactError>(moved)
+                })
+            })
+            .await?;
+        drop(turn);
+        self.deliver_soon(relays).await;
+        info!(count = moved, "home relay moved for contacts");
+        Ok(moved)
     }
 
     /// Sets the user's own name for a contact; an empty label clears it. A label follows the

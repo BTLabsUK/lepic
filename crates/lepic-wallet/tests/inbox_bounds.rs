@@ -34,11 +34,12 @@ use lepic_store::{
     AccountIndex, InboxEntry, InboxStatus, OutputRecord, OutputStatus, SlateStage, TxDirection,
     TxId, TxState, WalletStore,
 };
-use lepic_wallet::Event;
-use lepic_wallet::inbox::{
-    InboxSummary, ListenHandle, MAX_OPEN_RECEIPTS, MAX_OPEN_RECEIPTS_PER_SENDER,
-};
+use lepic_wallet::inbox::{InboxSummary, ListenHandle};
+use lepic_wallet::{Event, WalletPolicy};
 use world::World;
+
+const MAX_OPEN_RECEIPTS: usize = WalletPolicy::DEFAULT.max_open_receipts;
+const MAX_OPEN_RECEIPTS_PER_SENDER: usize = WalletPolicy::DEFAULT.max_open_receipts_per_sender;
 
 const VECTOR_SLATE_ID: &str = "0436430c-2b02-624c-2032-570501212b03";
 

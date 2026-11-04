@@ -342,6 +342,32 @@ fn a_failed_post_leaves_the_transaction_finalized_until_it_is_posted_again() {
     assert!(transaction_events(&mut events).is_empty());
 }
 
+both_stores!(a_failed_post_raises_not_posted_each_time_and_a_good_post_does_not);
+fn a_failed_post_raises_not_posted_each_time_and_a_good_post_does_not() {
+    let exchange = exchange(request(), None);
+    let mut events = exchange.sender.wallet.subscribe();
+    let node = &exchange.sender.harness.node;
+    node.fail_next("push_transaction", MockFailure::Unreachable);
+
+    exchange.finalize(&exchange.s2).unwrap_err();
+    node.fail_next("push_transaction", MockFailure::Unreachable);
+    exchange.post(exchange.tx_id).unwrap_err();
+    exchange.post(exchange.tx_id).unwrap();
+
+    let mut raised = Vec::new();
+    while let Ok(event) = events.try_recv() {
+        if let lepic_wallet::Event::NotPosted(not_posted) = event {
+            raised.push(not_posted);
+        }
+    }
+    assert_eq!(raised.len(), 2, "{raised:?}");
+    for not_posted in &raised {
+        assert_eq!(not_posted.tx_id, exchange.tx_id);
+        assert_eq!(not_posted.slate_id, exchange.slate_id);
+        assert!(!not_posted.reason.is_empty());
+    }
+}
+
 both_stores!(finalizing_again_after_a_failed_post_posts);
 fn finalizing_again_after_a_failed_post_posts() {
     let exchange = exchange(request(), None);

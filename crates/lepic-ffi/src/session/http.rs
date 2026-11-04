@@ -199,7 +199,9 @@ impl Session {
         message: Option<String>,
         options: Option<SendOptions>,
     ) -> Result<HttpSentTx, WalletError> {
-        let request = Self::send_request_with(amount, minimum_confirmations, message, options)?;
+        let request =
+            self.policy
+                .send_request_with(amount, minimum_confirmations, message, options)?;
         let url = foreign_url(url, allow_plain_http)?;
         let sent = self.engine.send(request, delivery(&url)).await?;
         let slate_id = sent.slate_id.to_string();

@@ -119,6 +119,8 @@ pub struct TorSettings {
     /// users out.
     pub data_dir: PathBuf,
     pub timings: TorTimings,
+    /// Environment variables tor does not inherit, such as one the host read a secret from.
+    pub withheld_env: Vec<String>,
 }
 
 impl TorSettings {
@@ -128,6 +130,7 @@ impl TorSettings {
             lib_dir: None,
             data_dir,
             timings,
+            withheld_env: Vec::new(),
         }
     }
 }
@@ -1135,6 +1138,9 @@ async fn launch(settings: &TorSettings, socks: &SharedSocks) -> Result<Running, 
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
+    for name in &settings.withheld_env {
+        command.env_remove(name);
+    }
     if let Some(lib_dir) = &settings.lib_dir
         && cfg!(target_os = "linux")
     {
@@ -1360,17 +1366,23 @@ mod tests {
     fn torrc_has_private_ports_cookie_auth_and_an_owner() {
         let paths = TorPaths::new(Path::new("/w/tor"));
         let torrc = build_torrc(&paths, 4242).unwrap();
+        let quoted = |name: &str| torrc_quote(&Path::new("/w/tor").join(name)).unwrap();
         assert_eq!(
             torrc,
-            "SocksPort auto ExtendedErrors IsolateSOCKSAuth\n\
-             ControlPort auto\n\
-             ControlPortWriteToFile \"/w/tor/control.txt\"\n\
-             CookieAuthentication 1\n\
-             CookieAuthFile \"/w/tor/control.cookie\"\n\
-             DataDirectory \"/w/tor/data\"\n\
-             __OwningControllerProcess 4242\n\
-             Log notice stdout\n\
-             AvoidDiskWrites 1\n"
+            format!(
+                "SocksPort auto ExtendedErrors IsolateSOCKSAuth\n\
+                 ControlPort auto\n\
+                 ControlPortWriteToFile {}\n\
+                 CookieAuthentication 1\n\
+                 CookieAuthFile {}\n\
+                 DataDirectory {}\n\
+                 __OwningControllerProcess 4242\n\
+                 Log notice stdout\n\
+                 AvoidDiskWrites 1\n",
+                quoted("control.txt"),
+                quoted("control.cookie"),
+                quoted("data"),
+            )
         );
     }
 

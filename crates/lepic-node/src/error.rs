@@ -200,26 +200,10 @@ impl fmt::Display for RejectionKind {
     }
 }
 
-// Bounds the walk so a cyclic or very deep source chain cannot make a log line unbounded.
-const MAX_ERROR_SOURCES: usize = 16;
-
-/// Formats an error with its source chain, for the `error` log field.
-pub(crate) struct ErrorChain<'a>(pub(crate) &'a (dyn StdError + 'static));
-
-impl fmt::Display for ErrorChain<'_> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.0)?;
-        let sources = std::iter::successors(self.0.source(), |&error| error.source());
-        for source in sources.take(MAX_ERROR_SOURCES) {
-            write!(f, ": {source}")?;
-        }
-        Ok(())
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use lepic_primitives::error_chain::ErrorChain;
 
     #[test]
     fn error_chain_includes_sources() {

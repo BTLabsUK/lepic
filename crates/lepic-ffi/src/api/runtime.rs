@@ -7,6 +7,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 
 use flutter_rust_bridge::frb;
 use lepic_keychain::KdfParams;
+use lepic_store::{DataDirLock, DataDirLockError};
 use lepic_telemetry::{LogFilter, LogRing, LogRingError, LogRingLimit, host_dispatch};
 use rand::SeedableRng as _;
 use rand::rngs::StdRng;
@@ -89,6 +90,22 @@ impl LepicRuntime {
                 NodeFactory::Http,
                 KdfParams::DEFAULT,
                 PinPolicy::DEFAULT,
+            )
+        })
+    }
+
+    /// [`LepicRuntime::new`] with the PIN rules the app chose.
+    #[frb(sync)]
+    pub fn with_pin_settings(
+        log_level: LogLevel,
+        pin: crate::api::policy::PinSettings,
+    ) -> Result<LepicRuntime, WalletError> {
+        guard("runtime", || {
+            Self::start(
+                log_level,
+                NodeFactory::Http,
+                KdfParams::DEFAULT,
+                pin.resolve()?,
             )
         })
     }
@@ -289,7 +306,7 @@ impl RuntimeInner {
         if open.contains(dir) {
             return Err(busy());
         }
-        let lock = lock_dir(dir)?;
+        let lock = lepic_store::try_lock_data_dir(dir).map_err(lock_error)?;
         open.insert(dir.to_path_buf());
         Ok(DirClaim {
             runtime: Arc::clone(self),
@@ -315,44 +332,26 @@ fn busy() -> WalletError {
     )
 }
 
-/// An exclusive OS lock on `LOCK_FILE` in `dir`, so other runtimes and processes cannot open
-/// the directory's database at the same time. Released when the file is closed. A symbolic link
-/// in place of the lock file is refused rather than followed, as the CLI refuses it. The file
-/// is opened close-on-exec, as the standard library opens every file, so a child process the
-/// app starts does not inherit the lock.
-fn lock_dir(dir: &Path) -> Result<std::fs::File, WalletError> {
-    let mut options = std::fs::File::options();
-    options.create(true).truncate(false).write(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt as _;
-        options.custom_flags(lepic_transport::file::O_NOFOLLOW);
-    }
-    let file = options.open(dir.join(LOCK_FILE)).map_err(|error| {
-        WalletError::new(
+/// The error for a directory that could not be claimed.
+fn lock_error(error: DataDirLockError) -> WalletError {
+    match error {
+        DataDirLockError::Busy => busy(),
+        DataDirLockError::Open(error) => WalletError::new(
             WalletErrorKind::Io,
             format!("wallet directory lock is not usable: {error}"),
-        )
-    })?;
-    match file.try_lock() {
-        Ok(()) => Ok(file),
-        Err(std::fs::TryLockError::WouldBlock) => Err(busy()),
-        Err(std::fs::TryLockError::Error(error)) => Err(WalletError::new(
+        ),
+        DataDirLockError::Lock(error) => WalletError::new(
             WalletErrorKind::Io,
             format!("wallet directory could not be locked: {error}"),
-        )),
+        ),
     }
 }
-
-/// The file in a data directory that holds the directory lock. It stays when the lock is
-/// released: removing it would let two openers lock different files.
-const LOCK_FILE: &str = ".lepic.lock";
 
 /// A data directory a wallet or a deletion is using.
 pub(crate) struct DirClaim {
     pub(crate) runtime: Arc<RuntimeInner>,
     pub(crate) dir: PathBuf,
-    _lock: std::fs::File,
+    _lock: DataDirLock,
 }
 
 impl Drop for DirClaim {
@@ -559,25 +558,6 @@ impl<S: lepic_store::WalletStore> lepic_store::WalletStore for ClaimedStore<S> {
 mod tests {
     use super::*;
 
-    /// The lock file's descriptor is close-on-exec, read from its open-file description.
-    #[cfg(target_os = "linux")]
-    #[test]
-    fn the_directory_lock_is_not_inherited_by_child_processes() {
-        use std::os::fd::AsRawFd as _;
-
-        const O_CLOEXEC: u32 = 0o2000000;
-        let dir = tempfile::tempdir().unwrap();
-        let file = lock_dir(dir.path()).unwrap();
-        let info =
-            std::fs::read_to_string(format!("/proc/self/fdinfo/{}", file.as_raw_fd())).unwrap();
-        let flags = info
-            .lines()
-            .find_map(|line| line.strip_prefix("flags:"))
-            .map(|flags| u32::from_str_radix(flags.trim(), 8).unwrap())
-            .unwrap();
-        assert_eq!(flags & O_CLOEXEC, O_CLOEXEC, "{info}");
-    }
-
     fn new_runtime() -> LepicRuntime {
         crate::api::testing::MockChain::new(1)
             .unwrap()
@@ -762,9 +742,11 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let elsewhere = tempfile::tempdir().unwrap();
         let target = elsewhere.path().join("created-through-the-link");
-        std::os::unix::fs::symlink(&target, dir.path().join(LOCK_FILE)).unwrap();
+        std::os::unix::fs::symlink(&target, dir.path().join(lepic_store::LOCK_FILE)).unwrap();
 
-        let error = lock_dir(dir.path()).unwrap_err();
+        let error = lepic_store::try_lock_data_dir(dir.path())
+            .map_err(lock_error)
+            .unwrap_err();
         assert_eq!(error.kind, WalletErrorKind::Io);
         assert!(!target.exists(), "the lock followed the link");
     }
@@ -772,12 +754,21 @@ mod tests {
     #[test]
     fn a_locked_directory_is_busy_until_released() {
         let dir = tempfile::tempdir().unwrap();
-        let held = lock_dir(dir.path()).unwrap();
+        let held = lepic_store::try_lock_data_dir(dir.path())
+            .map_err(lock_error)
+            .unwrap();
         assert_eq!(
-            lock_dir(dir.path()).unwrap_err().kind,
+            lepic_store::try_lock_data_dir(dir.path())
+                .map_err(lock_error)
+                .unwrap_err()
+                .kind,
             WalletErrorKind::WalletBusy
         );
         drop(held);
-        assert!(lock_dir(dir.path()).is_ok());
+        assert!(
+            lepic_store::try_lock_data_dir(dir.path())
+                .map_err(lock_error)
+                .is_ok()
+        );
     }
 }

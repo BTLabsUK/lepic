@@ -58,6 +58,7 @@ fn live_send_http_through_tor() {
     let rt = runtime.inner.boundary.handle.clone();
     let data = tempfile::tempdir().unwrap();
     let mut config = WalletConfig {
+        policy: Default::default(),
         data_dir: data.path().to_string_lossy().into_owned(),
         chain: Chain::Floonet,
         node_url,
@@ -201,6 +202,7 @@ fn live_tor_wanted_without_tor_reaches_nothing() {
     let rt = runtime.inner.boundary.handle.clone();
     let data = tempfile::tempdir().unwrap();
     let mut config = WalletConfig {
+        policy: Default::default(),
         data_dir: data.path().to_string_lossy().into_owned(),
         chain: Chain::Floonet,
         node_url: std::env::var("LEPIC_TEST_NODE_URL").unwrap(),

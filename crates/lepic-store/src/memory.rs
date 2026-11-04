@@ -686,6 +686,16 @@ impl SettingsRepository for MemoryRepos<'_> {
         Ok(self.state.settings.get(key).cloned())
     }
 
+    fn settings_with_prefix(&self, prefix: &str) -> Result<Vec<(String, String)>, StoreError> {
+        Ok(self
+            .state
+            .settings
+            .iter()
+            .filter(|(key, _)| key.starts_with(prefix))
+            .map(|(key, value)| (key.clone(), value.clone()))
+            .collect())
+    }
+
     fn delete_setting(&mut self, key: &str) -> Result<(), StoreError> {
         self.state.settings.remove(key);
         Ok(())

@@ -32,7 +32,7 @@ record that supersedes the old one; accepted records are not rewritten.
 | [0024](0024-contact-pairing-and-invoice-trust.md) | Contact pairing, sealed slates, and invoice trust on paired contacts | proposed |
 | [0025](0025-animated-qr-slates.md) | Slates as animated QR codes in `ur:epic-slate` | accepted |
 | [0026](0026-tor-as-a-build-feature.md) | Tor is a build feature of the binding | accepted |
-| [0027](0027-minimum-confirmations.md) | Minimum confirmations is a per-wallet setting, default 6 | accepted |
+| [0027](0027-minimum-confirmations.md) | Minimum confirmations is a per-wallet setting, default 6 | accepted, the cap of 30 superseded by 0036 |
 | [0028](0028-transaction-records-in-tables.md) | Per-transaction state lives in tables that cascade with the transaction | accepted |
 | [0029](0029-contacts-on-the-engine.md) | Contacts are a crate on top of the engine | accepted |
 | [0030](0030-all-configuration-in-settings-toml.md) | All configuration in settings.toml (no hardcoded configuration) | accepted |
@@ -41,6 +41,10 @@ record that supersedes the old one; accepted records are not rewritten.
 | [0033](0033-key-and-domain-registry.md) | One registry of seed-derived keys and signature domains | proposed |
 | [0034](0034-trust-versioning-and-probing.md) | Trust, versioning and probing between Epic wallets | proposed |
 | [0035](0035-restore-from-a-start-height.md) | Restore from a start height | accepted |
+| [0036](0036-policy-values-are-host-parameters.md) | Policy values are host parameters | accepted |
+| [0037](0037-one-send-to-self.md) | One send-to-self primitive | accepted |
+| [0039](0039-the-host-applies-a-relay-move.md) | The host applies a contact's relay move | accepted |
+| [0040](0040-contact-check-and-own-relay-move.md) | The contact check and moving one's own home relay | accepted |
 
 Template:
 

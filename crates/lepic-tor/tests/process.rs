@@ -377,6 +377,23 @@ async fn bootstraps_publishes_the_wallet_onion_and_stops() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn tor_does_not_inherit_a_withheld_variable() {
+    let fake = FakeTor::start(HONEST).await;
+    let mut settings = fake.settings(quick());
+    // Cargo sets both for the test process; only the withheld one must be missing in tor's.
+    settings.withheld_env = vec!["CARGO_PKG_NAME".to_owned()];
+    let tor = TorProcess::start(settings);
+    tor.wait_bootstrapped().await.unwrap();
+    let env = std::fs::read_to_string(fake.dir.path().join("fake-env")).unwrap();
+    tor.stop().await;
+    assert!(
+        env.lines()
+            .any(|line| line.starts_with("CARGO_PKG_VERSION="))
+    );
+    assert!(!env.lines().any(|line| line.starts_with("CARGO_PKG_NAME=")));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_stalled_bootstrap_is_a_network_failure() {
     let fake = FakeTor::start(Script {
         bootstrap: Bootstrap::Stalls,

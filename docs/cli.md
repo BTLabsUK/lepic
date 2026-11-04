@@ -64,6 +64,7 @@ Each setting comes from, in order: a flag, its environment variable, the config 
 | `data_dir` | `LEPIC_DATA_DIR` | `--data-dir` | `~/.lepic/<network>` |
 | `node_url` | `LEPIC_NODE_URL` | | the first of `[node] servers` in the settings file (`http://127.0.0.1:3413` shipped); floonet `[floonet] node` of the built-in configuration (`http://127.0.0.1:13413`) |
 | `node_api_secret_file` | `LEPIC_NODE_API_SECRET_FILE` | | none |
+| `password_file` | `LEPIC_PASSWORD_FILE` | | none |
 | `epicbox_relay` | `LEPIC_EPICBOX_RELAY` | | the first of `[epicbox] servers` in the settings file, over `wss://` |
 | `epicbox_tor_socks` | `LEPIC_EPICBOX_TOR_SOCKS` | | none: the relay is reached directly |
 | `epicbox_tor_binary` | `LEPIC_EPICBOX_TOR_BINARY` | | none |
@@ -72,7 +73,7 @@ Each setting comes from, in order: a flag, its environment variable, the config 
 | `output` | `LEPIC_OUTPUT` | `--output` | `human` |
 | `log_level` | `LEPIC_LOG_LEVEL` | `--log-level` | `warn` |
 | `log_format` | `LEPIC_LOG_FORMAT` | `--log-format` | `compact` |
-| `invoice_expiry_hours` | `LEPIC_INVOICE_EXPIRY_HOURS` | | `24`, at most `48` |
+| `invoice_expiry_hours` | `LEPIC_INVOICE_EXPIRY_HOURS` | | `24` |
 | `settings_file` | `LEPIC_SETTINGS` | `--settings` | `~/.lepic/settings.toml` |
 
 The config file is `~/.lepic/config.toml` when it exists, or the file `--config` or `LEPIC_CONFIG`
@@ -158,10 +159,15 @@ set, the node is never reached directly.
 ## Passwords and the recovery phrase
 
 Secrets are never taken from arguments, which other users can see in the process list and your
-shell keeps in its history. A command that opens the wallet reads the password from
-`LEPIC_PASSWORD` if it is set, else from a hidden prompt, else from one line of standard input. A
-new password is asked for twice at a prompt. `LEPIC_PASSWORD` is meant for scripts; while a
-command runs, other processes of the same user can read it.
+shell keeps in its history. A command that opens the wallet reads the password from the first
+line of `password_file` if it is set, else from `LEPIC_PASSWORD`, else from a hidden prompt, else
+from one line of standard input. A new password is asked for twice at a prompt.
+
+`password_file` is meant for services: point it at a file only its owner can read (mode `0600`).
+A file root owns may also be readable by its group or by the users an access list names, as a
+systemd credential (`LoadCredential=`) is. Any other mode is refused. `LEPIC_PASSWORD` is meant for scripts; while
+a command runs, other processes of the same user can read it. Neither is passed on to the tor the
+CLI starts.
 
 The recovery phrase is shown once, by `wallet init`. Write it down. It is the only way to get the
 funds back if the data directory is lost, and anyone who has it can spend them.
@@ -370,7 +376,8 @@ it the next time it connects, with either of:
   did: `Received 0, finalized 1, repeated 0, rejected 0, held for retry 0, parked 0, bounced 0,
   dropped 0, notices 0.`
 - `lepic epicbox listen` stays connected, answers incoming payments and finalizes answers as they
-  arrive, printing each change on stderr, until Ctrl-C. Then it prints the same summary.
+  arrive, printing each change on stderr, until Ctrl-C or SIGTERM. It then settles the message
+  in hand (at most 30 seconds) and prints the same summary.
 
 Receiving over Epicbox needs no command beyond these two: the sender's S1 waits on the relay
 until you drain or listen. `epic-wallet` on the other side handles your answer only while it
@@ -387,6 +394,16 @@ lepic tx resend 3 --to <address>
 lepic tx resend 3 --to-file pay-alice.slate
 lepic tx cancel 3
 ```
+
+A program that pays, such as a faucet, can make a send safe to repeat: it draws a random
+version-4 UUID, stores it with its own record of the payment, and passes it as `--slate-id`. If
+the program does not learn how the send ended, it runs the same command again. A send already
+made under that id is not made again: `lepic` exits 0 with the first send's `tx_id`, amount, fee
+and current `state`, `"repeated": true`, and `"delivered"`, which is `false` while the slate
+still has to be resent. The same id with another account, amount, destination or transport is
+refused with exit code 7. A slate id stays taken after the send is cancelled or expires.
+`lepic tx show --slate-id <UUID>` shows the send made under an id (exit 6 when there is none).
+The slate id travels in the slate, so never derive it from a user or order id.
 
 `tx cancel` of a transaction the other party can still complete on its own (a finalized send, an
 invoice you paid, a payment you received and answered) first asks the node, and is refused with
@@ -534,7 +551,7 @@ exchange whose slate came marked, to a wallet that has shown it runs LEPIC in th
 because `epic-wallet` cannot read them; they are counted as
 `notices` and, with human output, shown on stderr.
 
-Unpaid invoices expire after `invoice_expiry_hours`, 24 unless set, at most 48. Each `epicbox
+Unpaid invoices expire after `invoice_expiry_hours`, 24 unless set. Each `epicbox
 drain`, and `epicbox listen` when it starts and every few minutes while it runs, deletes parked
 invoices that were not paid in time, and cancels invoices this wallet issued that nobody paid,
 which drops the output and keys they reserved, so a late payment is refused. A payment of an
@@ -589,11 +606,34 @@ reply or confirm link sent by hand. In person, each side runs `contact show-card
 pair, at its Epicbox address; it is sent only to a key that ran LEPIC within 30 days and claims
 pair requests, and the pairing completes verified when the answer proves that address.
 
+A contact that moves to another relay asks for it in an update; `contact list` then shows
+`asks to move to relay <HOST>`, and `contact move <ID> --apply <HOST>` moves this wallet's
+mailbox with it there. Until then the contact's mailbox stays where it was.
+
+`contact move-home <HOST>` moves this wallet's own home relay for every paired contact: each is
+sent our card naming our mailbox on `<HOST>` once, and our mailboxes move there at once. The old
+mailboxes are not read again, so a contact that misses the update stops reaching this wallet
+until it pairs again. Set `<HOST>` as the wallet's Epicbox relay too, so new invites name it.
+
+`contact check <ID>` asks a paired contact to answer with its current card; a later `contact
+collect` takes the answer, and `contact list` shows when the contact was last heard
+(`last_heard`) and any relay it moved to.
+A wallet answers at most `contact_check_answers_per_hour` (default 1) and
+`contact_check_answers_per_day` (default 3) checks per contact; more are taken and dropped.
+
 `contact allow-invoices <ID> on` lets a verified contact send invoices; they arrive with
 `contact collect` and wait in `contact invoices` until `contact pay-invoice <SLATE_ID> <AMOUNT>`
 or `contact decline <SLATE_ID>`, which tells the contact.
 `contact invoice <ID> <AMOUNT>` invoices a contact. `contact collect` also sends what the outbox
 holds. `contact export <FILE>` and `contact import <FILE>` carry the pairings in a backup.
+
+`tx send <AMOUNT> --to-contact <ID>` pays a contact through its mailbox: the slate is sealed to
+the contact, queued in the outbox and posted at once when the relay answers. `--purpose
+withdrawal` (or `payment`, `refund`, ...) tells the contact what the payment is for. A contact
+that cannot take the slate is refused before anything is locked, and a send that cannot be
+queued is cancelled. `contact collect` posts what is still queued and finalizes the answer.
+`--slate-id` works as for any send; a repeat must name the same contact. The send is stored with
+the `file` transport, since the slate leaves as a sealed file.
 
 ## Transactions
 
@@ -606,7 +646,7 @@ $ lepic tx list
 
 States: `sent` (S1 or I2 handed over), `received` (S2 or I1 answered, waiting for the other side),
 `finalized`, `posted` (with the node), `confirmed` (in a block), `cancelled`, `expired`.
-`lepic tx show <ID>` adds the slate id, timestamps, the slate stages stored, the final kernel's
+`lepic tx show <ID>` (or `--slate-id <UUID>` for a send) adds the slate id, timestamps, the slate stages stored, the final kernel's
 excess (`Kernel`, JSON `kernel_excess`, in hex) and the block height the transaction was
 confirmed at (`Confirmed at`, JSON `confirmed_height`). The kernel is known once this wallet has
 finalized the transaction or paid the invoice, so not for a payment taken by `tx receive` or one
@@ -643,6 +683,82 @@ already holds the transaction's kernel, lepic records the transaction as posted 
 confirms it. Human output then reads `Transaction <ID> is posted; its kernel is already on chain at
 height <n>.` The JSON document keeps `"state": "posted"` and adds `"already_on_chain": true` and
 `"height": <n>`; for a normal accept `already_on_chain` is `false` and there is no `height`.
+
+## Service
+
+`lepic serve` keeps one unlocked wallet open and answers other `lepic` commands over a local
+socket. A script that runs many commands, such as a bot, then unlocks the wallet once and never
+fights over `.lepic.lock`. Unix only: on other platforms `serve` and `--service` fail with a usage
+error.
+
+```
+lepic serve &                               # asks for the password once
+lepic --service wallet info                 # answered by the running serve
+lepic --service=/run/user/1000/l.sock tx list
+```
+
+`serve` opens the wallet as every other command does (password from the environment, a file or a
+prompt) and holds `.lepic.lock` until it stops. While it runs it also:
+
+- listens on the Epicbox relay and expires invoices, as `epicbox listen` does;
+- collects the contacts' mailboxes at start, every mailbox at once, then every minute as the app's
+  foreground tick does, keeping relay backoff (`contact collect` through `--service` tries
+  everything at once);
+- refreshes the wallet from the node at start and every minute.
+
+A failed tick is logged at `warn` and never ends `serve`. `lepic --service serve status` shows,
+for the refresh and the collect, the failures since the last success, the last error and the time
+of the last success; `serve` only reports them and keeps trying every minute. Without `--service`,
+`serve status` exits with code 2 (`usage`).
+
+```
+$ lepic --service serve status
+Refresh  0 failures in a row, last success 2026-11-04T10:15:02Z
+Collect  3 failures in a row, last success 2026-11-04T10:12:01Z, last error: ...
+```
+
+With `--output json`, each of `refresh` and `collect` holds `consecutive_failures`, `last_error`
+(`null` before any failure, kept after a success) and `last_success` (`null` before the first).
+
+The socket is `<data_dir>/lepic.sock`; `--socket <PATH>` picks another. The path must fit a Unix
+socket (107 bytes on Linux), or `serve` exits with a usage error that names `--socket`. The socket
+has mode 600 and `serve` drops connections from any other user. A socket file left by an earlier
+`serve` is replaced; any other file at the path is an error and is left alone. The socket is removed
+when `serve` stops.
+
+`--service` sends the command to `serve` instead of running it. It prints what the command would
+have printed and exits with its code. Without `--service` a command never goes to `serve`. A bare
+`--service` uses the client's default socket; `--service=/path/s.sock` names one. If nothing answers
+at the socket, the exit code is 5 and the kind `service_unavailable`.
+
+Requests run at the same time, except sends over Tor, which take turns. The output format is the
+client's `--output` (or its `LEPIC_OUTPUT` and settings file). The request's log options are
+accepted and ignored, because `serve` logs to its own stderr.
+
+`serve` refuses with exit code 2 (`usage`) what cannot work inside it:
+
+- `wallet init`, `wallet restore` and `wallet import-seed`;
+- `serve` (but not `serve status`), `epicbox listen`, `http listen` and `tor listen`, because
+  `serve` owns the process;
+- `contact open-sealed -`, which would read the stdin of `serve`;
+- `--network` with another network than `serve` opened, and `--service`.
+
+`--data-dir`, `--config` and `--settings` in a request are ignored: the socket picks the wallet, so
+`lepic --data-dir /srv/faucet --service tx list` finds the socket there and runs on whatever wallet
+that `serve` holds.
+
+A command that reads a secret from stdin fails, as `serve` gives every request an empty stdin.
+
+On SIGINT or SIGTERM `serve` stops accepting connections and stops the listener. Each running
+request is interrupted as Ctrl-C interrupts the command run on its own, and `serve` waits for every
+one to answer: most end at once with exit code 12, and a `tx send` that may have stored its
+transaction answers with its `tx_id`. A request still being read is closed unanswered. A second
+signal does nothing, as for any `lepic` command; SIGKILL ends `serve` at once. It then locks the
+wallet, removes the socket and releases the lock. Its report names the socket, the number of requests served and what the listener received.
+
+The protocol is local to the CLI and may change: one request per connection, one JSON line
+`{"args":[...]}` of at most 64 KiB, answered by one JSON object `{"code":0,"stdout":"","stderr":""}`.
+Use `lepic --service` rather than the socket directly.
 
 ## Data and logs
 
@@ -683,13 +799,18 @@ Amounts are strings with eight decimals. The exit code says what kind of failure
 | 3 | `config` | invalid settings or config file |
 | 4 | `wrong_password` | the password did not unlock the wallet |
 | 5 | `wallet_state` | no wallet, a wallet already exists, it is in use, or it belongs to another network |
+| 5 | `service_unavailable` | `--service` found no `lepic serve` at the socket |
 | 6 | `not_found` | no such transaction, slate or account |
 | 7 | `rejected` | the slate or request was refused; nothing was stored |
 | 8 | `insufficient_funds` | not enough spendable funds |
 | 9 | `node` | the node could not be reached or answered badly |
 | 10 | `transport` | the slate file, the relay, the http listener or tor failed |
 | 11 | `incomplete` | stored, but not delivered or not posted; retry |
-| 12 | `interrupted` | stopped before it finished |
+| 12 | `interrupted` | stopped by Ctrl-C or SIGTERM before it finished |
+
+An error about one stored transaction also carries its `tx_id`. A `tx send` stopped by Ctrl-C
+or SIGTERM after it stored its transaction exits 12 with that `tx_id`; `lepic tx show` tells
+whether it was delivered, and `tx resend` or `tx cancel` settles it.
 
 ## Common errors
 

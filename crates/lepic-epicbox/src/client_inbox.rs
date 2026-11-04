@@ -17,6 +17,7 @@ use std::pin::pin;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
+use lepic_primitives::error_chain::ErrorChain;
 use lepic_slate::codec::{MediaType, WireSlate};
 use lepic_transport::error::TransportError;
 use lepic_transport::transport::{AckToken, BoxFuture, Destination, Envelope, Inbound};
@@ -30,9 +31,7 @@ use tracing::instrument::WithSubscriber;
 use tracing::{Instrument, debug, info, info_span, warn};
 
 use crate::address::EpicboxAddress;
-use crate::client::{
-    Awaiting, CancelToken, ClientContext, ClientError, ErrorChain, TRANSPORT_ID, post_frame,
-};
+use crate::client::{Awaiting, CancelToken, ClientContext, ClientError, TRANSPORT_ID, post_frame};
 use crate::crypto::{MessageError, ReceivedMessage};
 use crate::frame::{ClientFrame, RelayFrame, RelayMessageId, SlateFrame, WalletMode};
 use crate::prefilter::Admission;

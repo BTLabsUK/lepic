@@ -38,12 +38,7 @@ use crate::tuning::Tuning;
 /// Where the tor events of a session go.
 pub(crate) type TorReport = Arc<dyn Fn(TorEvent) + Send + Sync>;
 
-/// The directory inside the wallet's data directory that holds its tor's files.
-const TOR_DIR: &str = "tor";
-
-/// The file inside the wallet's data directory that says tor was expected and not stopped
-/// since: the next session waits for tor from its first connection.
-const TOR_EXPECTED_FILE: &str = "tor-expected";
+use super::{TOR_DIR, TOR_EXPECTED_FILE};
 
 /// The node requests, relay connection and HTTP sends of a session on `data_dir`. They wait
 /// for tor from the start when the app opens the session with `tor_wanted`, or when the last
@@ -664,7 +659,9 @@ impl Session {
         message: Option<String>,
         options: Option<SendOptions>,
     ) -> Result<HttpSentTx, WalletError> {
-        let request = Self::send_request_with(amount, minimum_confirmations, message, options)?;
+        let request =
+            self.policy
+                .send_request_with(amount, minimum_confirmations, message, options)?;
         let onion = onion(to)?;
         let report = self.tor_send_report()?;
         // The checks the send makes before it stores anything, so a send that cannot be
@@ -810,7 +807,7 @@ impl Session {
         self.node_tor.attach_socks(lepic_tor::FixedSocks(socks));
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     pub(crate) fn send_through_tor(&self) -> bool {
         *self.send_tor.active().borrow()
     }
@@ -820,18 +817,18 @@ impl Session {
         *self.relay_tor.active().borrow()
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     pub(crate) fn node_through_tor(&self) -> bool {
         *self.node_tor.active().borrow()
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     pub(crate) fn set_tor_timings(&self, timings: lepic_tor::TorTimings) {
         *lock(&self.tor_timings) = Some(timings);
     }
 
     /// Whether the running tor has a listener behind its onion.
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     pub(crate) fn tor_listener_runs(&self) -> bool {
         matches!(&*lock(&self.tor_slot), TorSlot::Running(run) if run.listener.is_some())
     }

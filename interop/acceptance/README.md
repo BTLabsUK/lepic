@@ -12,7 +12,11 @@ its own and answered from the listing, whose transaction names the listing. Last
 with a second lepic wallet by invite: both check the words, the payer allows the service's
 invoices, the service invoices it through the contact mailboxes, the payer pays once with the
 amount typed again, the service finalizes and posts, and the payer's `contact collect` shows
-that it was posted. Then lepic sends to that wallet over
+that it was posted. lepic then checks that contact while the payer runs `lepic serve`, which
+answers by itself, so lepic hears the payer again; `serve status` shows the collect and the
+refresh succeeding and serve stops cleanly on Ctrl-C. The CLI keeps no limits of its own: a
+two-letter password makes a wallet, a 72-hour invoice expiry is taken, and only an empty
+password (exit 7) and an expiry of 0 hours (exit 3) are refused. Then lepic sends to that wallet over
 Epicbox while it listens: both slates carry the LEPIC marker, and the listener reports the
 payment as posted by its sender seconds after the sender's push, before it confirms; a stock
 `epic-wallet` receiver's unmarked answer is recorded as another wallet's and is sent no notice. A stock `epic-wallet`

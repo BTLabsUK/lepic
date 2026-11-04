@@ -3,6 +3,7 @@
 //! under the pairing's channel key and signed, queued in the outbox, and kept on arrival until
 //! the host acknowledges them. LEPIC never reads them. Contacts never carry them.
 
+use crate::hex;
 use jiff::Timestamp;
 use lepic_contact::{Content, MessageType, Reference};
 use lepic_epicbox::Handled;
@@ -68,25 +69,6 @@ struct Kept {
     payload: String,
 }
 
-fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
-}
-
-fn unhex(text: &str) -> Option<Vec<u8>> {
-    let (pairs, rest) = text.as_bytes().as_chunks::<2>();
-    if !rest.is_empty() {
-        return None;
-    }
-    pairs
-        .iter()
-        .map(|pair| {
-            std::str::from_utf8(pair)
-                .ok()
-                .and_then(|pair| u8::from_str_radix(pair, 16).ok())
-        })
-        .collect()
-}
-
 /// The index of kept payloads. A damaged one is an error rather than an empty index, which
 /// the next arrival would write over and so lose every payload kept.
 fn read_index(repos: &dyn Repositories) -> Result<Index, StoreError> {
@@ -136,21 +118,21 @@ fn keep(
     }
     let kept = Kept {
         received_at: now.as_millisecond(),
-        payload: hex(payload),
+        payload: hex::encode(payload),
     };
     let text = serde_json::to_string(&kept).map_err(|_| StoreError::Corrupt {
         record: lepic_store::Record::Contact,
         field: "payload",
     })?;
     repos.put_setting(&id.key(), &text)?;
-    index.0.push((id_text, hex(&contact_id.0)));
+    index.0.push((id_text, hex::encode(&contact_id.0)));
     write_index(repos, &index)?;
     Ok(Arrival::New)
 }
 
 /// The contact a stored id names, when it is one.
 fn contact_of(text: &str) -> Option<ContactId> {
-    unhex(text)?.try_into().ok().map(ContactId)
+    hex::unhex(text)?.try_into().ok().map(ContactId)
 }
 
 /// Whether `record` is a pairing payloads may travel over: paired, with the peer's card.
@@ -247,7 +229,7 @@ where
                     };
                     let decoded = serde_json::from_str::<Kept>(&text).ok().and_then(|kept| {
                         Some((
-                            unhex(&kept.payload)?,
+                            hex::unhex(&kept.payload)?,
                             Timestamp::from_millisecond(kept.received_at).ok()?,
                         ))
                     });

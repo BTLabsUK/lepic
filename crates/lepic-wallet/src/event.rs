@@ -119,6 +119,11 @@ pub enum Event {
     /// time, its match verdict accepted, or the pairing ended by the contact or by never being
     /// finished. Never raised for this side's own words check.
     ContactUpdated(ContactUpdate),
+    /// A contact update named a mailbox on another relay. The newer card was stored, with an
+    /// [`Event::ContactUpdated`] for it, and the mailbox in use stays: the host decides whether
+    /// to follow, and applies the move with the contact book's `apply_relay_move`. Raised once
+    /// per card.
+    ContactRelayMoveRequested(RelayMoveRequest),
     /// A home relay did not answer; collecting from it backs off (RFC 0002 8.4).
     HomeRelayUnreachable(UnreachableRelay),
     /// A key check proved the contact still holds the old keys: the old pairing keeps its keys
@@ -157,6 +162,13 @@ pub enum Event {
     /// A contact sent a payload; it is kept for [`crate::Wallet::contact_payloads`] until the
     /// host acknowledges it.
     ContactPayload(ContactEvent),
+    /// The node refused a finalized transaction or could not be reached when it was pushed.
+    /// The transaction stays finalized and stored with its inputs locked; nothing is retried
+    /// here. The host decides when to push it again with [`crate::Wallet::post`], or to
+    /// cancel it. Raised for every failed push, from a finalize, a repost, an Epicbox
+    /// answer or an invoice payment; a push the node refused because inputs were spent
+    /// ends the transaction instead and raises no such event.
+    NotPosted(NotPosted),
 }
 
 /// An invoice a contact sent, with what the contact says about it.
@@ -193,6 +205,13 @@ pub struct OutboxNews {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ContactEvent {
     pub contact_id: lepic_store::ContactId,
+}
+
+/// A contact that asked to move to another relay, and that relay as `domain:port`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RelayMoveRequest {
+    pub contact_id: lepic_store::ContactId,
+    pub host: String,
 }
 
 /// A pairing request that was stored: its id and the sender's address.
@@ -249,6 +268,8 @@ pub enum PairingFailure {
     /// The confirm does not match the invite's commitment or enc key: something changed the
     /// invite on the way. Nothing was stored.
     ChangedOnTheWay,
+    /// The confirm's card names another contact kind than the invite did. Nothing was stored.
+    KindDiffers,
     /// The invite expired before a reply arrived.
     Expired,
     /// This wallet answered an invite and no confirm came in time, or, as the inviter, could
@@ -401,6 +422,15 @@ pub struct UnmatchedNotice {
 pub struct SupersededReceive {
     pub tx_id: TxId,
     pub slate_id: SlateId,
+}
+
+/// A finalized transaction the node did not take.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NotPosted {
+    pub tx_id: TxId,
+    pub slate_id: SlateId,
+    /// Why, as the node's error reads, for the host to log or show.
+    pub reason: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -147,6 +147,7 @@ async fn publishes_an_onion_and_reaches_it_over_tor() {
 }
 
 /// `check_version` at `onion` through `tor`, with more tries than [`TorTransport`] makes.
+#[cfg(unix)]
 async fn reach(tor: &TorProcess, onion: &lepic_tor::OnionAddress) -> f64 {
     let client = OnionClient::new(lepic_tor::testing::onion_client_settings());
     let asked = Instant::now();
@@ -171,6 +172,7 @@ async fn reach(tor: &TorProcess, onion: &lepic_tor::OnionAddress) -> f64 {
 }
 
 /// Sends `signal` to the tor started with `torrc`.
+#[cfg(unix)]
 fn signal_tor(torrc: &std::path::Path, signal: &str) {
     let status = std::process::Command::new("pkill")
         .arg(format!("-{signal}"))
@@ -186,6 +188,7 @@ fn signal_tor(torrc: &std::path::Path, signal: &str) {
 /// it; then tor is frozen as a phone's app freezer does, for `LEPIC_TOR_PAUSE_SECS` (default
 /// 90), thawed and refreshed, and refreshed again as after a network change. The onion
 /// answers after each.
+#[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "needs LEPIC_LIVE_TESTS=1, LEPIC_TOR_BINARY and the network"]
 async fn survives_a_left_tor_a_pause_and_a_network_change() {
