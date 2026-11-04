@@ -39,6 +39,10 @@ was checked with fixed-vector and mainnet-data comparisons of the old and new bu
 5. bitcoin-core/secp256k1 `e6d01e93` (PR 607): `src/ecmult_impl.h`, the three Pippenger
    bucket-table sizes are computed as `sizeof(...) << bucket_window` instead of
    `(1 << bucket_window) * sizeof(...)`, so the shift happens in `size_t`. Same values.
+6. bitcoin-core/secp256k1 `3cb057f8` (PR 578): `src/ecdsa_impl.h`,
+   `secp256k1_der_read_len` checks the parsed length against the remaining input without a sum
+   that could wrap. Well-formed DER parses as before; only a malformed length can change from
+   accepted to rejected. Not used by Epic consensus.
 
 ## Build changes (`build.rs`)
 
