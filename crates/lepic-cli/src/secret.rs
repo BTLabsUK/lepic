@@ -322,18 +322,19 @@ mod tests {
 
     #[test]
     fn an_empty_new_password_is_refused_from_every_source() {
-        let mut env = Env::new([(PASSWORD_ENV.to_owned(), String::new())]);
-        let mut input = input("\n");
-        block_on(async {
-            assert!(matches!(
-                input.wallet_password(&mut env, None, true).await,
-                Err(SecretError::EmptyNew)
-            ));
-            assert!(matches!(
-                input.wallet_password(&mut env, None, true).await,
-                Err(SecretError::EmptyNew)
-            ));
-        });
+        // An empty variable counts as unset, so the empty line on standard input is read.
+        let vars: [Vec<(String, String)>; 2] =
+            [vec![(PASSWORD_ENV.to_owned(), String::new())], vec![]];
+        for vars in vars {
+            let mut env = Env::new(vars);
+            let mut input = input("\n");
+            block_on(async {
+                assert!(matches!(
+                    input.wallet_password(&mut env, None, true).await,
+                    Err(SecretError::EmptyNew)
+                ));
+            });
+        }
     }
 
     /// A short password is read as it is, for a new wallet or an existing one.
