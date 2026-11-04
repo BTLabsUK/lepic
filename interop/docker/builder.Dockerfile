@@ -4,6 +4,7 @@
 # rust:1.89.0-bookworm, pinned by digest. build.sh checks the tag against REFERENCE_RUST.
 FROM rust:1.89.0-bookworm@sha256:948f9b08a66e7fe01b03a98ef1c7568292e07ec2e4fe90d88c07bb14563c84ff
 
+ARG NODE_RUST=1.99.1
 ARG LEPIC_RUST=1.99.0
 
 # The node and wallet build RandomX and secp256k1-zkp from C and C++, and bindgen needs libclang.
@@ -18,8 +19,8 @@ RUN apt-get update \
         pkg-config \
     && rm -rf /var/lib/apt/lists/*
 
-# Clippy and rustfmt check the interop miner, which builds with the reference toolchain.
-RUN rustup component add clippy rustfmt \
+# Clippy and rustfmt check the interop miners, which build with the node's toolchain.
+RUN rustup toolchain install "${NODE_RUST}" --profile minimal --component clippy,rustfmt \
     && rustup toolchain install "${LEPIC_RUST}" --profile minimal \
     && chmod -R a+rwX "${RUSTUP_HOME}"
 

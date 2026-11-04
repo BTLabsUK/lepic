@@ -404,8 +404,8 @@ dependencies = [
 
 [[package]]
 name = "epic_core"
-version = "4.1.0"
-source = "git+https://github.com/EpicCash/epic?tag=v4.1.0#82fa7e813dc3b9bf137b9dd523d847f4210f5ba4"
+version = "4.1.2"
+source = "git+https://github.com/EpicCash/epic?tag=v4.1.2#bd3a8c8c5e957e57574364326dfb17051d0096ae"
 dependencies = [
  "blake2-rfc",
  "byteorder",
@@ -436,8 +436,8 @@ dependencies = [
 
 [[package]]
 name = "epic_keychain"
-version = "4.1.0"
-source = "git+https://github.com/EpicCash/epic?tag=v4.1.0#82fa7e813dc3b9bf137b9dd523d847f4210f5ba4"
+version = "4.1.2"
+source = "git+https://github.com/EpicCash/epic?tag=v4.1.2#bd3a8c8c5e957e57574364326dfb17051d0096ae"
 dependencies = [
  "blake2-rfc",
  "byteorder",
@@ -460,8 +460,8 @@ dependencies = [
 
 [[package]]
 name = "epic_util"
-version = "4.1.0"
-source = "git+https://github.com/EpicCash/epic?tag=v4.1.0#82fa7e813dc3b9bf137b9dd523d847f4210f5ba4"
+version = "4.1.2"
+source = "git+https://github.com/EpicCash/epic?tag=v4.1.2#bd3a8c8c5e957e57574364326dfb17051d0096ae"
 dependencies = [
  "anyhow",
  "backtrace",

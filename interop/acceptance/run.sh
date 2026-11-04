@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: Apache-2.0
 # CLI acceptance: drives the installed `lepic` binary through every command against the local
-# interop stack (relay, reference node v4.1.0 on a test-mode chain, epic-wallet v4.1.0), in both
+# interop stack (relay, reference node v4.1.2 on a test-mode chain, epic-wallet v4.1.0), in both
 # directions over Epicbox and slate files, and prints a pass or fail table. Exits 0 only when
 # every step passed. Each run starts from a clean state: a new chain, new wallets and a new
 # lepic home under .work/state.

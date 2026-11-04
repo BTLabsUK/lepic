@@ -16,7 +16,7 @@ source "${interop_dir}/pins.env"
 # The same tag ../build.sh computes, so both use one builder image.
 builder_image="lepic-interop-builder:$({
     cat "${interop_dir}/docker/builder.Dockerfile"
-    echo "${REFERENCE_RUST} ${LEPIC_RUST}"
+    echo "${REFERENCE_RUST} ${NODE_RUST} ${LEPIC_RUST}"
 } | sha256sum | cut -c1-12)"
 
 log() { printf '[live-build] %s\n' "$*" >&2; }
@@ -25,7 +25,7 @@ miner_cargo() {
     docker run --rm \
         --user "$(id -u):$(id -g)" \
         -e HOME=/work/home \
-        -e RUSTUP_TOOLCHAIN="${REFERENCE_RUST}" \
+        -e RUSTUP_TOOLCHAIN="${NODE_RUST}" \
         -e CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-4}" \
         -e CARGO_TARGET_DIR=/work/target/live-miner \
         -e CARGO_TERM_COLOR=never \

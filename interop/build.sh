@@ -14,7 +14,7 @@ source "${interop_dir}/pins.env"
 # The tag changes with the Dockerfile and the toolchains, so a change rebuilds the image.
 builder_image="lepic-interop-builder:$({
     cat "${interop_dir}/docker/builder.Dockerfile"
-    echo "${REFERENCE_RUST} ${LEPIC_RUST}"
+    echo "${REFERENCE_RUST} ${NODE_RUST} ${LEPIC_RUST}"
 } | sha256sum | cut -c1-12)"
 jobs="${CARGO_BUILD_JOBS:-4}"
 
@@ -66,6 +66,7 @@ build_builder_image() {
     fi
     log "building ${builder_image}"
     docker build -q \
+        --build-arg "NODE_RUST=${NODE_RUST}" \
         --build-arg "LEPIC_RUST=${LEPIC_RUST}" \
         -t "${builder_image}" \
         -f "${interop_dir}/docker/builder.Dockerfile" \
@@ -91,16 +92,16 @@ cargo_in_builder() {
         cargo "$@"
 }
 
-# Compiles a pinned upstream binary once. Its build directory is deleted afterwards: the
+# Compiles a pinned upstream binary once, with the toolchain its source pins. Its build directory is deleted afterwards: the
 # binary never changes for a pinned commit, and the directory is several gigabytes.
 build_pinned() {
-    local name="$1" source_dir="$2" commit="$3" binary="$4"
+    local name="$1" toolchain="$2" source_dir="$3" commit="$4" binary="$5"
     local stamp="${work_dir}/bin/${binary}.commit"
     if [[ -x "${work_dir}/bin/${binary}" && "$(cat "${stamp}" 2>/dev/null)" == "${commit}" ]]; then
         return
     fi
     log "compiling ${name}"
-    cargo_in_builder "${REFERENCE_RUST}" "${source_dir}" "${binary}" build --release --locked
+    cargo_in_builder "${toolchain}" "${source_dir}" "${binary}" build --release --locked
     install -m 0755 "${work_dir}/target/${binary}/release/${binary}" "${work_dir}/bin/${binary}"
     echo "${commit}" >"${stamp}"
     rm -rf "${work_dir}/target/${binary}"
@@ -108,18 +109,20 @@ build_pinned() {
 
 build_binaries() {
     mkdir -p "${work_dir}/bin"
-    build_pinned "epic ${EPIC_TAG}" /work/src/epic "${EPIC_COMMIT}" epic
-    build_pinned "epic-wallet ${EPIC_WALLET_TAG}" /work/src/epic-wallet "${EPIC_WALLET_COMMIT}" epic-wallet
-    build_pinned "the relay's epicboxlib" /work/src/epic-epicbox-docker/epicboxlib_source \
+    build_pinned "epic ${EPIC_TAG}" "${NODE_RUST}" /work/src/epic "${EPIC_COMMIT}" epic
+    build_pinned "epic-wallet ${EPIC_WALLET_TAG}" "${REFERENCE_RUST}" /work/src/epic-wallet \
+        "${EPIC_WALLET_COMMIT}" epic-wallet
+    build_pinned "the relay's epicboxlib" "${REFERENCE_RUST}" \
+        /work/src/epic-epicbox-docker/epicboxlib_source \
         "${EPICBOX_COMMIT}" epicboxlib
     install -m 0644 "${work_dir}/src/epic/debian/foundation_floonet.json" \
         "${work_dir}/bin/foundation_floonet.json"
 
     log "checking and compiling the interop miner"
-    cargo_in_builder "${REFERENCE_RUST}" /repo/interop/miner miner fmt --check
-    cargo_in_builder "${REFERENCE_RUST}" /repo/interop/miner miner \
+    cargo_in_builder "${NODE_RUST}" /repo/interop/miner miner fmt --check
+    cargo_in_builder "${NODE_RUST}" /repo/interop/miner miner \
         clippy --release --locked -- -D warnings
-    cargo_in_builder "${REFERENCE_RUST}" /repo/interop/miner miner build --release --locked
+    cargo_in_builder "${NODE_RUST}" /repo/interop/miner miner build --release --locked
     install -m 0755 "${work_dir}/target/miner/release/lepic-interop-miner" "${work_dir}/bin/miner"
 
     log "compiling lepic"
