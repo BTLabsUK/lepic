@@ -100,6 +100,13 @@ was checked with fixed-vector and mainnet-data comparisons of the old and new bu
    up to the alignment wraps. Callers pass at most `2 + n_proofs` objects and sizes far below
    the bound, so their results are unchanged.
 
+16. bitcoin-core/secp256k1 `2277af5f` (PR 568): `src/ecmult_impl.h`, `secp256k1_ecmult_multi_var`
+   computes `n_batches` and `n_batch_points` as `n / d + (n % d != 0)` instead of
+   `(n + d - 1) / d`, at both the Pippenger and the Strauss site. Upstream moved the arithmetic
+   into `secp256k1_ecmult_multi_batch_size_helper`; the vendored inline form is kept. Both
+   formulas are ceil(n / d) whenever `n + d - 1` fits in `size_t`, which holds for every real
+   input.
+
 ## Build changes (`build.rs`)
 
 Each one is a change to how the C library is compiled, not to its source.

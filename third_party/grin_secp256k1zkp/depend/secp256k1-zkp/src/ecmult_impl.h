@@ -1114,8 +1114,9 @@ static int secp256k1_ecmult_multi_var(const secp256k1_ecmult_context *ctx, secp2
     } else if (max_points > ECMULT_MAX_POINTS_PER_BATCH) {
         max_points = ECMULT_MAX_POINTS_PER_BATCH;
     }
-    n_batches = (n+max_points-1)/max_points;
-    n_batch_points = (n+n_batches-1)/n_batches;
+    /* Compute ceil(n/max_points) and ceil(n/n_batches) without wrapping around */
+    n_batches = n/max_points + (n%max_points != 0);
+    n_batch_points = n/n_batches + (n%n_batches != 0);
 
     if (n_batch_points >= ECMULT_PIPPENGER_THRESHOLD) {
         f = secp256k1_ecmult_pippenger_batch;
@@ -1124,8 +1125,8 @@ static int secp256k1_ecmult_multi_var(const secp256k1_ecmult_context *ctx, secp2
         if (max_points == 0) {
             return 0;
         }
-        n_batches = (n+max_points-1)/max_points;
-        n_batch_points = (n+n_batches-1)/n_batches;
+        n_batches = n/max_points + (n%max_points != 0);
+        n_batch_points = n/n_batches + (n%n_batches != 0);
         f = secp256k1_ecmult_strauss_batch;
     }
     for(i = 0; i < n_batches; i++) {
