@@ -188,7 +188,14 @@ impl CliError {
 
     pub fn kind(&self) -> ErrorKind {
         match self {
-            Self::Settings(_) | Self::Telemetry(_) | Self::SharedDataDir => ErrorKind::Config,
+            Self::Settings(_)
+            | Self::Telemetry(_)
+            | Self::SharedDataDir
+            | Self::Secret(
+                SecretError::PasswordFileOpen { .. }
+                | SecretError::PasswordFileEmpty { .. }
+                | SecretError::PasswordFile { .. },
+            ) => ErrorKind::Config,
             Self::Secret(SecretError::Mismatch | SecretError::TooShort { .. }) => {
                 ErrorKind::Rejected
             }

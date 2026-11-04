@@ -44,6 +44,11 @@ pub const SETTINGS: &[(&str, &str, &str)] = &[
         "file holding the node's foreign api secret",
     ),
     (
+        "password_file",
+        "LEPIC_PASSWORD_FILE",
+        "file holding the wallet password, readable by its owner only",
+    ),
+    (
         "epicbox_relay",
         "LEPIC_EPICBOX_RELAY",
         "relay as wss://host[:port], or ws://host[:port] for a loopback host",
@@ -240,6 +245,8 @@ pub struct Settings {
     pub output: OutputFormat,
     pub node: NodeEndpoint,
     pub node_api_secret_file: Option<PathBuf>,
+    /// Read for the wallet password before `LEPIC_PASSWORD` and the prompt.
+    pub password_file: Option<PathBuf>,
     pub relay: RelayEndpoint,
     /// The servers of the settings file and the built-in configuration.
     pub servers: Servers,
@@ -357,6 +364,7 @@ impl Settings {
             },
             node,
             node_api_secret_file: lookup.path("node_api_secret_file")?,
+            password_file: lookup.path("password_file")?,
             relay,
             servers,
             tuning: config.tuning,

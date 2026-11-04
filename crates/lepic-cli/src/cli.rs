@@ -9,10 +9,10 @@ use clap::{Args, Parser, Subcommand, ValueEnum};
 use crate::exit::EXIT_CODES_HELP;
 
 const NEW_PASSWORD_HELP: &str = "\
-The new wallet password comes from LEPIC_PASSWORD, else from a hidden prompt, else from one line
-of standard input. LEPIC_PASSWORD stays in the process environment while the command runs, where
-the same user's processes can read it; the prompt and standard input do not leave it there. A new
-wallet password has at least 8 characters.";
+The new wallet password comes from the file LEPIC_PASSWORD_FILE names, else LEPIC_PASSWORD, else
+from a hidden prompt, else from one line of standard input. LEPIC_PASSWORD stays in the process
+environment while the command runs, where the same user's processes can read it; the prompt and
+standard input do not leave it there. A new wallet password has at least 8 characters.";
 
 const RESTORE_HELP: &str = "\
 Reads the recovery phrase, then the new wallet password unless LEPIC_PASSWORD is set, from hidden
@@ -29,10 +29,11 @@ password has at least 8 characters.";
 const LONG_ABOUT: &str = "\
 A light Epic Cash wallet
 
-Commands that open the wallet read its password from LEPIC_PASSWORD, else from a hidden prompt,
-else from one line of standard input. Secrets are never taken from arguments. LEPIC_PASSWORD stays
-in the process environment while the command runs, where the same user's processes can read it;
-the prompt and standard input do not leave it there.";
+Commands that open the wallet read its password from the file LEPIC_PASSWORD_FILE names (owner-only),
+else from LEPIC_PASSWORD, else from a hidden prompt, else from one line of standard input. Secrets
+are never taken from arguments. LEPIC_PASSWORD stays in the process environment while the command
+runs, where the same user's processes can read it; the file, the prompt and standard input do not
+leave it there.";
 
 #[derive(Debug, Parser)]
 #[command(

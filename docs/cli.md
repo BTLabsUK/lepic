@@ -64,6 +64,7 @@ Each setting comes from, in order: a flag, its environment variable, the config 
 | `data_dir` | `LEPIC_DATA_DIR` | `--data-dir` | `~/.lepic/<network>` |
 | `node_url` | `LEPIC_NODE_URL` | | the first of `[node] servers` in the settings file (`http://127.0.0.1:3413` shipped); floonet `[floonet] node` of the built-in configuration (`http://127.0.0.1:13413`) |
 | `node_api_secret_file` | `LEPIC_NODE_API_SECRET_FILE` | | none |
+| `password_file` | `LEPIC_PASSWORD_FILE` | | none |
 | `epicbox_relay` | `LEPIC_EPICBOX_RELAY` | | the first of `[epicbox] servers` in the settings file, over `wss://` |
 | `epicbox_tor_socks` | `LEPIC_EPICBOX_TOR_SOCKS` | | none: the relay is reached directly |
 | `epicbox_tor_binary` | `LEPIC_EPICBOX_TOR_BINARY` | | none |
@@ -158,10 +159,14 @@ set, the node is never reached directly.
 ## Passwords and the recovery phrase
 
 Secrets are never taken from arguments, which other users can see in the process list and your
-shell keeps in its history. A command that opens the wallet reads the password from
-`LEPIC_PASSWORD` if it is set, else from a hidden prompt, else from one line of standard input. A
-new password is asked for twice at a prompt. `LEPIC_PASSWORD` is meant for scripts; while a
-command runs, other processes of the same user can read it.
+shell keeps in its history. A command that opens the wallet reads the password from the first
+line of `password_file` if it is set, else from `LEPIC_PASSWORD`, else from a hidden prompt, else
+from one line of standard input. A new password is asked for twice at a prompt.
+
+`password_file` is meant for services: point it at a file only its owner can read (mode `0600`,
+or a systemd credential); any other mode is refused. `LEPIC_PASSWORD` is meant for scripts; while
+a command runs, other processes of the same user can read it. Neither is passed on to the tor the
+CLI starts.
 
 The recovery phrase is shown once, by `wallet init`. Write it down. It is the only way to get the
 funds back if the data directory is lost, and anyone who has it can spend them.
