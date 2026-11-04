@@ -107,6 +107,15 @@ const FEW_RELAYS: usize = 3;
 const IN_PERSON_PREFIX: &str = "contact.inperson.";
 const OLD_SALT_PREFIX: &str = "contact.oldsalt.";
 const STAMPED_PREFIX: &str = "contact.stamped.";
+const HELD_PREFIX: &str = "contact.held.";
+
+/// How many times a mailbox message that fails with an error is kept for the next cycle. As for
+/// the payments inbox: a relay discards everything queued for an address when one message stays
+/// unacknowledged for long, and every message behind a held one waits meanwhile.
+const MAX_HOLD_ATTEMPTS: u32 = 3;
+
+/// How long after a mailbox message was first held it is still kept, as for the payments inbox.
+const HOLD_PATIENCE: Duration = Duration::from_secs(3 * 60);
 
 /// The setting that marks a contact whose envelopes carry their send time: from then on one
 /// without it is refused.
@@ -704,6 +713,45 @@ where
         .await
     }
 
+    /// Counts one more hold of the envelope with `hash` and returns whether it may still be
+    /// held: fewer than [`MAX_HOLD_ATTEMPTS`] holds so far, and within [`HOLD_PATIENCE`] of the
+    /// first. The count is kept as `first-seen seconds:holds` under the envelope's hash.
+    async fn count_hold(&self, hash: [u8; 32]) -> Result<bool, ContactError> {
+        let session = self.wallet.session()?;
+        self.contact_work(move |ports, _| {
+            let now = u64::try_from(ports.clock.now().as_second()).unwrap_or(0);
+            let key = format!("{HELD_PREFIX}{}", hex(&hash));
+            session.store.write(|repos| {
+                let (first, holds) = repos
+                    .setting(&key)?
+                    .and_then(|text| {
+                        let (first, holds) = text.split_once(':')?;
+                        Some((first.parse::<u64>().ok()?, holds.parse::<u32>().ok()?))
+                    })
+                    .unwrap_or((now, 0));
+                let holds = holds.saturating_add(1);
+                let expired = hold_expired(first, holds, now);
+                if expired {
+                    repos.delete_setting(&key)?;
+                } else {
+                    repos.put_setting(&key, &format!("{first}:{holds}"))?;
+                }
+                Ok::<_, ContactError>(!expired)
+            })
+        })
+        .await
+    }
+
+    /// Forgets the hold count of a settled envelope.
+    async fn clear_hold(&self, hash: [u8; 32]) -> Result<(), ContactError> {
+        let session = self.wallet.session()?;
+        self.contact_work(move |_, _| {
+            let key = format!("{HELD_PREFIX}{}", hex(&hash));
+            Ok(session.store.write(|repos| repos.delete_setting(&key))?)
+        })
+        .await
+    }
+
     /// Forgets envelopes seen longer ago than a relay keeps a message, and a little longer.
     async fn forget_old_envelopes(&self) -> Result<(), ContactError> {
         let session = self.wallet.session()?;
@@ -733,17 +781,17 @@ where
             let Some(sent_at) = sent_at else {
                 let stamped = session.store.read(|repos| repos.setting(&key))?.is_some();
                 if stamped {
-                    debug!("envelope without a send time dropped");
+                    warn!("envelope without a send time dropped");
                 }
                 return Ok(!stamped);
             };
             let now = u64::try_from(ports.clock.now().as_second()).unwrap_or(0);
             if sent_at > now.saturating_add(MAX_CLOCK_AHEAD.as_secs()) {
-                debug!("envelope sealed ahead of our clock dropped");
+                warn!("envelope sealed ahead of our clock dropped");
                 return Ok(false);
             }
             if now.saturating_sub(sent_at) > MAX_ENVELOPE_AGE.as_secs() {
-                debug!("envelope sealed too long ago dropped");
+                warn!("envelope sealed too long ago dropped");
                 return Ok(false);
             }
             session.store.write(|repos| {
@@ -1398,7 +1446,7 @@ fn store_card_news(
     let moved = peer_mailbox != mailbox.peer_mailbox;
     let Some(relays) = relays.as_ref() else {
         if moved {
-            debug!("card naming another mailbox outside an update ignored");
+            warn!("card naming another mailbox outside an update ignored");
             return Ok(false);
         }
         record.peer = Some(peer_card(&card));
@@ -1406,14 +1454,14 @@ fn store_card_news(
         return Ok(true);
     };
     if !within_update_limits(repos, contact_id, now.as_second())? {
-        debug!("contact update over the limits dropped");
+        warn!("contact update over the limits dropped");
         return Ok(false);
     }
     let relay = EpicboxAddress::parse(&peer_mailbox, relay_network(network))
         .map_err(|_| ContactError::RelayAddress)?;
     let new_host = relay_host(&relay);
     if !may_move(&mailbox.peer_mailbox, &relay, service, relays, network) {
-        debug!("contact update to a relay it may not move to dropped");
+        warn!("contact update to a relay it may not move to dropped");
         return Ok(false);
     }
     record.peer = Some(peer_card(&card));
@@ -1564,6 +1612,15 @@ fn within_update_limits(
     Ok(true)
 }
 
+/// Whether a message first held at `first` (seconds) and held `holds` times by `now` may no
+/// longer be kept for the next cycle.
+fn hold_expired(first: u64, holds: u32, now: u64) -> bool {
+    holds > MAX_HOLD_ATTEMPTS
+        || now.saturating_sub(first) >= HOLD_PATIENCE.as_secs()
+        // A clock set back since the first hold.
+        || first > now.saturating_add(HOLD_PATIENCE.as_secs())
+}
+
 /// Hands each drained message to the engine and acknowledges it once its effect is stored.
 struct Collector<'a, N, S: StoreOpener, V> {
     wallet: &'a ContactBook<'a, N, S, V>,
@@ -1601,10 +1658,7 @@ where
             };
             match self.take(job, &envelope).await {
                 Ok(handled) => handled,
-                Err(error) => {
-                    warn!(error = %ErrorChain(&error), "mailbox message kept for later");
-                    Handled::Later
-                }
+                Err(error) => self.hold_or_settle(&envelope, &error).await,
             }
         })
     }
@@ -1616,6 +1670,31 @@ where
     S: StoreOpener + 'static,
     V: SecretVault + 'static,
 {
+    /// Keeps a message whose handling failed for the next cycle, until it has been held
+    /// [`MAX_HOLD_ATTEMPTS`] times or [`HOLD_PATIENCE`] has passed since it was first held:
+    /// then it is settled, so the relay keeps nothing behind it waiting. An error counting the
+    /// attempt itself does not stop the message being kept.
+    async fn hold_or_settle(&self, envelope: &[u8], error: &ContactError) -> Handled {
+        let hash = envelope_hash(envelope);
+        match self.wallet.count_hold(hash).await {
+            Ok(true) => {
+                warn!(error = %ErrorChain(error), "mailbox message kept for later");
+                Handled::Later
+            }
+            Ok(false) => {
+                warn!(error = %ErrorChain(error), "mailbox message dropped after being held too long");
+                if let Err(error) = self.wallet.remember(hash).await {
+                    warn!(error = %ErrorChain(&error), "dropped mailbox message not remembered");
+                }
+                Handled::Stored
+            }
+            Err(count_error) => {
+                warn!(error = %ErrorChain(error), count = %ErrorChain(&count_error), "mailbox message kept for later, holds not counted");
+                Handled::Later
+            }
+        }
+    }
+
     async fn take(&mut self, job: Job, envelope: &[u8]) -> Result<Handled, ContactError> {
         let hash = envelope_hash(envelope);
         if self.wallet.seen_before(hash).await? {
@@ -1641,6 +1720,7 @@ where
         };
         if handled == Handled::Stored {
             self.wallet.remember(hash).await?;
+            self.wallet.clear_hold(hash).await?;
         }
         Ok(handled)
     }
@@ -1652,5 +1732,26 @@ where
             _ => {}
         }
         taken.map(|_| Handled::Stored)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_message_is_held_for_a_few_tries_and_a_few_minutes() {
+        let now = 1_000_000;
+        assert!(!hold_expired(now, 1, now));
+        assert!(!hold_expired(now, MAX_HOLD_ATTEMPTS, now + 10));
+        assert!(hold_expired(now, MAX_HOLD_ATTEMPTS + 1, now));
+        assert!(hold_expired(now, 1, now + HOLD_PATIENCE.as_secs()));
+    }
+
+    #[test]
+    fn a_clock_set_back_since_the_first_hold_ends_it() {
+        let first = 1_000_000;
+        assert!(hold_expired(first, 1, first - HOLD_PATIENCE.as_secs() - 1));
+        assert!(!hold_expired(first, 1, first - 1));
     }
 }
