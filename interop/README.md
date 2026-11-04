@@ -114,7 +114,7 @@ the fees, so a lost or doubled effect fails the run.
 | same S1 twice over http | one S1 posted twice to `lepic http listen`: identical S2, one transaction, report counts one received and one repeated |
 | receiver cancels an unseen receipt | `epic-wallet` pays over Epicbox and does not finalize; `lepic tx cancel` succeeds and the amount leaves `wallet info`; `epic-wallet` then finalizes anyway, and once mined `lepic` confirms the transaction and the output comes back |
 | receiver cancel of a posted receipt | with the miner paused, `epic-wallet` finalizes and posts; `lepic tx cancel` is refused with exit 7 as in the node's pool, then, after the block, as on chain; state and balance stay |
-| spendable at three confirmations | with the miner paused and blocks mined one at a time, a receipt awaits confirmation at 1 and 2 confirmations, a send that needs it exits 8 at 2, and it is spendable at exactly 3 |
+| spendable at minimum confirmations | with the miner paused and blocks mined one at a time, a receipt awaits confirmation below LEPIC's default minimum confirmations (6), a send that needs it exits 8 one block before, and it is spendable at exactly 6 |
 
 `SCENARIO_FILTER='import epic-wallet history' ./run.sh` runs the last scenario alone (`history.sh`,
 `history_compare.py`). It builds a history in a fresh `epic-wallet` wallet: receipts over Epicbox and

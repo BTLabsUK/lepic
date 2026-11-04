@@ -607,10 +607,14 @@ lepic_nothing_pending() {
         $(info_field "${info}" locked) == 0))
 }
 
-# A received output awaits confirmation at one and two confirmations and is spendable at three
-# (by design); a send that needs it fails before.
-scenario_three_confirmations_body() {
-    local amount=0.45 slate=/exchange/three-confirmations.slate
+# Confirmations a LEPIC wallet needs before an output is spendable when it has not set its own
+# (`DEFAULT_MINIMUM_CONFIRMATIONS`, ADR 0027).
+LEPIC_MINIMUM_CONFIRMATIONS=6
+
+# A received output awaits confirmation below the wallet's minimum confirmations and is spendable
+# at it; a send that needs it fails one block before.
+scenario_minimum_confirmations_body() {
+    local amount=0.45 slate=/exchange/minimum-confirmations.slate min="${LEPIC_MINIMUM_CONFIRMATIONS}"
     ew peer send -m file -d "${slate}" -c 1 -s smallest "${amount}" >>"${RUN_LOG}" || fail "epic-wallet send failed" || return 1
     local received tx_id
     received="$(lepic tx receive "${slate}")" || fail "lepic could not receive the S1" || return 1
@@ -627,7 +631,7 @@ scenario_three_confirmations_body() {
 
     mine_until_pool_empty || fail "the transaction was not mined block by block" || return 1
     local n info confirmed_height tip
-    for n in 1 2 3; do
+    for n in $(seq 1 "${min}"); do
         ((n == 1)) || mine_one_block || fail "could not mine block ${n}" || return 1
         info="$(lepic wallet info)" || fail "wallet info failed" || return 1
         tip="$(jq -r .height <<<"${info}")"
@@ -635,34 +639,34 @@ scenario_three_confirmations_body() {
         confirmed_height="$(lepic tx show "${tx_id}" | jq -r .confirmed_height)"
         ((tip - confirmed_height + 1 == n)) ||
             fail "expected ${n} confirmations, tip ${tip}, mined at ${confirmed_height}" || return 1
-        if ((n < 3)); then
+        if ((n < min)); then
             (($(info_field "${info}" awaiting_confirmation) == units && $(info_field "${info}" spendable) == spendable0)) ||
                 fail "at ${n} confirmations the output is not awaiting confirmation: ${info}" || return 1
         else
             (($(info_field "${info}" awaiting_confirmation) == 0 && $(info_field "${info}" spendable) == spendable0 + units)) ||
-                fail "at 3 confirmations the output is not spendable: ${info}" || return 1
+                fail "at ${n} confirmations the output is not spendable: ${info}" || return 1
         fi
-        if ((n == 2)); then
-            # More than what was spendable before, so it needs the 2-confirmation output.
+        if ((n == min - 1)); then
+            # More than what was spendable before, so it needs the output one confirmation short.
             local need output status=0
             need="$(from_units $((spendable0 + units / 2)))"
-            output="$(lepic tx send "${need}" --to-file /exchange/three-confirmations-early.slate)" || status=$?
-            ((status == 8)) || fail "a send of ${need} needing the 2-confirmation output exited ${status}: ${output}" || return 1
+            output="$(lepic tx send "${need}" --to-file /exchange/minimum-confirmations-early.slate)" || status=$?
+            ((status == 8)) || fail "a send of ${need} needing the ${n}-confirmation output exited ${status}: ${output}" || return 1
         fi
     done
     EXPECTED_TOTAL=$((EXPECTED_TOTAL + units))
     check_lepic_total || return 1
-    DETAIL="awaiting at 1 and 2 confirmations, spendable at 3 (tip ${tip})"
+    DETAIL="awaiting below ${min} confirmations, spendable at ${min} (tip ${tip})"
 }
 
-scenario_three_confirmations() {
+scenario_minimum_confirmations() {
     peer_listen_stop
     wait_until "peer spendable" 180 ew_spendable_at_least peer "$(($(to_units 0.45) + UNIT))" ||
         fail "epic-wallet has no spendable funds" || return 1
     wait_until "lepic settled" 120 lepic_nothing_pending || fail "lepic still has pending amounts" || return 1
     miner_pause || fail "could not pause the miner" || return 1
     local status=0
-    scenario_three_confirmations_body || status=$?
+    scenario_minimum_confirmations_body || status=$?
     miner_resume
     return "${status}"
 }
@@ -686,6 +690,6 @@ SCENARIOS=(
     "same S1 twice over http:scenario_http_repeat"
     "receiver cancels an unseen receipt:scenario_cancel_unseen"
     "receiver cancel of a posted receipt:scenario_cancel_posted"
-    "spendable at three confirmations:scenario_three_confirmations"
+    "spendable at minimum confirmations:scenario_minimum_confirmations"
     "import epic-wallet history:scenario_import_history"
 )
