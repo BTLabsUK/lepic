@@ -464,6 +464,19 @@ pub struct ContactReport {
     pub state: String,
     /// The SAS entries as `emoji name`, four of them.
     pub sas: Vec<String>,
+    /// The four SAS table indexes, in the order of `sas`; empty without a SAS.
+    pub sas_indexes: Vec<u8>,
+    /// `waiting`, `paired`, `verified`, `keys-changed` or `ended`.
+    pub status: &'static str,
+    /// When the contact was first heard in this pairing.
+    pub peer_heard_at: Option<String>,
+    /// When the contact's match verdict was accepted.
+    pub peer_verified_at: Option<String>,
+    /// The feature bits the contact claimed; 0 when none.
+    pub peer_features: u32,
+    /// `mismatch`, `peer-mismatch`, `unpaired` or `never-finished`, once the pairing ended.
+    pub ended_reason: Option<&'static str>,
+    pub ended_at: Option<String>,
     pub allow_invoices: bool,
     pub seal: String,
     pub home_relay: Option<String>,
@@ -2080,6 +2093,13 @@ mod tests {
                     kind: Some("shop"),
                     state: text("paired"),
                     sas: vec![],
+                    sas_indexes: vec![],
+                    status: "paired",
+                    peer_heard_at: None,
+                    peer_verified_at: None,
+                    peer_features: 0,
+                    ended_reason: None,
+                    ended_at: None,
                     allow_invoices: false,
                     seal: text("on"),
                     home_relay: None,
@@ -2091,15 +2111,22 @@ mod tests {
                     "allow_invoices",
                     "claimed_name",
                     "contact_id",
+                    "ended_at",
+                    "ended_reason",
                     "home_relay",
                     "kind",
                     "label",
                     "lapsed",
                     "last_heard",
+                    "peer_features",
+                    "peer_heard_at",
+                    "peer_verified_at",
                     "requested_relay",
                     "sas",
+                    "sas_indexes",
                     "seal",
                     "state",
+                    "status",
                 ],
             ),
             (

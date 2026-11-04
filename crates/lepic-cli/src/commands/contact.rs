@@ -16,8 +16,8 @@ use lepic_wallet::slate::Stage;
 use lepic_wallet_contacts::{
     AcceptRequest, CardRequest, CollectTrigger, ContactKind, ContactRelays, ContactView,
     InviteExpiry, InviteRequest, InvoiceDetails, KeysDecision, LinkOutcome, MAX_APP_PAYLOAD_LEN,
-    PairingClass, PairingFailure, PayloadId, Purpose, Refusal, RelayMode, SasDecision,
-    SealedAnswer, WalletContacts,
+    PairingClass, PairingEndReason, PairingFailure, PairingStatus, PayloadId, Purpose, Refusal,
+    RelayMode, SasDecision, SasSymbol, SealedAnswer, WalletContacts,
 };
 
 use super::{Opened, Run, Spend};
@@ -149,6 +149,27 @@ fn contact_report(view: &ContactView) -> ContactReport {
                     .collect()
             })
             .unwrap_or_default(),
+        sas_indexes: view
+            .sas
+            .map(|symbols| symbols.iter().map(SasSymbol::index).collect())
+            .unwrap_or_default(),
+        status: match view.status {
+            PairingStatus::Waiting => "waiting",
+            PairingStatus::Paired => "paired",
+            PairingStatus::Verified => "verified",
+            PairingStatus::KeysChanged => "keys-changed",
+            PairingStatus::Ended => "ended",
+        },
+        peer_heard_at: view.peer_heard_at.map(|at| at.to_string()),
+        peer_verified_at: view.peer_verified_at.map(|at| at.to_string()),
+        peer_features: view.peer_features,
+        ended_reason: view.ended_reason.map(|reason| match reason {
+            PairingEndReason::Mismatch => "mismatch",
+            PairingEndReason::PeerMismatch => "peer-mismatch",
+            PairingEndReason::Unpaired => "unpaired",
+            PairingEndReason::NeverFinished => "never-finished",
+        }),
+        ended_at: view.ended_at.map(|at| at.to_string()),
         allow_invoices: view.allow_invoices,
         seal: match view.seal {
             SealMode::On => "on",

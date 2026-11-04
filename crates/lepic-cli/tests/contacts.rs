@@ -85,6 +85,38 @@ fn pair(host: &TestHost, inviter: &Instance, joiner: &Instance) -> (String, Stri
     ids
 }
 
+/// After both sides answer `match`, `contact list` carries the SAS indexes and when the contact's
+/// verdict was accepted.
+#[test]
+fn a_verified_contact_lists_its_sas_indexes_and_verdict_time() {
+    let host = TestHost::new();
+    let shop = Instance::new("shop password");
+    shop.run(&host, &["wallet", "init"]).ok();
+    let buyer = Instance::new("buyer password");
+    buyer.run(&host, &["wallet", "init"]).ok();
+    let (shop_side, buyer_side) = pair(&host, &shop, &buyer);
+    shop.run(&host, &["contact", "sas", &shop_side, "match"])
+        .ok();
+    buyer
+        .run(&host, &["contact", "sas", &buyer_side, "match"])
+        .ok();
+    wait_until("the verdicts accepted", || {
+        collect(&shop, &host);
+        collect(&buyer, &host);
+        listed(&shop, &host, &shop_side)["peer_verified_at"].is_string()
+            && listed(&buyer, &host, &buyer_side)["peer_verified_at"].is_string()
+    });
+    let contact = listed(&shop, &host, &shop_side);
+    assert_eq!(
+        contact["sas_indexes"].as_array().unwrap().len(),
+        4,
+        "{contact}"
+    );
+    assert_eq!(contact["status"], "verified", "{contact}");
+    assert!(contact["peer_heard_at"].is_string(), "{contact}");
+    assert_eq!(contact["ended_reason"], Value::Null, "{contact}");
+}
+
 /// `lepic serve` answers a check by itself; the asking wallet's next collect takes the answer
 /// and `contact list` shows the contact heard again.
 #[test]

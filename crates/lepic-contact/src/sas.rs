@@ -20,6 +20,18 @@ pub struct SasSymbol {
     pub name: &'static str,
 }
 
+impl SasSymbol {
+    /// The entry's index in the v1 table: the byte the SAS carries. Found by scanning the table
+    /// the symbol was read from, so the struct stays two strings.
+    pub fn index(&self) -> u8 {
+        EMOJI_V1
+            .lines()
+            .position(|line| line.split_once('\t') == Some((self.emoji, self.name)))
+            .and_then(|at| u8::try_from(at).ok())
+            .unwrap_or_default()
+    }
+}
+
 /// Four bytes, each an index into the SAS table.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Sas([u8; 4]);
@@ -86,4 +98,16 @@ pub fn symbol(index: u8) -> Result<SasSymbol, SasTableError> {
         return Err(SasTableError::BadLine { index });
     }
     Ok(SasSymbol { emoji, name })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_symbol_knows_its_table_index() {
+        for index in 0..=u8::MAX {
+            assert_eq!(symbol(index).unwrap().index(), index);
+        }
+    }
 }
