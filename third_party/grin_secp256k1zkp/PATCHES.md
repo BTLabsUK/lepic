@@ -73,6 +73,11 @@ builds.
    (`include/secp256k1_aggsig.h`), `context_clone` and `scratch_space_create` take a
    `*const Context`, `rangeproof_verify` takes `*mut u64`, and the four opaque C handle types no
    longer derive `Clone`. Byte-neutral.
+2. `src/pedersen.rs`: the shared bulletproof generators are created once through
+   `std::sync::Once` and published through an `AtomicPtr`, instead of a `static mut` that two
+   threads could read and write at the same time. From mimblewimble/rust-secp256k1-zkp commit
+   `d514444` ("fix data race and return checks"), the `shared_generators` hunk. The generators
+   are the same bytes (they depend only on `GENERATOR_G` and `MAX_GENERATORS`).
 
 Nothing else differs from 42fcb29 and the changes listed here. This file is the only addition.
 
