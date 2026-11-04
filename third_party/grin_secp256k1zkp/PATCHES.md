@@ -50,6 +50,8 @@ was checked with fixed-vector and mainnet-data comparisons of the old and new bu
 8. bitcoin-core/secp256k1 `eb28464a` (PR 731): `src/hash.h`, `src/hash_impl.h`, the
    SHA256 byte counter is a `uint64_t` instead of a `size_t`, so it cannot wrap on 32-bit
    targets. Identical digests for every input below 4 GiB.
+9. bitcoin-core/secp256k1 `960ba5f9` (PR 1729): `src/hash_impl.h`, the RFC6979 generate
+   loop keeps the remaining length in a `size_t` instead of an `int`. Same output.
 
 ## Build changes (`build.rs`)
 
