@@ -27,6 +27,9 @@ fn main() {
                .include("depend/secp256k1-zkp/include")
                .include("depend/secp256k1-zkp/src")
                .flag("-g")
+               // Upstream's configure.ac builds with -Wno-unused-function: the unity build of
+               // secp256k1.c defines static helpers that no enabled module calls.
+               .flag_if_supported("-Wno-unused-function")
                // Upstream compiles the library with -DSECP256K1_BUILD (Makefile.am,
                // libsecp256k1_la_CPPFLAGS). Without it include/secp256k1.h marks the API
                // arguments __nonnull__, and the compiler may then drop the library's own

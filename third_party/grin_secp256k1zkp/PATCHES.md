@@ -44,6 +44,14 @@ Each one is a change to how the C library is compiled, not to its source.
    each build verify on the other (the harness is described in the review that made this
    change).
 
+2. `-Wno-unused-function` (when the compiler accepts it). Upstream's `configure.ac` sets it in
+   `warn_CFLAGS` (mimblewimble/secp256k1-zkp `configure.ac`, line 68), and
+   rust-bitcoin/rust-secp256k1's `secp256k1-sys/build.rs` passes the same flag for the same
+   reason: `secp256k1.c` is a unity build and defines five static helpers
+   (`secp256k1_ecmult_strauss_batch_single`, `secp256k1_ecmult_pippenger_batch_single`,
+   `secp256k1_gej_is_valid_var`, `secp256k1_ge_set_infinity`, `secp256k1_fe_inv_all_var`)
+   that no enabled module calls. Diagnostics only; no code changes.
+
 Nothing else differs from 42fcb29 and the changes listed here. This file is the only addition.
 
 ## Re-checking
