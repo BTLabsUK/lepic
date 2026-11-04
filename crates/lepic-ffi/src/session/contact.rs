@@ -796,6 +796,25 @@ impl Session {
             .await?)
     }
 
+    pub(crate) async fn contacts_move_home(&self, relay: String) -> Result<u32, WalletError> {
+        let relays = self.contact_relays(ContactRelayMode::Online)?;
+        Ok(self
+            .engine
+            .contact_book()
+            .contacts_move_home(&relays, &relay)
+            .await?)
+    }
+
+    pub(crate) async fn contact_check(&self, contact_id: &str) -> Result<(), WalletError> {
+        let id = self::contact_id(contact_id)?;
+        let relays = self.contact_relays(ContactRelayMode::Online)?;
+        Ok(self
+            .engine
+            .contact_book()
+            .contact_check(&relays, id)
+            .await?)
+    }
+
     pub(crate) async fn pairing_cancel(&self, contact_id: &str) -> Result<(), WalletError> {
         let id = self::contact_id(contact_id)?;
         let pending = self.engine.contact_book().pairings_pending().await?;
