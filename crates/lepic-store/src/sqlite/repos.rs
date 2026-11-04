@@ -1193,6 +1193,14 @@ impl SettingsRepository for SqliteRepos<'_> {
             .optional()?)
     }
 
+    fn settings_with_prefix(&self, prefix: &str) -> Result<Vec<(String, String)>, StoreError> {
+        let mut statement = self.conn.prepare(
+            "SELECT key, value FROM settings WHERE substr(key, 1, length(?1)) = ?1 ORDER BY key",
+        )?;
+        let rows = statement.query_map([prefix], |row| Ok((row.get(0)?, row.get(1)?)))?;
+        Ok(rows.collect::<Result<_, _>>()?)
+    }
+
     fn delete_setting(&mut self, key: &str) -> Result<(), StoreError> {
         self.conn
             .execute("DELETE FROM settings WHERE key = ?1", [key])?;

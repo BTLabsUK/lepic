@@ -555,6 +555,20 @@ fn settings_are_replaced_and_deleted<B: Backend>() {
         read(store, |repos| repos.setting("node_url")).unwrap(),
         None
     );
+    write(store, |repos| {
+        repos.put_setting("held.b", "2")?;
+        repos.put_setting("held.a", "1")?;
+        repos.put_setting("held", "0")?;
+        repos.put_setting("helm.a", "3")
+    })
+    .unwrap();
+    assert_eq!(
+        read(store, |repos| repos.settings_with_prefix("held.")).unwrap(),
+        vec![
+            ("held.a".to_owned(), "1".to_owned()),
+            ("held.b".to_owned(), "2".to_owned()),
+        ]
+    );
 }
 
 #[derive(Debug)]
