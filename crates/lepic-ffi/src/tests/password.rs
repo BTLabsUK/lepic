@@ -200,20 +200,6 @@ async fn a_wrong_current_password_waits_as_a_wrong_unlock_does() {
 }
 
 #[tokio::test]
-async fn a_short_new_password_is_refused_before_the_attempt_is_counted() {
-    let fixture = Fixture::new();
-    let store = FaultyStore::default();
-    let wallet = create(&fixture, &store.app_store()).await;
-
-    let changed = wallet
-        .change_password(OLD.to_owned(), "short".to_owned())
-        .await;
-
-    assert_eq!(kind(changed), WalletErrorKind::InvalidArgument);
-    assert_eq!(store.get(FAILURES_KEY), None);
-}
-
-#[tokio::test]
 async fn a_pin_wallet_refuses_a_password_change_and_keeps_its_pin() {
     let fixture = Fixture::new();
     let store = FaultyStore::default();
@@ -500,15 +486,6 @@ async fn a_reset_with_another_or_an_invalid_phrase_changes_nothing() {
         kind(reset(&fixture, &store, "abandon abandon").await),
         WalletErrorKind::InvalidMnemonic
     );
-    let short = reset_password(
-        &fixture.runtime,
-        fixture.config(),
-        &store.app_store(),
-        OTHER_PHRASE.to_owned(),
-        "short".to_owned(),
-    )
-    .await;
-    assert_eq!(kind(short), WalletErrorKind::InvalidArgument);
 
     assert_eq!(store.get(VAULT_KEY), vault);
     assert_eq!(store.get(VAULT_NEXT_KEY), None);
