@@ -135,6 +135,13 @@ pub enum SendError {
     /// sender was allowed under.
     #[error("payment {tx_id} goes only to the allowed address of its invoice")]
     PayeeMismatch { tx_id: TxId },
+    /// [`SendRequest::slate_id`] names a slate id this wallet already stores; nothing was
+    /// stored. `sent` is this wallet's send under that id, when the id is one.
+    #[error("slate id {slate_id} is already taken")]
+    SlateIdTaken {
+        slate_id: SlateId,
+        sent: Option<TxId>,
+    },
     /// The transaction and its slate are stored and the inputs locked;
     /// [`crate::Wallet::resend`] tries again and [`crate::Wallet::cancel`] gives up.
     #[error("slate {slate_id} of transaction {tx_id} is stored but was not delivered")]
@@ -193,6 +200,11 @@ pub struct SendRequest {
     pub payment_proof_recipient: Option<ProofAddress>,
     /// Outputs selection must not take, whatever their state.
     pub exclude_outputs: Vec<Commitment>,
+    /// The slate id, instead of one drawn at random. A caller that stores it before sending
+    /// can repeat the send after a crash without paying twice: the repeat fails with
+    /// [`SendError::SlateIdTaken`], which names the first send. It must be a random version-4
+    /// id made for this send, since it travels in the slate.
+    pub slate_id: Option<SlateId>,
 }
 
 impl SendRequest {
@@ -211,6 +223,7 @@ impl SendRequest {
             message: None,
             payment_proof_recipient: None,
             exclude_outputs: Vec::new(),
+            slate_id: None,
         }
     }
 
@@ -671,6 +684,30 @@ fn create_s1(
     if repos.account(request.account)?.is_none() {
         return Err(WalletError::from(AccountError::UnknownAccount(request.account)).into());
     }
+    // Checked before selection, so a repeat names the first send even once the balance it
+    // spent is gone. The stage caches key by slate id alone, so an id taken in either
+    // direction is refused.
+    let randomness = match request.slate_id {
+        Some(slate_id) => {
+            let uuid = Uuid::from_bytes(*slate_id.as_bytes());
+            let sent = repos.transaction_by_slate(uuid, TxDirection::Outgoing)?;
+            if sent.is_some()
+                || repos
+                    .transaction_by_slate(uuid, TxDirection::Incoming)?
+                    .is_some()
+            {
+                return Err(SendError::SlateIdTaken {
+                    slate_id,
+                    sent: sent.map(|tx| tx.id),
+                });
+            }
+            S1Randomness {
+                slate_id,
+                ..randomness
+            }
+        }
+        None => randomness,
+    };
     let base_fee = env.base_fee();
     let outputs = spendable_here(
         keychain,
