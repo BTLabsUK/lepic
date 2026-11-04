@@ -370,7 +370,8 @@ it the next time it connects, with either of:
   did: `Received 0, finalized 1, repeated 0, rejected 0, held for retry 0, parked 0, bounced 0,
   dropped 0, notices 0.`
 - `lepic epicbox listen` stays connected, answers incoming payments and finalizes answers as they
-  arrive, printing each change on stderr, until Ctrl-C. Then it prints the same summary.
+  arrive, printing each change on stderr, until Ctrl-C or SIGTERM. It then settles the message
+  in hand (at most 30 seconds) and prints the same summary.
 
 Receiving over Epicbox needs no command beyond these two: the sender's S1 waits on the relay
 until you drain or listen. `epic-wallet` on the other side handles your answer only while it
@@ -689,7 +690,7 @@ Amounts are strings with eight decimals. The exit code says what kind of failure
 | 9 | `node` | the node could not be reached or answered badly |
 | 10 | `transport` | the slate file, the relay, the http listener or tor failed |
 | 11 | `incomplete` | stored, but not delivered or not posted; retry |
-| 12 | `interrupted` | stopped before it finished |
+| 12 | `interrupted` | stopped by Ctrl-C or SIGTERM before it finished |
 
 ## Common errors
 

@@ -307,6 +307,18 @@ impl MockRelay {
             .count()
     }
 
+    /// Messages for `address` sent to a socket but not yet acknowledged with `Made`: in the
+    /// hands of a client.
+    pub fn in_hand(&self, address: &EpicboxAddress) -> usize {
+        let queue = address.key_text();
+        let state = self.lock();
+        state
+            .messages
+            .iter()
+            .filter(|m| m.queue == queue && !m.made && state.deliveries.contains_key(&m.id))
+            .count()
+    }
+
     /// Open websocket connections.
     pub fn connections(&self) -> usize {
         self.lock().sockets.len()

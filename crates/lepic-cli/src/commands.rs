@@ -361,7 +361,7 @@ impl<H: Host> Run<'_, H> {
                     .until_interrupted(
                         opened.wallet.subscribe(),
                         listen_and_sweep(&opened, &handle, expiry, &swept),
-                        || handle.stop(),
+                        || finish_listen(&handle),
                     )
                     .await?;
                 let expired = swept
@@ -1709,6 +1709,21 @@ fn inbox_report(summary: InboxSummary, expired: Option<InvoiceSweep>) -> InboxRe
             cancellable: sweep.cancellable.iter().map(|tx_id| tx_id.0).collect(),
         }),
     }
+}
+
+/// How long an interrupted listen may take to settle the message in hand, as the app's listener
+/// gets when it moves to another relay; then the message is abandoned and stays on the relay.
+const LISTEN_GRACE: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// Ends a listen once the message in hand is settled and acknowledged, so a stop never leaves a
+/// slate handled but unacknowledged, and at once after [`LISTEN_GRACE`].
+fn finish_listen(handle: &ListenHandle) {
+    handle.finish();
+    let handle = handle.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(LISTEN_GRACE).await;
+        handle.stop();
+    });
 }
 
 /// How often a listen expires unpaid invoices. Expiry is counted in hours, so a sweep every

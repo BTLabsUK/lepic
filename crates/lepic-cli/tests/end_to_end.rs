@@ -429,6 +429,27 @@ fn listen_handles_a_waiting_slate_and_stops_when_interrupted() {
 }
 
 #[test]
+fn an_interrupted_listen_settles_the_slate_in_hand_first() {
+    let (mut host, sender, receiver) = two_wallets();
+    let address = receiver.run(&host, &["wallet", "address"]).ok().json();
+    sender
+        .run(
+            &host,
+            &["tx", "send", "1", "--to", text(&address, "address")],
+        )
+        .ok();
+    let relay = host.relay.clone();
+    let inbox =
+        EpicboxAddress::parse(text(&address, "address"), lepic_epicbox::Network::Floonet).unwrap();
+    let watched = relay.clone();
+    let watched_inbox = inbox.clone();
+    host.interrupt_when = Some(Arc::new(move || watched.in_hand(&watched_inbox) == 1));
+    let listened = receiver.run(&host, &["epicbox", "listen"]).ok().json();
+    assert_eq!(listened["received"], 1, "{listened}");
+    assert_eq!(relay.pending(&inbox), 0);
+}
+
+#[test]
 fn issue_pay_and_finalize_an_invoice_through_files() {
     let (host, payer, issuer) = two_wallets();
     let invoice = issuer.path("invoice.slate");
