@@ -57,6 +57,8 @@ pub enum Report {
     ContactList(ContactListReport),
     ContactRemove(ContactRemoveReport),
     ContactKeyCheck(ContactKeyCheckReport),
+    ContactCheck(ContactCheckReport),
+    ContactMoveHome(ContactMoveHomeReport),
     ContactSlate(ContactSlateReport),
     ContactInvoiceIssue(ContactInvoiceIssueReport),
     ContactInvoices(ContactInvoiceListReport),
@@ -502,6 +504,19 @@ pub struct ContactSlateReport {
 }
 
 #[derive(Debug, Serialize)]
+pub struct ContactCheckReport {
+    pub contact_id: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ContactMoveHomeReport {
+    /// The home relay moved to, `domain:port`.
+    pub home_relay: String,
+    /// How many contacts were told.
+    pub moved: u32,
+}
+
+#[derive(Debug, Serialize)]
 pub struct ContactKeyCheckReport {
     /// The new pairing the check went over.
     pub contact_id: String,
@@ -929,6 +944,8 @@ fn write_human(out: &mut Vec<u8>, report: &Report) -> std::io::Result<()> {
         | Report::ContactRemove(_)
         | Report::ContactSlate(_)
         | Report::ContactKeyCheck(_)
+        | Report::ContactCheck(_)
+        | Report::ContactMoveHome(_)
         | Report::ContactInvoiceIssue(_)
         | Report::ContactInvoices(_)
         | Report::ContactExport(_)
@@ -1432,6 +1449,16 @@ fn write_contact_human(out: &mut Vec<u8>, report: &Report) -> std::io::Result<()
         Report::ContactRemove(r) if r.removed => writeln!(out, "Pairing {} removed.", r.contact_id),
         Report::ContactRemove(r) => writeln!(out, "No pairing {}.", r.contact_id),
         Report::ContactSlate(r) => write_contact_slate(out, r),
+        Report::ContactCheck(r) => writeln!(
+            out,
+            "Check sent to {}; `lepic contact collect` takes the answer.",
+            r.contact_id
+        ),
+        Report::ContactMoveHome(r) => writeln!(
+            out,
+            "Home relay moved to {}; {} contact(s) told. The old mailboxes are not read again.",
+            r.home_relay, r.moved
+        ),
         Report::ContactKeyCheck(r) => writeln!(
             out,
             "Key check sent over pairing {} for {}; `lepic contact collect` takes the answer.",
@@ -2026,6 +2053,19 @@ mod tests {
                     removed: true,
                 }),
                 vec!["contact_id", "removed"],
+            ),
+            (
+                Report::ContactCheck(ContactCheckReport {
+                    contact_id: text("c"),
+                }),
+                vec!["contact_id"],
+            ),
+            (
+                Report::ContactMoveHome(ContactMoveHomeReport {
+                    home_relay: text("h"),
+                    moved: 1,
+                }),
+                vec!["home_relay", "moved"],
             ),
             (
                 Report::ContactKeyCheck(ContactKeyCheckReport {

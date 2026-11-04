@@ -740,6 +740,11 @@ with `lepic contact accept`.")]
     Label(ContactLabelArgs),
     /// Move to the relay a contact asked for; `contact list` shows the request
     Move(ContactMoveArgs),
+    /// Move your own home relay for every paired contact; each is told once and the old
+    /// mailboxes are not read again
+    MoveHome(ContactMoveHomeArgs),
+    /// Ask a paired contact to answer with its current card; `contact collect` takes the answer
+    Check(ContactIdArg),
     /// Allow or stop invoices from a verified contact
     AllowInvoices(ContactSwitchArgs),
     /// Invoice a paired contact through its mailbox
@@ -972,6 +977,13 @@ pub struct ContactMoveArgs {
     /// The relay host the contact asked for, as `contact list` shows it
     #[arg(long = "apply", value_name = "HOST")]
     pub apply: String,
+}
+
+#[derive(Debug, Args)]
+pub struct ContactMoveHomeArgs {
+    /// The relay to move to, `domain[:port]`; set it as the wallet's Epicbox relay too
+    #[arg(value_name = "HOST")]
+    pub host: String,
 }
 
 #[derive(Debug, Args)]

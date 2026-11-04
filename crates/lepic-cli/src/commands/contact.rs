@@ -25,18 +25,19 @@ use crate::cli::{
     ContactAcceptArgs, ContactArgs, ContactCardArgs, ContactCommand, ContactEnterArgs,
     ContactExportArgs, ContactImportArgs, ContactInviteArgs, ContactInvoiceArgs,
     ContactKeyCheckArgs, ContactKeysArgs, ContactKindArg, ContactLabelArgs, ContactMoveArgs,
-    ContactOpenSealedArgs, ContactPayArgs, ContactPlainArgs, ContactRequestArgs, ContactSasArgs,
-    ContactSealArgs, ContactSendSlateArgs, ContactSlateIdArg, ContactSwitchArgs, InviteExpiryArg,
-    KeysArg, OnOffArg, PurposeArg, SasArg,
+    ContactMoveHomeArgs, ContactOpenSealedArgs, ContactPayArgs, ContactPlainArgs,
+    ContactRequestArgs, ContactSasArgs, ContactSealArgs, ContactSendSlateArgs, ContactSlateIdArg,
+    ContactSwitchArgs, InviteExpiryArg, KeysArg, OnOffArg, PurposeArg, SasArg,
 };
 use crate::exit::CliError;
 use crate::host::Host;
 use crate::output::{
-    ContactAcceptReport, ContactCardReport, ContactCollectReport, ContactExportReport,
-    ContactFailureReport, ContactImportReport, ContactInviteReport, ContactInvoiceIssueReport,
-    ContactInvoiceListReport, ContactInvoiceReport, ContactKeyCheckReport, ContactLinkReport,
-    ContactListReport, ContactPreviewReport, ContactRemoveReport, ContactReport,
-    ContactSlateReport, InvoiceDeclineReport, InvoicePayReport, Report,
+    ContactAcceptReport, ContactCardReport, ContactCheckReport, ContactCollectReport,
+    ContactExportReport, ContactFailureReport, ContactImportReport, ContactInviteReport,
+    ContactInvoiceIssueReport, ContactInvoiceListReport, ContactInvoiceReport,
+    ContactKeyCheckReport, ContactLinkReport, ContactListReport, ContactMoveHomeReport,
+    ContactPreviewReport, ContactRemoveReport, ContactReport, ContactSlateReport,
+    InvoiceDeclineReport, InvoicePayReport, Report,
 };
 
 /// Contacts belong to the default account.
@@ -330,6 +331,14 @@ impl<H: Host> Run<'_, H> {
             ContactCommand::OpenSealed(args) => open_sealed(&opened, args).await?,
             ContactCommand::Label(args) => label(&opened, args).await?,
             ContactCommand::Move(args) => move_relay(&opened, args).await?,
+            ContactCommand::MoveHome(args) => move_home(&opened, &relays, args).await?,
+            ContactCommand::Check(args) => {
+                let id = contact_id(&args.contact)?;
+                wallet.contact_book().contact_check(&relays, id).await?;
+                Report::ContactCheck(ContactCheckReport {
+                    contact_id: id.to_string(),
+                })
+            }
             ContactCommand::Remove(args) => {
                 let id = contact_id(&args.contact)?;
                 Report::ContactRemove(ContactRemoveReport {
@@ -680,6 +689,23 @@ async fn move_relay<N: lepic_node::NodeApi + 'static>(
     Ok(Report::Contact(contact_report(
         &wallet.contact_book().contact(id).await?,
     )))
+}
+
+/// `lepic contact move-home`: moves the wallet's own home relay for every paired contact.
+async fn move_home<N: lepic_node::NodeApi + 'static>(
+    opened: &Opened<N>,
+    relays: &ContactRelays,
+    args: ContactMoveHomeArgs,
+) -> Result<Report, CliError> {
+    let moved = opened
+        .wallet
+        .contact_book()
+        .contacts_move_home(relays, &args.host)
+        .await?;
+    Ok(Report::ContactMoveHome(ContactMoveHomeReport {
+        home_relay: args.host.trim().to_ascii_lowercase(),
+        moved,
+    }))
 }
 
 /// `lepic contact allow-invoices`: lets a contact send invoices, or stops it.
