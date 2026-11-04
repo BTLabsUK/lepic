@@ -82,7 +82,7 @@ where
     /// Asks the contact `contact_id` for its current card (RFC 0002 8.5): a check queued in the
     /// outbox for its mailbox and posted when relays may be reached. A contact that takes it
     /// answers with a contact update, which a later collect takes as any other: it sets
-    /// `peer_heard_at`, refreshes the card on the same relay and raises
+    /// `last_sealed_in`, refreshes the card on the same relay and raises
     /// [`Event::ContactRelayMoveRequested`](lepic_wallet::event::Event::ContactRelayMoveRequested)
     /// for another. Which contacts to check, when, and how long to wait for the answer are the
     /// host's.

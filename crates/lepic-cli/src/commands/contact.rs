@@ -156,6 +156,7 @@ fn contact_report(view: &ContactView) -> ContactReport {
         home_relay: view.home_relay.clone(),
         requested_relay: view.requested_relay.clone(),
         lapsed: view.lapsed,
+        last_heard: view.last_sealed_in.map(|at| at.to_string()),
     }
 }
 

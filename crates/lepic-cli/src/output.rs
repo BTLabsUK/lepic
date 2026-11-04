@@ -467,6 +467,8 @@ pub struct ContactReport {
     /// The relay host the contact asked to move to, until `contact move` applies it.
     pub requested_relay: Option<String>,
     pub lapsed: bool,
+    /// When an envelope from the contact was last opened, if ever.
+    pub last_heard: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -737,6 +739,9 @@ fn write_contact(out: &mut Vec<u8>, contact: &ContactReport) -> std::io::Result<
     }
     if contact.lapsed {
         writeln!(out, "    not heard from in 90 days")?;
+    }
+    if let Some(heard) = &contact.last_heard {
+        writeln!(out, "    last heard {heard}")?;
     }
     Ok(())
 }
@@ -2028,6 +2033,7 @@ mod tests {
                     home_relay: None,
                     requested_relay: None,
                     lapsed: false,
+                    last_heard: None,
                 }),
                 vec![
                     "allow_invoices",
@@ -2037,6 +2043,7 @@ mod tests {
                     "kind",
                     "label",
                     "lapsed",
+                    "last_heard",
                     "requested_relay",
                     "sas",
                     "seal",

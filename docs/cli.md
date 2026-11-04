@@ -616,7 +616,8 @@ mailboxes are not read again, so a contact that misses the update stops reaching
 until it pairs again. Set `<HOST>` as the wallet's Epicbox relay too, so new invites name it.
 
 `contact check <ID>` asks a paired contact to answer with its current card; a later `contact
-collect` takes the answer, which shows when the contact was last heard and any relay it moved to.
+collect` takes the answer, and `contact list` shows when the contact was last heard
+(`last_heard`) and any relay it moved to.
 A wallet answers at most `contact_check_answers_per_hour` (default 1) and
 `contact_check_answers_per_day` (default 3) checks per contact; more are taken and dropped.
 

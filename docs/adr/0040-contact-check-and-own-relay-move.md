@@ -29,9 +29,9 @@ contacts to follow, so it does not wait for them.
    `contact_check_answers_per_hour`, default 1, and `contact_check_answers_per_day`, default
    3, at most 24. Checks beyond them are acknowledged and dropped.
 4. The answer is an ordinary update, so the asking wallet takes it on the existing path: any
-   answer sets `peer_heard_at`, a card on the same relay refreshes the record, and a card on
-   another relay raises `ContactRelayMoveRequested`. The receiver's update limits of RFC 0002
-   8.5 apply.
+   answer sets when the contact was last heard (`last_sealed_in`, `last_heard` in `lepic
+   contact list`), a card on the same relay refreshes the record, and a card on another relay
+   raises `ContactRelayMoveRequested`. The receiver's update limits of RFC 0002 8.5 apply.
 5. `ContactBook::contact_check(relays, contact_id)`, `EpicWallet::contact_check` and `lepic
    contact check <CONTACT>` send one. Which contacts to check, when, and how long to wait for
    the answer stay with the host; BT Wallet's 120 s and 7 days are its own values.
