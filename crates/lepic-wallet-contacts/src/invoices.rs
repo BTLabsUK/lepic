@@ -118,7 +118,9 @@ fn uuid(slate_id: SlateId) -> Uuid {
 /// Whether the contact may start an exchange under the slate id it chose (RFC 0002 3.4): no
 /// other contact holds the id, and no transaction of this wallet uses it, but for this
 /// contact's own repeat in the `repeat` direction. A contact can never take over a slate id
-/// this wallet exchanged with someone else.
+/// this wallet exchanged with someone else. An incoming transaction that no contact is linked
+/// to yet counts as the contact's own repeat when the repeat is `Incoming`: the receive stored it
+/// and the link behind it did not follow, and the repeat links it and sends the stored S2 again.
 fn slate_free_for(
     repos: &dyn Repositories,
     slate_id: Uuid,
@@ -129,10 +131,12 @@ fn slate_free_for(
         return Ok(false);
     }
     for direction in [TxDirection::Outgoing, TxDirection::Incoming] {
-        if let Some(tx) = repos.transaction_by_slate(slate_id, direction)?
-            && (Some(direction) != repeat || tx_contact(repos, tx.id)? != Some(contact))
-        {
-            return Ok(false);
+        if let Some(tx) = repos.transaction_by_slate(slate_id, direction)? {
+            let linked = tx_contact(repos, tx.id)?;
+            let unlinked_receive = direction == TxDirection::Incoming && linked.is_none();
+            if Some(direction) != repeat || (linked != Some(contact) && !unlinked_receive) {
+                return Ok(false);
+            }
         }
     }
     Ok(true)
@@ -1086,5 +1090,91 @@ where
             .await?;
         }
         Ok(declined.len())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    // Tests may unwrap (docs/rules.md).
+    #![allow(clippy::unwrap_used)]
+
+    use super::*;
+    use lepic_primitives::amount::Amount;
+    use lepic_store::{AccountIndex, AccountRecord, MemoryStore, StoreKeys, TransactionEntry};
+    use lepic_wallet::contact_link::link_tx;
+
+    const ANNA: ContactId = ContactId([1; 16]);
+    const BEN: ContactId = ContactId([2; 16]);
+    const SLATE: Uuid = Uuid::from_u128(7);
+
+    fn entry(direction: TxDirection) -> TransactionEntry {
+        TransactionEntry {
+            account: AccountIndex(0),
+            direction,
+            state: TxState::Received,
+            slate_id: Some(SLATE),
+            transport: None,
+            amount_credited: Amount::new(5),
+            amount_debited: Amount::new(0),
+            fee: None,
+            created_at: Timestamp::UNIX_EPOCH,
+            updated_at: Timestamp::UNIX_EPOCH,
+        }
+    }
+
+    fn store_with(direction: TxDirection) -> (MemoryStore, TxId) {
+        let store = MemoryStore::new(StoreKeys::from_bytes([0; 32], [0; 32]));
+        let tx_id = store
+            .write(|repos| {
+                repos.put_account(&AccountRecord {
+                    index: AccountIndex(0),
+                    label: "default".to_owned(),
+                    next_child: 0,
+                })?;
+                repos.insert_transaction(&entry(direction))
+            })
+            .unwrap();
+        (store, tx_id)
+    }
+
+    fn free(store: &MemoryStore, contact: ContactId) -> bool {
+        store
+            .read(|repos| slate_free_for(repos, SLATE, contact, Some(TxDirection::Incoming)))
+            .unwrap()
+    }
+
+    #[test]
+    fn a_stored_receive_with_no_link_is_a_repeat_that_links_it() {
+        let (store, tx_id) = store_with(TxDirection::Incoming);
+        assert!(free(&store, ANNA));
+        store
+            .write(|repos| {
+                assert!(link_slate(repos, SLATE, ANNA)?);
+                link_tx(repos, tx_id, ANNA)
+            })
+            .unwrap();
+        let linked = store.read(|repos| tx_contact(repos, tx_id)).unwrap();
+        assert_eq!(linked, Some(ANNA));
+        // A repeat of a linked receive is still the contact's, and no one else's.
+        assert!(free(&store, ANNA));
+        assert!(!free(&store, BEN));
+    }
+
+    #[test]
+    fn a_receive_linked_to_another_contact_is_not_free() {
+        let (store, tx_id) = store_with(TxDirection::Incoming);
+        store
+            .write(|repos| {
+                link_slate(repos, SLATE, BEN)?;
+                link_tx(repos, tx_id, BEN)
+            })
+            .unwrap();
+        assert!(!free(&store, ANNA));
+    }
+
+    #[test]
+    fn an_unlinked_outgoing_transaction_is_never_a_repeat() {
+        let (store, _) = store_with(TxDirection::Outgoing);
+        assert!(!free(&store, ANNA));
     }
 }
