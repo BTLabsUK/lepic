@@ -333,8 +333,9 @@ where
     /// that the caller removes afterwards.
     ///
     /// A send that was stored but could not be written or queued is cancelled, so it holds no
-    /// inputs. Fails with [`ContactError::Send`] when the send fails, and otherwise as
-    /// [`Wallet::contact_post_slate`] does.
+    /// inputs. When that cancel fails too, the error is [`ContactError::NotCancelled`] with the
+    /// transaction, never a silent leftover. Fails with [`ContactError::Send`] when the send
+    /// fails, and otherwise as [`Wallet::contact_post_slate`] does.
     #[instrument(skip_all, fields(wallet = %self.wallet.config().name))]
     pub async fn contact_send(
         &self,
@@ -354,10 +355,7 @@ where
             // Stored and locked, but the slate file was not written: nothing reaches the
             // contact, so the send is given up rather than left holding its inputs.
             Err(error @ SendError::Undelivered { tx_id, .. }) => {
-                if let Err(cancel) = self.wallet.cancel(tx_id).await {
-                    warn!(tx_id = %tx_id, error = %cancel, "send to a contact not written nor cancelled");
-                }
-                return Err(ContactError::Send(error));
+                return Err(self.give_up_send(tx_id, ContactError::Send(error)).await);
             }
             Err(error) => return Err(ContactError::Send(error)),
         };
@@ -366,15 +364,28 @@ where
             .contact_post_slate(relays, contact_id, tx_id, purpose)
             .await
         {
-            match self.wallet.cancel(tx_id).await {
-                Ok(()) => info!(tx_id = %tx_id, "send to a contact cancelled, it was not queued"),
-                Err(cancel) => {
-                    warn!(tx_id = %tx_id, error = %cancel, "send to a contact not queued nor cancelled");
-                }
-            }
-            return Err(error);
+            return Err(self.give_up_send(tx_id, error).await);
         }
         Ok(sent)
+    }
+
+    /// Cancels the stored send `tx_id` after `cause` stopped it. A cancel that fails is logged
+    /// and returned with the transaction, so the caller can cancel it again.
+    async fn give_up_send(&self, tx_id: lepic_store::TxId, cause: ContactError) -> ContactError {
+        match self.wallet.cancel(tx_id).await {
+            Ok(()) => {
+                info!(tx_id = %tx_id, "send to a contact cancelled, it was not delivered");
+                cause
+            }
+            Err(cancel) => {
+                warn!(tx_id = %tx_id, error = %cancel, "send to a contact not delivered nor cancelled");
+                ContactError::NotCancelled {
+                    tx_id,
+                    cause: Box::new(cause),
+                    cancel,
+                }
+            }
+        }
     }
 
     /// Opens sealed text from a file or a paste (RFC 0002 3.4 and 9.2). The hint finds the key:

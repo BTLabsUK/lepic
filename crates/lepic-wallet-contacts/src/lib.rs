@@ -326,6 +326,15 @@ pub enum ContactError {
     Finalize(#[source] lepic_wallet::finalize::FinalizeError),
     #[error("payment was not sent")]
     Send(#[source] lepic_wallet::send::SendError),
+    /// A payment to a contact was stored and its inputs locked, a later step failed, and
+    /// cancelling it failed as well: it stays stored until it is cancelled with
+    /// `Wallet::cancel` or sent again. `cause` is what failed first.
+    #[error("{cause}; transaction {tx_id} is still stored and could not be cancelled: {cancel}")]
+    NotCancelled {
+        tx_id: lepic_store::TxId,
+        cause: Box<ContactError>,
+        cancel: WalletError,
+    },
     /// The text is larger than this call reads.
     #[error("text is larger than {max} bytes")]
     TooLarge { max: usize },
