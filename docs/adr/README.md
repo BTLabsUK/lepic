@@ -41,6 +41,7 @@ record that supersedes the old one; accepted records are not rewritten.
 | [0033](0033-key-and-domain-registry.md) | One registry of seed-derived keys and signature domains | proposed |
 | [0034](0034-trust-versioning-and-probing.md) | Trust, versioning and probing between Epic wallets | proposed |
 | [0035](0035-restore-from-a-start-height.md) | Restore from a start height | accepted |
+| [0037](0037-one-send-to-self.md) | One send-to-self primitive | accepted |
 
 Template:
 

@@ -9,6 +9,14 @@ Conventional Commit messages at release time.
 
 ### Added
 
+- One send to self, ADR 0037: `Wallet::send_to_self` and `Wallet::estimate_send_to_self`
+  take a `SelfSendRequest` of inputs (`All`, `Smallest`, `Named`) and outputs (`Count`,
+  `Amounts`, the rest as one more output), 1 to 10 outputs; the estimate's fee equals the
+  send's. `lepic-ffi` gains `EpicWallet::send_to_self` and `EpicWallet::estimate_send_to_self`
+  with `SelfSendRequest`, `SelfInputs` and `SelfOutputs`.
+- `lepic-ffi`'s `node_tip` takes a `NodeRoute`: directly, or through the host's SOCKS5 proxy
+  with no fallback to a direct connection.
+
 - Restore from a start height, ADR 0035: `Wallet::restore_from_height` scans from a chosen
   height, and the wallet creates outputs once a scan from that height or below completes; its
   key counters move past the keys that scan found. `Wallet::restore_scan_start` tells where a
@@ -51,6 +59,13 @@ Conventional Commit messages at release time.
   is gone in two answers and neither the node's pool nor its chain holds its kernel. It is
   cancelled with its kernel watched, so a refused move back to the wallet is no longer posted
   again forever. An invoice this wallet issued and finalized expires at its cutoff.
+
+### Removed
+
+- `Wallet::self_send`, `Wallet::spend_outputs_to_self`, `Wallet::estimate_self_send`,
+  `SelfSendShape` and `SplitCount` in `lepic-wallet`, and `estimate_split`, `split_outputs`,
+  `estimate_consolidate`, `consolidate_outputs` and `spend_outputs_to_self` in `lepic-ffi`:
+  `send_to_self` replaces them (ADR 0037).
 
 ### Changed
 
