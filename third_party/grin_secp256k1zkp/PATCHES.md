@@ -70,6 +70,14 @@ was checked with fixed-vector and mainnet-data comparisons of the old and new bu
    `-vflag`, as upstream does. Every caller passes 0 or 1, for which the new masks equal the old
    ones, so every output is the same.
 
+13. bitcoin-core/secp256k1 `2241ae6d` (PR 709, macro hunk only), `a39c2b09` (PR 754, macro hunk
+   only) and `17fa2173` (PR 1303): `src/ecmult_const_impl.h`, `ECMULT_CONST_TABLE_GET_GE`
+   derives `abs_n` from the sign bit of `n` through a volatile mask (`<limits.h>` for
+   `CHAR_BIT`) and sets `r` from `pre[0]` before the cmov loop, so `r` is initialised on every
+   path. Not taken: the `group.h` change of 2241ae6d (dropping `rzr`), a39c2b09's doc comments
+   and its `secp256k1.c` hunk, which targets a `scalar_cmov` the vendored tree lacks. The
+   selected point is the same for every odd `n`.
+
 ## Build changes (`build.rs`)
 
 Each one is a change to how the C library is compiled, not to its source.
