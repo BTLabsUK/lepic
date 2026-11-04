@@ -455,6 +455,26 @@ impl EpicWallet {
         .await
     }
 
+    /// Follows the contact `contact_id` to the relay it asked to move to, `relay` as
+    /// `ContactRelayMoveRequested` and `ContactView::requested_relay` give it (`domain:port`):
+    /// messages go to its mailbox there, this wallet's mailbox for the contact moves to that
+    /// relay and the contact is told at the next collect, and the old mailbox is still
+    /// collected for seven days. Which relays to follow is the app's choice; nothing here
+    /// judges `relay`.
+    ///
+    /// Fails with `RelayMoveNotRequested` unless `relay` is the contact's `requested_relay`,
+    /// `ContactNotFound` for an unknown contact, and `PairingEnded` for a pairing that ended.
+    pub async fn contact_apply_relay_move(
+        &self,
+        contact_id: String,
+        relay: String,
+    ) -> Result<(), WalletError> {
+        self.run("contact_apply_relay_move", |session| async move {
+            session.contact_apply_relay_move(&contact_id, &relay).await
+        })
+        .await
+    }
+
     /// "Seal payments" on or off for a contact. Fails with `ContactNotFound`.
     pub async fn contact_set_seal(
         &self,

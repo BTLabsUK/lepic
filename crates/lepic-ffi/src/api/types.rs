@@ -1019,6 +1019,10 @@ pub struct ContactView {
     /// The contact removed this pairing on its side and said so: nothing sent through it
     /// arrives any more. Offer to remove it here too.
     pub removed_by_peer: bool,
+    /// `domain:port` of the relay the contact asked to move to, while messages still go to the
+    /// relay in use; `None` when it asked for no move. Apply it with
+    /// `EpicWallet::contact_apply_relay_move`.
+    pub requested_relay: Option<String>,
     /// The contact's payments address, `key@relay`, only when an address proof of this
     /// pairing verified over a card naming it. A later proof that fails keeps it; `None` for a
     /// contact that proved none.
@@ -1662,6 +1666,12 @@ pub enum WalletEventKind {
     /// are set. The transaction stays finalized, its inputs locked; nothing is retried. Call
     /// `EpicWallet::repost_transaction` when the connection is back, or cancel it.
     NotPosted,
+    /// The contact `contact_id` sent newer details that name its mailbox on another relay,
+    /// `relay` (`domain:port`). The details were stored, with a `ContactUpdated`, and messages
+    /// still go to the relay in use. Whether to follow is the app's choice: apply the move with
+    /// `EpicWallet::contact_apply_relay_move`. Raised once per newer card; after a restart,
+    /// `ContactView::requested_relay` still shows the request.
+    ContactRelayMoveRequested,
 }
 
 /// How a key check from `EpicWallet::contact_key_check` stands.
@@ -1703,7 +1713,7 @@ pub struct WalletEvent {
     pub contact_id: Option<String>,
     /// Why a pairing ended, for `PairingFailed`.
     pub pairing_failure: Option<PairingFailureReason>,
-    /// `domain:port`, for `HomeRelayUnreachable`.
+    /// `domain:port`, for `HomeRelayUnreachable` and `ContactRelayMoveRequested`.
     pub relay: Option<String>,
     /// For `InvoiceFromContact`, as the contact gave them.
     pub purpose: Option<SlatePurpose>,

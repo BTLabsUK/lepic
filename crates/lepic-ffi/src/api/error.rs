@@ -245,6 +245,10 @@ pub enum WalletErrorKind {
     /// The inviter's card names another contact kind than its invite did. Nothing was stored;
     /// pair again.
     PairingKindDiffers,
+    /// The relay given to `EpicWallet::contact_apply_relay_move` is not the one the contact
+    /// asked to move to (`ContactView::requested_relay`), or the contact asked for no move.
+    /// Nothing changed.
+    RelayMoveNotRequested,
 }
 
 impl WalletErrorKind {
@@ -336,6 +340,7 @@ impl WalletErrorKind {
             Self::ForeignProofAddress => 89,
             Self::WrongKey => 90,
             Self::PairingKindDiffers => 91,
+            Self::RelayMoveNotRequested => 92,
         }
     }
 }
@@ -714,6 +719,7 @@ impl From<ContactError> for WalletError {
                 E::InviteDismissed => K::InviteDismissed,
                 E::Ended => K::PairingEnded,
                 E::Waiting => K::PairingWaiting,
+                E::RelayMoveNotRequested => K::RelayMoveNotRequested,
                 E::Post(_) => K::TransportFailed,
                 _ => K::Other,
             },
@@ -853,6 +859,7 @@ mod tests {
             (K::ForeignProofAddress, 89),
             (K::WrongKey, 90),
             (K::PairingKindDiffers, 91),
+            (K::RelayMoveNotRequested, 92),
         ];
         for (kind, code) in expected {
             assert_eq!(kind.code(), code, "{kind:?}");
@@ -1187,6 +1194,7 @@ mod tests {
             (E::InviteDismissed, K::InviteDismissed),
             (E::Ended, K::PairingEnded),
             (E::Waiting, K::PairingWaiting),
+            (E::RelayMoveNotRequested, K::RelayMoveNotRequested),
             (E::NetworkMismatch, K::InvalidArgument),
             (E::TooLarge { max: 1 }, K::InvalidArgument),
             (E::Wallet(lepic_wallet::WalletError::Locked), K::Locked),

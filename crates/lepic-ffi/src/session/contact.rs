@@ -231,6 +231,7 @@ fn view(view: EngineContactView) -> ContactView {
         lapsed: view.lapsed,
         last_sealed_in_ms: view.last_sealed_in.map(ms),
         removed_by_peer: view.removed_by_peer,
+        requested_relay: view.requested_relay,
         payments_address: view.payments_address,
         created_at_ms: ms(view.created_at),
         status: match view.status {
@@ -857,6 +858,19 @@ impl Session {
             .await?)
     }
 
+    pub(crate) async fn contact_apply_relay_move(
+        &self,
+        contact_id: &str,
+        relay: &str,
+    ) -> Result<(), WalletError> {
+        let id = self::contact_id(contact_id)?;
+        Ok(self
+            .engine
+            .contact_book()
+            .apply_relay_move(id, relay)
+            .await?)
+    }
+
     pub(crate) async fn contact_set_seal(
         &self,
         contact_id: &str,
@@ -1412,6 +1426,16 @@ mod tests {
         }));
         assert_eq!(relay.kind, WalletEventKind::HomeRelayUnreachable);
         assert_eq!(relay.relay.as_deref(), Some("relay.example:443"));
+
+        let moved = mapped(&Event::ContactRelayMoveRequested(
+            lepic_wallet::event::RelayMoveRequest {
+                contact_id,
+                host: "relay2.example:443".to_owned(),
+            },
+        ));
+        assert_eq!(moved.kind, WalletEventKind::ContactRelayMoveRequested);
+        assert_eq!(moved.contact_id.as_deref(), Some(id.as_str()));
+        assert_eq!(moved.relay.as_deref(), Some("relay2.example:443"));
 
         let invoice = mapped(&Event::InvoiceFromContact(ContactInvoiceEvent {
             contact_id,
