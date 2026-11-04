@@ -11,12 +11,7 @@ async fn a_mined_kernel_is_located_and_an_unknown_one_is_not() {
     let pair = funded_pair().await;
     let alice = &pair.alice;
     let sent = alice
-        .self_send(
-            lepic_wallet::selection::SelfSendShape::Split(
-                lepic_wallet::selection::SplitCount::new(2).unwrap(),
-            ),
-            1,
-        )
+        .send_to_self(super::self_send::split(2), 1)
         .await
         .unwrap();
     let excess = alice

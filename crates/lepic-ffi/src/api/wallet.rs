@@ -16,7 +16,6 @@ use std::sync::Arc;
 use flutter_rust_bridge::frb;
 use lepic_keychain::Seed;
 use lepic_wallet::Password;
-use lepic_wallet::selection::{SelfSendShape, SplitCount};
 use zeroize::Zeroizing;
 
 use crate::inspect;
@@ -28,9 +27,9 @@ use crate::api::runtime::LepicRuntime;
 use crate::api::secret_store::AppSecretStore;
 use crate::api::types::{
     Chain, FeeEstimate, FinalizedTx, InboxReport, KernelLocation, LegacyImport, ListenerEvent,
-    ListenerEventKind, NodeTip, PeerCompat, ReceivedSlate, RefreshProgress, ScanProgress,
-    SelfSentTx, SendOptions, SentTx, Slate, SlateInfo, TransactionDetails, UrSlateProgress,
-    WalletConfig, WalletEvent, WalletOutput, WalletSummary,
+    ListenerEventKind, NodeRoute, NodeTip, PeerCompat, ReceivedSlate, RefreshProgress,
+    ScanProgress, SelfSendRequest, SelfSentTx, SendOptions, SentTx, Slate, SlateInfo,
+    TransactionDetails, UrSlateProgress, WalletConfig, WalletEvent, WalletOutput, WalletSummary,
 };
 use crate::boundary::{Boundary, end_stream, guard, guard_or};
 use crate::frb_generated::StreamSink;
@@ -221,11 +220,16 @@ pub fn wallet_fingerprint(mnemonic: String, chain: Chain) -> Result<String, Wall
 /// wallet. Fails with `NodeUnreachable` when the tip or version cannot be had; readiness and
 /// the block time are `None` when only they fail.
 ///
-/// No wallet is open, so the request always goes directly, never through tor. While a wallet
-/// is open, use [`EpicWallet::node_tip_for`], which follows the wallet's tor.
+/// The request goes by `route`, which the host states every time: directly, or through the
+/// SOCKS5 proxy the host runs, such as its own tor, and then never directly. It opens no tor of
+/// its own. A loopback node is reached directly either way. A SOCKS address that is not a
+/// loopback `ip:port` fails with `InvalidArgument`, and so does plain `http` to a node other
+/// than an onion through the proxy; a build without Tor fails a SOCKS route with
+/// `Unsupported`. While a wallet is open, [`EpicWallet::node_tip_for`] follows the wallet's tor.
 pub async fn node_tip(
     runtime: &LepicRuntime,
     config: WalletConfig,
+    route: NodeRoute,
 ) -> Result<NodeTip, WalletError> {
     let mut config = config;
     let node_secret = NodeSecret::take(&mut config);
@@ -234,41 +238,9 @@ pub async fn node_tip(
         .inner
         .boundary
         .run("node_tip", async move {
-            session::node_tip(&inner, &config, &node_secret).await
+            session::node_tip(&inner, &config, &node_secret, &route).await
         })
         .await
-}
-
-/// A split into `outputs` outputs: refused with `InvalidArgument` outside 2..=10.
-fn split_shape(outputs: u32) -> Result<SelfSendShape, WalletError> {
-    usize::try_from(outputs)
-        .ok()
-        .and_then(SplitCount::new)
-        .map(SelfSendShape::Split)
-        .ok_or_else(|| {
-            WalletError::new(
-                WalletErrorKind::InvalidArgument,
-                format!(
-                    "a split makes from {} to {} outputs",
-                    SplitCount::MIN,
-                    SplitCount::MAX
-                ),
-            )
-        })
-}
-
-/// The shape of a move-back into `outputs` outputs: one merges, 2..=10 split. Refused with
-/// `InvalidArgument` outside 1..=10.
-pub(crate) fn spend_back_shape(outputs: u32) -> Result<SelfSendShape, WalletError> {
-    if outputs == 1 {
-        return Ok(SelfSendShape::Consolidate);
-    }
-    split_shape(outputs).map_err(|_| {
-        WalletError::new(
-            WalletErrorKind::InvalidArgument,
-            format!("a spend makes from 1 to {} outputs", SplitCount::MAX),
-        )
-    })
 }
 
 /// `password` as the password of a new wallet: refused with `InvalidArgument` below
@@ -962,104 +934,51 @@ impl EpicWallet {
         .await
     }
 
-    /// The fee and inputs of [`EpicWallet::split_outputs`] into `outputs` outputs now, with
-    /// nothing locked. Fails as that call does.
-    pub async fn estimate_split(
+    /// The inputs, outputs and fee of [`EpicWallet::send_to_self`] with `request` now, with
+    /// nothing locked: `amount` is the first output and `change` the others. A send to self of
+    /// the same request at the same chain tip, with no outputs changed in between, charges this
+    /// fee. Fails as that call does before it stores anything.
+    pub async fn estimate_send_to_self(
         &self,
-        outputs: u32,
+        request: SelfSendRequest,
         minimum_confirmations: u64,
     ) -> Result<FeeEstimate, WalletError> {
-        self.run("estimate_split", |session| async move {
+        self.run("estimate_send_to_self", |session| async move {
             session
-                .estimate_self_send(split_shape(outputs)?, minimum_confirmations)
+                .estimate_send_to_self(request, minimum_confirmations)
                 .await
         })
         .await
     }
 
-    /// Splits the wallet's funds into `outputs` outputs of nearly equal value, from 2 to 10, so
-    /// that several sends can follow without waiting for each other's change: a normal network
-    /// transaction to the wallet itself, confirmed as any send, never through its Epicbox
-    /// address. It spends every output with `minimum_confirmations`, so the whole balance is
-    /// locked until it confirms; a wallet with more than 500 spendable outputs spends the 500
-    /// smallest and keeps the rest spendable. It shows as two transactions over transport
-    /// `self`, a send holding the change outputs and a receive holding one output; the fee is
-    /// that of [`EpicWallet::estimate_split`] at the same tip.
+    /// Spends the outputs `request.inputs` chooses among those with `minimum_confirmations`
+    /// into the outputs `request.outputs` asks for: a normal network transaction to the wallet
+    /// itself, confirmed as any send, never through its Epicbox address. The inputs are locked
+    /// until it confirms. It shows as two transactions over transport `self`, a send holding
+    /// the outputs after the first and a receive holding the first; the fee is that of
+    /// [`EpicWallet::estimate_send_to_self`] at the same tip. With `Named` it locks nothing
+    /// else: use it to make a cancelled payment final, since the other wallet may still hold a
+    /// signed copy that spends its inputs, for example the issuer of an invoice that was paid,
+    /// until they are spent elsewhere.
     ///
-    /// Fails with `InvalidArgument` for a count outside 2..=10, with `NotEnoughFunds` when the
-    /// spendable outputs cannot pay the fee and one base unit into each output, and otherwise
-    /// as [`EpicWallet::estimate_fee`], storing nothing. Fails with `NotPosted` when it was
-    /// stored but the node did not take it: post the send again with
-    /// [`EpicWallet::repost_transaction`] or cancel it with
-    /// [`EpicWallet::cancel_transaction`].
-    pub async fn split_outputs(
+    /// Fails, storing nothing, with `InvalidArgument` when the outputs, the remainder of
+    /// `Amounts` included, are not 1 to 10, an amount is 0, `Smallest` comes with `Count`,
+    /// `named` is set without `Named`, `count` with `Amounts` or `amounts` with `Count`, or
+    /// `Named` names no output, or one that is unknown, not unspent with
+    /// `minimum_confirmations`, or named twice; with `NothingToConsolidate` when `All` or
+    /// `Smallest` would spend one output into one, or `All` with `Count` 1 finds fewer than two
+    /// outputs to merge; with `NotEnoughFunds` when the inputs cannot pay the fee, the amounts
+    /// and one base unit into each other output; and otherwise as
+    /// [`EpicWallet::estimate_fee`]. Fails with `NotPosted` when it was stored but the node
+    /// did not take it: post the send again with [`EpicWallet::repost_transaction`] or cancel
+    /// it with [`EpicWallet::cancel_transaction`].
+    pub async fn send_to_self(
         &self,
-        outputs: u32,
+        request: SelfSendRequest,
         minimum_confirmations: u64,
     ) -> Result<SelfSentTx, WalletError> {
-        self.run("split_outputs", |session| async move {
-            session
-                .self_send(split_shape(outputs)?, minimum_confirmations)
-                .await
-        })
-        .await
-    }
-
-    /// The fee and inputs of [`EpicWallet::consolidate_outputs`] now, with nothing locked.
-    /// Fails as that call does.
-    pub async fn estimate_consolidate(
-        &self,
-        minimum_confirmations: u64,
-    ) -> Result<FeeEstimate, WalletError> {
-        self.run("estimate_consolidate", |session| async move {
-            session
-                .estimate_self_send(SelfSendShape::Consolidate, minimum_confirmations)
-                .await
-        })
-        .await
-    }
-
-    /// Merges every output with `minimum_confirmations` into one, as
-    /// [`EpicWallet::split_outputs`] does with one output: with more than 500 spendable
-    /// outputs it merges the 500 smallest, and a later call merges the rest. Fails as that
-    /// call does, and with `NothingToConsolidate` when fewer than two outputs are spendable.
-    pub async fn consolidate_outputs(
-        &self,
-        minimum_confirmations: u64,
-    ) -> Result<SelfSentTx, WalletError> {
-        self.run("consolidate_outputs", |session| async move {
-            session
-                .self_send(SelfSendShape::Consolidate, minimum_confirmations)
-                .await
-        })
-        .await
-    }
-
-    /// Spends exactly the outputs `commitments` names, by `WalletOutput.commitment`, into
-    /// `outputs` outputs of this wallet, and locks nothing else. With `outputs` 1 it merges
-    /// them as [`EpicWallet::consolidate_outputs`] does; with 2 to 10 the value less the fee
-    /// is split into that many outputs of nearly equal value, the last one taking the
-    /// remainder, as [`EpicWallet::split_outputs`] does, so the wallet can keep its number of
-    /// coins. The fee grows with the outputs. Use it to make a cancelled payment final: once a payment is cancelled its inputs
-    /// are spendable here, but the other wallet may still hold a signed copy that spends them,
-    /// for example the issuer of an invoice that was paid, until they are spent elsewhere.
-    ///
-    /// Fails with `InvalidArgument` when `outputs` is outside 1..=10, or `commitments` is empty,
-    /// or names an output that is unknown, not unspent with `minimum_confirmations`, or named
-    /// twice; with `NotEnoughFunds` when their value less the fee leaves less than one base
-    /// unit for each output; and otherwise as
-    /// [`EpicWallet::consolidate_outputs`] does, storing nothing.
-    pub async fn spend_outputs_to_self(
-        &self,
-        commitments: Vec<String>,
-        outputs: u32,
-        minimum_confirmations: u64,
-    ) -> Result<SelfSentTx, WalletError> {
-        let shape = spend_back_shape(outputs)?;
-        self.run("spend_outputs_to_self", |session| async move {
-            session
-                .spend_outputs_to_self(commitments, shape, minimum_confirmations)
-                .await
+        self.run("send_to_self", |session| async move {
+            session.send_to_self(request, minimum_confirmations).await
         })
         .await
     }

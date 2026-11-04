@@ -120,7 +120,7 @@ fn live_restore() {
             .unwrap();
         let mut tip_config = config(&restored_dir);
         let secret = NodeSecret::take(&mut tip_config);
-        let tip = session::node_tip(&runtime.inner, &tip_config, &secret)
+        let tip = session::node_tip(&runtime.inner, &tip_config, &secret, &crate::api::types::NodeRoute { socks: None })
             .await
             .unwrap()
             .height;

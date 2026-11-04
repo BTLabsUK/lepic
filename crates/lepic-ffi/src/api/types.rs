@@ -623,8 +623,7 @@ pub struct FeeEstimate {
     pub change_outputs: u32,
 }
 
-/// A send to the wallet itself, from `EpicWallet::split_outputs` and
-/// `EpicWallet::consolidate_outputs`, finalized and posted.
+/// A send to the wallet itself, from `EpicWallet::send_to_self`, finalized and posted.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SelfSentTx {
     /// The outgoing transaction: it spent the inputs and holds the change outputs.
@@ -637,6 +636,55 @@ pub struct SelfSentTx {
     pub input_count: u32,
     /// How many outputs it made: the received one and the change.
     pub output_count: u32,
+}
+
+/// The outputs `EpicWallet::send_to_self` spends.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SelfInputs {
+    /// Every output that may be spent, the smallest first, at most 500 of them: a wallet with
+    /// more spends the 500 smallest and keeps the rest spendable.
+    All,
+    /// The fewest of the smallest outputs that cover the amounts and the fee, at most 500.
+    /// Only with [`SelfOutputs::Amounts`].
+    Smallest,
+    /// Exactly the outputs [`SelfSendRequest::named`] names, and nothing else.
+    Named,
+}
+
+/// The outputs `EpicWallet::send_to_self` makes, from 1 to 10 in all.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SelfOutputs {
+    /// [`SelfSendRequest::count`] outputs of nearly equal value, the inputs' value less the
+    /// fee, the last one also taking the remainder: 1 merges the inputs into one.
+    Count,
+    /// One output per entry of [`SelfSendRequest::amounts`], and what the inputs hold beyond
+    /// the amounts and the fee as one more output when it is above zero.
+    Amounts,
+}
+
+/// What `EpicWallet::send_to_self` spends and makes. Split, merge and spend-back tools are
+/// built on it: a split into `n` is `All` with `Count` `n`, a merge `All` with `Count` 1.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SelfSendRequest {
+    pub inputs: SelfInputs,
+    /// The outputs `Named` spends, by `WalletOutput.commitment`; empty for the others.
+    pub named: Vec<String>,
+    pub outputs: SelfOutputs,
+    /// The outputs `Count` makes, 1 to 10; 0 for `Amounts`.
+    pub count: u32,
+    /// The base units of each output `Amounts` makes, 1 to 10 of them, each at least 1; empty
+    /// for `Count`.
+    pub amounts: Vec<u64>,
+}
+
+/// How `node_tip` reaches the node. The host states it every time; there is no default.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NodeRoute {
+    /// The SOCKS5 proxy the host runs, such as its tor, as a loopback `ip:port`: the request
+    /// goes through it with the node's name for the proxy to resolve, so an onion node works,
+    /// and never directly. `None` goes directly. A loopback node is reached directly either
+    /// way, as an open wallet reaches it.
+    pub socks: Option<String>,
 }
 
 /// How a send chooses the outputs it spends, as `epic-wallet send --selection_strategy`.

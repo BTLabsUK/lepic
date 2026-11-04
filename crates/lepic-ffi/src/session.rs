@@ -40,7 +40,9 @@ use lepic_wallet::scan::{
 };
 use lepic_wallet::selection::Commitment;
 use lepic_wallet::selection::{
-    Selection, SelectionOptions, SelectionStrategy as EngineStrategy, SelfSendShape,
+    Selection, SelectionOptions, SelectionStrategy as EngineStrategy,
+    SelfInputs as EngineSelfInputs, SelfOutputs as EngineSelfOutputs,
+    SelfSendRequest as EngineSelfSendRequest,
 };
 use lepic_wallet::self_send::SelfSent;
 use lepic_wallet::send::{Delivery, SendRequest, SentSlate};
@@ -62,11 +64,11 @@ use crate::api::runtime::{ClaimHolder, ClaimedStores, RuntimeInner};
 use crate::api::secret_store::AppSecretStore;
 use crate::api::types::{
     FeeEstimate, FinalizedTx, FoundDuring, ImportedTx, InboxReport, KernelLocation, LegacyImport,
-    LegacyImportStatus, ListenerEvent, ListenerEventKind, ListingRef, NodeTip, OutputCategory,
-    OutputStatus, PeerCompat, ReceivedSlate, ScanFound, ScanProgress, ScanResult,
-    SelectionStrategy, SelfSentTx, SendOptions, SentTx, Slate, SlateMessage, SlateStage,
-    TransactionDetails, TransportConnection, TransportState, TxOrigin, TxStatus, WalletConfig,
-    WalletEvent, WalletEventKind, WalletOutput, WalletSummary,
+    LegacyImportStatus, ListenerEvent, ListenerEventKind, ListingRef, NodeRoute, NodeTip,
+    OutputCategory, OutputStatus, PeerCompat, ReceivedSlate, ScanFound, ScanProgress, ScanResult,
+    SelectionStrategy, SelfInputs, SelfOutputs, SelfSendRequest, SelfSentTx, SendOptions, SentTx,
+    Slate, SlateMessage, SlateStage, TransactionDetails, TransportConnection, TransportState,
+    TxOrigin, TxStatus, WalletConfig, WalletEvent, WalletEventKind, WalletOutput, WalletSummary,
 };
 use crate::boundary::InFlight;
 use crate::frb_generated::StreamSink;
@@ -1076,44 +1078,71 @@ impl Session {
         Self::send_request(0, minimum_confirmations, None).selection_options()
     }
 
-    pub(crate) async fn estimate_self_send(
+    pub(crate) async fn estimate_send_to_self(
         &self,
-        shape: SelfSendShape,
+        request: SelfSendRequest,
         minimum_confirmations: u64,
     ) -> Result<FeeEstimate, WalletError> {
+        let request = self.self_send_request(request)?;
         let selection = self
             .engine
-            .estimate_self_send(Self::self_send_options(minimum_confirmations), shape)
+            .estimate_send_to_self(Self::self_send_options(minimum_confirmations), request)
             .await?;
         fee_estimate(&selection)
     }
 
-    pub(crate) async fn self_send(
+    pub(crate) async fn send_to_self(
         &self,
-        shape: SelfSendShape,
+        request: SelfSendRequest,
         minimum_confirmations: u64,
     ) -> Result<SelfSentTx, WalletError> {
+        let request = self.self_send_request(request)?;
         let sent = self
             .engine
-            .self_send(
+            .send_to_self(
                 Self::self_send_options(minimum_confirmations),
-                shape,
+                request,
                 Propagation::Fluff,
             )
             .await?;
         self_sent_tx(&sent)
     }
 
-    pub(crate) async fn spend_outputs_to_self(
+    /// `request` for the engine: `InvalidArgument` when a field is set that its kind does not
+    /// use, or a named commitment is not an output of this wallet. The engine checks the rest.
+    fn self_send_request(
         &self,
-        commitments: Vec<String>,
-        shape: SelfSendShape,
-        minimum_confirmations: u64,
-    ) -> Result<SelfSentTx, WalletError> {
+        request: SelfSendRequest,
+    ) -> Result<EngineSelfSendRequest, WalletError> {
+        let outputs = match request.outputs {
+            SelfOutputs::Count if request.amounts.is_empty() => EngineSelfOutputs::Count(
+                usize::try_from(request.count).map_err(|_| invalid("count out of range"))?,
+            ),
+            SelfOutputs::Amounts if request.count == 0 => {
+                EngineSelfOutputs::Amounts(request.amounts.into_iter().map(Amount::new).collect())
+            }
+            SelfOutputs::Count => return Err(invalid("amounts are only for Amounts")),
+            SelfOutputs::Amounts => return Err(invalid("count is only for Count")),
+        };
+        let inputs = match (request.inputs, request.named.is_empty()) {
+            (SelfInputs::Named, _) => {
+                EngineSelfInputs::Named(self.own_commitments(&request.named)?)
+            }
+            (SelfInputs::All, true) => EngineSelfInputs::All,
+            (SelfInputs::Smallest, true) => EngineSelfInputs::Smallest,
+            (SelfInputs::All | SelfInputs::Smallest, false) => {
+                return Err(invalid("named outputs are only for Named"));
+            }
+        };
+        Ok(EngineSelfSendRequest { inputs, outputs })
+    }
+
+    /// The outputs of this wallet `commitments` names by hex, in order.
+    fn own_commitments(&self, commitments: &[String]) -> Result<Vec<Commitment>, WalletError> {
         // Matched against the stored outputs, so an unknown commitment is refused here and
         // the engine checks that each one found may be spent.
         let outputs = self.engine.outputs(DEFAULT_ACCOUNT)?;
-        let commitments = commitments
+        commitments
             .iter()
             .enumerate()
             .map(|(position, hex)| {
@@ -1128,17 +1157,7 @@ impl Session {
                         ))
                     })
             })
-            .collect::<Result<Vec<_>, _>>()?;
-        let sent = self
-            .engine
-            .spend_outputs_to_self(
-                Self::self_send_options(minimum_confirmations),
-                commitments,
-                shape,
-                Propagation::Fluff,
-            )
-            .await?;
-        self_sent_tx(&sent)
+            .collect()
     }
 
     pub(crate) async fn scan(
@@ -2406,21 +2425,51 @@ impl Drop for ScratchFile {
     }
 }
 
-/// The tip and version of the node `config` names, without opening a wallet. No wallet is
-/// open, so there is no tor of its own to go through: the request always goes directly.
+/// The tip and version of the node `config` names, without opening a wallet, reached by
+/// `route`. No wallet is open, so no tor of its own is opened: the request goes directly or
+/// through the host's SOCKS proxy, and then never directly.
 pub(crate) async fn node_tip(
     runtime: &Arc<RuntimeInner>,
     config: &WalletConfig,
     node_secret: &NodeSecret,
+    route: &NodeRoute,
 ) -> Result<NodeTip, WalletError> {
     let tuning = Tuning::check(&config.tuning)?;
+    let tor = RelayTor::direct(true, tuning.tor_connect_timeout());
+    if let Some(address) = &route.socks {
+        through_socks(&tor, address)?;
+    }
     let node = runtime.nodes.client(
         (config, &tuning),
         node_secret,
-        &Arc::new(RelayTor::direct(true, tuning.tor_connect_timeout())),
+        &Arc::new(tor),
         &Arc::new(OnionRoutes::default()),
     )?;
     ask_node_tip(&node, &TipMemo::default()).await
+}
+
+/// Sends the connections of `tor` through the SOCKS5 proxy at `address`, a loopback `ip:port`:
+/// `InvalidArgument` for any other address.
+#[cfg(feature = "tor")]
+fn through_socks(tor: &RelayTor, address: &str) -> Result<(), WalletError> {
+    let socks: std::net::SocketAddr = address
+        .trim()
+        .parse()
+        .map_err(|_| invalid("the SOCKS address is not an ip:port"))?;
+    if !socks.ip().is_loopback() {
+        return Err(invalid("the SOCKS address is not a loopback address"));
+    }
+    tor.attach_socks(lepic_tor::FixedSocks(socks));
+    Ok(())
+}
+
+/// A build without Tor has no way through a SOCKS proxy: `Unsupported`.
+#[cfg(not(feature = "tor"))]
+fn through_socks(_tor: &RelayTor, _address: &str) -> Result<(), WalletError> {
+    Err(WalletError::new(
+        WalletErrorKind::Unsupported,
+        "this build of LEPIC has no Tor",
+    ))
 }
 
 impl Session {
