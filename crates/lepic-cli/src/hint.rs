@@ -345,7 +345,9 @@ mod tests {
             CliError::Send(SendError::Wallet(WalletError::NoWallet)),
         ] {
             let text = hint_for(&error);
-            assert!(text.contains("no floonet wallet in /w"), "{text}");
+            let wallet_dir = std::path::absolute("/w").unwrap();
+            let named = format!("no floonet wallet in {}", wallet_dir.display());
+            assert!(text.contains(&named), "{text}");
             assert!(text.contains("lepic wallet init"), "{text}");
         }
     }
