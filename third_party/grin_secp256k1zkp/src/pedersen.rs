@@ -400,7 +400,7 @@ impl Secp256k1 {
 			return Err(Error::IncapableContext);
 		}
 		let mut commit_i = [0; constants::PEDERSEN_COMMITMENT_SIZE_INTERNAL];
-		unsafe {
+		let ret = unsafe {
 			ffi::secp256k1_pedersen_commit(
 				self.ctx,
 				commit_i.as_mut_ptr(),
@@ -410,6 +410,9 @@ impl Secp256k1 {
 				constants::GENERATOR_G.as_ptr(),
 			)
 		};
+		if ret != 1 {
+			return Err(Error::InvalidCommit);
+		}
 		Ok(self.commit_ser(commit_i)?)
 	}
 
@@ -419,7 +422,7 @@ impl Secp256k1 {
 			return Err(Error::IncapableContext);
 		}
 		let mut commit_i = [0; constants::PEDERSEN_COMMITMENT_SIZE_INTERNAL];
-		unsafe {
+		let ret = unsafe {
 			ffi::secp256k1_pedersen_blind_commit(
 				self.ctx,
 				commit_i.as_mut_ptr(),
@@ -429,6 +432,9 @@ impl Secp256k1 {
 				constants::GENERATOR_G.as_ptr(),
 			)
 		};
+		if ret != 1 {
+			return Err(Error::InvalidCommit);
+		}
 		Ok(self.commit_ser(commit_i)?)
 	}
 
@@ -441,7 +447,7 @@ impl Secp256k1 {
 		let mut commit_i = [0; constants::PEDERSEN_COMMITMENT_SIZE_INTERNAL];
 		let zblind = [0u8; 32];
 
-		unsafe {
+		let ret = unsafe {
 			ffi::secp256k1_pedersen_commit(
 				self.ctx,
 				commit_i.as_mut_ptr(),
@@ -451,6 +457,9 @@ impl Secp256k1 {
 				constants::GENERATOR_G.as_ptr(),
 			)
 		};
+		if ret != 1 {
+			return Err(Error::InvalidCommit);
+		}
 		Ok(self.commit_ser(commit_i)?)
 	}
 

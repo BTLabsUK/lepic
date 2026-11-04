@@ -78,6 +78,12 @@ builds.
    threads could read and write at the same time. From mimblewimble/rust-secp256k1-zkp commit
    `d514444` ("fix data race and return checks"), the `shared_generators` hunk. The generators
    are the same bytes (they depend only on `GENERATOR_G` and `MAX_GENERATORS`).
+3. `src/pedersen.rs`: `commit`, `commit_blind` and `commit_value` check the return of
+   `secp256k1_pedersen_commit` / `secp256k1_pedersen_blind_commit` and return
+   `Error::InvalidCommit` when the C library reports failure (a zero value with a zero blind, or
+   an overflowing blind), instead of serialising an all-zero internal commitment. From
+   mimblewimble/rust-secp256k1-zkp commit `d514444`, the return-check hunks. Every successful
+   commitment is byte-identical; only the failure path changes from `Ok(zeroes)` to `Err`.
 
 Nothing else differs from 42fcb29 and the changes listed here. This file is the only addition.
 
