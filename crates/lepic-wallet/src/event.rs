@@ -157,6 +157,13 @@ pub enum Event {
     /// A contact sent a payload; it is kept for [`crate::Wallet::contact_payloads`] until the
     /// host acknowledges it.
     ContactPayload(ContactEvent),
+    /// The node refused a finalized transaction or could not be reached when it was pushed.
+    /// The transaction stays finalized and stored with its inputs locked; nothing is retried
+    /// here. The host decides when to push it again with [`crate::Wallet::post`], or to
+    /// cancel it. Raised for every failed push, from a finalize, a repost, an Epicbox
+    /// answer or an invoice payment; a push the node refused because inputs were spent
+    /// ends the transaction instead and raises no such event.
+    NotPosted(NotPosted),
 }
 
 /// An invoice a contact sent, with what the contact says about it.
@@ -403,6 +410,15 @@ pub struct UnmatchedNotice {
 pub struct SupersededReceive {
     pub tx_id: TxId,
     pub slate_id: SlateId,
+}
+
+/// A finalized transaction the node did not take.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NotPosted {
+    pub tx_id: TxId,
+    pub slate_id: SlateId,
+    /// Why, as the node's error reads, for the host to log or show.
+    pub reason: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

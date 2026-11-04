@@ -1188,6 +1188,16 @@ where
         Ok(None)
     }
 
+    /// Tells the host that the node did not take `tx_id`, so it can decide when to push it
+    /// again. Nothing is retried here.
+    fn raise_not_posted(&self, tx_id: TxId, finalized: &FinalizedSlate, source: &NodeError) {
+        self.emit(crate::Event::NotPosted(crate::event::NotPosted {
+            tx_id,
+            slate_id: finalized.slate.id(),
+            reason: crate::inbox::ErrorChain(source).to_string(),
+        }));
+    }
+
     /// Hands the transaction to the node, then records the transaction as posted. A node whose
     /// pool already holds it counts as having accepted it; when the node refuses the push, the
     /// kernel is looked up, and one already on chain counts as posted too.
@@ -1234,6 +1244,7 @@ where
                 }
                 None if pool_refused(&source) => {
                     let Some(spent) = self.spent_inputs(tx_id, finalized).await else {
+                        self.raise_not_posted(tx_id, finalized, &source);
                         return Err(PushFailure::NotPosted(source));
                     };
                     match spent {
@@ -1245,7 +1256,10 @@ where
                     }
                     return Err(PushFailure::Unminable { source, spent });
                 }
-                None => return Err(PushFailure::NotPosted(source)),
+                None => {
+                    self.raise_not_posted(tx_id, finalized, &source);
+                    return Err(PushFailure::NotPosted(source));
+                }
             },
         };
         let change = self
