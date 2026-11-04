@@ -47,6 +47,9 @@ was checked with fixed-vector and mainnet-data comparisons of the old and new bu
    `contrib/lax_der_parsing.c` and `contrib/lax_der_privatekey_parsing.c` (vendored, not
    compiled) skip the `memcpy` when a DER component has zero bytes, instead of passing a pointer
    past the buffer to a zero-length copy.
+8. bitcoin-core/secp256k1 `eb28464a` (PR 731): `src/hash.h`, `src/hash_impl.h`, the
+   SHA256 byte counter is a `uint64_t` instead of a `size_t`, so it cannot wrap on 32-bit
+   targets. Identical digests for every input below 4 GiB.
 
 ## Build changes (`build.rs`)
 
