@@ -124,6 +124,11 @@ builds.
    `MaybeUninit` memory. From mimblewimble/rust-secp256k1-zkp commit `6877373` ("zero-init
    instead of uninit"), the `macros.rs` `Clone` hunk; the rest of that commit is already covered
    by the fork's own `18f836b`. Same bytes.
+6. `Cargo.toml`, `src/lib.rs`: the optional `clippy = "0.0"` dependency, its `dev` feature and the
+   three `#![cfg_attr(feature = "dev", ...)]` lines that loaded clippy as a compiler plugin are
+   removed. They date from 2015 (mimblewimble/rust-secp256k1-zkp `4f83a83`); rustc dropped
+   compiler plugins in 1.75 (rust-lang/rust PR 116412), so the feature could not be built, and
+   `cargo machete` reports the dependency as unused. No code or output changes.
 
 Nothing else differs from 42fcb29 and the changes listed here. This file is the only addition.
 
