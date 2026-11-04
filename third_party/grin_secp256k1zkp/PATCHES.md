@@ -30,6 +30,8 @@ was checked with fixed-vector and mainnet-data comparisons of the old and new bu
    computes its infinity flag with `& ~a->infinity` instead of an integer multiply. Both
    operands are 0 or 1, so the value is identical; it keeps the constant-time path free of a
    multiply the compiler might turn into a branch.
+3. bitcoin-core/secp256k1 `069870d9` (PR 619): `src/secp256k1.c`,
+   `secp256k1_ec_privkey_negate` clears its scalar copy of the secret key before returning.
 
 ## Build changes (`build.rs`)
 
