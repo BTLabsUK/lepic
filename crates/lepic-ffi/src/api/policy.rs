@@ -55,6 +55,18 @@ pub struct HostPolicy {
     /// LEPIC sets no upper bound for it, nor for `set_minimum_confirmations`: a count above what
     /// the chain has makes nothing spendable, and the app decides how deep it lets users ask.
     pub default_minimum_confirmations: Option<u64>,
+    /// Contact checks one contact gets answered in an hour; a further one is dropped without
+    /// an answer. At least 1, at most `contact_check_answers_per_day`. Default 1.
+    pub contact_check_answers_per_hour: Option<u32>,
+    /// Contact checks one contact gets answered in a day. From 1 to 24. Default 3.
+    pub contact_check_answers_per_day: Option<u32>,
+    /// Times a contact mailbox message that fails for a lasting reason is kept for the next
+    /// collect before it is dropped. A failure that passes (node, relay or store not
+    /// answering, wallet locked) keeps it without counting. From 1 to 10. Default 3.
+    pub contact_hold_attempts: Option<u32>,
+    /// How long such a message is kept after it was first kept, in seconds. From 1 to 86,400.
+    /// Default 180.
+    pub contact_hold_patience_s: Option<u64>,
 }
 
 /// How a runtime treats PINs, chosen when the app creates it with
@@ -175,7 +187,22 @@ impl Policy {
                 .map_or(Ok(defaults.default_minimum_confirmations), |n| {
                     at_least_one(n, "default minimum confirmations")
                 })?,
+            contact_check_answers_per_hour: policy
+                .contact_check_answers_per_hour
+                .unwrap_or(defaults.contact_check_answers_per_hour),
+            contact_check_answers_per_day: policy
+                .contact_check_answers_per_day
+                .unwrap_or(defaults.contact_check_answers_per_day),
+            contact_hold_attempts: policy
+                .contact_hold_attempts
+                .unwrap_or(defaults.contact_hold_attempts),
+            contact_hold_patience: policy
+                .contact_hold_patience_s
+                .map_or(defaults.contact_hold_patience, Duration::from_secs),
         };
+        wallet
+            .validate()
+            .map_err(|error| invalid(&error.to_string()))?;
         Ok(Self {
             strategy: policy
                 .default_strategy

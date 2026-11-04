@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 use std::fmt;
 use std::path::PathBuf;
+use std::time::Duration;
 
 use lepic_primitives::params::Network;
 use lepic_transport::transport::TransportId;
@@ -21,6 +22,8 @@ pub enum ConfigError {
     UnknownTransport { transport: TransportId },
     #[error("{what} must be at least 1")]
     PolicyOutOfRange { what: &'static str },
+    #[error("{what} must be at most {max}")]
+    PolicyAboveBound { what: &'static str, max: u64 },
 }
 
 /// Names one wallet instance in logs and events. Not secret: it is neither the seed nor an
@@ -134,8 +137,9 @@ pub struct WalletConfig {
     pub policy: WalletPolicy,
 }
 
-/// How many receipts nobody asked for a wallet keeps open, and the confirmations a wallet
-/// counts as spendable before the user sets their own.
+/// How many receipts nobody asked for a wallet keeps open, the confirmations a wallet counts as
+/// spendable before the user sets their own, how often a contact's checks are answered, and how
+/// long a contact message that fails is held.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct WalletPolicy {
     /// Open receipts, payments received over Epicbox and answered with S2 that the sender has
@@ -158,20 +162,55 @@ pub struct WalletPolicy {
     /// The minimum confirmations of a wallet that never stored its own
     /// ([`crate::Wallet::set_minimum_confirmations`]). At least 1.
     pub default_minimum_confirmations: u64,
+    /// Contact checks (RFC 0002 8.5) one contact gets answered in an hour. A further check is
+    /// acknowledged and dropped without an answer. At least 1, at most
+    /// [`Self::contact_check_answers_per_day`].
+    pub contact_check_answers_per_hour: u32,
+    /// Contact checks one contact gets answered in a day. At least 1, at most
+    /// [`Self::MAX_CONTACT_CHECK_ANSWERS_PER_DAY`].
+    pub contact_check_answers_per_day: u32,
+    /// Times a contact mailbox message whose taking fails for a lasting reason is kept for the
+    /// next collect before it is acknowledged and dropped. A failure that passes (the node, the
+    /// relay or the store not answering, the wallet locked) keeps the message without counting.
+    /// At least 1, at most [`Self::MAX_CONTACT_HOLD_ATTEMPTS`].
+    pub contact_hold_attempts: u32,
+    /// How long after it was first kept such a message is still kept. At least a second, at
+    /// most [`Self::MAX_CONTACT_HOLD_PATIENCE`].
+    pub contact_hold_patience: Duration,
 }
 
 impl WalletPolicy {
-    /// The values every wallet used before they were parameters: 10 and 100 receipts and 6
-    /// confirmations.
+    /// The values every wallet used before they were parameters: 10 and 100 receipts, 6
+    /// confirmations, a contact's checks answered once an hour and three times a day, and a
+    /// failing contact message kept 3 times within 3 minutes.
     pub const DEFAULT: Self = Self {
         max_open_receipts_per_sender: 10,
         max_open_receipts: 100,
         default_minimum_confirmations: 6,
+        contact_check_answers_per_hour: 1,
+        contact_check_answers_per_day: 3,
+        contact_hold_attempts: 3,
+        contact_hold_patience: Duration::from_secs(3 * 60),
     };
+
+    /// The bound on [`Self::contact_check_answers_per_day`]: each answer is a contact update,
+    /// which a contact takes at most three times a day from one pairing and a hundred times an
+    /// hour in all (RFC 0002 8.5), so more answers only load the relay.
+    pub const MAX_CONTACT_CHECK_ANSWERS_PER_DAY: u32 = 24;
+
+    /// The bound on [`Self::contact_hold_attempts`]. A relay discards everything queued for a
+    /// mailbox when one message stays unacknowledged for long, and every message behind a kept
+    /// one waits meanwhile.
+    pub const MAX_CONTACT_HOLD_ATTEMPTS: u32 = 10;
+
+    /// The bound on [`Self::contact_hold_patience`], for the same reason: a day, after which the
+    /// count of a kept message is forgotten.
+    pub const MAX_CONTACT_HOLD_PATIENCE: Duration = Duration::from_secs(24 * 60 * 60);
 }
 
 impl WalletPolicy {
-    /// Fails with [`ConfigError::PolicyOutOfRange`] for a value below 1.
+    /// Fails with [`ConfigError::PolicyOutOfRange`] for a value below 1 and
+    /// [`ConfigError::PolicyAboveBound`] for one above its bound.
     pub fn validate(&self) -> Result<(), ConfigError> {
         for (what, value) in [
             (
@@ -183,10 +222,56 @@ impl WalletPolicy {
                 "default minimum confirmations",
                 self.default_minimum_confirmations,
             ),
+            (
+                "contact check answers per hour",
+                u64::from(self.contact_check_answers_per_hour),
+            ),
+            (
+                "contact check answers per day",
+                u64::from(self.contact_check_answers_per_day),
+            ),
+            (
+                "contact hold attempts",
+                u64::from(self.contact_hold_attempts),
+            ),
+            (
+                "contact hold patience in seconds",
+                self.contact_hold_patience.as_secs(),
+            ),
         ] {
             if value == 0 {
                 return Err(ConfigError::PolicyOutOfRange { what });
             }
+        }
+        for (what, value, max) in [
+            (
+                "contact check answers per hour",
+                self.contact_check_answers_per_hour,
+                self.contact_check_answers_per_day,
+            ),
+            (
+                "contact check answers per day",
+                self.contact_check_answers_per_day,
+                Self::MAX_CONTACT_CHECK_ANSWERS_PER_DAY,
+            ),
+            (
+                "contact hold attempts",
+                self.contact_hold_attempts,
+                Self::MAX_CONTACT_HOLD_ATTEMPTS,
+            ),
+        ] {
+            if value > max {
+                return Err(ConfigError::PolicyAboveBound {
+                    what,
+                    max: u64::from(max),
+                });
+            }
+        }
+        if self.contact_hold_patience > Self::MAX_CONTACT_HOLD_PATIENCE {
+            return Err(ConfigError::PolicyAboveBound {
+                what: "contact hold patience in seconds",
+                max: Self::MAX_CONTACT_HOLD_PATIENCE.as_secs(),
+            });
         }
         Ok(())
     }
@@ -234,6 +319,60 @@ mod tests {
         assert_eq!(policy.max_open_receipts_per_sender, 10);
         assert_eq!(policy.max_open_receipts, 100);
         assert_eq!(policy.default_minimum_confirmations, 6);
+        assert_eq!(policy.contact_check_answers_per_hour, 1);
+        assert_eq!(policy.contact_check_answers_per_day, 3);
+        assert_eq!(policy.contact_hold_attempts, 3);
+        assert_eq!(policy.contact_hold_patience, Duration::from_secs(180));
+        assert!(policy.validate().is_ok());
+    }
+
+    #[test]
+    fn contact_paces_and_holds_are_bounded() {
+        let with = |change: fn(&mut WalletPolicy)| {
+            let mut policy = WalletPolicy::default();
+            change(&mut policy);
+            policy.validate()
+        };
+        assert!(matches!(
+            with(|policy| policy.contact_check_answers_per_hour = 0),
+            Err(ConfigError::PolicyOutOfRange { .. })
+        ));
+        assert!(matches!(
+            with(|policy| policy.contact_check_answers_per_hour = 4),
+            Err(ConfigError::PolicyAboveBound { max: 3, .. })
+        ));
+        assert!(matches!(
+            with(|policy| {
+                policy.contact_check_answers_per_hour = 24;
+                policy.contact_check_answers_per_day = 24;
+            }),
+            Ok(())
+        ));
+        assert!(matches!(
+            with(|policy| policy.contact_check_answers_per_day = 25),
+            Err(ConfigError::PolicyAboveBound { max: 24, .. })
+        ));
+        assert!(matches!(
+            with(|policy| policy.contact_hold_attempts = 11),
+            Err(ConfigError::PolicyAboveBound { max: 10, .. })
+        ));
+        assert!(matches!(
+            with(|policy| policy.contact_hold_patience = Duration::ZERO),
+            Err(ConfigError::PolicyOutOfRange { .. })
+        ));
+        assert!(matches!(
+            with(|policy| {
+                policy.contact_hold_patience = WalletPolicy::MAX_CONTACT_HOLD_PATIENCE;
+            }),
+            Ok(())
+        ));
+        assert!(matches!(
+            with(|policy| {
+                policy.contact_hold_patience =
+                    WalletPolicy::MAX_CONTACT_HOLD_PATIENCE + Duration::from_secs(1);
+            }),
+            Err(ConfigError::PolicyAboveBound { .. })
+        ));
     }
 
     #[test]
