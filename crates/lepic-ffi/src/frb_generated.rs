@@ -43,7 +43,7 @@ flutter_rust_bridge::frb_generated_boilerplate!(
     default_rust_auto_opaque = RustAutoOpaqueMoi,
 );
 pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_VERSION: &str = "2.13.0";
-pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = 217505929;
+pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = 845949941;
 
 // Section: executor
 
@@ -9050,6 +9050,38 @@ fn wire__crate__api__runtime__LepicRuntime_store_migration_progress_impl(
         },
     )
 }
+fn wire__crate__api__runtime__LepicRuntime_with_pin_settings_impl(
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) -> flutter_rust_bridge::for_generated::WireSyncRust2DartSse {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_sync::<flutter_rust_bridge::for_generated::SseCodec, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "LepicRuntime_with_pin_settings",
+            port: None,
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Sync,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_log_level = <crate::api::diagnostics::LogLevel>::sse_decode(&mut deserializer);
+            let api_pin = <crate::api::policy::PinSettings>::sse_decode(&mut deserializer);
+            deserializer.end();
+            transform_result_sse::<_, crate::api::error::WalletError>((move || {
+                let output_ok =
+                    crate::api::runtime::LepicRuntime::with_pin_settings(api_log_level, api_pin)?;
+                std::result::Result::Ok(output_ok)
+            })())
+        },
+    )
+}
 fn wire__crate__api__testing__MockChain_fund_impl(
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
     rust_vec_len_: i32,
@@ -10303,6 +10335,38 @@ fn wire__crate__api__wallet__encode_ur_slate_impl(
         },
     )
 }
+fn wire__crate__api__policy__host_policy_default_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "host_policy_default",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            deserializer.end();
+            move |context| {
+                transform_result_sse::<_, ()>((move || {
+                    let output_ok = Ok::<_, ()>(crate::api::policy::HostPolicy::default())?;
+                    std::result::Result::Ok(output_ok)
+                })())
+            }
+        },
+    )
+}
 fn wire__crate__api__types__inbox_report_default_impl(
     port_: flutter_rust_bridge::for_generated::MessagePort,
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
@@ -10463,6 +10527,38 @@ fn wire__crate__api__wallet__node_tip_impl(
                     })()
                     .await,
                 )
+            }
+        },
+    )
+}
+fn wire__crate__api__policy__pin_settings_default_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "pin_settings_default",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            deserializer.end();
+            move |context| {
+                transform_result_sse::<_, ()>((move || {
+                    let output_ok = Ok::<_, ()>(crate::api::policy::PinSettings::default())?;
+                    std::result::Result::Ok(output_ok)
+                })())
             }
         },
     )
@@ -11485,6 +11581,37 @@ impl SseDecode for crate::api::types::FoundInvite {
     }
 }
 
+impl SseDecode for crate::api::policy::HostPolicy {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut var_defaultStrategy =
+            <Option<crate::api::types::SelectionStrategy>>::sse_decode(deserializer);
+        let mut var_sendTtlBlocks = <Option<u64>>::sse_decode(deserializer);
+        let mut var_invoiceTtlBlocks = <Option<u64>>::sse_decode(deserializer);
+        let mut var_maxChangeOutputs = <Option<u32>>::sse_decode(deserializer);
+        let mut var_maxExcludedOutputs = <Option<u32>>::sse_decode(deserializer);
+        let mut var_invoiceExpiryDefaultS = <Option<u64>>::sse_decode(deserializer);
+        let mut var_invoiceExpiryMaxS = <Option<u64>>::sse_decode(deserializer);
+        let mut var_maxInvoiceTtlLeadBlocks = <Option<u64>>::sse_decode(deserializer);
+        let mut var_maxOpenReceiptsPerSender = <Option<u32>>::sse_decode(deserializer);
+        let mut var_maxOpenReceipts = <Option<u32>>::sse_decode(deserializer);
+        let mut var_defaultMinimumConfirmations = <Option<u64>>::sse_decode(deserializer);
+        return crate::api::policy::HostPolicy {
+            default_strategy: var_defaultStrategy,
+            send_ttl_blocks: var_sendTtlBlocks,
+            invoice_ttl_blocks: var_invoiceTtlBlocks,
+            max_change_outputs: var_maxChangeOutputs,
+            max_excluded_outputs: var_maxExcludedOutputs,
+            invoice_expiry_default_s: var_invoiceExpiryDefaultS,
+            invoice_expiry_max_s: var_invoiceExpiryMaxS,
+            max_invoice_ttl_lead_blocks: var_maxInvoiceTtlLeadBlocks,
+            max_open_receipts_per_sender: var_maxOpenReceiptsPerSender,
+            max_open_receipts: var_maxOpenReceipts,
+            default_minimum_confirmations: var_defaultMinimumConfirmations,
+        };
+    }
+}
+
 impl SseDecode for crate::api::http::HttpExposure {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
@@ -12433,6 +12560,19 @@ impl SseDecode for Option<crate::api::types::ScanResult> {
     }
 }
 
+impl SseDecode for Option<crate::api::types::SelectionStrategy> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        if (<bool>::sse_decode(deserializer)) {
+            return Some(<crate::api::types::SelectionStrategy>::sse_decode(
+                deserializer,
+            ));
+        } else {
+            return None;
+        }
+    }
+}
+
 impl SseDecode for Option<crate::api::types::SendOptions> {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
@@ -12906,6 +13046,22 @@ impl SseDecode for crate::api::types::PendingPairingView {
             created_at_ms: var_createdAtMs,
             home_relay: var_homeRelay,
             expect_address: var_expectAddress,
+        };
+    }
+}
+
+impl SseDecode for crate::api::policy::PinSettings {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut var_minLen = <Option<u32>>::sse_decode(deserializer);
+        let mut var_freeFailures = <Option<u32>>::sse_decode(deserializer);
+        let mut var_firstDelayS = <Option<u64>>::sse_decode(deserializer);
+        let mut var_maxDelayS = <Option<u64>>::sse_decode(deserializer);
+        return crate::api::policy::PinSettings {
+            min_len: var_minLen,
+            free_failures: var_freeFailures,
+            first_delay_s: var_firstDelayS,
+            max_delay_s: var_maxDelayS,
         };
     }
 }
@@ -13713,6 +13869,7 @@ impl SseDecode for crate::api::types::WalletConfig {
         let mut var_offline = <bool>::sse_decode(deserializer);
         let mut var_torWanted = <bool>::sse_decode(deserializer);
         let mut var_hostFeatures = <u32>::sse_decode(deserializer);
+        let mut var_policy = <crate::api::policy::HostPolicy>::sse_decode(deserializer);
         return crate::api::types::WalletConfig {
             data_dir: var_dataDir,
             chain: var_chain,
@@ -13725,6 +13882,7 @@ impl SseDecode for crate::api::types::WalletConfig {
             offline: var_offline,
             tor_wanted: var_torWanted,
             host_features: var_hostFeatures,
+            policy: var_policy,
         };
     }
 }
@@ -14688,29 +14846,35 @@ fn pde_ffi_dispatcher_primary_impl(
             rust_vec_len,
             data_len,
         ),
-        169 => wire__crate__api__testing__MockStockPeer_return_messages_impl(
+        170 => wire__crate__api__testing__MockStockPeer_return_messages_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        170 => {
+        171 => {
             wire__crate__api__testing__MockStockPeer_send_impl(port, ptr, rust_vec_len, data_len)
         }
-        171 => wire__crate__api__wallet__decode_ur_slate_impl(port, ptr, rust_vec_len, data_len),
-        172 => wire__crate__api__wallet__delete_wallet_impl(port, ptr, rust_vec_len, data_len),
-        173 => wire__crate__api__wallet__encode_ur_slate_impl(port, ptr, rust_vec_len, data_len),
-        174 => {
+        172 => wire__crate__api__wallet__decode_ur_slate_impl(port, ptr, rust_vec_len, data_len),
+        173 => wire__crate__api__wallet__delete_wallet_impl(port, ptr, rust_vec_len, data_len),
+        174 => wire__crate__api__wallet__encode_ur_slate_impl(port, ptr, rust_vec_len, data_len),
+        175 => {
+            wire__crate__api__policy__host_policy_default_impl(port, ptr, rust_vec_len, data_len)
+        }
+        176 => {
             wire__crate__api__types__inbox_report_default_impl(port, ptr, rust_vec_len, data_len)
         }
-        175 => wire__crate__api__runtime__init_app_impl(port, ptr, rust_vec_len, data_len),
-        176 => wire__crate__api__wallet__inspect_slate_impl(port, ptr, rust_vec_len, data_len),
-        177 => wire__crate__api__wallet__node_tip_impl(port, ptr, rust_vec_len, data_len),
-        178 => wire__crate__api__wallet__reset_password_impl(port, ptr, rust_vec_len, data_len),
-        183 => {
+        177 => wire__crate__api__runtime__init_app_impl(port, ptr, rust_vec_len, data_len),
+        178 => wire__crate__api__wallet__inspect_slate_impl(port, ptr, rust_vec_len, data_len),
+        179 => wire__crate__api__wallet__node_tip_impl(port, ptr, rust_vec_len, data_len),
+        180 => {
+            wire__crate__api__policy__pin_settings_default_impl(port, ptr, rust_vec_len, data_len)
+        }
+        181 => wire__crate__api__wallet__reset_password_impl(port, ptr, rust_vec_len, data_len),
+        186 => {
             wire__crate__api__error__wallet_error_kind_code_impl(port, ptr, rust_vec_len, data_len)
         }
-        184 => wire__crate__api__wallet__wallet_exists_impl(port, ptr, rust_vec_len, data_len),
+        187 => wire__crate__api__wallet__wallet_exists_impl(port, ptr, rust_vec_len, data_len),
         _ => unreachable!(),
     }
 }
@@ -14767,59 +14931,64 @@ fn pde_ffi_dispatcher_sync_impl(
         }
         145 => wire__crate__api__runtime__LepicRuntime_new_impl(ptr, rust_vec_len, data_len),
         147 => wire__crate__api__runtime__LepicRuntime_stop_logs_impl(ptr, rust_vec_len, data_len),
-        149 => wire__crate__api__testing__MockChain_fund_impl(ptr, rust_vec_len, data_len),
-        150 => wire__crate__api__testing__MockChain_height_impl(ptr, rust_vec_len, data_len),
-        151 => wire__crate__api__testing__MockChain_lose_next_post_reply_impl(
+        149 => wire__crate__api__runtime__LepicRuntime_with_pin_settings_impl(
             ptr,
             rust_vec_len,
             data_len,
         ),
-        152 => wire__crate__api__testing__MockChain_mine_pushed_impl(ptr, rust_vec_len, data_len),
-        153 => wire__crate__api__testing__MockChain_new_impl(ptr, rust_vec_len, data_len),
-        154 => wire__crate__api__testing__MockChain_panic_on_next_node_call_impl(
+        150 => wire__crate__api__testing__MockChain_fund_impl(ptr, rust_vec_len, data_len),
+        151 => wire__crate__api__testing__MockChain_height_impl(ptr, rust_vec_len, data_len),
+        152 => wire__crate__api__testing__MockChain_lose_next_post_reply_impl(
             ptr,
             rust_vec_len,
             data_len,
         ),
-        155 => wire__crate__api__testing__MockChain_pool_pushed_impl(ptr, rust_vec_len, data_len),
-        156 => wire__crate__api__testing__MockChain_pushed_count_impl(ptr, rust_vec_len, data_len),
-        157 => wire__crate__api__testing__MockChain_runtime_impl(ptr, rust_vec_len, data_len),
-        158 => wire__crate__api__testing__MockChain_runtime_with_relay_impl(
+        153 => wire__crate__api__testing__MockChain_mine_pushed_impl(ptr, rust_vec_len, data_len),
+        154 => wire__crate__api__testing__MockChain_new_impl(ptr, rust_vec_len, data_len),
+        155 => wire__crate__api__testing__MockChain_panic_on_next_node_call_impl(
             ptr,
             rust_vec_len,
             data_len,
         ),
-        159 => wire__crate__api__testing__MockChain_set_height_impl(ptr, rust_vec_len, data_len),
-        160 => wire__crate__api__testing__MockChain_set_node_ready_for_txs_impl(
+        156 => wire__crate__api__testing__MockChain_pool_pushed_impl(ptr, rust_vec_len, data_len),
+        157 => wire__crate__api__testing__MockChain_pushed_count_impl(ptr, rust_vec_len, data_len),
+        158 => wire__crate__api__testing__MockChain_runtime_impl(ptr, rust_vec_len, data_len),
+        159 => wire__crate__api__testing__MockChain_runtime_with_relay_impl(
             ptr,
             rust_vec_len,
             data_len,
         ),
-        161 => {
+        160 => wire__crate__api__testing__MockChain_set_height_impl(ptr, rust_vec_len, data_len),
+        161 => wire__crate__api__testing__MockChain_set_node_ready_for_txs_impl(
+            ptr,
+            rust_vec_len,
+            data_len,
+        ),
+        162 => {
             wire__crate__api__testing__MockChain_set_node_stalled_impl(ptr, rust_vec_len, data_len)
         }
-        162 => wire__crate__api__testing__MockChain_set_node_unreachable_impl(
+        163 => wire__crate__api__testing__MockChain_set_node_unreachable_impl(
             ptr,
             rust_vec_len,
             data_len,
         ),
-        163 => wire__crate__api__testing__MockChain_stalled_node_calls_impl(
+        164 => wire__crate__api__testing__MockChain_stalled_node_calls_impl(
             ptr,
             rust_vec_len,
             data_len,
         ),
-        164 => wire__crate__api__testing__MockRelay_new_impl(ptr, rust_vec_len, data_len),
-        165 => wire__crate__api__testing__MockRelay_pending_impl(ptr, rust_vec_len, data_len),
-        166 => wire__crate__api__testing__MockRelay_set_refusing_impl(ptr, rust_vec_len, data_len),
-        167 => wire__crate__api__testing__MockStockPeer_address_impl(ptr, rust_vec_len, data_len),
-        168 => wire__crate__api__testing__MockStockPeer_new_impl(ptr, rust_vec_len, data_len),
-        179 => wire__crate__api__wallet__validate_epicbox_address_impl(ptr, rust_vec_len, data_len),
-        180 => wire__crate__api__wallet__validate_mnemonic_impl(ptr, rust_vec_len, data_len),
-        181 => wire__crate__api__tor__validate_onion_address_impl(ptr, rust_vec_len, data_len),
-        182 => {
+        165 => wire__crate__api__testing__MockRelay_new_impl(ptr, rust_vec_len, data_len),
+        166 => wire__crate__api__testing__MockRelay_pending_impl(ptr, rust_vec_len, data_len),
+        167 => wire__crate__api__testing__MockRelay_set_refusing_impl(ptr, rust_vec_len, data_len),
+        168 => wire__crate__api__testing__MockStockPeer_address_impl(ptr, rust_vec_len, data_len),
+        169 => wire__crate__api__testing__MockStockPeer_new_impl(ptr, rust_vec_len, data_len),
+        182 => wire__crate__api__wallet__validate_epicbox_address_impl(ptr, rust_vec_len, data_len),
+        183 => wire__crate__api__wallet__validate_mnemonic_impl(ptr, rust_vec_len, data_len),
+        184 => wire__crate__api__tor__validate_onion_address_impl(ptr, rust_vec_len, data_len),
+        185 => {
             wire__crate__api__wallet__verify_address_signature_at_impl(ptr, rust_vec_len, data_len)
         }
-        185 => wire__crate__api__wallet__wallet_fingerprint_impl(ptr, rust_vec_len, data_len),
+        188 => wire__crate__api__wallet__wallet_fingerprint_impl(ptr, rust_vec_len, data_len),
         _ => unreachable!(),
     }
 }
@@ -15341,6 +15510,42 @@ impl flutter_rust_bridge::IntoIntoDart<crate::api::types::FoundInvite>
     for crate::api::types::FoundInvite
 {
     fn into_into_dart(self) -> crate::api::types::FoundInvite {
+        self
+    }
+}
+// Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for crate::api::policy::HostPolicy {
+    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+        [
+            self.default_strategy.into_into_dart().into_dart(),
+            self.send_ttl_blocks.into_into_dart().into_dart(),
+            self.invoice_ttl_blocks.into_into_dart().into_dart(),
+            self.max_change_outputs.into_into_dart().into_dart(),
+            self.max_excluded_outputs.into_into_dart().into_dart(),
+            self.invoice_expiry_default_s.into_into_dart().into_dart(),
+            self.invoice_expiry_max_s.into_into_dart().into_dart(),
+            self.max_invoice_ttl_lead_blocks
+                .into_into_dart()
+                .into_dart(),
+            self.max_open_receipts_per_sender
+                .into_into_dart()
+                .into_dart(),
+            self.max_open_receipts.into_into_dart().into_dart(),
+            self.default_minimum_confirmations
+                .into_into_dart()
+                .into_dart(),
+        ]
+        .into_dart()
+    }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive
+    for crate::api::policy::HostPolicy
+{
+}
+impl flutter_rust_bridge::IntoIntoDart<crate::api::policy::HostPolicy>
+    for crate::api::policy::HostPolicy
+{
+    fn into_into_dart(self) -> crate::api::policy::HostPolicy {
         self
     }
 }
@@ -16520,6 +16725,29 @@ impl flutter_rust_bridge::IntoIntoDart<crate::api::types::PendingPairingView>
     }
 }
 // Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for crate::api::policy::PinSettings {
+    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+        [
+            self.min_len.into_into_dart().into_dart(),
+            self.free_failures.into_into_dart().into_dart(),
+            self.first_delay_s.into_into_dart().into_dart(),
+            self.max_delay_s.into_into_dart().into_dart(),
+        ]
+        .into_dart()
+    }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive
+    for crate::api::policy::PinSettings
+{
+}
+impl flutter_rust_bridge::IntoIntoDart<crate::api::policy::PinSettings>
+    for crate::api::policy::PinSettings
+{
+    fn into_into_dart(self) -> crate::api::policy::PinSettings {
+        self
+    }
+}
+// Codec=Dco (DartCObject based), see doc to use other codecs
 impl flutter_rust_bridge::IntoDart for crate::api::wallet::PinWallet {
     fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
         [
@@ -17539,6 +17767,7 @@ impl flutter_rust_bridge::IntoDart for crate::api::types::WalletConfig {
             self.offline.into_into_dart().into_dart(),
             self.tor_wanted.into_into_dart().into_dart(),
             self.host_features.into_into_dart().into_dart(),
+            self.policy.into_into_dart().into_dart(),
         ]
         .into_dart()
     }
@@ -18314,6 +18543,26 @@ impl SseEncode for crate::api::types::FoundInvite {
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
         <String>::sse_encode(self.link, serializer);
         <crate::api::types::InvitePreview>::sse_encode(self.preview, serializer);
+    }
+}
+
+impl SseEncode for crate::api::policy::HostPolicy {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <Option<crate::api::types::SelectionStrategy>>::sse_encode(
+            self.default_strategy,
+            serializer,
+        );
+        <Option<u64>>::sse_encode(self.send_ttl_blocks, serializer);
+        <Option<u64>>::sse_encode(self.invoice_ttl_blocks, serializer);
+        <Option<u32>>::sse_encode(self.max_change_outputs, serializer);
+        <Option<u32>>::sse_encode(self.max_excluded_outputs, serializer);
+        <Option<u64>>::sse_encode(self.invoice_expiry_default_s, serializer);
+        <Option<u64>>::sse_encode(self.invoice_expiry_max_s, serializer);
+        <Option<u64>>::sse_encode(self.max_invoice_ttl_lead_blocks, serializer);
+        <Option<u32>>::sse_encode(self.max_open_receipts_per_sender, serializer);
+        <Option<u32>>::sse_encode(self.max_open_receipts, serializer);
+        <Option<u64>>::sse_encode(self.default_minimum_confirmations, serializer);
     }
 }
 
@@ -19093,6 +19342,16 @@ impl SseEncode for Option<crate::api::types::ScanResult> {
     }
 }
 
+impl SseEncode for Option<crate::api::types::SelectionStrategy> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <bool>::sse_encode(self.is_some(), serializer);
+        if let Some(value) = self {
+            <crate::api::types::SelectionStrategy>::sse_encode(value, serializer);
+        }
+    }
+}
+
 impl SseEncode for Option<crate::api::types::SendOptions> {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
@@ -19508,6 +19767,16 @@ impl SseEncode for crate::api::types::PendingPairingView {
         <i64>::sse_encode(self.created_at_ms, serializer);
         <String>::sse_encode(self.home_relay, serializer);
         <Option<String>>::sse_encode(self.expect_address, serializer);
+    }
+}
+
+impl SseEncode for crate::api::policy::PinSettings {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <Option<u32>>::sse_encode(self.min_len, serializer);
+        <Option<u32>>::sse_encode(self.free_failures, serializer);
+        <Option<u64>>::sse_encode(self.first_delay_s, serializer);
+        <Option<u64>>::sse_encode(self.max_delay_s, serializer);
     }
 }
 
@@ -20211,6 +20480,7 @@ impl SseEncode for crate::api::types::WalletConfig {
         <bool>::sse_encode(self.offline, serializer);
         <bool>::sse_encode(self.tor_wanted, serializer);
         <u32>::sse_encode(self.host_features, serializer);
+        <crate::api::policy::HostPolicy>::sse_encode(self.policy, serializer);
     }
 }
 
