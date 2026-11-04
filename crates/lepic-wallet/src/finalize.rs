@@ -477,11 +477,6 @@ fn count(len: usize) -> u64 {
     u64::try_from(len).unwrap_or(u64::MAX)
 }
 
-/// The codecs a legacy transport policy decodes with, at the network's base fee.
-fn legacy_codecs(base_fee: Fee) -> Result<CodecRegistry, FinalizeError> {
-    Ok(codecs::legacy(base_fee))
-}
-
 /// What the store transaction of a finalize runs with, so it needs no `Ports`.
 struct FinalizeEnvironment {
     network: Network,
@@ -941,7 +936,7 @@ where
             .ok_or(FinalizeError::UnknownTransport { transport })?
             .policy();
         let s2 = policy
-            .decode(&legacy_codecs(base_fee)?, wire)
+            .decode(&codecs::legacy(base_fee), wire)
             .map_err(FinalizeError::Decode)?;
         let span = Span::current();
         span.record("slate_id", tracing::field::display(s2.id()));
@@ -1165,8 +1160,7 @@ where
         let candidates = {
             let session = Arc::clone(session);
             self.blocking(move |_, config| {
-                let codecs =
-                    crate::refresh::legacy_codecs(config.network.params().default_base_fee());
+                let codecs = codecs::legacy(config.network.params().default_base_fee());
                 Ok(session
                     .store
                     .read(|repos| own_spenders(repos, &codecs, tx_id, &gone)))

@@ -32,6 +32,7 @@ use tracing::{debug, info, instrument, warn};
 use uuid::Uuid;
 
 use crate::cancel::pool_holds;
+use crate::codecs;
 use crate::error::WalletError;
 use crate::event::{BouncedInvoice, Event, ExpiredInvoice};
 use crate::inbox::{Hold, InboxError, relay_network};
@@ -39,7 +40,7 @@ use crate::invoice::{InvoiceError, PaidInvoice, PayRequest, payer_release_height
 use crate::peer_compat::PeerKind;
 use crate::ports::{SecretVault, StoreOpener};
 use crate::receive::verify_message;
-use crate::refresh::{final_kernel, last_confirmed, legacy_codecs, ttl_cutoff};
+use crate::refresh::{final_kernel, last_confirmed, ttl_cutoff};
 use crate::wallet::Wallet;
 
 /// What a peer's own messages showed about invoices, from [`Wallet::peer_capability`]: the
@@ -482,7 +483,7 @@ where
 
 /// The legacy codecs at the network's base fee, which read every slate this wallet stores.
 pub(crate) fn stored_codecs(network: Network) -> CodecRegistry {
-    legacy_codecs(network.params().default_base_fee())
+    codecs::legacy(network.params().default_base_fee())
 }
 
 fn epicbox_decode(

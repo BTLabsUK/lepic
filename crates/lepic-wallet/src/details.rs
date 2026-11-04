@@ -18,13 +18,13 @@ use tracing::instrument;
 use uuid::Uuid;
 
 use crate::account::AccountError;
+use crate::codecs;
 use crate::epicbox_invoice::display_message;
 use crate::epicbox_notice::{cancelled_report, posted_report};
 use crate::error::WalletError;
 use crate::legacy_history::{self, TxOrigin};
 use crate::ports::{SecretVault, StoreOpener};
 use crate::receive::verify_message;
-use crate::refresh::legacy_codecs;
 use crate::release::release_check_with;
 use crate::scan::{ScanFound, found_output, scan_found};
 use crate::slate_cache::{SlateCache, Stages};
@@ -205,7 +205,7 @@ where
         tx_id: TxId,
     ) -> Result<TransactionDetails, WalletError> {
         let session = self.session()?;
-        let codecs = legacy_codecs(self.config().network.params().default_base_fee());
+        let codecs = codecs::legacy(self.config().network.params().default_base_fee());
         self.blocking(move |ports, _| {
             let now = ports.clock.now();
             session.store.read(|repos| {
@@ -229,7 +229,7 @@ where
         slate_id: SlateId,
     ) -> Result<Option<TransactionDetails>, WalletError> {
         let session = self.session()?;
-        let codecs = legacy_codecs(self.config().network.params().default_base_fee());
+        let codecs = codecs::legacy(self.config().network.params().default_base_fee());
         let uuid = Uuid::from_bytes(*slate_id.as_bytes());
         self.blocking(move |ports, _| {
             let now = ports.clock.now();
@@ -253,7 +253,7 @@ where
         account: AccountIndex,
     ) -> Result<Vec<TransactionDetails>, WalletError> {
         let session = self.session()?;
-        let codecs = legacy_codecs(self.config().network.params().default_base_fee());
+        let codecs = codecs::legacy(self.config().network.params().default_base_fee());
         self.blocking(move |ports, _| {
             let now = ports.clock.now();
             session.store.read(|repos| {

@@ -24,7 +24,7 @@ use std::sync::Arc;
 use jiff::Timestamp;
 use lepic_crypto::Commitment;
 use lepic_node::{NodeApi, NodeError, OutputLocation};
-use lepic_primitives::amount::{Amount, ArithmeticError, Fee, Height};
+use lepic_primitives::amount::{Amount, ArithmeticError, Height};
 use lepic_primitives::error_chain::ErrorChain;
 use lepic_slate::codec::{MediaType, WireSlate};
 use lepic_slate::model::Slate;
@@ -39,6 +39,7 @@ use uuid::Uuid;
 
 use crate::cancel::{cancel_partner, drop_holdings, pool_kernels, self_send_partner};
 use crate::chain::{self, ChainPosition, ImplausibleNodeData};
+use crate::codecs;
 use crate::epicbox_invoice::epicbox_invoice_payment;
 use crate::error::WalletError;
 use crate::event::{Balance, Event, SlateId, SupersededReceive};
@@ -364,7 +365,7 @@ where
         summary: &mut RefreshSummary,
     ) -> Result<BTreeSet<TxId>, RefreshError> {
         let node = &self.ports().node;
-        let codecs = legacy_codecs(self.config().network.params().default_base_fee());
+        let codecs = codecs::legacy(self.config().network.params().default_base_fee());
         let lookups = {
             let session = Arc::clone(session);
             self.blocking(move |_, _| {
@@ -418,7 +419,7 @@ where
         summary: &mut RefreshSummary,
     ) -> Result<(), RefreshError> {
         let node = &self.ports().node;
-        let codecs = legacy_codecs(self.config().network.params().default_base_fee());
+        let codecs = codecs::legacy(self.config().network.params().default_base_fee());
         let candidates = {
             let session = Arc::clone(session);
             let height = tip.height;
@@ -441,7 +442,7 @@ where
             chain::check_agreement(tip.height, second.height)?;
         }
         let cleared = self.not_held(&candidates, tip).await?;
-        let codecs = legacy_codecs(self.config().network.params().default_base_fee());
+        let codecs = codecs::legacy(self.config().network.params().default_base_fee());
         let changes = {
             let session = Arc::clone(session);
             let height = tip.height;
@@ -505,7 +506,7 @@ where
         now: Timestamp,
         summary: &mut RefreshSummary,
     ) -> Result<(), RefreshError> {
-        let codecs = legacy_codecs(self.config().network.params().default_base_fee());
+        let codecs = codecs::legacy(self.config().network.params().default_base_fee());
         let mut waiting = {
             let session = Arc::clone(session);
             self.blocking(move |_, _| {
@@ -601,7 +602,7 @@ where
         now: Timestamp,
         summary: &mut RefreshSummary,
     ) -> Result<(), RefreshError> {
-        let codecs = legacy_codecs(self.config().network.params().default_base_fee());
+        let codecs = codecs::legacy(self.config().network.params().default_base_fee());
         let posts = {
             let session = Arc::clone(session);
             self.blocking(move |_, _| Ok(session.store.read(|repos| pending_posts(repos, &codecs))))
@@ -802,7 +803,7 @@ where
         now: Timestamp,
         summary: &mut RefreshSummary,
     ) -> Result<(), RefreshError> {
-        let codecs = legacy_codecs(self.config().network.params().default_base_fee());
+        let codecs = codecs::legacy(self.config().network.params().default_base_fee());
         let (height, due) = {
             let session = Arc::clone(session);
             self.blocking(move |_, _| {
@@ -1914,11 +1915,6 @@ pub(crate) fn decode_stored(codecs: &CodecRegistry, tx_id: TxId, bytes: &[u8]) -
             None
         }
     }
-}
-
-/// The codecs stored slates are written in, in the detection order `receive` uses.
-pub(crate) fn legacy_codecs(base_fee: Fee) -> CodecRegistry {
-    crate::codecs::legacy(base_fee)
 }
 
 /// The height balances are computed at: the highest tip a refresh or scan confirmed, or zero

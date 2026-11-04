@@ -34,13 +34,12 @@ use uuid::Uuid;
 
 use crate::cancel::{cancel_partner, drop_holdings, pool_holds, self_send_partner};
 use crate::chain;
+use crate::codecs;
 use crate::error::WalletError;
 use crate::lifecycle::Session;
 use crate::other_wallet;
 use crate::ports::{SecretVault, StoreOpener};
-use crate::refresh::{
-    RefreshError, balance_height, final_kernel, legacy_codecs, stored_slate, unless_refused,
-};
+use crate::refresh::{RefreshError, balance_height, final_kernel, stored_slate, unless_refused};
 use crate::state::{StateChange, apply_transition, confirm_released, state_name};
 use crate::wallet::Wallet;
 use lepic_primitives::error_chain::ErrorChain;
@@ -546,7 +545,7 @@ where
     pub async fn release(&self, tx_id: TxId) -> Result<(), WalletError> {
         let session = self.session()?;
         let _posting = self.posting_turn().await;
-        let codecs = legacy_codecs(self.config().network.params().default_base_fee());
+        let codecs = codecs::legacy(self.config().network.params().default_base_fee());
         let (observed, check) = {
             let session = Arc::clone(&session);
             self.blocking(move |_, _| {
@@ -679,7 +678,7 @@ where
         let session = Arc::clone(session);
         let changes = self
             .blocking(move |_, config| {
-                let codecs = legacy_codecs(config.network.params().default_base_fee());
+                let codecs = codecs::legacy(config.network.params().default_base_fee());
                 Ok(session.store.write(|repos| {
                     for watched in &kernel_ended {
                         end_kernel_watch(repos, watched, height)?;

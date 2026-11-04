@@ -25,9 +25,10 @@ use lepic_store::{
 use tracing::{debug, info, instrument};
 
 use crate::chain;
+use crate::codecs;
 use crate::error::WalletError;
 use crate::ports::{SecretVault, StoreOpener};
-use crate::refresh::{forget_receive_seen, legacy_codecs, pending_kernel};
+use crate::refresh::{forget_receive_seen, pending_kernel};
 use crate::release::record_watch;
 use crate::self_send::SELF;
 use crate::send::SENDER_CONTEXT;
@@ -83,7 +84,7 @@ where
     pub async fn cancel(&self, tx_id: TxId) -> Result<(), WalletError> {
         let session = self.session()?;
         let posting = self.posting_turn().await;
-        let codecs = legacy_codecs(self.config().network.params().default_base_fee());
+        let codecs = codecs::legacy(self.config().network.params().default_base_fee());
         let (observed, lookup) = {
             let session = Arc::clone(&session);
             self.blocking(move |_, _| {
