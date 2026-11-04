@@ -27,6 +27,15 @@ fn main() {
                .include("depend/secp256k1-zkp/include")
                .include("depend/secp256k1-zkp/src")
                .flag("-g")
+               // Upstream compiles the library with -DSECP256K1_BUILD (Makefile.am,
+               // libsecp256k1_la_CPPFLAGS). Without it include/secp256k1.h marks the API
+               // arguments __nonnull__, and the compiler may then drop the library's own
+               // ARG_CHECK null checks (bitcoin-core/secp256k1 ae9e648 defines it in
+               // secp256k1.c for the same reason). SECP256K1_API is emptied as
+               // rust-secp256k1-sys does, so the static library carries no dllexport or
+               // visibility attributes into the Rust cdylib.
+               .define("SECP256K1_BUILD", Some("1"))
+               .define("SECP256K1_API", Some(""))
                // TODO these three should be changed to use libgmp, at least until secp PR 290 is merged
                .define("USE_NUM_NONE", Some("1"))
                .define("USE_FIELD_INV_BUILTIN", Some("1"))

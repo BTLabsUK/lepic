@@ -27,7 +27,24 @@ One, taken from upstream mimblewimble/secp256k1-zkp commit
 
 The upstream commit's new C test (`tests_impl.h`) is not applied: the C tests are not built here.
 
-Nothing else differs from 42fcb29. This file is the only addition.
+## Build changes (`build.rs`)
+
+Each one is a change to how the C library is compiled, not to its source.
+
+1. `SECP256K1_BUILD` defined, `SECP256K1_API` defined empty. Upstream's own build passes
+   `-DSECP256K1_BUILD` for the library (mimblewimble/secp256k1-zkp `Makefile.am`,
+   `libsecp256k1_la_CPPFLAGS`), and bitcoin-core/secp256k1 later put the define into
+   `secp256k1.c` itself (commit `ae9e648`, "Define SECP256K1_BUILD in secp256k1.c directly",
+   <https://github.com/bitcoin-core/secp256k1/pull/929>). The fork's `build.rs` never defined it,
+   so `include/secp256k1.h` marked the API arguments `__nonnull__` and GCC was free to delete
+   the library's own `ARG_CHECK` null checks, which it reported as 163 `-Wnonnull-compare`
+   warnings. `SECP256K1_API` is emptied as rust-bitcoin/rust-secp256k1's `secp256k1-sys`
+   `build.rs` does, so the static library carries no `dllexport` or visibility attribute into
+   the Rust cdylib. Byte-identical outputs before and after, and proofs and signatures from
+   each build verify on the other (the harness is described in the review that made this
+   change).
+
+Nothing else differs from 42fcb29 and the changes listed here. This file is the only addition.
 
 ## Re-checking
 
