@@ -32,6 +32,10 @@ was checked with fixed-vector and mainnet-data comparisons of the old and new bu
    multiply the compiler might turn into a branch.
 3. bitcoin-core/secp256k1 `069870d9` (PR 619): `src/secp256k1.c`,
    `secp256k1_ec_privkey_negate` clears its scalar copy of the secret key before returning.
+4. bitcoin-core/secp256k1 `45b6468d` and `dd6c3de3` (PR 937): `src/group_impl.h`,
+   `secp256k1_ge_set_gej_var` and `secp256k1_ge_set_all_gej_var` set every field (through
+   `secp256k1_ge_set_infinity`) when an input is the point at infinity, instead of leaving `x`
+   and `y` uninitialised. Callers in this tree check the flag first, so results are unchanged.
 
 ## Build changes (`build.rs`)
 
