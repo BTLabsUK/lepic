@@ -610,6 +610,16 @@ A contact that moves to another relay asks for it in an update; `contact list` t
 `asks to move to relay <HOST>`, and `contact move <ID> --apply <HOST>` moves this wallet's
 mailbox with it there. Until then the contact's mailbox stays where it was.
 
+`contact move-home <HOST>` moves this wallet's own home relay for every paired contact: each is
+sent our card naming our mailbox on `<HOST>` once, and our mailboxes move there at once. The old
+mailboxes are not read again, so a contact that misses the update stops reaching this wallet
+until it pairs again. Set `<HOST>` as the wallet's Epicbox relay too, so new invites name it.
+
+`contact check <ID>` asks a paired contact to answer with its current card; a later `contact
+collect` takes the answer, which shows when the contact was last heard and any relay it moved to.
+A wallet answers at most `contact_check_answers_per_hour` (default 1) and
+`contact_check_answers_per_day` (default 3) checks per contact; more are taken and dropped.
+
 `contact allow-invoices <ID> on` lets a verified contact send invoices; they arrive with
 `contact collect` and wait in `contact invoices` until `contact pay-invoice <SLATE_ID> <AMOUNT>`
 or `contact decline <SLATE_ID>`, which tells the contact.

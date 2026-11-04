@@ -44,6 +44,7 @@ record that supersedes the old one; accepted records are not rewritten.
 | [0036](0036-policy-values-are-host-parameters.md) | Policy values are host parameters | accepted |
 | [0037](0037-one-send-to-self.md) | One send-to-self primitive | accepted |
 | [0039](0039-the-host-applies-a-relay-move.md) | The host applies a contact's relay move | accepted |
+| [0040](0040-contact-check-and-own-relay-move.md) | The contact check and moving one's own home relay | accepted |
 
 Template:
 

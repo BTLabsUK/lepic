@@ -78,6 +78,19 @@ Conventional Commit messages at release time.
   when the cancel fails too, the error names the transaction, which stays stored with its
   inputs locked, and the failed cancel. A stored-but-undelivered send also sets `tx_id`.
 
+- The contact check, ADR 0040: envelope type `09` asks a paired contact for its current card,
+  and the contact answers with a contact update through its outbox. `ContactBook::contact_check`,
+  `EpicWallet::contact_check` and `lepic contact check <CONTACT>` send one. Answers are paced per
+  contact by `contact_check_answers_per_hour` (default 1) and `contact_check_answers_per_day`
+  (default 3, at most 24) in `WalletPolicy` and `HostPolicy`; checks beyond them are taken and
+  dropped. A wallet that predates type `09` drops the check as malformed and does not answer.
+- A move of the wallet's own home relay, ADR 0040: `ContactBook::contacts_move_home`,
+  `EpicWallet::contacts_move_home` and `lepic contact move-home <HOST>` send every paired contact
+  our card naming our mailbox on the new relay once, in a contact update, and move our mailboxes
+  there at once. The old mailboxes are not read again; there is no drain.
+- `lepic --service serve status` shows, for serve's wallet refresh and contact collect, the
+  failures since the last success, the last error and the time of the last success.
+
 ### Removed
 
 - `lepic-cli`'s minimum of 8 characters for a new wallet password (an empty one is still
@@ -116,6 +129,14 @@ Conventional Commit messages at release time.
   `ContactView::requested_relay` and `WalletErrorKind::RelayMoveNotRequested` (code 92).
   The CLI's contact list shows a waiting move, and `lepic contact move <ID> --apply <HOST>`
   applies it.
+- A contact mailbox message held on a passing error (the store, a relay or the node did not
+  answer, or the wallet is locked) is kept and its tries are not counted; only messages that fail for other reasons are
+  dropped after `contact_hold_attempts` tries (default 3, at most 10) over
+  `contact_hold_patience` (default 180 s, at most a day), now host parameters in `WalletPolicy`
+  and `HostPolicy` (`contact_hold_patience_s`).
+- `lepic serve` no longer drops requests still running at shutdown: it interrupts each one as
+  Ctrl-C would, so a `tx send` that stored its transaction answers with its `tx_id`, and it waits
+  for every reply.
 - A contact mailbox message's hold count is forgotten a day after it was first held, also when
   the message never comes back. `SettingsRepository` gains `settings_with_prefix`.
 - A contact payment whose receive was stored but not linked to its contact is linked when the

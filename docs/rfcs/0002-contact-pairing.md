@@ -227,6 +227,10 @@ optional fields, covered by the signature). The signature, tag `FF`, is last.
 > update; a value of another length is skipped like any unknown extension. Both extensions are
 > signed like every field before tag `FF`. The MAC input and the errors are in 6.1.
 
+> **Amended by ADR 0040.** Type `09` is a contact check: signed, empty body, between paired
+> contacts only (8.5). A reader that predates it refuses the type as malformed before it checks
+> the signature, so the envelope is acknowledged, attributed to nobody and left unanswered.
+
 Signing input: `"epic-seal/1 sig" || header (16 bytes) || recipient X25519 public key || every
 inner field before tag FF, exactly as encoded`. The recipient key binds the signature to this
 recipient, so a contact cannot re-seal our signed message to a third party.
@@ -774,6 +778,21 @@ Limits on updates, on the receiver (wallet and kit):
 - a move to another relay comes only in a 05 within these limits and takes effect only when the
   host applies it.
 
+> **Amended by ADR 0040.** A wallet or service moves its own home relay with
+> `contacts_move_home(host)`: each paired contact pairing that has not ended gets one `05` with
+> the card naming its mailbox on `host`, queued for the mailbox the contact reads now, and the
+> mover's mailbox for it moves to `host` in the same write. The mover announces once and does
+> not drain: the old mailboxes are not read again and nothing waits for contacts, so the old
+> relay need not keep running for them. A contact that misses the update stops reaching the
+> mover and pairs again. Private pairings and pairings in progress keep their relay.
+>
+> A contact check (type `09`) asks a paired contact for its current card. A wallet that takes
+> one from a paired contact whose pairing has not ended answers with a `05`: its current card,
+> `seq` raised by one, through its outbox, within a pace per contact the host sets (by default
+> one an hour and three a day; checks beyond it are acknowledged and dropped). The answer is
+> taken as any update under the limits below: it sets the heard time, refreshes a card on the
+> same relay, and reports a card on another relay as a move request.
+
 A user's own relay switch needs no update because of 8.3, so the flood of "my relay changed"
 notices that per-wallet addresses would need cannot happen. Section 15 has the remaining abuse
 cases.
@@ -914,8 +933,10 @@ per mailbox per drain, 50 mailboxes per collecting cycle.
 `PairingReplied`, `PairingConfirmed`, `PairingFailed{reason}`, `ContactUpdated`,
 `ContactKeysRestored`, `ContactKeysChanged`, `SealedReceived`, `SealedUnopenable`, `InvoiceFromContact`,
 `WithdrawalFromContact`, `HomeRelayUnreachable`, `OutboxDelivered`, `OutboxStuck`,
-`ContactPaymentFinalized` for the contact's answer to a send through its mailbox (9.1), and the
-existing `InvoiceFinalized` for a contact's payment. Event fields carry ids and labels, never keys or
+`ContactPaymentFinalized` for the contact's answer to a send through its mailbox (9.1),
+`ContactRelayMoveRequested` (ADR 0039) for a move a contact asked for, also the answer to a check
+from a contact that moved (ADR 0040), and the existing `InvoiceFinalized` for a contact's payment.
+A check's answer raises no event of its own: it shows as the contact's heard time and card. Event fields carry ids and labels, never keys or
 secrets. `SealedUnopenable` is raised at most once per contact per cycle. A collect also returns
 the pairings that ended and why.
 
