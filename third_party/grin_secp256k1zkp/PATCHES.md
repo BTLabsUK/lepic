@@ -58,6 +58,22 @@ Each one is a change to how the C library is compiled, not to its source.
    debug information when Cargo's profile asks for it, so the flag only forced DWARF data into
    release builds, and MSVC's `cl.exe` does not know the option. No compiled code changes.
 
+## Rust wrapper patches (`src/`)
+
+Each is a backport of one upstream commit, applied hunk for hunk to the vendored files. None
+changes a public signature LEPIC calls, and none changes the bytes any operation produces or
+accepts; that was checked with fixed-vector and mainnet-data comparisons of the old and new
+builds.
+1. `src/ffi.rs`, `src/key.rs`: the `extern "C"` declarations match `include/*.h`, from
+   mimblewimble/rust-secp256k1-zkp commit `00e2381` ("fix ffi signatures to match c headers").
+   `secp256k1_ec_pubkey_combine` takes `n: size_t` (the C side reads a 64-bit count; the wrapper
+   passed a 32-bit one), six output buffers are `*mut` instead of `*const` and `serialize_vec`
+   hands over `as_mut_ptr()`, the nonce-function type has the C argument order and `int` return
+   (`include/secp256k1.h`, lines 100-107), `is_partial` is `c_int`
+   (`include/secp256k1_aggsig.h`), `context_clone` and `scratch_space_create` take a
+   `*const Context`, `rangeproof_verify` takes `*mut u64`, and the four opaque C handle types no
+   longer derive `Clone`. Byte-neutral.
+
 Nothing else differs from 42fcb29 and the changes listed here. This file is the only addition.
 
 ## Re-checking
