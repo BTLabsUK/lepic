@@ -45,11 +45,11 @@ use lepic_wallet::selection::{
     SelfSendRequest as EngineSelfSendRequest,
 };
 use lepic_wallet::self_send::SelfSent;
-use lepic_wallet::send::{Delivery, SendRequest, SentSlate};
+use lepic_wallet::send::{Delivery, SendError, SendRequest, SentSlate};
 use lepic_wallet::slate::{MediaType, WireSlate};
 use lepic_wallet::{
-    Clock, DATABASE_FILE, ENCRYPTED_DATABASE_FILE, Event, NodeEndpoint, Password, Ports, Received,
-    ReceiveRequest, SessionState, SharedRng, Wallet, WalletName, WordCount,
+    Clock, DATABASE_FILE, ENCRYPTED_DATABASE_FILE, Event, NodeEndpoint, Password, Ports,
+    ReceiveRequest, Received, SessionState, SharedRng, Wallet, WalletName, WordCount,
 };
 use rand::SeedableRng;
 use rand::rngs::StdRng;
@@ -1377,21 +1377,58 @@ impl Session {
         options: Option<SendOptions>,
     ) -> Result<Slate, WalletError> {
         let scratch = ScratchFile::new(&self.data_dir)?;
-        let sent = self
-            .send_file(
-                amount,
-                minimum_confirmations,
-                scratch.path.clone(),
-                message,
-                options,
+        let sent = match self
+            .engine
+            .send(
+                Self::file_send_request(amount, minimum_confirmations, message, options)?,
+                Delivery::Export {
+                    transport: FILE,
+                    to: Location::File(scratch.path.clone()),
+                },
             )
-            .await?;
-        let json = scratch.read().await?;
+            .await
+        {
+            Ok(sent) => sent,
+            // Stored and locked, but the slate was not written: the caller gets no slate to
+            // pass on, so the send is given up rather than left holding its inputs.
+            Err(error @ SendError::Undelivered { tx_id, .. }) => {
+                return Err(self.give_up_send(tx_id, error.into()).await);
+            }
+            Err(error) => return Err(error.into()),
+        };
+        let json = match scratch.read().await {
+            Ok(json) => json,
+            Err(error) => return Err(self.give_up_send(sent.tx_id, error).await),
+        };
         Ok(Slate {
-            tx_id: sent.tx_id,
-            slate_id: sent.slate_id,
+            tx_id: sent.tx_id.0,
+            slate_id: sent.slate_id.to_string(),
             json,
         })
+    }
+
+    /// Cancels the stored send `tx_id` after `error` stopped it, so it holds no inputs, and
+    /// returns `error`. A cancel that fails is logged and named in the error, which then
+    /// carries `tx_id` for the caller to cancel.
+    pub(crate) async fn give_up_send(&self, tx_id: TxId, mut error: WalletError) -> WalletError {
+        match self.engine.cancel(tx_id).await {
+            Ok(()) => {
+                info!(tx_id = %tx_id, "send cancelled, its slate was not handed over");
+                error.tx_id = None;
+                error
+            }
+            Err(cancel) => {
+                warn!(tx_id = %tx_id, error = %cancel, "send not handed over nor cancelled");
+                WalletError::new(
+                    error.kind,
+                    format!(
+                        "{}; transaction {tx_id} is still stored and could not be cancelled: {cancel}",
+                        error.message
+                    ),
+                )
+                .with_tx(tx_id.0)
+            }
+        }
     }
 
     /// Signs the S1 in the file at `path`. Returns the reply, also written next to the file as
@@ -1445,9 +1482,7 @@ impl Session {
                 .finalize_invoice(FILE, wire, Propagation::Fluff)
                 .await?
         } else {
-            self.engine
-                .finalize(FILE, wire, Propagation::Fluff)
-                .await?
+            self.engine.finalize(FILE, wire, Propagation::Fluff).await?
         };
         Ok(FinalizedTx {
             tx_id: finalized.tx_id.0,
@@ -2239,6 +2274,12 @@ fn invoice_event(event: &Event) -> Option<WalletEvent> {
             slate_id: Some(cancelled.slate_id.to_string()),
             ..WalletEvent::of(WalletEventKind::PaymentCancelled)
         },
+        Event::NotPosted(not_posted) => WalletEvent {
+            tx_id: Some(not_posted.tx_id.0),
+            slate_id: Some(not_posted.slate_id.to_string()),
+            message: Some(not_posted.reason.clone()),
+            ..WalletEvent::of(WalletEventKind::NotPosted)
+        },
         _ => return None,
     })
 }
@@ -2379,6 +2420,9 @@ fn listener_event(event: &Event) -> Option<ListenerEvent> {
     })
 }
 
+const SCRATCH_PREFIX: &str = ".lepic-";
+const SCRATCH_SUFFIX: &str = ".slate";
+
 /// The slate text as the wire slate the file transport reads: JSON, bounded like a file.
 fn slate_text_wire(json: String) -> Result<WireSlate, WalletError> {
     if json.len() > MAX_SLATE_TEXT_LEN {
@@ -2414,7 +2458,7 @@ impl ScratchFile {
             .map_err(|error| WalletError::new(WalletErrorKind::Other, error.to_string()))?;
         let name: String = name.iter().map(|byte| format!("{byte:02x}")).collect();
         Ok(Self {
-            path: data_dir.join(format!(".lepic-{name}.slate")),
+            path: data_dir.join(format!("{SCRATCH_PREFIX}{name}{SCRATCH_SUFFIX}")),
         })
     }
 
@@ -2590,6 +2634,42 @@ async fn remove_database(data_dir: &Path) -> Result<(), WalletError> {
     Ok(())
 }
 
+/// The directory inside the wallet's data directory that holds its tor's files.
+pub(crate) const TOR_DIR: &str = "tor";
+
+/// The file inside the wallet's data directory that says tor was expected and not stopped
+/// since: the next session waits for tor from its first connection.
+pub(crate) const TOR_EXPECTED_FILE: &str = "tor-expected";
+
+/// Removes what a session leaves in the wallet's directory besides the database: scratch slate
+/// files a stopped call did not remove, the tor expectation and tor's own directory. A deleted
+/// wallet leaves nothing of its payments or its connections behind.
+async fn remove_session_files(data_dir: &Path) -> Result<(), WalletError> {
+    let dir = data_dir.to_owned();
+    tokio::task::spawn_blocking(move || -> std::io::Result<()> {
+        for entry in std::fs::read_dir(&dir)? {
+            let entry = entry?;
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            if name.starts_with(SCRATCH_PREFIX) && name.ends_with(SCRATCH_SUFFIX) {
+                remove_if_present(std::fs::remove_file(entry.path()))?;
+            }
+        }
+        remove_if_present(std::fs::remove_file(dir.join(TOR_EXPECTED_FILE)))?;
+        remove_if_present(std::fs::remove_dir_all(dir.join(TOR_DIR)))
+    })
+    .await
+    .map_err(|_| WalletError::new(WalletErrorKind::Panic, "file removal failed inside lepic"))?
+    .map_err(|error| io("removing the wallet's session files", &error))
+}
+
+fn remove_if_present(removed: std::io::Result<()>) -> std::io::Result<()> {
+    match removed {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        other => other,
+    }
+}
+
 /// Removes every plain copy of the database set aside, by the move to encryption or as
 /// damaged, whatever the encrypted database records, and what an interrupted copy or key check
 /// left. A deleted wallet leaves no readable history behind.
@@ -2616,6 +2696,7 @@ pub(crate) async fn delete_wallet(
     let claim = runtime.claim(Path::new(&config.data_dir)).await?;
     remove_set_aside_databases(&claim.dir).await?;
     remove_database(&claim.dir).await?;
+    remove_session_files(&claim.dir).await?;
     store.delete(VAULT_KEY).await?;
     store.delete(VAULT_NEXT_KEY).await?;
     crate::pin::forget(store).await?;

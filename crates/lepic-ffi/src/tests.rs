@@ -1641,3 +1641,27 @@ async fn delete_wallet_removes_the_encrypted_database_and_the_plain_copies() {
         .unwrap();
     assert_eq!(database_files(fixture.dir.path()), Vec::<String>::new());
 }
+
+/// What a session leaves besides the database goes with the wallet: scratch slate files, the
+/// tor expectation and tor's directory. Other files stay.
+#[tokio::test]
+async fn delete_wallet_removes_scratch_slates_and_the_tor_files() {
+    let fixture = Fixture::new();
+    let store = AppSecretStore::in_memory();
+    drop(fixture.create_with_pin(&store, PIN).await);
+    let dir = fixture.dir.path();
+    std::fs::write(dir.join(".lepic-0123456789abcdef.slate"), b"{}").unwrap();
+    std::fs::write(dir.join("tor-expected"), []).unwrap();
+    std::fs::create_dir_all(dir.join("tor").join("state")).unwrap();
+    std::fs::write(dir.join("tor").join("state").join("guards"), b"x").unwrap();
+    std::fs::write(dir.join("kept.txt"), b"x").unwrap();
+
+    crate::api::wallet::delete_wallet(&fixture.runtime, fixture.config(), &store)
+        .await
+        .unwrap();
+
+    assert!(!dir.join(".lepic-0123456789abcdef.slate").exists());
+    assert!(!dir.join("tor-expected").exists());
+    assert!(!dir.join("tor").exists());
+    assert!(dir.join("kept.txt").exists());
+}

@@ -38,12 +38,7 @@ use crate::tuning::Tuning;
 /// Where the tor events of a session go.
 pub(crate) type TorReport = Arc<dyn Fn(TorEvent) + Send + Sync>;
 
-/// The directory inside the wallet's data directory that holds its tor's files.
-const TOR_DIR: &str = "tor";
-
-/// The file inside the wallet's data directory that says tor was expected and not stopped
-/// since: the next session waits for tor from its first connection.
-const TOR_EXPECTED_FILE: &str = "tor-expected";
+use super::{TOR_DIR, TOR_EXPECTED_FILE};
 
 /// The node requests, relay connection and HTTP sends of a session on `data_dir`. They wait
 /// for tor from the start when the app opens the session with `tor_wanted`, or when the last

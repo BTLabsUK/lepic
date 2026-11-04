@@ -1658,6 +1658,10 @@ pub enum WalletEventKind {
     /// `sender` are set. Read it with `EpicWallet::pairing_requests`; dismiss a request from
     /// anyone not in the address book with `EpicWallet::pairing_request_dismiss`.
     PairingRequested,
+    /// The node did not take a finalized transaction: `tx_id`, `slate_id` and `message` (why)
+    /// are set. The transaction stays finalized, its inputs locked; nothing is retried. Call
+    /// `EpicWallet::repost_transaction` when the connection is back, or cancel it.
+    NotPosted,
 }
 
 /// How a key check from `EpicWallet::contact_key_check` stands.
@@ -1706,7 +1710,8 @@ pub struct WalletEvent {
     pub reference: Option<String>,
     /// Unix seconds; advisory.
     pub expires: Option<u64>,
-    /// For `InvoiceFromContact`, the issuer's message as `ContactInvoiceView.message` gives it.
+    /// For `InvoiceFromContact`, the issuer's message as `ContactInvoiceView.message` gives it;
+    /// for `NotPosted`, why the node did not take the transaction.
     pub message: Option<String>,
     /// For `NoticeUnmatched`: what the notice says.
     pub notice_kind: Option<String>,

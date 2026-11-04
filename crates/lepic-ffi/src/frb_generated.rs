@@ -12713,12 +12713,13 @@ impl SseDecode for crate::api::types::PairingFailureReason {
         let mut inner = <i32>::sse_decode(deserializer);
         return match inner {
             0 => crate::api::types::PairingFailureReason::ChangedOnTheWay,
-            1 => crate::api::types::PairingFailureReason::Expired,
-            2 => crate::api::types::PairingFailureReason::NotConfirmed,
-            3 => crate::api::types::PairingFailureReason::Refused,
-            4 => crate::api::types::PairingFailureReason::OtherAddress,
-            5 => crate::api::types::PairingFailureReason::AddressProofMissing,
-            6 => crate::api::types::PairingFailureReason::Crossed,
+            1 => crate::api::types::PairingFailureReason::KindDiffers,
+            2 => crate::api::types::PairingFailureReason::Expired,
+            3 => crate::api::types::PairingFailureReason::NotConfirmed,
+            4 => crate::api::types::PairingFailureReason::Refused,
+            5 => crate::api::types::PairingFailureReason::OtherAddress,
+            6 => crate::api::types::PairingFailureReason::AddressProofMissing,
+            7 => crate::api::types::PairingFailureReason::Crossed,
             _ => unreachable!("Invalid variant for PairingFailureReason: {}", inner),
         };
     }
@@ -13670,10 +13671,12 @@ impl SseDecode for crate::api::error::WalletError {
         let mut var_kind = <crate::api::error::WalletErrorKind>::sse_decode(deserializer);
         let mut var_code = <u32>::sse_decode(deserializer);
         let mut var_message = <String>::sse_decode(deserializer);
+        let mut var_txId = <Option<u32>>::sse_decode(deserializer);
         return crate::api::error::WalletError {
             kind: var_kind,
             code: var_code,
             message: var_message,
+            tx_id: var_txId,
         };
     }
 }
@@ -13766,6 +13769,7 @@ impl SseDecode for crate::api::error::WalletErrorKind {
             80 => crate::api::error::WalletErrorKind::PairingWaiting,
             81 => crate::api::error::WalletErrorKind::ForeignProofAddress,
             82 => crate::api::error::WalletErrorKind::WrongKey,
+            83 => crate::api::error::WalletErrorKind::PairingKindDiffers,
             _ => unreachable!("Invalid variant for WalletErrorKind: {}", inner),
         };
     }
@@ -13885,6 +13889,7 @@ impl SseDecode for crate::api::types::WalletEventKind {
             33 => crate::api::types::WalletEventKind::PaymentCancelled,
             34 => crate::api::types::WalletEventKind::NoticeUnmatched,
             35 => crate::api::types::WalletEventKind::PairingRequested,
+            36 => crate::api::types::WalletEventKind::NotPosted,
             _ => unreachable!("Invalid variant for WalletEventKind: {}", inner),
         };
     }
@@ -16253,12 +16258,13 @@ impl flutter_rust_bridge::IntoDart for crate::api::types::PairingFailureReason {
     fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
         match self {
             Self::ChangedOnTheWay => 0.into_dart(),
-            Self::Expired => 1.into_dart(),
-            Self::NotConfirmed => 2.into_dart(),
-            Self::Refused => 3.into_dart(),
-            Self::OtherAddress => 4.into_dart(),
-            Self::AddressProofMissing => 5.into_dart(),
-            Self::Crossed => 6.into_dart(),
+            Self::KindDiffers => 1.into_dart(),
+            Self::Expired => 2.into_dart(),
+            Self::NotConfirmed => 3.into_dart(),
+            Self::Refused => 4.into_dart(),
+            Self::OtherAddress => 5.into_dart(),
+            Self::AddressProofMissing => 6.into_dart(),
+            Self::Crossed => 7.into_dart(),
             _ => unreachable!(),
         }
     }
@@ -17482,6 +17488,7 @@ impl flutter_rust_bridge::IntoDart for crate::api::error::WalletError {
             self.kind.into_into_dart().into_dart(),
             self.code.into_into_dart().into_dart(),
             self.message.into_into_dart().into_dart(),
+            self.tx_id.into_into_dart().into_dart(),
         ]
         .into_dart()
     }
@@ -17584,6 +17591,7 @@ impl flutter_rust_bridge::IntoDart for crate::api::error::WalletErrorKind {
             Self::PairingWaiting => 80.into_dart(),
             Self::ForeignProofAddress => 81.into_dart(),
             Self::WrongKey => 82.into_dart(),
+            Self::PairingKindDiffers => 83.into_dart(),
             _ => unreachable!(),
         }
     }
@@ -17688,6 +17696,7 @@ impl flutter_rust_bridge::IntoDart for crate::api::types::WalletEventKind {
             Self::PaymentCancelled => 33.into_dart(),
             Self::NoticeUnmatched => 34.into_dart(),
             Self::PairingRequested => 35.into_dart(),
+            Self::NotPosted => 36.into_dart(),
             _ => unreachable!(),
         }
     }
@@ -19308,12 +19317,13 @@ impl SseEncode for crate::api::types::PairingFailureReason {
         <i32>::sse_encode(
             match self {
                 crate::api::types::PairingFailureReason::ChangedOnTheWay => 0,
-                crate::api::types::PairingFailureReason::Expired => 1,
-                crate::api::types::PairingFailureReason::NotConfirmed => 2,
-                crate::api::types::PairingFailureReason::Refused => 3,
-                crate::api::types::PairingFailureReason::OtherAddress => 4,
-                crate::api::types::PairingFailureReason::AddressProofMissing => 5,
-                crate::api::types::PairingFailureReason::Crossed => 6,
+                crate::api::types::PairingFailureReason::KindDiffers => 1,
+                crate::api::types::PairingFailureReason::Expired => 2,
+                crate::api::types::PairingFailureReason::NotConfirmed => 3,
+                crate::api::types::PairingFailureReason::Refused => 4,
+                crate::api::types::PairingFailureReason::OtherAddress => 5,
+                crate::api::types::PairingFailureReason::AddressProofMissing => 6,
+                crate::api::types::PairingFailureReason::Crossed => 7,
                 _ => {
                     unimplemented!("");
                 }
@@ -20134,6 +20144,7 @@ impl SseEncode for crate::api::error::WalletError {
         <crate::api::error::WalletErrorKind>::sse_encode(self.kind, serializer);
         <u32>::sse_encode(self.code, serializer);
         <String>::sse_encode(self.message, serializer);
+        <Option<u32>>::sse_encode(self.tx_id, serializer);
     }
 }
 
@@ -20225,6 +20236,7 @@ impl SseEncode for crate::api::error::WalletErrorKind {
                 crate::api::error::WalletErrorKind::PairingWaiting => 80,
                 crate::api::error::WalletErrorKind::ForeignProofAddress => 81,
                 crate::api::error::WalletErrorKind::WrongKey => 82,
+                crate::api::error::WalletErrorKind::PairingKindDiffers => 83,
                 _ => {
                     unimplemented!("");
                 }
@@ -20317,6 +20329,7 @@ impl SseEncode for crate::api::types::WalletEventKind {
                 crate::api::types::WalletEventKind::PaymentCancelled => 33,
                 crate::api::types::WalletEventKind::NoticeUnmatched => 34,
                 crate::api::types::WalletEventKind::PairingRequested => 35,
+                crate::api::types::WalletEventKind::NotPosted => 36,
                 _ => {
                     unimplemented!("");
                 }
