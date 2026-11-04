@@ -48,6 +48,7 @@ use lepic_wallet::{
     Clock, Event, Password, Ports, ReceiveRequest, SharedRng, Wallet, WalletConfig, WalletError,
     WalletName, WordCount,
 };
+use rand::Rng as _;
 use rand::SeedableRng as _;
 use rand::rngs::{StdRng, SysRng};
 use tokio::sync::{broadcast, watch};
@@ -658,7 +659,14 @@ impl<H: Host> Run<'_, H> {
         if let Some(slate_id) = slate_id
             && let Some(first) = opened.wallet.sent_with_slate(slate_id).await?
         {
-            return repeated_send(&first, slate_id, account.index, amount, &delivery, destination);
+            return repeated_send(
+                &first,
+                slate_id,
+                account.index,
+                amount,
+                &delivery,
+                destination,
+            );
         }
         if delivery.transport() == TRANSPORT_ID {
             opened.wallet.epicbox_attach(&opened.epicbox)?;
@@ -670,7 +678,8 @@ impl<H: Host> Run<'_, H> {
             strategy: spend.strategy,
             ttl_blocks: spend.ttl_blocks,
             message: args.message.message,
-            slate_id,
+            // Drawn here when the caller gave none, so an interrupted send can still be found.
+            slate_id: Some(slate_id.map_or_else(drawn_slate_id, Ok)?),
             ..SendRequest::new(account.index, amount)
         };
         if transport == lepic_tor::TRANSPORT_ID {
@@ -682,6 +691,11 @@ impl<H: Host> Run<'_, H> {
                 .await?;
         }
         let tor = self.tor_for(transport, &args.tor, &opened).await?;
+        // From here the send may store its transaction, so an interrupt ends it here and reports
+        // the transaction it stored, which the caller can then resend or cancel.
+        let sent_slate = request.slate_id;
+        self.graceful.store(true, Ordering::SeqCst);
+        let mut interrupt = self.interrupt.clone();
         let sending = async {
             let sent = opened.wallet.send(request, delivery).await?;
             let state = finalize_direct_reply(
@@ -693,9 +707,23 @@ impl<H: Host> Run<'_, H> {
             )
             .await?;
             Ok::<_, CliError>((sent, state))
-        }
-        .await;
+        };
+        let sending = tokio::select! {
+            result = sending => Some(result),
+            Ok(_) = interrupt.wait_for(|stopped| *stopped) => None,
+        };
         stop_tor(&opened, tor).await;
+        let Some(sending) = sending else {
+            let stored = match sent_slate {
+                Some(slate_id) => opened.wallet.sent_with_slate(slate_id).await?,
+                None => None,
+            };
+            return Err(
+                stored.map_or(CliError::Interrupted, |stored| CliError::SendInterrupted {
+                    tx_id: stored.transaction.id.0,
+                }),
+            );
+        };
         let (sent, state) = sending?;
         Ok(Report::Send(SendReport {
             tx_id: sent.tx_id.0,
@@ -1199,7 +1227,11 @@ impl<H: Host> Run<'_, H> {
         let password = self
             .console
             .secrets
-            .wallet_password(&mut self.console.env, self.settings.password_file.as_deref(), true)
+            .wallet_password(
+                &mut self.console.env,
+                self.settings.password_file.as_deref(),
+                true,
+            )
             .await?;
         Ok(password_from(password))
     }
@@ -1213,7 +1245,11 @@ impl<H: Host> Run<'_, H> {
         let password = self
             .console
             .secrets
-            .wallet_password(&mut self.console.env, self.settings.password_file.as_deref(), false)
+            .wallet_password(
+                &mut self.console.env,
+                self.settings.password_file.as_deref(),
+                false,
+            )
             .await?;
         let opened = self.prepare(false)?;
         opened.wallet.open(password_from(password)).await?;
@@ -1315,6 +1351,17 @@ fn start_from_confirmed_tip<T: RpcTransport + Clone + 'static>(
         .clone()
         .with_known_tip(tip.height, seen_ago);
     Ok(())
+}
+
+/// A random version-4 slate id, drawn as the engine draws one.
+fn drawn_slate_id() -> Result<SlateId, CliError> {
+    let mut rng = StdRng::try_from_rng(&mut SysRng).map_err(|error| CliError::Io {
+        what: "seed the random number generator",
+        source: std::io::Error::other(error),
+    })?;
+    let mut id = [0u8; 16];
+    rng.fill_bytes(&mut id);
+    Ok(SlateId::from_random_bytes(id))
 }
 
 /// A slate id for `tx send --slate-id`. It travels in the slate, so only a random version-4

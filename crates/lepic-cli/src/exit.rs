@@ -166,6 +166,11 @@ pub enum CliError {
     },
     #[error("stopped before it finished")]
     Interrupted,
+    #[error(
+        "stopped after transaction {tx_id} was stored, before its delivery was known: \
+         run `lepic tx show {tx_id}`"
+    )]
+    SendInterrupted { tx_id: u32 },
     #[error("other users can access the data directory")]
     SharedDataDir,
     #[error("another lepic process is using the data directory")]
@@ -244,7 +249,9 @@ impl CliError {
             Self::Refresh(RefreshError::Node(_) | RefreshError::Implausible(_))
             | Self::Scan(ScanError::Node(_) | ScanError::Implausible(_))
             | Self::Node(_) => ErrorKind::Node,
-            Self::Scan(ScanError::Cancelled) | Self::Interrupted => ErrorKind::Interrupted,
+            Self::Scan(ScanError::Cancelled) | Self::Interrupted | Self::SendInterrupted { .. } => {
+                ErrorKind::Interrupted
+            }
             Self::Transport(_) | Self::SlateFile { .. } => ErrorKind::Transport,
             Self::Refresh(_)
             | Self::Scan(_)
@@ -258,6 +265,16 @@ impl CliError {
     /// terminal. Repeated texts, as when a wrapper prints its source, appear once.
     pub fn chain(&self) -> Vec<String> {
         display_error_chain(self)
+    }
+
+    /// The stored transaction the error is about, for a script to resend, cancel or show.
+    pub const fn tx_id(&self) -> Option<u32> {
+        match self {
+            Self::SendInterrupted { tx_id }
+            | Self::SlateIdReused { tx_id }
+            | Self::HttpReplyLost { tx_id } => Some(*tx_id),
+            _ => None,
+        }
     }
 }
 
@@ -549,6 +566,10 @@ mod tests {
             ),
             (AmountError::Syntax.into(), ErrorKind::Usage),
             (CliError::Interrupted, ErrorKind::Interrupted),
+            (
+                CliError::SendInterrupted { tx_id: 2 },
+                ErrorKind::Interrupted,
+            ),
             (
                 RefreshError::Implausible(ImplausibleNodeData::TipTooHigh {
                     tip: Height::new(2),

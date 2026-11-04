@@ -707,6 +707,10 @@ Amounts are strings with eight decimals. The exit code says what kind of failure
 | 11 | `incomplete` | stored, but not delivered or not posted; retry |
 | 12 | `interrupted` | stopped by Ctrl-C or SIGTERM before it finished |
 
+An error about one stored transaction also carries its `tx_id`. A `tx send` stopped by Ctrl-C
+or SIGTERM after it stored its transaction exits 12 with that `tx_id`; `lepic tx show` tells
+whether it was delivered, and `tx resend` or `tx cancel` settles it.
+
 ## Common errors
 
 With human output, an error ends with a `hint:` line that names what to try next.

@@ -619,6 +619,8 @@ struct ErrorBody<'a> {
     exit_code: u8,
     message: &'a str,
     causes: &'a [String],
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tx_id: Option<u32>,
 }
 
 /// The text a successful command prints. A report that carries the recovery phrase is rendered
@@ -746,6 +748,7 @@ pub fn render_error(error: &CliError, format: OutputFormat, hint: Option<&str>) 
                     exit_code: kind.exit_code(),
                     message,
                     causes,
+                    tx_id: error.tx_id(),
                 },
             })
         }
@@ -2404,6 +2407,17 @@ mod tests {
         assert_eq!(inner, ["causes", "exit_code", "kind", "message"]);
         assert_eq!(value["error"]["kind"], "interrupted");
         assert_eq!(value["error"]["exit_code"], 12);
+    }
+
+    #[test]
+    fn an_interrupted_send_names_its_stored_transaction() {
+        let error = CliError::SendInterrupted { tx_id: 4 };
+        let value: Value =
+            serde_json::from_str(&render_error(&error, OutputFormat::Json, None)).unwrap();
+        assert_eq!(value["error"]["tx_id"], 4);
+        assert_eq!(value["error"]["exit_code"], 12);
+        let human = render_error(&error, OutputFormat::Human, None);
+        assert!(human.contains("transaction 4 was stored"), "{human}");
     }
 
     #[test]

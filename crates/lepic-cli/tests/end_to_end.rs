@@ -14,6 +14,7 @@ mod support;
 use std::sync::Arc;
 
 use lepic_epicbox::EpicboxAddress;
+use lepic_epicbox::mock_relay::Unanswered;
 use lepic_node::LocatedKernel;
 use lepic_node::mock::ChainOutput;
 use lepic_primitives::amount::Height;
@@ -442,6 +443,27 @@ fn an_interrupted_listen_settles_the_slate_in_hand_first() {
 }
 
 #[test]
+fn an_interrupted_send_names_the_transaction_it_stored() {
+    let (mut host, sender, receiver) = two_wallets();
+    let address = receiver.run(&host, &["wallet", "address"]).ok().json();
+    let relay = host.relay.clone();
+    relay.set_unanswered(Unanswered::PostSlate, true);
+    let watched = relay.clone();
+    host.interrupt_when = Some(Arc::new(move || watched.received("PostSlate") >= 1));
+    let interrupted = sender.run(
+        &host,
+        &["tx", "send", "1", "--to", text(&address, "address")],
+    );
+    assert_eq!(interrupted.code, 12, "{interrupted:?}");
+    let error = interrupted.json();
+    let tx_id = error["error"]["tx_id"].as_u64().unwrap().to_string();
+
+    host.interrupt_when = None;
+    let shown = sender.run(&host, &["tx", "show", &tx_id]).ok().json();
+    assert_eq!(shown["state"], "sent", "{shown}");
+}
+
+#[test]
 fn issue_pay_and_finalize_an_invoice_through_files() {
     let (host, payer, issuer) = two_wallets();
     let invoice = issuer.path("invoice.slate");
@@ -578,7 +600,12 @@ fn a_send_made_again_under_its_slate_id_sends_nothing() {
     assert_eq!(shown["tx_id"], sent["tx_id"], "{shown}");
     let unknown = sender.run(
         &host,
-        &["tx", "show", "--slate-id", "0b6e2f0c-4b1d-4c3e-9f2a-7d5b6c8e9f01"],
+        &[
+            "tx",
+            "show",
+            "--slate-id",
+            "0b6e2f0c-4b1d-4c3e-9f2a-7d5b6c8e9f01",
+        ],
     );
     assert_eq!(unknown.code, 6, "{unknown:?}");
 

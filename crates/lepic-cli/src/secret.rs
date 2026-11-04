@@ -336,8 +336,14 @@ mod tests {
         let mut env = Env::new([(PASSWORD_ENV.to_owned(), "pw".to_owned())]);
         let mut input = input("pw\n");
         block_on(async {
-            assert_eq!(*input.wallet_password(&mut env, None, false).await.unwrap(), "pw");
-            assert_eq!(*input.wallet_password(&mut env, None, false).await.unwrap(), "pw");
+            assert_eq!(
+                *input.wallet_password(&mut env, None, false).await.unwrap(),
+                "pw"
+            );
+            assert_eq!(
+                *input.wallet_password(&mut env, None, false).await.unwrap(),
+                "pw"
+            );
         });
     }
 
@@ -399,7 +405,11 @@ mod tests {
             ));
             assert!(matches!(
                 input
-                    .wallet_password(&mut Env::default(), Some(Path::new("/nonexistent/pw")), false)
+                    .wallet_password(
+                        &mut Env::default(),
+                        Some(Path::new("/nonexistent/pw")),
+                        false
+                    )
                     .await,
                 Err(SecretError::PasswordFile { .. })
             ));
