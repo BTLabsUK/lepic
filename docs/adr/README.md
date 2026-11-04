@@ -42,6 +42,7 @@ record that supersedes the old one; accepted records are not rewritten.
 | [0034](0034-trust-versioning-and-probing.md) | Trust, versioning and probing between Epic wallets | proposed |
 | [0035](0035-restore-from-a-start-height.md) | Restore from a start height | accepted |
 | [0037](0037-one-send-to-self.md) | One send-to-self primitive | accepted |
+| [0039](0039-the-host-applies-a-relay-move.md) | The host applies a contact's relay move | accepted |
 
 Template:
 

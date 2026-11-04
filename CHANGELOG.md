@@ -81,6 +81,21 @@ Conventional Commit messages at release time.
 
 ### Changed
 
+- **Breaking:** a contact's move to another relay is the host's choice, ADR 0039. The
+  collector no longer reads a contact's kind: an update whose card names a mailbox on the same
+  relay applies as before, and one naming another relay stores the newer card, keeps the
+  mailbox in use and raises `Event::ContactRelayMoveRequested` (contact id and `domain:port`)
+  once per card. `ContactBook::apply_relay_move` applies the move, and is refused with
+  `ContactError::RelayMoveNotRequested` for any other relay or when no move waits;
+  `ContactView::requested_relay` shows a waiting move. The rule that let only services move,
+  and only to a meeting relay or a named host on the default port, is gone. Existing contacts'
+  mailboxes are not touched. `lepic-ffi` gains `WalletEventKind::ContactRelayMoveRequested`
+  (`contact_id`, `relay`), `EpicWallet::contact_apply_relay_move`,
+  `ContactView::requested_relay` and `WalletErrorKind::RelayMoveNotRequested` (code 92).
+  The CLI's contact list shows a waiting move, and `lepic contact move <ID> --apply <HOST>`
+  applies it.
+- A contact mailbox message's hold count is forgotten a day after it was first held, also when
+  the message never comes back. `SettingsRepository` gains `settings_with_prefix`.
 - A contact payment whose receive was stored but not linked to its contact is linked when the
   sender repeats it, instead of being dropped and acknowledged. A mailbox message the handler
   holds with `Later` is held at most 3 times or 3 minutes, as the payments inbox bounds its
