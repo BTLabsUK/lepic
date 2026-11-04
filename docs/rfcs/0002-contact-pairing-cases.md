@@ -17,7 +17,7 @@ timings are in RFC section 12.6 and are tested in V-15 as listed there.
 | C-04 | Pairing mailbox relay differs from both wallets' relays | Expected and fine: one-off drains connect to any relay |
 | C-05 | Home relay down | Outbox and collecting back off; "X's relay isn't answering"; the relay's 7-day queue loses nothing once it is back |
 | C-06 | Many paired contacts on different relays | One connection per relay, 50 mailboxes per cycle, foreground drains only where something is pending |
-| C-07 | A service moves its home relay; the update is lost; both sides move | Old relay drained 7 days; the card in every later envelope heals a lost update; people re-pair |
+| C-07 | A service moves its home relay; the update is lost; both sides move | Old relay drained 7 days; a lost update is not healed by the card in a later envelope (it names another mailbox, so it is ignored); the service sends the move again as a new 05; people re-pair |
 | C-08 | Push registered on one relay while pairing on another | Push stays on the wallet's address; pairing mailboxes never use push; contact mailboxes use push only where their home relay has it |
 | C-09 | Tor on, off or Tor only | Mailbox drains and posts follow the wallet's Epicbox route; onion used when given; a relay unreachable over Tor falls back to the by-hand links |
 | C-10 | Offline | Online pairing and collecting are unavailable; in-person QR pairing and sealed files work |
@@ -121,7 +121,8 @@ timings are in RFC section 12.6 and are tested in V-15 as listed there.
 - **User sees.** Nothing.
 - **Test.** kit + engine: move the kit's home relay; an S1 posted before the move on the old
   relay and an invoice after it on the new relay both reach the wallet; with the update dropped
-  by the mock relay, the next envelope heals it.
+  by the mock relay, the card in the next envelope does not move the mailbox, and a new 05 with
+  a higher `seq` does.
 
 ### C-08 Push registration on one relay while pairing on another
 
@@ -429,8 +430,9 @@ timings are in RFC section 12.6 and are tested in V-15 as listed there.
 - **What happens.** A user's relay switch sends nothing (8.3), however often the user flips. Only
   services send home relay moves; receivers take only a higher `seq` with a valid signature from a
   paired key, at most 3 a day per contact and 100 an hour in total, and the kit applies the same
-  limits to anything its customers send (13.4). The card in every envelope heals anything a
-  limit dropped.
+  limits to anything its customers send (13.4). The card in a later envelope heals a dropped
+  change of name or payments address, but a card that names another mailbox moves nothing
+  outside a 05, so a dropped move waits for the service to send it again.
 - **User sees.** Nothing.
 - **Test.** engine and kit: 10 updates from one contact in an hour → 3 applied; an equal or lower
   `seq` ignored; an update signed by another key dropped.

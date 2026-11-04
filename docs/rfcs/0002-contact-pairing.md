@@ -756,7 +756,9 @@ Limits on updates, on the receiver (wallet and kit):
 - accepted only from a paired key with a valid signature, and only with a `seq` above the stored
   one; the same card again is ignored;
 - at most 3 per contact per day and 100 per hour in total; extra ones are acknowledged and dropped,
-  and the contact's next envelope (tag 07 carries the card) heals anything dropped;
+  and the card in the contact's next envelope (tag 07) heals a dropped change of name or
+  payments address, but never a dropped move: a card that names another mailbox is ignored
+  outside a 05 update, so the service sends the move again as a new 05 with a higher `seq`;
 - a card replaces the stored one only with the same enc, sig and hint keys; nothing but the user's
   "Use the new keys" (7.8) changes a contact's keys;
 - a move of the home relay comes only in a 05 within these limits, never changes the contact's
