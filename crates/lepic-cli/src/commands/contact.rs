@@ -262,7 +262,8 @@ fn write_or_print(
 ) -> Result<(Option<String>, Option<String>), CliError> {
     match out {
         Some(path) => {
-            std::fs::write(&path, text).map_err(CliError::io("write the slate file"))?;
+            lepic_store::file::write_owner_only_atomic(&path, text.as_bytes())
+                .map_err(CliError::io("write the slate file"))?;
             Ok((Some(path.display().to_string()), None))
         }
         None => Ok((None, Some(text))),
@@ -804,7 +805,8 @@ async fn export<N: lepic_node::NodeApi + 'static>(
 ) -> Result<Report, CliError> {
     let wallet = &opened.wallet;
     let document = wallet.contact_book().contacts_export().await?;
-    std::fs::write(&args.file, document).map_err(CliError::io("write the contact backup"))?;
+    lepic_store::file::write_owner_only_atomic(&args.file, document.as_bytes())
+        .map_err(CliError::io("write the contact backup"))?;
     Ok(Report::ContactExport(ContactExportReport {
         file: args.file.display().to_string(),
     }))

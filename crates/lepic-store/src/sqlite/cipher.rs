@@ -134,7 +134,7 @@ pub(super) fn write(database: &Path, key: &StoreKey) -> Result<(), StoreError> {
         .map_err(io("write the database key check"))?;
     drop(file);
     std::fs::rename(&temporary, &path).map_err(io("store the database key check"))?;
-    sync_folder(database).map_err(io("store the database key check"))
+    crate::file::sync_folder(database).map_err(io("store the database key check"))
 }
 
 fn parse(bytes: &[u8]) -> Option<(&[u8], &[u8])> {
@@ -175,21 +175,6 @@ fn owner_only_file(path: &Path) -> std::io::Result<std::fs::File> {
         .create(true)
         .truncate(true)
         .open(path)
-}
-
-/// Makes a rename inside the database's folder durable.
-#[cfg(unix)]
-pub(super) fn sync_folder(database: &Path) -> std::io::Result<()> {
-    match database.parent() {
-        Some(folder) if !folder.as_os_str().is_empty() => std::fs::File::open(folder)?.sync_all(),
-        _ => std::fs::File::open(".")?.sync_all(),
-    }
-}
-
-/// Windows has no folder handle to flush; its renames are journalled by NTFS.
-#[cfg(not(unix))]
-pub(super) fn sync_folder(_: &Path) -> std::io::Result<()> {
-    Ok(())
 }
 
 #[cfg(test)]

@@ -12,6 +12,7 @@ mod contact_backup;
 mod context;
 mod encoding;
 mod error;
+pub mod file;
 #[cfg(feature = "sqlite")]
 #[doc(hidden)]
 pub mod fuzz;
