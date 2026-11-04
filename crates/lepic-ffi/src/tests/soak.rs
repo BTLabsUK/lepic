@@ -175,6 +175,7 @@ fn soak() {
     let rt = runtime.inner.boundary.handle.clone();
     let data = tempfile::tempdir().unwrap();
     let mut config = WalletConfig {
+        policy: Default::default(),
         data_dir: data.path().to_string_lossy().into_owned(),
         chain: Chain::Floonet,
         node_url,

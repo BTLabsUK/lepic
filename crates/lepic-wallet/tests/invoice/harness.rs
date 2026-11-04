@@ -122,7 +122,7 @@ impl Party {
             network: Network::Floonet,
             data_dir: PathBuf::from(DATA_DIR),
             node: NodeEndpoint::parse("http://127.0.0.1:13413").unwrap(),
-            transports: vec![FILE],
+            policy: Default::default(),
             offline: false,
             host_features: 0,
         };

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-//! The wallet's minimum confirmations: the stored setting, its range, and the balance split
+//! The wallet's minimum confirmations: the stored setting, and the balance split
 //! following it (ADR 0027).
 
 // Tests may unwrap, index and panic (docs/rules.md).
@@ -12,9 +12,7 @@ use lepic_primitives::amount::Amount;
 use lepic_store::WalletStore;
 use lepic_wallet::WalletError;
 use lepic_wallet::event::Event;
-use lepic_wallet::refresh::{
-    BalanceCategory, DEFAULT_MINIMUM_CONFIRMATIONS, MINIMUM_CONFIRMATIONS_RANGE,
-};
+use lepic_wallet::refresh::{BalanceCategory, DEFAULT_MINIMUM_CONFIRMATIONS};
 use lepic_wallet::selection::{SelectionError, SelectionOptions};
 use lepic_wallet::send::SendError;
 use send_support::{ACCOUNT, FUNDING, Sender, TIP};
@@ -35,20 +33,18 @@ fn a_wallet_that_never_set_it_reads_the_default() {
 }
 
 #[test]
-fn the_setting_round_trips_and_is_bounded() {
+fn the_setting_round_trips_and_only_zero_is_refused() {
     let sender = Sender::new();
-    for count in [1, 3, 10, 30] {
+    // LEPIC sets no upper bound: the host decides how deep a user may ask (ADR 0036).
+    for count in [1, 3, 10, 30, 31, 1_000_000, u64::MAX] {
         sender.wallet.set_minimum_confirmations(count).unwrap();
         assert_eq!(sender.wallet.minimum_confirmations().unwrap(), count);
     }
-    assert_eq!(MINIMUM_CONFIRMATIONS_RANGE, 1..=30);
-    for count in [0, 31, u64::MAX] {
-        assert!(matches!(
-            sender.wallet.set_minimum_confirmations(count),
-            Err(WalletError::MinimumConfirmationsOutOfRange { count: c }) if c == count
-        ));
-    }
-    assert_eq!(sender.wallet.minimum_confirmations().unwrap(), 30);
+    assert!(matches!(
+        sender.wallet.set_minimum_confirmations(0),
+        Err(WalletError::MinimumConfirmationsOutOfRange { count: 0 })
+    ));
+    assert_eq!(sender.wallet.minimum_confirmations().unwrap(), u64::MAX);
     sender.wallet.lock();
     assert!(matches!(
         sender.wallet.minimum_confirmations(),

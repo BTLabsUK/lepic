@@ -88,6 +88,7 @@ fn live_restore() {
     let created_dir = tempfile::tempdir().unwrap();
     let restored_dir = tempfile::tempdir().unwrap();
     let config = |dir: &tempfile::TempDir| WalletConfig {
+        policy: Default::default(),
         data_dir: dir.path().to_string_lossy().into_owned(),
         chain: Chain::Floonet,
         node_url: node_url.clone(),

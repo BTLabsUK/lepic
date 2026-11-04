@@ -812,8 +812,9 @@ where
     }
 
     /// Whether a new S1 `slate_id` from the contact fits the open receipt caps the inbox keeps
-    /// for senders (RFC 0002 12.5): at most [`lepic_wallet::inbox::MAX_OPEN_RECEIPTS_PER_SENDER`] open
-    /// from this contact and [`lepic_wallet::inbox::MAX_OPEN_RECEIPTS`] from all contacts. One received
+    /// for senders (RFC 0002 12.5): at most the wallet policy's
+    /// `max_open_receipts_per_sender` open from this contact and its `max_open_receipts` from
+    /// all contacts. One received
     /// before always fits, so its stored S2 goes back again.
     async fn contact_receipt_room(
         &self,
@@ -821,6 +822,7 @@ where
         slate_id: Uuid,
     ) -> Result<bool, ContactError> {
         let session = self.wallet.session()?;
+        let policy = self.wallet.config().policy;
         self.contact_work(move |_, _| {
             Ok(session.store.read(|repos| {
                 if repos
@@ -848,10 +850,8 @@ where
                         None => {}
                     }
                 }
-                Ok(
-                    from_contact < lepic_wallet::inbox::MAX_OPEN_RECEIPTS_PER_SENDER
-                        && from_contacts < lepic_wallet::inbox::MAX_OPEN_RECEIPTS,
-                )
+                Ok(from_contact < policy.max_open_receipts_per_sender
+                    && from_contacts < policy.max_open_receipts)
             })?)
         })
         .await

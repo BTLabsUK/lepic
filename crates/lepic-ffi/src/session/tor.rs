@@ -659,7 +659,9 @@ impl Session {
         message: Option<String>,
         options: Option<SendOptions>,
     ) -> Result<HttpSentTx, WalletError> {
-        let request = Self::send_request_with(amount, minimum_confirmations, message, options)?;
+        let request =
+            self.policy
+                .send_request_with(amount, minimum_confirmations, message, options)?;
         let onion = onion(to)?;
         let report = self.tor_send_report()?;
         // The checks the send makes before it stores anything, so a send that cannot be

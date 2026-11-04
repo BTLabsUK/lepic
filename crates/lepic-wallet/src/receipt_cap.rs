@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //! The open receipt caps that bound payments nobody asked for, on every transport that takes
-//! them: [`MAX_OPEN_RECEIPTS_PER_SENDER`] per sender, where the transport names one, and
-//! [`MAX_OPEN_RECEIPTS`] in all. Each transport counts only its own open receipts.
+//! them: [`WalletPolicy::max_open_receipts_per_sender`] per sender, where the transport names
+//! one, and [`WalletPolicy::max_open_receipts`] in all. Each transport counts only its own open receipts.
 
 use std::cmp::Reverse;
 use std::collections::HashMap;
@@ -14,7 +14,7 @@ use tracing::{debug, info, instrument, warn};
 use uuid::Uuid;
 
 use crate::error::WalletError;
-use crate::inbox::{ErrorChain, MAX_OPEN_RECEIPTS, MAX_OPEN_RECEIPTS_PER_SENDER};
+use crate::inbox::ErrorChain;
 use crate::ports::{SecretVault, StoreOpener};
 use crate::receive::{ReceiveError, ReceiveRequest, Received, check_proposal, legacy_codecs};
 use crate::wallet::Wallet;
@@ -22,11 +22,11 @@ use crate::wallet::Wallet;
 /// Why a new S1 cannot be received under the caps.
 #[derive(Debug)]
 pub(crate) enum NoRoom {
-    /// The sender has [`MAX_OPEN_RECEIPTS_PER_SENDER`] open.
+    /// The sender has [`WalletPolicy::max_open_receipts_per_sender`] open.
     FromSender,
-    /// At [`MAX_OPEN_RECEIPTS`] and no open receipt could be cancelled.
+    /// At [`WalletPolicy::max_open_receipts`] and no open receipt could be cancelled.
     Full,
-    /// At [`MAX_OPEN_RECEIPTS`] and the node could not be asked whether one may be cancelled.
+    /// At [`WalletPolicy::max_open_receipts`] and the node could not be asked whether one may be cancelled.
     Unchecked(WalletError),
     /// The wallet could not count or cancel open receipts.
     Wallet(WalletError),
@@ -81,7 +81,7 @@ where
 {
     /// [`Wallet::receive`] of a payment nobody asked for, such as one a listener took: a new
     /// S1 is received only within the open receipt caps on `transport`, which names no sender,
-    /// so only [`crate::inbox::MAX_OPEN_RECEIPTS`] applies. At that cap the wallet refreshes
+    /// so only [`WalletPolicy::max_open_receipts`] applies. At that cap the wallet refreshes
     /// first, at most once a minute, so receipts already mined leave the count. With no sender
     /// to tell payments apart, no open receipt is cancelled to make room: a new S1 is refused
     /// until the count drops. An S1 received before is answered with its stored S2 whatever
@@ -126,7 +126,7 @@ where
     /// Checks the open receipt caps of `transport` before the new S1 `slate_id`, from `sender`
     /// when the transport names one, is received. A slate id received before passes, so its
     /// stored S2 is sent again. Over the sender's cap the S1 is refused; at the total cap room
-    /// is made as [`MAX_OPEN_RECEIPTS`] says, and only on a transport that names a sender:
+    /// is made as [`WalletPolicy::max_open_receipts`] says, and only on a transport that names a sender:
     /// without one, the oldest receipt is as likely a real payment as not, so the S1 is
     /// refused instead.
     pub(crate) async fn make_room(
@@ -151,8 +151,10 @@ where
                     .count()
             })
         };
+        let policy = self.config().policy;
         let at_a_cap = |open: &[OpenReceipt]| {
-            from_sender(open) >= MAX_OPEN_RECEIPTS_PER_SENDER || open.len() >= MAX_OPEN_RECEIPTS
+            from_sender(open) >= policy.max_open_receipts_per_sender
+                || open.len() >= policy.max_open_receipts
         };
         // An open receipt is one no refresh has seen confirmed yet, so some may already be
         // mined; a refresh confirms those before a cap refuses the S1 or a receipt is
@@ -166,10 +168,10 @@ where
                 .await?
                 .unwrap_or_default();
         }
-        if from_sender(&open) >= MAX_OPEN_RECEIPTS_PER_SENDER {
+        if from_sender(&open) >= policy.max_open_receipts_per_sender {
             return Err(NoRoom::FromSender);
         }
-        if open.len() < MAX_OPEN_RECEIPTS {
+        if open.len() < policy.max_open_receipts {
             return Ok(());
         }
         if sender.is_none() {

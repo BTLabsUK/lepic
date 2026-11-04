@@ -58,17 +58,8 @@ const SEED_CHECK_DOMAIN: &[u8] = b"lepic-wallet seed check v1";
 pub struct Password(Zeroizing<String>);
 
 impl Password {
-    /// The fewest characters a password set on a new wallet should have. Hosts check it where a
-    /// password is chosen; opening never does, so a wallet with a shorter password keeps opening.
-    pub const MIN_NEW_LEN: usize = 8;
-
     pub fn new(password: String) -> Self {
         Self(Zeroizing::new(password))
-    }
-
-    /// Whether the password has at least [`Password::MIN_NEW_LEN`] characters.
-    pub fn is_long_enough_to_set(text: &str) -> bool {
-        text.chars().count() >= Self::MIN_NEW_LEN
     }
 
     /// The password. Callers must not log it or copy it into memory that is not wiped.

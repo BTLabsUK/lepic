@@ -1144,7 +1144,10 @@ fn payments_from_one_contact_stop_at_the_open_receipt_cap() {
         .into_iter()
         .filter(|event| matches!(event, Event::WithdrawalFromContact(_)))
         .count();
-    assert_eq!(received, lepic_wallet::inbox::MAX_OPEN_RECEIPTS_PER_SENDER);
+    assert_eq!(
+        received,
+        lepic_wallet::WalletPolicy::DEFAULT.max_open_receipts_per_sender
+    );
 }
 
 /// R2-06: an outbox entry whose transaction ended is deleted, never sent.

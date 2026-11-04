@@ -2,7 +2,6 @@
 //! One open wallet: the engine over the binding's ports, and the glue between engine calls,
 //! the app's secret store and Dart streams.
 
-use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicU64;
 #[cfg(feature = "tor")]
@@ -24,7 +23,7 @@ use lepic_primitives::params::Network;
 use lepic_store::{AccountIndex, OutputStatus as EngineOutputStatus, TxId, TxState};
 use lepic_transport::file::{FILE, FileTransport, response_path};
 use lepic_transport::registry::TransportRegistry;
-use lepic_transport::transport::{BoxFuture, Destination, Exchange as _, Location, TransportId};
+use lepic_transport::transport::{BoxFuture, Destination, Exchange as _, Location};
 use lepic_wallet::details::TransactionDetails as EngineTransactionDetails;
 use lepic_wallet::event::{Balance, Connection, TransportState as EngineTransportState};
 use lepic_wallet::inbox::ListenHandle;
@@ -40,12 +39,11 @@ use lepic_wallet::scan::{
 };
 use lepic_wallet::selection::Commitment;
 use lepic_wallet::selection::{
-    Selection, SelectionOptions, SelectionStrategy as EngineStrategy,
-    SelfInputs as EngineSelfInputs, SelfOutputs as EngineSelfOutputs,
+    Selection, SelectionOptions, SelfInputs as EngineSelfInputs, SelfOutputs as EngineSelfOutputs,
     SelfSendRequest as EngineSelfSendRequest,
 };
 use lepic_wallet::self_send::SelfSent;
-use lepic_wallet::send::{Delivery, SendError, SendRequest, SentSlate};
+use lepic_wallet::send::{Delivery, SendError, SentSlate};
 use lepic_wallet::slate::{MediaType, WireSlate};
 use lepic_wallet::{
     Clock, DATABASE_FILE, ENCRYPTED_DATABASE_FILE, Event, NodeEndpoint, Password, Ports,
@@ -60,15 +58,16 @@ use zeroize::Zeroizing;
 
 use crate::api::at_rest::{RetiredPlainStore, StoreAtRest, StoreAtRestState};
 use crate::api::error::{WalletError, WalletErrorKind};
+use crate::api::policy::Policy;
 use crate::api::runtime::{ClaimHolder, ClaimedStores, RuntimeInner};
 use crate::api::secret_store::AppSecretStore;
 use crate::api::types::{
     FeeEstimate, FinalizedTx, FoundDuring, ImportedTx, InboxReport, KernelLocation, LegacyImport,
     LegacyImportStatus, ListenerEvent, ListenerEventKind, ListingRef, NodeRoute, NodeTip,
     OutputCategory, OutputStatus, PeerCompat, ReceivedSlate, ScanFound, ScanProgress, ScanResult,
-    SelectionStrategy, SelfInputs, SelfOutputs, SelfSendRequest, SelfSentTx, SendOptions, SentTx,
-    Slate, SlateMessage, SlateStage, TransactionDetails, TransportConnection, TransportState,
-    TxOrigin, TxStatus, WalletConfig, WalletEvent, WalletEventKind, WalletOutput, WalletSummary,
+    SelfInputs, SelfOutputs, SelfSendRequest, SelfSentTx, SendOptions, SentTx, Slate, SlateMessage,
+    SlateStage, TransactionDetails, TransportConnection, TransportState, TxOrigin, TxStatus,
+    WalletConfig, WalletEvent, WalletEventKind, WalletOutput, WalletSummary,
 };
 use crate::boundary::InFlight;
 use crate::frb_generated::StreamSink;
@@ -107,20 +106,7 @@ const SEED_SECRET: &str = "wallet/seed";
 /// The name of the wallet in logs. The binding opens one wallet per data directory.
 const WALLET_NAME: &str = "default";
 
-const DEFAULT_ACCOUNT: AccountIndex = AccountIndex(0);
-
-/// The strategy of a send given no options, as `epic-wallet send` and the Epic GUI wallet
-/// choose; the engine's own default, `All`, is that of `epic-wallet`'s owner API.
-const DEFAULT_STRATEGY: EngineStrategy = EngineStrategy::Smallest;
-
-/// Blocks, a day of them, after which this wallet neither finalizes nor posts an app send and
-/// expires it if unanswered. File slates carry it as their TTL too, so the receiver refuses to
-/// sign past it. An invoice the app issues carries it as its TTL, so a payer refuses a request
-/// a day old and the payment of one that is never finalized is released.
-const APP_TTL_BLOCKS: u64 = lepic_wallet::invoice::INVOICE_TTL_BLOCKS;
-
-/// The most change outputs a send may ask for; each one costs a range proof.
-const MAX_CHANGE_OUTPUTS: usize = 10;
+pub(crate) const DEFAULT_ACCOUNT: AccountIndex = AccountIndex(0);
 
 /// The longest slate text the file method imports, checked before the text is written to a
 /// scratch file.
@@ -251,6 +237,8 @@ pub(crate) struct Session {
     node_tips: BackendCache<(NodeBackend, Arc<TipMemo>)>,
     /// The tuning of the config the session was opened with.
     pub(crate) tuning: Tuning,
+    /// The policy of the config the session was opened with, with its defaults filled in.
+    pub(crate) policy: Policy,
     #[cfg(all(test, feature = "tor"))]
     tor_timings: Mutex<Option<lepic_tor::TorTimings>>,
     /// Makes the next listen fail before it subscribes.
@@ -463,10 +451,9 @@ impl lepic_epicbox::Connector for OfflineRelay {
     }
 }
 
-/// The transaction methods a session registers, and the ids its wallet offers them under.
+/// The transaction methods a session registers.
 struct SessionTransports {
     registry: TransportRegistry,
-    ids: Vec<TransportId>,
     http: lepic_foreign::HttpTransport,
     #[cfg(feature = "tor")]
     tor: lepic_tor::TorTransport,
@@ -480,7 +467,6 @@ fn session_transports(
     send_tor: &Arc<RelayTor>,
 ) -> Result<SessionTransports, WalletError> {
     let mut registry = TransportRegistry::new();
-    let mut ids = vec![FILE];
     registry
         .register(Box::new(FileTransport::new()))
         .map_err(|error| invalid(error.to_string()))?;
@@ -488,13 +474,11 @@ fn session_transports(
         registry
             .register(Box::new(epicbox.clone()))
             .map_err(|error| invalid(error.to_string()))?;
-        ids.push(TRANSPORT_ID);
     }
     let http = http::http_transport(tuning, send_tor)?;
     registry
         .register(Box::new(http.clone()))
         .map_err(|error| invalid(error.to_string()))?;
-    ids.push(lepic_foreign::TRANSPORT_ID);
     #[cfg(feature = "tor")]
     let tor = tor::tor_transport(tuning);
     #[cfg(feature = "tor")]
@@ -502,11 +486,9 @@ fn session_transports(
         registry
             .register(Box::new(tor.clone()))
             .map_err(|error| invalid(error.to_string()))?;
-        ids.push(lepic_tor::TRANSPORT_ID);
     }
     Ok(SessionTransports {
         registry,
-        ids,
         http,
         #[cfg(feature = "tor")]
         tor,
@@ -520,7 +502,8 @@ fn engine(
     data_dir: &Path,
     node: Node,
     claim: &Arc<ClaimHolder>,
-    (transports, ids): (TransportRegistry, Vec<TransportId>),
+    transports: TransportRegistry,
+    policy: &Policy,
     vault: &VaultBytes,
 ) -> Result<EngineWallet, WalletError> {
     let engine_config = lepic_wallet::WalletConfig {
@@ -529,9 +512,9 @@ fn engine(
         data_dir: data_dir.to_owned(),
         node: NodeEndpoint::parse(&config.node_url)
             .map_err(|_| invalid("node url is not an http or https url with a host"))?,
-        transports: ids,
         offline: config.offline,
         host_features: config.host_features,
+        policy: policy.wallet,
     };
     let ports = Ports {
         node,
@@ -557,6 +540,7 @@ impl Session {
     ) -> Result<Self, WalletError> {
         let network = config.chain.network();
         let tuning = Tuning::check(&config.tuning)?;
+        let policy = Policy::resolve(&config.policy)?;
         let data_dir = PathBuf::from(&config.data_dir);
         let claim = runtime.claim(&data_dir).await?;
         let data_dir = claim.dir.clone();
@@ -594,20 +578,13 @@ impl Session {
         .map(EpicboxSlot::new);
         let SessionTransports {
             registry,
-            ids,
             http,
             #[cfg(feature = "tor")]
             tor,
         } = session_transports(epicbox.as_ref(), &tuning, &send_tor)?;
         let vault = VaultBytes::default();
         let engine = engine(
-            runtime,
-            config,
-            &data_dir,
-            node,
-            &claim,
-            (registry, ids),
-            &vault,
+            runtime, config, &data_dir, node, &claim, registry, &policy, &vault,
         )?;
         Ok(Self {
             engine,
@@ -639,6 +616,7 @@ impl Session {
             onion_routes,
             node_tips: BackendCache::default(),
             tuning,
+            policy,
             #[cfg(all(test, feature = "tor"))]
             tor_timings: Mutex::default(),
             #[cfg(test)]
@@ -1054,7 +1032,9 @@ impl Session {
         minimum_confirmations: u64,
         options: Option<SendOptions>,
     ) -> Result<FeeEstimate, WalletError> {
-        let options = Self::send_request_with(amount, minimum_confirmations, None, options)?
+        let options = self
+            .policy
+            .send_request_with(amount, minimum_confirmations, None, options)?
             .selection_options();
         let selection = self
             .engine
@@ -1068,14 +1048,18 @@ impl Session {
         minimum_confirmations: u64,
         options: Option<SendOptions>,
     ) -> Result<FeeEstimate, WalletError> {
-        let options =
-            Self::send_request_with(0, minimum_confirmations, None, options)?.selection_options();
+        let options = self
+            .policy
+            .send_request_with(0, minimum_confirmations, None, options)?
+            .selection_options();
         let selection = self.engine.estimate_max(options).await?;
         fee_estimate(&selection)
     }
 
-    fn self_send_options(minimum_confirmations: u64) -> SelectionOptions {
-        Self::send_request(0, minimum_confirmations, None).selection_options()
+    fn self_send_options(&self, minimum_confirmations: u64) -> SelectionOptions {
+        self.policy
+            .send_request(0, minimum_confirmations, None)
+            .selection_options()
     }
 
     pub(crate) async fn estimate_send_to_self(
@@ -1086,7 +1070,7 @@ impl Session {
         let request = self.self_send_request(request)?;
         let selection = self
             .engine
-            .estimate_send_to_self(Self::self_send_options(minimum_confirmations), request)
+            .estimate_send_to_self(self.self_send_options(minimum_confirmations), request)
             .await?;
         fee_estimate(&selection)
     }
@@ -1100,7 +1084,7 @@ impl Session {
         let sent = self
             .engine
             .send_to_self(
-                Self::self_send_options(minimum_confirmations),
+                self.self_send_options(minimum_confirmations),
                 request,
                 Propagation::Fluff,
             )
@@ -1287,56 +1271,6 @@ impl Session {
         }
     }
 
-    /// A send with the binding's default selection, as [`Session::send_request_with`] without
-    /// options makes it.
-    fn send_request(
-        amount: u64,
-        minimum_confirmations: u64,
-        message: Option<String>,
-    ) -> SendRequest {
-        SendRequest {
-            minimum_confirmations,
-            message,
-            strategy: DEFAULT_STRATEGY,
-            local_ttl_blocks: Some(APP_TTL_BLOCKS),
-            ..SendRequest::new(DEFAULT_ACCOUNT, Amount::new(amount))
-        }
-    }
-
-    /// Fails with `InvalidArgument` for change outputs outside 1..=[`MAX_CHANGE_OUTPUTS`].
-    fn send_request_with(
-        amount: u64,
-        minimum_confirmations: u64,
-        message: Option<String>,
-        options: Option<SendOptions>,
-    ) -> Result<SendRequest, WalletError> {
-        let request = Self::send_request(amount, minimum_confirmations, message);
-        let Some(options) = options else {
-            return Ok(request);
-        };
-        let (strategy, change_outputs, exclude_outputs) = selection_choice(&options)?;
-        Ok(SendRequest {
-            strategy,
-            change_outputs,
-            exclude_outputs,
-            ..request
-        })
-    }
-
-    /// [`Session::send_request_with`] for the file method, whose slate carries the limit as its
-    /// TTL.
-    fn file_send_request(
-        amount: u64,
-        minimum_confirmations: u64,
-        message: Option<String>,
-        options: Option<SendOptions>,
-    ) -> Result<SendRequest, WalletError> {
-        Ok(SendRequest {
-            ttl_blocks: Some(APP_TTL_BLOCKS),
-            ..Self::send_request_with(amount, minimum_confirmations, message, options)?
-        })
-    }
-
     pub(crate) async fn send_file(
         &self,
         amount: u64,
@@ -1348,7 +1282,8 @@ impl Session {
         let sent = self
             .engine
             .send(
-                Self::file_send_request(amount, minimum_confirmations, message, options)?,
+                self.policy
+                    .file_send_request(amount, minimum_confirmations, message, options)?,
                 Delivery::Export {
                     transport: FILE,
                     to: Location::File(path),
@@ -1380,7 +1315,8 @@ impl Session {
         let sent = match self
             .engine
             .send(
-                Self::file_send_request(amount, minimum_confirmations, message, options)?,
+                self.policy
+                    .file_send_request(amount, minimum_confirmations, message, options)?,
                 Delivery::Export {
                     transport: FILE,
                     to: Location::File(scratch.path.clone()),
@@ -1696,7 +1632,9 @@ impl Session {
         message: Option<String>,
         options: Option<SendOptions>,
     ) -> Result<SentTx, WalletError> {
-        let request = Self::send_request_with(amount, minimum_confirmations, message, options)?;
+        let request =
+            self.policy
+                .send_request_with(amount, minimum_confirmations, message, options)?;
         let epicbox = self.epicbox()?;
         relay_address(&address, self.network)
             .ok_or_else(|| invalid("not an epicbox address with a relay on this network"))?;
@@ -2075,44 +2013,6 @@ fn legacy_import(outcome: &LegacyImportOutcome) -> LegacyImport {
         confirmed_by_kernel: outcome.confirmed_by_kernel,
         dated: outcome.dated,
     }
-}
-
-/// Outputs one send may be told to leave out.
-const MAX_EXCLUDED_OUTPUTS: usize = 500;
-
-/// The engine's strategy, change outputs and excluded outputs for `options`. Fails with
-/// `InvalidArgument` for change outputs outside 1..=[`MAX_CHANGE_OUTPUTS`], an excluded output
-/// that is not a commitment, or more than [`MAX_EXCLUDED_OUTPUTS`] of them.
-pub(crate) fn selection_choice(
-    options: &SendOptions,
-) -> Result<(EngineStrategy, NonZeroUsize, Vec<Commitment>), WalletError> {
-    if options.exclude_outputs.len() > MAX_EXCLUDED_OUTPUTS {
-        return Err(invalid(format!(
-            "at most {MAX_EXCLUDED_OUTPUTS} outputs may be excluded"
-        )));
-    }
-    let exclude = options
-        .exclude_outputs
-        .iter()
-        .map(|hex| {
-            Commitment::from_hex(hex)
-                .map_err(|_| invalid("an excluded output is not a commitment".to_owned()))
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-    let change_outputs = usize::try_from(options.change_outputs)
-        .ok()
-        .filter(|count| *count <= MAX_CHANGE_OUTPUTS)
-        .and_then(NonZeroUsize::new)
-        .ok_or_else(|| {
-            invalid(format!(
-                "change outputs must be from 1 to {MAX_CHANGE_OUTPUTS}"
-            ))
-        })?;
-    let strategy = match options.strategy {
-        SelectionStrategy::Smallest => EngineStrategy::Smallest,
-        SelectionStrategy::All => EngineStrategy::All,
-    };
-    Ok((strategy, change_outputs, exclude))
 }
 
 fn fee_estimate(selection: &Selection) -> Result<FeeEstimate, WalletError> {
@@ -2786,6 +2686,7 @@ mod tests {
 
     fn relay_config(domain: &str) -> WalletConfig {
         WalletConfig {
+            policy: Default::default(),
             data_dir: String::new(),
             chain: crate::api::types::Chain::Mainnet,
             node_url: String::new(),
@@ -3182,6 +3083,7 @@ mod tests {
         let mut sessions = Vec::new();
         for dir in &dirs {
             let mut config = WalletConfig {
+                policy: Default::default(),
                 data_dir: dir.path().to_string_lossy().into_owned(),
                 chain: crate::api::types::Chain::Floonet,
                 node_url: "http://127.0.0.1:1".to_owned(),
@@ -3263,17 +3165,5 @@ mod tests {
         };
         assert_eq!(*kind, ListenerEventKind::Repeated, "{seen:?}");
         assert_eq!(*again, Some(*first));
-    }
-
-    #[test]
-    fn app_sends_carry_a_local_limit_and_file_sends_a_ttl_too() {
-        let request = Session::send_request_with(1, 1, None, None).unwrap();
-        assert_eq!(request.local_ttl_blocks, Some(APP_TTL_BLOCKS));
-        assert_eq!(request.ttl_blocks, None);
-
-        let file = Session::file_send_request(1, 1, None, None).unwrap();
-        assert_eq!(file.local_ttl_blocks, Some(APP_TTL_BLOCKS));
-        assert_eq!(file.ttl_blocks, Some(APP_TTL_BLOCKS));
-        assert_eq!(APP_TTL_BLOCKS, 1_440);
     }
 }

@@ -99,7 +99,7 @@ pub enum WalletError {
     AppData(#[from] AppDataError),
     #[error("blocking wallet task did not complete")]
     Task(#[source] tokio::task::JoinError),
-    #[error("minimum confirmations must be between 1 and 30")]
+    #[error("minimum confirmations must be at least 1")]
     MinimumConfirmationsOutOfRange { count: u64 },
     #[error("balance out of range")]
     Balance(#[source] ArithmeticError),

@@ -17,8 +17,10 @@ pub enum ConfigError {
     WalletNameCharacter { position: usize },
     #[error("node endpoint is not an http or https url with a host")]
     NodeEndpoint,
-    #[error("transport {transport} is configured but not registered")]
+    #[error("transport {transport} is not registered")]
     UnknownTransport { transport: TransportId },
+    #[error("{what} must be at least 1")]
+    PolicyOutOfRange { what: &'static str },
 }
 
 /// Names one wallet instance in logs and events. Not secret: it is neither the seed nor an
@@ -119,9 +121,6 @@ pub struct WalletConfig {
     /// Where the wallet database lives. The host creates the directory.
     pub data_dir: PathBuf,
     pub node: NodeEndpoint,
-    /// The transaction methods this wallet offers. Each must be registered in the
-    /// [`crate::Ports::transports`] registry.
-    pub transports: Vec<TransportId>,
     /// The session never asks the node. Payment stages use the highest tip a refresh
     /// confirmed, unchecked, and finalizing stores the transaction `finalized` without a push.
     /// The host builds the session's node and relay ports to refuse every call as well. Fixed
@@ -130,6 +129,73 @@ pub struct WalletConfig {
     /// The feature bits the host app claims, a constant of its build, never a setting. Only
     /// the host bits ([`lepic_epicbox::marker::features::HOST_FEATURES`]) are kept.
     pub host_features: u32,
+    /// Values the host chooses; [`WalletPolicy::default`] is what LEPIC did before they were
+    /// parameters.
+    pub policy: WalletPolicy,
+}
+
+/// How many receipts nobody asked for a wallet keeps open, and the confirmations a wallet
+/// counts as spendable before the user sets their own.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WalletPolicy {
+    /// Open receipts, payments received over Epicbox and answered with S2 that the sender has
+    /// not finalized, kept from one sender key. A paying wallet finalizes as soon as the S2
+    /// arrives, so a sender with this many open is not finalizing; a further S1 from its key
+    /// is refused and acknowledged without being signed or stored, unless a refresh, made
+    /// first at most once a minute, confirms some of them. The same cap applies to parked
+    /// invoices.
+    pub max_open_receipts_per_sender: usize,
+    /// Open receipts kept over every sender. Each holds an unconfirmed output, a transaction
+    /// and its slates, so this bounds what unsolicited payments can store. At the cap the
+    /// inbox first refreshes, at most once a minute, so receipts already mined are confirmed
+    /// and leave the open set. Then one open receipt is cancelled to make room, as
+    /// [`crate::Wallet::cancel`] does, so a payment completed later is still restored: the
+    /// sender key with the most open receipts gives one up first, oldest first, and a receipt
+    /// the node's pool or chain holds is kept. When none can be cancelled, the new S1 is
+    /// refused without being signed or stored; the sender can send it again. A node that
+    /// cannot be asked holds the S1 only to the hold bound before it is refused the same way.
+    pub max_open_receipts: usize,
+    /// The minimum confirmations of a wallet that never stored its own
+    /// ([`crate::Wallet::set_minimum_confirmations`]). At least 1.
+    pub default_minimum_confirmations: u64,
+}
+
+impl WalletPolicy {
+    /// The values every wallet used before they were parameters: 10 and 100 receipts and 6
+    /// confirmations.
+    pub const DEFAULT: Self = Self {
+        max_open_receipts_per_sender: 10,
+        max_open_receipts: 100,
+        default_minimum_confirmations: 6,
+    };
+}
+
+impl WalletPolicy {
+    /// Fails with [`ConfigError::PolicyOutOfRange`] for a value below 1.
+    pub fn validate(&self) -> Result<(), ConfigError> {
+        for (what, value) in [
+            (
+                "max open receipts per sender",
+                self.max_open_receipts_per_sender as u64,
+            ),
+            ("max open receipts", self.max_open_receipts as u64),
+            (
+                "default minimum confirmations",
+                self.default_minimum_confirmations,
+            ),
+        ] {
+            if value == 0 {
+                return Err(ConfigError::PolicyOutOfRange { what });
+            }
+        }
+        Ok(())
+    }
+}
+
+impl Default for WalletPolicy {
+    fn default() -> Self {
+        Self::DEFAULT
+    }
 }
 
 impl WalletConfig {
@@ -151,15 +217,23 @@ mod tests {
             network: Network::Floonet,
             data_dir: PathBuf::from("/w"),
             node: NodeEndpoint::parse("http://127.0.0.1:1").unwrap(),
-            transports: Vec::new(),
             offline: false,
             host_features,
+            policy: WalletPolicy::default(),
         };
         assert_eq!(config(0).claimed_features(), LEPIC_FEATURES);
         assert_eq!(
             config(DIRECTORY | 0b1110 | 1 << 31).claimed_features(),
             LEPIC_FEATURES | DIRECTORY
         );
+    }
+
+    #[test]
+    fn the_default_policy_is_what_wallets_did_before_it_was_a_parameter() {
+        let policy = WalletPolicy::default();
+        assert_eq!(policy.max_open_receipts_per_sender, 10);
+        assert_eq!(policy.max_open_receipts, 100);
+        assert_eq!(policy.default_minimum_confirmations, 6);
     }
 
     #[test]

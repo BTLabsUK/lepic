@@ -78,6 +78,7 @@ impl World {
 
     fn config(dir: &tempfile::TempDir, relay: &str) -> WalletConfig {
         WalletConfig {
+            policy: Default::default(),
             data_dir: dir.path().to_string_lossy().into_owned(),
             chain: Chain::Floonet,
             node_url: "http://127.0.0.1:1".to_owned(),

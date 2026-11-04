@@ -431,9 +431,15 @@ fn relay(lookup: &Lookup<'_>, servers: &Servers) -> Result<RelayEndpoint, Settin
 
 const SECONDS_PER_HOUR: u64 = 60 * 60;
 
-/// A whole number of hours the engine accepts as an invoice expiry.
+/// The most hours of `invoice_expiry_hours`; the CLI enforces it, the library takes any window.
+const MAX_EXPIRY_HOURS: u64 = 48;
+
+/// A whole number of hours from 1 to [`MAX_EXPIRY_HOURS`] as an invoice expiry.
 fn parse_expiry_hours(text: &str) -> Option<InvoiceExpiry> {
-    let hours: u64 = text.parse().ok()?;
+    let hours: u64 = text
+        .parse()
+        .ok()
+        .filter(|hours| *hours <= MAX_EXPIRY_HOURS)?;
     let seconds = hours.checked_mul(SECONDS_PER_HOUR)?;
     InvoiceExpiry::new(std::time::Duration::from_secs(seconds)).ok()
 }

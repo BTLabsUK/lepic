@@ -40,10 +40,6 @@ pub(crate) const PENDING_KEY_KEY: &str = "lepic.pin-key-pending";
 /// The key of the count of PIN or password failures since the last right one, in decimal.
 pub(crate) const FAILURES_KEY: &str = "lepic.pin-failures";
 
-/// The shortest PIN `create_with_pin` and `change_pin` accept, in characters. Unlocking does
-/// not check it, so text sealed under a shorter PIN of an earlier version keeps opening.
-pub(crate) const MIN_PIN_LEN: usize = 6;
-
 const KEY_LEN: usize = 32;
 
 /// The length of the PIN key in padded base64.
@@ -52,6 +48,9 @@ const KEY_TEXT_LEN: usize = 44;
 /// How long PIN attempts wait after failures.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct PinPolicy {
+    /// The shortest PIN `create_with_pin` and `change_pin` accept, in characters. Unlocking
+    /// does not check it, so text sealed under a shorter PIN keeps opening.
+    pub(crate) min_len: usize,
     /// Failures before attempts start to wait, for typing mistakes.
     pub(crate) free_failures: u32,
     /// The wait once `free_failures` failures are counted; it doubles with each further one.
@@ -61,6 +60,7 @@ pub(crate) struct PinPolicy {
 
 impl PinPolicy {
     pub(crate) const DEFAULT: Self = Self {
+        min_len: 6,
         free_failures: 3,
         first_delay: Duration::from_secs(30),
         max_delay: Duration::from_secs(60 * 60),
@@ -91,20 +91,30 @@ impl PinGuard {
             attempts: Mutex::new(()),
         }
     }
+
+    /// The shortest PIN this runtime accepts for a new one.
+    pub(crate) fn min_len(&self) -> usize {
+        self.policy.min_len
+    }
 }
 
 /// A PIN the user typed, long enough to seal under.
 pub(crate) struct NewPin(Zeroizing<String>);
 
 impl NewPin {
-    pub(crate) fn new(pin: Zeroizing<String>) -> Result<Self, WalletError> {
-        if pin.chars().count() < MIN_PIN_LEN {
+    pub(crate) fn new(pin: Zeroizing<String>, min_len: usize) -> Result<Self, WalletError> {
+        if pin.chars().count() < min_len {
             return Err(WalletError::new(
                 WalletErrorKind::InvalidArgument,
-                format!("pin has fewer than {MIN_PIN_LEN} characters"),
+                format!("pin has fewer than {min_len} characters"),
             ));
         }
         Ok(Self(pin))
+    }
+
+    #[cfg(test)]
+    fn with_default(pin: Zeroizing<String>) -> Result<Self, WalletError> {
+        Self::new(pin, PinPolicy::DEFAULT.min_len)
     }
 }
 
@@ -591,12 +601,12 @@ mod tests {
 
     #[test]
     fn new_pin_needs_six_characters() {
-        assert!(NewPin::new(pin("")).is_err());
-        assert!(NewPin::new(pin("1234")).is_err());
-        assert!(NewPin::new(pin("12345")).is_err());
-        assert!(NewPin::new(pin("123456")).is_ok());
+        assert!(NewPin::with_default(pin("")).is_err());
+        assert!(NewPin::with_default(pin("1234")).is_err());
+        assert!(NewPin::with_default(pin("12345")).is_err());
+        assert!(NewPin::with_default(pin("123456")).is_ok());
         // Characters, not bytes: five two-byte characters are still too short.
-        assert!(NewPin::new(pin("äöüäö")).is_err());
+        assert!(NewPin::with_default(pin("äöüäö")).is_err());
     }
 
     /// Text sealed under a PIN shorter than today's floor, as an earlier version allowed, keeps
@@ -631,7 +641,7 @@ mod tests {
         let password = generate_password().unwrap();
         let sealed = seal_new(
             &store,
-            NewPin::new(pin("123456")).unwrap(),
+            NewPin::with_default(pin("123456")).unwrap(),
             password.clone(),
             cheap(),
         )
@@ -674,7 +684,7 @@ mod tests {
         let password = generate_password().unwrap();
         let sealed = seal_new(
             &store,
-            NewPin::new(pin("123456")).unwrap(),
+            NewPin::with_default(pin("123456")).unwrap(),
             password,
             cheap(),
         )
@@ -716,7 +726,7 @@ mod tests {
         let guard = PinGuard::new(PinPolicy::DEFAULT);
         let sealed = seal_new(
             &store,
-            NewPin::new(pin("123456")).unwrap(),
+            NewPin::with_default(pin("123456")).unwrap(),
             generate_password().unwrap(),
             cheap(),
         )
@@ -735,7 +745,7 @@ mod tests {
         let guard = PinGuard::new(PinPolicy::DEFAULT);
         let sealed = seal_new(
             &store,
-            NewPin::new(pin("123456")).unwrap(),
+            NewPin::with_default(pin("123456")).unwrap(),
             generate_password().unwrap(),
             cheap(),
         )
@@ -762,7 +772,7 @@ mod tests {
         let password = generate_password().unwrap();
         let sealed = seal_new(
             &store,
-            NewPin::new(pin("123456")).unwrap(),
+            NewPin::with_default(pin("123456")).unwrap(),
             password.clone(),
             cheap(),
         )
@@ -775,7 +785,7 @@ mod tests {
         let unsealable = Zeroizing::new("x".repeat(lepic_keychain::vault::MAX_SECRET_LEN + 1));
         let failed = seal_new(
             &store,
-            NewPin::new(pin("987654")).unwrap(),
+            NewPin::with_default(pin("987654")).unwrap(),
             unsealable,
             cheap(),
         )
@@ -845,7 +855,7 @@ mod tests {
         let password = generate_password().unwrap();
         let sealed = seal_new(
             store,
-            NewPin::new(pin(old)).unwrap(),
+            NewPin::with_default(pin(old)).unwrap(),
             password.clone(),
             cheap(),
         )
@@ -861,7 +871,7 @@ mod tests {
         sealed: &str,
         new: &str,
     ) -> Result<String, WalletError> {
-        let new = NewPin::new(pin(new)).unwrap();
+        let new = NewPin::with_default(pin(new)).unwrap();
         let accept = |_| async { Ok(()) };
         change(
             guard,
@@ -930,7 +940,7 @@ mod tests {
         let guard = PinGuard::new(PinPolicy::DEFAULT);
         let (_, sealed) = new_wallet(&store, "111111").await;
         let refuse = |_| async { Err(WalletError::new(WalletErrorKind::WrongPassword, "refused")) };
-        let new = NewPin::new(pin("222222")).unwrap();
+        let new = NewPin::with_default(pin("222222")).unwrap();
         let changed = change(&guard, &store, pin("111111"), sealed, new, cheap(), refuse).await;
         assert_eq!(changed.unwrap_err().kind, WalletErrorKind::WrongPassword);
         assert_eq!(store.read(PENDING_KEY_KEY).await.unwrap(), None);

@@ -15,7 +15,6 @@ use std::sync::Arc;
 
 use flutter_rust_bridge::frb;
 use lepic_keychain::Seed;
-use lepic_wallet::Password;
 use zeroize::Zeroizing;
 
 use crate::inspect;
@@ -163,8 +162,7 @@ pub async fn delete_wallet(
 /// password or the new one opens the wallet, without the PIN, and calling this again finishes
 /// the reset.
 ///
-/// Fails, with nothing changed, with `InvalidArgument` when `new_password` has fewer than eight
-/// characters, `InvalidMnemonic`, `PhraseMismatch` when the database belongs to another seed,
+/// Fails, with nothing changed, with `InvalidMnemonic`, `PhraseMismatch` when the database belongs to another seed,
 /// `ForeignWallet` when it belongs to another chain, `WalletNotFound` when the directory holds
 /// no database a wallet has used, or one that holds nothing to prove the phrase by (delete the
 /// wallet with [`delete_wallet`] and restore it), `WalletBusy` while a wallet on the directory
@@ -189,8 +187,7 @@ pub async fn reset_password(
         .inner
         .boundary
         .run("reset_password", async move {
-            let password = self::new_password(new_password)?;
-            session::reset_password(&inner, &config, &store, mnemonic, password).await
+            session::reset_password(&inner, &config, &store, mnemonic, new_password).await
         })
         .await
 }
@@ -243,22 +240,6 @@ pub async fn node_tip(
         .await
 }
 
-/// `password` as the password of a new wallet: refused with `InvalidArgument` below
-/// [`Password::MIN_NEW_LEN`] characters.
-fn new_password(password: Zeroizing<String>) -> Result<Zeroizing<String>, WalletError> {
-    if Password::is_long_enough_to_set(&password) {
-        Ok(password)
-    } else {
-        Err(WalletError::new(
-            WalletErrorKind::InvalidArgument,
-            format!(
-                "password has fewer than {} characters",
-                Password::MIN_NEW_LEN
-            ),
-        ))
-    }
-}
-
 /// A wallet created by [`EpicWallet::create_with_pin`], and its wallet password sealed under the
 /// PIN and the PIN key in the app's store. Store `sealed_password`;
 /// [`EpicWallet::open_with_pin`] needs it. With the store's contents it allows guessing the
@@ -296,7 +277,7 @@ async fn create_pin_wallet(
         .boundary
         .run(operation, async move {
             let origin = origin?;
-            let pin = pin::NewPin::new(pin)?;
+            let pin = pin::NewPin::new(pin, inner.pin.min_len())?;
             let session = Session::new(&inner, &config, &node_secret, store.clone()).await?;
             // Checked before the PIN key is written, so it never replaces another wallet's
             // key.
@@ -397,7 +378,7 @@ impl EpicWallet {
     /// found by it. `None` and 0 start from genesis. Pass a height only when the phrase was
     /// first used above it.
     ///
-    /// Fails with `InvalidArgument` when `password` has fewer than eight characters or
+    /// Fails with `InvalidArgument` when
     /// `restore_from_height` comes without `mnemonic`, before anything is written,
     /// `WalletAlreadyExists` when `store` holds a vault, `InvalidMnemonic`,
     /// `ForeignWallet` when the directory holds another wallet's database, `WalletBusy` when a
@@ -421,7 +402,6 @@ impl EpicWallet {
             .boundary
             .run("create", async move {
                 let origin = origin?;
-                let password = new_password(password)?;
                 let session = Session::new(&inner, &config, &node_secret, store).await?;
                 session.create(origin, password).await?;
                 Ok(EpicWallet {
@@ -460,7 +440,6 @@ impl EpicWallet {
             .inner
             .boundary
             .run("import_wallet_seed", async move {
-                let password = new_password(password)?;
                 let session = Session::new(&inner, &config, &node_secret, store).await?;
                 session.create(origin, password).await?;
                 Ok(EpicWallet {
@@ -513,7 +492,7 @@ impl EpicWallet {
     /// [`delete_wallet`] and create it again (a restored wallet from its phrase).
     ///
     /// `restore_from_height` is as in `create`. Fails with `InvalidArgument` when `pin` has
-    /// fewer than six characters, and otherwise as `create` does.
+    /// fewer than `PinSettings.min_len` characters (6 by default), and otherwise as `create` does.
     pub async fn create_with_pin(
         runtime: &LepicRuntime,
         config: WalletConfig,
@@ -691,7 +670,7 @@ impl EpicWallet {
     /// the old text stops opening. While a change is pending a wrong PIN costs two key
     /// derivations, and still counts as one failure.
     ///
-    /// Fails with `InvalidArgument` when `new_pin` has fewer than six characters, before any
+    /// Fails with `InvalidArgument` when `new_pin` has fewer than `PinSettings.min_len` characters (6 by default), before any
     /// attempt is counted, and otherwise as [`EpicWallet::mnemonic_with_pin`] does.
     pub async fn change_pin(
         &self,
@@ -703,7 +682,7 @@ impl EpicWallet {
         let new_pin = Zeroizing::new(new_pin);
         self.run("change_pin", |session| async move {
             session.ensure_unlocked()?;
-            let new_pin = pin::NewPin::new(new_pin)?;
+            let new_pin = pin::NewPin::new(new_pin, session.runtime().pin.min_len())?;
             let runtime = session.runtime();
             // Never reseal a password that does not open this wallet's vault.
             let check = |password| session.check_password(password);
@@ -752,8 +731,7 @@ impl EpicWallet {
     /// with the password that works drops or finishes the change. Use a store whose `write`
     /// has stored the value durably when it completes.
     ///
-    /// Fails with `InvalidArgument` when `new_password` has fewer than eight characters, and
-    /// `Unsupported` for a wallet from [`EpicWallet::create_with_pin`] (change its PIN with
+    /// Fails with `Unsupported` for a wallet from [`EpicWallet::create_with_pin`] (change its PIN with
     /// [`EpicWallet::change_pin`]), both before any attempt is counted; with `WrongPassword`
     /// when `current_password` does not open the vault, `Locked` on a locked wallet, and
     /// `SecretStore` when the store fails or does not give back what was written: the old
@@ -768,7 +746,6 @@ impl EpicWallet {
         let new_password = Zeroizing::new(new_password);
         self.run("change_password", |session| async move {
             session.ensure_unlocked()?;
-            let new_password = self::new_password(new_password)?;
             session
                 .change_password(current_password, new_password)
                 .await

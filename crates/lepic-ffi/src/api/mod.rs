@@ -8,6 +8,7 @@ pub mod diagnostics;
 pub mod error;
 pub mod http;
 pub mod invoice;
+pub mod policy;
 pub mod runtime;
 pub mod secret_store;
 pub mod testing;

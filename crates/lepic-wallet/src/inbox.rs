@@ -23,8 +23,9 @@
 //! refused at once; at most [`MAX_TWIN_ANSWERS`] at a time, for [`TWIN_REQUEUE_WINDOW`], and
 //! only while the inputs it spends are unspent.
 //!
-//! Payments nobody asked for are bounded too: at most [`MAX_OPEN_RECEIPTS_PER_SENDER`] open
-//! receipts per sender key and [`MAX_OPEN_RECEIPTS`] in all (see their docs).
+//! Payments nobody asked for are bounded too: at most
+//! [`crate::config::WalletPolicy::max_open_receipts_per_sender`] open receipts per sender key and
+//! [`crate::config::WalletPolicy::max_open_receipts`] in all (see their docs).
 //!
 //! Every message is idempotent on its relay id and on `(slate_id, stage)`: a redelivered S1 is
 //! answered with the S2 stored the first time, never a new one, and announced as
@@ -116,24 +117,6 @@ const CLOCK_STEP_TOLERANCE: Duration = Duration::from_secs(60);
 const TIP_REFRESH_INTERVAL: Duration = Duration::from_secs(60);
 
 const TIP_REFRESHED_SETTING: &str = "inbox.tip_refreshed_at";
-
-/// Open receipts, payments received over Epicbox and answered with S2 that the sender has not
-/// finalized, kept from one sender key. A paying wallet finalizes as soon as the S2 arrives, so
-/// a sender with this many open is not finalizing; a further S1 from its key is refused and
-/// acknowledged without being signed or stored, unless a refresh, made first at most once a
-/// minute, confirms some of them. The same cap applies to parked invoices.
-pub const MAX_OPEN_RECEIPTS_PER_SENDER: usize = 10;
-
-/// Open receipts kept over every sender. Each holds an unconfirmed output, a transaction and its
-/// slates, so this bounds what unsolicited payments can store. At the cap the inbox first
-/// refreshes, at most once a minute, so receipts already mined are confirmed and leave the open
-/// set. Then one open receipt is cancelled to make room, as [`Wallet::cancel`] does, so a
-/// payment completed later is still restored: the sender key with the most open receipts gives
-/// one up first, oldest first, and a receipt the node's pool or chain holds is kept. When none
-/// can be cancelled, the new S1 is refused without being signed or stored; the sender can send
-/// it again. A node that cannot be asked holds the S1 only to the hold bound before it is
-/// refused the same way.
-pub const MAX_OPEN_RECEIPTS: usize = 100;
 
 #[derive(Debug, Error)]
 #[non_exhaustive]
@@ -1761,7 +1744,7 @@ where
     /// Checks the open receipt caps before a new S1 from `reply_to`, the message `msg_id` on its
     /// try `attempt`, is received. A slate id received before passes, so its stored S2 is sent
     /// again. Over the sender's cap the S1 is refused; at the total cap room is made as
-    /// [`MAX_OPEN_RECEIPTS`] says.
+    /// [`crate::config::WalletPolicy::max_open_receipts`] says.
     async fn make_room_for(
         &self,
         msg_id: Option<&str>,

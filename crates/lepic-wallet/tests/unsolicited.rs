@@ -19,8 +19,9 @@ use lepic_node::mock::MockFailure;
 use lepic_store::{TxId, TxState, WalletStore};
 use lepic_transport::file::FILE;
 use lepic_transport::transport::TransportId;
-use lepic_wallet::inbox::MAX_OPEN_RECEIPTS;
-use lepic_wallet::{ReceiveError, ReceiveRequest, Received};
+use lepic_wallet::{ReceiveError, ReceiveRequest, Received, WalletPolicy};
+
+const MAX_OPEN_RECEIPTS: usize = WalletPolicy::DEFAULT.max_open_receipts;
 use receive_harness::*;
 
 const VECTOR_SLATE_ID: &str = "0436430c-2b02-624c-2032-570501212b03";

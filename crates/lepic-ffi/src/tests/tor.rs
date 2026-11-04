@@ -770,6 +770,7 @@ async fn the_onion_routes_of_the_config_are_there_from_the_open_and_checked() {
         async move {
             let dir = tempfile::tempdir().unwrap();
             let mut config = WalletConfig {
+                policy: Default::default(),
                 data_dir: dir.path().to_string_lossy().into_owned(),
                 chain: Chain::Mainnet,
                 node_url: "http://127.0.0.1:1".to_owned(),
@@ -970,6 +971,7 @@ async fn the_onion_address_is_the_payment_proof_address_in_onion_form() {
     let runtime = chain.runtime(LogLevel::Warn).unwrap();
     let dir = tempfile::tempdir().unwrap();
     let mut config = WalletConfig {
+        policy: Default::default(),
         data_dir: dir.path().to_string_lossy().into_owned(),
         chain: Chain::Mainnet,
         node_url: "http://127.0.0.1:1".to_owned(),

@@ -9,13 +9,16 @@ use std::sync::{Arc, Mutex, PoisonError};
 
 use tokio::sync::oneshot;
 
-use lepic_wallet::Password;
 use thiserror::Error;
 use zeroize::Zeroizing;
 
 use crate::settings::Env;
 
 pub const PASSWORD_ENV: &str = "LEPIC_PASSWORD";
+
+/// The fewest characters a password set on a new wallet has. The CLI checks it itself; the
+/// library takes any password.
+pub const MIN_NEW_PASSWORD_LEN: usize = 8;
 
 /// Longer than any password or recovery phrase a person types.
 pub const MAX_SECRET_LEN: usize = 4096;
@@ -81,7 +84,7 @@ impl SecretInput {
 
     /// The wallet password: the first line of `file`, else `LEPIC_PASSWORD`, else the prompt or
     /// a line of input. `LEPIC_PASSWORD` is removed from `env` either way. A new password must
-    /// have [`Password::MIN_NEW_LEN`] characters and is asked for twice at a terminal.
+    /// have [`MIN_NEW_PASSWORD_LEN`] characters and is asked for twice at a terminal.
     pub async fn wallet_password(
         &mut self,
         env: &mut Env,
@@ -89,9 +92,9 @@ impl SecretInput {
         new: bool,
     ) -> Result<Zeroizing<String>, SecretError> {
         let long_enough = |password: Zeroizing<String>| {
-            if new && !Password::is_long_enough_to_set(&password) {
+            if new && password.chars().count() < MIN_NEW_PASSWORD_LEN {
                 return Err(SecretError::TooShort {
-                    min: Password::MIN_NEW_LEN,
+                    min: MIN_NEW_PASSWORD_LEN,
                 });
             }
             Ok(password)
@@ -325,7 +328,7 @@ mod tests {
 
     #[test]
     fn a_new_password_shorter_than_the_minimum_is_refused_from_every_source() {
-        let short = "x".repeat(Password::MIN_NEW_LEN - 1);
+        let short = "x".repeat(MIN_NEW_PASSWORD_LEN - 1);
         let mut env = Env::new([(PASSWORD_ENV.to_owned(), short.clone())]);
         let mut input = input(&format!("{short}\n"));
         block_on(async {

@@ -3,34 +3,24 @@
 //! both sides.
 
 use std::path::{Path, PathBuf};
-use std::time::Duration;
 
 use lepic_primitives::amount::Amount;
 use lepic_transport::file::{FILE, FileTransport, response_path};
 use lepic_transport::transport::{Exchange as _, Location};
-use lepic_wallet::epicbox_invoice::InvoiceExpiry;
 use lepic_wallet::invoice::{InvoiceRequest, PaidInvoice};
 use lepic_wallet::send::Delivery;
 use lepic_wallet::slate::WireSlate;
 
-use super::{APP_TTL_BLOCKS, DEFAULT_ACCOUNT, ScratchFile, Session, invalid, transport_error};
+use super::{DEFAULT_ACCOUNT, ScratchFile, Session, invalid, transport_error};
 use crate::api::error::{WalletError, WalletErrorKind};
 use crate::api::types::{InvoiceSweep, IssuedInvoice, PaidInvoiceSlate, SendOptions, Slate};
-
-/// `seconds` as the window after which unpaid invoices expire; `None` is the default day.
-fn expiry(seconds: Option<u64>) -> Result<InvoiceExpiry, WalletError> {
-    match seconds {
-        None => Ok(InvoiceExpiry::default()),
-        Some(seconds) => Ok(InvoiceExpiry::new(Duration::from_secs(seconds))?),
-    }
-}
 
 impl Session {
     pub(crate) async fn sweep_invoices(
         &self,
         expiry_secs: Option<u64>,
     ) -> Result<InvoiceSweep, WalletError> {
-        let expiry = expiry(expiry_secs)?;
+        let expiry = self.policy.invoice_expiry(expiry_secs)?;
         self.attach_for_notices()?;
         let sweep = self.engine.sweep_invoices(expiry).await?;
         Ok(InvoiceSweep {
@@ -56,7 +46,7 @@ impl Session {
                     account: DEFAULT_ACCOUNT,
                     amount: Amount::new(amount),
                     message,
-                    ttl_blocks: Some(APP_TTL_BLOCKS),
+                    ttl_blocks: Some(self.policy.invoice_ttl_blocks),
                 },
                 Delivery::Export {
                     transport: FILE,
@@ -123,7 +113,9 @@ impl Session {
         message: Option<String>,
         options: Option<SendOptions>,
     ) -> Result<PaidInvoice, WalletError> {
-        let request = Self::pay_request(amount, minimum_confirmations, message, options)?;
+        let request = self
+            .policy
+            .pay_request(amount, minimum_confirmations, message, options)?;
         Ok(self.engine.pay_invoice(FILE, wire, request).await?)
     }
 

@@ -1362,12 +1362,7 @@ impl<H: Host> Run<'_, H> {
             network: self.settings.network,
             data_dir: self.settings.data_dir.clone(),
             node: self.settings.node.clone(),
-            transports: vec![
-                FILE,
-                TRANSPORT_ID,
-                lepic_foreign::TRANSPORT_ID,
-                lepic_tor::TRANSPORT_ID,
-            ],
+            policy: Default::default(),
             offline: false,
             host_features: 0,
         };

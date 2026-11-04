@@ -823,21 +823,6 @@ fn account_labels_are_validated_and_unique() {
 }
 
 #[test]
-fn configuration_naming_an_unregistered_transport_is_refused() {
-    let harness = Harness::new();
-    let mut config = harness.config(Network::Mainnet);
-    config.transports.push(TransportId::new("epicbox"));
-
-    let result = Wallet::new(config, harness.ports(TestVault::default()));
-
-    assert!(matches!(
-        result,
-        Err(WalletError::Config(ConfigError::UnknownTransport { transport }))
-            if transport == TransportId::new("epicbox")
-    ));
-}
-
-#[test]
 fn sqlite_wallet_survives_a_restart() {
     let harness = Harness::new();
     let dir = tempfile::tempdir().unwrap();

@@ -84,21 +84,26 @@ use build::{IssuerContext, final_transaction, verify_message};
 /// receiver, which the issuer is.
 pub(crate) const ISSUER_CONTEXT: ParticipantId = ParticipantId(1);
 
-/// A day of blocks: the TTL an invoice is meant to be payable for at most. The binding issues
-/// invoices with it and gives its sends the same limit.
+/// A day of blocks: the TTL an invoice is meant to be payable for at most, when the host sets
+/// no other. The binding issues invoices and sends with it unless the host passes its own.
 pub const INVOICE_TTL_BLOCKS: u64 = 1_440;
 
-/// How far above the payer's tip an invoice's TTL cutoff may lie: [`INVOICE_TTL_BLOCKS`] for
-/// the TTL itself and as many again for an issuer's node ahead of the payer's. A cutoff further
-/// ahead was set on a longer chain, another network's, or from a wrong height; paying it would
-/// lock the payer's inputs in a payment that cannot complete here.
-pub const MAX_INVOICE_TTL_LEAD_BLOCKS: u64 = 2 * INVOICE_TTL_BLOCKS;
+/// How far above the payer's tip an invoice's TTL cutoff may lie unless the host sets another
+/// ([`PayRequest::max_ttl_lead_blocks`]): two days of blocks, the TTL itself and as many again
+/// for an issuer's node ahead of the payer's. A cutoff further ahead was set on a longer
+/// chain, another network's, or from a wrong height; paying it would lock the payer's inputs
+/// in a payment that cannot complete here. A host's TTL does not move it.
+pub const MAX_INVOICE_TTL_LEAD_BLOCKS: u64 = 2_880;
+
+/// The most a host may set [`PayRequest::max_ttl_lead_blocks`] to, a year of blocks; a larger
+/// value is read as this one.
+pub const MAX_INVOICE_TTL_LEAD_CEILING_BLOCKS: u64 = 525_600;
 
 /// How far below the payer's tip an invoice's TTL cutoff may lie and still read as expired
-/// here: a year of [`INVOICE_TTL_BLOCKS`]. Nobody pays a request that long after it expired,
-/// while one made on a younger chain, such as floonet's read on mainnet, has its cutoff
-/// millions of blocks below the tip; that one was not made for this chain.
-pub const MAX_INVOICE_TTL_LAG_BLOCKS: u64 = 365 * INVOICE_TTL_BLOCKS;
+/// here: a year of blocks. Nobody pays a request that long after it expired, while one made on
+/// a younger chain, such as floonet's read on mainnet, has its cutoff millions of blocks below
+/// the tip; that one was not made for this chain. Not a host setting.
+pub const MAX_INVOICE_TTL_LAG_BLOCKS: u64 = 525_600;
 
 /// Blocks before an invoice's TTL cutoff from which a payer no longer pays it and its issuer no
 /// longer finalizes a payment of it, and blocks after the cutoff before the payer releases the
@@ -326,6 +331,10 @@ pub struct PayRequest {
     /// Blocks past the chain tip after which the issuer must refuse the payment. An invoice
     /// with an earlier TTL cutoff of its own keeps that one.
     pub ttl_blocks: Option<u64>,
+    /// How far above the chain tip an invoice's TTL cutoff may lie; [`PayRequest::new`] sets
+    /// [`MAX_INVOICE_TTL_LEAD_BLOCKS`]. Read as at most
+    /// [`MAX_INVOICE_TTL_LEAD_CEILING_BLOCKS`].
+    pub max_ttl_lead_blocks: u64,
     /// Cut to [`lepic_slate::model::MAX_MESSAGE_LEN`] bytes, on a character boundary, before
     /// it is signed.
     pub message: Option<String>,
@@ -344,6 +353,7 @@ impl PayRequest {
             change_outputs: defaults.change_outputs,
             strategy: defaults.strategy,
             ttl_blocks: None,
+            max_ttl_lead_blocks: MAX_INVOICE_TTL_LEAD_BLOCKS,
             message: None,
             exclude_outputs: Vec::new(),
         }
@@ -522,14 +532,15 @@ fn check_margin_ttl(cutoff: Option<Height>, tip: Height) -> Result<(), InvoiceEr
     }
 }
 
-/// Refuses an invoice whose TTL cutoff lies more than [`MAX_INVOICE_TTL_LEAD_BLOCKS`] above the
-/// node's tip. An invoice without a TTL, as upstream issues them, passes.
-fn check_ttl_lead(slate: &Slate, tip: Height) -> Result<(), InvoiceError> {
+/// Refuses an invoice whose TTL cutoff lies more than `lead` blocks, at most
+/// [`MAX_INVOICE_TTL_LEAD_CEILING_BLOCKS`], above the node's tip. An invoice without a TTL, as
+/// upstream issues them, passes.
+fn check_ttl_lead(slate: &Slate, tip: Height, lead: u64) -> Result<(), InvoiceError> {
     let Some(cutoff) = slate.ttl_cutoff_height() else {
         return Ok(());
     };
     // A limit that overflows is never exceeded.
-    let Ok(limit) = tip.checked_add_blocks(MAX_INVOICE_TTL_LEAD_BLOCKS) else {
+    let Ok(limit) = tip.checked_add_blocks(lead.min(MAX_INVOICE_TTL_LEAD_CEILING_BLOCKS)) else {
         return Ok(());
     };
     if cutoff > limit {
@@ -1088,7 +1099,7 @@ where
     /// this wallet paid before, [`InvoiceError::Expired`] once the tip comes within
     /// [`INVOICE_TTL_MARGIN_BLOCKS`] of the invoice's TTL cutoff, the height it reports as the
     /// cutoff, [`InvoiceError::TtlTooFarAhead`] when that cutoff lies more than
-    /// [`MAX_INVOICE_TTL_LEAD_BLOCKS`] above the tip, [`InvoiceError::TtlTooFarBehind`] when it
+    /// `request.max_ttl_lead_blocks` above the tip, [`InvoiceError::TtlTooFarBehind`] when it
     /// lies more than [`MAX_INVOICE_TTL_LAG_BLOCKS`] below it, [`InvoiceError::LockedUntil`]
     /// when its kernel lock height is above the tip, [`InvoiceError::AheadOfTip`] when its
     /// height is above any the chain can have reached by now, a [`InvoiceError::Selection`]
@@ -1149,7 +1160,7 @@ where
         // The issuer would refuse to finalize a payment signed from here on, which would only
         // keep this wallet's inputs locked until the payment expires.
         check_margin_ttl(i1.ttl_cutoff_height(), tip)?;
-        check_ttl_lead(&i1, tip)?;
+        check_ttl_lead(&i1, tip, request.max_ttl_lead_blocks)?;
         check_lock(&i1, tip)?;
         check_height(&i1, limit)?;
         debug!(height = tip.value(), "slate checked");

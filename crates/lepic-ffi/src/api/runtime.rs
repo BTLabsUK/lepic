@@ -93,6 +93,22 @@ impl LepicRuntime {
         })
     }
 
+    /// [`LepicRuntime::new`] with the PIN rules the app chose.
+    #[frb(sync)]
+    pub fn with_pin_settings(
+        log_level: LogLevel,
+        pin: crate::api::policy::PinSettings,
+    ) -> Result<LepicRuntime, WalletError> {
+        guard("runtime", || {
+            Self::start(
+                log_level,
+                NodeFactory::Http,
+                KdfParams::DEFAULT,
+                pin.resolve()?,
+            )
+        })
+    }
+
     pub(crate) fn start(
         log_level: LogLevel,
         nodes: NodeFactory,

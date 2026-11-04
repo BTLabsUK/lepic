@@ -9,7 +9,7 @@ use tokio::sync::broadcast;
 use tracing::{Dispatch, Span, debug, dispatcher, info, instrument};
 
 use crate::account::{self, Account, AccountLabel};
-use crate::config::{ConfigError, WalletConfig};
+use crate::config::WalletConfig;
 use crate::error::WalletError;
 use crate::event::{EVENT_CAPACITY, Event, SessionState};
 use crate::extension::{ContactNotices, PairRequests, ReplyKeys};
@@ -44,16 +44,10 @@ where
     S: StoreOpener + 'static,
     V: SecretVault + 'static,
 {
-    /// A locked handle. Fails with [`WalletError::Config`] when the configuration names a
-    /// transport the registry does not hold.
+    /// A locked handle. Fails with [`WalletError::Config`] when a policy value is out of range:
+    /// a receipt cap of zero, or fewer than one default minimum confirmation.
     pub fn new(config: WalletConfig, ports: Ports<N, S, V>) -> Result<Self, WalletError> {
-        if let Some(&transport) = config
-            .transports
-            .iter()
-            .find(|&&id| ports.transports.get(id).is_none())
-        {
-            return Err(ConfigError::UnknownTransport { transport }.into());
-        }
+        config.policy.validate()?;
         let (events, _) = broadcast::channel(EVENT_CAPACITY);
         Ok(Self {
             config: Arc::new(config),

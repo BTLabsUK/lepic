@@ -6,7 +6,7 @@ use lepic_primitives::amount::Amount;
 use lepic_store::{ContactId, ContactOutboxId, ContactOutboxState, ContactState, SealMode, TxId};
 use lepic_wallet::ReceiveRequest;
 use lepic_wallet::event::{ContactEvent, ContactSlateEvent, OutboxNews, SlateId};
-use lepic_wallet::invoice::{InvoiceRequest, PayRequest};
+use lepic_wallet::invoice::InvoiceRequest;
 use lepic_wallet::slate::{Slate, Stage, WireSlate};
 use lepic_wallet_contacts::{
     AcceptRequest, CardRequest, CollectTrigger as EngineTrigger, ContactKind as EngineKind,
@@ -386,23 +386,6 @@ impl Session {
             ));
         }
         Ok(relays.with_meeting(lepic_wallet_contacts::meeting_relays(meeting)?))
-    }
-
-    pub(super) fn pay_request(
-        amount: u64,
-        minimum_confirmations: u64,
-        message: Option<String>,
-        options: Option<SendOptions>,
-    ) -> Result<PayRequest, WalletError> {
-        let defaults = Self::send_request_with(amount, minimum_confirmations, message, options)?;
-        Ok(PayRequest {
-            minimum_confirmations,
-            strategy: defaults.strategy,
-            change_outputs: defaults.change_outputs,
-            message: defaults.message,
-            exclude_outputs: defaults.exclude_outputs,
-            ..PayRequest::new(DEFAULT_ACCOUNT, Amount::new(amount))
-        })
     }
 
     #[allow(clippy::too_many_arguments)] // One argument per choice of the Dart call.
@@ -993,7 +976,9 @@ impl Session {
     ) -> Result<SentTx, WalletError> {
         let id = self::contact_id(contact_id)?;
         let relays = self.contact_relays(mode)?;
-        let request = Self::send_request_with(amount, minimum_confirmations, message, options)?;
+        let request =
+            self.policy
+                .send_request_with(amount, minimum_confirmations, message, options)?;
         let scratch = ScratchFile::new(&self.data_dir)?;
         let sent = self
             .engine
@@ -1062,7 +1047,9 @@ impl Session {
         options: Option<SendOptions>,
     ) -> Result<SealedAnswer, WalletError> {
         let text = bounded(text, MAX_SEALED_TEXT, "sealed text")?;
-        let request = Self::pay_request(amount, minimum_confirmations, message, options)?;
+        let request = self
+            .policy
+            .pay_request(amount, minimum_confirmations, message, options)?;
         let done = self.engine.contact_book().sealed_pay(text, request).await?;
         answer(done.paid.tx_id, &done.paid.slate, done.answer)
     }
@@ -1192,7 +1179,9 @@ impl Session {
         mode: ContactRelayMode,
     ) -> Result<PaidInvoice, WalletError> {
         let slate_id = self::slate_id(slate_id)?;
-        let request = Self::pay_request(amount, minimum_confirmations, message, options)?;
+        let request = self
+            .policy
+            .pay_request(amount, minimum_confirmations, message, options)?;
         let relays = self.contact_relays(mode)?;
         let paid = self
             .engine

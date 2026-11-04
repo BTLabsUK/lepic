@@ -65,6 +65,10 @@ pub struct WalletConfig {
     /// (linked-device forwarding) and 5 (directory), and ignores the rest. Read when a wallet
     /// is created, restored or opened.
     pub host_features: u32,
+    /// Limits and presets that are the app's to choose. [`HostPolicy::default`], every field
+    /// `None`, is what LEPIC did before they were fields. Read when a wallet is created,
+    /// restored or opened.
+    pub policy: crate::api::policy::HostPolicy,
 }
 
 /// The app configuration's `[node]`, `[epicbox]`, `[http]` and `[tor]` tuning keys. Every
@@ -1779,6 +1783,7 @@ mod tests {
     #[test]
     fn wallet_config_debug_redacts_the_node_api_secret() {
         let config = WalletConfig {
+            policy: Default::default(),
             data_dir: "/data".to_owned(),
             chain: Chain::Floonet,
             node_url: "http://127.0.0.1:3413".to_owned(),

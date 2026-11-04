@@ -300,7 +300,7 @@ impl Party {
             network: Network::Floonet,
             data_dir: data_dir.clone(),
             node: NodeEndpoint::parse("http://127.0.0.1:13413").unwrap(),
-            transports: vec![TRANSPORT_ID],
+            policy: Default::default(),
             offline: false,
             host_features: 0,
         };
