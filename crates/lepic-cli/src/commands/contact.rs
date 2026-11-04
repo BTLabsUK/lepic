@@ -858,6 +858,7 @@ async fn collect<N: lepic_node::NodeApi + 'static>(
 }
 
 /// One collecting cycle on the Epicbox transport and the meeting relays, for `lepic serve`.
+#[cfg(unix)]
 pub(super) async fn collect_online<N: lepic_node::NodeApi + 'static>(
     opened: &Opened<N>,
     meeting: &[lepic_epicbox::RelayEndpoint],

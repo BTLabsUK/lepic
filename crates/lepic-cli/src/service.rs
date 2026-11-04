@@ -33,6 +33,7 @@ const SOCKET_PATH_MAX: usize = if cfg!(any(target_os = "linux", target_os = "and
 
 /// The command line after the program name, without the client's `--service` option.
 #[derive(Debug, Serialize, Deserialize)]
+#[cfg_attr(not(unix), allow(dead_code))]
 pub(crate) struct Request {
     pub args: Vec<String>,
 }
