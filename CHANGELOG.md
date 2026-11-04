@@ -91,6 +91,15 @@ Conventional Commit messages at release time.
 
 ### Changed
 
+- Shared helpers replace copies in the core crates; behaviour is unchanged. `lepic-store`
+  gains `file::write_owner_only_atomic` (owner-only temp file, sync, rename, folder sync),
+  which the CLI now uses for the vault, slate files and contact backups, and an async
+  `lock_data_dir` with `try_lock_data_dir`, `DataDirLock` and `DataDirLockError`, which the
+  CLI and the binding both use for the data-directory claim. `lepic-primitives` gains
+  `error_chain::ErrorChain`, and the wallet, relay, node and contact crates use it.
+  `lepic_crypto::hex` replaces the local hex readers and writers in the contact and relay
+  crates. The PIN and password code in `lepic-ffi` shares one `blocking()` and `rng()`, and
+  `lepic-wallet` calls `codecs::legacy` directly.
 - **Breaking:** a contact's move to another relay is the host's choice, ADR 0039. The
   collector no longer reads a contact's kind: an update whose card names a mailbox on the same
   relay applies as before, and one naming another relay stores the newer card, keeps the
