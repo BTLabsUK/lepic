@@ -111,6 +111,13 @@ was checked with fixed-vector and mainnet-data comparisons of the old and new bu
    runs its generate loop `counter + 1` times with the end test after the body, so it also
    terminates for `counter == UINT_MAX`. The nonce for every counter is the same.
 
+18. bitcoin-core/secp256k1 `6173839c` (PR 830); ElementsProject/secp256k1-zkp `5a40f3d9`:
+   `src/util.h` gains `secp256k1_memcmp_var`, a byte loop with `memcmp` semantics (upstream
+   added it over GCC bug 95189), used at the bulletproof rewind value check
+   (`bulletproofs/rangeproof_impl.h`), in `secp256k1_borromean_verify` and in
+   `secp256k1_rangeproof_rewind_inner`. Each site only tests the result against zero, where
+   the two functions agree; the surjection module's call is not compiled here.
+
 ## Build changes (`build.rs`)
 
 Each one is a change to how the C library is compiled, not to its source.
