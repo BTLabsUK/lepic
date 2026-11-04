@@ -4,6 +4,7 @@
 //! fallback, and anonymous answers to the reply key in the LEPIC marker.
 
 use lepic_wallet::contact_link::{link_tx, tx_contact};
+use std::path::PathBuf;
 use std::time::Duration;
 
 use jiff::Timestamp;
@@ -20,7 +21,8 @@ use lepic_store::{
     TxDirection, TxId, TxState, WalletStore,
 };
 use lepic_transport::file::FILE;
-use tracing::{info, instrument};
+use lepic_transport::transport::Location;
+use tracing::{info, instrument, warn};
 use uuid::Uuid;
 
 use super::keys::{contact_keys, contact_network, enc_secret, signing_key};
@@ -30,6 +32,7 @@ use lepic_wallet::finalize::Finalized;
 use lepic_wallet::invoice::{PaidInvoice, PayRequest};
 use lepic_wallet::ports::{SecretVault, StoreOpener};
 use lepic_wallet::receive::{ReceiveRequest, Received, legacy_codecs};
+use lepic_wallet::send::{Delivery, SendError, SendRequest, SentSlate};
 
 /// A contact with no envelope opened for this long is shown as lapsed (RFC 0002 9.4).
 pub const SEAL_LAPSE: Duration = Duration::from_secs(90 * 24 * 60 * 60);
@@ -321,6 +324,57 @@ where
             .await?;
         self.deliver_soon(relays).await;
         Ok(())
+    }
+
+    /// Pays the contact `contact_id` through its mailbox. The contact is checked as
+    /// [`Wallet::contact_check_mailbox_send`] checks it, so a send it cannot take locks nothing;
+    /// then `request` is sent with its S1 written to `slate_file` on the way, and posted as
+    /// [`Wallet::contact_post_slate`] posts it. `slate_file` is a path in the wallet's directory
+    /// that the caller removes afterwards.
+    ///
+    /// A send that was stored but could not be written or queued is cancelled, so it holds no
+    /// inputs. Fails with [`ContactError::Send`] when the send fails, and otherwise as
+    /// [`Wallet::contact_post_slate`] does.
+    #[instrument(skip_all, fields(wallet = %self.wallet.config().name))]
+    pub async fn contact_send(
+        &self,
+        relays: &super::ContactRelays,
+        contact_id: ContactId,
+        request: SendRequest,
+        slate_file: PathBuf,
+        purpose: Option<Purpose>,
+    ) -> Result<SentSlate, ContactError> {
+        self.contact_check_mailbox_send(contact_id).await?;
+        let delivery = Delivery::Export {
+            transport: FILE,
+            to: Location::File(slate_file),
+        };
+        let sent = match self.wallet.send(request, delivery).await {
+            Ok(sent) => sent,
+            // Stored and locked, but the slate file was not written: nothing reaches the
+            // contact, so the send is given up rather than left holding its inputs.
+            Err(error @ SendError::Undelivered { tx_id, .. }) => {
+                if let Err(cancel) = self.wallet.cancel(tx_id).await {
+                    warn!(tx_id = %tx_id, error = %cancel, "send to a contact not written nor cancelled");
+                }
+                return Err(ContactError::Send(error));
+            }
+            Err(error) => return Err(ContactError::Send(error)),
+        };
+        let tx_id = sent.tx_id;
+        if let Err(error) = self
+            .contact_post_slate(relays, contact_id, tx_id, purpose)
+            .await
+        {
+            match self.wallet.cancel(tx_id).await {
+                Ok(()) => info!(tx_id = %tx_id, "send to a contact cancelled, it was not queued"),
+                Err(cancel) => {
+                    warn!(tx_id = %tx_id, error = %cancel, "send to a contact not queued nor cancelled");
+                }
+            }
+            return Err(error);
+        }
+        Ok(sent)
     }
 
     /// Opens sealed text from a file or a paste (RFC 0002 3.4 and 9.2). The hint finds the key:

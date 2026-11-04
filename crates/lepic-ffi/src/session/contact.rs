@@ -4,12 +4,9 @@
 
 use lepic_primitives::amount::Amount;
 use lepic_store::{ContactId, ContactOutboxId, ContactOutboxState, ContactState, SealMode, TxId};
-use lepic_transport::file::FILE;
-use lepic_transport::transport::Location;
 use lepic_wallet::ReceiveRequest;
 use lepic_wallet::event::{ContactEvent, ContactSlateEvent, OutboxNews, SlateId};
 use lepic_wallet::invoice::{InvoiceRequest, PayRequest};
-use lepic_wallet::send::{Delivery, SendError};
 use lepic_wallet::slate::{Slate, Stage, WireSlate};
 use lepic_wallet_contacts::{
     AcceptRequest, CardRequest, CollectTrigger as EngineTrigger, ContactKind as EngineKind,
@@ -19,7 +16,6 @@ use lepic_wallet_contacts::{
     PairingClass as EngineClass, PairingFailure, PairingRole, Purpose, RelayMode,
     SasDecision as EngineSasDecision, SasSymbol, SealedAnswer as EngineAnswer, WalletContacts,
 };
-use tracing::{info, warn};
 
 use super::{DEFAULT_ACCOUNT, ScratchFile, Session, invalid};
 use crate::api::error::{WalletError, WalletErrorKind};
@@ -968,8 +964,7 @@ impl Session {
             .await?)
     }
 
-    /// Checks the contact first, so a send it cannot take locks nothing, and cancels the send
-    /// when it cannot be queued after all.
+    /// Pays a contact through its mailbox, as the engine's `contact_send` describes.
     #[allow(clippy::too_many_arguments)] // The app's send form, one value per field.
     pub(crate) async fn contact_send(
         &self,
@@ -983,49 +978,20 @@ impl Session {
     ) -> Result<SentTx, WalletError> {
         let id = self::contact_id(contact_id)?;
         let relays = self.contact_relays(mode)?;
-        self.engine
-            .contact_book()
-            .contact_check_mailbox_send(id)
-            .await?;
+        let request = Self::send_request_with(amount, minimum_confirmations, message, options)?;
         let scratch = ScratchFile::new(&self.data_dir)?;
-        let sent = match self
-            .engine
-            .send(
-                Self::send_request_with(amount, minimum_confirmations, message, options)?,
-                Delivery::Export {
-                    transport: FILE,
-                    to: Location::File(scratch.path.clone()),
-                },
-            )
-            .await
-        {
-            Ok(sent) => super::sent_tx(&sent),
-            // Stored and locked, but the scratch file was not written: nothing reaches the
-            // contact, so the send is given up rather than left holding its inputs.
-            Err(error @ SendError::Undelivered { tx_id, .. }) => {
-                if let Err(cancel) = self.engine.cancel(tx_id).await {
-                    warn!(tx_id = %tx_id, error = %cancel, "send to a contact not written nor cancelled");
-                }
-                return Err(error.into());
-            }
-            Err(error) => return Err(error.into()),
-        };
-        let tx_id = TxId(sent.tx_id);
-        if let Err(error) = self
+        let sent = self
             .engine
             .contact_book()
-            .contact_post_slate(&relays, id, tx_id, purpose.map(engine_purpose))
-            .await
-        {
-            match self.engine.cancel(tx_id).await {
-                Ok(()) => info!(tx_id = %tx_id, "send to a contact cancelled, it was not queued"),
-                Err(cancel) => {
-                    warn!(tx_id = %tx_id, error = %cancel, "send to a contact not queued nor cancelled");
-                }
-            }
-            return Err(error.into());
-        }
-        Ok(sent)
+            .contact_send(
+                &relays,
+                id,
+                request,
+                scratch.path.clone(),
+                purpose.map(engine_purpose),
+            )
+            .await?;
+        Ok(super::sent_tx(&sent))
     }
 
     pub(crate) async fn sealed_open(&self, text: &str) -> Result<SealedSlateView, WalletError> {

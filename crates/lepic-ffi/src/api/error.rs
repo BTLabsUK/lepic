@@ -633,6 +633,7 @@ impl From<ContactError> for WalletError {
             E::Receive(inner) => return inner.into(),
             E::Invoice(inner) => return inner.into(),
             E::Finalize(inner) => return inner.into(),
+            E::Send(inner) => return inner.into(),
             ref other => match other {
                 E::Offline => K::ContactsOffline,
                 E::EpicboxOff => K::EpicboxOff,

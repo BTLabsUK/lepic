@@ -324,6 +324,8 @@ pub enum ContactError {
     Invoice(#[source] lepic_wallet::invoice::InvoiceError),
     #[error("slate was not finalized")]
     Finalize(#[source] lepic_wallet::finalize::FinalizeError),
+    #[error("payment was not sent")]
+    Send(#[source] lepic_wallet::send::SendError),
     /// The text is larger than this call reads.
     #[error("text is larger than {max} bytes")]
     TooLarge { max: usize },
