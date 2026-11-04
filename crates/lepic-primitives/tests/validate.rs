@@ -235,3 +235,28 @@ fn overage_saturates_and_clamps_as_upstream() {
     let (_, body) = balanced(&offset(0x31)).into_parts();
     assert_eq!(committed::overage(&body), 10);
 }
+
+/// A zero fee adds no overage commitment, as upstream's `overage != 0` guard skips it: value 0
+/// with no blinding is the point at infinity, which `commit_value` rejects. An output of value 0
+/// is an ordinary blinded commitment.
+#[test]
+fn zero_fee_body_balances_without_an_overage_commitment() {
+    let tx_offset = offset(0x31);
+    let excess = SecretKey::sum(
+        &[key(0x21), key(0x22), key(0x23)],
+        &[key(0x11), tx_offset.to_secret_key().unwrap()],
+    )
+    .unwrap();
+    let features = KernelFeatures::Plain { fee: Fee::new(0) };
+    let body = TransactionBody::new(
+        vec![input(1000, 0x11)],
+        vec![output(600, 0x21), output(400, 0x22), output(0, 0x23)],
+        vec![kernel(features, &excess)],
+    );
+    assert_eq!(committed::overage(&body), 0);
+    assert_eq!(
+        Commitment::commit_value(0),
+        Err(CryptoError::InvalidCommitment)
+    );
+    assert_eq!(committed::verify_kernel_sums(&body, 0, &tx_offset), Ok(()));
+}

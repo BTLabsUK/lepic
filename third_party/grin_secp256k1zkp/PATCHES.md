@@ -175,6 +175,10 @@ builds.
    an overflowing blind), instead of serialising an all-zero internal commitment. From
    mimblewimble/rust-secp256k1-zkp commit `d514444`, the return-check hunks. Every successful
    commitment is byte-identical; only the failure path changes from `Ok(zeroes)` to `Err`.
+   The old `Ok` value was `08` followed by 32 zero bytes, which is not a curve point:
+   `to_pubkey`, `commit_sum` and `verify_commit_sum` all reject it. lepic-crypto re-parses every
+   commitment and already returned `InvalidCommitment` for it, and LEPIC's kernel sums skip a
+   zero overage as Epic's node does (`core/src/core/committed.rs`, `overage != 0`).
 4. `src/pedersen.rs`: the `RangeProof` serde visitor rejects a sequence longer than
    `MAX_PROOF_SIZE` with `invalid_length` instead of indexing past the buffer, with the
    upstream regression test. From EpicCash/rust-secp256k1-zkp commit `3028f01` ("harden
