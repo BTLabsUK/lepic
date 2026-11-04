@@ -870,13 +870,10 @@ where
             warn!("message of a kind its pairing does not carry dropped");
             return Ok(Handled::Stored);
         }
-        // Updates and key checks carry their own order: a card's seq, a check's open state.
-        if matches!(
-            opened.content.kind,
-            MessageType::Slate | MessageType::Notice | MessageType::AppPayload
-        ) && !self
-            .sent_recently(contact_id, opened.content.sent_at)
-            .await?
+        if timed(opened.content.kind)
+            && !self
+                .sent_recently(contact_id, opened.content.sent_at)
+                .await?
         {
             return Ok(Handled::Stored);
         }
@@ -915,7 +912,7 @@ where
         if current {
             self.forget_old_salt(contact_id).await?;
         }
-        self.dispatch_contact_message(contact_id, opened, envelope)
+        self.dispatch_contact_message(relays, contact_id, opened, envelope)
             .await
     }
 
@@ -923,6 +920,7 @@ where
     /// the contact's record as stored now.
     async fn dispatch_contact_message(
         &self,
+        relays: &ContactRelays,
         contact_id: ContactId,
         opened: Opened,
         envelope: &[u8],
@@ -947,6 +945,7 @@ where
             MessageType::KeyCheck => self.take_key_check(&record, envelope).await?,
             MessageType::KeyCheckAnswer => self.take_key_check_answer(&record, envelope).await?,
             MessageType::AppPayload => self.take_contact_payload(&record, opened.content).await?,
+            MessageType::ContactCheck => self.take_contact_check(relays, &record).await?,
             MessageType::PairingReply | MessageType::PairingConfirm => Handled::Stored,
         })
     }
@@ -1432,6 +1431,18 @@ fn box_keys(
     }))
 }
 
+/// Whether a message of `kind` is taken only when sealed recently. Updates and key checks
+/// carry their own order: a card's seq, a check's open state.
+fn timed(kind: MessageType) -> bool {
+    matches!(
+        kind,
+        MessageType::Slate
+            | MessageType::Notice
+            | MessageType::AppPayload
+            | MessageType::ContactCheck
+    )
+}
+
 /// Whether a pairing carries a message of `kind`: a private pairing carries the host app's
 /// payloads and the unpaired notice only; a contact never carries payloads.
 fn carries(private: bool, kind: MessageType) -> bool {
@@ -1691,6 +1702,20 @@ fn hold_expired(first: u64, holds: u32, now: u64, policy: &WalletPolicy) -> bool
     holds > policy.contact_hold_attempts
         || now.saturating_sub(first) >= patience
         // A clock set back since the first hold.
+        || first > now.saturating_add(patience)
+}
+
+/// Whether the hold count `value` (`first-seen seconds:holds`) may be forgotten at `now`: first
+/// held longer ago than [`HELD_FORGOTTEN`], ahead of a clock set back by more than `patience`,
+/// or unreadable.
+fn hold_forgotten(value: &str, now: u64, patience: Duration) -> bool {
+    let Some(first) = value
+        .split_once(':')
+        .and_then(|(first, _)| first.parse::<u64>().ok())
+    else {
+        return true;
+    };
+    now.saturating_sub(first) > HELD_FORGOTTEN.as_secs()
         || first > now.saturating_add(patience.as_secs())
 }
 
@@ -1735,20 +1760,6 @@ fn chain_passes(error: &(dyn std::error::Error + 'static)) -> bool {
         next = error.source();
     }
     false
-}
-
-/// Whether the hold count `value` (`first-seen seconds:holds`) may be forgotten at `now`: first
-/// held longer ago than [`HELD_FORGOTTEN`], ahead of a clock set back by more than `patience`,
-/// or unreadable.
-fn hold_forgotten(value: &str, now: u64, patience: Duration) -> bool {
-    let Some(first) = value
-        .split_once(':')
-        .and_then(|(first, _)| first.parse::<u64>().ok())
-    else {
-        return true;
-    };
-    now.saturating_sub(first) > HELD_FORGOTTEN.as_secs()
-        || first > now.saturating_add(patience)
 }
 
 /// Hands each drained message to the engine and acknowledges it once its effect is stored.
@@ -1807,6 +1818,10 @@ where
     /// behind it waiting. An error counting the attempt itself does not stop the message being
     /// kept.
     async fn hold_or_settle(&self, envelope: &[u8], error: &ContactError) -> Handled {
+        if passes(error) {
+            warn!(error = %ErrorChain(error), "mailbox message kept until the failure passes");
+            return Handled::Later;
+        }
         let hash = envelope_hash(envelope);
         match self.wallet.count_hold(hash).await {
             Ok(true) => {
@@ -1818,10 +1833,6 @@ where
                 if let Err(error) = self.wallet.remember(hash).await {
                     warn!(error = %ErrorChain(&error), "dropped mailbox message not remembered");
                 }
-        if passes(error) {
-            warn!(error = %ErrorChain(error), "mailbox message kept until the failure passes");
-            return Handled::Later;
-        }
                 Handled::Stored
             }
             Err(count_error) => {
@@ -1895,6 +1906,7 @@ mod tests {
     fn a_hold_count_is_forgotten_a_day_after_the_first_hold() {
         let first = 1_000_000;
         let forgotten = HELD_FORGOTTEN.as_secs();
+        let patience = WalletPolicy::DEFAULT.contact_hold_patience;
         assert!(!hold_forgotten(
             &format!("{first}:1"),
             first + patience.as_secs(),
@@ -1916,7 +1928,6 @@ mod tests {
             patience
         ));
         assert!(hold_forgotten("damaged", first, patience));
-        let patience = WalletPolicy::DEFAULT.contact_hold_patience;
     }
 
     #[test]

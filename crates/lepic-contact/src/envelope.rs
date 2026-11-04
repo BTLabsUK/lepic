@@ -73,6 +73,9 @@ pub enum MessageType {
     /// Bytes the host app sends its paired counterpart; LEPIC never reads them. Its byte
     /// leaves the next free values to RFC 0002, whose kit refuses 0x08 as unknown.
     AppPayload,
+    /// Asks a paired contact to answer with its current card in a contact update (RFC 0002
+    /// 8.5). Signed, with an empty body. Byte 0x09: the kit refuses 0x08 as unknown.
+    ContactCheck,
 }
 
 impl MessageType {
@@ -86,6 +89,7 @@ impl MessageType {
             Self::KeyCheck => 0x06,
             Self::KeyCheckAnswer => 0x07,
             Self::AppPayload => 0x40,
+            Self::ContactCheck => 0x09,
         }
     }
 
@@ -99,6 +103,7 @@ impl MessageType {
             0x06 => Self::KeyCheck,
             0x07 => Self::KeyCheckAnswer,
             0x40 => Self::AppPayload,
+            0x09 => Self::ContactCheck,
             _ => return None,
         })
     }

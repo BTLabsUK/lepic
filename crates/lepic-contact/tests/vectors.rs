@@ -91,6 +91,7 @@ fn type_byte(kind: MessageType) -> u8 {
         MessageType::KeyCheck => 6,
         MessageType::KeyCheckAnswer => 7,
         MessageType::AppPayload => 0x40,
+        MessageType::ContactCheck => 9,
     }
 }
 

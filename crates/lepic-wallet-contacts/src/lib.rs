@@ -12,6 +12,7 @@
 //! of file and paste slates. The engine keeps no contact code of its own.
 
 mod address_proof;
+mod check;
 mod collect;
 mod hex;
 mod invoices;
