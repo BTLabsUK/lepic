@@ -404,7 +404,8 @@ fn contact_kind(error: &ContactError) -> ErrorKind {
         | ContactError::Waiting
         | ContactError::OtherAddress
         | ContactError::KindDiffers
-        | ContactError::AddressProofMissing => ErrorKind::Rejected,
+        | ContactError::AddressProofMissing
+        | ContactError::RelayMoveNotRequested => ErrorKind::Rejected,
         ContactError::Post(_) => ErrorKind::Transport,
         ContactError::NotCancelled { cause, .. } => contact_kind(cause),
         _ => ErrorKind::Internal,

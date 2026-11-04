@@ -24,10 +24,14 @@ fn kind(kind: lepic_store::ContactKind) -> ContactKind {
 
 pub(crate) fn view(
     record: &ContactRecord,
-    home_relay: Option<String>,
+    mailbox: Option<&lepic_store::ContactMailbox>,
+    network: lepic_primitives::params::Network,
     now: jiff::Timestamp,
 ) -> ContactView {
     let facts = &record.facts;
+    let home_relay = mailbox.map(|mailbox| mailbox.home_relay.clone());
+    let requested_relay =
+        mailbox.and_then(|mailbox| super::collect::requested_relay(record, mailbox, network));
     ContactView {
         contact_id: record.contact_id,
         account: record.account,
@@ -47,6 +51,7 @@ pub(crate) fn view(
         lapsed: super::sealed::lapsed(record, now),
         last_sealed_in: record.last_sealed_in,
         removed_by_peer: facts.ended_reason == Some(PairingEndReason::Unpaired),
+        requested_relay,
         created_at: record.created_at,
         status: super::status::status_of(record),
         payments_address: facts.payments_address.clone(),
@@ -197,6 +202,7 @@ where
     /// left out. Fails with [`lepic_wallet::WalletError::Locked`] and as the store does.
     pub async fn contacts(&self) -> Result<Vec<ContactView>, ContactError> {
         let session = self.wallet.session()?;
+        let network = self.wallet.config().network;
         self.contact_work(move |ports, _| {
             let now = ports.clock.now();
             Ok(session.store.read(|repos| {
@@ -205,10 +211,8 @@ where
                     if record.peer.is_none() || super::private::is_private(&record) {
                         continue;
                     }
-                    let home = repos
-                        .contact_mailbox(record.contact_id)?
-                        .map(|mailbox| mailbox.home_relay);
-                    views.push(view(&record, home, now));
+                    let mailbox = repos.contact_mailbox(record.contact_id)?;
+                    views.push(view(&record, mailbox.as_ref(), network, now));
                 }
                 Ok::<_, StoreError>(views)
             })?)
@@ -265,6 +269,7 @@ where
     /// does.
     pub async fn private_pairings(&self) -> Result<Vec<ContactView>, ContactError> {
         let session = self.wallet.session()?;
+        let network = self.wallet.config().network;
         self.contact_work(move |ports, _| {
             let now = ports.clock.now();
             Ok(session.store.read(|repos| {
@@ -273,10 +278,8 @@ where
                     if !super::private::is_private(&record) {
                         continue;
                     }
-                    let home = repos
-                        .contact_mailbox(record.contact_id)?
-                        .map(|mailbox| mailbox.home_relay);
-                    views.push(view(&record, home, now));
+                    let mailbox = repos.contact_mailbox(record.contact_id)?;
+                    views.push(view(&record, mailbox.as_ref(), network, now));
                 }
                 Ok::<_, StoreError>(views)
             })?)
@@ -287,14 +290,13 @@ where
     /// One paired contact. Fails with [`ContactError::UnknownContact`].
     pub async fn contact(&self, contact_id: ContactId) -> Result<ContactView, ContactError> {
         let session = self.wallet.session()?;
+        let network = self.wallet.config().network;
         self.contact_work(move |ports, _| {
             let now = ports.clock.now();
             session.store.read(|repos| {
                 let record = paired(repos, contact_id)?;
-                let home = repos
-                    .contact_mailbox(contact_id)?
-                    .map(|mailbox| mailbox.home_relay);
-                Ok(view(&record, home, now))
+                let mailbox = repos.contact_mailbox(contact_id)?;
+                Ok(view(&record, mailbox.as_ref(), network, now))
             })
         })
         .await

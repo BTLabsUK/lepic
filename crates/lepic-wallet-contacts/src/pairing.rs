@@ -674,19 +674,20 @@ where
                     record.updated_at = now;
                     super::status::heard_now(&mut record, now);
                     repos.put_contact(&record)?;
-                    repos.put_contact_mailbox(&ContactMailbox {
+                    let mailbox = ContactMailbox {
                         contact_id,
                         peer_mailbox: peer.fields().mailbox.as_str().to_owned(),
                         our_mailbox: own.fields().mailbox.as_str().to_owned(),
-                        home_relay: home.clone(),
+                        home_relay: home,
                         onion: None,
                         previous: None,
                         backoff: Vec::new(),
-                    })?;
+                    };
+                    repos.put_contact_mailbox(&mailbox)?;
                     // A card QR is seen by anyone nearby: the first collect moves our mailbox.
                     repos.put_setting(&super::collect::in_person_key(contact_id), "1")?;
                     debug!(peer_relay = %peer_relay, "in-person pairing stored");
-                    Ok(super::manage::view(&record, Some(home), now))
+                    Ok(super::manage::view(&record, Some(&mailbox), network, now))
                 })
             })
             .await?;

@@ -31,7 +31,8 @@ use super::{
 };
 use crate::ContactBook;
 use lepic_wallet::event::{
-    ContactChange, ContactEvent, ContactUpdate, Event, FailedPairing, UnreachableRelay,
+    ContactChange, ContactEvent, ContactUpdate, Event, FailedPairing, RelayMoveRequest,
+    UnreachableRelay,
 };
 use lepic_wallet::inbox::{ErrorChain, relay_network};
 use lepic_wallet::ports::{SecretVault, StoreOpener};
@@ -84,7 +85,8 @@ const BACKOFF: [Duration; 4] = [
 /// Contacts that had something in the last day count as active for the foreground tick.
 const ACTIVE: Duration = Duration::from_secs(24 * 60 * 60);
 
-/// After a service moved its home relay, its old one is drained this long (RFC 0002 8.5).
+/// After a contact moved to another relay, our mailbox on the old one is drained this long (RFC
+/// 0002 8.5).
 const PREVIOUS_HOME_KEPT: Duration = Duration::from_secs(7 * 24 * 60 * 60);
 
 /// A card shown in person and never scanned back is forgotten after this.
@@ -244,22 +246,29 @@ fn relay_host(address: &EpicboxAddress) -> String {
     )
 }
 
-/// Whether a service may move its home relay to the relay of `address`: a meeting relay, or a
-/// named host (never an IP address) on the default port.
-fn acceptable_home(address: &EpicboxAddress, relays: &ContactRelays) -> bool {
-    let port = address.port().unwrap_or(lepic_epicbox::DEFAULT_PORT);
-    let meeting = relays
-        .meeting
-        .iter()
-        .any(|known| known.domain() == address.domain() && known.port() == port);
-    let domain = address.domain().as_str();
-    let ip_literal = domain.parse::<std::net::IpAddr>().is_ok()
-        || domain
-            .trim_start_matches('[')
-            .trim_end_matches(']')
-            .parse::<std::net::Ipv6Addr>()
-            .is_ok();
-    meeting || (!ip_literal && port == lepic_epicbox::DEFAULT_PORT)
+/// The relay host the contact's stored card names when the contact asked to move there: another
+/// host than the one of the mailbox we deliver to, and than our home relay. `None` when the card
+/// names no other host or its mailbox does not parse.
+fn requested_host(
+    card: &ContactCard,
+    mailbox: &lepic_store::ContactMailbox,
+    network: lepic_primitives::params::Network,
+) -> Option<String> {
+    let parse = |text: &str| EpicboxAddress::parse(text, relay_network(network)).ok();
+    let named = relay_host(&parse(card.fields().mailbox.as_str())?);
+    let current = parse(&mailbox.peer_mailbox).map(|address| relay_host(&address));
+    (current.as_deref() != Some(named.as_str()) && named != mailbox.home_relay).then_some(named)
+}
+
+/// The relay host a contact asked to move to and has not been moved to, from its stored card
+/// and its mailbox; see [`requested_host`].
+pub(crate) fn requested_relay(
+    record: &ContactRecord,
+    mailbox: &lepic_store::ContactMailbox,
+    network: lepic_primitives::params::Network,
+) -> Option<String> {
+    let card = ContactCard::decode(&record.peer.as_ref()?.bytes, contact_network(network)).ok()?;
+    requested_host(&card, mailbox, network)
 }
 
 /// Ends the pairing in progress `pending`, past its deadline, and says what ended: `None` when
@@ -995,10 +1004,11 @@ where
 
     /// Replaces the contact's card with `card` when it carries the same keys and kind and a
     /// higher sequence number. Only a contact update (`update` holds the relays) may change the
-    /// card's mailbox, within the limits of RFC 0002 8.5: a person's mailbox stays on its relay,
-    /// and a service moves its home relay only to a meeting relay or a named host on the
-    /// default port. After a move, our new card goes to the contact at once in a contact update.
-    /// A card in any other envelope that names another mailbox is ignored.
+    /// card's mailbox, within the update limits of RFC 0002 8.5, and only on the same relay: a
+    /// card naming a mailbox on another relay is stored, the mailbox in use stays, and
+    /// [`Event::ContactRelayMoveRequested`] tells the host, which may apply the move with
+    /// [`ContactBook::apply_relay_move`]. What the contact is plays no part. A card in any
+    /// other envelope that names another mailbox is ignored.
     pub(crate) async fn refresh_card(
         &self,
         contact_id: ContactId,
@@ -1044,18 +1054,17 @@ where
                         )
                     };
                     let before = address(repos)?;
-                    let updated =
-                        store_card_news(repos, &ports.rng, &session.keychain, network, news, now)?;
-                    let moved = updated && address(repos)? != before;
+                    let stored = store_card_news(repos, &session.keychain, network, news, now)?;
+                    let moved = stored != CardStored::Unchanged && address(repos)? != before;
                     if moved && let Some(record) = repos.contact(contact_id)? {
                         super::status::learn_from_pairing(repos, &record, network, now)?;
                     }
-                    Ok::<_, ContactError>((updated, moved))
+                    Ok::<_, ContactError>((stored, moved))
                 })
             })
             .await?;
-        let (updated, moved) = updated;
-        if updated {
+        let (stored, moved) = updated;
+        if stored != CardStored::Unchanged {
             info!("contact updated");
             self.wallet.emit(Event::ContactUpdated(ContactUpdate::of(
                 contact_id,
@@ -1068,6 +1077,54 @@ where
                 ContactChange::Address,
             )));
         }
+        if let CardStored::MoveRequested(host) = stored {
+            self.wallet
+                .emit(Event::ContactRelayMoveRequested(RelayMoveRequest {
+                    contact_id,
+                    host,
+                }));
+        }
+        Ok(())
+    }
+
+    /// Moves a contact to the relay its card asked for in a contact update, which raised
+    /// [`Event::ContactRelayMoveRequested`]: the contact's mailbox there takes our messages,
+    /// the outbox is redirected, our own card is re-signed for our mailbox on that relay and
+    /// queued for the contact in a contact update, and our previous mailbox is still collected
+    /// for seven days. Which relays to follow is the host's choice; nothing here judges `host`.
+    ///
+    /// Fails with [`ContactError::RelayMoveNotRequested`] unless `host` (`domain:port`) is the
+    /// relay of the mailbox the contact's stored card names and differs from the relay in use,
+    /// that is unless it is the contact's [`ContactView::requested_relay`];
+    /// [`ContactError::UnknownContact`]; [`ContactError::Ended`] for a pairing that ended; and as
+    /// the store does.
+    ///
+    /// [`ContactView::requested_relay`]: crate::ContactView::requested_relay
+    #[instrument(skip_all, fields(wallet = %self.wallet.config().name))]
+    pub async fn apply_relay_move(
+        &self,
+        contact_id: ContactId,
+        host: &str,
+    ) -> Result<(), ContactError> {
+        let session = self.wallet.session()?;
+        let network = self.wallet.config().network;
+        let host = host.to_owned();
+        self.contact_work(move |ports, _| {
+            let now = ports.clock.now();
+            session.store.write(|repos| {
+                store_relay_move(
+                    repos,
+                    &ports.rng,
+                    &session.keychain,
+                    network,
+                    contact_id,
+                    &host,
+                    now,
+                )
+            })
+        })
+        .await?;
+        info!("contact home relay moved");
         Ok(())
     }
 
@@ -1400,16 +1457,26 @@ struct CardNews {
     extras: lepic_contact::PairingExtras,
 }
 
-/// Stores the card of `news` as [`ContactBook::refresh_card`] describes, and returns whether the
-/// record changed.
+/// What storing a card did to the contact's record.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum CardStored {
+    /// Nothing changed.
+    Unchanged,
+    /// The newer card was stored, and the mailbox moved with it when it stayed on its relay.
+    Updated,
+    /// The newer card was stored; it names a mailbox on another relay, `domain:port`, and the
+    /// mailbox stays until the host applies the move.
+    MoveRequested(String),
+}
+
+/// Stores the card of `news` as [`ContactBook::refresh_card`] describes.
 fn store_card_news(
     repos: &mut dyn Repositories,
-    rng: &lepic_wallet::SharedRng,
     keychain: &lepic_keychain::Keychain,
     network: lepic_primitives::params::Network,
     news: CardNews,
     now: Timestamp,
-) -> Result<bool, ContactError> {
+) -> Result<CardStored, ContactError> {
     let CardNews {
         contact_id,
         card,
@@ -1417,16 +1484,16 @@ fn store_card_news(
         extras,
     } = news;
     let Some(mut record) = repos.contact(contact_id)? else {
-        return Ok(false);
+        return Ok(CardStored::Unchanged);
     };
     let Some(peer) = &record.peer else {
-        return Ok(false);
+        return Ok(CardStored::Unchanged);
     };
     if !newer_card(peer, &card) {
-        return Ok(false);
+        return Ok(CardStored::Unchanged);
     }
-    let service = peer.kind != lepic_store::ContactKind::Person;
-    if relays.is_some() && !super::private::is_private(&record) {
+    let update = relays.is_some();
+    if update && !super::private::is_private(&record) {
         let proven = super::address_proof::proven_in_update(
             keychain,
             network,
@@ -1440,66 +1507,95 @@ fn store_card_news(
         }
     }
     let Some(mut mailbox) = repos.contact_mailbox(contact_id)? else {
-        return Ok(false);
+        return Ok(CardStored::Unchanged);
     };
     let peer_mailbox = card.fields().mailbox.as_str().to_owned();
     let moved = peer_mailbox != mailbox.peer_mailbox;
-    let Some(relays) = relays.as_ref() else {
+    if !update {
         if moved {
             warn!("card naming another mailbox outside an update ignored");
-            return Ok(false);
+            return Ok(CardStored::Unchanged);
         }
         record.peer = Some(peer_card(&card));
         repos.put_contact(&record)?;
-        return Ok(true);
-    };
+        return Ok(CardStored::Updated);
+    }
     if !within_update_limits(repos, contact_id, now.as_second())? {
         warn!("contact update over the limits dropped");
-        return Ok(false);
+        return Ok(CardStored::Unchanged);
     }
-    let relay = EpicboxAddress::parse(&peer_mailbox, relay_network(network))
+    EpicboxAddress::parse(&peer_mailbox, relay_network(network))
         .map_err(|_| ContactError::RelayAddress)?;
-    let new_host = relay_host(&relay);
-    if !may_move(&mailbox.peer_mailbox, &relay, service, relays, network) {
-        warn!("contact update to a relay it may not move to dropped");
-        return Ok(false);
-    }
     record.peer = Some(peer_card(&card));
+    repos.put_contact(&record)?;
+    // A move to another relay waits for the host: which relays to follow is its choice.
+    if let Some(host) = requested_host(&card, &mailbox, network) {
+        info!("contact asked to move to another relay");
+        return Ok(CardStored::MoveRequested(host));
+    }
     if moved {
         repos.redirect_contact_outbox(contact_id, &peer_mailbox)?;
+        mailbox.peer_mailbox = peer_mailbox;
+        repos.put_contact_mailbox(&mailbox)?;
     }
-    let mut announce = None;
-    // A service moves its home relay with an update; people re-pair instead.
-    if service && new_host != mailbox.home_relay {
-        let (own_card, ours, signer) = moved_own_card(keychain, network, &record, &relay)?;
-        announce = Some(
-            lepic_contact::seal_contact_update(
-                &card,
-                &own_card,
-                &signer,
-                &mut super::LockedRng(&mut **rng.lock()),
-            )
-            .map_err(ContactError::Encode)?,
-        );
-        record.own_card = own_card.as_bytes().to_vec();
-        mailbox.previous = Some(lepic_store::PreviousHome {
-            relay: mailbox.home_relay.clone(),
-            peer_mailbox: mailbox.peer_mailbox.clone(),
-            our_mailbox: mailbox.our_mailbox.clone(),
-            until: now.checked_add(PREVIOUS_HOME_KEPT).unwrap_or(now),
-        });
-        mailbox.home_relay = new_host;
-        mailbox.our_mailbox = ours.to_string();
-        info!("contact home relay moved");
+    Ok(CardStored::Updated)
+}
+
+/// Moves the contact's mailbox to the one its stored card names, on the relay `host` the card
+/// asked for, in one write: the outbox is redirected, our own card is re-signed for our mailbox
+/// there and queued for the contact in a contact update, and the previous home is still
+/// drained for [`PREVIOUS_HOME_KEPT`].
+fn store_relay_move(
+    repos: &mut dyn Repositories,
+    rng: &lepic_wallet::SharedRng,
+    keychain: &lepic_keychain::Keychain,
+    network: lepic_primitives::params::Network,
+    contact_id: ContactId,
+    host: &str,
+    now: Timestamp,
+) -> Result<(), ContactError> {
+    let mut record = repos
+        .contact(contact_id)?
+        .ok_or(ContactError::UnknownContact)?;
+    let peer = record.peer.as_ref().ok_or(ContactError::UnknownContact)?;
+    let mut mailbox = repos
+        .contact_mailbox(contact_id)?
+        .ok_or(ContactError::UnknownContact)?;
+    if super::status::status_of(&record) == super::PairingStatus::Ended {
+        return Err(ContactError::Ended);
     }
+    let card = ContactCard::decode(&peer.bytes, contact_network(network))
+        .map_err(ContactError::StoredData)?;
+    if requested_host(&card, &mailbox, network).as_deref() != Some(host) {
+        return Err(ContactError::RelayMoveNotRequested);
+    }
+    let peer_mailbox = card.fields().mailbox.as_str().to_owned();
+    let relay = EpicboxAddress::parse(&peer_mailbox, relay_network(network))
+        .map_err(|_| ContactError::RelayAddress)?;
+    let (own_card, ours, signer) = moved_own_card(keychain, network, &record, &relay)?;
+    let envelope = lepic_contact::seal_contact_update(
+        &card,
+        &own_card,
+        &signer,
+        &mut super::LockedRng(&mut **rng.lock()),
+    )
+    .map_err(ContactError::Encode)?;
+    record.own_card = own_card.as_bytes().to_vec();
+    mailbox.previous = Some(lepic_store::PreviousHome {
+        relay: mailbox.home_relay.clone(),
+        peer_mailbox: mailbox.peer_mailbox.clone(),
+        our_mailbox: mailbox.our_mailbox.clone(),
+        until: now.checked_add(PREVIOUS_HOME_KEPT).unwrap_or(now),
+    });
+    mailbox.home_relay = relay_host(&relay);
+    mailbox.our_mailbox = ours.to_string();
     mailbox.peer_mailbox = peer_mailbox.clone();
+    repos.redirect_contact_outbox(contact_id, &peer_mailbox)?;
     repos.put_contact(&record)?;
     repos.put_contact_mailbox(&mailbox)?;
     // Our new mailbox reaches the contact at once, in the same write.
-    if let Some(envelope) = announce {
-        repos.enqueue_contact_outbox(&update_entry(contact_id, &envelope, peer_mailbox, now))?;
-    }
-    Ok(true)
+    repos.enqueue_contact_outbox(&update_entry(contact_id, &envelope, peer_mailbox, now))?;
+    Ok(())
 }
 
 /// Whether `card` may replace the contact's `peer` card: the same keys and kind and a higher
@@ -1511,24 +1607,7 @@ fn newer_card(peer: &lepic_store::PeerCard, card: &ContactCard) -> bool {
         && fields.seq > peer.seq
 }
 
-/// Whether a contact update may move the contact's mailbox from `old_mailbox` to one on
-/// `relay`: a person's mailbox stays on its relay, and a service moves only to a relay
-/// [`acceptable_home`] allows.
-fn may_move(
-    old_mailbox: &str,
-    relay: &EpicboxAddress,
-    service: bool,
-    relays: &ContactRelays,
-    network: lepic_primitives::params::Network,
-) -> bool {
-    let old_relay = EpicboxAddress::parse(old_mailbox, relay_network(network))
-        .ok()
-        .map(|old| relay_host(&old));
-    let other_relay = old_relay.as_deref() != Some(relay_host(relay).as_str());
-    !(other_relay && (!service || !acceptable_home(relay, relays)))
-}
-
-/// Our card re-signed for a service's move to the relay of `relay`: our mailbox there and the
+/// Our card re-signed for a move to the relay of `relay`: our mailbox there and the
 /// next sequence number. Returns the card, its mailbox and the key it is signed with.
 fn moved_own_card(
     keychain: &lepic_keychain::Keychain,

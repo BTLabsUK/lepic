@@ -119,6 +119,11 @@ pub enum Event {
     /// time, its match verdict accepted, or the pairing ended by the contact or by never being
     /// finished. Never raised for this side's own words check.
     ContactUpdated(ContactUpdate),
+    /// A contact update named a mailbox on another relay. The newer card was stored, with an
+    /// [`Event::ContactUpdated`] for it, and the mailbox in use stays: the host decides whether
+    /// to follow, and applies the move with the contact book's `apply_relay_move`. Raised once
+    /// per card.
+    ContactRelayMoveRequested(RelayMoveRequest),
     /// A home relay did not answer; collecting from it backs off (RFC 0002 8.4).
     HomeRelayUnreachable(UnreachableRelay),
     /// A key check proved the contact still holds the old keys: the old pairing keeps its keys
@@ -200,6 +205,13 @@ pub struct OutboxNews {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ContactEvent {
     pub contact_id: lepic_store::ContactId,
+}
+
+/// A contact that asked to move to another relay, and that relay as `domain:port`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RelayMoveRequest {
+    pub contact_id: lepic_store::ContactId,
+    pub host: String,
 }
 
 /// A pairing request that was stored: its id and the sender's address.

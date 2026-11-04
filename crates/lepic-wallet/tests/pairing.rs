@@ -1007,16 +1007,35 @@ fn contact_updates_refresh_the_card_within_three_a_day() {
     assert_eq!(updates, 3);
     assert_eq!(seq(), 4);
 
-    // A day later the next one is taken, but a person's mailbox stays on its relay: an update
-    // naming another relay is refused (RFC 0002 8.5).
+    // A day later the next one is taken. One naming another relay is stored and reported, and
+    // the mailbox stays until the host applies the move (RFC 0002 8.5).
     world.issuer.clock.advance(24 * HOUR + MINUTE);
     post_update(&world, ben_side, 6, "relay.test:8006");
     world.collect(&world.issuer);
-    assert_eq!(seq(), 4);
+    assert_eq!(seq(), 6);
     assert_eq!(peer_mailbox(), shown);
+    let moves = events(&mut issuer_events)
+        .into_iter()
+        .filter_map(|event| match event {
+            Event::ContactRelayMoveRequested(request) => Some(request),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(moves.len(), 1, "{moves:?}");
+    assert_eq!(moves[0].contact_id, anna_side);
+    assert_eq!(moves[0].host, "relay.test:8006");
+    // A newer card back on the relay asks for nothing more.
     post_update(&world, ben_side, 7, "relay.test:80");
     world.collect(&world.issuer);
     assert_eq!(seq(), 7);
+    assert_eq!(peer_mailbox(), shown);
+    assert_eq!(
+        world
+            .block_on(world.issuer.wallet.contact_book().contact(anna_side))
+            .unwrap()
+            .requested_relay,
+        None
+    );
 }
 
 /// The party's keys for its contact `contact`, as the wallet derives them.

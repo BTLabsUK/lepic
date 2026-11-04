@@ -227,6 +227,10 @@ pub struct ContactView {
     /// When an envelope from the contact was last opened, if ever: of a contact's several
     /// pairings, the one it uses is the one heard from last.
     pub last_sealed_in: Option<Timestamp>,
+    /// The relay, `domain:port`, a contact update asked to move to and the contact has not
+    /// been moved to: derived from the stored card and the mailbox in use. Apply it with
+    /// [`ContactBook::apply_relay_move`].
+    pub requested_relay: Option<String>,
     /// The contact removed this pairing on its side and said so: nothing sent through it
     /// arrives any more. The same as `ended_reason` being [`PairingEndReason::Unpaired`].
     pub removed_by_peer: bool,
@@ -387,6 +391,10 @@ pub enum ContactError {
     /// The contact's wallet has not been heard in this pairing yet.
     #[error("the pairing waits for the contact's wallet")]
     Waiting,
+    /// The relay given is not the one the contact's stored card asked to move to, or the
+    /// contact asked for no move.
+    #[error("the contact asked for no move to this relay")]
+    RelayMoveNotRequested,
 }
 
 impl From<StoreError> for ContactError {
