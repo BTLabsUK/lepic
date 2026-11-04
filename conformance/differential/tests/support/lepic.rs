@@ -30,7 +30,7 @@ use lepic_wallet::selection::SelectionStrategy;
 use lepic_wallet::send::{Delivery, SendError, SendRequest};
 use lepic_wallet::{
     Clock, FinalizeError, NodeEndpoint, Password, Ports, ReceiveError, ReceiveRequest, SecretVault,
-    SecretVaultError, SharedRng, StoreOpener, Wallet, WalletConfig, WalletName,
+    SecretVaultError, SharedRng, StoreOpener, Wallet, WalletConfig, WalletName, WalletPolicy,
 };
 use rand::SeedableRng;
 use rand::rngs::StdRng;
@@ -329,7 +329,7 @@ fn engine(
         network: NETWORK,
         data_dir: data_dir.to_path_buf(),
         node: NodeEndpoint::parse(node_url).unwrap(),
-        transports: vec![FILE],
+        policy: WalletPolicy::DEFAULT,
         offline: false,
         host_features: 0,
     };
