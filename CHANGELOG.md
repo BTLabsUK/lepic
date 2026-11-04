@@ -59,6 +59,18 @@ Conventional Commit messages at release time.
   is gone in two answers and neither the node's pool nor its chain holds its kernel. It is
   cancelled with its kernel watched, so a refused move back to the wallet is no longer posted
   again forever. An invoice this wallet issued and finalized expires at its cutoff.
+- `Event::NotPosted` (`lepic-wallet`) and `WalletEventKind::NotPosted` (`lepic-ffi`, with
+  `tx_id`, `slate_id` and `message`): a finalized transaction the node refused or could not be
+  reached for, also on the Epicbox answer and invoice paths that only logged it. The
+  transaction stays finalized; core retries nothing, and the host calls `repost_transaction`
+  when it chooses.
+- `PairingFailure::KindDiffers`, `ContactError::KindDiffers`, `PairingFailureReason::KindDiffers`
+  and `WalletErrorKind::PairingKindDiffers` (code 91): a pairing whose invite and card name
+  different contact kinds is refused when the confirm arrives, and nothing is stored.
+- `WalletError.tx_id` (`lepic-ffi`) and `ContactError::NotCancelled` (`lepic-wallet-contacts`):
+  a paste-slate send or a contact send that stored a transaction and then failed is cancelled;
+  when the cancel fails too, the error names the transaction, which stays stored with its
+  inputs locked, and the failed cancel. A stored-but-undelivered send also sets `tx_id`.
 
 ### Removed
 
@@ -69,6 +81,12 @@ Conventional Commit messages at release time.
 
 ### Changed
 
+- A contact payment whose receive was stored but not linked to its contact is linked when the
+  sender repeats it, instead of being dropped and acknowledged. A mailbox message the handler
+  holds with `Later` is held at most 3 times or 3 minutes, as the payments inbox bounds its
+  holds; errors the collector dropped at debug level are logged at warn.
+- `delete_wallet` also removes scratch slate files, `tor-expected` and the `tor/` directory.
+  Pasted slates are decoded in memory instead of through a scratch file.
 - `lepic-ffi`'s `EpicWallet::create` and `EpicWallet::create_with_pin` take
   `restore_from_height: Option<u64>` after the mnemonic; `None` or 0 restores from genesis, and a
   height without a mnemonic is refused with `InvalidArgument`. `scan` without a start, while a
