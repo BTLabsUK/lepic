@@ -52,6 +52,12 @@ Each one is a change to how the C library is compiled, not to its source.
    `secp256k1_gej_is_valid_var`, `secp256k1_ge_set_infinity`, `secp256k1_fe_inv_all_var`)
    that no enabled module calls. Diagnostics only; no code changes.
 
+3. The unconditional `-g` flag removed, as upstream mimblewimble/rust-secp256k1-zkp did in
+   commit `1caad22` ("drop -g debug flag", part of
+   <https://github.com/mimblewimble/rust-secp256k1-zkp/pull/89>). The `cc` crate already adds
+   debug information when Cargo's profile asks for it, so the flag only forced DWARF data into
+   release builds, and MSVC's `cl.exe` does not know the option. No compiled code changes.
+
 Nothing else differs from 42fcb29 and the changes listed here. This file is the only addition.
 
 ## Re-checking
