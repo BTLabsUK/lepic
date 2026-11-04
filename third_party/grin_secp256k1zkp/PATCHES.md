@@ -63,6 +63,13 @@ was checked with fixed-vector and mainnet-data comparisons of the old and new bu
    (`ecmult_impl.h`, the `secp256k1_scalar_is_zero(&na[np])` guard), so the point was never read
    and the result is unchanged; GCC's `-Wmaybe-uninitialized` report at `-O` goes away.
 
+12. bitcoin-core/secp256k1 `4a496a36` (PR 1257), `5fb336f9` and `17fa2173` (PR 1303):
+   `src/field_10x26_impl.h` `secp256k1_fe_cmov` and `secp256k1_fe_storage_cmov`,
+   `src/scalar_8x32_impl.h` `secp256k1_scalar_cadd_bit` and `secp256k1_scalar_cond_negate` copy
+   the flag into a `volatile int` before deriving the mask, and `cond_negate` derives it as
+   `-vflag`, as upstream does. Every caller passes 0 or 1, for which the new masks equal the old
+   ones, so every output is the same.
+
 ## Build changes (`build.rs`)
 
 Each one is a change to how the C library is compiled, not to its source.
