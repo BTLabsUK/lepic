@@ -566,8 +566,13 @@ mod tests {
         }
 
         fn is_onion(&self, host: &str) -> bool {
-            host.len() == 62 && host.ends_with(".onion")
+            looks_like_onion(host)
         }
+    }
+
+    /// A v3 onion host: 56 characters and `.onion`.
+    fn looks_like_onion(host: &str) -> bool {
+        host.len() == 62 && host.ends_with(".onion")
     }
 
     fn tls() -> Arc<ClientConfig> {
@@ -919,8 +924,7 @@ mod tests {
     }
 
     fn parse(response: &[u8]) -> Result<DialTarget, DiscoveryError> {
-        let is_onion = |host: &str| host.len() == 62 && host.ends_with(".onion");
-        parse_discovery(response, &relay(MAPPED, 443), is_onion)
+        parse_discovery(response, &relay(MAPPED, 443), looks_like_onion)
     }
 
     #[test]

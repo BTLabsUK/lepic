@@ -2,6 +2,7 @@
 //! The pairing flows (RFC 0002 7.1 to 7.6): invites, replies, confirms, pairing in person and
 //! the SAS check.
 
+use crate::hex;
 use std::time::Duration;
 
 use jiff::Timestamp;
@@ -1934,7 +1935,7 @@ fn decide_reply(
     pending.secrets.na = None;
     pending.secrets.rc = Some(rc);
     repos.put_pending_pairing(&pending)?;
-    repos.put_setting(&confirm_key(pairing_id), &hex(&envelope))?;
+    repos.put_setting(&confirm_key(pairing_id), &hex::encode(&envelope))?;
     Ok(Decision::Confirm(envelope))
 }
 
@@ -1974,7 +1975,7 @@ fn reply_taken_again(
     let same_peer = repos.contact(contact_id)?.is_some_and(|record| {
         record.peer.as_ref().map(|card| card.sig_key) == Some(peer.sig_key().to_bytes())
     });
-    Ok(match stored.and_then(|text| unhex(&text)) {
+    Ok(match stored.and_then(|text| hex::unhex(&text)) {
         // The reply that paired, taken again: its confirm goes out again.
         Some(envelope) if same_peer => Decision::Again(envelope),
         _ => Decision::Refuse(Refusal::AlreadyUsed, may_refuse(repos, pairing_id)?),
@@ -2215,7 +2216,7 @@ const REQUEST_OUT_PREFIX: &str = "contact.requestout.";
 /// The setting that marks the invite of the pairing record `contact_id` as one this wallet sent
 /// as a pairing request, until its pairing ends.
 pub(crate) fn request_out_key(contact_id: ContactId) -> String {
-    format!("{REQUEST_OUT_PREFIX}{}", hex(&contact_id.0))
+    format!("{REQUEST_OUT_PREFIX}{}", hex::encode(&contact_id.0))
 }
 
 /// Refusals one invite sends at most, so a leaked invite cannot make the inviter post to
@@ -2224,7 +2225,7 @@ const MAX_REFUSALS_PER_INVITE: u32 = 3;
 
 /// The setting that counts the refusals an invite sent, until its pairing ends.
 pub(crate) fn refusals_key(pairing_id: PairingId) -> String {
-    format!("{REFUSALS_PREFIX}{}", hex(&pairing_id.0))
+    format!("{REFUSALS_PREFIX}{}", hex::encode(&pairing_id.0))
 }
 
 /// Ends a pairing in progress: the pending pairing, its kept confirm and its refusal count go
@@ -2244,7 +2245,7 @@ pub(crate) fn end_pending(
 
 /// The setting that marks an inviter's confirm as sent: posted, or handed out by hand.
 pub(crate) fn confirm_out_key(pairing_id: PairingId) -> String {
-    format!("{CONFIRM_OUT_PREFIX}{}", hex(&pairing_id.0))
+    format!("{CONFIRM_OUT_PREFIX}{}", hex::encode(&pairing_id.0))
 }
 
 /// Unix seconds from which an inviter refuses a reply to an invite that expires at `expires`:
@@ -2289,21 +2290,7 @@ fn may_refuse(repos: &mut dyn Repositories, pairing_id: PairingId) -> Result<boo
 
 /// The setting that keeps an inviter's confirm until its pairing ends.
 pub(crate) fn confirm_key(pairing_id: PairingId) -> String {
-    format!("{CONFIRM_PREFIX}{}", hex(&pairing_id.0))
-}
-
-fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
-}
-
-fn unhex(text: &str) -> Option<Vec<u8>> {
-    if !text.len().is_multiple_of(2) {
-        return None;
-    }
-    text.as_bytes()
-        .chunks(2)
-        .map(|pair| u8::from_str_radix(std::str::from_utf8(pair).ok()?, 16).ok())
-        .collect()
+    format!("{CONFIRM_PREFIX}{}", hex::encode(&pairing_id.0))
 }
 
 fn refuse_known_card(

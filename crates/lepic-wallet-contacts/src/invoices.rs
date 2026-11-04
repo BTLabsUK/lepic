@@ -3,6 +3,7 @@
 //! sections 11 and 12): a contact's invoice parks only when the contact is verified and allowed
 //! to send invoices, payments and answers go through the outbox, and notices travel sealed.
 
+use crate::hex;
 use lepic_wallet::contact_link::{link_slate, slate_contact, tx_contact};
 use std::time::Duration;
 
@@ -96,21 +97,6 @@ fn purpose_of(byte: u8) -> Option<Purpose> {
     })
 }
 
-fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
-}
-
-fn contact_from_hex(text: &str) -> Option<ContactId> {
-    let mut id = [0u8; 16];
-    if text.len() != 32 {
-        return None;
-    }
-    for (slot, pair) in id.iter_mut().zip(text.as_bytes().chunks(2)) {
-        *slot = u8::from_str_radix(std::str::from_utf8(pair).ok()?, 16).ok()?;
-    }
-    Some(ContactId(id))
-}
-
 fn uuid(slate_id: SlateId) -> Uuid {
     Uuid::from_bytes(*slate_id.as_bytes())
 }
@@ -166,7 +152,7 @@ pub(crate) fn drop_contact_invoices(
 /// The sender key a contact's parked invoices are stored and capped under: the contact, never
 /// the mailbox its card names, which the contact chooses.
 fn contact_sender_key(contact_id: ContactId) -> String {
-    format!("contact:{}", hex(&contact_id.0))
+    format!("contact:{}", hex::encode(&contact_id.0))
 }
 
 /// `content` with our current card, sealed at `now` and signed to the contact of `record` of
@@ -352,7 +338,7 @@ where
                 let slate = codecs.decode(&wire).ok()?;
                 Some(ContactInvoice {
                     slate_id: slate.id(),
-                    contact_id: contact_from_hex(&note.contact)?,
+                    contact_id: hex::decode_array(&note.contact).ok().map(ContactId)?,
                     amount: slate.amount(),
                     purpose: note.purpose.and_then(purpose_of),
                     reference: note.reference,
@@ -871,7 +857,7 @@ where
         let slate_uuid = uuid(slate.id());
         let bytes = wire.as_bytes().to_vec();
         let note = InvoiceNote {
-            contact: hex(&contact_id.0),
+            contact: hex::encode(&contact_id.0),
             purpose: purpose.map(purpose_byte),
             reference: reference.clone(),
             expires,

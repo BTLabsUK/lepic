@@ -2,6 +2,7 @@
 //! Collecting: one-off drains of the pairing mailboxes and the contact mailboxes, grouped by
 //! relay, with per-relay backoff (RFC 0002 8.2 to 8.5).
 
+use crate::hex;
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
 
@@ -127,7 +128,7 @@ const HELD_FORGOTTEN: Duration = Duration::from_secs(24 * 60 * 60);
 /// The setting that marks a contact whose envelopes carry their send time: from then on one
 /// without it is refused.
 pub(crate) fn stamped_key(contact_id: ContactId) -> String {
-    format!("{STAMPED_PREFIX}{}", hex(&contact_id.0))
+    format!("{STAMPED_PREFIX}{}", hex::encode(&contact_id.0))
 }
 
 /// The send time to seal into an envelope sealed at `now`.
@@ -137,11 +138,11 @@ pub(crate) fn send_time(now: Timestamp) -> Option<u64> {
 
 /// The setting that marks a contact paired in person whose mailbox has not moved yet.
 pub(crate) fn in_person_key(contact_id: ContactId) -> String {
-    format!("{IN_PERSON_PREFIX}{}", hex(&contact_id.0))
+    format!("{IN_PERSON_PREFIX}{}", hex::encode(&contact_id.0))
 }
 
 fn old_salt_key(contact_id: ContactId) -> String {
-    format!("{OLD_SALT_PREFIX}{}", hex(&contact_id.0))
+    format!("{OLD_SALT_PREFIX}{}", hex::encode(&contact_id.0))
 }
 
 /// The box salt of a mailbox moved away from after an in-person pairing. It is read until the
@@ -238,10 +239,6 @@ fn envelope_hash(envelope: &[u8]) -> [u8; 32] {
     Blake2b256::digest(envelope).into()
 }
 
-fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
-}
-
 /// A relay's `domain:port`, the port explicit.
 fn relay_host(address: &EpicboxAddress) -> String {
     format!(
@@ -320,21 +317,6 @@ fn end_late_pairing(
     repos.delete_contact(contact_id)?;
     super::private::delete_secrets(repos, contact_id)?;
     Ok(Some(Some(FailedPairing { contact_id, reason })))
-}
-
-pub(crate) fn unhex16_pub(text: &str) -> Option<[u8; 16]> {
-    unhex16(text)
-}
-
-fn unhex16(text: &str) -> Option<[u8; 16]> {
-    if text.len() != 32 {
-        return None;
-    }
-    let mut out = [0u8; 16];
-    for (slot, pair) in out.iter_mut().zip(text.as_bytes().chunks(2)) {
-        *slot = u8::from_str_radix(std::str::from_utf8(pair).ok()?, 16).ok()?;
-    }
-    Some(out)
 }
 
 impl<N, S, V> ContactBook<'_, N, S, V>
@@ -734,7 +716,7 @@ where
         let session = self.wallet.session()?;
         self.contact_work(move |ports, _| {
             let now = u64::try_from(ports.clock.now().as_second()).unwrap_or(0);
-            let key = format!("{HELD_PREFIX}{}", hex(&hash));
+            let key = format!("{HELD_PREFIX}{}", hex::encode(&hash));
             session.store.write(|repos| {
                 let (first, holds) = repos
                     .setting(&key)?
@@ -760,7 +742,7 @@ where
     async fn clear_hold(&self, hash: [u8; 32]) -> Result<(), ContactError> {
         let session = self.wallet.session()?;
         self.contact_work(move |_, _| {
-            let key = format!("{HELD_PREFIX}{}", hex(&hash));
+            let key = format!("{HELD_PREFIX}{}", hex::encode(&hash));
             Ok(session.store.write(|repos| repos.delete_setting(&key))?)
         })
         .await
@@ -1194,7 +1176,7 @@ where
                         )
                         .map_err(ContactError::Encode)?;
                         let old = OldSalt {
-                            salt: hex(&record.box_salt),
+                            salt: hex::encode(&record.box_salt),
                         };
                         write_json(repos, &old_salt_key(record.contact_id), &old)?;
                         let mut record = record;
@@ -1391,7 +1373,7 @@ fn contact_mailboxes(
         let old_salt = repos
             .setting(&old_salt_key(record.contact_id))?
             .and_then(|text| serde_json::from_str::<OldSalt>(&text).ok())
-            .and_then(|old| unhex16(&old.salt));
+            .and_then(|old| hex::decode_array(&old.salt).ok());
         if let Some(salt) = old_salt {
             contacts.push((
                 record.clone(),
@@ -1692,7 +1674,7 @@ fn within_update_limits(
         times.retain(|at| *at > day_ago);
     }
     updates.per_contact.retain(|_, times| !times.is_empty());
-    let key = hex(&contact_id.0);
+    let key = hex::encode(&contact_id.0);
     let mine = updates.per_contact.get(&key).map_or(0, Vec::len);
     if mine >= UPDATES_PER_CONTACT_PER_DAY || updates.all.len() >= UPDATES_PER_HOUR {
         write_json(repos, UPDATES_KEY, &updates)?;

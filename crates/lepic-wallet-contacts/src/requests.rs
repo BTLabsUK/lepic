@@ -513,7 +513,7 @@ enum Standing {
 pub(crate) fn standing_id(repos: &dyn Repositories) -> Result<Option<ContactId>, StoreError> {
     Ok(repos
         .setting(STANDING_KEY)?
-        .and_then(|text| super::collect::unhex16_pub(&text))
+        .and_then(|text| crate::hex::decode_array(&text).ok())
         .map(ContactId))
 }
 

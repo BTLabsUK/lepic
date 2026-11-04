@@ -5,6 +5,7 @@
 //! proof by its old key, and both fold the new pairing into the old record. Without a proven
 //! answer within a day, the old record stays as it was and the new pairing shows keys-changed.
 
+use crate::hex;
 use std::time::Duration;
 
 use jiff::Timestamp;
@@ -85,26 +86,12 @@ struct FoundAnswer {
     at: i64,
 }
 
-fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
-}
-
-fn unhex(text: &str) -> Option<Vec<u8>> {
-    if !text.len().is_multiple_of(2) {
-        return None;
-    }
-    text.as_bytes()
-        .chunks(2)
-        .map(|pair| u8::from_str_radix(std::str::from_utf8(pair).ok()?, 16).ok())
-        .collect()
-}
-
 fn id_of(text: &str) -> Option<ContactId> {
-    unhex(text)?.try_into().ok().map(ContactId)
+    hex::unhex(text)?.try_into().ok().map(ContactId)
 }
 
 fn key(prefix: &str, id: ContactId) -> String {
-    format!("{prefix}{}", hex(&id.0))
+    format!("{prefix}{}", hex::encode(&id.0))
 }
 
 /// Deletes the key check settings kept for the pairing `id`, which is being removed. The marks
@@ -241,7 +228,7 @@ where
                             repos,
                             fresh,
                             &SentCheck {
-                                old: hex(&old.0),
+                                old: hex::encode(&old.0),
                                 envelope: String::new(),
                                 at: now.as_second(),
                             },
@@ -270,8 +257,8 @@ where
                     repos.put_setting(
                         &key(SENT_PREFIX, new),
                         &json(&SentCheck {
-                            old: hex(&old.0),
-                            envelope: hex(&envelope),
+                            old: hex::encode(&old.0),
+                            envelope: hex::encode(&envelope),
                             at: now.as_second(),
                         })?,
                     )?;
@@ -539,9 +526,9 @@ where
                         return Ok(None);
                     };
                     let (Some(found_envelope), Some(card), Some(salt)) = (
-                        unhex(&found.envelope),
-                        unhex(&found.card),
-                        unhex(&found.salt).and_then(|salt| <[u8; 16]>::try_from(salt).ok()),
+                        hex::unhex(&found.envelope),
+                        hex::unhex(&found.card),
+                        hex::unhex(&found.salt).and_then(|salt| <[u8; 16]>::try_from(salt).ok()),
                     ) else {
                         return Ok(None);
                     };
@@ -731,10 +718,10 @@ fn answer_key_check(
         &key(FOUND_PREFIX, new),
         &json(&FoundAnswer {
             slot,
-            salt: hex(&salt),
-            card: hex(refreshed.as_bytes()),
-            envelope: hex(&envelope),
-            record: existing.map(|old| hex(&old.contact_id.0)),
+            salt: hex::encode(&salt),
+            card: hex::encode(refreshed.as_bytes()),
+            envelope: hex::encode(&envelope),
+            record: existing.map(|old| hex::encode(&old.contact_id.0)),
             at: now.as_second(),
         })?,
     )?;
@@ -851,7 +838,8 @@ fn open_sent_check(
     if !within_window(sent_at, now) {
         return Ok(None);
     }
-    let (Some(old_id), Some(check_envelope)) = (id_of(&sent.old), unhex(&sent.envelope)) else {
+    let (Some(old_id), Some(check_envelope)) = (id_of(&sent.old), hex::unhex(&sent.envelope))
+    else {
         return Ok(None);
     };
     Ok(Some((old_id, check_envelope)))

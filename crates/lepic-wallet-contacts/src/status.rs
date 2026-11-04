@@ -10,6 +10,7 @@
 //! (feature bit 3). They are retried for seven days and then dropped without a word. An inviter
 //! that never hears the contact during seven days of collecting ends the pairing.
 
+use crate::hex;
 use std::time::Duration;
 
 use blake2::Blake2b256;
@@ -132,27 +133,12 @@ struct Read {
     sas: Option<String>,
 }
 
-fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
-}
-
-fn unhex32(text: &str) -> Option<[u8; VERDICT_LEN]> {
-    if text.len() != VERDICT_LEN.saturating_mul(2) {
-        return None;
-    }
-    let mut out = [0u8; VERDICT_LEN];
-    for (slot, pair) in out.iter_mut().zip(text.as_bytes().chunks(2)) {
-        *slot = u8::from_str_radix(std::str::from_utf8(pair).ok()?, 16).ok()?;
-    }
-    Some(out)
-}
-
 /// The text of a status notice, padded to `length`.
 pub(crate) fn status_text(message: StatusMessage, length: usize) -> String {
     let (kind, sas) = match message {
         StatusMessage::Finished => (FINISHED, None),
-        StatusMessage::Match(hash) => (MATCH, Some(hex(&hash))),
-        StatusMessage::Mismatch(hash) => (MISMATCH, Some(hex(&hash))),
+        StatusMessage::Match(hash) => (MATCH, Some(hex::encode(&hash))),
+        StatusMessage::Mismatch(hash) => (MISMATCH, Some(hex::encode(&hash))),
     };
     let written = Written {
         lepic: NOTICE_VERSION,
@@ -172,7 +158,10 @@ pub(crate) fn parse_status(text: &str) -> Option<StatusMessage> {
     if read.lepic != NOTICE_VERSION {
         return None;
     }
-    let sas = read.sas.as_deref().and_then(unhex32);
+    let sas = read
+        .sas
+        .as_deref()
+        .and_then(|text| hex::decode_array(text).ok());
     match read.kind.as_str() {
         FINISHED => Some(StatusMessage::Finished),
         MATCH => sas.map(StatusMessage::Match),

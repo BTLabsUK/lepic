@@ -13,6 +13,7 @@
 
 mod address_proof;
 mod collect;
+mod hex;
 mod invoices;
 mod key_schedule;
 mod keycheck;
