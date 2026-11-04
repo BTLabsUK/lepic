@@ -164,6 +164,9 @@ impl<'di> de::Visitor<'di> for Visitor {
 			let mut ret: [u8; constants::MAX_PROOF_SIZE] = [0; constants::MAX_PROOF_SIZE];
 			let mut i = 0;
 			while let Some(val) = v.next_element()? {
+				if i >= constants::MAX_PROOF_SIZE {
+					return Err(de::Error::invalid_length(i, &self));
+				}
 				ret[i] = val;
 				i += 1;
 			}
@@ -1165,6 +1168,17 @@ mod tests {
 	use rand::{rng, Rng};
 
 	use crate::pedersen::tests::chrono::prelude::*;
+
+	#[test]
+	fn range_proof_deserialize_rejects_oversized_proof() {
+		let valid = crate::json::to_string(&vec![0u8; constants::MAX_PROOF_SIZE]).unwrap();
+		let proof: RangeProof = crate::json::from_str(&valid).unwrap();
+		assert_eq!(proof.plen, constants::MAX_PROOF_SIZE);
+
+		let oversized =
+			crate::json::to_string(&vec![0u8; constants::MAX_PROOF_SIZE + 1]).unwrap();
+		assert!(crate::json::from_str::<RangeProof>(&oversized).is_err());
+	}
 
 	#[test]
 	fn commit_parse_ser() {

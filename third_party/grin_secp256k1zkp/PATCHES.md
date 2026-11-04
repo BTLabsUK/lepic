@@ -84,6 +84,11 @@ builds.
    an overflowing blind), instead of serialising an all-zero internal commitment. From
    mimblewimble/rust-secp256k1-zkp commit `d514444`, the return-check hunks. Every successful
    commitment is byte-identical; only the failure path changes from `Ok(zeroes)` to `Err`.
+4. `src/pedersen.rs`: the `RangeProof` serde visitor rejects a sequence longer than
+   `MAX_PROOF_SIZE` with `invalid_length` instead of indexing past the buffer, with the
+   upstream regression test. From EpicCash/rust-secp256k1-zkp commit `3028f01` ("harden
+   deser/tests"), the same bound as mimblewimble/rust-secp256k1-zkp `af84dd4`. Every proof that
+   deserialised before still does, to the same bytes.
 
 Nothing else differs from 42fcb29 and the changes listed here. This file is the only addition.
 
