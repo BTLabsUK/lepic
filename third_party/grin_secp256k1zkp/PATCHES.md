@@ -107,6 +107,10 @@ was checked with fixed-vector and mainnet-data comparisons of the old and new bu
    formulas are ceil(n / d) whenever `n + d - 1` fits in `size_t`, which holds for every real
    input.
 
+17. bitcoin-core/secp256k1 `b1bc6f3e` (PR 1890): `src/secp256k1.c`, `nonce_function_rfc6979`
+   runs its generate loop `counter + 1` times with the end test after the body, so it also
+   terminates for `counter == UINT_MAX`. The nonce for every counter is the same.
+
 ## Build changes (`build.rs`)
 
 Each one is a change to how the C library is compiled, not to its source.

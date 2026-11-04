@@ -462,8 +462,9 @@ static int nonce_function_rfc6979(unsigned char *nonce32, const unsigned char *m
    }
    secp256k1_rfc6979_hmac_sha256_initialize(&rng, keydata, offset);
    secp256k1_memclear(keydata, sizeof(keydata));
-   for (i = 0; i <= counter; i++) {
+   for (i = 0; ; i++) {
        secp256k1_rfc6979_hmac_sha256_generate(&rng, nonce32, 32);
+       if (i == counter) break;
    }
    secp256k1_rfc6979_hmac_sha256_finalize(&rng);
    return 1;
