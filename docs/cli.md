@@ -685,7 +685,9 @@ lepic --service=/run/user/1000/l.sock tx list
 prompt) and holds `.lepic.lock` until it stops. While it runs it also:
 
 - listens on the Epicbox relay and expires invoices, as `epicbox listen` does;
-- collects the contacts' mailboxes at start and every minute;
+- collects the contacts' mailboxes at start, every mailbox at once, then every minute as the app's
+  foreground tick does, keeping relay backoff (`contact collect` through `--service` tries
+  everything at once);
 - refreshes the wallet from the node at start and every minute.
 
 A failed tick is logged at `warn` and never ends `serve`.

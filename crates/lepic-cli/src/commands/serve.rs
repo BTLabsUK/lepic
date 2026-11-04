@@ -17,6 +17,7 @@ use lepic_epicbox::RelayEndpoint;
 use lepic_node::NodeApi;
 use lepic_primitives::params::Network;
 use lepic_wallet::inbox::{InboxError, InboxSummary, ListenHandle};
+use lepic_wallet_contacts::CollectTrigger;
 use tokio::net::UnixStream;
 use tokio::sync::{Notify, watch};
 use tokio::time::{Instant, MissedTickBehavior};
@@ -36,7 +37,8 @@ use crate::secret::SecretInput;
 use crate::service::{self, Listening, Reply, Request};
 use crate::settings::{Env, OutputFormat, Settings};
 
-/// How often serve collects the contact mailboxes, and once when it starts.
+/// How often serve collects the contact mailboxes, as the app's foreground tick does: relay
+/// backoff and outbox retry times are kept. The first cycle, at start, tries everything at once.
 const COLLECT_INTERVAL: Duration = Duration::from_secs(60);
 
 /// How often serve refreshes the wallet against the node, and once when it starts.
@@ -260,10 +262,13 @@ async fn maintain<N: NodeApi + 'static>(
     collect.set_missed_tick_behavior(MissedTickBehavior::Delay);
     let mut refresh = tokio::time::interval(REFRESH_INTERVAL);
     refresh.set_missed_tick_behavior(MissedTickBehavior::Delay);
+    let mut trigger = CollectTrigger::Open;
     loop {
         tokio::select! {
             _ = collect.tick() => {
-                if let Err(error) = contact::collect_online(opened, meeting).await {
+                let cycle = contact::collect_online(opened, meeting, trigger).await;
+                trigger = CollectTrigger::Foreground;
+                if let Err(error) = cycle {
                     tracing::warn!(
                         error = %lepic_telemetry::ErrorChain(&error),
                         "contact collect failed"

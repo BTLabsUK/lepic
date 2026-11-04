@@ -296,7 +296,7 @@ impl<H: Host> Run<'_, H> {
             ContactCommand::Enter(args) => enter(&opened, &relays, args).await?,
             ContactCommand::Collect => {
                 let events = wallet.subscribe();
-                let report = collect(&opened, &relays).await?;
+                let report = collect(&opened, &relays, CollectTrigger::Pull).await?;
                 self.show_invoice_events(events);
                 report
             }
@@ -811,12 +811,13 @@ async fn import<N: lepic_node::NodeApi + 'static>(
 async fn collect<N: lepic_node::NodeApi + 'static>(
     opened: &Opened<N>,
     relays: &ContactRelays,
+    trigger: CollectTrigger,
 ) -> Result<Report, CliError> {
     let wallet = &opened.wallet;
     // The cycle runs the outbox itself, every queued entry at once.
     let collected = wallet
         .contact_book()
-        .contacts_collect(relays, CollectTrigger::Pull)
+        .contacts_collect(relays, trigger)
         .await?;
     Ok(Report::ContactCollect(ContactCollectReport {
         mailboxes: collected.mailboxes,
@@ -839,10 +840,11 @@ async fn collect<N: lepic_node::NodeApi + 'static>(
 pub(super) async fn collect_online<N: lepic_node::NodeApi + 'static>(
     opened: &Opened<N>,
     meeting: &[lepic_epicbox::RelayEndpoint],
+    trigger: CollectTrigger,
 ) -> Result<(), CliError> {
     let relays = ContactRelays::new(opened.epicbox.clone(), RelayMode::Online)
         .with_meeting(meeting.to_vec());
-    collect(opened, &relays).await.map(drop)
+    collect(opened, &relays, trigger).await.map(drop)
 }
 
 /// `lepic contact invoices`: lists the contacts' invoices waiting for the user.
