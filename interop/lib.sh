@@ -9,20 +9,30 @@ log() { printf '[%s] %s\n' "$(date -u +%H:%M:%S)" "$*" >&2; }
 
 dc() { docker compose --project-directory "${INTEROP_DIR}" -f "${INTEROP_DIR}/compose.yaml" "$@"; }
 
-# Allows one run of compose project $1 at a time on this host. Every worktree's copy of a stack
-# shares its project name and ports, so a second run's start or teardown removes the first run's
-# containers. The lock is released when the script exits.
+# Allows one Docker stack on this host at a time. Every stack (interop, acceptance, live, the
+# release harness's smoke) uses fixed project names and host ports, so a second one's start or
+# teardown removes the first one's containers. One host-wide flock serves them all: a second run
+# waits, naming the holder, and starts when the first ends. $1 names the run. The lock is
+# released when the script exits; a script started by the holder (LEPIC_DOCKER_STACK_LOCK_HELD
+# names the holder's pid) does not take it again.
 hold_stack() {
-    local lock="${TMPDIR:-/tmp}/$1.lock"
-    if ! command -v flock >/dev/null; then
-        log "flock not found; a concurrent $1 run would not be noticed"
+    local lock="${LEPIC_DOCKER_STACK_LOCK:-${HOME}/.cache/lepic-docker-stack.lock}"
+    if [[ -n "${LEPIC_DOCKER_STACK_LOCK_HELD:-}" ]] && kill -0 "${LEPIC_DOCKER_STACK_LOCK_HELD}" 2>/dev/null; then
         return 0
     fi
-    exec {STACK_LOCK_FD}<>"${lock}"
-    if ! flock -n "${STACK_LOCK_FD}"; then
-        log "another $1 run is active on this host (lock ${lock}); wait for it to end"
-        exit 1
+    if ! command -v flock >/dev/null; then
+        log "flock not found; a concurrent Docker stack run would not be noticed"
+        return 0
     fi
+    mkdir -p "$(dirname "${lock}")"
+    exec {STACK_LOCK_FD}>>"${lock}"
+    if ! flock -n "${STACK_LOCK_FD}"; then
+        log "waiting for $(head -n 1 "${lock}" 2>/dev/null || echo 'another Docker stack run') (lock ${lock})"
+        flock "${STACK_LOCK_FD}"
+        log "lock acquired"
+    fi
+    printf '%s, pid %s, in %s, since %s\n' "$1" "$$" "${PWD}" "$(date -u +%H:%M:%SZ)" >"${lock}"
+    export LEPIC_DOCKER_STACK_LOCK_HELD=$$
 }
 
 # lepic with JSON output; logs go to the run log, and so does a failure's exit status.

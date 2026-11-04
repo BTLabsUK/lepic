@@ -14,6 +14,8 @@ interop/run.sh --keep     # leave the stack running afterwards
 interop/run.sh --no-build # reuse the binaries already in .work/bin
 ```
 
+Every Docker stack runner (`run.sh`, `acceptance/run.sh`, `live/run.sh`) takes one host-wide lock, `~/.cache/lepic-docker-stack.lock`, before it starts a stack and holds it until teardown; a second runner prints `waiting for <holder>` and starts when the first ends.
+
 Needs Docker with Compose 2.17 or later, `git`, `jq`, `bash` and `python3` (with its standard
 `sqlite3` module, which the acceptance run uses). The first build compiles the node, the wallet
 and the relay's checker from source and takes 20 to 30 minutes; later runs take about six minutes.
