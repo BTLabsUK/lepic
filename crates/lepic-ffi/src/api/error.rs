@@ -242,6 +242,9 @@ pub enum WalletErrorKind {
     /// its key check refuses it. Nothing was changed or moved. Recover with the phrase only
     /// if it is this wallet's; the database is kept.
     WrongKey,
+    /// The inviter's card names another contact kind than its invite did. Nothing was stored;
+    /// pair again.
+    PairingKindDiffers,
 }
 
 impl WalletErrorKind {
@@ -332,6 +335,7 @@ impl WalletErrorKind {
             // 83 to 88 belong to the pairing kinds.
             Self::ForeignProofAddress => 89,
             Self::WrongKey => 90,
+            Self::PairingKindDiffers => 91,
         }
     }
 }
@@ -805,6 +809,7 @@ mod tests {
             (K::PairingWaiting, 88),
             (K::ForeignProofAddress, 89),
             (K::WrongKey, 90),
+            (K::PairingKindDiffers, 91),
         ];
         for (kind, code) in expected {
             assert_eq!(kind.code(), code, "{kind:?}");
@@ -1132,6 +1137,7 @@ mod tests {
             (E::DoesNotPayInvoices, K::ContactRefusesInvoices),
             (E::OtherAddress, K::OtherAddress),
             (E::AddressProofMissing, K::AddressProofMissing),
+            (E::KindDiffers, K::PairingKindDiffers),
             (E::PeerNotProven, K::PeerNotProven),
             (E::PairingInProgress, K::PairingInProgress),
             (E::Crossed, K::PairingCrossed),

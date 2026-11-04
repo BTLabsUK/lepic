@@ -355,6 +355,9 @@ pub enum ContactError {
     /// The pairing ended: nothing new goes through it.
     #[error("the pairing ended")]
     Ended,
+    /// The inviter's card names another kind than its invite did: nothing is stored.
+    #[error("the card names another kind than the invite")]
+    KindDiffers,
     /// The key did not run LEPIC lately, answered unmarked since, or never claimed pair
     /// requests: nothing is sent to it.
     #[error("the peer is not proven to take pairing requests")]

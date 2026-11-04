@@ -153,6 +153,7 @@ const fn engine_purpose(purpose: SlatePurpose) -> Purpose {
 pub(super) const fn failure_reason(failure: PairingFailure) -> PairingFailureReason {
     match failure {
         PairingFailure::ChangedOnTheWay => PairingFailureReason::ChangedOnTheWay,
+        PairingFailure::KindDiffers => PairingFailureReason::KindDiffers,
         PairingFailure::Expired => PairingFailureReason::Expired,
         PairingFailure::NotConfirmed => PairingFailureReason::NotConfirmed,
         PairingFailure::Refused(_) => PairingFailureReason::Refused,

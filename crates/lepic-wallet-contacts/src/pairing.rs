@@ -1319,6 +1319,16 @@ where
             warn!("pairing confirm does not match the invite");
             return Ok(self.pairing_failed(contact_id, PairingFailure::ChangedOnTheWay));
         }
+        if confirm.card.fields().kind != invite.fields().kind {
+            self.contact_work(move |_, _| {
+                session
+                    .store
+                    .write(|repos| drop_pairing(repos, pairing_id, contact_id))
+            })
+            .await?;
+            warn!("pairing confirm card names another kind than the invite");
+            return Ok(self.pairing_failed(contact_id, PairingFailure::KindDiffers));
+        }
         let Some(sas) = confirm_sas(net, &class, &confirm, &own, &Nonce::from_bytes(n_b)) else {
             return Ok(Taken::Ignored);
         };
@@ -1472,6 +1482,7 @@ fn link_failure(reason: PairingFailure) -> Option<ContactError> {
     match reason {
         PairingFailure::OtherAddress => Some(ContactError::OtherAddress),
         PairingFailure::AddressProofMissing => Some(ContactError::AddressProofMissing),
+        PairingFailure::KindDiffers => Some(ContactError::KindDiffers),
         _ => None,
     }
 }

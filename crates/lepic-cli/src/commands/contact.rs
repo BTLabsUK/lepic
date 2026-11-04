@@ -99,6 +99,7 @@ fn failure_name(reason: PairingFailure) -> &'static str {
         PairingFailure::Expired => "expired",
         PairingFailure::NotConfirmed => "not-confirmed",
         PairingFailure::ChangedOnTheWay => "changed-on-the-way",
+        PairingFailure::KindDiffers => "kind-differs",
         PairingFailure::Refused(Refusal::AlreadyUsed) => "refused-already-used",
         PairingFailure::Refused(Refusal::Expired) => "refused-expired",
         PairingFailure::Refused(Refusal::CancelledByInviter) => "refused-cancelled",

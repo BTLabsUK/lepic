@@ -403,6 +403,7 @@ fn contact_kind(error: &ContactError) -> ErrorKind {
         | ContactError::Ended
         | ContactError::Waiting
         | ContactError::OtherAddress
+        | ContactError::KindDiffers
         | ContactError::AddressProofMissing => ErrorKind::Rejected,
         ContactError::Post(_) => ErrorKind::Transport,
         _ => ErrorKind::Internal,

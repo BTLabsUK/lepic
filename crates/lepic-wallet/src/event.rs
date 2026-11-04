@@ -249,6 +249,8 @@ pub enum PairingFailure {
     /// The confirm does not match the invite's commitment or enc key: something changed the
     /// invite on the way. Nothing was stored.
     ChangedOnTheWay,
+    /// The confirm's card names another contact kind than the invite did. Nothing was stored.
+    KindDiffers,
     /// The invite expired before a reply arrived.
     Expired,
     /// This wallet answered an invite and no confirm came in time, or, as the inviter, could

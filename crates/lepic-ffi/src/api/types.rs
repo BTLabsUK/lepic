@@ -1433,6 +1433,8 @@ pub struct ContactImportSummary {
 pub enum PairingFailureReason {
     /// Something changed the invite on the way. Nothing was stored; pair again.
     ChangedOnTheWay,
+    /// The inviter's card named another kind than its invite did: nothing was stored.
+    KindDiffers,
     /// The invite expired before a reply came.
     Expired,
     /// This wallet answered and no confirmation came in time, or, as the inviter, its
