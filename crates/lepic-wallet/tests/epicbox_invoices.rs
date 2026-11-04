@@ -34,7 +34,7 @@ use lepic_wallet::event::BouncedInvoice;
 use lepic_wallet::inbox::{InboxError, InboxSummary, ListenHandle};
 use lepic_wallet::invoice::{INVOICE_TTL_MARGIN_BLOCKS, InvoiceError, PayRequest};
 use lepic_wallet::peer_compat::PeerKind;
-use lepic_wallet::selection::{SelectionOptions, SelfSendShape};
+use lepic_wallet::selection::{SelectionOptions, SelfInputs, SelfOutputs, SelfSendRequest};
 use lepic_wallet::send::{Delivery, SendError};
 use lepic_wallet::slate::{CodecRegistry, V2JsonCodec};
 use tokio::sync::broadcast::Receiver;
@@ -727,13 +727,15 @@ fn a_cancelled_payment_has_exactly_its_inputs_spent_to_the_payer_itself() {
 
     // The issuer still holds the signed I2; spending its inputs elsewhere voids it.
     let sent = world
-        .block_on(world.payer.wallet.spend_outputs_to_self(
+        .block_on(world.payer.wallet.send_to_self(
             SelectionOptions {
                 minimum_confirmations: 1,
                 ..SelectionOptions::new(ACCOUNT)
             },
-            inputs.clone(),
-            SelfSendShape::Consolidate,
+            SelfSendRequest {
+                inputs: SelfInputs::Named(inputs.clone()),
+                outputs: SelfOutputs::Count(1),
+            },
             Propagation::Fluff,
         ))
         .unwrap();

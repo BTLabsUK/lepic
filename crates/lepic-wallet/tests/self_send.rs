@@ -30,7 +30,9 @@ use lepic_wallet::finalize::{FinalizeError, Posted};
 use lepic_wallet::refresh::{RefreshOutcome, UNFINALIZED_RECEIVE_BLOCKS};
 use lepic_wallet::release::RELEASE_AFTER_BLOCKS;
 use lepic_wallet::scan::{ScanCancel, ScanOptions};
-use lepic_wallet::selection::{SelectionError, SelectionOptions, SelfSendShape, SplitCount};
+use lepic_wallet::selection::{
+    SelectionError, SelectionOptions, SelfInputs, SelfOutputs, SelfSendRequest,
+};
 use lepic_wallet::self_send::{SELF, SelfSendError};
 use lepic_wallet::send::SendError;
 use send_support::{ACCOUNT, FUNDING, Sender, TIP, output};
@@ -43,17 +45,89 @@ fn options() -> SelectionOptions {
     }
 }
 
-fn split(outputs: usize) -> SelfSendShape {
-    SelfSendShape::Split(SplitCount::new(outputs).unwrap())
+fn split(outputs: usize) -> SelfOutputs {
+    SelfOutputs::Count(outputs)
 }
 
-#[test]
-fn split_counts_outside_two_to_ten_do_not_exist() {
-    for outputs in [0, 1, 11] {
-        assert_eq!(SplitCount::new(outputs), None, "{outputs}");
+/// Every spendable output into `outputs`.
+fn all(outputs: SelfOutputs) -> SelfSendRequest {
+    SelfSendRequest {
+        inputs: SelfInputs::All,
+        outputs,
     }
-    for outputs in 2..=10 {
-        assert_eq!(SplitCount::new(outputs).unwrap().get(), outputs);
+}
+
+/// For each way of choosing inputs with amounts asked for: the send takes what the estimate
+/// said, pays the amounts and returns the rest less the fee as one more output.
+#[test]
+fn a_send_to_self_of_amounts_pays_them_for_the_estimated_fee() {
+    let amounts = || SelfOutputs::Amounts(vec![Amount::new(FUNDING / 4), Amount::new(FUNDING / 8)]);
+    let requests: [fn(&Sender, SelfOutputs) -> SelfSendRequest; 3] = [
+        |_, outputs| all(outputs),
+        |_, outputs| SelfSendRequest {
+            inputs: SelfInputs::Smallest,
+            outputs,
+        },
+        |sender, outputs| SelfSendRequest {
+            inputs: SelfInputs::Named(vec![
+                commitment_of(sender, FUNDING),
+                commitment_of(sender, FUNDING / 2),
+            ]),
+            outputs,
+        },
+    ];
+    for request in requests {
+        let sender = Sender::new();
+        sender.fund(1, FUNDING / 2);
+        sender.fund(2, 3 * FUNDING);
+        let request = request(&sender, amounts());
+        let estimate = sender
+            .harness
+            .block_on(
+                sender
+                    .wallet
+                    .estimate_send_to_self(options(), request.clone()),
+            )
+            .unwrap();
+
+        let sent = sender
+            .harness
+            .block_on(
+                sender
+                    .wallet
+                    .send_to_self(options(), request.clone(), Propagation::Fluff),
+            )
+            .unwrap();
+
+        assert_eq!(sent.selection, estimate, "{request:?}");
+        // The smallest output alone covers the amounts and the fee.
+        let inputs = match request.inputs {
+            SelfInputs::All => 3,
+            SelfInputs::Smallest => 1,
+            SelfInputs::Named(_) => 2,
+        };
+        assert_eq!(estimate.inputs.len(), inputs, "{request:?}");
+        let total = estimate.total.value();
+        assert_eq!(
+            estimate.change,
+            vec![
+                Amount::new(FUNDING / 8),
+                Amount::new(total - FUNDING / 4 - FUNDING / 8 - estimate.fee.value()),
+            ]
+        );
+        let mut made: Vec<u64> = sender
+            .outputs()
+            .into_iter()
+            .filter(|output| output.status == OutputStatus::Unconfirmed)
+            .map(|output| output.amount.value())
+            .collect();
+        made.sort_unstable();
+        let mut expected: Vec<u64> = std::iter::once(estimate.amount)
+            .chain(estimate.change.iter().copied())
+            .map(Amount::value)
+            .collect();
+        expected.sort_unstable();
+        assert_eq!(made, expected, "{request:?}");
     }
 }
 
@@ -62,7 +136,11 @@ fn a_split_makes_outputs_of_nearly_equal_value_for_the_estimated_fee() {
     let sender = Sender::new();
     let estimate = sender
         .harness
-        .block_on(sender.wallet.estimate_self_send(options(), split(4)))
+        .block_on(
+            sender
+                .wallet
+                .estimate_send_to_self(options(), all(split(4))),
+        )
         .unwrap();
 
     let sent = sender
@@ -70,7 +148,7 @@ fn a_split_makes_outputs_of_nearly_equal_value_for_the_estimated_fee() {
         .block_on(
             sender
                 .wallet
-                .self_send(options(), split(4), Propagation::Fluff),
+                .send_to_self(options(), all(split(4)), Propagation::Fluff),
         )
         .unwrap();
 
@@ -121,7 +199,7 @@ fn a_self_send_reports_itself_and_never_a_received_payment() {
         .block_on(
             sender
                 .wallet
-                .self_send(options(), split(2), Propagation::Fluff),
+                .send_to_self(options(), all(split(2)), Propagation::Fluff),
         )
         .unwrap();
 
@@ -152,7 +230,7 @@ fn each_entry_of_a_self_send_lists_the_outputs_it_made() {
         .block_on(
             sender
                 .wallet
-                .self_send(options(), split(3), Propagation::Fluff),
+                .send_to_self(options(), all(split(3)), Propagation::Fluff),
         )
         .unwrap();
 
@@ -191,15 +269,15 @@ fn a_consolidation_merges_every_spendable_output_into_one() {
         .block_on(
             sender
                 .wallet
-                .estimate_self_send(options(), SelfSendShape::Consolidate),
+                .estimate_send_to_self(options(), all(SelfOutputs::Count(1))),
         )
         .unwrap();
 
     let sent = sender
         .harness
-        .block_on(sender.wallet.self_send(
+        .block_on(sender.wallet.send_to_self(
             options(),
-            SelfSendShape::Consolidate,
+            all(SelfOutputs::Count(1)),
             Propagation::Fluff,
         ))
         .unwrap();
@@ -245,7 +323,7 @@ fn a_split_the_funds_cannot_pay_stores_nothing() {
         .block_on(
             sender
                 .wallet
-                .self_send(options(), split(2), Propagation::Fluff),
+                .send_to_self(options(), all(split(2)), Propagation::Fluff),
         )
         .unwrap_err();
 
@@ -278,10 +356,10 @@ impl Failed {
     /// A consolidation of the funding with a second output: no change, so only the incoming
     /// entry holds an unconfirmed output.
     fn consolidation() -> Self {
-        Self::shaped(SelfSendShape::Consolidate, &[Locked, Locked, Unconfirmed])
+        Self::shaped(SelfOutputs::Count(1), &[Locked, Locked, Unconfirmed])
     }
 
-    fn shaped(shape: SelfSendShape, statuses: &[OutputStatus]) -> Self {
+    fn shaped(shape: SelfOutputs, statuses: &[OutputStatus]) -> Self {
         let clock = MovableClock::starting_at(fixed_time());
         let sender = Sender::with_clock(Arc::new(clock.clone()));
         let funding = sender.outputs().remove(0);
@@ -295,7 +373,7 @@ impl Failed {
                 spent: false,
             });
         });
-        if shape == SelfSendShape::Consolidate {
+        if shape == SelfOutputs::Count(1) {
             sender.fund(1, FUNDING);
         }
         let before = sender.wallet.balance(ACCOUNT).unwrap();
@@ -309,7 +387,7 @@ impl Failed {
             .block_on(
                 sender
                     .wallet
-                    .self_send(options(), shape, Propagation::Fluff),
+                    .send_to_self(options(), all(shape), Propagation::Fluff),
             )
             .unwrap_err();
 
@@ -560,18 +638,20 @@ fn spend_named(
     sender: &Sender,
     commitments: Vec<lepic_crypto::Commitment>,
 ) -> Result<lepic_wallet::self_send::SelfSent, SelfSendError> {
-    spend_named_into(sender, commitments, SelfSendShape::Consolidate)
+    spend_named_into(sender, commitments, SelfOutputs::Count(1))
 }
 
 fn spend_named_into(
     sender: &Sender,
     commitments: Vec<lepic_crypto::Commitment>,
-    shape: SelfSendShape,
+    shape: SelfOutputs,
 ) -> Result<lepic_wallet::self_send::SelfSent, SelfSendError> {
-    sender.harness.block_on(sender.wallet.spend_outputs_to_self(
+    sender.harness.block_on(sender.wallet.send_to_self(
         options(),
-        commitments,
-        shape,
+        SelfSendRequest {
+            inputs: SelfInputs::Named(commitments),
+            outputs: shape,
+        },
         Propagation::Fluff,
     ))
 }
@@ -594,7 +674,7 @@ fn spending_named_outputs_into_as_many_outputs_keeps_the_number_of_coins() {
         let sender = Sender::new();
         let named = fund_and_name(&sender, coins);
         let shape = if coins == 1 {
-            SelfSendShape::Consolidate
+            SelfOutputs::Count(1)
         } else {
             split(coins as usize)
         };
@@ -837,10 +917,12 @@ fn spending_named_outputs_refuses_young_unconfirmed_and_other_account_outputs() 
         };
         sender
             .harness
-            .block_on(sender.wallet.spend_outputs_to_self(
+            .block_on(sender.wallet.send_to_self(
                 options,
-                vec![funding, named],
-                SelfSendShape::Consolidate,
+                SelfSendRequest {
+                    inputs: SelfInputs::Named(vec![funding, named]),
+                    outputs: SelfOutputs::Count(1),
+                },
                 Propagation::Fluff,
             ))
             .unwrap_err()

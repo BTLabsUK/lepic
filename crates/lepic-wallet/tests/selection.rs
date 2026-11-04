@@ -19,8 +19,8 @@ use lepic_primitives::output::{OutputFeatures, OutputIdentifier};
 use lepic_primitives::params::MAX_TX_WEIGHT;
 use lepic_store::{AccountIndex, KEY_ID_LEN, KeyId, OutputRecord, OutputStatus};
 use lepic_wallet::selection::{
-    Selection, SelectionError, SelectionRequest, SelectionStrategy, SelfSendShape, SplitCount,
-    eligible_to_spend, estimate, select, select_max, select_self_send,
+    Selection, SelectionError, SelectionRequest, SelectionStrategy, SelfInputs, SelfOutputs,
+    SelfSendRequest, eligible_to_spend, estimate, select, select_max, select_to_self,
 };
 
 const TIP: Height = Height::new(100);
@@ -432,19 +432,44 @@ fn many_unspent(count: usize, value: u64) -> Vec<OutputRecord> {
         .collect()
 }
 
-fn self_send(outputs: &[OutputRecord], shape: SelfSendShape) -> Result<Selection, SelectionError> {
-    select_self_send(outputs, &request(0), shape)
+fn to_self(
+    outputs: &[OutputRecord],
+    inputs: SelfInputs,
+    wanted: SelfOutputs,
+) -> Result<Selection, SelectionError> {
+    select_to_self(
+        outputs,
+        &request(0),
+        &SelfSendRequest {
+            inputs,
+            outputs: wanted,
+        },
+    )
+}
+
+fn self_send(outputs: &[OutputRecord], wanted: SelfOutputs) -> Result<Selection, SelectionError> {
+    to_self(outputs, SelfInputs::All, wanted)
+}
+
+fn amounts(values: &[u64]) -> SelfOutputs {
+    SelfOutputs::Amounts(values.iter().copied().map(Amount::new).collect())
+}
+
+/// The value of every output a selection makes, the amount first.
+fn made(selection: &Selection) -> Vec<u64> {
+    std::iter::once(selection.amount)
+        .chain(selection.change.iter().copied())
+        .map(Amount::value)
+        .collect()
 }
 
 #[test]
 fn a_self_send_spends_at_most_the_output_limit_taking_the_smallest() {
     let mut outputs = many_unspent(501, 1_000 * MILLI_EPIC);
     outputs[7].amount = Amount::new(5_000 * MILLI_EPIC);
-    for shape in [
-        SelfSendShape::Consolidate,
-        SelfSendShape::Split(SplitCount::new(3).unwrap()),
-    ] {
-        let selection = self_send(&outputs, shape).unwrap();
+    for count in [1, 3] {
+        let shape = SelfOutputs::Count(count);
+        let selection = self_send(&outputs, shape.clone()).unwrap();
 
         assert_eq!(selection.inputs.len(), 500, "{shape:?}");
         assert!(
@@ -455,17 +480,13 @@ fn a_self_send_spends_at_most_the_output_limit_taking_the_smallest() {
             "the largest output is left spendable"
         );
         assert_eq!(selection.total, Amount::new(500 * 1_000 * MILLI_EPIC));
-        let outputs = match shape {
-            SelfSendShape::Consolidate => 1,
-            SelfSendShape::Split(count) => count.get(),
-        };
-        // 500 inputs and `outputs` outputs weigh 4 * outputs + 1 - 500, floored at 1.
-        let weight = (4 * outputs as u64 + 1).saturating_sub(500).max(1);
+        // 500 inputs and `count` outputs weigh 4 * count + 1 - 500, floored at 1.
+        let weight = (4 * count as u64 + 1).saturating_sub(500).max(1);
         assert_eq!(selection.fee, Fee::new(weight * MILLI_EPIC));
         let made: u64 =
             selection.amount.value() + selection.change.iter().map(|c| c.value()).sum::<u64>();
         assert_eq!(made + selection.fee.value(), selection.total.value());
-        assert_eq!(selection.change.len(), outputs - 1);
+        assert_eq!(selection.change.len(), count - 1);
     }
 }
 
@@ -473,14 +494,14 @@ fn a_self_send_spends_at_most_the_output_limit_taking_the_smallest() {
 fn refuses_to_consolidate_fewer_than_two_spendable_outputs() {
     for outputs in [Vec::new(), unspent(&[100 * MILLI_EPIC])] {
         assert_eq!(
-            self_send(&outputs, SelfSendShape::Consolidate),
+            self_send(&outputs, SelfOutputs::Count(1)),
             Err(SelectionError::NothingToConsolidate {
                 outputs: outputs.len()
             })
         );
     }
     let two = unspent(&[100 * MILLI_EPIC, 100 * MILLI_EPIC]);
-    let selection = self_send(&two, SelfSendShape::Consolidate).unwrap();
+    let selection = self_send(&two, SelfOutputs::Count(1)).unwrap();
     assert_eq!(selection.inputs.len(), 2);
     assert!(selection.change.is_empty());
     // Two inputs and one output weigh 4 + 1 - 2 = 3.
@@ -493,7 +514,7 @@ fn refuses_to_consolidate_fewer_than_two_spendable_outputs() {
 #[test]
 fn a_split_of_one_output_is_allowed_and_splits_it_evenly() {
     let outputs = unspent(&[1_000 * MILLI_EPIC + 5]);
-    let selection = self_send(&outputs, SelfSendShape::Split(SplitCount::new(4).unwrap())).unwrap();
+    let selection = self_send(&outputs, SelfOutputs::Count(4)).unwrap();
 
     // One input and four outputs weigh 16 + 1 - 1 = 16.
     let left = 1_000 * MILLI_EPIC + 5 - 16 * MILLI_EPIC;
@@ -506,5 +527,188 @@ fn a_split_of_one_output_is_allowed_and_splits_it_evenly() {
             Amount::new(share),
             Amount::new(share + left % 4)
         ]
+    );
+}
+
+#[test]
+fn amounts_are_paid_one_output_each_and_the_remainder_comes_back_as_one_more() {
+    let outputs = unspent(&[300 * MILLI_EPIC, 500 * MILLI_EPIC]);
+    let selection = self_send(&outputs, amounts(&[100 * MILLI_EPIC, 200 * MILLI_EPIC])).unwrap();
+
+    // Two inputs and three outputs weigh 12 + 1 - 2 = 11.
+    assert_eq!(selection.fee, Fee::new(11 * MILLI_EPIC));
+    assert_eq!(
+        made(&selection),
+        vec![100 * MILLI_EPIC, 200 * MILLI_EPIC, (500 - 11) * MILLI_EPIC]
+    );
+    assert_eq!(selection.inputs.len(), 2);
+}
+
+#[test]
+fn amounts_that_take_everything_but_the_fee_leave_no_remainder() {
+    // Two inputs and two outputs weigh 8 + 1 - 2 = 7.
+    let outputs = unspent(&[300 * MILLI_EPIC, 500 * MILLI_EPIC]);
+    let selection = self_send(&outputs, amounts(&[100 * MILLI_EPIC, 693 * MILLI_EPIC])).unwrap();
+    assert_eq!(selection.fee, Fee::new(7 * MILLI_EPIC));
+    assert_eq!(made(&selection), vec![100 * MILLI_EPIC, 693 * MILLI_EPIC]);
+}
+
+#[test]
+fn amounts_refuse_a_remainder_too_small_for_its_own_output() {
+    // Exactly: fee 7. With a remainder: three outputs, fee 11, so 4 milli would not even
+    // pay for the remainder's output.
+    let outputs = unspent(&[300 * MILLI_EPIC, 500 * MILLI_EPIC]);
+    assert_eq!(
+        self_send(&outputs, amounts(&[100 * MILLI_EPIC, 690 * MILLI_EPIC])),
+        Err(SelectionError::NotEnoughFunds {
+            available: Amount::new(800 * MILLI_EPIC),
+            needed: Amount::new(801 * MILLI_EPIC + 1),
+        })
+    );
+    assert!(matches!(
+        self_send(&outputs, amounts(&[900 * MILLI_EPIC])),
+        Err(SelectionError::NotEnoughFunds { .. })
+    ));
+}
+
+#[test]
+fn the_smallest_inputs_are_the_fewest_smallest_that_cover_the_amounts_and_the_fee() {
+    let outputs = unspent(&[
+        50 * MILLI_EPIC,
+        900 * MILLI_EPIC,
+        60 * MILLI_EPIC,
+        70 * MILLI_EPIC,
+    ]);
+    let selection = to_self(
+        &outputs,
+        SelfInputs::Smallest,
+        amounts(&[60 * MILLI_EPIC, 60 * MILLI_EPIC]),
+    )
+    .unwrap();
+
+    // 50 + 60 + 70 = 180 pays 120 and the fee of three inputs and three outputs, 12 + 1 - 3
+    // = 10, with 50 left over.
+    assert_eq!(
+        values(&selection.inputs),
+        [50, 60, 70].map(|v| v * MILLI_EPIC).to_vec()
+    );
+    assert_eq!(selection.fee, Fee::new(10 * MILLI_EPIC));
+    assert_eq!(
+        made(&selection),
+        vec![60 * MILLI_EPIC, 60 * MILLI_EPIC, 50 * MILLI_EPIC]
+    );
+}
+
+#[test]
+fn the_smallest_inputs_take_a_second_rather_than_move_one_output_into_one() {
+    // One input and one output weigh 4 + 1 - 1 = 4, so 54 alone pays 50 exactly.
+    let outputs = unspent(&[54 * MILLI_EPIC, 100 * MILLI_EPIC]);
+    let selection = to_self(&outputs, SelfInputs::Smallest, amounts(&[50 * MILLI_EPIC])).unwrap();
+    assert_eq!(selection.inputs.len(), 2);
+
+    let alone = unspent(&[54 * MILLI_EPIC]);
+    assert_eq!(
+        to_self(&alone, SelfInputs::Smallest, amounts(&[50 * MILLI_EPIC])),
+        Err(SelectionError::NothingToConsolidate { outputs: 1 })
+    );
+}
+
+#[test]
+fn the_smallest_inputs_report_what_all_of_them_lack() {
+    let outputs = unspent(&[50 * MILLI_EPIC, 60 * MILLI_EPIC]);
+    assert!(matches!(
+        to_self(&outputs, SelfInputs::Smallest, amounts(&[500 * MILLI_EPIC])),
+        Err(SelectionError::NotEnoughFunds { available, .. })
+            if available == Amount::new(110 * MILLI_EPIC)
+    ));
+}
+
+#[test]
+fn every_input_into_one_output_of_its_value_is_refused_for_a_single_output() {
+    // One input into exactly one output only moves it.
+    let outputs = unspent(&[54 * MILLI_EPIC]);
+    assert_eq!(
+        self_send(&outputs, amounts(&[50 * MILLI_EPIC])),
+        Err(SelectionError::NothingToConsolidate { outputs: 1 })
+    );
+}
+
+#[test]
+fn named_inputs_are_spent_as_named_even_one_into_one() {
+    let outputs = unspent(&[50 * MILLI_EPIC, 60 * MILLI_EPIC, 70 * MILLI_EPIC]);
+    let named = vec![outputs[2].id.commitment, outputs[0].id.commitment];
+    let selection = to_self(
+        &outputs,
+        SelfInputs::Named(named),
+        amounts(&[20 * MILLI_EPIC]),
+    )
+    .unwrap();
+    assert_eq!(
+        values(&selection.inputs),
+        vec![50 * MILLI_EPIC, 70 * MILLI_EPIC]
+    );
+    // Two inputs and two outputs weigh 8 + 1 - 2 = 7.
+    assert_eq!(made(&selection), vec![20 * MILLI_EPIC, 93 * MILLI_EPIC]);
+
+    let one = to_self(
+        &outputs,
+        SelfInputs::Named(vec![outputs[1].id.commitment]),
+        SelfOutputs::Count(1),
+    )
+    .unwrap();
+    // One input and one output weigh 4.
+    assert_eq!(made(&one), vec![56 * MILLI_EPIC]);
+}
+
+#[test]
+fn named_inputs_refuse_none_twice_or_unknown() {
+    let outputs = unspent(&[50 * MILLI_EPIC, 60 * MILLI_EPIC]);
+    let other = unspent(&[1, 2, 3])[2].id.commitment;
+    let named = |commitments| {
+        to_self(
+            &outputs,
+            SelfInputs::Named(commitments),
+            SelfOutputs::Count(1),
+        )
+    };
+    assert_eq!(named(Vec::new()), Err(SelectionError::NoOutputsNamed));
+    assert_eq!(
+        named(vec![outputs[0].id.commitment, outputs[0].id.commitment]),
+        Err(SelectionError::NamedOutputUnavailable { position: 1 })
+    );
+    assert_eq!(
+        named(vec![other]),
+        Err(SelectionError::NamedOutputUnavailable { position: 0 })
+    );
+}
+
+#[test]
+fn refuses_outputs_out_of_range_zero_amounts_and_smallest_with_a_count() {
+    let outputs = unspent(&[500 * MILLI_EPIC, 500 * MILLI_EPIC]);
+    for wanted in [SelfOutputs::Count(0), SelfOutputs::Count(11), amounts(&[])] {
+        assert!(
+            matches!(
+                self_send(&outputs, wanted.clone()),
+                Err(SelectionError::SelfSendOutputs { .. })
+            ),
+            "{wanted:?}"
+        );
+    }
+    assert_eq!(
+        self_send(&outputs, amounts(&[MILLI_EPIC; 11])),
+        Err(SelectionError::SelfSendOutputs { outputs: 11 })
+    );
+    assert_eq!(
+        self_send(&outputs, amounts(&[MILLI_EPIC; 10])),
+        Err(SelectionError::SelfSendOutputs { outputs: 11 }),
+        "ten amounts leave a remainder that would be the eleventh"
+    );
+    assert_eq!(
+        self_send(&outputs, amounts(&[MILLI_EPIC, 0])),
+        Err(SelectionError::ZeroAmount { position: 1 })
+    );
+    assert_eq!(
+        to_self(&outputs, SelfInputs::Smallest, SelfOutputs::Count(2)),
+        Err(SelectionError::SmallestNeedsAmounts)
     );
 }
