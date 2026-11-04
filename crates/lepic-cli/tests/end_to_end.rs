@@ -763,3 +763,49 @@ fn listen_shows_each_slate_it_receives() {
         "{listened:?}"
     );
 }
+
+/// The CLI keeps no policy of its own: a short password and an invoice expiry beyond 48 hours
+/// are taken as given. Only what cannot work is refused: an empty password for a new wallet and
+/// an expiry of no hours.
+#[test]
+fn the_cli_takes_short_passwords_and_long_expiries_and_refuses_an_empty_password() {
+    let host = TestHost::new();
+    let short = Instance::new("a b");
+    short.run(&host, &["wallet", "init"]).ok();
+    short.run(&host, &["wallet", "info"]).ok();
+
+    let mut env = short.env();
+    env.push(("LEPIC_INVOICE_EXPIRY_HOURS".to_owned(), "72".to_owned()));
+    let drained = short
+        .run_with(&host, &["epicbox", "drain"], env.clone(), "")
+        .ok()
+        .json();
+    assert!(drained["expired"].is_object(), "{drained}");
+    env.retain(|(name, _)| name != "LEPIC_INVOICE_EXPIRY_HOURS");
+    env.push(("LEPIC_INVOICE_EXPIRY_HOURS".to_owned(), "0".to_owned()));
+    let none = short.run_with(&host, &["epicbox", "drain"], env, "");
+    assert_eq!(none.code, 3, "{none:?}");
+    assert_eq!(none.json()["error"]["kind"], "config", "{none:?}");
+
+    // An empty LEPIC_PASSWORD counts as unset, so the empty line on standard input is read.
+    let empty = Instance::new("not used");
+    let mut env = empty.env();
+    env.retain(|(name, _)| name != "LEPIC_PASSWORD");
+    for (env, stdin) in [
+        (
+            [
+                env.clone(),
+                vec![("LEPIC_PASSWORD".to_owned(), String::new())],
+            ]
+            .concat(),
+            "\n",
+        ),
+        (env.clone(), "\n"),
+    ] {
+        let refused = support::run_in(&host, &["wallet", "init"], env, stdin);
+        assert_eq!(refused.code, 7, "{refused:?}");
+        assert_eq!(refused.json()["error"]["kind"], "rejected", "{refused:?}");
+    }
+    // Nothing was created.
+    assert_ne!(empty.run(&host, &["wallet", "info"]).code, 0);
+}

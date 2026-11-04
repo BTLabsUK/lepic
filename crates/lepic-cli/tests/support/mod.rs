@@ -12,7 +12,7 @@
 )]
 
 use std::io::{self, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
@@ -47,6 +47,9 @@ pub const PATIENCE: Duration = Duration::from_secs(20);
 /// 10 EPIC.
 pub const FUNDING: u64 = 1_000_000_000;
 
+/// How often `lepic serve` collects and refreshes under test, so a test sees several cycles.
+pub const MAINTENANCE: Duration = Duration::from_millis(100);
+
 pub struct TestHost {
     pub node: MockNode,
     pub relay: MockRelay,
@@ -68,6 +71,16 @@ impl TestHost {
                 },
             )),
             relay: MockRelay::new(RelayNetwork::Floonet),
+            interrupt_when: None,
+        }
+    }
+
+    /// The same node and relay with no simulated Ctrl-C, for clients of a `lepic serve` whose
+    /// host stops it.
+    pub fn without_interrupt(&self) -> Self {
+        Self {
+            node: self.node.clone(),
+            relay: self.relay.clone(),
             interrupt_when: None,
         }
     }
@@ -127,6 +140,10 @@ impl Host for TestHost {
             }),
             None => Box::pin(std::future::pending()),
         }
+    }
+
+    fn maintenance_interval(&self) -> Duration {
+        MAINTENANCE
     }
 }
 
@@ -300,6 +317,28 @@ pub fn run_reading(
         code,
         stdout: stdout.text(),
         stderr: stderr.text(),
+    }
+}
+
+/// Waits until a `lepic serve` binds `socket`.
+pub fn wait_for_socket(socket: &Path) {
+    let started = std::time::Instant::now();
+    while !socket.exists() {
+        assert!(
+            started.elapsed() < PATIENCE,
+            "serve never bound {}",
+            socket.display()
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+/// Waits until `condition` holds, checking it every 20 ms.
+pub fn wait_until(what: &str, mut condition: impl FnMut() -> bool) {
+    let started = std::time::Instant::now();
+    while !condition() {
+        assert!(started.elapsed() < PATIENCE, "never: {what}");
+        std::thread::sleep(Duration::from_millis(20));
     }
 }
 
