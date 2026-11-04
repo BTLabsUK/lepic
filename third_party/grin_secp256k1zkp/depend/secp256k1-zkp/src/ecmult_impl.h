@@ -1066,6 +1066,7 @@ static int secp256k1_ecmult_multi_var_simple(const secp256k1_ecmult_context *ctx
     secp256k1_scalar_set_int(&szero, 0);
     /* r = inp_g_sc*G */
     secp256k1_gej_set_infinity(r);
+    secp256k1_gej_set_infinity(&tmpj);
     secp256k1_ecmult(ctx, r, &tmpj, &szero, inp_g_sc);
     for (point_idx = 0; point_idx < n_points; point_idx++) {
         secp256k1_ge point;

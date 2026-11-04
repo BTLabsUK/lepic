@@ -56,6 +56,12 @@ was checked with fixed-vector and mainnet-data comparisons of the old and new bu
    `secp256k1_ecdsa_sig_sign` checks a zero `r` and an overflowing `x` at run time again
    instead of in `VERIFY_CHECK`s that this build compiles away. The conditions are
    cryptographically unreachable, so no signature changes.
+11. bitcoin-core/secp256k1 `bade617` (PR 580), one line: `src/ecmult_impl.h`,
+   `secp256k1_ecmult_multi_var_simple` sets `tmpj` to infinity before passing it with a zero
+   scalar to `secp256k1_ecmult`, as upstream's version of the same function
+   (`secp256k1_ecmult_multi_simple_var`) does. Strauss skips a point whose scalar is zero
+   (`ecmult_impl.h`, the `secp256k1_scalar_is_zero(&na[np])` guard), so the point was never read
+   and the result is unchanged; GCC's `-Wmaybe-uninitialized` report at `-O` goes away.
 
 ## Build changes (`build.rs`)
 
