@@ -30,7 +30,7 @@ use crate::cli::{
     PurposeArg, SasArg,
 };
 use crate::exit::CliError;
-use crate::host::{Host, HostNode};
+use crate::host::Host;
 use crate::output::{
     ContactAcceptReport, ContactCardReport, ContactCollectReport, ContactExportReport,
     ContactFailureReport, ContactImportReport, ContactInviteReport, ContactInvoiceIssueReport,
@@ -276,7 +276,7 @@ fn answer_text(answer: SealedAnswer) -> String {
 
 impl<H: Host> Run<'_, H> {
     pub(super) async fn contact(&mut self, args: ContactArgs) -> Result<Report, CliError> {
-        let opened: Opened<HostNode<H>> = self.open().await?;
+        let opened = self.open().await?;
         let wallet = &opened.wallet;
         let relays = relays(&opened, &args, &self.settings.servers.meeting_relays);
         Ok(match args.command {
@@ -833,6 +833,16 @@ async fn collect<N: lepic_node::NodeApi + 'static>(
             .collect(),
         unreachable: collected.unreachable,
     }))
+}
+
+/// One collecting cycle on the Epicbox transport and the meeting relays, for `lepic serve`.
+pub(super) async fn collect_online<N: lepic_node::NodeApi + 'static>(
+    opened: &Opened<N>,
+    meeting: &[lepic_epicbox::RelayEndpoint],
+) -> Result<(), CliError> {
+    let relays = ContactRelays::new(opened.epicbox.clone(), RelayMode::Online)
+        .with_meeting(meeting.to_vec());
+    collect(opened, &relays).await.map(drop)
 }
 
 /// `lepic contact invoices`: lists the contacts' invoices waiting for the user.

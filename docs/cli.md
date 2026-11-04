@@ -668,6 +668,61 @@ confirms it. Human output then reads `Transaction <ID> is posted; its kernel is 
 height <n>.` The JSON document keeps `"state": "posted"` and adds `"already_on_chain": true` and
 `"height": <n>`; for a normal accept `already_on_chain` is `false` and there is no `height`.
 
+## Service
+
+`lepic serve` keeps one unlocked wallet open and answers other `lepic` commands over a local
+socket. A script that runs many commands, such as a bot, then unlocks the wallet once and never
+fights over `.lepic.lock`. Unix only: on other platforms `serve` and `--service` fail with a usage
+error.
+
+```
+lepic serve &                               # asks for the password once
+lepic --service wallet info                 # answered by the running serve
+lepic --service=/run/user/1000/l.sock tx list
+```
+
+`serve` opens the wallet as every other command does (password from the environment, a file or a
+prompt) and holds `.lepic.lock` until it stops. While it runs it also:
+
+- listens on the Epicbox relay and expires invoices, as `epicbox listen` does;
+- collects the contacts' mailboxes at start and every minute;
+- refreshes the wallet from the node at start and every minute.
+
+A failed tick is logged at `warn` and never ends `serve`.
+
+The socket is `<data_dir>/lepic.sock`; `--socket <PATH>` picks another. The path must fit a Unix
+socket (107 bytes on Linux), or `serve` exits with a usage error that names `--socket`. The socket
+has mode 600 and `serve` drops connections from any other user. A socket file left by an earlier
+`serve` is replaced; any other file at the path is an error and is left alone. The socket is removed
+when `serve` stops.
+
+`--service` sends the command to `serve` instead of running it. It prints what the command would
+have printed and exits with its code. Without `--service` a command never goes to `serve`. A bare
+`--service` uses the client's default socket; `--service=/path/s.sock` names one. If nothing answers
+at the socket, the exit code is 5 and the kind `service_unavailable`.
+
+Requests run at the same time, except sends over Tor, which take turns. The output format is the
+client's `--output` (or its `LEPIC_OUTPUT` and settings file). The request's log options are
+accepted and ignored, because `serve` logs to its own stderr.
+
+`serve` refuses with exit code 2 (`usage`) what cannot work inside it:
+
+- `wallet init`, `wallet restore` and `wallet import-seed`;
+- `serve`, `epicbox listen`, `http listen` and `tor listen`, because `serve` owns the process;
+- `contact open-sealed -`, which would read the stdin of `serve`;
+- the options `--data-dir`, `--network`, `--config`, `--settings` and `--service`, which would
+  change what `serve` opened.
+
+A command that reads a secret from stdin fails, as `serve` gives every request an empty stdin.
+
+On SIGINT or SIGTERM `serve` stops accepting connections and stops the listener. Running requests
+get 30 seconds, then are dropped. It then locks the wallet, removes the socket and releases the
+lock. Its report names the socket, the number of requests served and what the listener received.
+
+The protocol is local to the CLI and may change: one request per connection, one JSON line
+`{"args":[...]}` of at most 64 KiB, answered by one JSON object `{"code":0,"stdout":"","stderr":""}`.
+Use `lepic --service` rather than the socket directly.
+
 ## Data and logs
 
 The data directory, `~/.lepic/<network>` unless `data_dir` says otherwise, holds:
@@ -707,6 +762,7 @@ Amounts are strings with eight decimals. The exit code says what kind of failure
 | 3 | `config` | invalid settings or config file |
 | 4 | `wrong_password` | the password did not unlock the wallet |
 | 5 | `wallet_state` | no wallet, a wallet already exists, it is in use, or it belongs to another network |
+| 5 | `service_unavailable` | `--service` found no `lepic serve` at the socket |
 | 6 | `not_found` | no such transaction, slate or account |
 | 7 | `rejected` | the slate or request was refused; nothing was stored |
 | 8 | `insufficient_funds` | not enough spendable funds |

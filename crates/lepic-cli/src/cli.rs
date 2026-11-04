@@ -79,6 +79,16 @@ pub struct GlobalArgs {
     /// Command output on stdout [env: LEPIC_OUTPUT] [default: human]
     #[arg(long, global = true, value_name = "FORMAT")]
     pub output: Option<OutputArg>,
+    /// Run the command on the `lepic serve` process listening at SOCKET [default: lepic.sock in
+    /// the data directory]
+    #[arg(
+        long,
+        global = true,
+        value_name = "SOCKET",
+        num_args = 0..=1,
+        require_equals = true
+    )]
+    pub service: Option<Option<PathBuf>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -125,6 +135,23 @@ pub enum Command {
     Node(NodeCommand),
     /// Pair with contacts, and exchange invoices and slates with them through their mailboxes
     Contact(ContactArgs),
+    /// Hold the wallet open and answer commands sent with --service
+    #[command(after_help = SERVE_HELP)]
+    Serve(ServeArgs),
+}
+
+const SERVE_HELP: &str = "\
+Opens the wallet once, as other commands do, and holds the data directory until it stops. It
+listens on Epicbox, expires unpaid invoices, collects contact mailboxes and refreshes the wallet
+while it runs, and answers other lepic commands on a local socket: run them with `lepic
+--service=SOCKET <command>`, or `lepic --service <command>` for the default socket. Only the
+user that runs it can use the socket. Ctrl-C or SIGTERM stops it.";
+
+#[derive(Debug, Args)]
+pub struct ServeArgs {
+    /// Unix socket to listen on [default: lepic.sock in the data directory]
+    #[arg(long, value_name = "SOCKET")]
+    pub socket: Option<PathBuf>,
 }
 
 #[derive(Debug, Subcommand)]

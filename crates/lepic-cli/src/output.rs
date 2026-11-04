@@ -38,6 +38,7 @@ pub enum Report {
     InvoiceList(InvoiceListReport),
     InvoiceDecline(InvoiceDeclineReport),
     Inbox(InboxReport),
+    Serve(ServeReport),
     EpicboxStatus(EpicboxStatusReport),
     Peer(PeerReport),
     HttpListen(HttpListenReport),
@@ -547,6 +548,16 @@ pub struct ContactImportReport {
     pub skipped_conflict: usize,
 }
 
+/// What `serve` did before it was stopped.
+#[derive(Debug, Serialize)]
+pub struct ServeReport {
+    pub socket: String,
+    /// Requests answered, whatever their exit code.
+    pub requests: u32,
+    /// What the Epicbox listener received.
+    pub inbox: InboxReport,
+}
+
 /// What `http listen` did before it was stopped.
 #[derive(Debug, Serialize)]
 pub struct HttpListenReport {
@@ -877,6 +888,7 @@ fn write_human(out: &mut Vec<u8>, report: &Report) -> std::io::Result<()> {
         | Report::InvoiceDecline(_)
         | Report::Peer(_) => write_invoice_human(out, report),
         Report::Inbox(_)
+        | Report::Serve(_)
         | Report::HttpListen(_)
         | Report::TorAddress(_)
         | Report::TorListen(_)
@@ -1243,22 +1255,10 @@ fn write_invoice_human(out: &mut Vec<u8>, report: &Report) -> std::io::Result<()
 /// An inbox, listener, Tor or Epicbox report. Writes nothing for any other.
 fn write_transport_human(out: &mut Vec<u8>, report: &Report) -> std::io::Result<()> {
     match report {
-        Report::Inbox(r) => {
-            writeln!(
-                out,
-                "Received {}, finalized {}, repeated {}, rejected {}, held for retry {}, parked \
-                 {}, bounced {}, dropped {}, notices {}.",
-                r.received,
-                r.finalized,
-                r.repeated,
-                r.rejected,
-                r.held,
-                r.parked,
-                r.bounced,
-                r.dropped,
-                r.notices
-            )?;
-            write_expired(out, r.expired.as_ref())
+        Report::Inbox(r) => write_inbox(out, r),
+        Report::Serve(r) => {
+            writeln!(out, "Served {} requests on {}.", r.requests, r.socket)?;
+            write_inbox(out, &r.inbox)
         }
         Report::HttpListen(r) => writeln!(
             out,
@@ -1278,6 +1278,24 @@ fn write_transport_human(out: &mut Vec<u8>, report: &Report) -> std::io::Result<
         }
         _ => Ok(()),
     }
+}
+
+fn write_inbox(out: &mut Vec<u8>, r: &InboxReport) -> std::io::Result<()> {
+    writeln!(
+        out,
+        "Received {}, finalized {}, repeated {}, rejected {}, held for retry {}, parked {}, \
+         bounced {}, dropped {}, notices {}.",
+        r.received,
+        r.finalized,
+        r.repeated,
+        r.rejected,
+        r.held,
+        r.parked,
+        r.bounced,
+        r.dropped,
+        r.notices
+    )?;
+    write_expired(out, r.expired.as_ref())
 }
 
 /// A pairing report. Writes nothing for any other.
@@ -1814,6 +1832,25 @@ mod tests {
                     "rejected",
                     "repeated",
                 ],
+            ),
+            (
+                Report::Serve(ServeReport {
+                    socket: text("s"),
+                    requests: 0,
+                    inbox: InboxReport {
+                        received: 0,
+                        finalized: 0,
+                        repeated: 0,
+                        rejected: 0,
+                        held: 0,
+                        parked: 0,
+                        bounced: 0,
+                        dropped: 0,
+                        notices: 0,
+                        expired: None,
+                    },
+                }),
+                vec!["inbox", "requests", "socket"],
             ),
             (
                 Report::EpicboxStatus(EpicboxStatusReport {

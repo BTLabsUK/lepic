@@ -79,6 +79,8 @@ use crate::stores::{CliStores, SharedStore};
 use crate::vault::{FileVault, VAULT_FILE};
 
 mod contact;
+#[cfg(unix)]
+mod serve;
 
 /// The directory inside the data directory that holds the wallet's tor files.
 const TOR_DIR: &str = "tor";
@@ -104,8 +106,17 @@ struct Opened<N: NodeApi + 'static> {
     http: lepic_foreign::HttpTransport,
     /// Holds the answers of Tor sends until they are finalized.
     tor: lepic_tor::TorTransport,
+    /// Taken by a send over Tor for as long as its tor is attached to [`Self::tor`], which only
+    /// one send at a time can use.
+    tor_gate: Arc<tokio::sync::Mutex<()>>,
     /// Held until the command ends; `None` when the data directory does not exist.
     _lock: Option<std::fs::File>,
+}
+
+/// A tor started for one send, and the hold on the wallet's tor transport it keeps until stopped.
+struct SendTor {
+    process: Arc<TorProcess>,
+    _gate: tokio::sync::OwnedMutexGuard<()>,
 }
 
 impl<N: NodeApi + 'static> Opened<N> {
@@ -127,6 +138,8 @@ struct Run<'a, H: Host> {
     interrupt: watch::Receiver<bool>,
     /// Set by a command that stops on its own when interrupted and reports what it did.
     graceful: Arc<AtomicBool>,
+    /// The wallet `lepic serve` holds open, which every command then uses.
+    held: Option<Arc<Opened<HostNode<H>>>>,
 }
 
 /// Runs `command` until it ends or the user interrupts it. An interrupt ends any command at
@@ -152,6 +165,7 @@ pub(crate) async fn execute<H: Host>(
         console,
         interrupt: interrupt.clone(),
         graceful: Arc::clone(&graceful),
+        held: None,
     };
     let result = tokio::select! {
         result = run.dispatch(command) => result,
@@ -180,6 +194,7 @@ impl<H: Host> Run<'_, H> {
             Command::Tor(TorCommand::Listen(args)) => self.tor_listen(args).await,
             Command::Node(NodeCommand::Status) => self.node_status().await,
             Command::Contact(args) => self.contact(args).await,
+            Command::Serve(args) => self.serve(args).await,
         }
     }
 
@@ -790,7 +805,7 @@ impl<H: Host> Run<'_, H> {
 
     /// Answers payments over HTTP until interrupted.
     async fn http_listen(&mut self, args: &HttpListenArgs) -> Result<Report, CliError> {
-        let opened = Arc::new(self.open().await?);
+        let opened = self.open().await?;
         let exposure = if args.internet {
             Exposure::Internet
         } else {
@@ -837,10 +852,11 @@ impl<H: Host> Run<'_, H> {
         transport: lepic_transport::transport::TransportId,
         binary: &TorBinaryArgs,
         opened: &Opened<N>,
-    ) -> Result<Option<Arc<TorProcess>>, CliError> {
+    ) -> Result<Option<SendTor>, CliError> {
         if transport != lepic_tor::TRANSPORT_ID {
             return Ok(None);
         }
+        let gate = Arc::clone(&opened.tor_gate).lock_owned().await;
         let tor = Arc::new(self.start_tor(binary)?);
         self.wait_for_tor(&tor).await?;
         opened.tor.attach(Arc::clone(&tor) as Arc<dyn SocksProxy>);
@@ -850,7 +866,10 @@ impl<H: Host> Run<'_, H> {
                  and a half minutes to fail.",
             );
         }
-        Ok(Some(tor))
+        Ok(Some(SendTor {
+            process: tor,
+            _gate: gate,
+        }))
     }
 
     fn start_tor(&self, binary: &TorBinaryArgs) -> Result<TorProcess, CliError> {
@@ -902,7 +921,7 @@ impl<H: Host> Run<'_, H> {
         if args.tor.tor_binary.is_none() {
             return Err(CliError::TorBinaryNeeded);
         }
-        let opened = Arc::new(self.open().await?);
+        let opened = self.open().await?;
         let key = opened.wallet.onion_key()?;
         let onion = lepic_tor::onion_address(key.public_key());
         let counts = Arc::new(HttpCounts::default());
@@ -1268,7 +1287,14 @@ impl<H: Host> Run<'_, H> {
 
     /// Unlocks the wallet in the data directory. A directory without a vault is reported before
     /// the password is asked for, which would otherwise be typed for nothing.
-    async fn open(&mut self) -> Result<Opened<HostNode<H>>, CliError> {
+    async fn open(&mut self) -> Result<Arc<Opened<HostNode<H>>>, CliError> {
+        if let Some(held) = &self.held {
+            return Ok(Arc::clone(held));
+        }
+        self.open_fresh().await.map(Arc::new)
+    }
+
+    async fn open_fresh(&mut self) -> Result<Opened<HostNode<H>>, CliError> {
         if !self.settings.data_dir.join(VAULT_FILE).exists() {
             return Err(WalletError::NoWallet.into());
         }
@@ -1352,8 +1378,14 @@ impl<H: Host> Run<'_, H> {
             epicbox,
             http,
             tor,
+            tor_gate: Arc::new(tokio::sync::Mutex::new(())),
             _lock: lock,
         })
+    }
+
+    #[cfg(not(unix))]
+    async fn serve(&mut self, _: crate::cli::ServeArgs) -> Result<Report, CliError> {
+        Err(CliError::ServiceUnsupported)
     }
 
     fn data_dir_text(&self) -> String {
@@ -1510,11 +1542,11 @@ async fn finalize_direct_reply<N: NodeApi + 'static>(
 }
 
 /// Detaches and stops the tor a send started.
-async fn stop_tor<N: NodeApi + 'static>(opened: &Opened<N>, tor: Option<Arc<TorProcess>>) {
+async fn stop_tor<N: NodeApi + 'static>(opened: &Opened<N>, tor: Option<SendTor>) {
     let Some(tor) = tor else { return };
     opened.tor.detach();
     // Dropping the last handle kills tor at once instead.
-    if let Ok(tor) = Arc::try_unwrap(tor) {
+    if let Ok(tor) = Arc::try_unwrap(tor.process) {
         tor.stop().await;
     }
 }

@@ -22,31 +22,33 @@ use crate::amount::AmountError;
 use crate::secret::SecretError;
 use crate::settings::SettingsError;
 
-/// What kind of failure ended a command. The discriminant is the exit code.
+/// What kind of failure ended a command. [`ErrorKind::exit_code`] is the exit code;
+/// `ServiceUnavailable` shares code 5 with `WalletState`, the other way a wallet cannot be used.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(u8)]
 pub enum ErrorKind {
-    Internal = 1,
-    Usage = 2,
-    Config = 3,
-    WrongPassword = 4,
-    WalletState = 5,
-    NotFound = 6,
-    Rejected = 7,
-    InsufficientFunds = 8,
-    Node = 9,
-    Transport = 10,
-    Incomplete = 11,
-    Interrupted = 12,
+    Internal,
+    Usage,
+    Config,
+    WrongPassword,
+    WalletState,
+    ServiceUnavailable,
+    NotFound,
+    Rejected,
+    InsufficientFunds,
+    Node,
+    Transport,
+    Incomplete,
+    Interrupted,
 }
 
 impl ErrorKind {
-    pub const ALL: [Self; 12] = [
+    pub const ALL: [Self; 13] = [
         Self::Internal,
         Self::Usage,
         Self::Config,
         Self::WrongPassword,
         Self::WalletState,
+        Self::ServiceUnavailable,
         Self::NotFound,
         Self::Rejected,
         Self::InsufficientFunds,
@@ -57,7 +59,20 @@ impl ErrorKind {
     ];
 
     pub const fn exit_code(self) -> u8 {
-        self as u8
+        match self {
+            Self::Internal => 1,
+            Self::Usage => 2,
+            Self::Config => 3,
+            Self::WrongPassword => 4,
+            Self::WalletState | Self::ServiceUnavailable => 5,
+            Self::NotFound => 6,
+            Self::Rejected => 7,
+            Self::InsufficientFunds => 8,
+            Self::Node => 9,
+            Self::Transport => 10,
+            Self::Incomplete => 11,
+            Self::Interrupted => 12,
+        }
     }
 
     /// The `kind` field of a JSON error.
@@ -68,6 +83,7 @@ impl ErrorKind {
             Self::Config => "config",
             Self::WrongPassword => "wrong_password",
             Self::WalletState => "wallet_state",
+            Self::ServiceUnavailable => "service_unavailable",
             Self::NotFound => "not_found",
             Self::Rejected => "rejected",
             Self::InsufficientFunds => "insufficient_funds",
@@ -88,6 +104,7 @@ Exit codes:
    3  config: invalid settings or config file
    4  wrong_password: the password did not unlock the wallet
    5  wallet_state: no wallet, a wallet already exists, it is in use, or it belongs elsewhere
+   5  service_unavailable: nothing answers at the --service socket; start `lepic serve`
    6  not_found: no such transaction, slate or account
    7  rejected: the slate or request was refused; nothing was stored
    8  insufficient_funds: not enough spendable funds
@@ -193,6 +210,20 @@ pub enum CliError {
     Contact(#[from] ContactError),
     #[error("contact id is not 32 hex digits")]
     ContactId,
+    #[error("no lepic serve answers at {}", path.display())]
+    ServiceUnavailable { path: std::path::PathBuf },
+    #[error("{what} cannot run through lepic serve")]
+    ServiceRefused { what: &'static str },
+    #[error("{option} cannot change what lepic serve opened")]
+    ServiceOption { option: &'static str },
+    #[error("the request to lepic serve is refused: {reason}")]
+    ServiceRequest { reason: &'static str },
+    #[error("the socket path {} is too long for a unix socket", path.display())]
+    SocketPathTooLong { path: std::path::PathBuf },
+    #[error("{} exists and is not a socket", path.display())]
+    SocketPathTaken { path: std::path::PathBuf },
+    #[error("lepic serve and --service need unix sockets, which this system does not offer")]
+    ServiceUnsupported,
 }
 
 impl CliError {
@@ -226,7 +257,14 @@ impl CliError {
             | Self::InvoiceOverHttp
             | Self::OnionAddress(_)
             | Self::ContactId
+            | Self::ServiceRefused { .. }
+            | Self::ServiceOption { .. }
+            | Self::ServiceRequest { .. }
+            | Self::SocketPathTooLong { .. }
+            | Self::SocketPathTaken { .. }
+            | Self::ServiceUnsupported
             | Self::TorBinaryNeeded => ErrorKind::Usage,
+            Self::ServiceUnavailable { .. } => ErrorKind::ServiceUnavailable,
             Self::Contact(error) => contact_kind(error),
             Self::Tor(failure) if failure.kind == lepic_tor::FailureKind::Missing => {
                 ErrorKind::Config
@@ -489,10 +527,15 @@ mod tests {
 
     #[test]
     fn exit_codes_are_distinct_and_never_zero() {
-        let mut codes: Vec<u8> = ErrorKind::ALL.iter().map(|kind| kind.exit_code()).collect();
+        let mut codes: Vec<u8> = ErrorKind::ALL
+            .iter()
+            .filter(|kind| **kind != ErrorKind::ServiceUnavailable)
+            .map(|kind| kind.exit_code())
+            .collect();
         codes.sort_unstable();
         codes.dedup();
-        assert_eq!(codes.len(), ErrorKind::ALL.len());
+        assert_eq!(codes.len(), ErrorKind::ALL.len() - 1);
+        assert_eq!(ErrorKind::ServiceUnavailable.exit_code(), 5);
         assert!(!codes.contains(&0));
     }
 
@@ -627,6 +670,12 @@ mod tests {
             ),
             (ReceiveError::ZeroAmount.into(), ErrorKind::Rejected),
             (CliError::DataDirInUse, ErrorKind::WalletState),
+            (
+                CliError::ServiceUnavailable {
+                    path: "lepic.sock".into(),
+                },
+                ErrorKind::ServiceUnavailable,
+            ),
             (
                 InvoiceError::NotParked {
                     slate_id: lepic_wallet::event::SlateId::from_bytes([1; 16]),
