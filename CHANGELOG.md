@@ -9,6 +9,12 @@ Conventional Commit messages at release time.
 
 ### Added
 
+- Policy values as host parameters, ADR 0036: `WalletPolicy` in `lepic-wallet`'s
+  `WalletConfig`, `HostPolicy` in `lepic-ffi`'s `WalletConfig` and `PinSettings` with
+  `LepicRuntime::with_pin_settings`. They cover the default strategy, the send and invoice
+  TTLs, the change and exclusion limits, the Epicbox invoice window, the payer's TTL lead
+  cap, the open receipt caps, the default minimum confirmations and the PIN rules. Every
+  default is the value used before.
 - One send to self, ADR 0037: `Wallet::send_to_self` and `Wallet::estimate_send_to_self`
   take a `SelfSendRequest` of inputs (`All`, `Smallest`, `Named`) and outputs (`Count`,
   `Amounts`, the rest as one more output), 1 to 10 outputs; the estimate's fee equals the
@@ -74,6 +80,10 @@ Conventional Commit messages at release time.
 
 ### Removed
 
+- `Password::MIN_NEW_LEN` and `Password::is_long_enough_to_set` (`lepic-wallet`), the password
+  length check of `lepic-ffi`, `MINIMUM_CONFIRMATIONS_RANGE` and its upper bound of 30, and
+  `WalletConfig.transports` (ADR 0036). The host checks the password length and the depth it
+  allows; `lepic-cli` checks 8 characters itself.
 - `Wallet::self_send`, `Wallet::spend_outputs_to_self`, `Wallet::estimate_self_send`,
   `SelfSendShape` and `SplitCount` in `lepic-wallet`, and `estimate_split`, `split_outputs`,
   `estimate_consolidate`, `consolidate_outputs` and `spend_outputs_to_self` in `lepic-ffi`:

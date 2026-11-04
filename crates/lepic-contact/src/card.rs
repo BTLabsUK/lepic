@@ -71,6 +71,8 @@ impl Capabilities {
     pub const ISSUES_INVOICES: Self = Self(1 << 2);
     /// A service inbox that asks for the fixed hint (RFC 0002 3.2).
     pub const FIXED_HINT: Self = Self(1 << 3);
+    /// Reserved: no LEPIC code sets or reads it. It stays defined so a card from a wallet that
+    /// sets it still parses.
     pub const SENDS_WITHDRAWALS: Self = Self(1 << 4);
 
     const KNOWN: u16 = 0b1_1111;
