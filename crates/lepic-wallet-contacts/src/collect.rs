@@ -32,6 +32,7 @@ use super::{
 };
 use crate::ContactBook;
 use lepic_primitives::error_chain::ErrorChain;
+use lepic_wallet::WalletPolicy;
 use lepic_wallet::event::{
     ContactChange, ContactEvent, ContactUpdate, Event, FailedPairing, RelayMoveRequest,
     UnreachableRelay,
@@ -113,17 +114,11 @@ const OLD_SALT_PREFIX: &str = "contact.oldsalt.";
 const STAMPED_PREFIX: &str = "contact.stamped.";
 const HELD_PREFIX: &str = "contact.held.";
 
-/// How many times a mailbox message that fails with an error is kept for the next cycle. As for
-/// the payments inbox: a relay discards everything queued for an address when one message stays
-/// unacknowledged for long, and every message behind a held one waits meanwhile.
-const MAX_HOLD_ATTEMPTS: u32 = 3;
-
-/// How long after a mailbox message was first held it is still kept, as for the payments inbox.
-const HOLD_PATIENCE: Duration = Duration::from_secs(3 * 60);
-
 /// A hold count is forgotten this long after the message was first held, whether or not it came
-/// back: one that never comes back would otherwise keep its row forever.
-const HELD_FORGOTTEN: Duration = Duration::from_secs(24 * 60 * 60);
+/// back: one that never comes back would otherwise keep its row forever. How often and how long
+/// a failing message is held are the host's ([`WalletPolicy::contact_hold_attempts`] and
+/// [`WalletPolicy::contact_hold_patience`]), within this bound.
+const HELD_FORGOTTEN: Duration = WalletPolicy::MAX_CONTACT_HOLD_PATIENCE;
 
 /// The setting that marks a contact whose envelopes carry their send time: from then on one
 /// without it is refused.
@@ -710,10 +705,12 @@ where
     }
 
     /// Counts one more hold of the envelope with `hash` and returns whether it may still be
-    /// held: fewer than [`MAX_HOLD_ATTEMPTS`] holds so far, and within [`HOLD_PATIENCE`] of the
-    /// first. The count is kept as `first-seen seconds:holds` under the envelope's hash.
+    /// held: no more than [`WalletPolicy::contact_hold_attempts`] holds so far, and within
+    /// [`WalletPolicy::contact_hold_patience`] of the first. The count is kept as
+    /// `first-seen seconds:holds` under the envelope's hash.
     async fn count_hold(&self, hash: [u8; 32]) -> Result<bool, ContactError> {
         let session = self.wallet.session()?;
+        let policy = self.wallet.config().policy;
         self.contact_work(move |ports, _| {
             let now = u64::try_from(ports.clock.now().as_second()).unwrap_or(0);
             let key = format!("{HELD_PREFIX}{}", hex::encode(&hash));
@@ -726,7 +723,7 @@ where
                     })
                     .unwrap_or((now, 0));
                 let holds = holds.saturating_add(1);
-                let expired = hold_expired(first, holds, now);
+                let expired = hold_expired(first, holds, now, &policy);
                 if expired {
                     repos.delete_setting(&key)?;
                 } else {
@@ -752,6 +749,7 @@ where
     /// the hold counts of messages first held longer ago than [`HELD_FORGOTTEN`].
     async fn forget_old_envelopes(&self) -> Result<(), ContactError> {
         let session = self.wallet.session()?;
+        let patience = self.wallet.config().policy.contact_hold_patience;
         self.contact_work(move |ports, _| {
             let now = ports.clock.now();
             let cutoff = now.checked_sub(SEEN_LIFETIME).unwrap_or(now);
@@ -759,7 +757,7 @@ where
             session.store.write(|repos| {
                 repos.forget_envelopes_before(cutoff)?;
                 for (key, value) in repos.settings_with_prefix(HELD_PREFIX)? {
-                    if hold_forgotten(&value, seconds) {
+                    if hold_forgotten(&value, seconds, patience) {
                         repos.delete_setting(&key)?;
                     }
                 }
@@ -1687,17 +1685,62 @@ fn within_update_limits(
 }
 
 /// Whether a message first held at `first` (seconds) and held `holds` times by `now` may no
-/// longer be kept for the next cycle.
-fn hold_expired(first: u64, holds: u32, now: u64) -> bool {
-    holds > MAX_HOLD_ATTEMPTS
-        || now.saturating_sub(first) >= HOLD_PATIENCE.as_secs()
+/// longer be kept for the next cycle under `policy`.
+fn hold_expired(first: u64, holds: u32, now: u64, policy: &WalletPolicy) -> bool {
+    let patience = policy.contact_hold_patience.as_secs();
+    holds > policy.contact_hold_attempts
+        || now.saturating_sub(first) >= patience
         // A clock set back since the first hold.
-        || first > now.saturating_add(HOLD_PATIENCE.as_secs())
+        || first > now.saturating_add(patience.as_secs())
+}
+
+/// Whether `error` passes by itself: the node, a relay or the store did not answer, or the
+/// wallet is locked. A message that fails so is kept for the next cycle without counting a
+/// hold, as the payments inbox keeps one; any other failure counts.
+fn passes(error: &ContactError) -> bool {
+    match error {
+        ContactError::Offline | ContactError::EpicboxOff => true,
+        ContactError::Wallet(error) => chain_passes(error),
+        error => chain_passes(error),
+    }
+}
+
+/// Whether any error in the chain from `error` passes, as [`passes`] says.
+fn chain_passes(error: &(dyn std::error::Error + 'static)) -> bool {
+    let mut next = Some(error);
+    while let Some(error) = next {
+        let passing = if let Some(error) = error.downcast_ref::<lepic_wallet::WalletError>() {
+            matches!(error, lepic_wallet::WalletError::Locked)
+        } else if let Some(error) = error.downcast_ref::<StoreError>() {
+            matches!(
+                error,
+                StoreError::Database(_)
+                    | StoreError::Io { .. }
+                    | StoreError::Randomness(_)
+                    | StoreError::Poisoned
+            )
+        } else if let Some(error) = error.downcast_ref::<lepic_node::NodeError>() {
+            error.is_transient()
+        } else if let Some(error) = error.downcast_ref::<lepic_epicbox::MailboxError>() {
+            matches!(
+                error,
+                lepic_epicbox::MailboxError::Unreachable(_) | lepic_epicbox::MailboxError::Lost(_)
+            )
+        } else {
+            false
+        };
+        if passing {
+            return true;
+        }
+        next = error.source();
+    }
+    false
 }
 
 /// Whether the hold count `value` (`first-seen seconds:holds`) may be forgotten at `now`: first
-/// held longer ago than [`HELD_FORGOTTEN`], ahead of a clock set back, or unreadable.
-fn hold_forgotten(value: &str, now: u64) -> bool {
+/// held longer ago than [`HELD_FORGOTTEN`], ahead of a clock set back by more than `patience`,
+/// or unreadable.
+fn hold_forgotten(value: &str, now: u64, patience: Duration) -> bool {
     let Some(first) = value
         .split_once(':')
         .and_then(|(first, _)| first.parse::<u64>().ok())
@@ -1705,7 +1748,7 @@ fn hold_forgotten(value: &str, now: u64) -> bool {
         return true;
     };
     now.saturating_sub(first) > HELD_FORGOTTEN.as_secs()
-        || first > now.saturating_add(HOLD_PATIENCE.as_secs())
+        || first > now.saturating_add(patience)
 }
 
 /// Hands each drained message to the engine and acknowledges it once its effect is stored.
@@ -1757,10 +1800,12 @@ where
     S: StoreOpener + 'static,
     V: SecretVault + 'static,
 {
-    /// Keeps a message whose handling failed for the next cycle, until it has been held
-    /// [`MAX_HOLD_ATTEMPTS`] times or [`HOLD_PATIENCE`] has passed since it was first held:
-    /// then it is settled, so the relay keeps nothing behind it waiting. An error counting the
-    /// attempt itself does not stop the message being kept.
+    /// Keeps a message whose handling failed for the next cycle. A failure that passes
+    /// ([`passes`]) keeps it without counting; any other keeps it until it has been held
+    /// [`WalletPolicy::contact_hold_attempts`] times or [`WalletPolicy::contact_hold_patience`]
+    /// has passed since it was first held: then it is settled, so the relay keeps nothing
+    /// behind it waiting. An error counting the attempt itself does not stop the message being
+    /// kept.
     async fn hold_or_settle(&self, envelope: &[u8], error: &ContactError) -> Handled {
         let hash = envelope_hash(envelope);
         match self.wallet.count_hold(hash).await {
@@ -1773,6 +1818,10 @@ where
                 if let Err(error) = self.wallet.remember(hash).await {
                     warn!(error = %ErrorChain(&error), "dropped mailbox message not remembered");
                 }
+        if passes(error) {
+            warn!(error = %ErrorChain(error), "mailbox message kept until the failure passes");
+            return Handled::Later;
+        }
                 Handled::Stored
             }
             Err(count_error) => {
@@ -1829,10 +1878,17 @@ mod tests {
     #[test]
     fn a_message_is_held_for_a_few_tries_and_a_few_minutes() {
         let now = 1_000_000;
-        assert!(!hold_expired(now, 1, now));
-        assert!(!hold_expired(now, MAX_HOLD_ATTEMPTS, now + 10));
-        assert!(hold_expired(now, MAX_HOLD_ATTEMPTS + 1, now));
-        assert!(hold_expired(now, 1, now + HOLD_PATIENCE.as_secs()));
+        let policy = WalletPolicy::DEFAULT;
+        let attempts = policy.contact_hold_attempts;
+        assert!(!hold_expired(now, 1, now, &policy));
+        assert!(!hold_expired(now, attempts, now + 10, &policy));
+        assert!(hold_expired(now, attempts + 1, now, &policy));
+        assert!(hold_expired(
+            now,
+            1,
+            now + policy.contact_hold_patience.as_secs(),
+            &policy
+        ));
     }
 
     #[test]
@@ -1841,21 +1897,57 @@ mod tests {
         let forgotten = HELD_FORGOTTEN.as_secs();
         assert!(!hold_forgotten(
             &format!("{first}:1"),
-            first + HOLD_PATIENCE.as_secs()
+            first + patience.as_secs(),
+            patience
         ));
-        assert!(!hold_forgotten(&format!("{first}:3"), first + forgotten));
-        assert!(hold_forgotten(&format!("{first}:3"), first + forgotten + 1));
+        assert!(!hold_forgotten(
+            &format!("{first}:3"),
+            first + forgotten,
+            patience
+        ));
+        assert!(hold_forgotten(
+            &format!("{first}:3"),
+            first + forgotten + 1,
+            patience
+        ));
         assert!(hold_forgotten(
             &format!("{first}:1"),
-            first - HOLD_PATIENCE.as_secs() - 1
+            first - patience.as_secs() - 1,
+            patience
         ));
-        assert!(hold_forgotten("damaged", first));
+        assert!(hold_forgotten("damaged", first, patience));
+        let patience = WalletPolicy::DEFAULT.contact_hold_patience;
     }
 
     #[test]
     fn a_clock_set_back_since_the_first_hold_ends_it() {
         let first = 1_000_000;
-        assert!(hold_expired(first, 1, first - HOLD_PATIENCE.as_secs() - 1));
-        assert!(!hold_expired(first, 1, first - 1));
+        let policy = WalletPolicy::DEFAULT;
+        let patience = policy.contact_hold_patience.as_secs();
+        assert!(hold_expired(first, 1, first - patience - 1, &policy));
+        assert!(!hold_expired(first, 1, first - 1, &policy));
+    }
+
+    #[test]
+    fn a_failure_that_passes_by_itself_holds_without_counting() {
+        let store = |error| ContactError::Wallet(lepic_wallet::WalletError::Store(error));
+        for passing in [
+            ContactError::Offline,
+            ContactError::EpicboxOff,
+            ContactError::Wallet(lepic_wallet::WalletError::Locked),
+            store(StoreError::Poisoned),
+        ] {
+            assert!(passes(&passing), "{passing:?}");
+        }
+        for counted in [
+            ContactError::Ended,
+            ContactError::UnknownContact,
+            store(StoreError::Corrupt {
+                record: lepic_store::Record::Contact,
+                field: "card",
+            }),
+        ] {
+            assert!(!passes(&counted), "{counted:?}");
+        }
     }
 }
