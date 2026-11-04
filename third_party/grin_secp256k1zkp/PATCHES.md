@@ -26,6 +26,10 @@ was checked with fixed-vector and mainnet-data comparisons of the old and new bu
    failed `secp256k1_bulletproof_deserialize_point` in
    `secp256k1_bulletproof_rangeproof_verify_impl`. A proof with an invalid point is still
    rejected with the same return value; only the verifier's scratch frame is now released.
+2. bitcoin-core/secp256k1 `e491d06b` (PR 882): `src/group_impl.h`, `secp256k1_gej_add_ge`
+   computes its infinity flag with `& ~a->infinity` instead of an integer multiply. Both
+   operands are 0 or 1, so the value is identical; it keeps the constant-time path free of a
+   multiply the compiler might turn into a branch.
 
 ## Build changes (`build.rs`)
 
