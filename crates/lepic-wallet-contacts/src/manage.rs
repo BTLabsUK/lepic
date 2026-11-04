@@ -501,6 +501,93 @@ where
         Ok(queued)
     }
 
+    /// Moves this wallet's home relay for its contacts to `host`, `domain[:port]` (RFC 0002
+    /// 8.5): every paired contact pairing that has not ended and is not at home there gets our
+    /// card naming our mailbox on `host`, once, as a contact update queued for the mailbox it
+    /// reads now, and our mailbox for it moves to `host` in the same write. Returns how many
+    /// moved.
+    ///
+    /// The move announces and does not drain: the old mailboxes are not read again, whether
+    /// or not the contact follows. A contact that takes the update sees
+    /// [`Event::ContactRelayMoveRequested`](lepic_wallet::event::Event::ContactRelayMoveRequested)
+    /// and writes to the new mailbox once it applies the move; what it sends before that, or
+    /// all of it when it never takes the update, is lost, and the pairing has to be made
+    /// again. Private pairings and pairings in progress keep their relay. New invites name the
+    /// relay of `relays`, so the host switches its own relay too.
+    ///
+    /// Fails with [`ContactError::RelayAddress`] for a host that is not a relay's name, and as
+    /// the store does.
+    #[instrument(skip_all, fields(wallet = %self.wallet.config().name))]
+    pub async fn contacts_move_home(
+        &self,
+        relays: &ContactRelays,
+        host: &str,
+    ) -> Result<u32, ContactError> {
+        self.check_contact_network(relays)?;
+        let home = super::relay::endpoint_for(&host.trim().to_ascii_lowercase(), relays)?;
+        let home_relay = super::relay::host_text(&home);
+        let network = self.wallet.config().network;
+        let features = self.wallet.config().claimed_features();
+        let session = self.wallet.session()?;
+        let payments = super::address_proof::Payments::of(&session.keychain, network, relays)?;
+        // A collect on its way would drain the mailboxes this moves away from.
+        let turn = self.wallet.contact_turn().await;
+        let moved = self
+            .contact_work(move |ports, _| {
+                let now = ports.clock.now();
+                session.store.write(|repos| {
+                    let at = super::address_proof::CardUpdate {
+                        keychain: &session.keychain,
+                        network,
+                        payments: &payments,
+                        features,
+                        now,
+                    };
+                    let mut moved = 0u32;
+                    for record in repos.contacts()? {
+                        let Some(mut mailbox) = repos.contact_mailbox(record.contact_id)? else {
+                            continue;
+                        };
+                        if mailbox.home_relay == home_relay {
+                            continue;
+                        }
+                        let keys = super::keys::contact_keys(
+                            &session.keychain,
+                            network,
+                            record.account,
+                            record.slot,
+                            record.box_salt,
+                        )?;
+                        let ours = super::keys::box_identity(&keys, network, &home)?
+                            .address()
+                            .to_string();
+                        let named = lepic_contact::MailboxAddress::new(&ours)
+                            .map_err(ContactError::Name)?;
+                        if !super::address_proof::queue_card_update(
+                            repos,
+                            &ports.rng,
+                            &at,
+                            record,
+                            |fields| fields.mailbox = named,
+                        )? {
+                            continue;
+                        }
+                        mailbox.home_relay.clone_from(&home_relay);
+                        // Only a drain left by following a contact's own move stays, to its end.
+                        mailbox.our_mailbox = ours;
+                        repos.put_contact_mailbox(&mailbox)?;
+                        moved = moved.saturating_add(1);
+                    }
+                    Ok::<_, ContactError>(moved)
+                })
+            })
+            .await?;
+        drop(turn);
+        self.deliver_soon(relays).await;
+        info!(count = moved, "home relay moved for contacts");
+        Ok(moved)
+    }
+
     /// Sets the user's own name for a contact; an empty label clears it. A label follows the
     /// rule of card names: at most 48 bytes, no control or hidden formatting characters.
     /// Fails with [`ContactError::Name`] for another label and [`ContactError::UnknownContact`].
