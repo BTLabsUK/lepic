@@ -163,8 +163,9 @@ shell keeps in its history. A command that opens the wallet reads the password f
 line of `password_file` if it is set, else from `LEPIC_PASSWORD`, else from a hidden prompt, else
 from one line of standard input. A new password is asked for twice at a prompt.
 
-`password_file` is meant for services: point it at a file only its owner can read (mode `0600`,
-or a systemd credential); any other mode is refused. `LEPIC_PASSWORD` is meant for scripts; while
+`password_file` is meant for services: point it at a file only its owner can read (mode `0600`).
+A file root owns may also be readable by its group or by the users an access list names, as a
+systemd credential (`LoadCredential=`) is. Any other mode is refused. `LEPIC_PASSWORD` is meant for scripts; while
 a command runs, other processes of the same user can read it. Neither is passed on to the tor the
 CLI starts.
 

@@ -183,7 +183,8 @@ fn first_line(bytes: &[u8], what: &'static str) -> Result<Zeroizing<String>, Sec
 }
 
 /// The wallet password from the first line of a file only its owner can read, the way a service
-/// manager hands a secret to a service without putting it in the environment.
+/// manager hands a secret to a service without putting it in the environment. See
+/// [`readable_by_others`] for the modes taken.
 fn read_password_file(path: &Path) -> Result<Zeroizing<String>, SecretError> {
     let failed = |source| SecretError::PasswordFile {
         path: path.to_owned(),
@@ -192,9 +193,9 @@ fn read_password_file(path: &Path) -> Result<Zeroizing<String>, SecretError> {
     let file = std::fs::File::open(path).map_err(failed)?;
     #[cfg(unix)]
     {
-        use std::os::unix::fs::PermissionsExt as _;
-        let mode = file.metadata().map_err(failed)?.permissions().mode();
-        if mode & 0o077 != 0 {
+        use std::os::unix::fs::MetadataExt as _;
+        let metadata = file.metadata().map_err(failed)?;
+        if readable_by_others(metadata.mode(), metadata.uid()) {
             return Err(SecretError::PasswordFileOpen {
                 path: path.to_owned(),
             });
@@ -212,6 +213,16 @@ fn read_password_file(path: &Path) -> Result<Zeroizing<String>, SecretError> {
         });
     }
     Ok(password)
+}
+
+/// Whether a file of `mode` owned by `owner` may be read by users the owner did not choose. A file
+/// root owns may be readable by its group, or by users an access list names, as a systemd
+/// credential is: only root granted that. A file anyone else owns must be owner-only.
+#[cfg(unix)]
+const fn readable_by_others(mode: u32, owner: u32) -> bool {
+    let by_group = mode & 0o070 != 0 && owner != 0;
+    let by_anyone = mode & 0o007 != 0;
+    by_group || by_anyone
 }
 
 /// Holds the most a read takes, the longest secret and one byte more, from the start: a growing
@@ -429,6 +440,16 @@ mod tests {
                 Err(SecretError::PasswordFileOpen { .. })
             ));
         });
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_root_owned_file_may_be_read_by_its_group_but_never_by_anyone() {
+        assert!(!readable_by_others(0o100_600, 1000));
+        assert!(readable_by_others(0o100_640, 1000));
+        assert!(!readable_by_others(0o100_440, 0));
+        assert!(readable_by_others(0o100_444, 0));
+        assert!(readable_by_others(0o100_604, 1000));
     }
 
     #[test]
