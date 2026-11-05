@@ -208,6 +208,8 @@ pub enum CliError {
     Tor(#[from] lepic_tor::TorFailure),
     #[error("contact failed")]
     Contact(#[from] ContactError),
+    #[error("a pairing's sas is not in the sas table")]
+    SasTable,
     #[error("contact id is not 32 hex digits")]
     ContactId,
     #[error("payload id is not 32 hex digits")]
@@ -302,6 +304,7 @@ impl CliError {
             | Self::Scan(_)
             | Self::Store(_)
             | Self::Registry(_)
+            | Self::SasTable
             | Self::Io { .. } => ErrorKind::Internal,
         }
     }

@@ -133,8 +133,8 @@ fn state_name(state: ContactState) -> &'static str {
     }
 }
 
-fn contact_report(view: &ContactView) -> ContactReport {
-    ContactReport {
+fn contact_report(view: &ContactView) -> Result<ContactReport, CliError> {
+    Ok(ContactReport {
         contact_id: view.contact_id.to_string(),
         label: view.label.clone(),
         claimed_name: view.claimed_name.clone(),
@@ -152,6 +152,8 @@ fn contact_report(view: &ContactView) -> ContactReport {
         sas_indexes: view
             .sas
             .map(|symbols| symbols.iter().map(SasSymbol::index).collect())
+            .transpose()
+            .map_err(|_| CliError::SasTable)?
             .unwrap_or_default(),
         status: match view.status {
             PairingStatus::Waiting => "waiting",
@@ -181,7 +183,7 @@ fn contact_report(view: &ContactView) -> ContactReport {
         requested_relay: view.requested_relay.clone(),
         lapsed: view.lapsed,
         last_heard: view.last_sealed_in.map(|at| at.to_string()),
-    }
+    })
 }
 
 /// The CLI's relays: its Epicbox transport, and the first Epicbox servers of the settings file,
@@ -337,7 +339,7 @@ impl<H: Host> Run<'_, H> {
                     .contact_book()
                     .pairing_scan_card(&relays, id, &args.link)
                     .await?;
-                Report::Contact(contact_report(&view))
+                Report::Contact(contact_report(&view)?)
             }
             ContactCommand::List => Report::ContactList(ContactListReport {
                 contacts: wallet
@@ -346,7 +348,7 @@ impl<H: Host> Run<'_, H> {
                     .await?
                     .iter()
                     .map(contact_report)
-                    .collect(),
+                    .collect::<Result<_, _>>()?,
             }),
             ContactCommand::KeyCheck(args) => key_check(&opened, &relays, args).await?,
             ContactCommand::Keys(args) => resolve_keys(&opened, args).await?,
@@ -545,7 +547,7 @@ async fn sas<N: lepic_node::NodeApi + 'static>(
             removed: true,
         })
     } else {
-        Report::Contact(contact_report(&wallet.contact_book().contact(id).await?))
+        Report::Contact(contact_report(&wallet.contact_book().contact(id).await?)?)
     })
 }
 
@@ -616,7 +618,7 @@ async fn resolve_keys<N: lepic_node::NodeApi + 'static>(
                 .contact_book()
                 .contact_keys_resolve(new, KeysDecision::UseNew)
                 .await?;
-            Report::Contact(contact_report(&wallet.contact_book().contact(new).await?))
+            Report::Contact(contact_report(&wallet.contact_book().contact(new).await?)?)
         }
     })
 }
@@ -706,7 +708,7 @@ async fn label<N: lepic_node::NodeApi + 'static>(
         .await?;
     Ok(Report::Contact(contact_report(
         &wallet.contact_book().contact(id).await?,
-    )))
+    )?))
 }
 
 /// `lepic contact move`: moves our mailbox with this contact to the relay it asked for.
@@ -722,7 +724,7 @@ async fn move_relay<N: lepic_node::NodeApi + 'static>(
         .await?;
     Ok(Report::Contact(contact_report(
         &wallet.contact_book().contact(id).await?,
-    )))
+    )?))
 }
 
 /// `lepic contact move-home`: moves the wallet's own home relay for every paired contact.
@@ -760,7 +762,7 @@ async fn allow_invoices<N: lepic_node::NodeApi + 'static>(
         .await?;
     Ok(Report::Contact(contact_report(
         &wallet.contact_book().contact(id).await?,
-    )))
+    )?))
 }
 
 /// `lepic contact invoice`: sends a contact an invoice through its mailbox.
