@@ -361,3 +361,138 @@ fn a_wallet_moving_its_home_relay_tells_each_contact_once_and_does_not_drain() {
     // The old mailbox still holds the check nobody read.
     assert_eq!(world.relay.pending(&old), left + 1);
 }
+
+fn peer_profile(world: &World, party: &Party, contact: ContactId) -> u32 {
+    world
+        .block_on(party.wallet.contact_book().contact(contact))
+        .unwrap()
+        .peer_profile
+}
+
+fn set_profile(world: &World, party: &Party, profile: u16) -> u32 {
+    world
+        .block_on(
+            party
+                .wallet
+                .contact_book()
+                .contacts_set_own_profile(&relays(party), profile),
+        )
+        .unwrap()
+}
+
+/// Each side's configured profile reaches the other in the invite and the reply, and the view
+/// shows the peer's half of the features word; a wallet without one shows 0.
+#[test]
+fn a_pairing_shows_the_peers_profile_and_no_profile_is_zero() {
+    let world = World::with_profiles(3, 5);
+    let (issuer_side, payer_side) = world.pair_by_link();
+    assert_eq!(peer_profile(&world, &world.issuer, issuer_side), 5);
+    assert_eq!(peer_profile(&world, &world.payer, payer_side), 3);
+
+    let plain = World::new();
+    let (issuer_side, payer_side) = plain.pair_by_link();
+    assert_eq!(peer_profile(&plain, &plain.issuer, issuer_side), 0);
+    assert_eq!(peer_profile(&plain, &plain.payer, payer_side), 0);
+}
+
+/// A features word stored by an older build, with bits the profile half now uses, still loads
+/// and shows those bits as the profile; the low half is untouched.
+#[test]
+fn a_stored_features_word_with_high_bits_still_loads() {
+    let world = World::new();
+    let (issuer_side, payer_side) = world.pair_by_link();
+    world.payer.write(|repos| {
+        let mut record = repos.contact(payer_side)?.unwrap();
+        record.facts.peer_features = 0x8001_004f;
+        repos.put_contact(&record)
+    });
+    let view = world
+        .block_on(world.payer.wallet.contact_book().contact(payer_side))
+        .unwrap();
+    assert_eq!(view.peer_features, 0x8001_004f);
+    assert_eq!(view.peer_profile, 0x8001);
+    assert_eq!(peer_profile(&world, &world.issuer, issuer_side), 0);
+}
+
+/// `contacts_set_own_profile` queues one update per paired contact, raises the card's seq,
+/// and the contact shows the new profile once it collects.
+#[test]
+fn setting_the_own_profile_updates_each_paired_contact() {
+    let world = World::with_profiles(3, 0);
+    let (issuer_side, payer_side) = world.pair_by_link();
+    assert_eq!(peer_profile(&world, &world.payer, payer_side), 3);
+    let seq = own_seq(&world.issuer, issuer_side);
+
+    assert_eq!(set_profile(&world, &world.issuer, 1), 1);
+    assert_eq!(own_seq(&world.issuer, issuer_side), seq + 1);
+    world.collect(&world.issuer);
+    world.collect(&world.payer);
+    assert_eq!(peer_profile(&world, &world.payer, payer_side), 1);
+    assert_eq!(peer_seq(&world.payer, payer_side), seq + 1);
+
+    // Nothing stored says what the contact was told, so the same value is sent again.
+    assert_eq!(set_profile(&world, &world.issuer, 1), 1);
+    // The session's configured profile is not changed by it.
+    assert_eq!(world.issuer.wallet.config().profile, 3);
+}
+
+/// An ended pairing gets no update; a wallet with no contact queues none.
+#[test]
+fn setting_the_own_profile_skips_ended_pairings() {
+    let world = World::new();
+    assert_eq!(set_profile(&world, &world.issuer, 1), 0);
+    let (issuer_side, payer_side) = world.pair_by_link();
+    world.issuer.write(|repos| {
+        let mut record = repos.contact(issuer_side)?.unwrap();
+        record.facts.ended_reason = Some(lepic_store::PairingEndReason::Unpaired);
+        repos.put_contact(&record)
+    });
+    assert_eq!(set_profile(&world, &world.issuer, 1), 0);
+    assert_eq!(peer_profile(&world, &world.payer, payer_side), 0);
+}
+
+/// A contact check is answered with the configured profile in the card update's features, and
+/// the profile survives the re-sign that a card update is.
+#[test]
+fn a_contact_check_answer_carries_the_configured_profile() {
+    let world = World::with_profiles(3, 0);
+    let (issuer_side, payer_side) = world.pair_by_link();
+    set_profile(&world, &world.issuer, 7);
+    world.collect(&world.issuer);
+    world.collect(&world.payer);
+    assert_eq!(peer_profile(&world, &world.payer, payer_side), 7);
+
+    advance(&world, 10 * MINUTE);
+    check(&world, &world.payer, payer_side).unwrap();
+    world.collect(&world.issuer);
+    world.collect(&world.payer);
+    assert_eq!(peer_profile(&world, &world.payer, payer_side), 3);
+    assert_eq!(
+        peer_seq(&world.payer, payer_side),
+        own_seq(&world.issuer, issuer_side)
+    );
+}
+
+/// A pairing restored from a contact backup knows no features word: the backup keeps none. The
+/// check the app sends right after a restore brings the peer's profile back.
+#[test]
+fn a_restored_pairing_learns_the_peers_profile_from_a_contact_check() {
+    let world = World::with_profiles(3, 0);
+    let (_, payer_side) = world.pair_by_link();
+    assert_eq!(peer_profile(&world, &world.payer, payer_side), 3);
+    let document = world
+        .block_on(world.payer.wallet.contact_book().contacts_export())
+        .unwrap();
+    let restored = world.payer_twin();
+    world
+        .block_on(restored.wallet.contact_book().contacts_import(document))
+        .unwrap();
+    let contact = world.only_contact(&restored);
+    assert_eq!(peer_profile(&world, &restored, contact), 0);
+
+    check(&world, &restored, contact).unwrap();
+    world.collect(&world.issuer);
+    world.collect(&restored);
+
+    assert_eq!(peer_profile(&world, &restored, contact), 3);
+}

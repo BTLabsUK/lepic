@@ -252,6 +252,9 @@ pub struct ContactView {
     pub peer_verified_at: Option<Timestamp>,
     /// The features the contact claimed in this pairing; 0 when none were received.
     pub peer_features: u32,
+    /// The profile the contact sent: `peer_features` from bit 16 up, moved down. LEPIC never
+    /// reads a bit of it; the host names them.
+    pub peer_profile: u32,
     pub ended_reason: Option<PairingEndReason>,
     pub ended_at: Option<Timestamp>,
 }

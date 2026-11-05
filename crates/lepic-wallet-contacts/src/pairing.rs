@@ -395,7 +395,7 @@ where
         let payments = (request.class == PairingClass::Contact)
             .then(|| Payments::of(&session.keychain, network, relays))
             .transpose()?;
-        let features = self.wallet.config().claimed_features();
+        let features = self.wallet.config().pairing_features();
         let mut offer = self
             .contact_work(move |ports, _| {
                 let now = ports.clock.now();
@@ -513,7 +513,7 @@ where
         let payments = (invite.class() == PairingClass::Contact)
             .then(|| Payments::of(&session.keychain, network, relays))
             .transpose()?;
-        let features = self.wallet.config().claimed_features();
+        let features = self.wallet.config().pairing_features();
         let expect_key = expected_key(request.expect_address.as_deref(), network)?;
         let ours = payments.as_ref().map(Payments::key);
         let (contact_id, envelope, from, to) = self
@@ -1073,7 +1073,7 @@ where
             (None, PairingExtras::default())
         } else {
             let payments = Payments::of(&session.keychain, network, relays)?;
-            let features = self.wallet.config().claimed_features();
+            let features = self.wallet.config().pairing_features();
             reply_proofs(
                 network, &keys, &invite, &reply, &own, &extras, &payments, features,
             )

@@ -145,7 +145,7 @@ where
         record: &ContactRecord,
     ) -> Result<Handled, ContactError> {
         let network = self.wallet.config().network;
-        let features = self.wallet.config().claimed_features();
+        let features = self.wallet.config().pairing_features();
         let policy = self.wallet.config().policy;
         let session = self.wallet.session()?;
         let payments = Payments::of(&session.keychain, network, relays)?;

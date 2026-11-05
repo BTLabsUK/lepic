@@ -125,6 +125,7 @@ impl Party {
             policy: Default::default(),
             offline: false,
             host_features: 0,
+            profile: 0,
         };
         let wallet = Wallet::new(config, ports).unwrap();
         runtime
