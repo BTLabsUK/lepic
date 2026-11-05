@@ -16,13 +16,16 @@ pub const STATUS_NOTICES: u32 = 1 << 3;
 pub const DEVICE_FORWARDING: u32 = 1 << 4;
 /// The directory listing; a host bit.
 pub const DIRECTORY: u32 = 1 << 5;
+/// Keeping app payloads that arrive over a pairing until the host acknowledges them.
+pub const APP_PAYLOADS: u32 = 1 << 6;
 
 /// The bits the host app may claim; it passes them as one constant of its build.
 pub const HOST_FEATURES: u32 = DEVICE_FORWARDING | DIRECTORY;
 
 /// The bits this build of LEPIC claims for itself, the same for every wallet it runs, never
 /// derived from a setting.
-pub const LEPIC_FEATURES: u32 = MARKER | PAIR_REQUESTS | ADDRESS_PROOF | STATUS_NOTICES;
+pub const LEPIC_FEATURES: u32 =
+    MARKER | PAIR_REQUESTS | ADDRESS_PROOF | STATUS_NOTICES | APP_PAYLOADS;
 
 /// What a wallet whose host claims `host` writes: LEPIC's own bits, and of `host` only the
 /// host bits.
@@ -39,12 +42,18 @@ mod tests {
         assert_eq!(claimed(0), LEPIC_FEATURES);
         assert_eq!(claimed(u32::MAX), LEPIC_FEATURES | HOST_FEATURES);
         assert_eq!(claimed(ADDRESS_PROOF | PAIR_REQUESTS), LEPIC_FEATURES);
-        assert_eq!(claimed(DIRECTORY | 1 << 6), LEPIC_FEATURES | DIRECTORY);
+        assert_eq!(claimed(DIRECTORY | 1 << 7), LEPIC_FEATURES | DIRECTORY);
     }
 
     #[test]
     fn lepic_never_claims_a_host_bit_itself() {
         assert_eq!(LEPIC_FEATURES & HOST_FEATURES, 0);
         assert_ne!(LEPIC_FEATURES & MARKER, 0);
+    }
+
+    #[test]
+    fn lepic_claims_app_payloads() {
+        assert_eq!(LEPIC_FEATURES, 0b100_1111);
+        assert_ne!(claimed(0) & APP_PAYLOADS, 0);
     }
 }

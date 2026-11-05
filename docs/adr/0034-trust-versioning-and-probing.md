@@ -66,12 +66,15 @@ A `u32` that only grows. A bit is never reused or redefined.
 | 3 | Pairing-outcome notices | same | a verdict or `pair-finished` arrived in a pairing whose proof names the key |
 | 4 | Linked-device forwarding | the app (host bit) | the app reports a forwarded item was taken |
 | 5 | Directory and listings | the app (host bit) | the app reports a directory exchange succeeded |
-| 6 to 31 | Reserved | | |
+| 6 | App payloads | marker word, pairing envelope | an app payload from the key was kept |
+| 7 to 31 | Reserved | | |
 
 The marker word is `f` inside the marker; pairing envelopes carry the same `u32` in extension tag
 `0x82`, big-endian, unknown bits kept and never refused. The app passes bits 4 and 5 as one build
 constant (`WalletConfig::host_features`); LEPIC keeps only those two bits of it and adds its own,
-bits 0 to 3, so the word this build claims is 15 without the host and 63 with both host bits.
+bits 0 to 3 and 6, so the word this build claims is 79 without the host and 127 with both host
+bits. A wallet posting an app payload to a key whose recorded word is known and lacks bit 6
+logs a warning and reports it to the caller; the payload is posted all the same.
 The marked V2 and V3 JSON codecs (`MarkedV2JsonCodec`, `MarkedV3JsonCodec`) write it as `f`
 (`with_features`) and read it back; an `f` that is no `u32` reads as a marker without a word. The
 word is the same for every user of a build and is never taken from a setting. Vectors:
