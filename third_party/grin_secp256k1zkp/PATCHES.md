@@ -15,7 +15,7 @@ Only what `build.rs` compiles and includes is kept, with the licence and fork no
 
 ## Patches
 
-One, taken from upstream mimblewimble/secp256k1-zkp commit
+Patch 1, taken from upstream mimblewimble/secp256k1-zkp commit
 `0eefcedc1fec37d54e53bac4e535afa47d6774fa` ("fix scratch leak"):
 
 - `depend/secp256k1-zkp/src/modules/bulletproofs/rangeproof_impl.h`: two added lines, a
@@ -26,6 +26,16 @@ One, taken from upstream mimblewimble/secp256k1-zkp commit
   verifier's scratch frame is now released.
 
 The upstream commit's new C test (`tests_impl.h`) is not applied: the C tests are not built here.
+
+Patch 2, LEPIC's own, so the crate builds without warnings and stays valid under edition 2024
+(`static_mut_refs` is an error there). `src/pedersen.rs` only:
+
+- `shared_generators` reads `SHARED_BULLETGENERATORS` by value through a raw pointer,
+  `match *(&raw const SHARED_BULLETGENERATORS)`, instead of `SHARED_BULLETGENERATORS.clone()`,
+  which took a shared reference to a mutable static. The value is a `Copy` `Option` of a
+  pointer, so the result is the same.
+- The unused `use std::mem;` and the deprecated `use std::u64;` are removed. The three
+  `u64::MAX` then name the type's associated constant, the same value.
 
 Nothing else differs from 42fcb29. This file is the only addition.
 
@@ -39,4 +49,4 @@ cd third_party/grin_secp256k1zkp
 find . -type f ! -name PATCHES.md | while read f; do diff -u "../../fork/$f" "$f"; done
 ```
 
-The only output is the two lines above.
+The only output is the two C lines of patch 1 and the four `src/pedersen.rs` lines of patch 2.

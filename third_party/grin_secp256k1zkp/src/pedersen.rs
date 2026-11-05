@@ -19,9 +19,7 @@
 use libc::size_t;
 use std::cmp::min;
 use std::fmt;
-use std::mem;
 use std::ptr;
-use std::u64;
 
 use crate::ContextFlag;
 use crate::Error::{self, InvalidPublicKey, InvalidCommit};
@@ -45,7 +43,7 @@ static mut SHARED_BULLETGENERATORS: Option<*mut ffi::BulletproofGenerators> = No
 // TODO: Check whether this matters if this is used with a different context; don't think it does
 fn shared_generators(ctx: *mut ffi::Context) -> *mut ffi::BulletproofGenerators {
 	unsafe {
-		match SHARED_BULLETGENERATORS.clone() {
+		match *(&raw const SHARED_BULLETGENERATORS) {
 			Some(s) => s,
 			None => {
 				SHARED_BULLETGENERATORS = Some(ffi::secp256k1_bulletproof_generators_create(

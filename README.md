@@ -67,7 +67,7 @@ LEPIC reads and writes the same formats as `epic-wallet` and adds:
 LEPIC reimplements the transaction, key and slate logic of the Epic Cash node and wallet instead of
 linking their full code, and uses the same cryptography library Epic Cash uses,
 [rust-secp256k1-zkp](https://github.com/EpicCash/rust-secp256k1-zkp), vendored from an exact commit
-with one upstream fix (`third_party/grin_secp256k1zkp/PATCHES.md`).
+with one upstream fix and a warning fix (`third_party/grin_secp256k1zkp/PATCHES.md`).
 Matching is checked, not assumed:
 
 - **One target release.** LEPIC targets `epic-wallet` and the Epic node `v4.1.0`, pinned to exact

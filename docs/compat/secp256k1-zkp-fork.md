@@ -60,9 +60,11 @@ Upstream after the merge base, besides the two guards the fork took:
 
 `third_party/grin_secp256k1zkp` is the fork at 42fcb29 with its C library at b247e1ec, plus one
 patch: upstream `0eefced`'s two added lines in `src/modules/bulletproofs/rangeproof_impl.h`, which
-free the verifier's scratch frame before the two early `return 0;` after a bad proof point.
-`PATCHES.md` there lists the origin, what was left out (CI, fuzz, C tests, benchmarks, autotools)
-and the patch. The workspace takes it as a path dependency; `third_party` is excluded from the
+free the verifier's scratch frame before the two early `return 0;` after a bad proof point. A
+second patch, LEPIC's own, only removes rustc warnings in `src/pedersen.rs`: two unused or
+deprecated imports, and the shared generators are read through a raw pointer instead of a
+reference to a mutable static. `PATCHES.md` there lists the origin, what was left out (CI, fuzz,
+C tests, benchmarks, autotools) and both patches. The workspace takes it as a path dependency; `third_party` is excluded from the
 workspace, and `cargo xtask repo-lint` rejects any git source in the product lockfile.
 
 Why this and not upstream v0.8.0: the patch adds two lines and leaves every return value as it
@@ -72,7 +74,7 @@ return codes, other rand versions), which is a much larger change to review. Pus
 fork elsewhere would put the dependency outside this repository.
 
 To re-check: clone the fork at 42fcb29 with its submodule and diff each vendored file against
-it, as `PATCHES.md` shows. The only difference is the two lines.
+it, as `PATCHES.md` shows. The only differences are the two C lines and the four Rust lines.
 
 Unverified: the switch was made without building or testing. The next release candidate runs the
 full check on it: `cargo xtask vectors verify`, the fuzz targets (`slate_flow` with leak detection
