@@ -1,6 +1,6 @@
 # 0020 Reference wallet and node move to epic-wallet v4.1.0
 
-Status: accepted
+Status: accepted; superseded in part by 0038 (the node pin of the interop images and `upstream.toml`)
 Date: 2026-10-22
 
 Supersedes the version table of [0009](0009-conformance.md). The rest of 0009 stands.

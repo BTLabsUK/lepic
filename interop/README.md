@@ -2,7 +2,7 @@
 
 ## TL;DR
 
-`interop/run.sh` builds the public Epicbox relay, the reference node `v4.1.0`, `epic-wallet` `v4.1.0`
+`interop/run.sh` builds the public Epicbox relay, the reference node `v4.1.2`, `epic-wallet` `v4.1.0`
 and `lepic`, starts them on a private Docker network with a local test-mode chain, funds both wallets,
 runs every scenario below and prints a pass or fail table. It exits 0 only when every scenario
 passed. The compose network is internal, with no route out, so nothing in the stack can reach a
@@ -27,7 +27,7 @@ Builds use `CARGO_BUILD_JOBS` (default 4).
 |---|---|
 | `mongodb` | MongoDB 6.0 with the relay's own `mongo-init.js` |
 | `epicbox` | The relay from `EpicCash/epic-epicbox-docker`, domain `localhost`, port 3423, plain `ws://` |
-| `node` | `epic` `v4.1.0` on usernet: no peers, no seeds, RandomX blocks only, stratum on 23416 |
+| `node` | `epic` `v4.1.2` on usernet: no peers, no seeds, RandomX blocks only, stratum on 23416 |
 | `miner` | `miner/`, a stratum client that mines with the reference node's RandomX code |
 | `funder` | `epic-wallet` serving its foreign API; the node pays every coinbase to it |
 | `peer` | `epic-wallet`, the counterparty; the scenarios start and stop its Epicbox listener |
@@ -116,7 +116,7 @@ the fees, so a lost or doubled effect fails the run.
 | same S1 twice over http | one S1 posted twice to `lepic http listen`: identical S2, one transaction, report counts one received and one repeated |
 | receiver cancels an unseen receipt | `epic-wallet` pays over Epicbox and does not finalize; `lepic tx cancel` succeeds and the amount leaves `wallet info`; `epic-wallet` then finalizes anyway, and once mined `lepic` confirms the transaction and the output comes back |
 | receiver cancel of a posted receipt | with the miner paused, `epic-wallet` finalizes and posts; `lepic tx cancel` is refused with exit 7 as in the node's pool, then, after the block, as on chain; state and balance stay |
-| spendable at six confirmations | with the miner paused and blocks mined one at a time, a receipt awaits confirmation at 1 to 5 confirmations, a send that needs it exits 8 at 5, and it is spendable at exactly 6, the wallet default |
+| spendable at minimum confirmations | with the miner paused and blocks mined one at a time, a receipt awaits confirmation below LEPIC's default minimum confirmations (6), a send that needs it exits 8 one block before, and it is spendable at exactly 6 |
 
 `SCENARIO_FILTER='import epic-wallet history' ./run.sh` runs the last scenario alone (`history.sh`,
 `history_compare.py`). It builds a history in a fresh `epic-wallet` wallet: receipts over Epicbox and

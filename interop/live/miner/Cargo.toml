@@ -10,9 +10,9 @@ description = "Multi-threaded RandomX stratum miner for funding the live floonet
 [workspace]
 
 [dependencies]
-# Pinned exactly as the conformance workspace pins the reference node (ADR 0009), and the RandomX
+# Pinned exactly as the interop node (`interop/pins.env`), and the RandomX
 # binding exactly as that node pins it, so the hashes are the node's own.
-epic_core = { git = "https://github.com/EpicCash/epic", tag = "v4.0.4" }
-randomx = { git = "https://github.com/EpicCash/randomx-rust.git", tag = "v0.2.1" }
+epic_core = { git = "https://github.com/EpicCash/epic", tag = "v4.1.2" }
+randomx = { git = "https://github.com/EpicCash/randomx-rust.git", tag = "v0.2.1.1" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

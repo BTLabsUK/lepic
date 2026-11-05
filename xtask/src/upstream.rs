@@ -799,10 +799,10 @@ mod tests {
         }
     }
 
-    /// Each module records the ADR 0020 pin (`v4.1.0`) or, while its upstream drift since the
-    /// ADR 0009 pin awaits review, that older pin.
+    /// Each module records the current pin (node `v4.1.2`, ADR 0038; wallet `v4.1.0`, ADR 0020)
+    /// or, while its upstream drift since an earlier pin awaits review, that older pin.
     #[test]
-    fn repository_manifest_parses_with_adr_0009_or_0020_commits() {
+    fn repository_manifest_parses_with_reviewed_commits() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
         let text = fs::read_to_string(root.join(MANIFEST)).unwrap();
         let manifest = Manifest::parse(&text).unwrap();
@@ -810,8 +810,8 @@ mod tests {
         for module in &manifest.modules {
             let expected: [&str; 2] = match module.upstream.repo.as_str() {
                 "https://github.com/EpicCash/epic" => [
-                    "9d022b1d521d3f705532e12ab77e0a429f6fde1f",
                     "82fa7e813dc3b9bf137b9dd523d847f4210f5ba4",
+                    "bd3a8c8c5e957e57574364326dfb17051d0096ae",
                 ],
                 "https://github.com/EpicCash/epic-wallet" => [
                     "465d499f01aad7e570b6cc220d52c6bfcf6a9a44",
