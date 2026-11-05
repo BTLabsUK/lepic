@@ -267,16 +267,16 @@ pub struct TxReport {
     /// cancelled it; `tx show` only.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sender_reported_cancelled_at: Option<String>,
-    /// For a payment received at a listing address, the directory key (hex) and generation of
+    /// For a payment received at a listing address, the service key (hex) and generation of
     /// that listing; `tx show` only.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub receive_listing: Option<ListingReport>,
 }
 
-/// A listing: the directory key in hex and the generation.
+/// A listing: the service key in hex and the generation.
 #[derive(Debug, Serialize)]
 pub struct ListingReport {
-    pub dkey: String,
+    pub service_key: String,
     pub generation: u32,
 }
 

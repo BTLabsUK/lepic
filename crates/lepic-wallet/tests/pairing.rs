@@ -3187,13 +3187,13 @@ fn verified_contacts_pass_payloads_both_ways() {
     let (anna_side, ben_side) = verified_pair(&world);
     let mut ben_events = world.payer.wallet.subscribe();
 
-    let to_ben = post_payload(&world, &world.issuer, anna_side, b"directory hello");
+    let to_ben = post_payload(&world, &world.issuer, anna_side, b"name service hello");
     world.collect(&world.payer);
     let kept = payloads(&world, &world.payer);
     assert_eq!(kept.len(), 1);
     assert_eq!(
         (kept[0].id, kept[0].contact_id, kept[0].payload.as_slice()),
-        (to_ben, ben_side, b"directory hello".as_slice())
+        (to_ben, ben_side, b"name service hello".as_slice())
     );
     let arrived = events(&mut ben_events)
         .into_iter()
@@ -3224,7 +3224,7 @@ fn verified_contacts_pass_payloads_both_ways() {
     assert!(payloads(&world, &world.payer).is_empty());
 }
 
-/// A directory's first record reaches the wallet right after the pairing, before either side
+/// A name service's first record reaches the wallet right after the pairing, before either side
 /// compared the words, and the wallet can answer over it.
 #[test]
 fn a_contact_payload_passes_once_paired_before_any_words_check() {

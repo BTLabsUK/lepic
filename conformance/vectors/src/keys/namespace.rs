@@ -6,8 +6,8 @@
 //! SHA-256, HKDF, HMAC and Ed25519 from `ring`. Listing addresses use the wallet's own Epicbox
 //! address code.
 //!
-//! - listing key: BLAKE2b(key = seed, "lepic-wallet listing key v1" || dkey (33) || generation
-//!   (u32 BE) || counter (u8)), the counter from 0 up to the first valid secp256k1 key;
+//! - listing key: BLAKE2b(key = seed, "lepic-wallet listing key v1" || service_key (33) ||
+//!   generation (u32 BE) || counter (u8)), the counter from 0 up to the first valid secp256k1 key;
 //! - device-link key: Ed25519 from BLAKE2b(key = seed, "lepic-wallet device link key v1"), signing
 //!   "lepic/device-link/v1" || transcript;
 //! - listing signature: ECDSA by the listing key over SHA-256(SHA-256(tag) || SHA-256(tag) ||
@@ -32,8 +32,8 @@ const DEVICE_LINK_TAG: &[u8] = b"lepic/device-link/v1";
 const LISTING_TAG: &[u8] = b"lepic/listing-signature/v1";
 const ADDRESS_PROOF_SALT: &[u8] = b"lepic/addr-proof/1";
 
-/// Directory keys: the secret keys whose public keys the listings are for.
-const DIRECTORIES: [[u8; 32]; 2] = [[0x31; 32], [0x32; 32]];
+/// Service keys: the secret keys whose public keys the listings are for.
+const SERVICES: [[u8; 32]; 2] = [[0x31; 32], [0x32; 32]];
 const GENERATIONS: [u32; 3] = [0, 1, u32::MAX];
 
 /// The app domains of the registry, and the message signed under each.
@@ -72,13 +72,13 @@ pub(super) fn keyed(seed: &[u8], parts: &[&[u8]]) -> [u8; 32] {
 struct ListingInputs {
     seed: String,
     label: &'static str,
-    directory_keys: Vec<String>,
+    service_keys: Vec<String>,
     generations: Vec<u32>,
 }
 
 #[derive(Serialize)]
 struct ListingCase {
-    dkey: String,
+    service_key: String,
     generation: u32,
     counter: u8,
     secret_key: String,
@@ -91,11 +91,11 @@ struct Cases<T> {
     cases: Vec<T>,
 }
 
-/// The listing key of `seed` for `dkey` and `generation`, and the counter that made it.
+/// The listing key of `seed` for `service_key` and `generation`, and the counter that made it.
 fn listing_key(
     secp: &Secp256k1,
     seed: &[u8],
-    dkey: &[u8],
+    service_key: &[u8],
     generation: u32,
 ) -> Result<(u8, SecretKey), Error> {
     for counter in 0..=u8::MAX {
@@ -103,7 +103,7 @@ fn listing_key(
             seed,
             &[
                 LISTING_KEY_LABEL,
-                dkey,
+                service_key,
                 &generation.to_be_bytes(),
                 &[counter],
             ],
@@ -117,10 +117,10 @@ fn listing_key(
     )))
 }
 
-fn dkey(secp: &Secp256k1, secret: &[u8; 32]) -> Result<Vec<u8>, Error> {
-    let secret = SecretKey::from_slice(secp, secret).map_err(Error::reference("directory key"))?;
+fn service_key(secp: &Secp256k1, secret: &[u8; 32]) -> Result<Vec<u8>, Error> {
+    let secret = SecretKey::from_slice(secp, secret).map_err(Error::reference("service key"))?;
     let public =
-        PublicKey::from_secret_key(secp, &secret).map_err(Error::reference("directory key"))?;
+        PublicKey::from_secret_key(secp, &secret).map_err(Error::reference("service key"))?;
     Ok(public.serialize_vec(secp, true).to_vec())
 }
 
@@ -128,18 +128,18 @@ fn listing_keys(pins: &KeysPins<'_>) -> Result<Vec<Rendered>, Error> {
     let secp = secp();
     let mut vectors = Vec::new();
     for seed in &SEEDS {
-        let dkeys = DIRECTORIES
+        let service_keys = SERVICES
             .iter()
-            .map(|secret| dkey(&secp, secret))
+            .map(|secret| service_key(&secp, secret))
             .collect::<Result<Vec<_>, _>>()?;
         let mut cases = Vec::new();
-        for dkey in &dkeys {
+        for service_key in &service_keys {
             for generation in GENERATIONS {
-                let (counter, key) = listing_key(&secp, seed.entropy, dkey, generation)?;
+                let (counter, key) = listing_key(&secp, seed.entropy, service_key, generation)?;
                 let public = PublicKey::from_secret_key(&secp, &key)
                     .map_err(Error::reference("listing public key"))?;
                 cases.push(ListingCase {
-                    dkey: hex(dkey),
+                    service_key: hex(service_key),
                     generation,
                     counter,
                     secret_key: hex(key.0),
@@ -154,7 +154,7 @@ fn listing_keys(pins: &KeysPins<'_>) -> Result<Vec<Rendered>, Error> {
         let inputs = ListingInputs {
             seed: hex(seed.entropy),
             label: "lepic-wallet listing key v1",
-            directory_keys: dkeys.iter().map(hex).collect(),
+            service_keys: service_keys.iter().map(hex).collect(),
             generations: GENERATIONS.to_vec(),
         };
         let name = format!("listing_keys_{}", seed.name);
@@ -166,7 +166,7 @@ fn listing_keys(pins: &KeysPins<'_>) -> Result<Vec<Rendered>, Error> {
 #[derive(Serialize)]
 struct SignatureInputs {
     seed: String,
-    dkey: String,
+    service_key: String,
     generation: u32,
     tag: &'static str,
     message: String,
@@ -191,8 +191,8 @@ fn listing_signatures(pins: &KeysPins<'_>) -> Result<Vec<Rendered>, Error> {
     let seed = SEEDS
         .first()
         .ok_or(Error::reference("seeds")(Inconsistent("no seed")))?;
-    let dkey = dkey(&secp, &DIRECTORIES[0])?;
-    let (_, key) = listing_key(&secp, seed.entropy, &dkey, 0)?;
+    let service_key = service_key(&secp, &SERVICES[0])?;
+    let (_, key) = listing_key(&secp, seed.entropy, &service_key, 0)?;
     let public =
         PublicKey::from_secret_key(&secp, &key).map_err(Error::reference("listing public key"))?;
     let tag = sha256(&[LISTING_TAG]);
@@ -215,7 +215,7 @@ fn listing_signatures(pins: &KeysPins<'_>) -> Result<Vec<Rendered>, Error> {
     }
     let inputs = SignatureInputs {
         seed: hex(seed.entropy),
-        dkey: hex(&dkey),
+        service_key: hex(&service_key),
         generation: 0,
         tag: "lepic/listing-signature/v1",
         message: hex(MESSAGE),

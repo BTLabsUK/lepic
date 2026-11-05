@@ -14,13 +14,13 @@ pub const ADDRESS_PROOF: u32 = 1 << 2;
 pub const STATUS_NOTICES: u32 = 1 << 3;
 /// Forwarding between linked devices; a host bit.
 pub const DEVICE_FORWARDING: u32 = 1 << 4;
-/// The directory listing; a host bit.
-pub const DIRECTORY: u32 = 1 << 5;
+/// The name service and its listings; a host bit.
+pub const NAME_SERVICE: u32 = 1 << 5;
 /// Keeping app payloads that arrive over a pairing until the host acknowledges them.
 pub const APP_PAYLOADS: u32 = 1 << 6;
 
 /// The bits the host app may claim; it passes them as one constant of its build.
-pub const HOST_FEATURES: u32 = DEVICE_FORWARDING | DIRECTORY;
+pub const HOST_FEATURES: u32 = DEVICE_FORWARDING | NAME_SERVICE;
 
 /// The bits this build of LEPIC claims for itself, the same for every wallet it runs, never
 /// derived from a setting.
@@ -42,7 +42,10 @@ mod tests {
         assert_eq!(claimed(0), LEPIC_FEATURES);
         assert_eq!(claimed(u32::MAX), LEPIC_FEATURES | HOST_FEATURES);
         assert_eq!(claimed(ADDRESS_PROOF | PAIR_REQUESTS), LEPIC_FEATURES);
-        assert_eq!(claimed(DIRECTORY | 1 << 7), LEPIC_FEATURES | DIRECTORY);
+        assert_eq!(
+            claimed(NAME_SERVICE | 1 << 7),
+            LEPIC_FEATURES | NAME_SERVICE
+        );
     }
 
     #[test]

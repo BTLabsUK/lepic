@@ -318,10 +318,13 @@ pub(crate) fn verify_address_signature_at(
         .any(|key| lepic_epicbox::listing_message_verifies_hex(&key, &domain, message, signature))
 }
 
-/// The listing of the directory key `dkey`, 66 hex digits, and `generation`.
-fn listing(dkey: &str, generation: u32) -> Result<lepic_wallet::namespace::Listing, WalletError> {
-    lepic_wallet::namespace::Listing::from_hex(dkey, generation)
-        .map_err(|_| invalid("directory key is not a compressed secp256k1 key in hex"))
+/// The listing of the service key `service_key`, 66 hex digits, and `generation`.
+fn listing(
+    service_key: &str,
+    generation: u32,
+) -> Result<lepic_wallet::namespace::Listing, WalletError> {
+    lepic_wallet::namespace::Listing::from_hex(service_key, generation)
+        .map_err(|_| invalid("service key is not a compressed secp256k1 key in hex"))
 }
 
 fn service_domain(domain: &str) -> Result<lepic_epicbox::ServiceDomain, WalletError> {
@@ -1566,10 +1569,10 @@ impl Session {
 
     pub(crate) fn epicbox_address_at(
         &self,
-        dkey: &str,
+        service_key: &str,
         generation: u32,
     ) -> Result<String, WalletError> {
-        let listing = listing(dkey, generation)?;
+        let listing = listing(service_key, generation)?;
         Ok(self
             .engine
             .epicbox_address_at(&listing, &self.epicbox()?)?
@@ -1578,10 +1581,10 @@ impl Session {
 
     pub(crate) async fn drain_epicbox_at(
         &self,
-        dkey: &str,
+        service_key: &str,
         generation: u32,
     ) -> Result<InboxReport, WalletError> {
-        let listing = listing(dkey, generation)?;
+        let listing = listing(service_key, generation)?;
         let epicbox = self.epicbox()?;
         let summary = self.engine.drain_epicbox_at(&listing, &epicbox).await?;
         Ok(inbox_report(&summary))
@@ -1590,7 +1593,7 @@ impl Session {
     /// Never logs the message or the signature.
     pub(crate) fn sign_with_address_key_at(
         &self,
-        dkey: &str,
+        service_key: &str,
         generation: u32,
         domain: &str,
         message: &[u8],
@@ -1598,7 +1601,7 @@ impl Session {
         if message.len() > MAX_ADDRESS_SIGNED_LEN {
             return Err(invalid("message too long to sign"));
         }
-        let listing = listing(dkey, generation)?;
+        let listing = listing(service_key, generation)?;
         let domain = service_domain(domain)?;
         Ok(self
             .engine
@@ -1936,7 +1939,7 @@ fn transaction_details(details: &EngineTransactionDetails) -> TransactionDetails
             .as_ref()
             .map(|address| address.as_str().to_owned()),
         receive_listing: details.receive_listing.map(|listing| ListingRef {
-            dkey: listing.dkey().to_hex(),
+            service_key: listing.service_key().to_hex(),
             generation: listing.generation(),
         }),
         ttl_cutoff_height: details.ttl_cutoff_height.map(Height::value),

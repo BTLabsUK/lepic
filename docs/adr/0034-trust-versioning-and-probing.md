@@ -65,7 +65,7 @@ A `u32` that only grows. A bit is never reused or redefined.
 | 2 | Address proof | same | a proof from the key verified |
 | 3 | Pairing-outcome notices | same | a verdict or `pair-finished` arrived in a pairing whose proof names the key |
 | 4 | Linked-device forwarding | the app (host bit) | the app reports a forwarded item was taken |
-| 5 | Directory and listings | the app (host bit) | the app reports a directory exchange succeeded |
+| 5 | Name service and listings | the app (host bit) | the app reports a name-service exchange succeeded |
 | 6 | App payloads | marker word, pairing envelope | an app payload from the key was kept |
 | 7 to 31 | Reserved | | |
 
@@ -150,8 +150,8 @@ for its other fields. Vector: `keys/address_proofs` (the three steps, made from 
 
 ### Listings
 
-The listing calls take `(dkey, gen)`, derive keys by label (0033), and refuse app domains that start
-with `lepic`. A receive on a listing address never signs with index 0 and refuses a payment-proof
+The listing calls take `(service_key, gen)`, derive keys by label (0033), and refuse app domains
+that start with `lepic`. A receive on a listing address never signs with index 0 and refuses a payment-proof
 request; every later message of that transaction goes out from the listing key or is withheld.
 Other wallets' proof requests on normal receives are handled as before.
 

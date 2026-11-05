@@ -746,7 +746,8 @@ where
     }
 
     /// Forgets envelopes seen longer ago than a relay keeps a message, and a little longer, the
-    /// payload acknowledgement marks and parked payloads as old, and the hold counts of messages first held longer ago than [`HELD_FORGOTTEN`].
+    /// payload acknowledgement marks and parked payloads as old, and the hold counts of messages
+    /// first held longer ago than [`HELD_FORGOTTEN`].
     async fn forget_old_envelopes(&self) -> Result<(), ContactError> {
         let session = self.wallet.session()?;
         let patience = self.wallet.config().policy.contact_hold_patience;

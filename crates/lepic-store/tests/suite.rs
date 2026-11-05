@@ -760,7 +760,7 @@ fn receive_listing_is_recorded_and_survives_updates<B: Backend>() {
         None
     );
     let listing = lepic_store::ReceiveListing {
-        dkey: [2; 33],
+        service_key: [2; 33],
         generation: u32::MAX,
     };
     write(store, |repos| repos.set_receive_listing(id, &listing)).unwrap();

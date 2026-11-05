@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Listing addresses: Epicbox addresses of keys from the LEPIC namespace, one per listing with a
-//! directory, apart from the payments address. A listing's mailbox is drained on its own
+//! name service, apart from the payments address. A listing's mailbox is drained on its own
 //! connection, never by the payments listener; what arrives there is answered from the listing's
 //! address and recorded with the listing.
 //!
 //! Only S1 slates and notices are taken at a listing. A payment that asks for a payment proof is
 //! refused, so nothing about it is ever signed by the payments key. The app passes only the
-//! directory key and the generation; no secret, signature over a LEPIC domain, or ECDH value
+//! service key and the generation; no secret, signature over a LEPIC domain, or ECDH value
 //! leaves the wallet.
 
 use lepic_crypto::{EcdsaSignature, PublicKey};

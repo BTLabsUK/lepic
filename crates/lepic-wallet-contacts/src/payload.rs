@@ -33,7 +33,7 @@ pub const MAX_APP_PAYLOAD_LEN: usize = 64 * 1024;
 pub const MAX_KEPT_PAYLOADS: usize = 256;
 
 /// Payloads from one contact kept unacknowledged at once; more stay on the relay until the host
-/// acknowledges some. A contact is another person's wallet, or a service such as a directory
+/// acknowledges some. A contact is another person's wallet, or a service such as a name service
 /// that exchanges a few small signed records over the pairing, so a host that acknowledges what
 /// it reads never comes near it; it bounds what one contact can make the wallet store to an
 /// eighth of the private pairings' share, which linked devices rely on.

@@ -15,7 +15,7 @@ use zeroize::Zeroizing;
 
 use crate::error::WalletError;
 
-/// The key of a listing address: context `dkey (33) || generation (u32 BE) || counter (u8)`,
+/// The key of a listing address: context `service_key (33) || generation (u32 BE) || counter (u8)`,
 /// the counter from 0 up to the first output that is a valid secp256k1 key.
 pub const LISTING_KEY_LABEL: &[u8] = b"lepic-wallet listing key v1";
 
@@ -26,37 +26,41 @@ pub const DEVICE_LINK_KEY_LABEL: &[u8] = b"lepic-wallet device link key v1";
 /// What device-link signatures are made over: this tag, then the transcript.
 pub const DEVICE_LINK_TAG: &[u8] = b"lepic/device-link/v1";
 
-/// A listing of this wallet with a directory: the directory's key and the generation of the
+/// A listing of this wallet with a name service: the service's key and the generation of the
 /// listing, raised after each leave so a new listing gets a new key.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Listing {
-    dkey: PublicKey,
+    service_key: PublicKey,
     generation: u32,
 }
 
 impl Listing {
-    pub fn new(dkey: PublicKey, generation: u32) -> Self {
-        Self { dkey, generation }
+    pub fn new(service_key: PublicKey, generation: u32) -> Self {
+        Self {
+            service_key,
+            generation,
+        }
     }
 
-    /// Fails with [`WalletError::InvalidListing`] unless `dkey` is a compressed secp256k1 key.
-    pub fn from_bytes(dkey: &[u8], generation: u32) -> Result<Self, WalletError> {
-        if dkey.len() != 33 {
+    /// Fails with [`WalletError::InvalidListing`] unless `service_key` is a compressed secp256k1 key.
+    pub fn from_bytes(service_key: &[u8], generation: u32) -> Result<Self, WalletError> {
+        if service_key.len() != 33 {
             return Err(WalletError::InvalidListing);
         }
-        let dkey = PublicKey::from_bytes(dkey).map_err(|_| WalletError::InvalidListing)?;
-        Ok(Self::new(dkey, generation))
+        let service_key =
+            PublicKey::from_bytes(service_key).map_err(|_| WalletError::InvalidListing)?;
+        Ok(Self::new(service_key, generation))
     }
 
-    /// [`Self::from_bytes`] of `dkey` written as 66 hex digits.
-    pub fn from_hex(dkey: &str, generation: u32) -> Result<Self, WalletError> {
-        let bytes =
-            lepic_crypto::hex::decode_array::<33>(dkey).map_err(|_| WalletError::InvalidListing)?;
+    /// [`Self::from_bytes`] of `service_key` written as 66 hex digits.
+    pub fn from_hex(service_key: &str, generation: u32) -> Result<Self, WalletError> {
+        let bytes = lepic_crypto::hex::decode_array::<33>(service_key)
+            .map_err(|_| WalletError::InvalidListing)?;
         Self::from_bytes(&bytes, generation)
     }
 
-    pub fn dkey(&self) -> &PublicKey {
-        &self.dkey
+    pub fn service_key(&self) -> &PublicKey {
+        &self.service_key
     }
 
     pub fn generation(&self) -> u32 {
@@ -65,18 +69,18 @@ impl Listing {
 
     pub(crate) fn to_stored(self) -> lepic_store::ReceiveListing {
         lepic_store::ReceiveListing {
-            dkey: self.dkey.to_bytes(),
+            service_key: self.service_key.to_bytes(),
             generation: self.generation,
         }
     }
 
-    /// The listing `stored` names; a stored directory key that is no curve point is damage,
+    /// The listing `stored` names; a stored service key that is no curve point is damage,
     /// reported as such rather than read as no listing.
     pub(crate) fn from_stored(
         stored: &lepic_store::ReceiveListing,
     ) -> Result<Self, lepic_store::StoreError> {
-        PublicKey::from_bytes(&stored.dkey)
-            .map(|dkey| Self::new(dkey, stored.generation))
+        PublicKey::from_bytes(&stored.service_key)
+            .map(|service_key| Self::new(service_key, stored.generation))
             .map_err(|_| lepic_store::StoreError::Corrupt {
                 record: lepic_store::Record::Transaction,
                 field: "receive listing",
@@ -107,10 +111,14 @@ fn namespace_hash(
 
 /// The secret key of `listing`'s address.
 pub(crate) fn listing_key(seed: &Seed, listing: &Listing) -> Result<SecretKey, WalletError> {
-    let dkey = listing.dkey.to_bytes();
+    let service_key = listing.service_key.to_bytes();
     let generation = listing.generation.to_be_bytes();
     for counter in 0..=u8::MAX {
-        let bytes = namespace_hash(seed, LISTING_KEY_LABEL, &[&dkey, &generation, &[counter]])?;
+        let bytes = namespace_hash(
+            seed,
+            LISTING_KEY_LABEL,
+            &[&service_key, &generation, &[counter]],
+        )?;
         if let Ok(key) = SecretKey::from_array(*bytes) {
             return Ok(key);
         }
@@ -155,16 +163,16 @@ mod tests {
         Seed::from_entropy(&[byte; 32]).unwrap()
     }
 
-    fn dkey(byte: u8) -> PublicKey {
+    fn service_key(byte: u8) -> PublicKey {
         PublicKey::from_secret_key(&SecretKey::from_array([byte; 32]).unwrap()).unwrap()
     }
 
     #[test]
-    fn a_stored_listing_reads_back_and_a_damaged_directory_key_is_reported() {
-        let listing = Listing::new(dkey(9), 3);
+    fn a_stored_listing_reads_back_and_a_damaged_service_key_is_reported() {
+        let listing = Listing::new(service_key(9), 3);
         assert_eq!(Listing::from_stored(&listing.to_stored()).unwrap(), listing);
         let damaged = lepic_store::ReceiveListing {
-            dkey: [0; 33],
+            service_key: [0; 33],
             generation: 3,
         };
         assert!(matches!(
@@ -178,10 +186,10 @@ mod tests {
 
     #[test]
     fn a_listing_key_is_the_keyed_hash_of_its_label_and_context() {
-        let listing = Listing::new(dkey(9), 3);
+        let listing = Listing::new(service_key(9), 3);
         let mut mac = <Blake2bMac<U32> as KeyInit>::new_from_slice(&[1; 32]).unwrap();
         mac.update(b"lepic-wallet listing key v1");
-        mac.update(&dkey(9).to_bytes());
+        mac.update(&service_key(9).to_bytes());
         mac.update(&[0, 0, 0, 3]);
         mac.update(&[0]);
         let expected: [u8; 32] = mac.finalize_fixed().into();
@@ -192,11 +200,14 @@ mod tests {
     }
 
     #[test]
-    fn listing_keys_differ_by_seed_directory_and_generation() {
-        let key = |seed_byte, dkey_byte, generation| {
-            *listing_key(&seed(seed_byte), &Listing::new(dkey(dkey_byte), generation))
-                .unwrap()
-                .expose_bytes()
+    fn listing_keys_differ_by_seed_service_and_generation() {
+        let key = |seed_byte, key_byte, generation| {
+            *listing_key(
+                &seed(seed_byte),
+                &Listing::new(service_key(key_byte), generation),
+            )
+            .unwrap()
+            .expose_bytes()
         };
         let base = key(1, 9, 0);
         assert_eq!(base, key(1, 9, 0));
@@ -207,7 +218,7 @@ mod tests {
 
     #[test]
     fn a_listing_needs_a_compressed_curve_point() {
-        assert!(Listing::from_bytes(&dkey(9).to_bytes(), 0).is_ok());
+        assert!(Listing::from_bytes(&service_key(9).to_bytes(), 0).is_ok());
         assert!(matches!(
             Listing::from_bytes(&[2; 32], 0),
             Err(WalletError::InvalidListing)

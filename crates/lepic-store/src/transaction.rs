@@ -84,12 +84,12 @@ pub struct TransactionEntry {
     pub updated_at: Timestamp,
 }
 
-/// The listing a payment came in on: the directory key the listing is for and its generation.
+/// The listing a payment came in on: the service key the listing is for and its generation.
 /// Absent for a payment to the payments address.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ReceiveListing {
     /// A compressed secp256k1 key.
-    pub dkey: [u8; 33],
+    pub service_key: [u8; 33],
     pub generation: u32,
 }
 

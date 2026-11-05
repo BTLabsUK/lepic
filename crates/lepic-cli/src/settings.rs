@@ -463,7 +463,7 @@ fn parse_host_features(text: &str) -> Option<u32> {
     {
         bits |= match name {
             "device-forwarding" => features::DEVICE_FORWARDING,
-            "name-service" => features::DIRECTORY,
+            "name-service" => features::NAME_SERVICE,
             _ => return None,
         };
     }
@@ -728,11 +728,11 @@ mod tests {
         assert_eq!(parse_host_features(""), Some(0));
         assert_eq!(
             parse_host_features("name-service"),
-            Some(features::DIRECTORY)
+            Some(features::NAME_SERVICE)
         );
         assert_eq!(
             parse_host_features(" name-service , device-forwarding,"),
-            Some(features::DIRECTORY | features::DEVICE_FORWARDING)
+            Some(features::NAME_SERVICE | features::DEVICE_FORWARDING)
         );
         for bad in [
             "marker",
@@ -752,7 +752,7 @@ mod tests {
             resolve(&[("LEPIC_HOST_FEATURES", "name-service")])
                 .unwrap()
                 .host_features,
-            lepic_epicbox::marker::features::DIRECTORY
+            lepic_epicbox::marker::features::NAME_SERVICE
         );
         assert!(matches!(
             resolve(&[("LEPIC_HOST_FEATURES", "everything")]),

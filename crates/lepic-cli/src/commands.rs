@@ -358,10 +358,10 @@ impl<H: Host> Run<'_, H> {
         let expiry = self.settings.invoice_expiry;
         let (summary, expired) = match command {
             EpicboxCommand::Drain(ListingArgs {
-                listing: Some(dkey),
+                listing: Some(service_key),
                 generation,
             }) => {
-                let listing = listing_of(&dkey, generation)?;
+                let listing = listing_of(&service_key, generation)?;
                 let summary = opened
                     .wallet
                     .drain_epicbox_at(&listing, &opened.epicbox)
@@ -395,10 +395,10 @@ impl<H: Host> Run<'_, H> {
                 (summary, expired)
             }
             EpicboxCommand::Status(ListingArgs {
-                listing: Some(dkey),
+                listing: Some(service_key),
                 generation,
             }) => {
-                let listing = listing_of(&dkey, generation)?;
+                let listing = listing_of(&service_key, generation)?;
                 let address = opened
                     .wallet
                     .epicbox_address_at(&listing, &opened.epicbox)?;
@@ -1987,10 +1987,14 @@ fn parked_invoice_report(invoice: IncomingInvoice) -> ParkedInvoiceReport {
     }
 }
 
-/// The listing of the directory key `dkey`, 66 hex digits, and `generation`.
-fn listing_of(dkey: &str, generation: u32) -> Result<lepic_wallet::namespace::Listing, CliError> {
+/// The listing of the service key `service_key`, 66 hex digits, and `generation`.
+fn listing_of(
+    service_key: &str,
+    generation: u32,
+) -> Result<lepic_wallet::namespace::Listing, CliError> {
     Ok(lepic_wallet::namespace::Listing::from_hex(
-        dkey, generation,
+        service_key,
+        generation,
     )?)
 }
 
@@ -2014,7 +2018,7 @@ fn show(repos: &dyn Repositories, details: &TransactionDetails) -> Result<TxRepo
             .sender_reported_cancelled_at
             .map(|at| at.to_string()),
         receive_listing: details.receive_listing.map(|listing| ListingReport {
-            dkey: listing.dkey().to_hex(),
+            service_key: listing.service_key().to_hex(),
             generation: listing.generation(),
         }),
         messages: Some(

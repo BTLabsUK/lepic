@@ -312,7 +312,7 @@ fn restored(harness: &support::Harness, seed_hex: &str) -> support::TestWallet {
 
 fn listing_of(case: &Value) -> lepic_wallet::namespace::Listing {
     lepic_wallet::namespace::Listing::from_hex(
-        case["dkey"].as_str().unwrap(),
+        case["service_key"].as_str().unwrap(),
         u32::try_from(case["generation"].as_u64().unwrap()).unwrap(),
     )
     .unwrap()

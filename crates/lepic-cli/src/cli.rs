@@ -610,12 +610,12 @@ without it or an invoice came back unpaid, unknown before either. Nothing is sen
     Peer(PeerArgs),
 }
 
-/// A listing address of this wallet, for a directory.
+/// A listing address of this wallet, for a name service.
 #[derive(Debug, Args)]
 pub struct ListingArgs {
-    /// The directory key of a listing, a compressed secp256k1 key in hex: act on that listing's
+    /// The service key of a listing, a compressed secp256k1 key in hex: act on that listing's
     /// address instead of the wallet's own
-    #[arg(long, value_name = "DKEY")]
+    #[arg(long, value_name = "SERVICE_KEY")]
     pub listing: Option<String>,
     /// The generation of the listing, raised after each leave
     #[arg(long, default_value_t = 0, requires = "listing")]

@@ -36,7 +36,7 @@ fn uuid(slate_id: SlateId) -> Uuid {
     Uuid::from_bytes(*slate_id.as_bytes())
 }
 
-fn directory() -> Listing {
+fn name_service() -> Listing {
     let secret = SecretKey::from_array([0x31; 32]).unwrap();
     Listing::new(PublicKey::from_secret_key(&secret).unwrap(), 0)
 }
@@ -78,7 +78,7 @@ impl World {
 #[test]
 fn a_payment_to_a_listing_is_answered_from_it_and_names_it() {
     let world = World::new();
-    let listing = directory();
+    let listing = name_service();
     let address = world.listing_address(&world.issuer, &listing);
     assert_ne!(address.public_key(), world.issuer.address.public_key());
 
@@ -95,7 +95,7 @@ fn a_payment_to_a_listing_is_answered_from_it_and_names_it() {
     assert_eq!(
         world.issuer.read(|repos| repos.receive_listing(tx.id)),
         Some(ReceiveListing {
-            dkey: listing.dkey().to_bytes(),
+            service_key: listing.service_key().to_bytes(),
             generation: 0,
         })
     );
@@ -144,7 +144,7 @@ fn s1_with_proof(world: &World, proof: ProofAddress) -> (SentSlate, String) {
 #[test]
 fn a_listing_payment_that_asks_for_a_proof_is_refused_and_nothing_is_signed() {
     let world = World::new();
-    let listing = directory();
+    let listing = name_service();
     let address = world.listing_address(&world.issuer, &listing);
     // A proof by the issuer's own payments key, which the payments address would sign.
     let payments_proof_key = world
@@ -176,7 +176,7 @@ fn a_listing_payment_that_asks_for_a_proof_is_refused_and_nothing_is_signed() {
 #[test]
 fn a_listing_payment_arriving_at_the_payments_address_gets_no_answer_from_there() {
     let world = World::new();
-    let listing = directory();
+    let listing = name_service();
     let address = world.listing_address(&world.issuer, &listing);
     let sent = world.pay(&address);
     assert_eq!(world.drain_listing(&world.issuer, &listing).received, 1);
@@ -197,11 +197,11 @@ fn a_listing_payment_arriving_at_the_payments_address_gets_no_answer_from_there(
 #[test]
 fn listing_keys_come_back_from_the_phrase_and_differ_by_listing() {
     let world = World::new();
-    let listing = directory();
+    let listing = name_service();
     let first = world.listing_address(&world.issuer, &listing);
     let next = world.listing_address(
         &world.issuer,
-        &Listing::new(*listing.dkey(), listing.generation() + 1),
+        &Listing::new(*listing.service_key(), listing.generation() + 1),
     );
     assert_ne!(first.public_key(), next.public_key());
     // Another install of the phrase derives the same key.

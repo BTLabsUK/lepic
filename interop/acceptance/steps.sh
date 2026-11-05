@@ -436,10 +436,10 @@ step_errors() {
     DETAIL="wrong password 4, bad address 2 and nothing stored, overspend 8, no wallet 5 with hint, no node 9"
 }
 
-# A directory key for the listing step: the generator point, a valid compressed key.
-LISTING_DKEY="0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798"
+# A service key for the listing step: the generator point, a valid compressed key.
+LISTING_SERVICE_KEY="0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798"
 
-# Drains lepic's listing address of LISTING_DKEY until a counter reaches a value, as
+# Drains lepic's listing address of LISTING_SERVICE_KEY until a counter reaches a value, as
 # drain_until does for the wallet's own address.
 listing_drain_until() {
     local name="$1" want="$2" timeout="$3"
@@ -447,7 +447,7 @@ listing_drain_until() {
     local total='{"received":0,"finalized":0,"repeated":0,"rejected":0,"held":0,"dropped":0,"notices":0}'
     while :; do
         local report
-        report="$(lepic epicbox drain --listing "${LISTING_DKEY}")" || return 1
+        report="$(lepic epicbox drain --listing "${LISTING_SERVICE_KEY}")" || return 1
         total="$(jq -c -n --argjson a "${total}" --argjson b "${report}" \
             '$a | with_entries(.value += ($b[.key] // 0))')"
         if (($(jq -r ".${name}" <<<"${total}") >= want)); then
@@ -473,7 +473,7 @@ onion_key_hex() {
 step_listing_receives_over_epicbox() {
     peer_listen_start || fail "epic-wallet listener did not start" || return 1
     local listing
-    listing="$(lepic epicbox status --listing "${LISTING_DKEY}" | jq -r .address)" ||
+    listing="$(lepic epicbox status --listing "${LISTING_SERVICE_KEY}" | jq -r .address)" ||
         fail "lepic gave no listing address" || return 1
     [[ "${listing%%@*}" != "${LEPIC_ADDRESS%%@*}" ]] || fail "the listing is the payments address" || return 1
     local main_before
@@ -492,8 +492,8 @@ step_listing_receives_over_epicbox() {
     [[ -n "${tx}" && "$(wc -l <<<"${tx}")" -eq 1 ]] || fail "expected one new incoming tx: ${tx}" || return 1
     tx_id="$(jq -r .tx_id <<<"${tx}")"
     slate_id="$(jq -r .slate_id <<<"${tx}")"
-    lepic tx show "${tx_id}" | jq -e --arg dkey "${LISTING_DKEY}" \
-        '.receive_listing.dkey == $dkey and .receive_listing.generation == 0' >/dev/null ||
+    lepic tx show "${tx_id}" | jq -e --arg service_key "${LISTING_SERVICE_KEY}" \
+        '.receive_listing.service_key == $service_key and .receive_listing.generation == 0' >/dev/null ||
         { fail "tx show does not name the listing: $(lepic tx show "${tx_id}")"; } || return 1
     confirm_both "${tx_id}" "${slate_id}" || return 1
     EXPECTED_TOTAL=$((EXPECTED_TOTAL + $(to_units 1.1)))
