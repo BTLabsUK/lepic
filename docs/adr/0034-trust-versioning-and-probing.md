@@ -158,9 +158,11 @@ Other wallets' proof requests on normal receives are handled as before.
 ### Privacy
 
 - **Marker.** `f` travels only inside the Epicbox-encrypted slate, only where the marker already
-  goes (an S1 sent, an S2 answering a marked S1), never in file, QR or paste slates. It is a
-  constant of the build, the same for every user of a release, never from a setting. The marker's
-  `version` stays 1 and no version string is sent.
+  goes (an S1 sent, an S2 answering a marked S1), never in file, QR or paste slates. LEPIC's own
+  bits are a constant of the build, the same for every user of a release; only the host bits come
+  from the host, the app's build constant or the CLI's `host_features` setting, so a service
+  stands out by the features it offers and a wallet does not. The marker's `version` stays 1 and
+  no version string is sent.
 - **Relay.** The relay is told `4.1.0`, as `epic-wallet` v4.1.0 sends (`RELAY_WALLET_VERSION`).
   Tor is recommended where Epicbox is set up.
 - **Padding.** Readers accept notices up to 8 KiB. Writers pad every plain notice, sealed notice

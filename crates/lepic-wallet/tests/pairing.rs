@@ -3200,6 +3200,17 @@ fn verified_contacts_pass_payloads_both_ways() {
         .filter(|event| matches!(event, Event::ContactPayload(_)))
         .count();
     assert_eq!(arrived, 1);
+    // A kept payload shows that app payloads work with Anna's proven key.
+    let anna_key = payments_address(&world, &world.payer, ben_side).unwrap();
+    let works = world
+        .payer
+        .wallet
+        .peer_compat(&anna_key)
+        .unwrap()
+        .stored
+        .unwrap()
+        .works;
+    assert_ne!(works & lepic_epicbox::marker::features::APP_PAYLOADS, 0);
 
     let to_anna = post_payload(&world, &world.payer, ben_side, b"back");
     world.collect(&world.issuer);

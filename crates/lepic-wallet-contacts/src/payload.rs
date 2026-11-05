@@ -622,13 +622,26 @@ where
         let session = self.wallet.session()?;
         let body = content.body;
         let hash = envelope_hash(envelope);
+        let key = crate::status::proven_key(record, self.wallet.config().network);
         let kept = self
             .contact_work(move |ports, _| {
                 let now = ports.clock.now();
                 Ok(session.store.write(|repos| {
                     let kept = keep(repos, contact_id, sender, id, &body, now)?;
-                    if matches!(kept, Arrival::Full { .. }) {
-                        park(repos, &hash, contact_id, now)?;
+                    match kept {
+                        Arrival::Full { .. } => park(repos, &hash, contact_id, now)?,
+                        // App payloads work with the key this pairing proved.
+                        Arrival::New => {
+                            if let Some(key) = &key {
+                                lepic_wallet::peer_compat::record_works(
+                                    repos,
+                                    key,
+                                    APP_PAYLOADS,
+                                    true,
+                                )?;
+                            }
+                        }
+                        Arrival::Repeat => {}
                     }
                     Ok::<_, StoreError>(kept)
                 })?)
