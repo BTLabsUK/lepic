@@ -610,12 +610,12 @@ without it or an invoice came back unpaid, unknown before either. Nothing is sen
     Peer(PeerArgs),
 }
 
-/// A listing address of this wallet, for a directory.
+/// A listing address of this wallet, for a name service.
 #[derive(Debug, Args)]
 pub struct ListingArgs {
-    /// The directory key of a listing, a compressed secp256k1 key in hex: act on that listing's
+    /// The service key of a listing, a compressed secp256k1 key in hex: act on that listing's
     /// address instead of the wallet's own
-    #[arg(long, value_name = "DKEY")]
+    #[arg(long, value_name = "SERVICE_KEY")]
     pub listing: Option<String>,
     /// The generation of the listing, raised after each leave
     #[arg(long, default_value_t = 0, requires = "listing")]
@@ -775,6 +775,47 @@ answer: the keys are back and the new pairing goes, or the new pairing shows key
     SendSlate(ContactSendSlateArgs),
     /// Write a transaction's slate plain, for a contact that cannot open sealed text
     Plain(ContactPlainArgs),
+    /// Send, list and acknowledge the host app's payloads to and from paired contacts
+    #[command(after_help = "\
+LEPIC never reads the bytes. `lepic contact collect`, or `lepic serve` on its own, takes arriving \
+payloads; they wait in `contact payload list` until acknowledged.")]
+    Payload(ContactPayloadArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct ContactPayloadArgs {
+    #[command(subcommand)]
+    pub command: ContactPayloadCommand,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum ContactPayloadCommand {
+    /// Send bytes to a paired contact through its mailbox; prints the payload's id
+    Post(ContactPayloadPostArgs),
+    /// List the payloads that arrived and are not acknowledged, oldest first
+    List,
+    /// Forget payloads once their bytes are kept elsewhere; prints how many were forgotten
+    Ack(ContactPayloadAckArgs),
+}
+
+#[derive(Debug, Args)]
+#[command(group(clap::ArgGroup::new("bytes").required(true).args(["hex", "file"])))]
+pub struct ContactPayloadPostArgs {
+    #[command(flatten)]
+    pub contact: ContactIdArg,
+    /// The payload as hex digits
+    #[arg(long, value_name = "HEX")]
+    pub hex: Option<String>,
+    /// A file whose bytes are the payload
+    #[arg(long, value_name = "FILE")]
+    pub file: Option<PathBuf>,
+}
+
+#[derive(Debug, Args)]
+pub struct ContactPayloadAckArgs {
+    /// Payload ids, as `contact payload list` shows them
+    #[arg(value_name = "ID", required = true, num_args = 1..)]
+    pub ids: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]

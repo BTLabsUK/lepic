@@ -1285,7 +1285,7 @@ impl Session {
             .contact_book()
             .contact_post_payload(&relays, id, payload)
             .await?;
-        Ok(sent.to_string())
+        Ok(sent.id.to_string())
     }
 
     pub(crate) async fn private_pairings(&self) -> Result<Vec<ContactView>, WalletError> {
@@ -1414,6 +1414,10 @@ mod tests {
             (
                 Event::SealedUnopenable(news),
                 WalletEventKind::SealedUnopenable,
+            ),
+            (
+                Event::ContactPayloadsParked(news),
+                WalletEventKind::ContactPayloadsParked,
             ),
         ] {
             let mapped = mapped(&event);

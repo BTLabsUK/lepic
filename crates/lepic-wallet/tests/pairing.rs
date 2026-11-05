@@ -3003,7 +3003,8 @@ fn two_installs_of_one_phrase_pair_privately_and_pass_payloads_both_ways() {
             phone,
             b"to the desk".to_vec(),
         ))
-        .unwrap();
+        .unwrap()
+        .id;
     world.collect(&twin);
     let kept = payloads(&world, &twin);
     assert_eq!(kept.len(), 1);
@@ -3105,7 +3106,8 @@ fn a_payload_reaches_the_paired_contact_once_and_stays_until_acknowledged() {
             anna_side,
             b"opaque bytes".to_vec(),
         ))
-        .unwrap();
+        .unwrap()
+        .id;
     // The outbox posts it once more, as a retry would.
     let outbox = world
         .block_on(world.issuer.wallet.contact_book().contact_outbox(anna_side))
@@ -3176,6 +3178,7 @@ fn post_payload(world: &World, party: &Party, contact: ContactId, payload: &[u8]
             payload.to_vec(),
         ))
         .unwrap()
+        .id
 }
 
 #[test]
@@ -3184,19 +3187,30 @@ fn verified_contacts_pass_payloads_both_ways() {
     let (anna_side, ben_side) = verified_pair(&world);
     let mut ben_events = world.payer.wallet.subscribe();
 
-    let to_ben = post_payload(&world, &world.issuer, anna_side, b"directory hello");
+    let to_ben = post_payload(&world, &world.issuer, anna_side, b"name service hello");
     world.collect(&world.payer);
     let kept = payloads(&world, &world.payer);
     assert_eq!(kept.len(), 1);
     assert_eq!(
         (kept[0].id, kept[0].contact_id, kept[0].payload.as_slice()),
-        (to_ben, ben_side, b"directory hello".as_slice())
+        (to_ben, ben_side, b"name service hello".as_slice())
     );
     let arrived = events(&mut ben_events)
         .into_iter()
         .filter(|event| matches!(event, Event::ContactPayload(_)))
         .count();
     assert_eq!(arrived, 1);
+    // A kept payload shows that app payloads work with Anna's proven key.
+    let anna_key = payments_address(&world, &world.payer, ben_side).unwrap();
+    let works = world
+        .payer
+        .wallet
+        .peer_compat(&anna_key)
+        .unwrap()
+        .stored
+        .unwrap()
+        .works;
+    assert_ne!(works & lepic_epicbox::marker::features::APP_PAYLOADS, 0);
 
     let to_anna = post_payload(&world, &world.payer, ben_side, b"back");
     world.collect(&world.issuer);
@@ -3221,7 +3235,7 @@ fn verified_contacts_pass_payloads_both_ways() {
     assert!(payloads(&world, &world.payer).is_empty());
 }
 
-/// A directory's first record reaches the wallet right after the pairing, before either side
+/// A name service's first record reaches the wallet right after the pairing, before either side
 /// compared the words, and the wallet can answer over it.
 #[test]
 fn a_contact_payload_passes_once_paired_before_any_words_check() {
@@ -3315,6 +3329,62 @@ fn a_contact_over_its_payload_cap_waits_on_the_relay_and_leaves_room_for_linked_
     bytes.sort_unstable();
     assert_eq!(bytes.len(), cap);
     assert_eq!(bytes.last(), Some(&u8::try_from(cap).unwrap()));
+}
+
+/// A payload left on the relay for its cap is not opened again while the cap holds, and each
+/// collecting cycle tells the host once that payloads wait.
+#[test]
+fn a_payload_left_for_its_cap_is_not_opened_again_and_is_reported_each_cycle() {
+    let cap = lepic_wallet_contacts::MAX_KEPT_PAYLOADS_PER_CONTACT;
+    let world = World::new();
+    let (anna_side, ben_side) = verified_pair(&world);
+    for n in 0..cap.checked_add(2).unwrap() {
+        post_payload(&world, &world.payer, ben_side, &[u8::try_from(n).unwrap()]);
+    }
+    let parked_told = |news: Vec<Event>| {
+        news.into_iter()
+            .filter(|event| {
+                *event
+                    == Event::ContactPayloadsParked(ContactEvent {
+                        contact_id: anna_side,
+                    })
+            })
+            .count()
+    };
+    let parked = |party: &Party| party.read(|repos| repos.settings_with_prefix("contact.parked."));
+
+    // A cycle takes a batch from the relay, so the one over the cap may come in a later one.
+    let mut issuer_events = world.issuer.wallet.subscribe();
+    let mut cycles = 0;
+    while parked(&world.issuer).is_empty() && cycles < 3 {
+        world.collect(&world.issuer);
+        cycles += 1;
+    }
+    assert_eq!(parked_told(events(&mut issuer_events)), 1);
+    let marks = parked(&world.issuer);
+    assert_eq!(marks.len(), 1);
+
+    // Opening the message again would take it to the cap once more and mark it anew.
+    world.issuer.clock.advance(HOUR);
+    world.collect(&world.issuer);
+    assert_eq!(parked_told(events(&mut issuer_events)), 1);
+    assert_eq!(parked(&world.issuer), marks);
+    assert_eq!(payloads(&world, &world.issuer).len(), cap);
+
+    let first = payloads(&world, &world.issuer)[0].id;
+    world
+        .block_on(
+            world
+                .issuer
+                .wallet
+                .contact_book()
+                .contact_payloads_ack(&[first]),
+        )
+        .unwrap();
+    assert!(parked(&world.issuer).is_empty());
+    world.collect(&world.issuer);
+    assert_eq!(payloads(&world, &world.issuer).len(), cap);
+    assert_eq!(parked_told(events(&mut issuer_events)), 1);
 }
 
 /// The key of an Epicbox address text.

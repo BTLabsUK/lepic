@@ -15,8 +15,9 @@ use lepic_wallet::send::{SendRequest, SentSlate};
 use lepic_wallet::slate::Stage;
 use lepic_wallet_contacts::{
     AcceptRequest, CardRequest, CollectTrigger, ContactKind, ContactRelays, ContactView,
-    InviteExpiry, InviteRequest, InvoiceDetails, KeysDecision, LinkOutcome, PairingClass,
-    PairingFailure, Purpose, Refusal, RelayMode, SasDecision, SealedAnswer, WalletContacts,
+    InviteExpiry, InviteRequest, InvoiceDetails, KeysDecision, LinkOutcome, MAX_APP_PAYLOAD_LEN,
+    PairingClass, PairingEndReason, PairingFailure, PairingStatus, PayloadId, Purpose, Refusal,
+    RelayMode, SasDecision, SasSymbol, SealedAnswer, WalletContacts,
 };
 
 use super::{Opened, Run, Spend};
@@ -25,9 +26,10 @@ use crate::cli::{
     ContactAcceptArgs, ContactArgs, ContactCardArgs, ContactCommand, ContactEnterArgs,
     ContactExportArgs, ContactImportArgs, ContactInviteArgs, ContactInvoiceArgs,
     ContactKeyCheckArgs, ContactKeysArgs, ContactKindArg, ContactLabelArgs, ContactMoveArgs,
-    ContactMoveHomeArgs, ContactOpenSealedArgs, ContactPayArgs, ContactPlainArgs,
-    ContactRequestArgs, ContactSasArgs, ContactSealArgs, ContactSendSlateArgs, ContactSlateIdArg,
-    ContactSwitchArgs, InviteExpiryArg, KeysArg, OnOffArg, PurposeArg, SasArg,
+    ContactMoveHomeArgs, ContactOpenSealedArgs, ContactPayArgs, ContactPayloadArgs,
+    ContactPayloadCommand, ContactPayloadPostArgs, ContactPlainArgs, ContactRequestArgs,
+    ContactSasArgs, ContactSealArgs, ContactSendSlateArgs, ContactSlateIdArg, ContactSwitchArgs,
+    InviteExpiryArg, KeysArg, OnOffArg, PurposeArg, SasArg,
 };
 use crate::exit::CliError;
 use crate::host::Host;
@@ -36,8 +38,9 @@ use crate::output::{
     ContactExportReport, ContactFailureReport, ContactImportReport, ContactInviteReport,
     ContactInvoiceIssueReport, ContactInvoiceListReport, ContactInvoiceReport,
     ContactKeyCheckReport, ContactLinkReport, ContactListReport, ContactMoveHomeReport,
-    ContactPreviewReport, ContactRemoveReport, ContactReport, ContactSlateReport,
-    InvoiceDeclineReport, InvoicePayReport, Report,
+    ContactPayloadAckReport, ContactPayloadListReport, ContactPayloadPostReport,
+    ContactPayloadReport, ContactPreviewReport, ContactRemoveReport, ContactReport,
+    ContactSlateReport, InvoiceDeclineReport, InvoicePayReport, Report,
 };
 
 /// Contacts belong to the default account.
@@ -130,8 +133,8 @@ fn state_name(state: ContactState) -> &'static str {
     }
 }
 
-fn contact_report(view: &ContactView) -> ContactReport {
-    ContactReport {
+fn contact_report(view: &ContactView) -> Result<ContactReport, CliError> {
+    Ok(ContactReport {
         contact_id: view.contact_id.to_string(),
         label: view.label.clone(),
         claimed_name: view.claimed_name.clone(),
@@ -146,6 +149,29 @@ fn contact_report(view: &ContactView) -> ContactReport {
                     .collect()
             })
             .unwrap_or_default(),
+        sas_indexes: view
+            .sas
+            .map(|symbols| symbols.iter().map(SasSymbol::index).collect())
+            .transpose()
+            .map_err(|_| CliError::SasTable)?
+            .unwrap_or_default(),
+        status: match view.status {
+            PairingStatus::Waiting => "waiting",
+            PairingStatus::Paired => "paired",
+            PairingStatus::Verified => "verified",
+            PairingStatus::KeysChanged => "keys-changed",
+            PairingStatus::Ended => "ended",
+        },
+        peer_heard_at: view.peer_heard_at.map(|at| at.to_string()),
+        peer_verified_at: view.peer_verified_at.map(|at| at.to_string()),
+        peer_features: view.peer_features,
+        ended_reason: view.ended_reason.map(|reason| match reason {
+            PairingEndReason::Mismatch => "mismatch",
+            PairingEndReason::PeerMismatch => "peer-mismatch",
+            PairingEndReason::Unpaired => "unpaired",
+            PairingEndReason::NeverFinished => "never-finished",
+        }),
+        ended_at: view.ended_at.map(|at| at.to_string()),
         allow_invoices: view.allow_invoices,
         seal: match view.seal {
             SealMode::On => "on",
@@ -157,7 +183,7 @@ fn contact_report(view: &ContactView) -> ContactReport {
         requested_relay: view.requested_relay.clone(),
         lapsed: view.lapsed,
         last_heard: view.last_sealed_in.map(|at| at.to_string()),
-    }
+    })
 }
 
 /// The CLI's relays: its Epicbox transport, and the first Epicbox servers of the settings file,
@@ -313,7 +339,7 @@ impl<H: Host> Run<'_, H> {
                     .contact_book()
                     .pairing_scan_card(&relays, id, &args.link)
                     .await?;
-                Report::Contact(contact_report(&view))
+                Report::Contact(contact_report(&view)?)
             }
             ContactCommand::List => Report::ContactList(ContactListReport {
                 contacts: wallet
@@ -322,7 +348,7 @@ impl<H: Host> Run<'_, H> {
                     .await?
                     .iter()
                     .map(contact_report)
-                    .collect(),
+                    .collect::<Result<_, _>>()?,
             }),
             ContactCommand::KeyCheck(args) => key_check(&opened, &relays, args).await?,
             ContactCommand::Keys(args) => resolve_keys(&opened, args).await?,
@@ -354,6 +380,15 @@ impl<H: Host> Run<'_, H> {
             ContactCommand::Decline(args) => decline(&opened, &relays, args).await?,
             ContactCommand::Export(args) => export(&opened, args).await?,
             ContactCommand::Import(args) => import(&opened, args).await?,
+            ContactCommand::Payload(args) => {
+                let report = payload(&opened, &relays, args).await?;
+                if let Report::ContactPayloadPost(posted) = &report
+                    && posted.peer_lacks_app_payloads
+                {
+                    self.show_line(PEER_LACKS_APP_PAYLOADS);
+                }
+                report
+            }
         })
     }
 }
@@ -512,7 +547,7 @@ async fn sas<N: lepic_node::NodeApi + 'static>(
             removed: true,
         })
     } else {
-        Report::Contact(contact_report(&wallet.contact_book().contact(id).await?))
+        Report::Contact(contact_report(&wallet.contact_book().contact(id).await?)?)
     })
 }
 
@@ -583,7 +618,7 @@ async fn resolve_keys<N: lepic_node::NodeApi + 'static>(
                 .contact_book()
                 .contact_keys_resolve(new, KeysDecision::UseNew)
                 .await?;
-            Report::Contact(contact_report(&wallet.contact_book().contact(new).await?))
+            Report::Contact(contact_report(&wallet.contact_book().contact(new).await?)?)
         }
     })
 }
@@ -673,7 +708,7 @@ async fn label<N: lepic_node::NodeApi + 'static>(
         .await?;
     Ok(Report::Contact(contact_report(
         &wallet.contact_book().contact(id).await?,
-    )))
+    )?))
 }
 
 /// `lepic contact move`: moves our mailbox with this contact to the relay it asked for.
@@ -689,7 +724,7 @@ async fn move_relay<N: lepic_node::NodeApi + 'static>(
         .await?;
     Ok(Report::Contact(contact_report(
         &wallet.contact_book().contact(id).await?,
-    )))
+    )?))
 }
 
 /// `lepic contact move-home`: moves the wallet's own home relay for every paired contact.
@@ -727,7 +762,7 @@ async fn allow_invoices<N: lepic_node::NodeApi + 'static>(
         .await?;
     Ok(Report::Contact(contact_report(
         &wallet.contact_book().contact(id).await?,
-    )))
+    )?))
 }
 
 /// `lepic contact invoice`: sends a contact an invoice through its mailbox.
@@ -853,6 +888,96 @@ async fn import<N: lepic_node::NodeApi + 'static>(
         skipped_existing: summary.skipped_existing,
         skipped_conflict: summary.skipped_conflict,
     }))
+}
+
+/// The warning a post prints when the other wallet's features are known and lack app payloads.
+const PEER_LACKS_APP_PAYLOADS: &str =
+    "warning: the other wallet does not claim app payloads; it may not keep this one";
+
+/// `lepic contact payload`: posts, lists and acknowledges the host app's payloads. LEPIC never
+/// reads the bytes, and the CLI adds no rule of its own to what the wallet allows.
+async fn payload<N: lepic_node::NodeApi + 'static>(
+    opened: &Opened<N>,
+    relays: &ContactRelays,
+    args: ContactPayloadArgs,
+) -> Result<Report, CliError> {
+    let book = opened.wallet.contact_book();
+    Ok(match args.command {
+        ContactPayloadCommand::Post(args) => {
+            let id = contact_id(&args.contact.contact)?;
+            let bytes = payload_bytes(&args)?;
+            let posted = book.contact_post_payload(relays, id, bytes).await?;
+            Report::ContactPayloadPost(ContactPayloadPostReport {
+                contact_id: id.to_string(),
+                payload_id: posted.id.to_string(),
+                peer_lacks_app_payloads: posted.peer_lacks_app_payloads,
+            })
+        }
+        ContactPayloadCommand::List => Report::ContactPayloadList(ContactPayloadListReport {
+            payloads: book
+                .contact_payloads()
+                .await?
+                .into_iter()
+                .map(|kept| ContactPayloadReport {
+                    id: kept.id.to_string(),
+                    contact_id: kept.contact_id.to_string(),
+                    received_at: kept.received_at.to_string(),
+                    payload: to_hex(&kept.payload),
+                })
+                .collect(),
+        }),
+        ContactPayloadCommand::Ack(args) => {
+            let ids = args
+                .ids
+                .iter()
+                .map(|text| PayloadId::parse(text.trim()).ok_or(CliError::PayloadId))
+                .collect::<Result<Vec<_>, _>>()?;
+            Report::ContactPayloadAck(ContactPayloadAckReport {
+                acknowledged: book.contact_payloads_ack(&ids).await?,
+            })
+        }
+    })
+}
+
+/// The bytes `--hex` or `--file` gives. A file is read up to one byte past the largest
+/// payload, so the wallet refuses a larger one without the whole file in memory.
+fn payload_bytes(args: &ContactPayloadPostArgs) -> Result<Vec<u8>, CliError> {
+    use std::io::Read as _;
+    if let Some(path) = &args.file {
+        let mut bytes = Vec::new();
+        let limit = u64::try_from(MAX_APP_PAYLOAD_LEN)
+            .unwrap_or(u64::MAX)
+            .saturating_add(1);
+        std::fs::File::open(path)
+            .and_then(|file| file.take(limit).read_to_end(&mut bytes))
+            .map_err(CliError::io("read the payload file"))?;
+        return Ok(bytes);
+    }
+    from_hex(args.hex.as_deref().unwrap_or_default())
+}
+
+fn from_hex(text: &str) -> Result<Vec<u8>, CliError> {
+    let text = text.trim();
+    if !text.len().is_multiple_of(2) || !text.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err(CliError::PayloadHex);
+    }
+    text.as_bytes()
+        .chunks(2)
+        .map(|pair| {
+            std::str::from_utf8(pair)
+                .ok()
+                .and_then(|pair| u8::from_str_radix(pair, 16).ok())
+                .ok_or(CliError::PayloadHex)
+        })
+        .collect()
+}
+
+fn to_hex(bytes: &[u8]) -> String {
+    bytes.iter().fold(String::new(), |mut text, byte| {
+        use std::fmt::Write as _;
+        let _ = write!(text, "{byte:02x}");
+        text
+    })
 }
 
 /// `lepic contact collect`: runs one collecting cycle.

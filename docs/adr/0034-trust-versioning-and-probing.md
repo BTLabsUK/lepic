@@ -65,16 +65,21 @@ A `u32` that only grows. A bit is never reused or redefined.
 | 2 | Address proof | same | a proof from the key verified |
 | 3 | Pairing-outcome notices | same | a verdict or `pair-finished` arrived in a pairing whose proof names the key |
 | 4 | Linked-device forwarding | the app (host bit) | the app reports a forwarded item was taken |
-| 5 | Directory and listings | the app (host bit) | the app reports a directory exchange succeeded |
-| 6 to 31 | Reserved | | |
+| 5 | Name service and listings | the app (host bit) | the app reports a name-service exchange succeeded |
+| 6 | App payloads | marker word, pairing envelope | an app payload from the key was kept |
+| 7 to 31 | Reserved | | |
 
 The marker word is `f` inside the marker; pairing envelopes carry the same `u32` in extension tag
 `0x82`, big-endian, unknown bits kept and never refused. The app passes bits 4 and 5 as one build
 constant (`WalletConfig::host_features`); LEPIC keeps only those two bits of it and adds its own,
-bits 0 to 3, so the word this build claims is 15 without the host and 63 with both host bits.
+bits 0 to 3 and 6, so the word this build claims is 79 without the host and 127 with both host
+bits. A wallet posting an app payload to a key whose recorded word is known and lacks bit 6
+logs a warning and reports it to the caller; the payload is posted all the same.
 The marked V2 and V3 JSON codecs (`MarkedV2JsonCodec`, `MarkedV3JsonCodec`) write it as `f`
 (`with_features`) and read it back; an `f` that is no `u32` reads as a marker without a word. The
-word is the same for every user of a build and is never taken from a setting. Vectors:
+word is the same for every user of a build; the CLI, which has no app around it, takes the
+host bits from its `host_features` setting, which the operator of a service sets once for its
+wallets, masked to bits 4 and 5 the same way. Vectors:
 `testdata/vectors/epicbox/marker_s1_v2_features_5` and `_53` (a marker with `f` of 5 and of 53,
 to pin the codec).
 
@@ -145,17 +150,19 @@ for its other fields. Vector: `keys/address_proofs` (the three steps, made from 
 
 ### Listings
 
-The listing calls take `(dkey, gen)`, derive keys by label (0033), and refuse app domains that start
-with `lepic`. A receive on a listing address never signs with index 0 and refuses a payment-proof
+The listing calls take `(service_key, gen)`, derive keys by label (0033), and refuse app domains
+that start with `lepic`. A receive on a listing address never signs with index 0 and refuses a payment-proof
 request; every later message of that transaction goes out from the listing key or is withheld.
 Other wallets' proof requests on normal receives are handled as before.
 
 ### Privacy
 
 - **Marker.** `f` travels only inside the Epicbox-encrypted slate, only where the marker already
-  goes (an S1 sent, an S2 answering a marked S1), never in file, QR or paste slates. It is a
-  constant of the build, the same for every user of a release, never from a setting. The marker's
-  `version` stays 1 and no version string is sent.
+  goes (an S1 sent, an S2 answering a marked S1), never in file, QR or paste slates. LEPIC's own
+  bits are a constant of the build, the same for every user of a release; only the host bits come
+  from the host, the app's build constant or the CLI's `host_features` setting, so a service
+  stands out by the features it offers and a wallet does not. The marker's `version` stays 1 and
+  no version string is sent.
 - **Relay.** The relay is told `4.1.0`, as `epic-wallet` v4.1.0 sends (`RELAY_WALLET_VERSION`).
   Tor is recommended where Epicbox is set up.
 - **Padding.** Readers accept notices up to 8 KiB. Writers pad every plain notice, sealed notice

@@ -103,7 +103,7 @@ pub enum WalletError {
     MinimumConfirmationsOutOfRange { count: u64 },
     #[error("balance out of range")]
     Balance(#[source] ArithmeticError),
-    /// A listing's directory key is not a compressed secp256k1 key.
+    /// A listing's service key is not a compressed secp256k1 key.
     #[error("listing rejected")]
     InvalidListing,
 }

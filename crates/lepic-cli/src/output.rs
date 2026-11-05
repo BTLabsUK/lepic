@@ -64,6 +64,9 @@ pub enum Report {
     ContactInvoices(ContactInvoiceListReport),
     ContactExport(ContactExportReport),
     ContactImport(ContactImportReport),
+    ContactPayloadPost(ContactPayloadPostReport),
+    ContactPayloadList(ContactPayloadListReport),
+    ContactPayloadAck(ContactPayloadAckReport),
 }
 
 #[derive(Serialize)]
@@ -264,16 +267,16 @@ pub struct TxReport {
     /// cancelled it; `tx show` only.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sender_reported_cancelled_at: Option<String>,
-    /// For a payment received at a listing address, the directory key (hex) and generation of
+    /// For a payment received at a listing address, the service key (hex) and generation of
     /// that listing; `tx show` only.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub receive_listing: Option<ListingReport>,
 }
 
-/// A listing: the directory key in hex and the generation.
+/// A listing: the service key in hex and the generation.
 #[derive(Debug, Serialize)]
 pub struct ListingReport {
-    pub dkey: String,
+    pub service_key: String,
     pub generation: u32,
 }
 
@@ -461,6 +464,19 @@ pub struct ContactReport {
     pub state: String,
     /// The SAS entries as `emoji name`, four of them.
     pub sas: Vec<String>,
+    /// The four SAS table indexes, in the order of `sas`; empty without a SAS.
+    pub sas_indexes: Vec<u8>,
+    /// `waiting`, `paired`, `verified`, `keys-changed` or `ended`.
+    pub status: &'static str,
+    /// When the contact was first heard in this pairing.
+    pub peer_heard_at: Option<String>,
+    /// When the contact's match verdict was accepted.
+    pub peer_verified_at: Option<String>,
+    /// The feature bits the contact claimed; 0 when none.
+    pub peer_features: u32,
+    /// `mismatch`, `peer-mismatch`, `unpaired` or `never-finished`, once the pairing ended.
+    pub ended_reason: Option<&'static str>,
+    pub ended_at: Option<String>,
     pub allow_invoices: bool,
     pub seal: String,
     pub home_relay: Option<String>,
@@ -566,6 +582,36 @@ pub struct ContactImportReport {
     pub imported: usize,
     pub skipped_existing: usize,
     pub skipped_conflict: usize,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ContactPayloadPostReport {
+    pub contact_id: String,
+    /// The id the other wallet keeps the payload under, 32 lowercase hex digits.
+    pub payload_id: String,
+    /// The other wallet's recorded features are known and do not claim app payloads; the
+    /// payload was queued all the same.
+    pub peer_lacks_app_payloads: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ContactPayloadListReport {
+    pub payloads: Vec<ContactPayloadReport>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ContactPayloadReport {
+    pub id: String,
+    pub contact_id: String,
+    pub received_at: String,
+    /// The bytes as lowercase hex.
+    pub payload: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ContactPayloadAckReport {
+    /// How many kept payloads were forgotten.
+    pub acknowledged: usize,
 }
 
 /// What `serve` did before it was stopped.
@@ -954,7 +1000,10 @@ fn write_human(out: &mut Vec<u8>, report: &Report) -> std::io::Result<()> {
         | Report::ContactInvoiceIssue(_)
         | Report::ContactInvoices(_)
         | Report::ContactExport(_)
-        | Report::ContactImport(_) => write_contact_human(out, report),
+        | Report::ContactImport(_)
+        | Report::ContactPayloadPost(_)
+        | Report::ContactPayloadList(_)
+        | Report::ContactPayloadAck(_) => write_contact_human(out, report),
     }
 }
 
@@ -1517,6 +1566,25 @@ fn write_contact_human(out: &mut Vec<u8>, report: &Report) -> std::io::Result<()
             "{} pairings restored; {} were here already and {} clashed with another.",
             r.imported, r.skipped_existing, r.skipped_conflict
         ),
+        Report::ContactPayloadPost(r) => {
+            writeln!(out, "Payload {} queued for {}.", r.payload_id, r.contact_id)
+        }
+        Report::ContactPayloadList(r) => {
+            if r.payloads.is_empty() {
+                return writeln!(out, "No payloads wait.");
+            }
+            for payload in &r.payloads {
+                writeln!(
+                    out,
+                    "{}  from {}  {}\n    {}",
+                    payload.id, payload.contact_id, payload.received_at, payload.payload
+                )?;
+            }
+            Ok(())
+        }
+        Report::ContactPayloadAck(r) => {
+            writeln!(out, "{} payload(s) acknowledged.", r.acknowledged)
+        }
         _ => Ok(()),
     }
 }
@@ -2028,6 +2096,13 @@ mod tests {
                     kind: Some("shop"),
                     state: text("paired"),
                     sas: vec![],
+                    sas_indexes: vec![],
+                    status: "paired",
+                    peer_heard_at: None,
+                    peer_verified_at: None,
+                    peer_features: 0,
+                    ended_reason: None,
+                    ended_at: None,
                     allow_invoices: false,
                     seal: text("on"),
                     home_relay: None,
@@ -2039,15 +2114,22 @@ mod tests {
                     "allow_invoices",
                     "claimed_name",
                     "contact_id",
+                    "ended_at",
+                    "ended_reason",
                     "home_relay",
                     "kind",
                     "label",
                     "lapsed",
                     "last_heard",
+                    "peer_features",
+                    "peer_heard_at",
+                    "peer_verified_at",
                     "requested_relay",
                     "sas",
+                    "sas_indexes",
                     "seal",
                     "state",
+                    "status",
                 ],
             ),
             (
@@ -2127,6 +2209,22 @@ mod tests {
                     skipped_conflict: 0,
                 }),
                 vec!["imported", "skipped_conflict", "skipped_existing"],
+            ),
+            (
+                Report::ContactPayloadPost(ContactPayloadPostReport {
+                    contact_id: text("c"),
+                    payload_id: text("p"),
+                    peer_lacks_app_payloads: false,
+                }),
+                vec!["contact_id", "payload_id", "peer_lacks_app_payloads"],
+            ),
+            (
+                Report::ContactPayloadList(ContactPayloadListReport { payloads: vec![] }),
+                vec!["payloads"],
+            ),
+            (
+                Report::ContactPayloadAck(ContactPayloadAckReport { acknowledged: 1 }),
+                vec!["acknowledged"],
             ),
             (
                 Report::HttpListen(HttpListenReport {

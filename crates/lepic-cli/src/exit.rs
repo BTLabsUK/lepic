@@ -208,8 +208,14 @@ pub enum CliError {
     Tor(#[from] lepic_tor::TorFailure),
     #[error("contact failed")]
     Contact(#[from] ContactError),
+    #[error("a pairing's sas is not in the sas table")]
+    SasTable,
     #[error("contact id is not 32 hex digits")]
     ContactId,
+    #[error("payload id is not 32 hex digits")]
+    PayloadId,
+    #[error("--hex is not an even number of hex digits")]
+    PayloadHex,
     #[error("no lepic serve answers at {}", path.display())]
     ServiceUnavailable { path: std::path::PathBuf },
     #[error("{what} cannot run through lepic serve")]
@@ -257,6 +263,8 @@ impl CliError {
             | Self::InvoiceOverHttp
             | Self::OnionAddress(_)
             | Self::ContactId
+            | Self::PayloadId
+            | Self::PayloadHex
             | Self::ServiceRefused { .. }
             | Self::ServiceOption { .. }
             | Self::ServiceOnly { .. }
@@ -296,6 +304,7 @@ impl CliError {
             | Self::Scan(_)
             | Self::Store(_)
             | Self::Registry(_)
+            | Self::SasTable
             | Self::Io { .. } => ErrorKind::Internal,
         }
     }
@@ -695,6 +704,8 @@ mod tests {
                 ErrorKind::Rejected,
             ),
             (CliError::SlateId, ErrorKind::Usage),
+            (CliError::PayloadId, ErrorKind::Usage),
+            (CliError::PayloadHex, ErrorKind::Usage),
             (CliError::NotRandomSlateId, ErrorKind::Usage),
             (CliError::SlateIdReused { tx_id: 1 }, ErrorKind::Rejected),
             (CliError::NoSendWithSlate, ErrorKind::NotFound),

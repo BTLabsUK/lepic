@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Paired contacts between CLI instances on the mock relay: the contact check answered by a
-//! serving wallet, and the move of a wallet's own home relay (ADR 0040).
+//! serving wallet, the move of a wallet's own home relay (ADR 0040), and the host app's
+//! payloads.
 
 // Tests may unwrap, index, panic and use plain arithmetic (docs/rules.md).
 #![cfg(unix)]
@@ -82,6 +83,38 @@ fn pair(host: &TestHost, inviter: &Instance, joiner: &Instance) -> (String, Stri
             && listed(joiner, host, &ids.1)["state"] == "paired"
     });
     ids
+}
+
+/// After both sides answer `match`, `contact list` carries the SAS indexes and when the contact's
+/// verdict was accepted.
+#[test]
+fn a_verified_contact_lists_its_sas_indexes_and_verdict_time() {
+    let host = TestHost::new();
+    let shop = Instance::new("shop password");
+    shop.run(&host, &["wallet", "init"]).ok();
+    let buyer = Instance::new("buyer password");
+    buyer.run(&host, &["wallet", "init"]).ok();
+    let (shop_side, buyer_side) = pair(&host, &shop, &buyer);
+    shop.run(&host, &["contact", "sas", &shop_side, "match"])
+        .ok();
+    buyer
+        .run(&host, &["contact", "sas", &buyer_side, "match"])
+        .ok();
+    wait_until("the verdicts accepted", || {
+        collect(&shop, &host);
+        collect(&buyer, &host);
+        listed(&shop, &host, &shop_side)["peer_verified_at"].is_string()
+            && listed(&buyer, &host, &buyer_side)["peer_verified_at"].is_string()
+    });
+    let contact = listed(&shop, &host, &shop_side);
+    assert_eq!(
+        contact["sas_indexes"].as_array().unwrap().len(),
+        4,
+        "{contact}"
+    );
+    assert_eq!(contact["status"], "verified", "{contact}");
+    assert!(contact["peer_heard_at"].is_string(), "{contact}");
+    assert_eq!(contact["ended_reason"], Value::Null, "{contact}");
 }
 
 /// `lepic serve` answers a check by itself; the asking wallet's next collect takes the answer
@@ -225,4 +258,145 @@ fn a_contact_follows_a_moved_home_and_one_that_missed_the_move_goes_unanswered()
     assert_eq!(after["last_heard"], before["last_heard"], "{after}");
     assert_eq!(after["requested_relay"], Value::Null, "{after}");
     assert_eq!(after["state"], "paired", "{after}");
+}
+
+fn payloads(instance: &Instance, host: &TestHost, service: &[&str]) -> Vec<Value> {
+    let args = [service, &["contact", "payload", "list"]].concat();
+    let list = instance.run(host, &args).ok().json();
+    list["payloads"].as_array().unwrap().clone()
+}
+
+/// A posts bytes given as hex and as a file; B's collect takes both, the list shows them as
+/// sent, and once acknowledged they are gone.
+#[test]
+fn a_payload_posted_to_a_contact_is_listed_until_acknowledged() {
+    let host = TestHost::new();
+    let shop = Instance::new("shop password");
+    shop.run(&host, &["wallet", "init"]).ok();
+    let buyer = Instance::new("buyer password");
+    buyer.run(&host, &["wallet", "init"]).ok();
+    let (buyer_at_shop, shop_at_buyer) = pair(&host, &shop, &buyer);
+
+    let posted = shop
+        .run(
+            &host,
+            &[
+                "contact",
+                "payload",
+                "post",
+                &buyer_at_shop,
+                "--hex",
+                "00ff10",
+            ],
+        )
+        .ok()
+        .json();
+    assert_eq!(posted["contact_id"], buyer_at_shop.as_str(), "{posted}");
+    assert_eq!(posted["peer_lacks_app_payloads"], false, "{posted}");
+    let by_hex = text(&posted, "payload_id").to_owned();
+    let file = shop.home.path().join("payload.bin");
+    std::fs::write(&file, b"from a file").unwrap();
+    let by_file = shop
+        .run(
+            &host,
+            &[
+                "contact",
+                "payload",
+                "post",
+                &buyer_at_shop,
+                "--file",
+                file.to_str().unwrap(),
+            ],
+        )
+        .ok()
+        .json();
+    let by_file = text(&by_file, "payload_id").to_owned();
+
+    collect(&buyer, &host);
+    let kept = payloads(&buyer, &host, &[]);
+    assert_eq!(kept.len(), 2, "{kept:?}");
+    let entry = |id: &str| kept.iter().find(|kept| kept["id"] == id).unwrap().clone();
+    assert_eq!(entry(&by_hex)["payload"], "00ff10");
+    assert_eq!(entry(&by_file)["payload"], "66726f6d20612066696c65");
+    for kept in &kept {
+        assert_eq!(kept["contact_id"], shop_at_buyer.as_str(), "{kept}");
+        assert!(kept["received_at"].is_string(), "{kept}");
+    }
+
+    let acked = buyer
+        .run(&host, &["contact", "payload", "ack", &by_hex, &by_file])
+        .ok()
+        .json();
+    assert_eq!(acked["acknowledged"], 2, "{acked}");
+    assert!(payloads(&buyer, &host, &[]).is_empty());
+}
+
+/// Through `lepic --service`, a serving wallet's own collect takes the payload; list and ack
+/// answer from serve.
+#[test]
+fn payload_commands_run_through_lepic_serve() {
+    let mut host = TestHost::new();
+    let shop = Instance::new("shop password");
+    shop.run(&host, &["wallet", "init"]).ok();
+    let buyer = Instance::new("buyer password");
+    buyer.run(&host, &["wallet", "init"]).ok();
+    let (buyer_at_shop, shop_at_buyer) = pair(&host, &shop, &buyer);
+
+    let stop = Arc::new(AtomicBool::new(false));
+    let signal = Arc::clone(&stop);
+    host.interrupt_when = Some(Arc::new(move || signal.load(Ordering::SeqCst)));
+    let client = host.without_interrupt();
+    let dir = tempfile::tempdir().unwrap();
+    let shop_socket = dir.path().join("shop.sock");
+    let buyer_socket = dir.path().join("buyer.sock");
+    let shop_service = format!("--service={}", shop_socket.display());
+    let buyer_service = format!("--service={}", buyer_socket.display());
+
+    let (shop_served, buyer_served) = std::thread::scope(|scope| {
+        let shop_server =
+            scope.spawn(|| shop.run(&host, &["serve", "--socket", shop_socket.to_str().unwrap()]));
+        let buyer_server = scope.spawn(|| {
+            buyer.run(
+                &host,
+                &["serve", "--socket", buyer_socket.to_str().unwrap()],
+            )
+        });
+        wait_for_socket(&shop_socket);
+        wait_for_socket(&buyer_socket);
+        let posted = shop
+            .run(
+                &client,
+                &[
+                    &shop_service,
+                    "contact",
+                    "payload",
+                    "post",
+                    &buyer_at_shop,
+                    "--hex",
+                    "c0ffee",
+                ],
+            )
+            .ok()
+            .json();
+        let id = text(&posted, "payload_id").to_owned();
+        let mut kept = Vec::new();
+        wait_until("the serving buyer keeps the payload", || {
+            kept = payloads(&buyer, &client, &[&buyer_service]);
+            !kept.is_empty()
+        });
+        assert_eq!(kept.len(), 1, "{kept:?}");
+        assert_eq!(kept[0]["id"], id.as_str());
+        assert_eq!(kept[0]["contact_id"], shop_at_buyer.as_str());
+        assert_eq!(kept[0]["payload"], "c0ffee");
+        let acked = buyer
+            .run(&client, &[&buyer_service, "contact", "payload", "ack", &id])
+            .ok()
+            .json();
+        assert_eq!(acked["acknowledged"], 1, "{acked}");
+        assert!(payloads(&buyer, &client, &[&buyer_service]).is_empty());
+        stop.store(true, Ordering::SeqCst);
+        (shop_server.join().unwrap(), buyer_server.join().unwrap())
+    });
+    shop_served.ok();
+    buyer_served.ok();
 }

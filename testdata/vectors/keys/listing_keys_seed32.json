@@ -10,7 +10,7 @@
   "inputs": {
     "seed": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
     "label": "lepic-wallet listing key v1",
-    "directory_keys": [
+    "service_keys": [
       "036930f46dd0b16d866d59d1054aa63298b357499cd1862ef16f3f55f1cafceb82",
       "0290999dbbf43034bffb1dd53eac1eb4c33a4ea1c4f48ba585cfde3830840f0555"
     ],
@@ -23,7 +23,7 @@
   "expected": {
     "cases": [
       {
-        "dkey": "036930f46dd0b16d866d59d1054aa63298b357499cd1862ef16f3f55f1cafceb82",
+        "service_key": "036930f46dd0b16d866d59d1054aa63298b357499cd1862ef16f3f55f1cafceb82",
         "generation": 0,
         "counter": 0,
         "secret_key": "d7df4ce5a69671ecc23c3851ddde0f2c603d11175eaa68eeba8d50383345b705",
@@ -44,7 +44,7 @@
         ]
       },
       {
-        "dkey": "036930f46dd0b16d866d59d1054aa63298b357499cd1862ef16f3f55f1cafceb82",
+        "service_key": "036930f46dd0b16d866d59d1054aa63298b357499cd1862ef16f3f55f1cafceb82",
         "generation": 1,
         "counter": 0,
         "secret_key": "2464f57fcbe6bb073a0c26a9739e2d0f849ae8c7a13a4570ebb41ceb3d688a91",
@@ -65,7 +65,7 @@
         ]
       },
       {
-        "dkey": "036930f46dd0b16d866d59d1054aa63298b357499cd1862ef16f3f55f1cafceb82",
+        "service_key": "036930f46dd0b16d866d59d1054aa63298b357499cd1862ef16f3f55f1cafceb82",
         "generation": 4294967295,
         "counter": 0,
         "secret_key": "1f7df819b98e46041d3e647deb6909154f19859029b6d9b1f14e5ffb435eb2c5",
@@ -86,7 +86,7 @@
         ]
       },
       {
-        "dkey": "0290999dbbf43034bffb1dd53eac1eb4c33a4ea1c4f48ba585cfde3830840f0555",
+        "service_key": "0290999dbbf43034bffb1dd53eac1eb4c33a4ea1c4f48ba585cfde3830840f0555",
         "generation": 0,
         "counter": 0,
         "secret_key": "4ea58619e885ec0c2f2b1872fecbcf66149af35867d4064f43e213b1ae180f23",
@@ -107,7 +107,7 @@
         ]
       },
       {
-        "dkey": "0290999dbbf43034bffb1dd53eac1eb4c33a4ea1c4f48ba585cfde3830840f0555",
+        "service_key": "0290999dbbf43034bffb1dd53eac1eb4c33a4ea1c4f48ba585cfde3830840f0555",
         "generation": 1,
         "counter": 0,
         "secret_key": "4df44e02b734a486e64cf9a7b98348e40533acca0d7b6b8dcf55bcb106a5a18f",
@@ -128,7 +128,7 @@
         ]
       },
       {
-        "dkey": "0290999dbbf43034bffb1dd53eac1eb4c33a4ea1c4f48ba585cfde3830840f0555",
+        "service_key": "0290999dbbf43034bffb1dd53eac1eb4c33a4ea1c4f48ba585cfde3830840f0555",
         "generation": 4294967295,
         "counter": 0,
         "secret_key": "bbce82421d033b1581a0e6741deb7eb62ba2c091cc4eb52b727b120f356c8740",

@@ -15,9 +15,10 @@ use crate::api::wallet::verify_address_signature_at;
 const PHRASE: &str = "abandon abandon abandon abandon abandon abandon abandon abandon \
                       abandon abandon abandon about";
 
-/// A directory key, compressed, in hex.
-const DKEY: &str = "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798";
-const OTHER_DKEY: &str = "02c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee5";
+/// A service key, compressed, in hex.
+const SERVICE_KEY: &str = "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798";
+const OTHER_SERVICE_KEY: &str =
+    "02c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee5";
 
 async fn wallet(fixture: &mut Fixture, mnemonic: Option<&str>) -> EpicWallet {
     let relay = MockRelay::new(RelayNetwork::Floonet);
@@ -47,9 +48,15 @@ async fn a_listing_address_is_the_same_on_every_device_and_never_the_payments_ad
     let (mut first, mut second) = (Fixture::new(), Fixture::new());
     let here = wallet(&mut first, Some(PHRASE)).await;
     let there = wallet(&mut second, Some(PHRASE)).await;
-    let listing = here.epicbox_address_at(DKEY.to_owned(), 0).await.unwrap();
+    let listing = here
+        .epicbox_address_at(SERVICE_KEY.to_owned(), 0)
+        .await
+        .unwrap();
     assert_eq!(
-        there.epicbox_address_at(DKEY.to_owned(), 0).await.unwrap(),
+        there
+            .epicbox_address_at(SERVICE_KEY.to_owned(), 0)
+            .await
+            .unwrap(),
         listing
     );
     assert!(crate::api::wallet::validate_epicbox_address(
@@ -59,15 +66,22 @@ async fn a_listing_address_is_the_same_on_every_device_and_never_the_payments_ad
     let payments = here.epicbox_address().await.unwrap();
     let others = [
         payments,
-        here.epicbox_address_at(DKEY.to_owned(), 1).await.unwrap(),
-        here.epicbox_address_at(OTHER_DKEY.to_owned(), 0)
+        here.epicbox_address_at(SERVICE_KEY.to_owned(), 1)
+            .await
+            .unwrap(),
+        here.epicbox_address_at(OTHER_SERVICE_KEY.to_owned(), 0)
             .await
             .unwrap(),
     ];
     for other in others {
         assert_ne!(key_of(&other), key_of(&listing));
     }
-    for bad in ["", "02", &DKEY[2..], &format!("05{}", &DKEY[2..])] {
+    for bad in [
+        "",
+        "02",
+        &SERVICE_KEY[2..],
+        &format!("05{}", &SERVICE_KEY[2..]),
+    ] {
         assert_eq!(
             kind(here.epicbox_address_at(bad.to_owned(), 0).await),
             WalletErrorKind::InvalidArgument,
@@ -78,7 +92,12 @@ async fn a_listing_address_is_the_same_on_every_device_and_never_the_payments_ad
 
 async fn sign(wallet: &EpicWallet, domain: &str) -> Result<String, WalletError> {
     wallet
-        .sign_with_address_key_at(DKEY.to_owned(), 0, domain.to_owned(), b"card".to_vec())
+        .sign_with_address_key_at(
+            SERVICE_KEY.to_owned(),
+            0,
+            domain.to_owned(),
+            b"card".to_vec(),
+        )
         .await
 }
 
@@ -89,7 +108,12 @@ async fn a_listing_signature_verifies_for_its_domain_and_key_only() {
     let theirs = wallet(&mut second, None).await;
     let message = b"card".to_vec();
     let signature = sign(&ours, "epic-listing/1").await.unwrap();
-    let key = key_of(&ours.epicbox_address_at(DKEY.to_owned(), 0).await.unwrap());
+    let key = key_of(
+        &ours
+            .epicbox_address_at(SERVICE_KEY.to_owned(), 0)
+            .await
+            .unwrap(),
+    );
     let verify = |key: &str, domain: &str, message: &[u8], signature: &str| {
         verify_address_signature_at(
             key.to_owned(),
@@ -174,7 +198,7 @@ async fn signs_without_a_relay_and_refuses_an_oversized_message() {
     .unwrap();
     let sign = |size: usize| {
         wallet.sign_with_address_key_at(
-            DKEY.to_owned(),
+            SERVICE_KEY.to_owned(),
             0,
             "epic-listing/1".to_owned(),
             vec![7; size],
@@ -192,7 +216,7 @@ async fn signs_without_a_relay_and_refuses_an_oversized_message() {
     );
     // The listing address needs the relay of the configuration.
     assert_eq!(
-        kind(wallet.epicbox_address_at(DKEY.to_owned(), 0).await),
+        kind(wallet.epicbox_address_at(SERVICE_KEY.to_owned(), 0).await),
         WalletErrorKind::Unsupported
     );
 }

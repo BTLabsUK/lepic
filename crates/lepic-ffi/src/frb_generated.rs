@@ -2938,7 +2938,7 @@ fn wire__crate__api__wallet__EpicWallet_drain_epicbox_at_impl(
             let api_that = <RustOpaqueMoi<
                 flutter_rust_bridge::for_generated::RustAutoOpaqueInner<EpicWallet>,
             >>::sse_decode(&mut deserializer);
-            let api_dkey = <String>::sse_decode(&mut deserializer);
+            let api_service_key = <String>::sse_decode(&mut deserializer);
             let api_generation = <u32>::sse_decode(&mut deserializer);
             deserializer.end();
             move |context| async move {
@@ -2963,7 +2963,7 @@ fn wire__crate__api__wallet__EpicWallet_drain_epicbox_at_impl(
                         let api_that_guard = api_that_guard.unwrap();
                         let output_ok = crate::api::wallet::EpicWallet::drain_epicbox_at(
                             &*api_that_guard,
-                            api_dkey,
+                            api_service_key,
                             api_generation,
                         )
                         .await?;
@@ -3057,7 +3057,7 @@ fn wire__crate__api__wallet__EpicWallet_epicbox_address_at_impl(
             let api_that = <RustOpaqueMoi<
                 flutter_rust_bridge::for_generated::RustAutoOpaqueInner<EpicWallet>,
             >>::sse_decode(&mut deserializer);
-            let api_dkey = <String>::sse_decode(&mut deserializer);
+            let api_service_key = <String>::sse_decode(&mut deserializer);
             let api_generation = <u32>::sse_decode(&mut deserializer);
             deserializer.end();
             move |context| async move {
@@ -3082,7 +3082,7 @@ fn wire__crate__api__wallet__EpicWallet_epicbox_address_at_impl(
                         let api_that_guard = api_that_guard.unwrap();
                         let output_ok = crate::api::wallet::EpicWallet::epicbox_address_at(
                             &*api_that_guard,
-                            api_dkey,
+                            api_service_key,
                             api_generation,
                         )
                         .await?;
@@ -8084,7 +8084,7 @@ fn wire__crate__api__wallet__EpicWallet_sign_with_address_key_at_impl(
             let api_that = <RustOpaqueMoi<
                 flutter_rust_bridge::for_generated::RustAutoOpaqueInner<EpicWallet>,
             >>::sse_decode(&mut deserializer);
-            let api_dkey = <String>::sse_decode(&mut deserializer);
+            let api_service_key = <String>::sse_decode(&mut deserializer);
             let api_generation = <u32>::sse_decode(&mut deserializer);
             let api_domain = <String>::sse_decode(&mut deserializer);
             let api_message = <Vec<u8>>::sse_decode(&mut deserializer);
@@ -8111,7 +8111,7 @@ fn wire__crate__api__wallet__EpicWallet_sign_with_address_key_at_impl(
                         let api_that_guard = api_that_guard.unwrap();
                         let output_ok = crate::api::wallet::EpicWallet::sign_with_address_key_at(
                             &*api_that_guard,
-                            api_dkey,
+                            api_service_key,
                             api_generation,
                             api_domain,
                             api_message,
@@ -12368,10 +12368,10 @@ impl SseDecode for crate::api::types::ListenerEventKind {
 impl SseDecode for crate::api::types::ListingRef {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
-        let mut var_dkey = <String>::sse_decode(deserializer);
+        let mut var_serviceKey = <String>::sse_decode(deserializer);
         let mut var_generation = <u32>::sse_decode(deserializer);
         return crate::api::types::ListingRef {
-            dkey: var_dkey,
+            service_key: var_serviceKey,
             generation: var_generation,
         };
     }
@@ -14242,6 +14242,7 @@ impl SseDecode for crate::api::types::WalletEventKind {
             35 => crate::api::types::WalletEventKind::PairingRequested,
             36 => crate::api::types::WalletEventKind::NotPosted,
             37 => crate::api::types::WalletEventKind::ContactRelayMoveRequested,
+            38 => crate::api::types::WalletEventKind::ContactPayloadsParked,
             _ => unreachable!("Invalid variant for WalletEventKind: {}", inner),
         };
     }
@@ -16220,7 +16221,7 @@ impl flutter_rust_bridge::IntoIntoDart<crate::api::types::ListenerEventKind>
 impl flutter_rust_bridge::IntoDart for crate::api::types::ListingRef {
     fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
         [
-            self.dkey.into_into_dart().into_dart(),
+            self.service_key.into_into_dart().into_dart(),
             self.generation.into_into_dart().into_dart(),
         ]
         .into_dart()
@@ -18149,6 +18150,7 @@ impl flutter_rust_bridge::IntoDart for crate::api::types::WalletEventKind {
             Self::PairingRequested => 35.into_dart(),
             Self::NotPosted => 36.into_dart(),
             Self::ContactRelayMoveRequested => 37.into_dart(),
+            Self::ContactPayloadsParked => 38.into_dart(),
             _ => unreachable!(),
         }
     }
@@ -19240,7 +19242,7 @@ impl SseEncode for crate::api::types::ListenerEventKind {
 impl SseEncode for crate::api::types::ListingRef {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
-        <String>::sse_encode(self.dkey, serializer);
+        <String>::sse_encode(self.service_key, serializer);
         <u32>::sse_encode(self.generation, serializer);
     }
 }
@@ -20830,6 +20832,7 @@ impl SseEncode for crate::api::types::WalletEventKind {
                 crate::api::types::WalletEventKind::PairingRequested => 35,
                 crate::api::types::WalletEventKind::NotPosted => 36,
                 crate::api::types::WalletEventKind::ContactRelayMoveRequested => 37,
+                crate::api::types::WalletEventKind::ContactPayloadsParked => 38,
                 _ => {
                     unimplemented!("");
                 }

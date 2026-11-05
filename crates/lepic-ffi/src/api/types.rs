@@ -62,7 +62,7 @@ pub struct WalletConfig {
     pub tor_wanted: bool,
     /// The feature bits the app claims to other LEPIC wallets: one constant of the app's
     /// build, the same for every user, never a setting. LEPIC keeps only the host bits, 4
-    /// (linked-device forwarding) and 5 (directory), and ignores the rest. Read when a wallet
+    /// (linked-device forwarding) and 5 (name service), and ignores the rest. Read when a wallet
     /// is created, restored or opened.
     pub host_features: u32,
     /// Limits and presets that are the app's to choose. [`HostPolicy::default`], every field
@@ -362,11 +362,11 @@ impl From<lepic_wallet::details::TxFlow> for TxFlow {
     }
 }
 
-/// A listing of this wallet with a directory: the directory's compressed secp256k1 key in hex
+/// A listing of this wallet with a name service: the service's compressed secp256k1 key in hex
 /// (66 digits) and the listing's generation, raised after each leave.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ListingRef {
-    pub dkey: String,
+    pub service_key: String,
     pub generation: u32,
 }
 
@@ -1677,6 +1677,10 @@ pub enum WalletEventKind {
     /// `EpicWallet::contact_apply_relay_move`. Raised once per newer card; after a restart,
     /// `ContactView::requested_relay` still shows the request.
     ContactRelayMoveRequested,
+    /// Payloads from the pairing `contact_id` were left on the relay because the payloads kept
+    /// and not acknowledged fill its cap. Raised at most once per pairing in a collect. They
+    /// arrive after `EpicWallet::contact_payloads_ack` makes room.
+    ContactPayloadsParked,
 }
 
 /// How a key check from `EpicWallet::contact_key_check` stands.

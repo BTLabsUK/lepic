@@ -201,8 +201,8 @@ where
     }
 
     /// Records what the host app learned of one of its own features with the key of `address`:
-    /// that it worked, or that it failed. Only the host bits (device forwarding and the
-    /// directory) are taken; a bit the key never claimed does not start working. Sends nothing.
+    /// that it worked, or that it failed. Only the host bits (device forwarding and the name
+    /// service) are taken; a bit the key never claimed does not start working. Sends nothing.
     ///
     /// Fails with [`InboxError::Address`] for an address that does not parse or is on the other
     /// network, with [`InboxError::NotHostFeature`] for any other bit than one host bit, and with

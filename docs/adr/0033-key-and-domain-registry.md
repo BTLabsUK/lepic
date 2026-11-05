@@ -39,7 +39,7 @@ changed in one edit and nothing else spells it. The wallet derives its subkeys i
 `lepic_wallet::store_keys` (context key and peer tag key), `lepic_wallet::store_key` (database key,
 0032) and `lepic_wallet::namespace` (listing keys and the device-link key).
 
-Listing keys take `(dkey, gen)`: the directory key (33 bytes) and a generation (u32 big-endian,
+Listing keys take `(service_key, gen)`: the service key (33 bytes) and a generation (u32 big-endian,
 raised when a listing is left). Nothing is derived on `m/<a>/1/0x8000_0000` or above. A receive on
 a listing address never signs with index 0 and refuses a payment-proof request.
 
@@ -79,7 +79,7 @@ no LEPIC code signs under it.
 
 ### Recorded exception: the listing key
 
-A listing key is the Epicbox identity of one directory listing. It answers the relay's challenge
+A listing key is the Epicbox identity of one name-service listing. It answers the relay's challenge
 (ECDSA over text), does the Epicbox ECDH that opens messages to the listing address, and signs
 the listing's messages under the listing tag (below). A payer sends to the address of the key that
 signs the listing card, so the signer and the address cannot be two keys without a card that
@@ -118,7 +118,7 @@ used again and never reused.
 | `lepic-wallet peer tag v1` | 32-byte BLAKE2b key | Keyed hash of an Epicbox key under which its compat row is stored | `lepic-wallet` | 26.10.25 | live | `store/peer_compat.json` |
 | `lepic-wallet store key v1` | 32-byte raw key | Page encryption of the wallet database (0032) | `lepic-wallet` | 26.10.25 | live | `store_key/store_key_seed_*` |
 | `lepic-wallet store check v1` ‖ salt(16) | BLAKE2b-128 keyed by the store key | The `.check` file that proves the store key before the database opens (0032) | `lepic-wallet` | 26.10.25 | live | `store_key/store_key_seed_*` |
-| `lepic-wallet listing key v1` ‖ dkey(33) ‖ gen(u32 BE) ‖ ctr | secp256k1 (counter until valid) | Address, ECDH and signing key of one directory listing (exception above) | `lepic-wallet::namespace` | 26.10.25 | live | `keys/listing_keys_seed32`, `keys/listing_keys_seed16` |
+| `lepic-wallet listing key v1` ‖ service_key(33) ‖ gen(u32 BE) ‖ ctr | secp256k1 (counter until valid) | Address, ECDH and signing key of one name-service listing (exception above) | `lepic-wallet::namespace` | 26.10.25 | live | `keys/listing_keys_seed32`, `keys/listing_keys_seed16` |
 | `lepic-wallet device link key v1` | Ed25519 | Signs the hello of a linked device; both devices on one phrase hold it, so a valid signature proves the same phrase. The 32 bytes are the Ed25519 seed; the context is empty | `lepic-wallet::namespace` | 26.10.25 | live | `keys/device_link_key_seed32`, `keys/device_link_key_seed16` |
 
 #### HKDF and codes
@@ -158,7 +158,7 @@ New in this batch:
 | `lepic/device-link/v1` | Ed25519, device-link key; signs `tag ‖ transcript` with no hash of the tag | The device-link hello transcript, which the app builds | `lepic-wallet::namespace` | 26.10.25 | live | `keys/device_link_key_seed32`, `keys/device_link_key_seed16` |
 | `lepic/listing-signature/v1` | ECDSA, listing key; digest `SHA256(SHA256(tag) ‖ SHA256(tag) ‖ len(u8) ‖ domain ‖ message)` | Any app domain below. A domain is `[a-z0-9-]+/[0-9]+`, 3 to 64 bytes; any domain starting with `lepic`, in any case, is refused. The tag's SHA-256 holds a byte UTF-8 never uses, so no text signature passes as a listing signature | `lepic-epicbox` | 26.10.25 | live | `keys/listing_signatures` |
 | `lepic-wallet pairing verdict v1` | unkeyed BLAKE2b-256 over tag ‖ the 4-byte short authentication string | The hash a pairing verdict notice carries instead of the string (0034) | `lepic-wallet-contacts` | 26.10.25 | live | none yet |
-| `epic-dir-hello/1` | listing signer | Directory hello, over its fields, including the pairing's four SAS indexes (`bind`), which the wallet compares with the words it showed | app | not shipped (app) | live | none (app) |
+| `epic-dir-hello/1` | listing signer | Name-service hello, over its fields, including the pairing's four SAS indexes (`bind`), which the wallet compares with the words it showed | app | not shipped (app) | live | none (app) |
 | `epic-listing/1`, `epic-listing-moved/1`, `epic-payreq/1`, `epic-unlist/1` | listing signer | A listing; its move to a new address; a payment request; leaving | app | not shipped (app) | live | none (app) |
 | `lepic/addr-proof/1` | HKDF salt (table above); the MAC covers `H(cardProver) ‖ H(cardVerifier) ‖ H(invite)`, with a zero slot for a hash the step does not have. A pairing made before this release has no proof and gets none; an address card goes out only when the payments address changes | Address proof | `lepic-wallet-contacts` | 26.10.25 | live | `keys/address_proofs` |
 

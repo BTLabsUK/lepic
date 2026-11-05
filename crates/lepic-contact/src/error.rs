@@ -118,6 +118,8 @@ pub enum SasTableError {
     MissingLine { index: u8 },
     #[error("sas table line {index} is not emoji, tab, name")]
     BadLine { index: u8 },
+    #[error("the symbol is not an entry of the sas table")]
+    UnknownSymbol,
 }
 
 /// Why pairing words could not be read or used.

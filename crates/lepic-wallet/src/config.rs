@@ -296,7 +296,7 @@ mod tests {
 
     #[test]
     fn only_host_bits_of_the_host_features_are_claimed() {
-        use lepic_epicbox::marker::features::{DIRECTORY, LEPIC_FEATURES};
+        use lepic_epicbox::marker::features::{LEPIC_FEATURES, NAME_SERVICE};
         let config = |host_features| WalletConfig {
             name: WalletName::new("w").unwrap(),
             network: Network::Floonet,
@@ -308,8 +308,8 @@ mod tests {
         };
         assert_eq!(config(0).claimed_features(), LEPIC_FEATURES);
         assert_eq!(
-            config(DIRECTORY | 0b1110 | 1 << 31).claimed_features(),
-            LEPIC_FEATURES | DIRECTORY
+            config(NAME_SERVICE | 0b1110 | 1 << 31).claimed_features(),
+            LEPIC_FEATURES | NAME_SERVICE
         );
     }
 

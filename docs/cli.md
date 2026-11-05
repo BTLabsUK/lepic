@@ -74,6 +74,7 @@ Each setting comes from, in order: a flag, its environment variable, the config 
 | `log_level` | `LEPIC_LOG_LEVEL` | `--log-level` | `warn` |
 | `log_format` | `LEPIC_LOG_FORMAT` | `--log-format` | `compact` |
 | `invoice_expiry_hours` | `LEPIC_INVOICE_EXPIRY_HOURS` | | `24` |
+| `host_features` | `LEPIC_HOST_FEATURES` | | none |
 | `settings_file` | `LEPIC_SETTINGS` | `--settings` | `~/.lepic/settings.toml` |
 
 The config file is `~/.lepic/config.toml` when it exists, or the file `--config` or `LEPIC_CONFIG`
@@ -91,6 +92,11 @@ epicbox_relay = "wss://epicbox.epiccash.com"
 
 Without a node of your own, point `node_url` at any floonet node whose foreign API is served
 over `https://`, and leave `node_api_secret_file` out unless that node asks for one.
+
+A wallet that a service runs claims the host bits of that service in its marker (ADR 0034) with
+`host_features`: bit names, comma-separated, of `device-forwarding` (4) and `name-service` (5),
+for example `host_features = "name-service"`. An unknown name is an error. Without it the wallet
+claims none.
 
 ### The settings file and the built-in configuration
 
@@ -618,6 +624,13 @@ until it pairs again. Set `<HOST>` as the wallet's Epicbox relay too, so new inv
 `contact check <ID>` asks a paired contact to answer with its current card; a later `contact
 collect` takes the answer, and `contact list` shows when the contact was last heard
 (`last_heard`) and any relay it moved to.
+
+In JSON, each contact also carries what a host service needs to follow a pairing: `status`
+(`waiting`, `paired`, `verified`, `keys-changed` or `ended`), `sas_indexes` (the four SAS table
+indexes, in the order of `sas`; empty without a SAS), `peer_heard_at` and `peer_verified_at`
+(RFC 3339, or null), `peer_features` (the feature bits the contact claimed, 0 when none) and,
+once the pairing ended, `ended_reason` (`mismatch`, `peer-mismatch`, `unpaired` or
+`never-finished`) and `ended_at`.
 A wallet answers at most `contact_check_answers_per_hour` (default 1) and
 `contact_check_answers_per_day` (default 3) checks per contact; more are taken and dropped.
 
@@ -626,6 +639,18 @@ A wallet answers at most `contact_check_answers_per_hour` (default 1) and
 or `contact decline <SLATE_ID>`, which tells the contact.
 `contact invoice <ID> <AMOUNT>` invoices a contact. `contact collect` also sends what the outbox
 holds. `contact export <FILE>` and `contact import <FILE>` carry the pairings in a backup.
+
+`contact payload post <ID> --hex <HEX>` (or `--file <FILE>`) sends the host app's bytes, at
+most 64 KiB, to a paired contact or a verified private pairing, and prints the payload's id; LEPIC
+never reads them. `contact collect`, or `serve` on its own, takes arriving payloads; `contact
+payload list` shows each one's id, contact, arrival time and bytes as hex until `contact payload
+ack <ID>...` forgets it; a payload acknowledged is not kept again if it arrives once more. A
+payload whose record no longer reads is dropped from the list and frees its place. At most 32 wait
+per contact (256 from private pairings); more stay on the relay until some are acknowledged, and
+`contact collect` leaves them unopened until then. When the contact's wallet is known not to claim
+app payloads, `post` prints a warning to stderr and sets `peer_lacks_app_payloads` in its JSON;
+the payload is sent all the same. Through `--service`, `serve` reads the `--file` path, so give
+an absolute one; the request holds at most 64 KiB, so `--hex` carries about half that.
 
 `tx send <AMOUNT> --to-contact <ID>` pays a contact through its mailbox: the slate is sealed to
 the contact, queued in the outbox and posted at once when the relay answers. `--purpose

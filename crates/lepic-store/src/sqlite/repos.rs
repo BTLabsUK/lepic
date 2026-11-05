@@ -550,7 +550,7 @@ impl TransactionRepository for SqliteRepos<'_> {
              WHERE id = ?1",
             params![
                 i64::from(id.0),
-                &listing.dkey[..],
+                &listing.service_key[..],
                 i64::from(listing.generation)
             ],
         )?;
@@ -578,10 +578,12 @@ impl TransactionRepository for SqliteRepos<'_> {
         };
         match row {
             None | Some((None, None)) => Ok(None),
-            Some((Some(dkey), Some(generation))) => Ok(Some(crate::transaction::ReceiveListing {
-                dkey: <[u8; 33]>::try_from(dkey.as_slice()).map_err(|_| bad())?,
-                generation: u32::try_from(generation).map_err(|_| bad())?,
-            })),
+            Some((Some(service_key), Some(generation))) => {
+                Ok(Some(crate::transaction::ReceiveListing {
+                    service_key: <[u8; 33]>::try_from(service_key.as_slice()).map_err(|_| bad())?,
+                    generation: u32::try_from(generation).map_err(|_| bad())?,
+                }))
+            }
             // Both columns are written together; one without the other is damage.
             Some(_) => Err(bad()),
         }
