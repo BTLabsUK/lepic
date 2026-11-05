@@ -59,6 +59,8 @@ pub enum Report {
     ContactKeyCheck(ContactKeyCheckReport),
     ContactCheck(ContactCheckReport),
     ContactMoveHome(ContactMoveHomeReport),
+    ProfileShow(ProfileShowReport),
+    ProfileSet(ProfileSetReport),
     ContactSlate(ContactSlateReport),
     ContactInvoiceIssue(ContactInvoiceIssueReport),
     ContactInvoices(ContactInvoiceListReport),
@@ -474,6 +476,8 @@ pub struct ContactReport {
     pub peer_verified_at: Option<String>,
     /// The feature bits the contact claimed; 0 when none.
     pub peer_features: u32,
+    /// The profile the contact told (ADR 0041), the upper half of its feature word; 0 when none.
+    pub peer_profile: u32,
     /// `mismatch`, `peer-mismatch`, `unpaired` or `never-finished`, once the pairing ended.
     pub ended_reason: Option<&'static str>,
     pub ended_at: Option<String>,
@@ -524,6 +528,29 @@ pub struct ContactSlateReport {
 #[derive(Debug, Serialize)]
 pub struct ContactCheckReport {
     pub contact_id: String,
+}
+
+/// `lepic profile show`.
+#[derive(Debug, Serialize)]
+pub struct ProfileShowReport {
+    /// The profile this wallet tells paired contacts: the flag, `LEPIC_PROFILE`, the config file.
+    pub profile: u16,
+    /// The names of the bits set.
+    pub names: Vec<&'static str>,
+    /// The bits set that have no name, as a number.
+    pub unnamed: u32,
+}
+
+/// `lepic profile set`.
+#[derive(Debug, Serialize)]
+pub struct ProfileSetReport {
+    pub profile: u16,
+    pub names: Vec<&'static str>,
+    pub unnamed: u32,
+    /// How many contact updates were queued.
+    pub queued: u32,
+    /// The profile the settings give, which later updates tell again when it differs.
+    pub configured: u16,
 }
 
 #[derive(Debug, Serialize)]
@@ -757,6 +784,19 @@ fn write_contact_slate(out: &mut Vec<u8>, r: &ContactSlateReport) -> std::io::Re
     Ok(())
 }
 
+/// ` (name, name, 0x8000)` for a profile; nothing for none.
+fn profile_words(names: &[&str], unnamed: u32) -> String {
+    let mut words: Vec<String> = names.iter().map(|name| (*name).to_owned()).collect();
+    if unnamed != 0 {
+        words.push(format!("{unnamed:#x}"));
+    }
+    if words.is_empty() {
+        String::new()
+    } else {
+        format!(" ({})", words.join(", "))
+    }
+}
+
 fn write_contact(out: &mut Vec<u8>, contact: &ContactReport) -> std::io::Result<()> {
     writeln!(
         out,
@@ -779,6 +819,15 @@ fn write_contact(out: &mut Vec<u8>, contact: &ContactReport) -> std::io::Result<
     }
     if !contact.sas.is_empty() {
         writeln!(out, "    check: {}", contact.sas.join(" · "))?;
+    }
+    if contact.peer_profile != 0 {
+        let (names, unnamed) = crate::profile::describe(contact.peer_profile);
+        writeln!(
+            out,
+            "    profile {}{}",
+            contact.peer_profile,
+            profile_words(&names, unnamed)
+        )?;
     }
     if let Some(host) = &contact.requested_relay {
         writeln!(out, "    asks to move to relay {}", printable(host))?;
@@ -997,6 +1046,8 @@ fn write_human(out: &mut Vec<u8>, report: &Report) -> std::io::Result<()> {
         | Report::ContactKeyCheck(_)
         | Report::ContactCheck(_)
         | Report::ContactMoveHome(_)
+        | Report::ProfileShow(_)
+        | Report::ProfileSet(_)
         | Report::ContactInvoiceIssue(_)
         | Report::ContactInvoices(_)
         | Report::ContactExport(_)
@@ -1487,6 +1538,37 @@ fn write_pairing_human(out: &mut Vec<u8>, report: &Report) -> std::io::Result<()
     }
 }
 
+fn write_profile(out: &mut Vec<u8>, report: &Report) -> std::io::Result<()> {
+    match report {
+        Report::ProfileShow(r) => {
+            writeln!(
+                out,
+                "Profile {}{}",
+                r.profile,
+                profile_words(&r.names, r.unnamed)
+            )
+        }
+        Report::ProfileSet(r) => {
+            writeln!(
+                out,
+                "Profile {}{} queued for {} contact(s); `lepic contact collect` sends them.",
+                r.profile,
+                profile_words(&r.names, r.unnamed),
+                r.queued
+            )?;
+            if r.configured != r.profile {
+                writeln!(
+                    out,
+                    "The settings give {}; later updates tell that again unless you set `profile` too.",
+                    r.configured
+                )?;
+            }
+            Ok(())
+        }
+        _ => Ok(()),
+    }
+}
+
 /// A report on paired contacts. Writes nothing for any other.
 fn write_contact_human(out: &mut Vec<u8>, report: &Report) -> std::io::Result<()> {
     match report {
@@ -1508,6 +1590,7 @@ fn write_contact_human(out: &mut Vec<u8>, report: &Report) -> std::io::Result<()
             "Check sent to {}; `lepic contact collect` takes the answer.",
             r.contact_id
         ),
+        Report::ProfileShow(_) | Report::ProfileSet(_) => write_profile(out, report),
         Report::ContactMoveHome(r) => writeln!(
             out,
             "Home relay moved to {}; {} contact(s) told. The old mailboxes are not read again.",
@@ -2101,6 +2184,7 @@ mod tests {
                     peer_heard_at: None,
                     peer_verified_at: None,
                     peer_features: 0,
+                    peer_profile: 0,
                     ended_reason: None,
                     ended_at: None,
                     allow_invoices: false,
@@ -2123,6 +2207,7 @@ mod tests {
                     "last_heard",
                     "peer_features",
                     "peer_heard_at",
+                    "peer_profile",
                     "peer_verified_at",
                     "requested_relay",
                     "sas",
@@ -2148,6 +2233,24 @@ mod tests {
                     contact_id: text("c"),
                 }),
                 vec!["contact_id"],
+            ),
+            (
+                Report::ProfileShow(ProfileShowReport {
+                    profile: 3,
+                    names: vec!["no-payments"],
+                    unnamed: 0,
+                }),
+                vec!["names", "profile", "unnamed"],
+            ),
+            (
+                Report::ProfileSet(ProfileSetReport {
+                    profile: 3,
+                    names: vec![],
+                    unnamed: 0,
+                    queued: 1,
+                    configured: 0,
+                }),
+                vec!["configured", "names", "profile", "queued", "unnamed"],
             ),
             (
                 Report::ContactMoveHome(ContactMoveHomeReport {

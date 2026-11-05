@@ -79,6 +79,7 @@ use crate::stores::{CliStores, SharedStore};
 use crate::vault::{FileVault, VAULT_FILE};
 
 mod contact;
+mod profile;
 #[cfg(unix)]
 mod serve;
 
@@ -194,6 +195,7 @@ impl<H: Host> Run<'_, H> {
             Command::Tor(TorCommand::Listen(args)) => self.tor_listen(args).await,
             Command::Node(NodeCommand::Status) => self.node_status().await,
             Command::Contact(args) => self.contact(args).await,
+            Command::Profile(command) => self.profile(command).await,
             Command::Serve(args) => self.serve(args).await,
         }
     }
@@ -1365,6 +1367,7 @@ impl<H: Host> Run<'_, H> {
             policy: Default::default(),
             offline: false,
             host_features: self.settings.host_features,
+            profile: self.settings.profile,
         };
         let wallet = Wallet::new(config, ports)?;
         lepic_wallet_contacts::install(&wallet);

@@ -250,7 +250,7 @@ fn no_short_or_long_flag_has_two_meanings() {
 }
 
 #[test]
-fn global_options_are_exactly_the_planned_eight() {
+fn global_options_are_exactly_the_planned_ten() {
     let root = Cli::command();
     let mut globals: Vec<&str> = root
         .get_arguments()
@@ -267,6 +267,8 @@ fn global_options_are_exactly_the_planned_eight() {
             "log-level",
             "network",
             "output",
+            "profile",
+            "profile-bits",
             "service",
             "settings"
         ]

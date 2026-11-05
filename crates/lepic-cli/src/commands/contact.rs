@@ -165,6 +165,7 @@ fn contact_report(view: &ContactView) -> Result<ContactReport, CliError> {
         peer_heard_at: view.peer_heard_at.map(|at| at.to_string()),
         peer_verified_at: view.peer_verified_at.map(|at| at.to_string()),
         peer_features: view.peer_features,
+        peer_profile: view.peer_profile,
         ended_reason: view.ended_reason.map(|reason| match reason {
             PairingEndReason::Mismatch => "mismatch",
             PairingEndReason::PeerMismatch => "peer-mismatch",

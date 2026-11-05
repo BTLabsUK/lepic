@@ -75,8 +75,13 @@ fn refusal(cli: &Cli, settings: &Settings) -> Option<CliError> {
         };
         network != settings.network
     });
+    let other_profile = crate::settings::profile_flag(global)
+        .ok()
+        .flatten()
+        .is_some_and(|profile| profile != settings.profile);
     let option = [
         (other_network, "--network"),
+        (other_profile, "--profile"),
         (global.service.is_some(), "--service"),
     ]
     .into_iter()
