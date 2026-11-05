@@ -239,39 +239,40 @@ fn the_payer_receives_posted_with_the_kernel_excess() {
     assert_eq!(state, TxState::Sent);
 }
 
+/// The payer's key is LEPIC lately, but an invoice it neither paid nor declined holds nothing
+/// from it, so the cancel tells it nothing; its payment is answered instead.
 #[test]
-fn an_unpaid_payer_receives_withdrawn_for_a_cancelled_invoice() {
+fn an_unanswered_invoice_is_withdrawn_without_a_notice() {
     let world = World::new();
     world.settle_one_invoice();
+    world.payer.fund(10, world::FUNDING);
     let issued = world.issue(None);
     let summary = world.drain_payer_invoices();
     assert_eq!(summary.notices, 1);
-    let mut payer_events = world.payer.wallet.subscribe();
+    let posts = world.relay.received("PostSlate");
 
     world
         .block_on(world.issuer.wallet.cancel(issued.tx_id))
         .unwrap();
-    let summary = world.drain_payer_invoices();
 
-    assert_eq!(
-        summary,
-        InboxSummary {
-            notices: 1,
-            ..InboxSummary::default()
-        }
-    );
-    assert_eq!(
-        notice_events(&mut payer_events),
-        vec![Event::InvoiceWithdrawn(WithdrawnInvoice {
-            slate_id: issued.slate_id,
-            tx_id: None,
-        })]
-    );
+    assert_eq!(world.relay.received("PostSlate"), posts);
+    assert_eq!(world.drain_payer_invoices(), InboxSummary::default());
     assert!(
         world
             .payer
             .read(|repos| repos.pending_invoice(uuid(issued.slate_id)))
-            .is_none()
+            .is_some()
+    );
+    let paid = world.pay(&issued);
+    let mut payer_events = world.payer.wallet.subscribe();
+    assert_eq!(world.drain_issuer().rejected, 1);
+    assert_eq!(world.drain_payer_invoices().notices, 1);
+    assert_eq!(
+        notice_events(&mut payer_events),
+        vec![Event::InvoiceWithdrawn(WithdrawnInvoice {
+            slate_id: issued.slate_id,
+            tx_id: Some(paid.tx_id),
+        })]
     );
 }
 
@@ -292,6 +293,8 @@ fn a_withdrawn_paid_invoice_raises_an_event_and_moves_nothing() {
     world
         .block_on(world.issuer.wallet.cancel(issued.tx_id))
         .unwrap();
+    // The payment, not the cancel, shows the issuer that the payer runs LEPIC.
+    assert_eq!(world.drain_issuer().rejected, 1);
     let summary = world.drain_payer_invoices();
 
     assert_eq!(summary.notices, 1);
@@ -675,6 +678,34 @@ fn a_decline_after_the_invoice_was_finalized_raises_no_event() {
         .unwrap()
         .state;
     assert_eq!(state, TxState::Posted);
+}
+
+#[test]
+fn a_repeated_decline_raises_one_event() {
+    let world = World::new();
+    let peer = world.peer_client(9);
+    let issued = world.issue_to(peer.address(), None);
+    let mut issuer_events = world.issuer.wallet.subscribe();
+    let declined = notice("declined", issued.slate_id);
+
+    world.post(9, &world.issuer.address, &declined, 1);
+    assert_eq!(world.drain_issuer().notices, 1);
+    world.post(9, &world.issuer.address, &declined, 1);
+    assert_eq!(world.drain_issuer().notices, 1);
+
+    assert_eq!(
+        notice_events(&mut issuer_events),
+        vec![Event::InvoiceDeclined(DeclinedInvoice {
+            tx_id: issued.tx_id,
+            slate_id: issued.slate_id,
+        })]
+    );
+    let state = world
+        .issuer
+        .read(|repos| repos.transaction(issued.tx_id))
+        .unwrap()
+        .state;
+    assert_eq!(state, TxState::Received);
 }
 
 #[test]

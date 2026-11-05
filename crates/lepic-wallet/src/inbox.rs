@@ -1210,8 +1210,9 @@ where
                 )
                 .await
             }
-            // The payer may not have heard the withdrawal: the notice sent at the cancel fails
-            // while this wallet is offline. The payment is kept for another try while the
+            // The payer may not have heard the withdrawal: the cancel tells a payer over
+            // Epicbox nothing before it answered with the marker, and its notice fails while
+            // this wallet is offline. The payment is kept for another try while the
             // answer cannot be delivered, up to the hold bound; after that the payer's next
             // try of the same payment brings the answer again.
             Err(

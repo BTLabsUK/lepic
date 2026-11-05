@@ -76,6 +76,10 @@ enum Effect {
     Unheld,
 }
 
+/// Prefix of the settings that record a taken decline, one per invoice, keyed by its
+/// hyphenated slate id.
+const DECLINED_PREFIX: &str = "notice.declined.";
+
 fn uuid(slate_id: SlateId) -> Uuid {
     Uuid::from_bytes(*slate_id.as_bytes())
 }
@@ -177,7 +181,7 @@ fn apply_notice(
             &from,
             network,
         )? {
-            Some((tx_id, TxState::Received)) => Effect::Declined { tx_id },
+            Some((tx_id, TxState::Received)) => take_decline(repos, tx_id, slate_id)?,
             // The invoice was paid and finalized, or ended otherwise, before the decline came.
             Some(_) => Effect::Noted,
             None => Effect::Dropped,
@@ -194,6 +198,26 @@ fn apply_notice(
         record_marked(repos, &key, now, None)?;
     }
     Ok(effect)
+}
+
+/// The settings key recording that the decline of the invoice `slate_id` was taken.
+fn declined_setting(slate_id: Uuid) -> String {
+    format!("{DECLINED_PREFIX}{slate_id}")
+}
+
+/// A `declined` for the invoice `tx_id`, which still waits for payment. Only the first one
+/// raises an event; it is recorded, so a repeat, as when the relay delivers it again, is noted.
+fn take_decline(
+    repos: &mut dyn Repositories,
+    tx_id: TxId,
+    slate_id: Uuid,
+) -> Result<Effect, StoreError> {
+    let key = declined_setting(slate_id);
+    if repos.setting(&key)?.is_some() {
+        return Ok(Effect::Noted);
+    }
+    repos.put_setting(&key, "1")?;
+    Ok(Effect::Declined { tx_id })
 }
 
 /// Whether this wallet holds a transaction or a parked invoice of `slate_id`.
@@ -341,11 +365,12 @@ fn withdraw(
 }
 
 /// Where a `withdrawn` for the cancelled transaction `tx_id` goes: the address an invoice over
-/// Epicbox was issued to, while no payment of it was finalized.
+/// Epicbox was issued to, while no payment of it was finalized. With whether its payer declined
+/// it, which only LEPIC does.
 fn withdrawal_target(
     repos: &dyn Repositories,
     tx_id: TxId,
-) -> Result<Option<(SlateId, Destination)>, StoreError> {
+) -> Result<Option<(SlateId, Destination, bool)>, StoreError> {
     let Some(entry) = repos.transaction(tx_id)? else {
         return Ok(None);
     };
@@ -361,10 +386,12 @@ fn withdrawal_target(
     {
         return Ok(None);
     }
+    let declined = repos.setting(&declined_setting(slate_id))?.is_some();
     Ok(repos.counterparty(tx_id)?.map(|to| {
         (
             SlateId::from_bytes(slate_id.into_bytes()),
             Destination::new(to),
+            declined,
         )
     }))
 }
@@ -782,9 +809,15 @@ where
     }
 
     /// Tells the payer that the cancelled invoice `tx_id` is withdrawn, when it was one issued
-    /// over Epicbox, and records that it was told. Fails with why such a notice was not
-    /// delivered.
-    pub(crate) async fn notify_withdrawn(&self, tx_id: TxId) -> Result<(), Hold> {
+    /// over Epicbox, and records that it was told. Over Epicbox only when its payer answered with
+    /// LEPIC's marker: a payment that came `payment_marked`, or a `declined` this wallet took.
+    /// The invoice itself is this wallet's own slate and shows nothing about the payer. Fails
+    /// with why such a notice was not delivered.
+    pub(crate) async fn notify_withdrawn(
+        &self,
+        tx_id: TxId,
+        payment_marked: bool,
+    ) -> Result<(), Hold> {
         let target = async {
             let session = self.session()?;
             self.blocking(move |_, _| {
@@ -794,7 +827,7 @@ where
             })
             .await
         };
-        let (slate_id, to) = match target.await {
+        let (slate_id, to, declined) = match target.await {
             Ok(Some(target)) => target,
             Ok(None) => return Ok(()),
             Err(error) => {
@@ -806,10 +839,8 @@ where
             slate_id,
             kind: NoticeKind::Withdrawn,
         };
-        // The exchange is the invoice this wallet issued over Epicbox, which carried the marker,
-        // to an address the payer derived for invoices, which no stock wallet reads; a payment
-        // answering it unmarked records its key first, so the rule on the key still holds.
-        self.send_notice(None, &to, notice, true).await?;
+        self.send_notice(None, &to, notice, payment_marked || declined)
+            .await?;
         let recorded = self
             .inbox_write(move |repos, _| {
                 let mut marks = repos.tx_marks(tx_id)?;
@@ -824,8 +855,9 @@ where
     }
 
     /// Answers a marked `payment` of the cancelled invoice `tx_id` with a `withdrawn` to the
-    /// address the invoice was issued to, when the payer was never told: the notice sent at the
-    /// cancel fails while this wallet is offline. A due answer records the key the invoice went
+    /// address the invoice was issued to, when the payer was never told: the cancel tells a
+    /// payer over Epicbox nothing until it answered with the marker, and the notice it sends
+    /// fails while this wallet is offline. A due answer records the key the invoice went
     /// to as running LEPIC, and not the sender's, which a verified payment does not prove.
     /// Fails with why that answer was due and not delivered.
     pub(crate) async fn answer_withdrawn_payment(
@@ -851,7 +883,7 @@ where
                 return Err(error.into());
             }
         }
-        self.notify_withdrawn(tx_id).await
+        self.notify_withdrawn(tx_id, true).await
     }
 
     /// Tells the receiver of the cancelled send `tx_id` that it is cancelled, when it is an
