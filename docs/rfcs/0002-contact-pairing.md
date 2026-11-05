@@ -227,6 +227,12 @@ optional fields, covered by the signature). The signature, tag `FF`, is last.
 > update; a value of another length is skipped like any unknown extension. Both extensions are
 > signed like every field before tag `FF`. The MAC input and the errors are in 6.1.
 
+> **Amended by ADR 0041.** The feature word has two halves. Bits 0-15 are capabilities, the
+> registry of ADR 0034. Bits 16-31 are the owner's profile, 16 bits the host names and the library
+> only carries. Profile bits ride in this word only, to paired contacts: never in the marker, and
+> a plain sender claims none. A receiver stores the whole word and shows the upper half as the
+> peer's profile; it only removes an offer or changes wording, and is never an identifier.
+
 > **Amended by ADR 0040.** Type `09` is a contact check: signed, empty body, between paired
 > contacts only (8.5). A reader that predates it refuses the type as malformed before it checks
 > the signature, so the envelope is acknowledged, attributed to nobody and left unanswered.

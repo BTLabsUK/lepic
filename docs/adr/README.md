@@ -46,6 +46,7 @@ record that supersedes the old one; accepted records are not rewritten.
 | [0038](0038-reference-node-4-1-2.md) | Reference node moves to epic v4.1.2 for interop and `upstream.toml` | accepted |
 | [0039](0039-the-host-applies-a-relay-move.md) | The host applies a contact's relay move | accepted |
 | [0040](0040-contact-check-and-own-relay-move.md) | The contact check and moving one's own home relay | accepted |
+| [0041](0041-the-owners-profile-in-the-feature-word.md) | The owner's profile in the feature word | accepted |
 
 Template:
 

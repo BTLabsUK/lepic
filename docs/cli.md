@@ -75,6 +75,7 @@ Each setting comes from, in order: a flag, its environment variable, the config 
 | `log_format` | `LEPIC_LOG_FORMAT` | `--log-format` | `compact` |
 | `invoice_expiry_hours` | `LEPIC_INVOICE_EXPIRY_HOURS` | | `24` |
 | `host_features` | `LEPIC_HOST_FEATURES` | | none |
+| `profile` | `LEPIC_PROFILE` | `--profile`, `--profile-bits` | `0` |
 | `settings_file` | `LEPIC_SETTINGS` | `--settings` | `~/.lepic/settings.toml` |
 
 The config file is `~/.lepic/config.toml` when it exists, or the file `--config` or `LEPIC_CONFIG`
@@ -97,6 +98,13 @@ A wallet that a service runs claims the host bits of that service in its marker 
 `host_features`: bit names, comma-separated, of `device-forwarding` (4) and `name-service` (5),
 for example `host_features = "name-service"`. An unknown name is an error. Without it the wallet
 claims none.
+
+The profile (ADR 0041) is what the wallet tells its paired contacts about the host, in bits 16-31 of
+the feature word: 16 bits, never in the marker. `--profile <NAMES>` takes `no-payments` (bit 0, 1)
+and `automated` (bit 1, 2), comma-separated; `--profile-bits <N>` takes a number 0 to 65535,
+decimal or `0x` hex, for bits the CLI has no name for. The two flags exclude each other. The
+config file and `LEPIC_PROFILE` take names or a number. An unknown name or a number above 65535
+is a usage error. The flag wins over the variable, the variable over the config file.
 
 ### The settings file and the built-in configuration
 
@@ -633,6 +641,31 @@ once the pairing ended, `ended_reason` (`mismatch`, `peer-mismatch`, `unpaired` 
 `never-finished`) and `ended_at`.
 A wallet answers at most `contact_check_answers_per_hour` (default 1) and
 `contact_check_answers_per_day` (default 3) checks per contact; more are taken and dropped.
+
+`contact list` shows a contact's profile when it is not 0 (`profile 3 (no-payments, automated)`),
+and its JSON carries `peer_profile` (0 when none). A pairing restored from a backup shows 0 until
+the contact answers a `contact check`.
+
+`lepic profile show` prints the profile this wallet tells, as a number and names (bits without a
+name as hex). `lepic profile set no-payments,automated` (or `set --bits 0x1`, or `set ""` to
+clear) queues an update for every paired contact; `contact collect` sends them. It prints how many
+were queued. The new value is not saved: later updates tell the configured one again, so set
+`profile` in the config file too. Updates count against the contact update limits (3 a day per
+contact, 100 an hour).
+
+For services: run the wallet with the profile in its config and change it live with `profile set`.
+
+```
+$ cat ~/.lepic/config.toml
+profile = "no-payments,automated"
+$ lepic --service profile set --bits 0x1
+Profile 1 (no-payments) queued for 4 contact(s); `lepic contact collect` sends them.
+The settings give 3; later updates tell that again unless you set `profile` too.
+$ lepic --service profile show
+Profile 3 (no-payments, automated)
+```
+
+`--service` refuses a `--profile` that differs from the one `serve` opened with.
 
 `contact allow-invoices <ID> on` lets a verified contact send invoices; they arrive with
 `contact collect` and wait in `contact invoices` until `contact pay-invoice <SLATE_ID> <AMOUNT>`
