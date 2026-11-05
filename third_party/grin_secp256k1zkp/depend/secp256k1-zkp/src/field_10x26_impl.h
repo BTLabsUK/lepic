@@ -291,14 +291,11 @@ SECP256K1_INLINE static int secp256k1_fe_is_odd(const secp256k1_fe *a) {
 }
 
 SECP256K1_INLINE static void secp256k1_fe_clear(secp256k1_fe *a) {
-    int i;
+    secp256k1_memclear(a, sizeof(secp256k1_fe));
 #ifdef VERIFY
     a->magnitude = 0;
     a->normalized = 1;
 #endif
-    for (i=0; i<10; i++) {
-        a->n[i] = 0;
-    }
 }
 
 static int secp256k1_fe_cmp_var(const secp256k1_fe *a, const secp256k1_fe *b) {
@@ -1093,7 +1090,8 @@ static void secp256k1_fe_sqr(secp256k1_fe *r, const secp256k1_fe *a) {
 
 static SECP256K1_INLINE void secp256k1_fe_cmov(secp256k1_fe *r, const secp256k1_fe *a, int flag) {
     uint32_t mask0, mask1;
-    mask0 = flag + ~((uint32_t)0);
+    volatile int vflag = flag;
+    mask0 = vflag + ~((uint32_t)0);
     mask1 = ~mask0;
     r->n[0] = (r->n[0] & mask0) | (a->n[0] & mask1);
     r->n[1] = (r->n[1] & mask0) | (a->n[1] & mask1);
@@ -1115,7 +1113,8 @@ static SECP256K1_INLINE void secp256k1_fe_cmov(secp256k1_fe *r, const secp256k1_
 
 static SECP256K1_INLINE void secp256k1_fe_storage_cmov(secp256k1_fe_storage *r, const secp256k1_fe_storage *a, int flag) {
     uint32_t mask0, mask1;
-    mask0 = flag + ~((uint32_t)0);
+    volatile int vflag = flag;
+    mask0 = vflag + ~((uint32_t)0);
     mask1 = ~mask0;
     r->n[0] = (r->n[0] & mask0) | (a->n[0] & mask1);
     r->n[1] = (r->n[1] & mask0) | (a->n[1] & mask1);

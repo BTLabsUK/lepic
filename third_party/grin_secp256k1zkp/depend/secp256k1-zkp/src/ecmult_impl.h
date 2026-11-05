@@ -356,13 +356,16 @@ static int secp256k1_ecmult_wnaf(int *wnaf, int len, const secp256k1_scalar *a, 
     VERIFY_CHECK(a != NULL);
     VERIFY_CHECK(2 <= w && w <= 31);
 
-    memset(wnaf, 0, len * sizeof(wnaf[0]));
+    for (bit = 0; bit < len; bit++) {
+        wnaf[bit] = 0;
+    }
 
     if (secp256k1_scalar_get_bits(&s, 255, 1)) {
         secp256k1_scalar_negate(&s, &s);
         sign = -1;
     }
 
+    bit = 0;
     while (bit < len) {
         int now;
         int word;
@@ -932,7 +935,7 @@ static size_t secp256k1_pippenger_scratch_size(size_t n_points, int bucket_windo
     size_t entries = n_points + 1;
 #endif
     size_t entry_size = sizeof(secp256k1_ge) + sizeof(secp256k1_scalar) + sizeof(struct secp256k1_pippenger_point_state) + (WNAF_SIZE(bucket_window+1)+1)*sizeof(int);
-    return ((1<<bucket_window) * sizeof(secp256k1_gej) + sizeof(struct secp256k1_pippenger_state) + entries * entry_size);
+    return (sizeof(secp256k1_gej) << bucket_window) + sizeof(struct secp256k1_pippenger_state) + entries * entry_size;
 }
 
 static int secp256k1_ecmult_pippenger_batch(const secp256k1_ecmult_context *ctx, secp256k1_scratch *scratch, secp256k1_gej *r, const secp256k1_scalar *inp_g_sc, secp256k1_ecmult_multi_callback cb, void *cbdata, size_t n_points, size_t cb_offset) {
@@ -968,7 +971,7 @@ static int secp256k1_ecmult_pippenger_batch(const secp256k1_ecmult_context *ctx,
     state_space = (struct secp256k1_pippenger_state *) secp256k1_scratch_alloc(scratch, sizeof(*state_space));
     state_space->ps = (struct secp256k1_pippenger_point_state *) secp256k1_scratch_alloc(scratch, entries * sizeof(*state_space->ps));
     state_space->wnaf_na = (int *) secp256k1_scratch_alloc(scratch, entries*(WNAF_SIZE(bucket_window+1)) * sizeof(int));
-    buckets = (secp256k1_gej *) secp256k1_scratch_alloc(scratch, (1<<bucket_window) * sizeof(*buckets));
+    buckets = (secp256k1_gej *) secp256k1_scratch_alloc(scratch, sizeof(*buckets) << bucket_window);
 
     if (inp_g_sc != NULL) {
         scalars[0] = *inp_g_sc;
@@ -1035,7 +1038,7 @@ static size_t secp256k1_pippenger_max_points(secp256k1_scratch *scratch) {
 #ifdef USE_ENDOMORPHISM
         entry_size = 2*entry_size;
 #endif
-        space_overhead = ((1<<bucket_window) * sizeof(secp256k1_gej) + entry_size + sizeof(struct secp256k1_pippenger_state));
+        space_overhead = (sizeof(secp256k1_gej) << bucket_window) + entry_size + sizeof(struct secp256k1_pippenger_state);
         if (space_overhead > max_alloc) {
             break;
         }
@@ -1066,6 +1069,7 @@ static int secp256k1_ecmult_multi_var_simple(const secp256k1_ecmult_context *ctx
     secp256k1_scalar_set_int(&szero, 0);
     /* r = inp_g_sc*G */
     secp256k1_gej_set_infinity(r);
+    secp256k1_gej_set_infinity(&tmpj);
     secp256k1_ecmult(ctx, r, &tmpj, &szero, inp_g_sc);
     for (point_idx = 0; point_idx < n_points; point_idx++) {
         secp256k1_ge point;
@@ -1110,8 +1114,9 @@ static int secp256k1_ecmult_multi_var(const secp256k1_ecmult_context *ctx, secp2
     } else if (max_points > ECMULT_MAX_POINTS_PER_BATCH) {
         max_points = ECMULT_MAX_POINTS_PER_BATCH;
     }
-    n_batches = (n+max_points-1)/max_points;
-    n_batch_points = (n+n_batches-1)/n_batches;
+    /* Compute ceil(n/max_points) and ceil(n/n_batches) without wrapping around */
+    n_batches = n/max_points + (n%max_points != 0);
+    n_batch_points = n/n_batches + (n%n_batches != 0);
 
     if (n_batch_points >= ECMULT_PIPPENGER_THRESHOLD) {
         f = secp256k1_ecmult_pippenger_batch;
@@ -1120,8 +1125,8 @@ static int secp256k1_ecmult_multi_var(const secp256k1_ecmult_context *ctx, secp2
         if (max_points == 0) {
             return 0;
         }
-        n_batches = (n+max_points-1)/max_points;
-        n_batch_points = (n+n_batches-1)/n_batches;
+        n_batches = n/max_points + (n%max_points != 0);
+        n_batch_points = n/n_batches + (n%n_batches != 0);
         f = secp256k1_ecmult_strauss_batch;
     }
     for(i = 0; i < n_batches; i++) {

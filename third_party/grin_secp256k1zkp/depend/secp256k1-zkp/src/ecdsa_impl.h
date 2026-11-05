@@ -66,7 +66,7 @@ static int secp256k1_der_read_len(const unsigned char **sigp, const unsigned cha
         return -1;
     }
     /* X.690-207 8.1.3.5 long form length octets */
-    lenleft = b1 & 0x7F;
+    lenleft = b1 & 0x7F; /* lenleft is at least 1 */
     if (lenleft > sigend - *sigp) {
         return -1;
     }
@@ -82,12 +82,12 @@ static int secp256k1_der_read_len(const unsigned char **sigp, const unsigned cha
     }
     while (lenleft > 0) {
         ret = (ret << 8) | **sigp;
-        if (ret + lenleft > (size_t)(sigend - *sigp)) {
-            /* Result exceeds the length of the passed array. */
-            return -1;
-        }
         (*sigp)++;
         lenleft--;
+    }
+    if (ret > (size_t)(sigend - *sigp)) {
+        /* Result exceeds the length of the passed array. */
+        return -1;
     }
     if (ret < 128) {
         /* Not the shortest possible length encoding. */
@@ -132,7 +132,7 @@ static int secp256k1_der_parse_integer(secp256k1_scalar *r, const unsigned char 
         overflow = 1;
     }
     if (!overflow) {
-        memcpy(ra + 32 - rlen, *sig, rlen);
+        if (rlen) memcpy(ra + 32 - rlen, *sig, rlen);
         secp256k1_scalar_set_b32(r, ra, &overflow);
     }
     if (overflow) {
@@ -281,10 +281,14 @@ static int secp256k1_ecdsa_sig_sign(const secp256k1_ecmult_gen_context *ctx, sec
     secp256k1_fe_normalize(&r.y);
     secp256k1_fe_get_b32(b, &r.x);
     secp256k1_scalar_set_b32(sigr, b, &overflow);
-    /* These two conditions should be checked before calling */
-    VERIFY_CHECK(!secp256k1_scalar_is_zero(sigr));
-    VERIFY_CHECK(overflow == 0);
-
+    if (secp256k1_scalar_is_zero(sigr)) {
+        /* P.x = order is on the curve, so technically sig->r could end up zero, which would be an invalid signature.
+         * This branch is cryptographically unreachable as hitting it requires finding the discrete log of P.x = N.
+         */
+        secp256k1_gej_clear(&rp);
+        secp256k1_ge_clear(&r);
+        return 0;
+    }
     if (recid) {
         /* The overflow condition is cryptographically unreachable as hitting it requires finding the discrete log
          * of some P where P.x >= order, and only 1 in about 2^127 points meet this criteria.

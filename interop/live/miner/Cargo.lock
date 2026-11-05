@@ -756,7 +756,6 @@ name = "lepic-live-miner"
 version = "0.1.0"
 dependencies = [
  "epic_core",
- "epic_util",
  "randomx",
  "serde",
  "serde_json",

@@ -13,31 +13,192 @@ Only what `build.rs` compiles and includes is kept, with the licence and fork no
 `.git`, CI files, `fuzz/`, the C tests and benchmarks, `src/java`, `src/asm`, `sage/`, `obj/`,
 `build-aux/` and the autotools files.
 
-## Patches
+## C library patches (`depend/secp256k1-zkp`)
 
-Patch 1, taken from upstream mimblewimble/secp256k1-zkp commit
-`0eefcedc1fec37d54e53bac4e535afa47d6774fa` ("fix scratch leak"):
+Each item is one upstream commit applied to the compiled files only; the upstream commits' test
+changes are not applied because the C tests are not built here. None changes any byte an
+operation produces, or the accept/reject verdict of any commitment, proof or signature; that
+was checked with fixed-vector and mainnet-data comparisons of the old and new builds.
 
-- `depend/secp256k1-zkp/src/modules/bulletproofs/rangeproof_impl.h`: two added lines, a
-  `secp256k1_scratch_deallocate_frame(scratch);` before each early `return 0;` that follows a
-  failed `secp256k1_bulletproof_deserialize_point` in
-  `secp256k1_bulletproof_rangeproof_verify_impl`. The file is byte-identical to upstream's at
-  0eefced. A proof with an invalid point is still rejected with the same return value; only the
-  verifier's scratch frame is now released.
+1. mimblewimble/secp256k1-zkp `0eefcedc1fec37d54e53bac4e535afa47d6774fa` ("fix scratch leak"):
+   `src/modules/bulletproofs/rangeproof_impl.h`, two added lines, a
+   `secp256k1_scratch_deallocate_frame(scratch);` before each early `return 0;` that follows a
+   failed `secp256k1_bulletproof_deserialize_point` in
+   `secp256k1_bulletproof_rangeproof_verify_impl`. A proof with an invalid point is still
+   rejected with the same return value; only the verifier's scratch frame is now released.
+2. bitcoin-core/secp256k1 `e491d06b` (PR 882): `src/group_impl.h`, `secp256k1_gej_add_ge`
+   computes its infinity flag with `& ~a->infinity` instead of an integer multiply. Both
+   operands are 0 or 1, so the value is identical; it keeps the constant-time path free of a
+   multiply the compiler might turn into a branch.
+3. bitcoin-core/secp256k1 `069870d9` (PR 619): `src/secp256k1.c`,
+   `secp256k1_ec_privkey_negate` clears its scalar copy of the secret key before returning.
+4. bitcoin-core/secp256k1 `45b6468d` and `dd6c3de3` (PR 937): `src/group_impl.h`,
+   `secp256k1_ge_set_gej_var` and `secp256k1_ge_set_all_gej_var` set every field (through
+   `secp256k1_ge_set_infinity`) when an input is the point at infinity, instead of leaving `x`
+   and `y` uninitialised. Callers in this tree check the flag first, so results are unchanged.
+5. bitcoin-core/secp256k1 `e6d01e93` (PR 607): `src/ecmult_impl.h`, the three Pippenger
+   bucket-table sizes are computed as `sizeof(...) << bucket_window` instead of
+   `(1 << bucket_window) * sizeof(...)`, so the shift happens in `size_t`. Same values.
+6. bitcoin-core/secp256k1 `3cb057f8` (PR 578): `src/ecdsa_impl.h`,
+   `secp256k1_der_read_len` checks the parsed length against the remaining input without a sum
+   that could wrap. Well-formed DER parses as before; only a malformed length can change from
+   accepted to rejected. Not used by Epic consensus.
+7. bitcoin-core/secp256k1 `9570f674` (PR 879): `src/ecdsa_impl.h`,
+   `contrib/lax_der_parsing.c` and `contrib/lax_der_privatekey_parsing.c` (vendored, not
+   compiled) skip the `memcpy` when a DER component has zero bytes, instead of passing a pointer
+   past the buffer to a zero-length copy.
+8. bitcoin-core/secp256k1 `eb28464a` (PR 731): `src/hash.h`, `src/hash_impl.h`, the
+   SHA256 byte counter is a `uint64_t` instead of a `size_t`, so it cannot wrap on 32-bit
+   targets. Identical digests for every input below 4 GiB.
+9. bitcoin-core/secp256k1 `960ba5f9` (PR 1729): `src/hash_impl.h`, the RFC6979 generate
+   loop keeps the remaining length in a `size_t` instead of an `int`. Same output.
+10. bitcoin-core/secp256k1 `93d343bf` (PR 732): `src/ecdsa_impl.h`,
+   `secp256k1_ecdsa_sig_sign` checks a zero `r` and an overflowing `x` at run time again
+   instead of in `VERIFY_CHECK`s that this build compiles away. The conditions are
+   cryptographically unreachable, so no signature changes.
+11. bitcoin-core/secp256k1 `bade617` (PR 580), one line: `src/ecmult_impl.h`,
+   `secp256k1_ecmult_multi_var_simple` sets `tmpj` to infinity before passing it with a zero
+   scalar to `secp256k1_ecmult`, as upstream's version of the same function
+   (`secp256k1_ecmult_multi_simple_var`) does. Strauss skips a point whose scalar is zero
+   (`ecmult_impl.h`, the `secp256k1_scalar_is_zero(&na[np])` guard), so the point was never read
+   and the result is unchanged; GCC's `-Wmaybe-uninitialized` report at `-O` goes away.
 
-The upstream commit's new C test (`tests_impl.h`) is not applied: the C tests are not built here.
+12. bitcoin-core/secp256k1 `4a496a36` (PR 1257), `5fb336f9` and `17fa2173` (PR 1303):
+   `src/field_10x26_impl.h` `secp256k1_fe_cmov` and `secp256k1_fe_storage_cmov`,
+   `src/scalar_8x32_impl.h` `secp256k1_scalar_cadd_bit` and `secp256k1_scalar_cond_negate` copy
+   the flag into a `volatile int` before deriving the mask, and `cond_negate` derives it as
+   `-vflag`, as upstream does. Every caller passes 0 or 1, for which the new masks equal the old
+   ones, so every output is the same.
 
-Patch 2, LEPIC's own, so the crate builds without warnings and stays valid under edition 2024
-(`static_mut_refs` is an error there). `src/pedersen.rs` only:
+13. bitcoin-core/secp256k1 `2241ae6d` (PR 709, macro hunk only), `a39c2b09` (PR 754, macro hunk
+   only) and `17fa2173` (PR 1303): `src/ecmult_const_impl.h`, `ECMULT_CONST_TABLE_GET_GE`
+   derives `abs_n` from the sign bit of `n` through a volatile mask (`<limits.h>` for
+   `CHAR_BIT`) and sets `r` from `pre[0]` before the cmov loop, so `r` is initialised on every
+   path. Not taken: the `group.h` change of 2241ae6d (dropping `rzr`), a39c2b09's doc comments
+   and its `secp256k1.c` hunk, which targets a `scalar_cmov` the vendored tree lacks. The
+   selected point is the same for every odd `n`.
 
-- `shared_generators` reads `SHARED_BULLETGENERATORS` by value through a raw pointer,
-  `match *(&raw const SHARED_BULLETGENERATORS)`, instead of `SHARED_BULLETGENERATORS.clone()`,
-  which took a shared reference to a mutable static. The value is a `Copy` `Option` of a
-  pointer, so the result is the same.
-- The unused `use std::mem;` and the deprecated `use std::u64;` are removed. The three
-  `u64::MAX` then name the type's associated constant, the same value.
+14. bitcoin-core/secp256k1 `1c081262`, `9bb368d1`, `97c57f4`, `99cc9fd6` and `765ef533`
+   (PR 1579); ElementsProject/secp256k1-zkp `e3bddfa7`, `a69a662d` and `d3cb785c`: `src/util.h`
+   gains `secp256k1_memclear` (`SecureZeroMemory` under MSVC, otherwise `memset` followed by an
+   asm memory barrier, or a volatile function pointer). `scalar_clear`, `fe_clear`, `gej_clear`
+   and `ge_clear` use it, as do the `memset` calls that wipe nonce, key and HMAC buffers in
+   `secp256k1.c`, `ecmult_gen_impl.h`, `hash_impl.h` and the recovery module; `ecmult_wnaf`
+   zeroes its array in a loop. Added wipes follow the same commits: `pj` in
+   `secp256k1_ec_pubkey_create`, `rj` in `secp256k1_schnorrsig_sign`, the ECDH intermediates,
+   the aggsig nonce buffer and context nonces, the generator blind, the `blind_sum` overflow
+   path, the borromean temp buffer and the rangeproof sign, rewind and verify exit paths.
+   Not taken: the `VERIFY` checkmem hook (no `checkmem.h` here), the hash state `_clear`
+   functions (`e7d3844`, `349e6ab`; no net effect over 9bb368d1), and the surjection and
+   whitelist modules, which are not compiled. Only writes of zero to buffers that are not read
+   again are added or changed, so every output is the same.
 
-Nothing else differs from 42fcb29. This file is the only addition.
+15. bitcoin-core/secp256k1 `4edaf06f` and `8ecc6ce5` (PR 648): `src/scratch_impl.h`,
+   `secp256k1_scratch_max_allocation` returns 0 when `objects * ALIGNMENT` would wrap (the
+   vendored code multiplies by `ALIGNMENT`, upstream by `ALIGNMENT - 1`, so the bound here is
+   `SIZE_MAX / ALIGNMENT`), and `secp256k1_scratch_alloc` returns NULL when rounding the size
+   up to the alignment wraps. Callers pass at most `2 + n_proofs` objects and sizes far below
+   the bound, so their results are unchanged.
+
+16. bitcoin-core/secp256k1 `2277af5f` (PR 568): `src/ecmult_impl.h`, `secp256k1_ecmult_multi_var`
+   computes `n_batches` and `n_batch_points` as `n / d + (n % d != 0)` instead of
+   `(n + d - 1) / d`, at both the Pippenger and the Strauss site. Upstream moved the arithmetic
+   into `secp256k1_ecmult_multi_batch_size_helper`; the vendored inline form is kept. Both
+   formulas are ceil(n / d) whenever `n + d - 1` fits in `size_t`, which holds for every real
+   input.
+
+17. bitcoin-core/secp256k1 `b1bc6f3e` (PR 1890): `src/secp256k1.c`, `nonce_function_rfc6979`
+   runs its generate loop `counter + 1` times with the end test after the body, so it also
+   terminates for `counter == UINT_MAX`. The nonce for every counter is the same.
+
+18. bitcoin-core/secp256k1 `6173839c` (PR 830); ElementsProject/secp256k1-zkp `5a40f3d9`:
+   `src/util.h` gains `secp256k1_memcmp_var`, a byte loop with `memcmp` semantics (upstream
+   added it over GCC bug 95189), used at the bulletproof rewind value check
+   (`bulletproofs/rangeproof_impl.h`), in `secp256k1_borromean_verify` and in
+   `secp256k1_rangeproof_rewind_inner`. Each site only tests the result against zero, where
+   the two functions agree; the surjection module's call is not compiled here.
+
+## Build changes (`build.rs`)
+
+Each one is a change to how the C library is compiled, not to its source.
+
+1. `SECP256K1_BUILD` defined, `SECP256K1_API` defined empty. Upstream's own build passes
+   `-DSECP256K1_BUILD` for the library (mimblewimble/secp256k1-zkp `Makefile.am`,
+   `libsecp256k1_la_CPPFLAGS`), and bitcoin-core/secp256k1 later put the define into
+   `secp256k1.c` itself (commit `ae9e648`, "Define SECP256K1_BUILD in secp256k1.c directly",
+   <https://github.com/bitcoin-core/secp256k1/pull/929>). The fork's `build.rs` never defined it,
+   so `include/secp256k1.h` marked the API arguments `__nonnull__` and GCC was free to delete
+   the library's own `ARG_CHECK` null checks, which it reported as 163 `-Wnonnull-compare`
+   warnings. `SECP256K1_API` is emptied as rust-bitcoin/rust-secp256k1's `secp256k1-sys`
+   `build.rs` does, so the static library carries no `dllexport` or visibility attribute into
+   the Rust cdylib. Byte-identical outputs before and after, and proofs and signatures from
+   each build verify on the other (the harness is described in the review that made this
+   change).
+
+2. `-Wno-unused-function` (when the compiler accepts it). Upstream's `configure.ac` sets it in
+   `warn_CFLAGS` (mimblewimble/secp256k1-zkp `configure.ac`, line 68), and
+   rust-bitcoin/rust-secp256k1's `secp256k1-sys/build.rs` passes the same flag for the same
+   reason: `secp256k1.c` is a unity build and defines five static helpers
+   (`secp256k1_ecmult_strauss_batch_single`, `secp256k1_ecmult_pippenger_batch_single`,
+   `secp256k1_gej_is_valid_var`, `secp256k1_ge_set_infinity`, `secp256k1_fe_inv_all_var`)
+   that no enabled module calls. Diagnostics only; no code changes.
+
+3. The unconditional `-g` flag removed, as upstream mimblewimble/rust-secp256k1-zkp did in
+   commit `1caad22` ("drop -g debug flag", part of
+   <https://github.com/mimblewimble/rust-secp256k1-zkp/pull/89>). The `cc` crate already adds
+   debug information when Cargo's profile asks for it, so the flag only forced DWARF data into
+   release builds, and MSVC's `cl.exe` does not know the option. No compiled code changes.
+
+## Rust wrapper patches (`src/`)
+
+Each is a backport of one upstream commit, applied hunk for hunk to the vendored files. None
+changes a public signature LEPIC calls, and none changes the bytes any operation produces or
+accepts; that was checked with fixed-vector and mainnet-data comparisons of the old and new
+builds.
+1. `src/ffi.rs`, `src/key.rs`: the `extern "C"` declarations match `include/*.h`, from
+   mimblewimble/rust-secp256k1-zkp commit `00e2381` ("fix ffi signatures to match c headers").
+   `secp256k1_ec_pubkey_combine` takes `n: size_t` (the C side reads a 64-bit count; the wrapper
+   passed a 32-bit one), six output buffers are `*mut` instead of `*const` and `serialize_vec`
+   hands over `as_mut_ptr()`, the nonce-function type has the C argument order and `int` return
+   (`include/secp256k1.h`, lines 100-107), `is_partial` is `c_int`
+   (`include/secp256k1_aggsig.h`), `context_clone` and `scratch_space_create` take a
+   `*const Context`, `rangeproof_verify` takes `*mut u64`, and the four opaque C handle types no
+   longer derive `Clone`. Byte-neutral.
+2. `src/pedersen.rs`: the shared bulletproof generators are created once through
+   `std::sync::Once` and published through an `AtomicPtr`, instead of a `static mut` that two
+   threads could read and write at the same time. From mimblewimble/rust-secp256k1-zkp commit
+   `d514444` ("fix data race and return checks"), the `shared_generators` hunk. The generators
+   are the same bytes (they depend only on `GENERATOR_G` and `MAX_GENERATORS`).
+3. `src/pedersen.rs`: `commit`, `commit_blind` and `commit_value` check the return of
+   `secp256k1_pedersen_commit` / `secp256k1_pedersen_blind_commit` and return
+   `Error::InvalidCommit` when the C library reports failure (a zero value with a zero blind, or
+   an overflowing blind), instead of serialising an all-zero internal commitment. From
+   mimblewimble/rust-secp256k1-zkp commit `d514444`, the return-check hunks. Every successful
+   commitment is byte-identical; only the failure path changes from `Ok(zeroes)` to `Err`.
+   The old `Ok` value was `08` followed by 32 zero bytes, which is not a curve point:
+   `to_pubkey`, `commit_sum` and `verify_commit_sum` all reject it. lepic-crypto re-parses every
+   commitment and already returned `InvalidCommitment` for it, and LEPIC's kernel sums skip a
+   zero overage as Epic's node does (`core/src/core/committed.rs`, `overage != 0`).
+4. `src/pedersen.rs`: the `RangeProof` serde visitor rejects a sequence longer than
+   `MAX_PROOF_SIZE` with `invalid_length` instead of indexing past the buffer, with the
+   upstream regression test. From EpicCash/rust-secp256k1-zkp commit `3028f01` ("harden
+   deser/tests"), the same bound as mimblewimble/rust-secp256k1-zkp `af84dd4`. Every proof that
+   deserialised before still does, to the same bytes.
+5. `src/macros.rs`: `Clone` for the array newtypes (`SecretKey`, `PublicKey`, `Signature`,
+   `Message` and the rest) copies the inner array instead of writing through a `&mut` into
+   `MaybeUninit` memory. From mimblewimble/rust-secp256k1-zkp commit `6877373` ("zero-init
+   instead of uninit"), the `macros.rs` `Clone` hunk; the rest of that commit is already covered
+   by the fork's own `18f836b`. Same bytes.
+6. `Cargo.toml`, `src/lib.rs`: the optional `clippy = "0.0"` dependency, its `dev` feature and the
+   three `#![cfg_attr(feature = "dev", ...)]` lines that loaded clippy as a compiler plugin are
+   removed. They date from 2015 (mimblewimble/rust-secp256k1-zkp `4f83a83`); rustc dropped
+   compiler plugins in 1.75 (rust-lang/rust PR 116412), so the feature could not be built, and
+   `cargo machete` reports the dependency as unused. No code or output changes.
+7. `src/pedersen.rs`, LEPIC's own: the unused `use std::mem;` and the deprecated `use std::u64;`
+   are removed, so the crate builds without those warnings. The three `u64::MAX` then name the
+   type's associated constant, the same value.
+
+Nothing else differs from 42fcb29 and the changes listed here. This file is the only addition.
 
 ## Re-checking
 
@@ -49,4 +210,4 @@ cd third_party/grin_secp256k1zkp
 find . -type f ! -name PATCHES.md | while read f; do diff -u "../../fork/$f" "$f"; done
 ```
 
-The only output is the two C lines of patch 1 and the four `src/pedersen.rs` lines of patch 2.
+Every difference in the output is one of the items above.

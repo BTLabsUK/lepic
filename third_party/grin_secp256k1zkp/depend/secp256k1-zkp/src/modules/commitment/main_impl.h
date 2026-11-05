@@ -194,6 +194,8 @@ int secp256k1_pedersen_blind_sum(const secp256k1_context* ctx, unsigned char *bl
     for (i = 0; i < n; i++) {
         secp256k1_scalar_set_b32(&x, blinds[i], &overflow);
         if (overflow) {
+            secp256k1_scalar_clear(&acc);
+            secp256k1_scalar_clear(&x);
             return 0;
         }
         if (i >= npositive) {

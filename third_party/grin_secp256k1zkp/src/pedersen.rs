@@ -38,23 +38,23 @@ const SCRATCH_SPACE_SIZE: size_t = 256 * MAX_WIDTH;
 const MAX_GENERATORS: size_t = 256;
 
 /// Shared Bullet Proof Generators (avoid recreating every time)
-static mut SHARED_BULLETGENERATORS: Option<*mut ffi::BulletproofGenerators> = None;
+static SHARED_BULLETGENERATORS: std::sync::Once = std::sync::Once::new();
+static SHARED_BULLETGENERATORS_PTR: std::sync::atomic::AtomicPtr<ffi::BulletproofGenerators> =
+	std::sync::atomic::AtomicPtr::new(std::ptr::null_mut());
 
-// TODO: Check whether this matters if this is used with a different context; don't think it does
 fn shared_generators(ctx: *mut ffi::Context) -> *mut ffi::BulletproofGenerators {
-	unsafe {
-		match *(&raw const SHARED_BULLETGENERATORS) {
-			Some(s) => s,
-			None => {
-				SHARED_BULLETGENERATORS = Some(ffi::secp256k1_bulletproof_generators_create(
-					ctx,
-					constants::GENERATOR_G.as_ptr(),
-					MAX_GENERATORS,
-				));
-				SHARED_BULLETGENERATORS.unwrap()
-			}
-		}
-	}
+	SHARED_BULLETGENERATORS.call_once(|| {
+		let ptr = unsafe {
+			ffi::secp256k1_bulletproof_generators_create(
+				ctx,
+				constants::GENERATOR_G.as_ptr(),
+				MAX_GENERATORS,
+			)
+		};
+		assert!(!ptr.is_null(), "secp256k1_bulletproof_generators_create returned null");
+		SHARED_BULLETGENERATORS_PTR.store(ptr, std::sync::atomic::Ordering::Release);
+	});
+	SHARED_BULLETGENERATORS_PTR.load(std::sync::atomic::Ordering::Acquire)
 }
 
 /// underling lib's representation of a commit, which is now a full 64 bytes
@@ -162,6 +162,9 @@ impl<'di> de::Visitor<'di> for Visitor {
 			let mut ret: [u8; constants::MAX_PROOF_SIZE] = [0; constants::MAX_PROOF_SIZE];
 			let mut i = 0;
 			while let Some(val) = v.next_element()? {
+				if i >= constants::MAX_PROOF_SIZE {
+					return Err(de::Error::invalid_length(i, &self));
+				}
 				ret[i] = val;
 				i += 1;
 			}
@@ -398,7 +401,7 @@ impl Secp256k1 {
 			return Err(Error::IncapableContext);
 		}
 		let mut commit_i = [0; constants::PEDERSEN_COMMITMENT_SIZE_INTERNAL];
-		unsafe {
+		let ret = unsafe {
 			ffi::secp256k1_pedersen_commit(
 				self.ctx,
 				commit_i.as_mut_ptr(),
@@ -408,6 +411,9 @@ impl Secp256k1 {
 				constants::GENERATOR_G.as_ptr(),
 			)
 		};
+		if ret != 1 {
+			return Err(Error::InvalidCommit);
+		}
 		Ok(self.commit_ser(commit_i)?)
 	}
 
@@ -417,7 +423,7 @@ impl Secp256k1 {
 			return Err(Error::IncapableContext);
 		}
 		let mut commit_i = [0; constants::PEDERSEN_COMMITMENT_SIZE_INTERNAL];
-		unsafe {
+		let ret = unsafe {
 			ffi::secp256k1_pedersen_blind_commit(
 				self.ctx,
 				commit_i.as_mut_ptr(),
@@ -427,6 +433,9 @@ impl Secp256k1 {
 				constants::GENERATOR_G.as_ptr(),
 			)
 		};
+		if ret != 1 {
+			return Err(Error::InvalidCommit);
+		}
 		Ok(self.commit_ser(commit_i)?)
 	}
 
@@ -439,7 +448,7 @@ impl Secp256k1 {
 		let mut commit_i = [0; constants::PEDERSEN_COMMITMENT_SIZE_INTERNAL];
 		let zblind = [0u8; 32];
 
-		unsafe {
+		let ret = unsafe {
 			ffi::secp256k1_pedersen_commit(
 				self.ctx,
 				commit_i.as_mut_ptr(),
@@ -449,6 +458,9 @@ impl Secp256k1 {
 				constants::GENERATOR_G.as_ptr(),
 			)
 		};
+		if ret != 1 {
+			return Err(Error::InvalidCommit);
+		}
 		Ok(self.commit_ser(commit_i)?)
 	}
 
@@ -1154,6 +1166,17 @@ mod tests {
 	use rand::{rng, Rng};
 
 	use crate::pedersen::tests::chrono::prelude::*;
+
+	#[test]
+	fn range_proof_deserialize_rejects_oversized_proof() {
+		let valid = crate::json::to_string(&vec![0u8; constants::MAX_PROOF_SIZE]).unwrap();
+		let proof: RangeProof = crate::json::from_str(&valid).unwrap();
+		assert_eq!(proof.plen, constants::MAX_PROOF_SIZE);
+
+		let oversized =
+			crate::json::to_string(&vec![0u8; constants::MAX_PROOF_SIZE + 1]).unwrap();
+		assert!(crate::json::from_str::<RangeProof>(&oversized).is_err());
+	}
 
 	#[test]
 	fn commit_parse_ser() {

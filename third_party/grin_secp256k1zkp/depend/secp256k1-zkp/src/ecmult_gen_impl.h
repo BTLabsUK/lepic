@@ -182,7 +182,7 @@ static void secp256k1_ecmult_gen_blind(secp256k1_ecmult_gen_context *ctx, const 
         memcpy(keydata + 32, seed32, 32);
     }
     secp256k1_rfc6979_hmac_sha256_initialize(&rng, keydata, seed32 ? 64 : 32);
-    memset(keydata, 0, sizeof(keydata));
+    secp256k1_memclear(keydata, sizeof(keydata));
     /* Retry for out of range results to achieve uniformity. */
     do {
         secp256k1_rfc6979_hmac_sha256_generate(&rng, nonce32, 32);
@@ -199,7 +199,7 @@ static void secp256k1_ecmult_gen_blind(secp256k1_ecmult_gen_context *ctx, const 
         retry |= secp256k1_scalar_is_zero(&b);
     } while (retry); /* This branch true is cryptographically unreachable. Requires sha256_hmac output > order. */
     secp256k1_rfc6979_hmac_sha256_finalize(&rng);
-    memset(nonce32, 0, 32);
+    secp256k1_memclear(nonce32, sizeof(nonce32));
     secp256k1_ecmult_gen(ctx, &gb, &b);
     secp256k1_scalar_negate(&b, &b);
     ctx->blind = b;

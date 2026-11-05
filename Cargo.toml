@@ -28,8 +28,8 @@ lepic-telemetry = { path = "crates/lepic-telemetry" }
 
 # Every external crate is set once here with default features off; crates
 # enable what they use. Features listed here are policy, not convenience.
-# The secp256k1-zkp wrapper is a vendored copy with one upstream fix and one warning
-# fix of our own, recorded in third_party/grin_secp256k1zkp/PATCHES.md (ADR 0010).
+# The secp256k1-zkp wrapper is a vendored copy with upstream backports and build fixes,
+# recorded in third_party/grin_secp256k1zkp/PATCHES.md (ADR 0010).
 grin_secp256k1zkp = { path = "third_party/grin_secp256k1zkp", default-features = false, features = ["bullet-proof-sizing"] }
 tokio = { version = "1.53.1", default-features = false }
 tokio-tungstenite = { version = "0.30.0", default-features = false }

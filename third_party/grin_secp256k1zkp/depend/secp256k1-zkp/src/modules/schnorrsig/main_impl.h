@@ -98,6 +98,7 @@ int secp256k1_schnorrsig_sign(const secp256k1_context* ctx, secp256k1_schnorrsig
     secp256k1_scalar_get_b32(&sig->data[32], &e);
     secp256k1_scalar_clear(&k);
     secp256k1_scalar_clear(&x);
+    secp256k1_gej_clear(&rj);
 
     return 1;
 }

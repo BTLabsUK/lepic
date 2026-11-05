@@ -7,6 +7,8 @@
 #ifndef SECP256K1_ECMULT_CONST_IMPL_H
 #define SECP256K1_ECMULT_CONST_IMPL_H
 
+#include <limits.h>
+
 #include "scalar.h"
 #include "group.h"
 #include "ecmult_const.h"
@@ -14,16 +16,21 @@
 
 /* This is like `ECMULT_TABLE_GET_GE` but is constant time */
 #define ECMULT_CONST_TABLE_GET_GE(r,pre,n,w) do { \
-    int m; \
-    int abs_n = (n) * (((n) > 0) * 2 - 1); \
-    int idx_n = abs_n / 2; \
+    int m = 0; \
+    int volatile mask = (n) >> (sizeof(n) * CHAR_BIT - 1); \
+    int abs_n = ((n) + mask) ^ mask; \
+    int idx_n = abs_n >> 1; \
     secp256k1_fe neg_y; \
     VERIFY_CHECK(((n) & 1) == 1); \
     VERIFY_CHECK((n) >= -((1 << ((w)-1)) - 1)); \
     VERIFY_CHECK((n) <=  ((1 << ((w)-1)) - 1)); \
     VERIFY_SETUP(secp256k1_fe_clear(&(r)->x)); \
     VERIFY_SETUP(secp256k1_fe_clear(&(r)->y)); \
-    for (m = 0; m < ECMULT_TABLE_SIZE(w); m++) { \
+    /* Unconditionally set r->x = (pre)[m].x. r->y = (pre)[m].y. because it's either the correct one \
+     * or will get replaced in the later iterations, this is needed to make sure `r` is initialized. */ \
+    (r)->x = (pre)[m].x; \
+    (r)->y = (pre)[m].y; \
+    for (m = 1; m < ECMULT_TABLE_SIZE(w); m++) { \
         /* This loop is used to avoid secret data in array indices. See
          * the comment in ecmult_gen_impl.h for rationale. */ \
         secp256k1_fe_cmov(&(r)->x, &(pre)[m].x, m == idx_n); \

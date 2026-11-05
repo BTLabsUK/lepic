@@ -141,7 +141,7 @@ int secp256k1_aggsig_generate_nonce_single(const secp256k1_context* ctx, secp256
         retry = secp256k1_scalar_is_zero(secnonce);
     } while (retry); /* This branch true is cryptographically unreachable. Requires sha256_hmac output > Fp. */
     secp256k1_ecmult_gen(&ctx->ecmult_gen_ctx, pubnonce, secnonce);
-    memset(data, 0, 32);  /* TODO proper clear */
+    secp256k1_memclear(data, sizeof(data));
     /* Negate nonce if needed to get y to be a quadratic residue */
     if (!secp256k1_gej_has_quad_y_var(pubnonce)) {
         secp256k1_scalar_negate(secnonce, secnonce);
@@ -729,7 +729,7 @@ void secp256k1_aggsig_context_destroy(secp256k1_aggsig_context *aggctx) {
         return;
     }
     memset(aggctx->pubkeys, 0, aggctx->n_sigs * sizeof(*aggctx->pubkeys));
-    memset(aggctx->secnonce, 0, aggctx->n_sigs * sizeof(*aggctx->secnonce));
+    secp256k1_memclear(aggctx->secnonce, aggctx->n_sigs * sizeof(*aggctx->secnonce));
     memset(aggctx->progress, 0, aggctx->n_sigs * sizeof(*aggctx->progress));
     free(aggctx->pubkeys);
     free(aggctx->secnonce);

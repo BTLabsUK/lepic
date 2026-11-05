@@ -461,9 +461,10 @@ static int nonce_function_rfc6979(unsigned char *nonce32, const unsigned char *m
        buffer_append(keydata, &offset, algo16, 16);
    }
    secp256k1_rfc6979_hmac_sha256_initialize(&rng, keydata, offset);
-   memset(keydata, 0, sizeof(keydata));
-   for (i = 0; i <= counter; i++) {
+   secp256k1_memclear(keydata, sizeof(keydata));
+   for (i = 0; ; i++) {
        secp256k1_rfc6979_hmac_sha256_generate(&rng, nonce32, 32);
+       if (i == counter) break;
    }
    secp256k1_rfc6979_hmac_sha256_finalize(&rng);
    return 1;
@@ -505,7 +506,7 @@ int secp256k1_ecdsa_sign(const secp256k1_context* ctx, secp256k1_ecdsa_signature
             }
             count++;
         }
-        memset(nonce32, 0, 32);
+        secp256k1_memclear(nonce32, sizeof(nonce32));
         secp256k1_scalar_clear(&msg);
         secp256k1_scalar_clear(&non);
         secp256k1_scalar_clear(&sec);
@@ -548,6 +549,7 @@ int secp256k1_ec_pubkey_create(const secp256k1_context* ctx, secp256k1_pubkey *p
     if (ret) {
         secp256k1_ecmult_gen(&ctx->ecmult_gen_ctx, &pj, &sec);
         secp256k1_ge_set_gej(&p, &pj);
+        secp256k1_gej_clear(&pj);
         secp256k1_pubkey_save(pubkey, &p);
     }
     secp256k1_scalar_clear(&sec);
@@ -563,6 +565,7 @@ int secp256k1_ec_privkey_negate(const secp256k1_context* ctx, unsigned char *sec
     secp256k1_scalar_negate(&sec, &sec);
     secp256k1_scalar_get_b32(seckey, &sec);
 
+    secp256k1_scalar_clear(&sec);
     return 1;
 }
 
