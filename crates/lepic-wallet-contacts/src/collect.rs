@@ -230,7 +230,7 @@ fn write_json<T: Serialize>(
     repos.put_setting(key, &text)
 }
 
-fn envelope_hash(envelope: &[u8]) -> [u8; 32] {
+pub(crate) fn envelope_hash(envelope: &[u8]) -> [u8; 32] {
     Blake2b256::digest(envelope).into()
 }
 
@@ -385,7 +385,7 @@ where
         let ended_before = self.ended_since(&BTreeSet::new()).await?;
         let ended_before: BTreeSet<ContactId> =
             ended_before.iter().map(|ended| ended.contact_id).collect();
-        let mut told = BTreeSet::new();
+        let mut told = Told::default();
         for (host, mailboxes) in by_relay {
             let Some(first) = mailboxes.first() else {
                 continue;
@@ -745,8 +745,8 @@ where
         .await
     }
 
-    /// Forgets envelopes seen longer ago than a relay keeps a message, and a little longer, and
-    /// the hold counts of messages first held longer ago than [`HELD_FORGOTTEN`].
+    /// Forgets envelopes seen longer ago than a relay keeps a message, and a little longer, the
+    /// payload acknowledgement marks and parked payloads as old, and the hold counts of messages first held longer ago than [`HELD_FORGOTTEN`].
     async fn forget_old_envelopes(&self) -> Result<(), ContactError> {
         let session = self.wallet.session()?;
         let patience = self.wallet.config().policy.contact_hold_patience;
@@ -756,6 +756,7 @@ where
             let seconds = u64::try_from(now.as_second()).unwrap_or(0);
             session.store.write(|repos| {
                 repos.forget_envelopes_before(cutoff)?;
+                super::payload::forget_old_marks(repos, now, SEEN_LIFETIME)?;
                 for (key, value) in repos.settings_with_prefix(HELD_PREFIX)? {
                     if hold_forgotten(&value, seconds, patience) {
                         repos.delete_setting(&key)?;
@@ -816,7 +817,7 @@ where
         contact_id: ContactId,
         current: bool,
         envelope: &[u8],
-        told: &mut std::collections::BTreeSet<ContactId>,
+        told: &mut Told,
     ) -> Result<Handled, ContactError> {
         let network = self.wallet.config().network;
         let net = contact_network(network);
@@ -862,7 +863,7 @@ where
             &recorded,
             channel.as_ref(),
             contact_id,
-            told,
+            &mut told.unopenable,
         ) else {
             return Ok(Handled::Stored);
         };
@@ -912,7 +913,7 @@ where
         if current {
             self.forget_old_salt(contact_id).await?;
         }
-        self.dispatch_contact_message(relays, contact_id, opened, envelope)
+        self.dispatch_contact_message(relays, contact_id, opened, envelope, told)
             .await
     }
 
@@ -924,6 +925,7 @@ where
         contact_id: ContactId,
         opened: Opened,
         envelope: &[u8],
+        told: &mut Told,
     ) -> Result<Handled, ContactError> {
         let record = {
             let session = self.wallet.session()?;
@@ -944,7 +946,10 @@ where
             }
             MessageType::KeyCheck => self.take_key_check(&record, envelope).await?,
             MessageType::KeyCheckAnswer => self.take_key_check_answer(&record, envelope).await?,
-            MessageType::AppPayload => self.take_contact_payload(&record, opened.content).await?,
+            MessageType::AppPayload => {
+                self.take_contact_payload(&record, opened.content, envelope, &mut told.parked)
+                    .await?
+            }
             MessageType::ContactCheck => self.take_contact_check(relays, &record).await?,
             MessageType::PairingReply | MessageType::PairingConfirm => Handled::Stored,
         })
@@ -1769,8 +1774,16 @@ struct Collector<'a, N, S: StoreOpener, V> {
     messages: usize,
     paired: usize,
     failed: Vec<FailedPairing>,
-    /// Contacts already reported with [`Event::SealedUnopenable`] this cycle.
-    told: &'a mut std::collections::BTreeSet<ContactId>,
+    told: &'a mut Told,
+}
+
+/// The contacts a cycle already told the host about, so each is told once a cycle.
+#[derive(Default)]
+struct Told {
+    /// Reported with [`Event::SealedUnopenable`].
+    unopenable: BTreeSet<ContactId>,
+    /// Reported with [`Event::ContactPayloadsParked`].
+    parked: BTreeSet<ContactId>,
 }
 
 impl<N, S, V> MailboxHandler for Collector<'_, N, S, V>
@@ -1845,6 +1858,13 @@ where
         let hash = envelope_hash(envelope);
         if self.wallet.seen_before(hash).await? {
             return Ok(Handled::Stored);
+        }
+        // A payload left for its cap stays without being opened again while the cap holds.
+        if let Job::Contact(contact_id, _) = job
+            && self.wallet.payload_parked(hash, contact_id).await?
+        {
+            self.wallet.tell_parked(contact_id, &mut self.told.parked);
+            return Ok(Handled::Later);
         }
         let handled = match job {
             Job::Reply(pairing_id) => {

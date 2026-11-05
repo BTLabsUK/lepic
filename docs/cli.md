@@ -641,8 +641,12 @@ holds. `contact export <FILE>` and `contact import <FILE>` carry the pairings in
 most 64 KiB, to a paired contact or a verified private pairing, and prints the payload's id; LEPIC
 never reads them. `contact collect`, or `serve` on its own, takes arriving payloads; `contact
 payload list` shows each one's id, contact, arrival time and bytes as hex until `contact payload
-ack <ID>...` forgets it. At most 32 wait per contact (256 from private pairings); more stay on the
-relay until some are acknowledged. Through `--service`, `serve` reads the `--file` path, so give
+ack <ID>...` forgets it; a payload acknowledged is not kept again if it arrives once more. A
+payload whose record no longer reads is dropped from the list and frees its place. At most 32 wait
+per contact (256 from private pairings); more stay on the relay until some are acknowledged, and
+`contact collect` leaves them unopened until then. When the contact's wallet is known not to claim
+app payloads, `post` prints a warning to stderr and sets `peer_lacks_app_payloads` in its JSON;
+the payload is sent all the same. Through `--service`, `serve` reads the `--file` path, so give
 an absolute one; the request holds at most 64 KiB, so `--hex` carries about half that.
 
 `tx send <AMOUNT> --to-contact <ID>` pays a contact through its mailbox: the slate is sealed to

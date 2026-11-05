@@ -1677,6 +1677,10 @@ pub enum WalletEventKind {
     /// `EpicWallet::contact_apply_relay_move`. Raised once per newer card; after a restart,
     /// `ContactView::requested_relay` still shows the request.
     ContactRelayMoveRequested,
+    /// Payloads from the pairing `contact_id` were left on the relay because the payloads kept
+    /// and not acknowledged fill its cap. Raised at most once per pairing in a collect. They
+    /// arrive after `EpicWallet::contact_payloads_ack` makes room.
+    ContactPayloadsParked,
 }
 
 /// How a key check from `EpicWallet::contact_key_check` stands.

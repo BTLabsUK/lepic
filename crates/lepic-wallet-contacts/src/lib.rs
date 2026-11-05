@@ -66,7 +66,7 @@ pub use pairing::{
 };
 pub use payload::{
     ContactPayload, MAX_APP_PAYLOAD_LEN, MAX_KEPT_PAYLOADS, MAX_KEPT_PAYLOADS_PER_CONTACT,
-    PayloadId,
+    PayloadId, PostedPayload,
 };
 pub use relay::{MAX_MEETING_RELAYS, meeting_host, meeting_relays};
 pub use requests::{MAX_LIVE_REQUESTS, MAX_SETTLED_REQUESTS, PairRequestView, REQUEST_EXPIRY};

@@ -292,6 +292,7 @@ fn a_payload_posted_to_a_contact_is_listed_until_acknowledged() {
         .ok()
         .json();
     assert_eq!(posted["contact_id"], buyer_at_shop.as_str(), "{posted}");
+    assert_eq!(posted["peer_lacks_app_payloads"], false, "{posted}");
     let by_hex = text(&posted, "payload_id").to_owned();
     let file = shop.home.path().join("payload.bin");
     std::fs::write(&file, b"from a file").unwrap();

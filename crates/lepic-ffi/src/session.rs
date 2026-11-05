@@ -2263,6 +2263,9 @@ fn contact_wallet_event(event: &Event) -> Option<WalletEvent> {
         Event::ContactPayload(news) => {
             contact::contact_event(WalletEventKind::ContactPayload, news)
         }
+        Event::ContactPayloadsParked(news) => {
+            contact::contact_event(WalletEventKind::ContactPayloadsParked, news)
+        }
         Event::ContactRelayMoveRequested(request) => WalletEvent {
             contact_id: Some(request.contact_id.to_string()),
             relay: Some(request.host.clone()),

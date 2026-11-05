@@ -378,7 +378,15 @@ impl<H: Host> Run<'_, H> {
             ContactCommand::Decline(args) => decline(&opened, &relays, args).await?,
             ContactCommand::Export(args) => export(&opened, args).await?,
             ContactCommand::Import(args) => import(&opened, args).await?,
-            ContactCommand::Payload(args) => payload(&opened, &relays, args).await?,
+            ContactCommand::Payload(args) => {
+                let report = payload(&opened, &relays, args).await?;
+                if let Report::ContactPayloadPost(posted) = &report
+                    && posted.peer_lacks_app_payloads
+                {
+                    self.show_line(PEER_LACKS_APP_PAYLOADS);
+                }
+                report
+            }
         })
     }
 }
@@ -880,6 +888,10 @@ async fn import<N: lepic_node::NodeApi + 'static>(
     }))
 }
 
+/// The warning a post prints when the other wallet's features are known and lack app payloads.
+const PEER_LACKS_APP_PAYLOADS: &str =
+    "warning: the other wallet does not claim app payloads; it may not keep this one";
+
 /// `lepic contact payload`: posts, lists and acknowledges the host app's payloads. LEPIC never
 /// reads the bytes, and the CLI adds no rule of its own to what the wallet allows.
 async fn payload<N: lepic_node::NodeApi + 'static>(
@@ -892,10 +904,11 @@ async fn payload<N: lepic_node::NodeApi + 'static>(
         ContactPayloadCommand::Post(args) => {
             let id = contact_id(&args.contact.contact)?;
             let bytes = payload_bytes(&args)?;
-            let payload_id = book.contact_post_payload(relays, id, bytes).await?;
+            let posted = book.contact_post_payload(relays, id, bytes).await?;
             Report::ContactPayloadPost(ContactPayloadPostReport {
                 contact_id: id.to_string(),
-                payload_id: payload_id.to_string(),
+                payload_id: posted.id.to_string(),
+                peer_lacks_app_payloads: posted.peer_lacks_app_payloads,
             })
         }
         ContactPayloadCommand::List => Report::ContactPayloadList(ContactPayloadListReport {

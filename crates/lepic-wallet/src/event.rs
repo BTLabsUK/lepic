@@ -162,6 +162,10 @@ pub enum Event {
     /// A contact sent a payload; it is kept for [`crate::Wallet::contact_payloads`] until the
     /// host acknowledges it.
     ContactPayload(ContactEvent),
+    /// Payloads from the pairing were left on the relay because its cap of kept payloads is
+    /// reached; raised at most once per pairing in a collecting cycle. They arrive once the host
+    /// acknowledges payloads with [`crate::Wallet::contact_payloads_ack`].
+    ContactPayloadsParked(ContactEvent),
     /// The node refused a finalized transaction or could not be reached when it was pushed.
     /// The transaction stays finalized and stored with its inputs locked; nothing is retried
     /// here. The host decides when to push it again with [`crate::Wallet::post`], or to

@@ -589,6 +589,9 @@ pub struct ContactPayloadPostReport {
     pub contact_id: String,
     /// The id the other wallet keeps the payload under, 32 lowercase hex digits.
     pub payload_id: String,
+    /// The other wallet's recorded features are known and do not claim app payloads; the
+    /// payload was queued all the same.
+    pub peer_lacks_app_payloads: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -2211,8 +2214,9 @@ mod tests {
                 Report::ContactPayloadPost(ContactPayloadPostReport {
                     contact_id: text("c"),
                     payload_id: text("p"),
+                    peer_lacks_app_payloads: false,
                 }),
-                vec!["contact_id", "payload_id"],
+                vec!["contact_id", "payload_id", "peer_lacks_app_payloads"],
             ),
             (
                 Report::ContactPayloadList(ContactPayloadListReport { payloads: vec![] }),
