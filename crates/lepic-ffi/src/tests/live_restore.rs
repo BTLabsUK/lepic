@@ -100,6 +100,7 @@ fn live_restore() {
         offline: false,
         tor_wanted: false,
         host_features: 0,
+        profile: 0,
     };
     rt.block_on(async {
         // A throwaway seed made here, never anyone's wallet.

@@ -65,6 +65,10 @@ pub struct WalletConfig {
     /// (linked-device forwarding) and 5 (name service), and ignores the rest. Read when a wallet
     /// is created, restored or opened.
     pub host_features: u32,
+    /// The app's profile of its owner, sent to paired contacts in bits 16 to 31 of the pairing
+    /// features and never in a marker; LEPIC does not read a bit. 0 for none. Read when a
+    /// wallet is created, restored or opened.
+    pub profile: u16,
     /// Limits and presets that are the app's to choose. [`HostPolicy::default`], every field
     /// `None`, is what LEPIC did before they were fields. Read when a wallet is created,
     /// restored or opened.
@@ -169,6 +173,7 @@ impl std::fmt::Debug for WalletConfig {
             .field("tuning", &self.tuning)
             .field("offline", &self.offline)
             .field("host_features", &self.host_features)
+            .field("profile", &self.profile)
             .finish()
     }
 }
@@ -1042,6 +1047,9 @@ pub struct ContactView {
     pub peer_verified_at_ms: Option<i64>,
     /// The feature bits the contact claimed in this pairing; 0 when none came.
     pub peer_features: u32,
+    /// The profile the contact sent, `peer_features` from bit 16 up moved down; 0 when none
+    /// came. LEPIC reads no bit of it.
+    pub peer_profile: u32,
     pub ended_reason: Option<PairingEndReason>,
     pub ended_at_ms: Option<i64>,
 }
@@ -1800,6 +1808,7 @@ mod tests {
             offline: false,
             tor_wanted: false,
             host_features: 0,
+            profile: 0,
         };
         let printed = format!("{config:?}");
         assert!(!printed.contains("node-secret-value"));

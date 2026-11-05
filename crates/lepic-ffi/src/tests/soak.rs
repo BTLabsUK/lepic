@@ -187,6 +187,7 @@ fn soak() {
         offline: false,
         tor_wanted: false,
         host_features: 0,
+        profile: 0,
     };
     let secret = NodeSecret::take(&mut config);
     let counters = Arc::new(Counters::default());
