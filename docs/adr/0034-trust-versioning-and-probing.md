@@ -77,7 +77,9 @@ bits. A wallet posting an app payload to a key whose recorded word is known and 
 logs a warning and reports it to the caller; the payload is posted all the same.
 The marked V2 and V3 JSON codecs (`MarkedV2JsonCodec`, `MarkedV3JsonCodec`) write it as `f`
 (`with_features`) and read it back; an `f` that is no `u32` reads as a marker without a word. The
-word is the same for every user of a build and is never taken from a setting. Vectors:
+word is the same for every user of a build; the CLI, which has no app around it, takes the
+host bits from its `host_features` setting, which the operator of a service sets once for its
+wallets, masked to bits 4 and 5 the same way. Vectors:
 `testdata/vectors/epicbox/marker_s1_v2_features_5` and `_53` (a marker with `f` of 5 and of 53,
 to pin the codec).
 

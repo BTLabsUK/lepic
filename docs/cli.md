@@ -30,9 +30,6 @@ so; add it, for example with `export PATH="$HOME/.local/bin:$PATH"` in your shel
 the result with `lepic --version`. Run the same command again to upgrade; a running `lepic` keeps
 working while the file is replaced.
 
-A host that runs a contact directory builds with `cargo build --release -p lepic-cli --features
-directory-host`; its wallets then claim the directory bit (32) in their marker.
-
 ## Before the first wallet: network, node and relay
 
 Every command runs on one chain, chosen with `--network mainnet` (the default) or
@@ -77,6 +74,7 @@ Each setting comes from, in order: a flag, its environment variable, the config 
 | `log_level` | `LEPIC_LOG_LEVEL` | `--log-level` | `warn` |
 | `log_format` | `LEPIC_LOG_FORMAT` | `--log-format` | `compact` |
 | `invoice_expiry_hours` | `LEPIC_INVOICE_EXPIRY_HOURS` | | `24` |
+| `host_features` | `LEPIC_HOST_FEATURES` | | none |
 | `settings_file` | `LEPIC_SETTINGS` | `--settings` | `~/.lepic/settings.toml` |
 
 The config file is `~/.lepic/config.toml` when it exists, or the file `--config` or `LEPIC_CONFIG`
@@ -94,6 +92,11 @@ epicbox_relay = "wss://epicbox.epiccash.com"
 
 Without a node of your own, point `node_url` at any floonet node whose foreign API is served
 over `https://`, and leave `node_api_secret_file` out unless that node asks for one.
+
+A wallet that a service runs claims the host bits of that service in its marker (ADR 0034) with
+`host_features`: bit names, comma-separated, of `device-forwarding` (4) and `name-service` (5),
+for example `host_features = "name-service"`. An unknown name is an error. Without it the wallet
+claims none.
 
 ### The settings file and the built-in configuration
 

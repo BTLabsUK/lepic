@@ -1364,7 +1364,7 @@ impl<H: Host> Run<'_, H> {
             node: self.settings.node.clone(),
             policy: Default::default(),
             offline: false,
-            host_features: crate::host::HOST_FEATURES,
+            host_features: self.settings.host_features,
         };
         let wallet = Wallet::new(config, ports)?;
         lepic_wallet_contacts::install(&wallet);

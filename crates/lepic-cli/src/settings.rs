@@ -79,6 +79,12 @@ pub const SETTINGS: &[(&str, &str, &str)] = &[
         "hours an unpaid invoice is kept, 1 to 48",
     ),
     (
+        "host_features",
+        "LEPIC_HOST_FEATURES",
+        "host feature bits the wallet's marker claims, by name, comma-separated: \
+         device-forwarding, name-service",
+    ),
+    (
         "settings_file",
         "LEPIC_SETTINGS",
         "settings.toml with the servers: [node] servers, [epicbox] servers",
@@ -257,6 +263,9 @@ pub struct Settings {
     pub node_over_tor: bool,
     /// How long an unpaid invoice is kept, on either side.
     pub invoice_expiry: InvoiceExpiry,
+    /// The host bits the wallet's marker claims (ADR 0034), only bits of
+    /// `features::HOST_FEATURES`; none unless `host_features` names them.
+    pub host_features: u32,
 }
 
 /// The output format alone, for reporting errors that happen before the rest resolves.
@@ -332,6 +341,9 @@ impl Settings {
             .parse("invoice_expiry_hours", parse_expiry_hours)?
             .unwrap_or_default();
         let relay_tor = relay_tor(&lookup)?;
+        let host_features = lookup
+            .parse("host_features", parse_host_features)?
+            .unwrap_or(0);
         let node_over_tor = lookup
             .parse("node_over_tor", |text| match text {
                 "true" => Some(true),
@@ -371,6 +383,7 @@ impl Settings {
             relay_tor,
             node_over_tor,
             invoice_expiry,
+            host_features,
         })
     }
 }
@@ -436,6 +449,25 @@ fn parse_expiry_hours(text: &str) -> Option<InvoiceExpiry> {
     let hours: u64 = text.parse().ok()?;
     let seconds = hours.checked_mul(SECONDS_PER_HOUR)?;
     InvoiceExpiry::new(std::time::Duration::from_secs(seconds)).ok()
+}
+
+/// The host bits a `host_features` value names. Each name is one bit of
+/// `features::HOST_FEATURES`; an unknown name refuses the whole value. Empty names none.
+fn parse_host_features(text: &str) -> Option<u32> {
+    use lepic_epicbox::marker::features;
+    let mut bits = 0;
+    for name in text
+        .split(',')
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+    {
+        bits |= match name {
+            "device-forwarding" => features::DEVICE_FORWARDING,
+            "name-service" => features::DIRECTORY,
+            _ => return None,
+        };
+    }
+    Some(bits & features::HOST_FEATURES)
 }
 
 /// At most one way through tor: a running tor's SOCKS address, or a tor binary to run.
@@ -688,6 +720,47 @@ mod tests {
         for bad in ["0", "-1", "1.5", "", "24h", "18446744073709551615"] {
             assert!(parse_expiry_hours(bad).is_none(), "{bad}");
         }
+    }
+
+    #[test]
+    fn host_features_are_host_bits_by_name() {
+        use lepic_epicbox::marker::features;
+        assert_eq!(parse_host_features(""), Some(0));
+        assert_eq!(
+            parse_host_features("name-service"),
+            Some(features::DIRECTORY)
+        );
+        assert_eq!(
+            parse_host_features(" name-service , device-forwarding,"),
+            Some(features::DIRECTORY | features::DEVICE_FORWARDING)
+        );
+        for bad in [
+            "marker",
+            "pair-requests",
+            "32",
+            "name-service,other",
+            "Name-Service",
+        ] {
+            assert_eq!(parse_host_features(bad), None, "{bad}");
+        }
+    }
+
+    #[test]
+    fn the_wallet_claims_no_host_bit_unless_the_setting_names_one() {
+        assert_eq!(resolve(&[]).unwrap().host_features, 0);
+        assert_eq!(
+            resolve(&[("LEPIC_HOST_FEATURES", "name-service")])
+                .unwrap()
+                .host_features,
+            lepic_epicbox::marker::features::DIRECTORY
+        );
+        assert!(matches!(
+            resolve(&[("LEPIC_HOST_FEATURES", "everything")]),
+            Err(SettingsError::InvalidValue {
+                key: "host_features",
+                ..
+            })
+        ));
     }
 
     #[test]
