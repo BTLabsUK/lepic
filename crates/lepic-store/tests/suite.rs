@@ -17,16 +17,16 @@ use lepic_primitives::output::OutputFeatures;
 use lepic_primitives::params::Network;
 use lepic_store::{
     AccountIndex, AccountRecord, CONTACT_SLOT_COUNT, ChainCheck, ContactCap, ContactOutboxState,
-    ContactState, FoundDuring, ImportSummary, ImportedKind, ImportedMessage, ImportedOutput,
-    ImportedOutputStatus, ImportedTransaction, InboxEntry, InboxStatus, InvoiceAddressIndex,
-    InvoiceCap, KeyId, MAX_CANCELLED_PAIRINGS, MAX_CONTACTS, MAX_IMPORTED_MESSAGE_BYTES,
-    MAX_PARKED_INVOICES, MAX_PARKED_INVOICES_PER_SENDER, MAX_PENDING_PAIRINGS, OpenReceipt,
-    OtherWalletSpend, OutboxEntry, OutboxId, OutboxStatus, OutputStatus, PRIVATE_SLOT_END,
-    PairRequest, PairingEndReason, PairingFacts, PairingId, PairingState, ParticipantId, PeerCard,
-    PeerCompat, PendingInvoiceStatus, PrivateContext, Record, Repositories, ScanFoundRecord,
-    SealMode, SlateStage, StatusKind, StatusNotice, StoreError, TransactionEntry, TxDirection,
-    TxId, TxMarks, TxState, TxWatch, WalletStore, WatchPhase, WatchedOutput, export_contacts,
-    import_contacts,
+    ContactState, DomainClaimBytes, FoundDuring, ImportSummary, ImportedKind, ImportedMessage,
+    ImportedOutput, ImportedOutputStatus, ImportedTransaction, InboxEntry, InboxStatus,
+    InvoiceAddressIndex, InvoiceCap, KeyId, MAX_CANCELLED_PAIRINGS, MAX_CONTACTS,
+    MAX_IMPORTED_MESSAGE_BYTES, MAX_PARKED_INVOICES, MAX_PARKED_INVOICES_PER_SENDER,
+    MAX_PENDING_PAIRINGS, OpenReceipt, OtherWalletSpend, OutboxEntry, OutboxId, OutboxStatus,
+    OutputStatus, PRIVATE_SLOT_END, PairRequest, PairingEndReason, PairingFacts, PairingId,
+    PairingState, ParticipantId, PeerCard, PeerCompat, PendingInvoiceStatus, PrivateContext,
+    Record, Repositories, ScanFoundRecord, SealMode, SlateStage, StatusKind, StatusNotice,
+    StoreError, TransactionEntry, TxDirection, TxId, TxMarks, TxState, TxWatch, WalletStore,
+    WatchPhase, WatchedOutput, export_contacts, import_contacts,
 };
 use uuid::Uuid;
 
@@ -1618,6 +1618,7 @@ fn pairing_facts_round_trip_and_are_found_by_payments_key<B: Backend>() {
         ended_at: Some(support::time(6)),
         heard_wait: std::time::Duration::from_secs(7),
         heard_wait_mark: Some(support::time(8)),
+        peer_domain: None,
     };
     write(store, |repos| {
         repos.put_contact(&proven)?;
@@ -1802,6 +1803,84 @@ fn status_notices_list_due_ones_and_outlive_their_contact<B: Backend>() {
             record: Record::StatusNotice
         })
     ));
+}
+
+fn facts_round_trip_domain<B: Backend>() {
+    let backend = B::create(context_key(1));
+    let store = backend.store();
+    let mut claimed = contact(1, 1);
+    claimed.facts.peer_domain = Some(DomainClaimBytes {
+        domain: "shop.example".to_owned(),
+        attestation: vec![9; 300],
+    });
+    write(store, |repos| {
+        repos.put_contact(&claimed)?;
+        repos.put_contact(&contact(2, 2))
+    })
+    .unwrap();
+    read(store, |repos| {
+        assert_eq!(repos.contact(contact_id(1))?, Some(claimed.clone()));
+        assert_eq!(
+            repos.contact(contact_id(2))?.unwrap().facts.peer_domain,
+            None
+        );
+        Ok(())
+    })
+    .unwrap();
+    // A proof over the limit is refused on write.
+    let mut huge = contact(3, 3);
+    huge.facts.peer_domain = Some(DomainClaimBytes {
+        domain: "shop.example".to_owned(),
+        attestation: vec![0; 4097],
+    });
+    assert!(write(store, |repos| repos.put_contact(&huge)).is_err());
+    // The limit itself is stored.
+    huge.facts
+        .peer_domain
+        .as_mut()
+        .unwrap()
+        .attestation
+        .truncate(4096);
+    write(store, |repos| repos.put_contact(&huge)).unwrap();
+}
+
+fn backup_round_trips_domain<B: Backend>() {
+    let source = B::create(context_key(1));
+    let mut claimed = contact(1, 1);
+    claimed.facts.peer_domain = Some(DomainClaimBytes {
+        domain: "shop.example".to_owned(),
+        attestation: vec![0xab, 0xcd, 0xef],
+    });
+    write(source.store(), |repos| repos.put_contact(&claimed)).unwrap();
+    let json = read(source.store(), |repos| {
+        export_contacts(repos, Network::Floonet)
+    })
+    .unwrap();
+    assert!(json.contains(r#""peer_domain":"shop.example""#), "{json}");
+    assert!(
+        json.contains(r#""peer_domain_attestation":"abcdef""#),
+        "{json}"
+    );
+    let clean = B::create(context_key(2));
+    write(clean.store(), |repos| import(repos, &json)).unwrap();
+    let restored = read(clean.store(), |repos| repos.contacts()).unwrap();
+    assert_eq!(restored[0].facts.peer_domain, claimed.facts.peer_domain);
+}
+
+fn backup_v1_without_domain_imports<B: Backend>() {
+    let source = B::create(context_key(1));
+    write(source.store(), |repos| repos.put_contact(&contact(1, 1))).unwrap();
+    let json = read(source.store(), |repos| {
+        export_contacts(repos, Network::Floonet)
+    })
+    .unwrap();
+    // No domain: the fields are left out of the document, and an older document imports.
+    assert!(!json.contains("peer_domain"), "{json}");
+    let clean = B::create(context_key(2));
+    let summary = write(clean.store(), |repos| import(repos, &json)).unwrap();
+    assert_eq!(summary.imported, 1);
+    let restored = read(clean.store(), |repos| repos.contacts()).unwrap();
+    assert_eq!(restored[0].facts.peer_domain, None);
 }
 
 fn contact_backup_leaves_out_ended_and_unheard_records<B: Backend>() {
@@ -2808,6 +2887,9 @@ for_each_backend!(
     pair_requests_are_kept_one_per_sender_key,
     status_notices_list_due_ones_and_outlive_their_contact,
     contact_backup_leaves_out_ended_and_unheard_records,
+    facts_round_trip_domain,
+    backup_round_trips_domain,
+    backup_v1_without_domain_imports,
 );
 
 #[test]

@@ -472,6 +472,21 @@ fn check_v13_seed(store: &SqliteStore) {
     check_empty(store);
 }
 
+fn v13_store_migrates_to_v14_with_null_domain(store: &SqliteStore) {
+    let contacts = store.read(|repos| repos.contacts()).unwrap();
+    assert_eq!(contacts.len(), 1);
+    assert_eq!(contacts[0].facts.peer_domain, None);
+    let conn = store.conn.lock().unwrap();
+    let columns: (Option<String>, Option<Vec<u8>>) = conn
+        .query_row(
+            "SELECT peer_domain, peer_domain_attestation FROM contacts",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(columns, (None, None));
+}
+
 fn check_v5_seed(store: &SqliteStore) {
     let imported = store
         .read(|repos| repos.imported_transaction(TxId(1)))
@@ -655,6 +670,15 @@ const UPGRADES: &[UpgradeCase] = &[
     },
     UpgradeCase {
         from: 13,
+        seed: "INSERT INTO contacts (contact_id, label, state, allow_invoices, seal,
+                   imported_from_backup, created_at, updated_at, account, slot, box_salt,
+                   own_card)
+               VALUES (X'01010101010101010101010101010101', 'a', 'paired', 0, 'on', 0, 5, 5, 0,
+                   1, X'11111111111111111111111111111111', X'aa');",
+        check: v13_store_migrates_to_v14_with_null_domain,
+    },
+    UpgradeCase {
+        from: 14,
         seed: "",
         check: check_v13_seed,
     },

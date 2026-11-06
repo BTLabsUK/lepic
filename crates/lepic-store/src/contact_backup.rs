@@ -23,8 +23,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::account::AccountIndex;
 use crate::contact::{
-    ContactId, ContactMailbox, ContactRecord, ContactRepository, ContactState, PairingFacts,
-    PeerCard, PreviousHome, SealMode,
+    ContactId, ContactMailbox, ContactRecord, ContactRepository, ContactState, DomainClaimBytes,
+    PairingFacts, PeerCard, PreviousHome, SealMode,
 };
 use crate::error::{Record, StoreError};
 
@@ -86,6 +86,10 @@ struct Entry {
     payments_key: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     peer_verdict: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    peer_domain: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    peer_domain_attestation: Option<String>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -253,6 +257,11 @@ pub fn export_contacts_where<R: ContactRepository + ?Sized>(
             payments_address: facts.payments_address.clone(),
             payments_key: facts.payments_key.as_ref().map(|key| to_hex(key)),
             peer_verdict: facts.peer_verdict.as_ref().map(|verdict| to_hex(verdict)),
+            peer_domain: facts.peer_domain.as_ref().map(|claim| claim.domain.clone()),
+            peer_domain_attestation: facts
+                .peer_domain
+                .as_ref()
+                .map(|claim| to_hex(&claim.attestation)),
         });
     }
     let slot_counters = repos
@@ -299,6 +308,14 @@ fn record_from(
         .payments_address
         .clone()
         .filter(|_| payments_key.is_some());
+    // A domain comes back only with its attestation, and the reverse.
+    let peer_domain = match (&entry.peer_domain, &entry.peer_domain_attestation) {
+        (Some(domain), Some(attestation)) => Some(DomainClaimBytes {
+            domain: domain.clone(),
+            attestation: from_hex(attestation, "peer domain attestation")?,
+        }),
+        _ => None,
+    };
     let facts = PairingFacts {
         payments_key: payments_key.filter(|_| payments_address.is_some()),
         payments_address,
@@ -311,6 +328,7 @@ fn record_from(
             .as_deref()
             .map(|verdict| from_hex_fixed(verdict, "peer verdict"))
             .transpose()?,
+        peer_domain,
         ..PairingFacts::default()
     };
     let record = ContactRecord {

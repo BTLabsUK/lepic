@@ -205,6 +205,17 @@ pub struct PairingFacts {
     pub heard_wait: Duration,
     /// The last collect that reached the pairing's home relay while it is unheard.
     pub heard_wait_mark: Option<Timestamp>,
+    /// The domain the contact claimed and the proof it sent, stored exactly as received and
+    /// unverified; the host verifies it (RFC 0002 6.3, ADR 0043).
+    pub peer_domain: Option<DomainClaimBytes>,
+}
+
+/// The domain a contact claimed and the raw envelope extension 0x83 value it sent, stored
+/// exactly as received, unverified; the host verifies (RFC 0002 6.3, ADR 0043).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DomainClaimBytes {
+    pub domain: String,
+    pub attestation: Vec<u8>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -423,6 +423,13 @@ ALTER TABLE tx_marks ADD COLUMN answer_marked INTEGER NOT NULL DEFAULT 0
 /// Pairings in progress keep the address they must prove, the invitee's reply to post again,
 /// and a cancel. Pairing requests from other wallets and the pairing status notices get tables
 /// of their own; and a received transaction names the listing it came in on.
+/// The domain a contact claimed in its pairing and the raw proof it sent, kept unverified
+/// (RFC 0002 6.3, ADR 0043). Both are set or both are NULL.
+const V14: &str = "
+ALTER TABLE contacts ADD COLUMN peer_domain TEXT;
+ALTER TABLE contacts ADD COLUMN peer_domain_attestation BLOB;
+";
+
 const V13: &str = "
 ALTER TABLE contacts ADD COLUMN payments_address TEXT;
 ALTER TABLE contacts ADD COLUMN payments_key BLOB
@@ -492,10 +499,11 @@ ALTER TABLE transactions ADD COLUMN receive_listing_gen INTEGER
     CHECK ((receive_listing_gen IS NULL) = (receive_listing_dkey IS NULL));
 ";
 
-pub(crate) const MIGRATIONS: &[&str] = &[V1, V2, V3, V4, V5, V6, V7, V8, V9, V10, V11, V12, V13];
+pub(crate) const MIGRATIONS: &[&str] =
+    &[V1, V2, V3, V4, V5, V6, V7, V8, V9, V10, V11, V12, V13, V14];
 
 /// The version this build writes.
-pub const SCHEMA_VERSION: u32 = 13;
+pub const SCHEMA_VERSION: u32 = 14;
 
 /// The schema version stored in the database; 0 for a database without a schema.
 pub(crate) fn stored_version(conn: &Connection) -> Result<u32, StoreError> {
