@@ -30,6 +30,9 @@ pub(crate) enum NoRoom {
     Unchecked(WalletError),
     /// The wallet could not count or cancel open receipts.
     Wallet(WalletError),
+    /// The wallet refuses payments nobody asked for
+    /// ([`WalletPolicy::refuse_unsolicited_payments`]) and this slate id is new.
+    Refused,
 }
 
 impl From<WalletError> for NoRoom {
@@ -87,9 +90,10 @@ where
     /// until the count drops. An S1 received before is answered with its stored S2 whatever
     /// the count. Calls are served one at a time.
     ///
-    /// Fails with [`ReceiveError::OpenReceipts`] at the cap; the sender can send the payment
-    /// again later. Otherwise fails as [`Wallet::receive`] does; the slate is checked before
-    /// the caps are.
+    /// Fails with [`ReceiveError::Refused`] for a new S1 when the wallet refuses payments
+    /// nobody asked for ([`WalletPolicy::refuse_unsolicited_payments`]), and with
+    /// [`ReceiveError::OpenReceipts`] at the cap; the sender can send the payment again later.
+    /// Otherwise fails as [`Wallet::receive`] does; the slate is checked before the caps are.
     #[instrument(
         name = "receive_unsolicited",
         skip_all,
@@ -114,11 +118,13 @@ where
         // Taken after the checks, so slates that are not payments never wait for it.
         let _turn = self.unsolicited_turn().await;
         let slate_id = Uuid::from_bytes(*slate.id().as_bytes());
-        match self.make_room(transport, slate_id, None).await {
+        let refuse = self.config().policy.refuse_unsolicited_payments;
+        match self.make_room(transport, slate_id, None, refuse).await {
             Ok(()) => {}
             Err(NoRoom::Wallet(error)) => return Err(ReceiveError::Wallet(error)),
             Err(NoRoom::Unchecked(error)) => return Err(ReceiveError::OpenReceipts(Some(error))),
             Err(NoRoom::FromSender | NoRoom::Full) => return Err(ReceiveError::OpenReceipts(None)),
+            Err(NoRoom::Refused) => return Err(ReceiveError::Refused),
         }
         self.receive(transport, wire, request).await
     }
@@ -128,12 +134,14 @@ where
     /// stored S2 is sent again. Over the sender's cap the S1 is refused; at the total cap room
     /// is made as [`WalletPolicy::max_open_receipts`] says, and only on a transport that names a sender:
     /// without one, the oldest receipt is as likely a real payment as not, so the S1 is
-    /// refused instead.
+    /// refused instead. With `refuse`, a new S1 is refused before any count, as
+    /// [`WalletPolicy::refuse_unsolicited_payments`] says.
     pub(crate) async fn make_room(
         &self,
         transport: TransportId,
         slate_id: Uuid,
         sender: Option<Sender<'_>>,
+        refuse: bool,
     ) -> Result<(), NoRoom> {
         let Some(mut open) = self
             .open_receipts_unless_known(transport, Some(slate_id))
@@ -141,6 +149,9 @@ where
         else {
             return Ok(());
         };
+        if refuse {
+            return Err(NoRoom::Refused);
+        }
         let no_key = |text: &str| text.to_owned();
         let key_of: KeyOf<'_> = sender.as_ref().map_or(&no_key, |s| s.key_of);
         let from_sender = |open: &[OpenReceipt]| {

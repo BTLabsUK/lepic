@@ -342,6 +342,8 @@ pub(crate) enum Refusal {
     OpenReceipts,
     #[error("open receipts are at the cap and the node could not be asked to cancel one")]
     OpenReceiptsUnchecked(#[source] WalletError),
+    #[error("this wallet refuses payments nobody asked for")]
+    Unsolicited,
 }
 
 /// A failure that leaves the message for the relay to deliver again.
@@ -398,7 +400,8 @@ fn receive_is_permanent(error: &ReceiveError) -> bool {
         | ReceiveError::Signing(_)
         | ReceiveError::Excess(_)
         | ReceiveError::Slate(_)
-        | ReceiveError::Encode(_) => true,
+        | ReceiveError::Encode(_)
+        | ReceiveError::Refused => true,
     }
 }
 
@@ -1455,7 +1458,8 @@ where
 
     /// Receives an S1 and replies with S2, or replies again with the S2 stored for it. A
     /// different S1 under a slate id received before is refused, and so is a new one over the
-    /// open receipt caps. A reply that cannot be delivered is given up at the hold bound.
+    /// open receipt caps, or at the payments address of a wallet that refuses payments nobody
+    /// asked for. A reply that cannot be delivered is given up at the hold bound.
     async fn answer(
         &self,
         msg_id: Option<&str>,
@@ -1465,7 +1469,7 @@ where
         reply_to: &Destination,
         route: Option<&ListingRoute>,
     ) -> Result<Handled, Settlement> {
-        self.make_room_for(msg_id, attempt, proposal, reply_to)
+        self.make_room_for(msg_id, attempt, envelope, proposal, reply_to, route)
             .await?;
         let marked = carries_lepic_marker(envelope.wire());
         let features = lepic_marker_features(envelope.wire());
@@ -1728,13 +1732,17 @@ where
     /// Checks the open receipt caps before a new S1 from `reply_to`, the message `msg_id` on its
     /// try `attempt`, is received. A slate id received before passes, so its stored S2 is sent
     /// again. Over the sender's cap the S1 is refused; at the total cap room is made as
-    /// [`crate::config::WalletPolicy::max_open_receipts`] says.
+    /// [`crate::config::WalletPolicy::max_open_receipts`] says. At the payments address, not a
+    /// listing, a wallet that refuses payments nobody asked for refuses every new S1 and
+    /// answers it with a `declined` notice (ADR 0045).
     async fn make_room_for(
         &self,
         msg_id: Option<&str>,
         attempt: u32,
+        envelope: &Envelope,
         proposal: &Slate,
         reply_to: &Destination,
+        route: Option<&ListingRoute>,
     ) -> Result<(), Settlement> {
         let slate_id = Uuid::from_bytes(*proposal.id().as_bytes());
         let network = relay_network(self.config().network);
@@ -1744,8 +1752,16 @@ where
             key: &key,
             key_of: &key_of,
         };
-        match self.make_room(TRANSPORT_ID, slate_id, Some(sender)).await {
+        let refuse = route.is_none() && self.config().policy.refuse_unsolicited_payments;
+        match self
+            .make_room(TRANSPORT_ID, slate_id, Some(sender), refuse)
+            .await
+        {
             Ok(()) => Ok(()),
+            Err(NoRoom::Refused) => {
+                self.decline_payment(msg_id, attempt, envelope, proposal, reply_to)
+                    .await
+            }
             Err(NoRoom::FromSender) => Err(Refusal::OpenReceiptsFromSender.into()),
             Err(NoRoom::Full) => Err(Refusal::OpenReceipts.into()),
             Err(NoRoom::Unchecked(error)) => {
@@ -1757,6 +1773,39 @@ where
             }
             Err(NoRoom::Wallet(error)) => Err(Hold::Wallet(error).into()),
         }
+    }
+
+    /// Refuses the new S1 `proposal` of a wallet that refuses payments nobody asked for, and
+    /// first tells its sender with a `declined` notice, which goes only to a marked sender
+    /// lately shown to run LEPIC. A notice that cannot be delivered for a reason that passes
+    /// holds the message up to the hold bound.
+    async fn decline_payment(
+        &self,
+        msg_id: Option<&str>,
+        attempt: u32,
+        envelope: &Envelope,
+        proposal: &Slate,
+        reply_to: &Destination,
+    ) -> Result<(), Settlement> {
+        let marked = carries_lepic_marker(envelope.wire());
+        let features = lepic_marker_features(envelope.wire());
+        self.record_sending_peer(reply_to, marked, features).await;
+        match self
+            .decline_unsolicited(reply_to, proposal.id(), marked)
+            .await
+        {
+            Ok(()) => {}
+            Err(hold)
+                if matches!(hold, Hold::Withheld)
+                    || reply_is_permanent(&hold)
+                    || self.hold_exhausted(msg_id, attempt).await? =>
+            {
+                debug!(slate_id = %proposal.id(), error = %ErrorChain(&hold), "declined notice not sent");
+            }
+            Err(hold) => return Err(hold.into()),
+        }
+        info!(slate_id = %proposal.id(), "payment nobody asked for refused");
+        Err(Refusal::Unsolicited.into())
     }
 
     /// Whether a refresh stored a confirmed height at or past `cutoff`. Only then is a slate

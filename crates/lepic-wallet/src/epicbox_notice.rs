@@ -5,8 +5,15 @@
 //! A plain notice goes to a payments address only when the exchange it is about came marked
 //! from that key and the key is LEPIC lately ([`crate::peer_compat`]), because any other
 //! listener processes only V2 and V3 slates and never acknowledges a notice. A notice is
-//! accepted only from the recorded counterparty of its slate, and it never moves funds or
-//! unlocks anything: it deletes a parked invoice at most, and otherwise only tells the host.
+//! accepted only from the recorded counterparty of its slate. It never moves funds, and it
+//! unlocks something in one case only: a `declined` for a send this wallet made and its
+//! receiver never answered cancels that send (ADR 0045), which only frees this wallet's own
+//! inputs, since a receiver that never signed cannot complete the payment. Otherwise it deletes
+//! a parked invoice at most, and only tells the host.
+//!
+//! `declined` goes from the payer of an invoice to its issuer, and from a receiver set to refuse
+//! payments nobody asked for to the sender of such an S1 (ADR 0045). A wallet before ADR 0045
+//! holds no invoice of the S1's slate id, and drops the second kind.
 //!
 //! `posted` goes from the issuer of a paid invoice to its payer, and from the sender of an
 //! ordinary payment to its receiver. The receiver keeps the time of the first report it
@@ -34,8 +41,8 @@ use uuid::Uuid;
 use crate::details::POSTED_REPORT_WINDOW;
 use crate::epicbox_invoice::stored_codecs;
 use crate::event::{
-    CancelledPayment, DeclinedInvoice, Event, PostedInvoice, PostedPayment, UnmatchedNotice,
-    WithdrawnInvoice,
+    CancelledPayment, DeclinedInvoice, DeclinedPayment, Event, PostedInvoice, PostedPayment,
+    UnmatchedNotice, WithdrawnInvoice,
 };
 use crate::finalize::kernel_excess;
 use crate::inbox::{Handled, Hold, relay_network};
@@ -64,6 +71,12 @@ enum Effect {
     Declined {
         tx_id: TxId,
     },
+    /// The receiver of the send `tx_id` refused it unanswered: the send is to be cancelled.
+    /// `first` for the first such notice, which raises the event.
+    SendDeclined {
+        tx_id: TxId,
+        first: bool,
+    },
     Withdrawn {
         tx_id: Option<TxId>,
     },
@@ -79,6 +92,10 @@ enum Effect {
 /// Prefix of the settings that record a taken decline, one per invoice, keyed by its
 /// hyphenated slate id.
 const DECLINED_PREFIX: &str = "notice.declined.";
+
+/// Prefix of the settings that record when the receiver of a send declined it unanswered, one
+/// per send, keyed by its hyphenated slate id, valued with the time in RFC 3339.
+const SEND_DECLINED_PREFIX: &str = "notice.send_declined.";
 
 fn uuid(slate_id: SlateId) -> Uuid {
     Uuid::from_bytes(*slate_id.as_bytes())
@@ -184,7 +201,7 @@ fn apply_notice(
             Some((tx_id, TxState::Received)) => take_decline(repos, tx_id, slate_id)?,
             // The invoice was paid and finalized, or ended otherwise, before the decline came.
             Some(_) => Effect::Noted,
-            None => Effect::Dropped,
+            None => take_send_decline(repos, slate_id, &from, network, now)?,
         },
         NoticeKind::Withdrawn => withdraw(repos, slate_id, &from, network)?,
         NoticeKind::Cancelled => report_cancelled(repos, slate_id, &from, network, now)?,
@@ -218,6 +235,50 @@ fn take_decline(
     }
     repos.put_setting(&key, "1")?;
     Ok(Effect::Declined { tx_id })
+}
+
+/// A `declined` for a send this wallet made, from its receiver (ADR 0045). Taken only while the
+/// send waits unanswered: `sent`, with no S2 stored, so the receiver never signed and cannot
+/// complete it. The first one is recorded with its time; a repeat, as when the relay delivers
+/// it again or a cancel before failed for a reason that passes, cancels again without an
+/// event. One for a send that was answered, finalized or ended is noted.
+fn take_send_decline(
+    repos: &mut dyn Repositories,
+    slate_id: Uuid,
+    from: &NoticeFrom,
+    network: RelayNetwork,
+    now: jiff::Timestamp,
+) -> Result<Effect, StoreError> {
+    let Some((tx_id, state)) = transaction_with(
+        repos,
+        slate_id,
+        TxDirection::Outgoing,
+        SlateStage::Standard1,
+        from,
+        network,
+    )?
+    else {
+        return Ok(Effect::Dropped);
+    };
+    if state != TxState::Sent || repos.slate(slate_id, SlateStage::Standard2)?.is_some() {
+        return Ok(Effect::Noted);
+    }
+    let key = format!("{SEND_DECLINED_PREFIX}{slate_id}");
+    let first = repos.setting(&key)?.is_none();
+    if first {
+        repos.put_setting(&key, &now.to_string())?;
+    }
+    Ok(Effect::SendDeclined { tx_id, first })
+}
+
+/// When the receiver of the send `slate_id` declined it unanswered (ADR 0045).
+pub(crate) fn receiver_declined_report(
+    repos: &dyn Repositories,
+    slate_id: Uuid,
+) -> Result<Option<jiff::Timestamp>, StoreError> {
+    Ok(repos
+        .setting(&format!("{SEND_DECLINED_PREFIX}{slate_id}"))?
+        .and_then(|at| at.parse().ok()))
 }
 
 /// Whether this wallet holds a transaction or a parked invoice of `slate_id`.
@@ -493,7 +554,11 @@ where
             }));
             return Ok(Handled::Dropped);
         }
-        Ok(self.report_notice(slate_id, effect))
+        let handled = self.report_notice(slate_id, effect);
+        if let Effect::SendDeclined { tx_id, .. } = effect {
+            self.cancel_declined(tx_id).await?;
+        }
+        Ok(handled)
     }
 
     /// Applies a notice another install of this wallet received over Epicbox from `sender`,
@@ -518,7 +583,29 @@ where
             debug!(slate_id = %notice.slate_id, "passed-on notice for a slate not held dropped");
             return Ok(false);
         }
-        Ok(self.report_notice(notice.slate_id, effect) == Handled::Notice)
+        let handled = self.report_notice(notice.slate_id, effect);
+        if let Effect::SendDeclined { tx_id, .. } = effect {
+            self.cancel_declined(tx_id).await?;
+        }
+        Ok(handled == Handled::Notice)
+    }
+
+    /// Cancels the send `tx_id` its receiver declined unanswered, as [`Wallet::cancel`] does,
+    /// so its inputs are free again. A failure that passes, the wallet locked or the store not
+    /// answering, is returned, so the notice is taken again. Any other means the send moved on
+    /// meanwhile and is only logged.
+    async fn cancel_declined(&self, tx_id: TxId) -> Result<(), crate::WalletError> {
+        match self.cancel(tx_id).await {
+            Ok(()) => {
+                info!(tx_id = %tx_id, "send declined by its receiver cancelled");
+                Ok(())
+            }
+            Err(error @ (crate::WalletError::Locked | crate::WalletError::Store(_))) => Err(error),
+            Err(error) => {
+                warn!(tx_id = %tx_id, error = %ErrorChain(&error), "declined send not cancelled");
+                Ok(())
+            }
+        }
     }
 
     async fn apply_epicbox_notice(
@@ -557,6 +644,9 @@ where
             })),
             Effect::Declined { tx_id } => {
                 Some(Event::InvoiceDeclined(DeclinedInvoice { tx_id, slate_id }))
+            }
+            Effect::SendDeclined { tx_id, first } => {
+                first.then_some(Event::PaymentDeclined(DeclinedPayment { tx_id, slate_id }))
             }
             Effect::Withdrawn { tx_id } => Some(Event::InvoiceWithdrawn(WithdrawnInvoice {
                 slate_id,
@@ -726,7 +816,8 @@ where
 
     /// Applies a notice the paired contact `contact_id` sent sealed and signed, for a slate
     /// exchanged with that contact only, and raises its event. Returns the payment to cancel
-    /// for a `withdrawn` of an invoice this wallet paid.
+    /// for a `withdrawn` of an invoice this wallet paid, and the send to cancel for a
+    /// `declined` of a send the contact refused unanswered (ADR 0045).
     pub async fn apply_contact_notice(
         &self,
         notice: Notice,
@@ -767,6 +858,10 @@ where
             Effect::Declined { tx_id } => (
                 Some(Event::InvoiceDeclined(DeclinedInvoice { tx_id, slate_id })),
                 None,
+            ),
+            Effect::SendDeclined { tx_id, first } => (
+                first.then_some(Event::PaymentDeclined(DeclinedPayment { tx_id, slate_id })),
+                Some(tx_id),
             ),
             Effect::Withdrawn { tx_id } => (
                 Some(Event::InvoiceWithdrawn(WithdrawnInvoice {
@@ -982,6 +1077,35 @@ where
                 .map(Destination::new))
         })
         .await
+    }
+
+    /// Tells `to`, the sender of the S1 `slate_id` this wallet refused as nobody asked for it
+    /// (ADR 0045), that it was declined, when the S1 came `marked` from a key lately shown to
+    /// run LEPIC. Nothing goes for a slate id this wallet holds anything of, which the S1's
+    /// sender could have chosen to reach someone else.
+    pub(crate) async fn decline_unsolicited(
+        &self,
+        to: &Destination,
+        slate_id: SlateId,
+        marked: bool,
+    ) -> Result<(), Hold> {
+        let session = self.session()?;
+        let held = self
+            .blocking(move |_, _| {
+                Ok(session
+                    .store
+                    .read(|repos| holds_slate(repos, uuid(slate_id)))?)
+            })
+            .await?;
+        if held {
+            debug!(slate_id = %slate_id, "declined notice withheld for a slate held here");
+            return Err(Hold::Withheld);
+        }
+        let notice = Notice {
+            slate_id,
+            kind: NoticeKind::Declined,
+        };
+        self.send_notice(None, to, notice, marked).await
     }
 
     /// Sends `notice` to `to`, through `sender` or else the registered Epicbox transport, when

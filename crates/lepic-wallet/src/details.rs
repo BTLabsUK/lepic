@@ -20,7 +20,7 @@ use uuid::Uuid;
 use crate::account::AccountError;
 use crate::codecs;
 use crate::epicbox_invoice::display_message;
-use crate::epicbox_notice::{cancelled_report, posted_report};
+use crate::epicbox_notice::{cancelled_report, posted_report, receiver_declined_report};
 use crate::error::WalletError;
 use crate::legacy_history::{self, TxOrigin};
 use crate::ports::{SecretVault, StoreOpener};
@@ -111,6 +111,10 @@ pub struct TransactionDetails {
     /// after it ended here. Advisory: nothing was released on the report, and a payment the
     /// chain still confirms clears it. `None` for any other transaction.
     pub sender_reported_cancelled_at: Option<Timestamp>,
+    /// For a send this wallet made, when its receiver declined it unanswered, as a wallet set to
+    /// refuse payments nobody asked for does (ADR 0045), and the send was cancelled for it.
+    /// Show the send as declined by the receiver. `None` for any other transaction.
+    pub receiver_declined_at: Option<Timestamp>,
 }
 
 /// What an imported transaction carries beyond its log entry.
@@ -161,6 +165,20 @@ fn sender_report(
         posted_report(repos, transaction.id, now)
     } else {
         Ok(None)
+    }
+}
+
+/// When the receiver of a send this wallet made declined it unanswered. Read only for an
+/// outgoing transaction.
+fn receiver_decline(
+    repos: &dyn Repositories,
+    transaction: &StoredTransaction,
+) -> Result<Option<Timestamp>, StoreError> {
+    match transaction.entry.slate_id {
+        Some(slate_id) if transaction.entry.direction == TxDirection::Outgoing => {
+            receiver_declined_report(repos, slate_id)
+        }
+        _ => Ok(None),
     }
 }
 
@@ -346,12 +364,14 @@ fn details(
     let spent_commits = spent_commits(repos, stages, &transaction, flow)?;
     let sender_reported_posted_at = sender_report(repos, &transaction, now)?;
     let sender_reported_cancelled_at = sender_cancel_report(repos, &transaction)?;
+    let receiver_declined_at = receiver_decline(repos, &transaction)?;
     let unverified =
         origin == TxOrigin::OtherWallet && crate::other_wallet::is_unverified(repos, tx_id)?;
     Ok(TransactionDetails {
         unverified,
         sender_reported_posted_at,
         sender_reported_cancelled_at,
+        receiver_declined_at,
         output_commits,
         spent_commits,
         undelivered,

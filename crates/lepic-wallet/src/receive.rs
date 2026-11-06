@@ -141,6 +141,11 @@ pub enum ReceiveError {
     /// the reason. See [`Wallet::receive_unsolicited`].
     #[error("open receipts are at the cap")]
     OpenReceipts(#[source] Option<WalletError>),
+    /// The wallet refuses payments nobody asked for
+    /// ([`crate::config::WalletPolicy::refuse_unsolicited_payments`]); nothing was signed or
+    /// stored (ADR 0045).
+    #[error("this wallet refuses payments nobody asked for")]
+    Refused,
 }
 
 impl From<StoreError> for ReceiveError {
