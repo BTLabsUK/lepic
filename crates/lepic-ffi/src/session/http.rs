@@ -17,7 +17,7 @@ use lepic_store::TxId;
 use lepic_transport::transport::{BoxFuture, Destination, TransportId};
 use lepic_wallet::send::Delivery;
 use lepic_wallet::slate::WireSlate;
-use lepic_wallet::{ReceiveError, ReceiveRequest};
+use lepic_wallet::{ProofKey, ReceiveError, ReceiveRequest};
 use tokio::net::TcpStream;
 use tracing::{debug, warn};
 
@@ -304,7 +304,7 @@ impl Session {
             }
             *slot = HttpListener::Starting(generation);
         }
-        let receiver = self.http_receiver(Arc::clone(&report), TRANSPORT_ID);
+        let receiver = self.http_receiver(Arc::clone(&report), TRANSPORT_ID, ProofKey::Payments);
         let settings = ListenSettings::new(self::exposure(exposure), port, self.tuning.listen);
         let listening = lepic_foreign::listen(settings, receiver).await;
         let handle = match listening {
@@ -361,11 +361,13 @@ impl Session {
         self: &Arc<Self>,
         report: HttpReport,
         transport: TransportId,
+        proof_key: ProofKey,
     ) -> Arc<dyn ReceiveHandler> {
         Arc::new(HttpReceiver {
             session: Arc::downgrade(self),
             report,
             transport,
+            proof_key,
         })
     }
 
@@ -395,11 +397,13 @@ impl Session {
 }
 
 /// The wallet behind the HTTP listener. It holds the session weakly, so a running listener
-/// never keeps a dropped wallet open.
+/// never keeps a dropped wallet open. Payment proofs are signed with `proof_key`, the key of
+/// the address the listener serves.
 struct HttpReceiver {
     session: Weak<Session>,
     report: HttpReport,
     transport: TransportId,
+    proof_key: ProofKey,
 }
 
 impl ReceiveHandler for HttpReceiver {
@@ -410,11 +414,15 @@ impl ReceiveHandler for HttpReceiver {
             };
             let boundary = session.runtime().boundary.clone();
             let transport = self.transport;
+            let request = ReceiveRequest {
+                proof_key: self.proof_key,
+                ..ReceiveRequest::default()
+            };
             let received = boundary
                 .run("http_receive", async move {
                     match session
                         .engine
-                        .receive_unsolicited(transport, &slate, ReceiveRequest::default())
+                        .receive_unsolicited(transport, &slate, request)
                         .await
                     {
                         Err(ReceiveError::OpenReceipts(cause)) => Ok(Err(cause)),

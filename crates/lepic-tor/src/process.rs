@@ -245,6 +245,12 @@ enum Request {
         target: OnionTarget,
         reply: oneshot::Sender<Result<(), TorFailure>>,
     },
+    AddOnion {
+        key: Box<Zeroizing<[u8; 64]>>,
+        expected: OnionAddress,
+        target: OnionTarget,
+        reply: oneshot::Sender<Result<(), TorFailure>>,
+    },
     Refresh {
         network_changed: bool,
         reply: oneshot::Sender<Result<(), TorFailure>>,
@@ -393,6 +399,31 @@ impl TorProcess {
                 return Err(stopped());
             }
         }
+    }
+
+    /// Adds another onion service of the wallet besides the one [`Self::publish_onion_to`]
+    /// publishes, port 80 to `target`, such as the onion an earlier version published. Tor
+    /// publishes it and keeps it while it runs and after a network change; its upload is not
+    /// waited for, and [`TorState`] keeps naming the published onion. `seed` is expanded in
+    /// memory and never stored. A [`FailureKind::Listener`] or [`FailureKind::Keys`] error
+    /// leaves tor running; adding the same onion twice fails with `Keys`.
+    pub async fn add_onion_to(
+        &self,
+        seed: &[u8; 32],
+        target: OnionTarget,
+    ) -> Result<OnionAddress, TorFailure> {
+        let expected = OnionAddress::from_public_key(&public_key_of_seed(seed));
+        let (reply, answer) = oneshot::channel();
+        let request = Request::AddOnion {
+            key: expanded_secret(seed),
+            expected: expected.clone(),
+            target,
+            reply,
+        };
+        let stopped = || TorFailure::new(FailureKind::Stopped, "tor stopped");
+        self.requests.send(request).await.map_err(|_| stopped())?;
+        answer.await.map_err(|_| stopped())??;
+        Ok(expected)
     }
 
     /// Tells tor the host is back: from a pause, or with another network when
@@ -557,6 +588,8 @@ struct Progress {
     tag: String,
     bootstrapped: bool,
     published: Option<Published>,
+    /// Onions added besides the published one, removed at the stop.
+    others: Vec<OnionAddress>,
     stall_deadline: Instant,
     bootstrap_deadline: Instant,
     publish_deadline: Option<Instant>,
@@ -625,7 +658,7 @@ async fn supervise(
                 match handled {
                     Handled::Done => {}
                     Handled::Stop { reply } => {
-                        shutdown(running, progress.published.as_ref(), timings).await;
+                        shutdown(running, &progress, timings).await;
                         if let Some(reply) = reply {
                             state.send_replace(TorState::Off);
                             info!("tor stopped");
@@ -695,6 +728,7 @@ async fn start(
         tag: String::new(),
         bootstrapped: false,
         published: None,
+        others: Vec::new(),
         stall_deadline: after(now, timings.stall),
         bootstrap_deadline: after(running.started, timings.bootstrap),
         publish_deadline: None,
@@ -749,6 +783,25 @@ impl Session<'_> {
                 reply,
             } => {
                 let result = add_onion(
+                    self.running,
+                    self.progress,
+                    &key,
+                    expected,
+                    &target,
+                    self.timings,
+                )
+                .await;
+                drop(key);
+                let _ = reply.send(result);
+                Handled::Done
+            }
+            Request::AddOnion {
+                key,
+                expected,
+                target,
+                reply,
+            } => {
+                let result = add_other_onion(
                     self.running,
                     self.progress,
                     &key,
@@ -1022,6 +1075,38 @@ async fn add_onion(
     Ok(())
 }
 
+/// Adds an onion besides the published one, after checking its listener answers.
+async fn add_other_onion(
+    running: &Running,
+    progress: &mut Progress,
+    key: &[u8; 64],
+    expected: OnionAddress,
+    target: &OnionTarget,
+    timings: TorTimings,
+) -> Result<(), TorFailure> {
+    if !listener_answers(target, timings.listener_check).await {
+        return Err(TorFailure::new(
+            FailureKind::Listener,
+            "the listener of the other onion does not answer",
+        ));
+    }
+    let added = running
+        .control
+        .add_onion(key, target)
+        .await
+        .map_err(|error| TorFailure::new(FailureKind::Keys, format_args!("add onion: {error}")))?;
+    if added.service_id != expected.service_id() {
+        let _ = running.control.del_onion(&added.service_id).await;
+        return Err(TorFailure::new(
+            FailureKind::Keys,
+            "tor published another onion",
+        ));
+    }
+    progress.others.push(expected);
+    debug!(transport = "tor", "other onion service added");
+    Ok(())
+}
+
 /// `SIGNAL ACTIVE`, and after a network change `DisableNetwork` on and off, the new SOCKS
 /// address and `SIGNAL NEWNYM`. Turning the network off and on closes the old connections but
 /// keeps what tor learned of onion services while the network was gone: intro points that
@@ -1068,13 +1153,14 @@ async fn network_lost(running: &Running, progress: &mut Progress) -> Result<(), 
 }
 
 /// `DEL_ONION` and `SIGNAL SHUTDOWN`, bounded; then the exit, and a kill if it does not come.
-async fn shutdown(running: Running, published: Option<&Published>, timings: TorTimings) {
+async fn shutdown(running: Running, progress: &Progress, timings: TorTimings) {
     let Running {
         mut child, control, ..
     } = running;
     let polite = async {
-        if let Some(published) = published {
-            let _ = control.del_onion(published.onion.service_id()).await;
+        let published = progress.published.iter().map(|published| &published.onion);
+        for onion in published.chain(&progress.others) {
+            let _ = control.del_onion(onion.service_id()).await;
         }
         let _ = control.signal_shutdown().await;
     };
@@ -1094,7 +1180,7 @@ async fn fail(
     state.send_replace(TorState::Failed(failure.clone()));
     while let Some(request) = requests.recv().await {
         match request {
-            Request::Publish { reply, .. } => {
+            Request::Publish { reply, .. } | Request::AddOnion { reply, .. } => {
                 let _ = reply.send(Err(failure.clone()));
             }
             Request::Refresh { reply, .. } | Request::NetworkLost { reply } => {
@@ -1420,6 +1506,7 @@ mod tests {
             tag: "loading_descriptors".into(),
             bootstrapped: false,
             published: None,
+            others: Vec::new(),
             stall_deadline: now,
             bootstrap_deadline: now,
             publish_deadline: None,
@@ -1459,6 +1546,7 @@ mod tests {
                 added_at,
                 uploaded: false,
             }),
+            others: Vec::new(),
             stall_deadline: now,
             bootstrap_deadline: now,
             publish_deadline: Some(now),
@@ -1509,6 +1597,7 @@ mod tests {
             tag: "conn_done".into(),
             bootstrapped: false,
             published: None,
+            others: Vec::new(),
             stall_deadline: past,
             bootstrap_deadline: past + Duration::from_secs(600),
             publish_deadline: None,
@@ -1556,6 +1645,7 @@ mod tests {
             tag: "loading".into(),
             bootstrapped: false,
             published: None,
+            others: Vec::new(),
             stall_deadline: start + timings.stall,
             bootstrap_deadline: start + timings.bootstrap,
             publish_deadline: None,
@@ -1595,6 +1685,7 @@ mod tests {
             tag: "loading".into(),
             bootstrapped: false,
             published: None,
+            others: Vec::new(),
             stall_deadline: start + timings.stall,
             bootstrap_deadline: start + timings.bootstrap,
             publish_deadline: None,

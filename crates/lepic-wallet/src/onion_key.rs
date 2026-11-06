@@ -1,8 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
-//! The key of the wallet's onion service (ADR 0018): the payment-proof key of the default
-//! account, so the onion equals what `epic-wallet address` prints and survives a restore.
+//! The keys of the wallet's onion service (ADR 0044). The onion's own key is a key of the LEPIC
+//! namespace, so the Epicbox and payment-proof addresses do not give the onion; a restore from
+//! the phrase gives it back. The previous onion, which LEPIC 0.3.1 and earlier published (ADR
+//! 0018), is the payment-proof key of the default account, what `epic-wallet address` prints.
 
 use std::fmt;
+
+use ed25519_dalek::SigningKey;
 
 use lepic_node::NodeApi;
 use lepic_store::AccountIndex;
@@ -10,14 +14,16 @@ use zeroize::Zeroizing;
 
 use crate::account;
 use crate::error::WalletError;
+use crate::namespace;
 use crate::ports::{SecretVault, StoreOpener};
 use crate::wallet::Wallet;
 
 const ONION_ACCOUNT: AccountIndex = AccountIndex(0);
 const ONION_KEY_INDEX: u32 = 0;
 
-/// The 32-byte ed25519 seed tor publishes the wallet's onion with, and its public key. The
-/// seed is wiped on drop and never printed.
+/// The 32-byte ed25519 seed tor publishes an onion of the wallet with, and its public key. The
+/// seed is wiped on drop and never printed. A payment proof asked for the public key over Tor
+/// is signed with this key.
 pub struct OnionKey {
     seed: Zeroizing<[u8; 32]>,
     public_key: [u8; 32],
@@ -29,7 +35,8 @@ impl OnionKey {
         &self.seed
     }
 
-    /// The ed25519 public key, which is also the wallet's payment-proof address.
+    /// The ed25519 public key: the onion in bytes, and the receiver address of a payment proof
+    /// asked for over it.
     pub const fn public_key(&self) -> &[u8; 32] {
         &self.public_key
     }
@@ -47,11 +54,24 @@ where
     S: StoreOpener + 'static,
     V: SecretVault + 'static,
 {
-    /// The key of the wallet's onion service: the address secret key of account `m/0/0`,
-    /// index 0, which seeds the payment-proof key.
+    /// The key of the wallet's onion service: the namespace key labelled
+    /// [`namespace::ONION_KEY_LABEL`], on no BIP32 path.
     ///
     /// Fails with [`WalletError::Locked`] while the wallet is locked.
     pub fn onion_key(&self) -> Result<OnionKey, WalletError> {
+        let session = self.session()?;
+        let seed = namespace::onion_seed(&session.seed)?;
+        let public_key = SigningKey::from_bytes(&seed).verifying_key().to_bytes();
+        Ok(OnionKey { seed, public_key })
+    }
+
+    /// The key of the onion the wallet published before ADR 0044: the address secret key of
+    /// account `m/0/0`, index 0, which seeds the payment-proof key, so its public key is the
+    /// payment-proof address. A host that keeps the previous onion reachable publishes it with
+    /// this key.
+    ///
+    /// Fails with [`WalletError::Locked`] while the wallet is locked.
+    pub fn previous_onion_key(&self) -> Result<OnionKey, WalletError> {
         let session = self.session()?;
         let parent = account::parent_key_id(ONION_ACCOUNT)?;
         let secret = session

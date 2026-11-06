@@ -195,10 +195,30 @@ fn a_send_takes_an_onion_address_with_the_tor_binary() {
         Some(std::path::Path::new("/opt/tor/tor"))
     );
     assert!(args.tor.lib_dir.is_none());
+    assert!(!args.previous_onion);
+    let cli = Cli::try_parse_from([
+        "lepic",
+        "tor",
+        "listen",
+        "--tor-binary",
+        "/opt/tor/tor",
+        "--previous-onion",
+    ])
+    .unwrap();
+    assert!(matches!(
+        cli.command,
+        lepic_cli::cli::Command::Tor(lepic_cli::cli::TorCommand::Listen(args))
+            if args.previous_onion
+    ));
     let cli = Cli::try_parse_from(["lepic", "tor", "address"]).unwrap();
     assert!(matches!(
         cli.command,
-        lepic_cli::cli::Command::Tor(lepic_cli::cli::TorCommand::Address)
+        lepic_cli::cli::Command::Tor(lepic_cli::cli::TorCommand::Address(args)) if !args.previous
+    ));
+    let cli = Cli::try_parse_from(["lepic", "tor", "address", "--previous"]).unwrap();
+    assert!(matches!(
+        cli.command,
+        lepic_cli::cli::Command::Tor(lepic_cli::cli::TorCommand::Address(args)) if args.previous
     ));
     let cli = Cli::try_parse_from(["lepic", "tx", "resend", "1", "--to", onion.as_str()]).unwrap();
     let lepic_cli::cli::Command::Tx(lepic_cli::cli::TxCommand::Resend(args)) = cli.command else {

@@ -724,6 +724,9 @@ pub struct TorAddressReport {
 #[derive(Debug, Serialize)]
 pub struct TorListenReport {
     pub onion: String,
+    /// The previous onion, when `--previous-onion` published it too.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub previous_onion: Option<String>,
     pub received: u32,
     /// Payments answered again with the reply stored the first time.
     pub repeated: u32,
@@ -1470,11 +1473,17 @@ fn write_transport_human(out: &mut Vec<u8>, report: &Report) -> std::io::Result<
             r.port, r.exposure, r.received, r.repeated, r.refused
         ),
         Report::TorAddress(r) => writeln!(out, "{}", r.onion),
-        Report::TorListen(r) => writeln!(
-            out,
-            "Listened at {} over Tor: received {}, repeated {}, refused {}.",
-            r.onion, r.received, r.repeated, r.refused
-        ),
+        Report::TorListen(r) => {
+            let at = match &r.previous_onion {
+                Some(previous) => format!("{} and {previous}", r.onion),
+                None => r.onion.clone(),
+            };
+            writeln!(
+                out,
+                "Listened at {at} over Tor: received {}, repeated {}, refused {}.",
+                r.received, r.repeated, r.refused
+            )
+        }
         Report::EpicboxStatus(r) => {
             writeln!(out, "Relay    {}", r.relay)?;
             writeln!(out, "Address  {}", r.address)?;
@@ -2448,11 +2457,22 @@ mod tests {
             (
                 Report::TorListen(TorListenReport {
                     onion: text("o"),
+                    previous_onion: None,
                     received: 1,
                     repeated: 0,
                     refused: 0,
                 }),
                 vec!["onion", "received", "refused", "repeated"],
+            ),
+            (
+                Report::TorListen(TorListenReport {
+                    onion: text("o"),
+                    previous_onion: Some(text("p")),
+                    received: 1,
+                    repeated: 0,
+                    refused: 0,
+                }),
+                vec!["onion", "previous_onion", "received", "refused", "repeated"],
             ),
             (
                 Report::NodeStatus(NodeStatusReport {

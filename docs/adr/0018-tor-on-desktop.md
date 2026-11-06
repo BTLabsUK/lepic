@@ -1,6 +1,6 @@
 # 0018 Tor on desktop through a bundled tor child process
 
-Status: accepted
+Status: accepted; superseded in part by 0044 (the onion key)
 Date: 2026-10-22
 
 ## Context
@@ -32,7 +32,8 @@ yet and no control port, and its onion-service support is newer than C tor's.
   the connection), `__OwningControllerProcess`, then `TAKEOWNERSHIP`, so tor exits with the
   wallet process or its control connection. No shell is involved.
 - The onion's key is the payment-proof key: its seed is the wallet's address secret key for
-  account `m/0/0`, index 0. `lepic-tor` expands it in memory (SHA-512, clamped) and passes it to
+  account `m/0/0`, index 0. (ADR 0044 gives the onion a key of its own; this one is the previous
+  onion.) `lepic-tor` expands it in memory (SHA-512, clamped) and passes it to
   `ADD_ONION` with `Flags=DiscardPK`, mapping port 80 to the HTTP listener on `127.0.0.1`
   (ADR 0017). The key is never written to disk or logged.
 - Readiness comes from the control port: bootstrap progress, then the first `HS_DESC UPLOADED`

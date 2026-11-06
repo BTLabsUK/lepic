@@ -685,22 +685,37 @@ pub struct TorBinaryArgs {
 pub enum TorCommand {
     /// Show the wallet's onion address, which tor listen publishes
     #[command(after_help = "\
-The onion address is the wallet's payment-proof address in onion form, the address epic-wallet
-`address` prints too, so it stays the same after a restore from the recovery phrase.")]
-    Address,
+The onion address has its own key from the recovery phrase, so it stays the same after a restore.
+It is not the payment-proof address: a payment proof asked for over the onion is signed with the
+onion's key, and the onion's address is the receiver address. With --previous, shows the onion
+LEPIC 0.3.1 and earlier published, which is the payment-proof address in onion form, as
+epic-wallet `address` prints it.")]
+    Address(TorAddressArgs),
     /// Answer payments sent to the wallet's onion address over Tor, until interrupted
     #[command(after_help = "\
 Runs the tor binary given with --tor-binary for this wallet, with its files in tor/ inside the
 data directory, and publishes the wallet's onion address. Payments reach the wallet foreign API
 on a listener on 127.0.0.1, which tor forwards the onion to; only payments are answered, never
-invoices. The onion address is printed once others can reach it.")]
+invoices. The onion address is printed once others can reach it. With --previous-onion, the
+onion of LEPIC 0.3.1 and earlier is published too, on its own listener, for senders that still
+have it; proofs asked for there are signed with the payment-proof key.")]
     Listen(TorListenArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct TorAddressArgs {
+    /// Show the previous onion address, the payment-proof address in onion form
+    #[arg(long)]
+    pub previous: bool,
 }
 
 #[derive(Debug, Args)]
 pub struct TorListenArgs {
     #[command(flatten)]
     pub tor: TorBinaryArgs,
+    /// Publish the previous onion address as well
+    #[arg(long)]
+    pub previous_onion: bool,
 }
 
 #[derive(Debug, Subcommand)]

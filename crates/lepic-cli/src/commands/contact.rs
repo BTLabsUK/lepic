@@ -1109,6 +1109,7 @@ async fn open_sealed<N: lepic_node::NodeApi + 'static>(
                     ReceiveRequest {
                         account: Some(args.account.account),
                         message: args.message.message,
+                        ..ReceiveRequest::default()
                     },
                 )
                 .await?;

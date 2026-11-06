@@ -45,8 +45,8 @@ use lepic_wallet::send::{Delivery, SendRequest};
 use lepic_wallet::slate::WireSlate;
 use lepic_wallet::state::state_name;
 use lepic_wallet::{
-    Clock, Event, Password, Ports, ReceiveRequest, SharedRng, Wallet, WalletConfig, WalletError,
-    WalletName, WordCount,
+    Clock, Event, Password, Ports, ProofKey, ReceiveRequest, SharedRng, Wallet, WalletConfig,
+    WalletError, WalletName, WordCount,
 };
 use rand::Rng as _;
 use rand::SeedableRng as _;
@@ -60,8 +60,8 @@ use crate::cli::{
     Command, DestinationArgs, EpicboxCommand, FinalizeArgs, HttpCommand, HttpListenArgs,
     ImportHistoryArgs, ImportSeedArgs, InitArgs, InvoiceCommand, IssueArgs, ListingArgs,
     NodeCommand, PayArgs, PostArgs, ReceiveArgs, ResendArgs, RestoreArgs, ScanArgs, SelectionArg,
-    SendArgs, SendDestinationArgs, SpendArgs, TorBinaryArgs, TorCommand, TorListenArgs, TxCommand,
-    WalletCommand, WalletScanArgs, WordsArg,
+    SendArgs, SendDestinationArgs, SpendArgs, TorAddressArgs, TorBinaryArgs, TorCommand,
+    TorListenArgs, TxCommand, WalletCommand, WalletScanArgs, WordsArg,
 };
 use crate::exit::{CliError, ErrorKind};
 use crate::host::{Host, HostNode};
@@ -191,7 +191,7 @@ impl<H: Host> Run<'_, H> {
             Command::Invoice(command) => self.invoice(command).await,
             Command::Epicbox(command) => self.epicbox(command).await,
             Command::Http(HttpCommand::Listen(args)) => self.http_listen(&args).await,
-            Command::Tor(TorCommand::Address) => self.tor_address().await,
+            Command::Tor(TorCommand::Address(args)) => self.tor_address(args).await,
             Command::Tor(TorCommand::Listen(args)) => self.tor_listen(args).await,
             Command::Node(NodeCommand::Status) => self.node_status().await,
             Command::Contact(args) => self.contact(args).await,
@@ -818,6 +818,7 @@ impl<H: Host> Run<'_, H> {
             opened: Arc::clone(&opened),
             counts: Arc::clone(&counts),
             transport: lepic_foreign::TRANSPORT_ID,
+            proof_key: ProofKey::Payments,
         });
         let port = args.port.unwrap_or(self.settings.tuning.listen_port);
         let handle = lepic_foreign::listen(
@@ -910,15 +911,20 @@ impl<H: Host> Run<'_, H> {
         }
     }
 
-    async fn tor_address(&mut self) -> Result<Report, CliError> {
+    async fn tor_address(&mut self, args: TorAddressArgs) -> Result<Report, CliError> {
         let opened = self.open().await?;
-        let key = opened.wallet.onion_key()?;
+        let key = if args.previous {
+            opened.wallet.previous_onion_key()?
+        } else {
+            opened.wallet.onion_key()?
+        };
         Ok(Report::TorAddress(TorAddressReport {
             onion: lepic_tor::onion_address(key.public_key()),
         }))
     }
 
-    /// Publishes the wallet's onion and answers payments over Tor until interrupted.
+    /// Publishes the wallet's onion, and with `--previous-onion` the previous one on its own
+    /// listener, and answers payments over Tor until interrupted.
     async fn tor_listen(&mut self, args: TorListenArgs) -> Result<Report, CliError> {
         if args.tor.tor_binary.is_none() {
             return Err(CliError::TorBinaryNeeded);
@@ -926,17 +932,35 @@ impl<H: Host> Run<'_, H> {
         let opened = self.open().await?;
         let key = opened.wallet.onion_key()?;
         let onion = lepic_tor::onion_address(key.public_key());
+        let previous_key = if args.previous_onion {
+            Some(opened.wallet.previous_onion_key()?)
+        } else {
+            None
+        };
+        let previous_onion = previous_key
+            .as_ref()
+            .map(|key| lepic_tor::onion_address(key.public_key()));
         let counts = Arc::new(HttpCounts::default());
-        let receiver = Arc::new(HttpReceiver {
-            opened: Arc::clone(&opened),
-            counts: Arc::clone(&counts),
-            transport: lepic_tor::TRANSPORT_ID,
-        });
-        let handle = lepic_foreign::listen(
-            lepic_tor::listen_settings(self.settings.tuning.listen),
-            receiver,
-        )
-        .await?;
+        let receiver = |proof_key| {
+            Arc::new(HttpReceiver {
+                opened: Arc::clone(&opened),
+                counts: Arc::clone(&counts),
+                transport: lepic_tor::TRANSPORT_ID,
+                proof_key,
+            })
+        };
+        let settings = lepic_tor::listen_settings(self.settings.tuning.listen);
+        let handle = lepic_foreign::listen(settings.clone(), receiver(ProofKey::Onion)).await?;
+        let previous_handle = match previous_key {
+            Some(_) => match lepic_foreign::listen(settings, receiver(ProofKey::Payments)).await {
+                Ok(handle) => Some(handle),
+                Err(error) => {
+                    handle.shutdown().await;
+                    return Err(error.into());
+                }
+            },
+            None => None,
+        };
         let tor = self.start_tor(&args.tor)?;
         let published = async {
             self.wait_for_tor(&tor).await?;
@@ -945,15 +969,24 @@ impl<H: Host> Run<'_, H> {
             }
             tor.publish_onion(key.expose_seed(), handle.local_addr().port())
                 .await?;
+            if let (Some(key), Some(previous)) = (&previous_key, &previous_handle) {
+                let target = lepic_tor::OnionTarget::Port(previous.local_addr().port());
+                tor.add_onion_to(key.expose_seed(), target).await?;
+            }
             Ok::<_, CliError>(())
         }
         .await;
         drop(key);
+        drop(previous_key);
         let ended = match published {
             Ok(()) => {
                 if self.settings.output == OutputFormat::Human {
+                    let at = match &previous_onion {
+                        Some(previous) => format!("{onion} and {previous}"),
+                        None => onion.clone(),
+                    };
                     self.show_line(&format!(
-                        "Listening for payments at {onion} over Tor. Ctrl-C stops."
+                        "Listening for payments at {at} over Tor. Ctrl-C stops."
                     ));
                 }
                 let stop = tokio::sync::Notify::new();
@@ -972,9 +1005,13 @@ impl<H: Host> Run<'_, H> {
         };
         tor.stop().await;
         handle.shutdown().await;
+        if let Some(previous) = previous_handle {
+            previous.shutdown().await;
+        }
         ended?;
         Ok(Report::TorListen(TorListenReport {
             onion,
+            previous_onion,
             received: counts.received.load(Ordering::Relaxed),
             repeated: counts.repeated.load(Ordering::Relaxed),
             refused: counts.refused.load(Ordering::Relaxed),
@@ -1088,6 +1125,7 @@ impl<H: Host> Run<'_, H> {
                 ReceiveRequest {
                     account: Some(args.account.account),
                     message: args.message.message,
+                    ..ReceiveRequest::default()
                 },
             )
             .await?;
@@ -1558,12 +1596,14 @@ struct HttpCounts {
     refused: std::sync::atomic::AtomicU32,
 }
 
-/// The wallet behind `http listen` and `tor listen`, recording receipts as `transport`'s.
+/// The wallet behind `http listen` and `tor listen`, recording receipts as `transport`'s and
+/// signing payment proofs with `proof_key`, the key of the address the listener serves.
 /// Receipts reach the user as the wallet's events.
 struct HttpReceiver<N: NodeApi + 'static> {
     opened: Arc<Opened<N>>,
     counts: Arc<HttpCounts>,
     transport: lepic_transport::transport::TransportId,
+    proof_key: ProofKey,
 }
 
 impl<N: NodeApi + 'static> ReceiveHandler for HttpReceiver<N> {
@@ -1572,7 +1612,14 @@ impl<N: NodeApi + 'static> ReceiveHandler for HttpReceiver<N> {
             let received = self
                 .opened
                 .wallet
-                .receive_unsolicited(self.transport, &slate, ReceiveRequest::default())
+                .receive_unsolicited(
+                    self.transport,
+                    &slate,
+                    ReceiveRequest {
+                        proof_key: self.proof_key,
+                        ..ReceiveRequest::default()
+                    },
+                )
                 .await;
             match received {
                 Ok(received) => {

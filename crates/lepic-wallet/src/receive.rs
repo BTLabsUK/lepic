@@ -7,8 +7,8 @@
 //! Receive: the receiver's step of the standard flow, from the sender's S1 to the S2 reply, as
 //! `epic-wallet`'s `receive_tx` does it (`docs/compat/legacy-slates.md`, "Lifecycle").
 
-use crate::namespace::Listing;
-use ed25519_dalek::Signer;
+use crate::namespace::{self, Listing};
+use ed25519_dalek::{Signer, SigningKey};
 use lepic_crypto::aggsig::{
     calculate_partial_sig, create_secnonce, sign_single, verify_completed_sig,
 };
@@ -73,6 +73,22 @@ pub struct ReceiveRequest {
     pub account: Option<String>,
     /// The receiver's message to the sender, cut to the first 256 bytes before it is signed.
     pub message: Option<String>,
+    /// The key that signs a payment proof the slate asks for: the key of the address the
+    /// slate came to.
+    pub proof_key: ProofKey,
+}
+
+/// Which key signs a payment proof (ADR 0044). A proof whose receiver address is not that
+/// key's public key is refused with [`ReceiveError::ForeignProofAddress`], so a slate sent to
+/// one address of the wallet never learns that another address is the same wallet's.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum ProofKey {
+    /// The payment-proof key, index 0 of the receiving account, as `epic-wallet` signs: for
+    /// Epicbox, HTTP, files, and the previous onion.
+    #[default]
+    Payments,
+    /// The wallet's onion key ([`Wallet::onion_key`]): for slates that came to the onion.
+    Onion,
 }
 
 /// A received slate: the stored transaction and the S2 reply.
@@ -430,6 +446,7 @@ pub(crate) fn receive_own<D>(
     let request = ReceiveRequest {
         account: Some(label),
         message: None,
+        proof_key: ProofKey::Payments,
     };
     let response = respond(repos, session, &proposal, &request, rng)?;
     let reply = V3JsonCodec::new(network.params().default_base_fee())
@@ -559,6 +576,12 @@ fn respond<D>(
     let key_id = account::next_output_key(repos, account.index)?;
     let parent = account.parent_key_id()?;
     let keychain = &session.keychain;
+    let onion_key = match request.proof_key {
+        ProofKey::Payments => None,
+        ProofKey::Onion => Some(SigningKey::from_bytes(&*namespace::onion_seed(
+            &session.seed,
+        )?)),
+    };
     build_response(
         keychain,
         slate,
@@ -567,6 +590,7 @@ fn respond<D>(
             parent,
             message: request.message.as_deref(),
             base_fee: proposal.network.params().default_base_fee(),
+            onion_key: onion_key.as_ref(),
         },
         rng,
     )
@@ -600,6 +624,7 @@ pub fn build_s2(
             parent,
             message,
             base_fee,
+            onion_key: None,
         },
         rng,
     )
@@ -611,6 +636,8 @@ struct Contribution<'a> {
     parent: Identifier,
     message: Option<&'a str>,
     base_fee: Fee,
+    /// Signs the payment proof instead of the payment-proof key of `parent`.
+    onion_key: Option<&'a SigningKey>,
 }
 
 /// S1 to S2 as `add_output_to_slate` and `receive_tx` do it: the output for the slate amount at
@@ -659,8 +686,16 @@ fn build_response(
 
     let proof_signature = match slate.payment_proof() {
         Some(proof) => {
-            let key = keychain.payment_proof_key(&contribution.parent, PAYMENT_PROOF_KEY_INDEX)?;
-            if &key.public_key() != proof.receiver_address.as_bytes() {
+            let payments;
+            let key = match contribution.onion_key {
+                Some(key) => key,
+                None => {
+                    payments = keychain
+                        .payment_proof_key(&contribution.parent, PAYMENT_PROOF_KEY_INDEX)?;
+                    payments.expose_signing_key()
+                }
+            };
+            if &key.verifying_key().to_bytes() != proof.receiver_address.as_bytes() {
                 return Err(ReceiveError::ForeignProofAddress);
             }
             let excess = kernel_excess(&slate, &output)?;
@@ -668,7 +703,7 @@ fn build_response(
             signed.extend_from_slice(&amount.to_be_bytes());
             signed.extend_from_slice(excess.as_bytes());
             signed.extend_from_slice(proof.sender_address.as_bytes());
-            let signature = key.expose_signing_key().sign(&signed);
+            let signature = key.sign(&signed);
             Some(ProofSignature::from_bytes(signature.to_bytes()))
         }
         None => None,

@@ -471,11 +471,21 @@ were received, repeated and refused. Invoices are never answered over HTTP.
 
 ## Direct over Tor
 
-Every wallet has an onion address: its payment-proof address in onion form, the one
-`epic-wallet address` prints too, so it survives a restore from the recovery phrase.
+Every wallet has an onion address with a key of its own, derived from the recovery phrase, so
+it survives a restore (ADR 0044). It is not the payment-proof address: a payment proof asked for
+over the onion names the onion's key as the receiver address and is signed with it, and a proof
+asked for over Epicbox, HTTP or a file is signed with the payment-proof key as before.
 
 ```
 $ lepic tor address
+mv5s7skb6dq2rhxouxdz4ibnd2c3zgvmmewe4cnho6irgt35tcwnmqqd.onion
+```
+
+LEPIC 0.3.1 and earlier, the Epic GUI wallet and `epic-wallet` publish another onion: the
+payment-proof address in onion form, the one `epic-wallet address` prints. `--previous` shows it:
+
+```
+$ lepic tor address --previous
 gpuxiaswl37rjqfunltyo57h7ubqvmyf4yoyomyh6zs5btdbbzymfeid.onion
 ```
 
@@ -490,6 +500,16 @@ $ lepic tor listen --tor-binary ~/tor/tor --lib-dir ~/tor
 Connecting to the Tor network: 95%
 Publishing the wallet's onion address.
 Listening for payments at gpuxiaswl37rjqfunltyo57h7ubqvmyf4yoyomyh6zs5btdbbzymfeid.onion over Tor. Ctrl-C stops.
+```
+
+`--previous-onion` publishes the previous onion as well, for senders that still have it. It gets
+a listener of its own, and a payment proof asked for there is signed with the payment-proof key,
+so a sender never sees one key answer for both addresses. The lines then name both onions:
+
+```
+$ lepic tor listen --previous-onion --tor-binary ~/tor/tor --lib-dir ~/tor
+...
+Listening for payments at mv5s7skb6dq2rhxouxdz4ibnd2c3zgvmmewe4cnho6irgt35tcwnmqqd.onion and gpuxiaswl37rjqfunltyo57h7ubqvmyf4yoyomyh6zs5btdbbzymfeid.onion over Tor. Ctrl-C stops.
 ```
 
 Tor forwards the onion's port 80 to a listener on `127.0.0.1`, at a port picked when it starts.

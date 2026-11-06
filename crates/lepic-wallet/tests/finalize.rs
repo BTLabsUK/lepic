@@ -40,7 +40,7 @@ use lepic_wallet::event::TransactionState;
 use lepic_wallet::finalize::{FinalizeError, Posted, SlateField};
 use lepic_wallet::selection::SelectionStrategy;
 use lepic_wallet::send::{Delivery, SendRequest};
-use lepic_wallet::{Event, WalletError};
+use lepic_wallet::{Event, ProofKey, ReceiveError, ReceiveRequest, WalletError};
 use receive_harness::{Receiver, json, vector};
 use send_support::{ACCOUNT, PEER, Sender, TIP, V2Only, legacy_codecs, uuid};
 use serde_json::Value;
@@ -84,6 +84,15 @@ fn exchange(request: SendRequest, receiver_message: Option<&str>) -> Exchange {
 }
 
 fn exchange_with(sender: Sender, request: SendRequest, receiver_message: Option<&str>) -> Exchange {
+    exchange_replying(sender, request, |s1| reply(s1, receiver_message))
+}
+
+/// A sent transaction and the S2 `reply` answers its S1 with.
+fn exchange_replying(
+    sender: Sender,
+    request: SendRequest,
+    reply: impl FnOnce(&WireSlate) -> WireSlate,
+) -> Exchange {
     let sent = sender
         .harness
         .block_on(sender.wallet.send(
@@ -95,7 +104,7 @@ fn exchange_with(sender: Sender, request: SendRequest, receiver_message: Option<
         ))
         .unwrap();
     let (s1, _) = sender.received().unwrap();
-    let s2 = reply(&s1, receiver_message);
+    let s2 = reply(&s1);
     Exchange {
         sender,
         tx_id: sent.tx_id,
@@ -231,6 +240,77 @@ fn finalize_verifies_and_keeps_a_requested_payment_proof() {
     assert_eq!(proof.receiver_address, receiver_address());
     assert!(proof.receiver_signature.is_some());
     assert_eq!(exchange.state(), TxState::Posted);
+}
+
+/// The receiver's onion as a payment-proof address (ADR 0044).
+fn receiver_onion_address() -> ProofAddress {
+    let receiver = Receiver::new(RECEIVER_MNEMONIC, TIP);
+    ProofAddress::from_bytes(*receiver.wallet.onion_key().unwrap().public_key()).unwrap()
+}
+
+/// What `receiver` answers `s1` with, its payment proof signed with `proof_key`.
+fn receive_signed_with(
+    receiver: &Receiver,
+    s1: &WireSlate,
+    proof_key: ProofKey,
+) -> Result<WireSlate, ReceiveError> {
+    receiver
+        .receive_with(
+            FILE,
+            s1.as_text().unwrap(),
+            ReceiveRequest {
+                proof_key,
+                ..ReceiveRequest::default()
+            },
+        )
+        .map(|received| received.reply)
+}
+
+both_stores!(a_payment_proof_asked_for_the_onion_is_signed_with_the_onion_key_and_verifies);
+fn a_payment_proof_asked_for_the_onion_is_signed_with_the_onion_key_and_verifies() {
+    assert_ne!(receiver_onion_address(), receiver_address());
+    let receiver = Receiver::new(RECEIVER_MNEMONIC, TIP);
+    let exchange = exchange_replying(
+        Sender::new(),
+        SendRequest {
+            payment_proof_recipient: Some(receiver_onion_address()),
+            ..request()
+        },
+        |s1| receive_signed_with(&receiver, s1, ProofKey::Onion).unwrap(),
+    );
+    let finalized = exchange.finalize(&exchange.s2).unwrap();
+    let proof = finalized.slate.payment_proof().unwrap();
+    assert_eq!(proof.receiver_address, receiver_onion_address());
+    assert!(proof.receiver_signature.is_some());
+    assert_eq!(exchange.state(), TxState::Posted);
+}
+
+both_stores!(a_proof_key_signs_only_for_its_own_address);
+fn a_proof_key_signs_only_for_its_own_address() {
+    // Each key refuses the other's address, so a slate sent to one address cannot learn that
+    // the other belongs to the same wallet.
+    for (recipient, proof_key) in [
+        (receiver_address(), ProofKey::Onion),
+        (receiver_onion_address(), ProofKey::Payments),
+    ] {
+        let receiver = Receiver::new(RECEIVER_MNEMONIC, TIP);
+        exchange_replying(
+            Sender::new(),
+            SendRequest {
+                payment_proof_recipient: Some(recipient),
+                ..request()
+            },
+            |s1| {
+                let error = receive_signed_with(&receiver, s1, proof_key).unwrap_err();
+                assert!(
+                    matches!(error, ReceiveError::ForeignProofAddress),
+                    "{proof_key:?}: {error:?}"
+                );
+                s1.clone()
+            },
+        );
+        assert_eq!(receiver.transaction_count(), 0);
+    }
 }
 
 both_stores!(finalizing_the_same_s2_again_changes_nothing);
