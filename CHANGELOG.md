@@ -7,8 +7,21 @@ Conventional Commit messages at release time.
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-11-06
+
 ### Added
 
+- The owner's profile, ADR 0041: bits 16 to 31 of the envelope feature word (tag `0x82`,
+  `HOST_PROFILE` and `PROFILE_SHIFT` in `lepic-epicbox`) carry a host-defined profile to every
+  paired contact. `WalletConfig.profile` (`lepic-wallet` and `lepic-ffi`) sets it, with
+  `WalletConfig::pairing_features`; `ContactBook::contacts_set_own_profile` sends paired contacts
+  a card update when it changes; `ContactView.peer_profile` (`lepic-wallet-contacts` and
+  `lepic-ffi`) gives the contact's. Core gives the bits no meaning. A wallet that predates it
+  reads zero.
+- `lepic` profile settings: `profile = "no-payments,automated"` in the config file,
+  `LEPIC_PROFILE`, `--profile <NAMES>` and `--profile-bits <N>`, `lepic profile show` and
+  `lepic profile set`, also through `--service`. The CLI names bit 0 `no-payments` and bit 1
+  `automated`; contact views show the contact's profile.
 - Policy values as host parameters, ADR 0036: `WalletPolicy` in `lepic-wallet`'s
   `WalletConfig`, `HostPolicy` in `lepic-ffi`'s `WalletConfig` and `PinSettings` with
   `LepicRuntime::with_pin_settings`. They cover the default strategy, the send and invoice
@@ -90,6 +103,14 @@ Conventional Commit messages at release time.
   there at once. The old mailboxes are not read again; there is no drain.
 - `lepic --service serve status` shows, for serve's wallet refresh and contact collect, the
   failures since the last success, the last error and the time of the last success.
+
+### Deprecated
+
+- The contact kind, ADR 0041: new invites and cards write person whatever the request names,
+  so an invite and its cards always agree; existing pairings keep their kind. The `kind`
+  fields stay in the card, the invite, the requests and the views, and are not to be read for
+  meaning. `lepic contact invite --kind` and `lepic contact show-card --kind` are hidden and
+  ignored, with a note.
 
 ### Removed
 

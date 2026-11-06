@@ -101,7 +101,11 @@ destination's domain is not checked either. The sender's domain is advisory. LEP
 reply through its own relay, never to the relay a `from` names, and keys contacts, notices and
 invoices on the public key alone.
 
-## Relay retention
+## Relay retention (compat contract)
+
+LEPIC's outbox retry schedule, its notice rules and the contact mailboxes of RFC 0002 assume the
+two facts below. The probe pins facts 1 to 6 above; the discard rule is read from the relay source
+and has been reproduced by hand, not by a test.
 
 - The relay stores each message for 7 days (MongoDB TTL index `expireAfterSeconds: 604800`). The
   24-hour `expiration` field it also writes is not enforced.

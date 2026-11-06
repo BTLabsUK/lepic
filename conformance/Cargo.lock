@@ -2342,7 +2342,7 @@ checksum = "bbd2bcb4c963f2ddae06a2efc7e9f3591312473c50c6685e1f298068316e66fe"
 
 [[package]]
 name = "lepic-contact"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "argon2",
  "base64 0.23.1",
@@ -2359,7 +2359,7 @@ dependencies = [
 
 [[package]]
 name = "lepic-crypto"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "grin_secp256k1zkp 0.8.1",
  "rand_core 0.10.1",
@@ -2369,7 +2369,7 @@ dependencies = [
 
 [[package]]
 name = "lepic-epicbox"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "bs58",
  "chacha20poly1305 0.11.0",
@@ -2393,7 +2393,7 @@ dependencies = [
 
 [[package]]
 name = "lepic-keychain"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "argon2",
  "bip39",
@@ -2416,7 +2416,7 @@ dependencies = [
 
 [[package]]
 name = "lepic-node"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "base64 0.23.1",
  "futures-util",
@@ -2441,7 +2441,7 @@ dependencies = [
 
 [[package]]
 name = "lepic-primitives"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "blake2",
  "lepic-crypto",
@@ -2451,7 +2451,7 @@ dependencies = [
 
 [[package]]
 name = "lepic-slate"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "ed25519-dalek 3.0.0",
  "lepic-crypto",
@@ -2467,7 +2467,7 @@ dependencies = [
 
 [[package]]
 name = "lepic-store"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "blake2",
  "chacha20poly1305 0.11.0",
@@ -2481,7 +2481,7 @@ dependencies = [
 
 [[package]]
 name = "lepic-transport"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "lepic-primitives",
  "lepic-slate",
@@ -2493,7 +2493,7 @@ dependencies = [
 
 [[package]]
 name = "lepic-wallet"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "blake2",
  "ed25519-dalek 3.0.0",
