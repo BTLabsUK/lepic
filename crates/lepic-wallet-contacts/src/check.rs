@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 use tracing::{debug, info, instrument};
 use uuid::Uuid;
 
-use super::address_proof::{CardUpdate, Payments, queue_card_update};
+use super::address_proof::{CardUpdate, Payments, domain_signer, queue_card_update};
 use super::{ContactError, ContactRelays};
 use crate::ContactBook;
 use crate::hex;
@@ -149,6 +149,11 @@ where
         let policy = self.wallet.config().policy;
         let session = self.wallet.session()?;
         let payments = Payments::of(&session.keychain, network, relays)?;
+        let domain = domain_signer(
+            &session.keychain,
+            network,
+            self.wallet.config().domain.as_deref(),
+        )?;
         let record = record.clone();
         let answered = self
             .contact_work(move |ports, _| {
@@ -162,6 +167,7 @@ where
                         network,
                         payments: &payments,
                         features,
+                        domain: domain.as_ref(),
                         now,
                     };
                     queue_card_update(repos, &ports.rng, &at, record, |_| {})

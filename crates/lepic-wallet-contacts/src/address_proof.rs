@@ -24,10 +24,11 @@ use sha2::{Digest, Sha256};
 use zeroize::Zeroizing;
 
 use jiff::Timestamp;
-use lepic_contact::{PairingExtras, seal_contact_update_with};
+use lepic_contact::{DomainName, PairingExtras, seal_contact_update_with};
 use lepic_store::{ContactRecord, ContactState, Repositories};
 
 use crate::collect::update_entry;
+use crate::domain::DomainSigner;
 use crate::keys::{contact_keys, contact_network, signing_key};
 use crate::private::is_private;
 use crate::{ContactError, ContactRelays, LockedRng};
@@ -200,6 +201,25 @@ impl Payments {
 }
 
 /// The address index and account of the payments identity, which `epic-wallet` derives too.
+/// The signer of the domain claims of the wallet behind `keychain`, when `domain` names one:
+/// the domain key is the payments account's, so the wallet claims one domain whatever account
+/// a pairing is made in. `None` for a wallet that claims no domain.
+pub(crate) fn domain_signer(
+    keychain: &Keychain,
+    network: Network,
+    domain: Option<&str>,
+) -> Result<Option<DomainSigner>, ContactError> {
+    let Some(domain) = domain else {
+        return Ok(None);
+    };
+    let domain = DomainName::new(domain).map_err(ContactError::Domain)?;
+    let root =
+        crate::key_schedule::contact_root(keychain, &parent_key_id(PAYMENTS_ACCOUNT)?, network)
+            .map_err(ContactError::Keys)?;
+    let key = root.domain_key(network).map_err(ContactError::Keys)?;
+    Ok(Some(DomainSigner { key, domain }))
+}
+
 const PAYMENTS_ACCOUNT: lepic_store::AccountIndex = lepic_store::AccountIndex(0);
 const PAYMENTS_INDEX: u32 = 0;
 
@@ -285,6 +305,8 @@ pub(crate) struct CardUpdate<'a> {
     pub(crate) network: Network,
     pub(crate) payments: &'a Payments,
     pub(crate) features: u32,
+    /// What signs the domain claim the update carries; none when the wallet claims no domain.
+    pub(crate) domain: Option<&'a DomainSigner>,
     pub(crate) now: Timestamp,
 }
 
@@ -337,6 +359,13 @@ pub(crate) fn queue_card_update(
     let extras = PairingExtras {
         address_proof,
         features: Some(at.features),
+        domain: at.domain.map(|domain| {
+            domain.claim(
+                net,
+                &signer.verifying_key(),
+                u64::try_from(at.now.as_second()).unwrap_or(0),
+            )
+        }),
     };
     let envelope = seal_contact_update_with(
         &peer_card,
@@ -369,12 +398,11 @@ const ADDRESS_CARDS_KEY: &str = "contact.address-cards";
 pub(crate) fn queue_address_cards(
     repos: &mut dyn Repositories,
     rng: &lepic_wallet::SharedRng,
-    keychain: &Keychain,
-    network: Network,
-    payments: &Payments,
-    features: u32,
-    now: Timestamp,
+    at: &CardUpdate<'_>,
 ) -> Result<usize, ContactError> {
+    let CardUpdate {
+        network, payments, ..
+    } = *at;
     let address = payments.address.to_string();
     if repos.setting(ADDRESS_CARDS_KEY)?.as_deref() == Some(address.as_str()) {
         return Ok(0);
@@ -390,14 +418,7 @@ pub(crate) fn queue_address_cards(
             Some(named) if *named != card_address => {}
             _ => continue,
         }
-        let at = CardUpdate {
-            keychain,
-            network,
-            payments,
-            features,
-            now,
-        };
-        if queue_card_update(repos, rng, &at, record, |fields| {
+        if queue_card_update(repos, rng, at, record, |fields| {
             fields.payments_address = Some(card_address.clone());
         })? {
             queued = queued.saturating_add(1);

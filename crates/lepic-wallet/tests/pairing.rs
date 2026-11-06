@@ -3522,6 +3522,7 @@ fn post_address_update(
         &lepic_contact::PairingExtras {
             address_proof: proof,
             features: Some(5),
+            domain: None,
         },
         &mut rand::rngs::StdRng::seed_from_u64(u64::from(seq)),
     )

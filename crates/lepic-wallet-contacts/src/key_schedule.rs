@@ -14,6 +14,7 @@ use blake2::Blake2b256;
 use blake2::digest::{FixedOutput, Update};
 use ed25519_dalek::SigningKey;
 use hkdf::Hkdf;
+use lepic_contact::DomainKey;
 use lepic_crypto::{CryptoError, PublicKey, SecretKey};
 use lepic_primitives::params::Network;
 use sha2::Sha256;
@@ -26,6 +27,7 @@ use lepic_keychain::{Identifier, Keychain, KeychainError};
 const ROOT_SALT: &[u8] = b"epic-contact/1";
 const MAILBOX_SALT: &[u8] = b"epic-pair/1 mailbox";
 const KEY_CHECK_DOMAIN: &[u8] = b"epic-pair/1 keycheck";
+const DOMAIN_SALT: &[u8] = b"epic-domain/1";
 
 /// A slot is any u32. A wallet keeps its slots below `SLOT_COUNT`, the range the slot searches
 /// cover, and refuses new pairings once it used them all; a service never searches and may use
@@ -243,6 +245,21 @@ impl ContactRoot {
         let mut key = Zeroizing::new([0u8; 32]);
         self.expand(&[b"reply", &slate_id], &mut key)?;
         Ok(ReplyKey(key))
+    }
+
+    /// The key this account signs domain claims with on `network` (ADR 0033, RFC 0002 6.3):
+    /// `HKDF(salt = "epic-domain/1", ikm = root, info = "sign" || net)` is its Ed25519 seed. It
+    /// depends on the seed, the account and the network only, so a restored wallet derives the
+    /// key its domain file lists.
+    pub fn domain_key(&self, network: Network) -> Result<DomainKey, ContactKeyError> {
+        let hkdf = Hkdf::<Sha256>::new(Some(DOMAIN_SALT), self.0.as_slice());
+        let mut seed = Zeroizing::new([0u8; 32]);
+        hkdf.expand(
+            &[b"sign".as_slice(), &[network_byte(network)]].concat(),
+            seed.as_mut(),
+        )
+        .map_err(|_| ContactKeyError::Derivation)?;
+        Ok(DomainKey::from_seed(*seed))
     }
 }
 

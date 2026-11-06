@@ -135,6 +135,10 @@ pub struct WalletConfig {
     /// The host's profile of the wallet's owner, 0 for none: sent to paired contacts as bits
     /// 16 to 31 of the pairing features, never in a marker, never read by LEPIC.
     pub profile: u16,
+    /// The domain this wallet claims to its paired contacts (RFC 0002 6.3): host-provided,
+    /// normalized by the contact book when the wallet opens. `None` for wallets that claim
+    /// none, such as apps.
+    pub domain: Option<String>,
     /// Values the host chooses; [`WalletPolicy::default`] is what LEPIC did before they were
     /// parameters.
     pub policy: WalletPolicy,
@@ -320,6 +324,7 @@ mod tests {
             offline: false,
             host_features,
             profile: 0,
+            domain: None,
             policy: WalletPolicy::default(),
         };
         assert_eq!(config(0).claimed_features(), LEPIC_FEATURES);
@@ -340,6 +345,7 @@ mod tests {
             offline: false,
             host_features: 0,
             profile: 3,
+            domain: None,
             policy: WalletPolicy::default(),
         };
         assert_eq!(config.claimed_features() & HOST_PROFILE, 0);

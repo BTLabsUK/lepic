@@ -281,6 +281,23 @@ impl Party {
         relay: &MockRelay,
         runtime: &tokio::runtime::Runtime,
     ) -> Self {
+        Self::with_domain(
+            mnemonic, name, seed_rng, profile, None, node, relay, runtime,
+        )
+    }
+
+    /// As [`Self::with_profile`], the wallet claiming `domain` in the cards it sends.
+    #[allow(clippy::too_many_arguments)]
+    fn with_domain(
+        mnemonic: &str,
+        name: &str,
+        seed_rng: u64,
+        profile: u16,
+        domain: Option<&str>,
+        node: &MockNode,
+        relay: &MockRelay,
+        runtime: &tokio::runtime::Runtime,
+    ) -> Self {
         let epicbox = EpicboxTransport::new(settings(), RelayNetwork::Floonet, relay.connector());
         let delivered_to = Arc::default();
         let deliveries_failing = Arc::default();
@@ -316,6 +333,7 @@ impl Party {
             offline: false,
             host_features: 0,
             profile,
+            domain: domain.map(str::to_owned),
         };
         let wallet = Wallet::new(config, ports).unwrap();
         lepic_wallet_contacts::install(&wallet);
@@ -503,6 +521,16 @@ impl World {
     /// As [`Self::new`], the issuer's wallet configured with profile `issuer` and the payer's
     /// with `payer`.
     pub fn with_profiles(issuer: u16, payer: u16) -> Self {
+        Self::with_parties((issuer, None), (payer, None))
+    }
+
+    /// As [`Self::new`], the issuer's wallet claiming the domain `issuer` and the payer's the
+    /// domain `payer`, where one is given.
+    pub fn with_domains(issuer: Option<&str>, payer: Option<&str>) -> Self {
+        Self::with_parties((0, issuer), (0, payer))
+    }
+
+    fn with_parties(issuer: (u16, Option<&str>), payer: (u16, Option<&str>)) -> Self {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
@@ -518,16 +546,26 @@ impl World {
                 last_block_pushed: Hash::from_slice(&[0; 32]).unwrap(),
             },
         ));
-        let issuer = Party::with_profile(
+        let issuer = Party::with_domain(
             ISSUER_MNEMONIC,
             "issuer",
             1,
-            issuer,
+            issuer.0,
+            issuer.1,
             &node,
             &relay,
             &runtime,
         );
-        let payer = Party::with_profile(PAYER_MNEMONIC, "payer", 2, payer, &node, &relay, &runtime);
+        let payer = Party::with_domain(
+            PAYER_MNEMONIC,
+            "payer",
+            2,
+            payer.0,
+            payer.1,
+            &node,
+            &relay,
+            &runtime,
+        );
         payer.fund(0, FUNDING);
         Self {
             runtime,

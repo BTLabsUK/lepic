@@ -10,7 +10,7 @@ use lepic_store::{
 };
 use tracing::{info, instrument, warn};
 
-use super::{ContactError, ContactRelays, ContactView, RelayMode, pairing_id_of};
+use super::{ContactError, ContactRelays, ContactView, DomainVerdict, RelayMode, pairing_id_of};
 use crate::ContactBook;
 use lepic_wallet::ports::{SecretVault, StoreOpener};
 
@@ -62,6 +62,11 @@ pub(crate) fn view(
             .filter(|_| record.sas.as_ref().map(super::status::verdict_hash) == facts.peer_verdict),
         peer_features: facts.peer_features,
         peer_profile: facts.peer_features >> lepic_epicbox::marker::features::PROFILE_SHIFT,
+        peer_domain: facts.peer_domain.as_ref().map(|claim| claim.domain.clone()),
+        peer_domain_attestation: facts
+            .peer_domain
+            .as_ref()
+            .map(|claim| claim.attestation.clone()),
         ended_reason: facts.ended_reason,
         ended_at: facts.ended_at,
     }
@@ -464,6 +469,11 @@ where
         let features = self.wallet.config().pairing_features();
         let session = self.wallet.session()?;
         let payments = super::address_proof::Payments::of(&session.keychain, network, relays)?;
+        let domain = super::address_proof::domain_signer(
+            &session.keychain,
+            network,
+            self.wallet.config().domain.as_deref(),
+        )?;
         let net = super::keys::contact_network(network);
         let queued = self
             .contact_work(move |ports, _| {
@@ -474,6 +484,7 @@ where
                         network,
                         payments: &payments,
                         features,
+                        domain: domain.as_ref(),
                         now,
                     };
                     let mut queued = 0u32;
@@ -520,6 +531,11 @@ where
         let features = self.wallet.config().pairing_features_with(profile);
         let session = self.wallet.session()?;
         let payments = super::address_proof::Payments::of(&session.keychain, network, relays)?;
+        let domain = super::address_proof::domain_signer(
+            &session.keychain,
+            network,
+            self.wallet.config().domain.as_deref(),
+        )?;
         let queued = self
             .contact_work(move |ports, _| {
                 let now = ports.clock.now();
@@ -529,6 +545,7 @@ where
                         network,
                         payments: &payments,
                         features,
+                        domain: domain.as_ref(),
                         now,
                     };
                     let mut queued = 0u32;
@@ -549,6 +566,112 @@ where
             .await?;
         info!(count = queued, "own profile given to contacts");
         Ok(queued)
+    }
+
+    /// Tells every contact pairing that has not ended the domain this wallet claims, as a
+    /// contact update the next collect posts: our card again with the next sequence number,
+    /// the current features and a fresh domain claim signed for each pairing; private
+    /// pairings are left alone. Returns how many were queued.
+    ///
+    /// Fails with [`ContactError::NoDomainConfigured`] when the wallet was opened without a
+    /// domain, and with [`ContactError::Domain`] for one that is not a valid name.
+    #[instrument(skip_all, fields(wallet = %self.wallet.config().name))]
+    pub async fn contacts_tell_domain(&self, relays: &ContactRelays) -> Result<u32, ContactError> {
+        let network = self.wallet.config().network;
+        let features = self.wallet.config().pairing_features();
+        let session = self.wallet.session()?;
+        let payments = super::address_proof::Payments::of(&session.keychain, network, relays)?;
+        let domain = super::address_proof::domain_signer(
+            &session.keychain,
+            network,
+            self.wallet.config().domain.as_deref(),
+        )?
+        .ok_or(ContactError::NoDomainConfigured)?;
+        let queued = self
+            .contact_work(move |ports, _| {
+                let now = ports.clock.now();
+                session.store.write(|repos| {
+                    let at = super::address_proof::CardUpdate {
+                        keychain: &session.keychain,
+                        network,
+                        payments: &payments,
+                        features,
+                        domain: Some(&domain),
+                        now,
+                    };
+                    let mut queued = 0u32;
+                    for record in repos.contacts()? {
+                        if super::address_proof::queue_card_update(
+                            repos,
+                            &ports.rng,
+                            &at,
+                            record,
+                            |_| {},
+                        )? {
+                            queued = queued.saturating_add(1);
+                        }
+                    }
+                    Ok::<_, ContactError>(queued)
+                })
+            })
+            .await?;
+        info!(count = queued, "domain given to contacts");
+        Ok(queued)
+    }
+
+    /// The public key of this wallet's domain key on its network: what the domain lists in its
+    /// well-known file (`DomainFile::render`) for the wallet's claims to verify. It needs no
+    /// configured domain.
+    pub fn own_domain_key(&self) -> Result<lepic_contact::VerifyingKey, ContactError> {
+        let network = self.wallet.config().network;
+        let session = self.wallet.session()?;
+        let root = super::key_schedule::contact_root(
+            &session.keychain,
+            &lepic_wallet::account::parent_key_id(lepic_store::AccountIndex(0))?,
+            network,
+        )
+        .map_err(ContactError::Keys)?;
+        Ok(root
+            .domain_key(network)
+            .map_err(ContactError::Keys)?
+            .public())
+    }
+
+    /// Whether the well-known file `file`, which the host fetched from the domain the contact
+    /// claimed, proves the claim stored from its pairing (RFC 0002 6.3). Nothing is fetched or
+    /// stored here, and the claim stays unverified in the record whatever the verdict.
+    ///
+    /// Fails with [`ContactError::UnknownContact`] and [`ContactError::NoDomainClaim`] when the
+    /// contact claimed no domain.
+    pub async fn domain_verify(
+        &self,
+        contact_id: ContactId,
+        file: &[u8],
+    ) -> Result<DomainVerdict, ContactError> {
+        let network = self.wallet.config().network;
+        let net = super::keys::contact_network(network);
+        let session = self.wallet.session()?;
+        let record = self
+            .contact_work(move |_, _| {
+                session
+                    .store
+                    .read(|repos| Ok::<_, ContactError>(repos.contact(contact_id)?))
+            })
+            .await?
+            .ok_or(ContactError::UnknownContact)?;
+        let stored = record
+            .facts
+            .peer_domain
+            .as_ref()
+            .ok_or(ContactError::NoDomainClaim)?;
+        let peer = record.peer.as_ref().ok_or(ContactError::NoDomainClaim)?;
+        let claim = lepic_contact::DomainClaim::from_bytes(&stored.attestation)
+            .map_err(|_| ContactError::NoDomainClaim)?;
+        let domain = lepic_contact::DomainName::new(&stored.domain)
+            .map_err(|_| ContactError::NoDomainClaim)?;
+        let sig_key = lepic_contact::VerifyingKey::from_bytes(&peer.sig_key)
+            .map_err(|_| ContactError::NoDomainClaim)?;
+        Ok(super::domain::verify(&domain, file, &claim, &sig_key, net))
     }
 
     /// Moves this wallet's home relay for its contacts to `host`, `domain[:port]` (RFC 0002
@@ -580,6 +703,11 @@ where
         let features = self.wallet.config().pairing_features();
         let session = self.wallet.session()?;
         let payments = super::address_proof::Payments::of(&session.keychain, network, relays)?;
+        let domain = super::address_proof::domain_signer(
+            &session.keychain,
+            network,
+            self.wallet.config().domain.as_deref(),
+        )?;
         // A collect on its way would drain the mailboxes this moves away from.
         let turn = self.wallet.contact_turn().await;
         let moved = self
@@ -591,6 +719,7 @@ where
                         network,
                         payments: &payments,
                         features,
+                        domain: domain.as_ref(),
                         now,
                     };
                     let mut moved = 0u32;

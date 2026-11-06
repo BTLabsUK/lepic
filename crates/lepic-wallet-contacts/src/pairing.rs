@@ -11,23 +11,24 @@ use lepic_contact::{
     seal_private_confirm, seal_private_refusal, seal_private_reply,
 };
 use lepic_contact::{
-    Commitment, Confirm, ConfirmBody, ConfirmCode, ContactCard, ContactKind, Invite, InviteFields,
-    InviteId, Nonce, PairingCode, PairingExtras, PairingLink, ReplyBody, Sas, SealedEnvelope,
-    open_confirm_with, open_reply_with, pairing_envelope_from_link, pairing_envelope_link,
-    seal_confirm_with_extras, seal_reply_with,
+    Commitment, Confirm, ConfirmBody, ConfirmCode, ContactCard, ContactKind, DomainClaim, Invite,
+    InviteFields, InviteId, Nonce, PairingCode, PairingExtras, PairingLink, ReplyBody, Sas,
+    SealedEnvelope, open_confirm_with, open_reply_with, pairing_envelope_from_link,
+    pairing_envelope_link, seal_confirm_with_extras, seal_reply_with,
 };
 use lepic_contact::{ContactName, Refusal, RelayHost, seal_refusal};
 use lepic_epicbox::{EpicboxAddress, Identity, RelayEndpoint};
 use lepic_node::NodeApi;
 use lepic_store::{
-    AccountIndex, ContactId, ContactMailbox, ContactRecord, ContactState, PairingId, PairingRole,
-    PairingSecrets, PairingState, PeerCard, PendingPairing, Repositories, SealMode, StoreError,
-    WalletStore,
+    AccountIndex, ContactId, ContactMailbox, ContactRecord, ContactState, DomainClaimBytes,
+    PairingId, PairingRole, PairingSecrets, PairingState, PeerCard, PendingPairing, Repositories,
+    SealMode, StoreError, WalletStore,
 };
 use tracing::{debug, info, instrument, warn};
 
 use super::address_proof::{
-    Payments, ProofBinding, ProofStep, ProvenAddress, invite_mailbox_key, mailbox_key, proven,
+    Payments, ProofBinding, ProofStep, ProvenAddress, domain_signer, invite_mailbox_key,
+    mailbox_key, proven,
 };
 use super::keys::{
     CardDetails, box_identity, contact_keys, contact_network, enc_secret, our_card,
@@ -40,6 +41,7 @@ use super::{
     PairingFailure, new_id, pairing_id_of, same_secret,
 };
 use crate::ContactBook;
+use crate::domain::DomainSigner;
 use lepic_wallet::SharedRng;
 use lepic_wallet::event::{ContactEvent, Event, FailedPairing};
 use lepic_wallet::ports::{SecretVault, StoreOpener};
@@ -315,6 +317,9 @@ struct NewPairing<'a> {
     payments: Option<&'a Payments>,
     /// What the pairing's messages claim.
     features: u32,
+    /// Signs the domain claim the pairing's reply carries; none for a wallet that claims no
+    /// domain and for a private pairing.
+    domain: Option<&'a DomainSigner>,
 }
 
 /// A reply that opened under one of this wallet's invites, with the pairing's keys.
@@ -351,6 +356,8 @@ struct ReplyTaking {
     proven: Option<ProvenAddress>,
     /// What the reply claims.
     peer_features: u32,
+    /// The domain the reply claims to speak for, unverified.
+    peer_domain: Option<DomainClaim>,
     /// What our confirm carries beside its body.
     confirm_extras: PairingExtras,
 }
@@ -415,6 +422,8 @@ where
                     now,
                     payments: payments.as_ref(),
                     features,
+                    // An invite carries no extensions; the replies do.
+                    domain: None,
                 };
                 session
                     .store
@@ -520,6 +529,15 @@ where
             .then(|| Payments::of(&session.keychain, network, relays))
             .transpose()?;
         let features = self.wallet.config().pairing_features();
+        let domain = if request.class == PairingClass::Contact {
+            domain_signer(
+                &session.keychain,
+                network,
+                self.wallet.config().domain.as_deref(),
+            )?
+        } else {
+            None
+        };
         let expect_key = expected_key(request.expect_address.as_deref(), network)?;
         let ours = payments.as_ref().map(Payments::key);
         let (contact_id, envelope, from, to) = self
@@ -533,6 +551,7 @@ where
                     now: ports.clock.now(),
                     payments: payments.as_ref(),
                     features,
+                    domain: domain.as_ref(),
                 };
                 session.store.write(|repos| {
                     if let (Some(theirs), Some(ours)) = (expect_key, &ours) {
@@ -1041,6 +1060,44 @@ where
         Ok(LinkOutcome::Ignored)
     }
 
+    /// The address proof and the domain claim our confirm carries for a reply of a non-private
+    /// pairing, and the address the reply proved (RFC 0002 6.2, 6.3). A private pairing proves
+    /// and claims nothing.
+    fn confirm_proofs(
+        &self,
+        relays: &ContactRelays,
+        keychain: &lepic_keychain::Keychain,
+        opened: &OpenedReply,
+    ) -> Result<(Option<ProvenAddress>, PairingExtras), ContactError> {
+        if opened.private.is_some() {
+            return Ok((None, PairingExtras::default()));
+        }
+        let network = self.wallet.config().network;
+        let payments = Payments::of(keychain, network, relays)?;
+        let features = self.wallet.config().pairing_features();
+        let claim = domain_signer(keychain, network, self.wallet.config().domain.as_deref())?.map(
+            |domain| {
+                let now = self.wallet.ports().clock.now();
+                domain.claim(
+                    contact_network(network),
+                    &signing_key(&opened.keys).verifying_key(),
+                    u64::try_from(now.as_second()).unwrap_or(0),
+                )
+            },
+        );
+        Ok(reply_proofs(
+            network,
+            &opened.keys,
+            &opened.invite,
+            &opened.reply,
+            &opened.own,
+            &opened.extras,
+            &payments,
+            features,
+            claim,
+        ))
+    }
+
     /// The inviter's side of a reply (RFC 0002 7.3): the first reply whose code matches and whose
     /// card verifies pairs. Every refusal (used, expired, a card this wallet already holds or
     /// its own) is decided, and an accepted reply's record stored with nA consumed, in one store
@@ -1057,33 +1114,26 @@ where
         let network = self.wallet.config().network;
         let net = contact_network(network);
         let session = self.wallet.session()?;
-        let Some(OpenedReply {
-            contact_id,
-            keys,
-            invite,
-            reply,
-            extras,
-            own,
-            private,
-        }) = self
+        let Some(opened) = self
             .open_pairing_reply(&session.keychain, pairing_id, envelope)
             .await?
         else {
             return Ok(Taken::Ignored);
         };
+        let (proven, confirm_extras) = self.confirm_proofs(relays, &session.keychain, &opened)?;
+        let OpenedReply {
+            contact_id,
+            keys,
+            invite,
+            reply,
+            extras,
+            private,
+            ..
+        } = opened;
         let channel = private.as_ref().and_then(|secrets| secrets.channel.clone());
         let home = endpoint_for(invite.fields().home_relay.as_str(), relays)?;
         let onion_text = invite.fields().onion.as_ref().map(RelayHost::as_str);
         let rc = *reply.confirm_code.expose_bytes();
-        let (proven, confirm_extras) = if private.is_some() {
-            (None, PairingExtras::default())
-        } else {
-            let payments = Payments::of(&session.keychain, network, relays)?;
-            let features = self.wallet.config().pairing_features();
-            reply_proofs(
-                network, &keys, &invite, &reply, &own, &extras, &payments, features,
-            )
-        };
         let taking = ReplyTaking {
             network,
             heard_by_hand: by_hand && relays.mode != super::RelayMode::Online,
@@ -1099,6 +1149,7 @@ where
             private,
             proven,
             peer_features: extras.features.unwrap_or(0),
+            peer_domain: extras.domain,
             confirm_extras,
         };
         let decision = self
@@ -1355,6 +1406,7 @@ where
             }
         };
         let peer_features = extras.features.unwrap_or(0);
+        let peer_domain = extras.domain;
         let peer = confirm.card.clone();
         let fields = invite.fields();
         let home_text = fields.home_relay.as_str().to_owned();
@@ -1366,6 +1418,7 @@ where
                     refuse_known_card(repos, &peer, &own)?;
                     let mut record = record;
                     record.facts.peer_features = peer_features;
+                    record.facts.peer_domain = peer_domain.as_ref().map(claim_bytes);
                     set_proven(&mut record, proven);
                     super::status::learn_from_pairing(repos, &record, network, now)?;
                     record.peer = Some(peer_card(&peer));
@@ -1757,6 +1810,13 @@ fn store_answer(
             )
         }),
         features: Some(at.features),
+        domain: at.domain.map(|domain| {
+            domain.claim(
+                invite.network(),
+                &signing_key(&keys).verifying_key(),
+                u64::try_from(at.now.as_second()).unwrap_or(0),
+            )
+        }),
     };
     let envelope = seal_answer(invite, &body, &card, &extras, &mut private, &mut rng)?;
     if let Some(secrets) = &private {
@@ -1854,6 +1914,7 @@ fn decide_reply(
         private,
         proven,
         peer_features,
+        peer_domain,
         confirm_extras,
     } = taking;
     // Read again inside the transaction: another reply may have paired since.
@@ -1922,6 +1983,7 @@ fn decide_reply(
     drop(guard);
     let envelope = envelope.map_err(ContactError::Encode)?;
     record.facts.peer_features = peer_features;
+    record.facts.peer_domain = peer_domain.as_ref().map(claim_bytes);
     set_proven(&mut record, proven);
     super::status::learn_from_pairing(repos, &record, network, now)?;
     record.peer = Some(peer_card(&peer));
@@ -2026,6 +2088,7 @@ fn reply_proofs(
     extras: &PairingExtras,
     payments: &Payments,
     features: u32,
+    domain: Option<DomainClaim>,
 ) -> (Option<ProvenAddress>, PairingExtras) {
     let net = contact_network(network);
     let proven = proven(
@@ -2057,6 +2120,7 @@ fn reply_proofs(
         PairingExtras {
             address_proof,
             features: Some(features),
+            domain,
         },
     )
 }
@@ -2087,6 +2151,15 @@ fn confirm_proven(
         },
         extras.address_proof.as_ref(),
     )
+}
+
+/// A received domain claim as the record keeps it: unverified, with the name beside the
+/// bytes the host verifies later.
+pub(crate) fn claim_bytes(claim: &DomainClaim) -> DomainClaimBytes {
+    DomainClaimBytes {
+        domain: claim.domain.as_str().to_owned(),
+        attestation: claim.to_bytes(),
+    }
 }
 
 /// Records the payments address a pairing proved. Without a proof the stored one stays.

@@ -14,6 +14,7 @@
 mod address_proof;
 mod check;
 mod collect;
+mod domain;
 mod hex;
 mod invoices;
 mod key_schedule;
@@ -47,6 +48,7 @@ use lepic_wallet::ports::{SecretVault, StoreOpener};
 use thiserror::Error;
 
 pub use collect::{CollectReport, CollectTrigger};
+pub use domain::{DOMAIN_FILE_MAX, DomainFile, DomainRefused, DomainSigner, DomainVerdict, verify};
 pub use invoices::{ContactInvoice, InvoiceDetails, SAME_AMOUNT_WINDOW};
 pub use key_schedule::{
     BOX_SALT_LEN, ContactKeyError, ContactKeys, ContactRoot, PRIVATE_SLOT_BASE, ReplyKey,
@@ -257,6 +259,11 @@ pub struct ContactView {
     /// The profile the contact sent: `peer_features` from bit 16 up, moved down. LEPIC never
     /// reads a bit of it; the host names them.
     pub peer_profile: u32,
+    /// The domain the contact claimed in this pairing, unverified: the host proves it with
+    /// `domain_verify` against the domain's well-known file.
+    pub peer_domain: Option<String>,
+    /// The claim as received (extension 0x83), kept so a host can verify it later.
+    pub peer_domain_attestation: Option<Vec<u8>>,
     pub ended_reason: Option<PairingEndReason>,
     pub ended_at: Option<Timestamp>,
 }
@@ -406,6 +413,15 @@ pub enum ContactError {
     /// contact asked for no move.
     #[error("the contact asked for no move to this relay")]
     RelayMoveNotRequested,
+    /// The domain this wallet is set to claim is not a valid domain name.
+    #[error("the configured domain is not valid")]
+    Domain(#[source] lepic_contact::DomainError),
+    /// The call needs a domain and the wallet is configured with none.
+    #[error("the wallet claims no domain")]
+    NoDomainConfigured,
+    /// The contact claimed no domain in its pairing, or its stored claim cannot be read.
+    #[error("the contact claimed no domain")]
+    NoDomainClaim,
 }
 
 impl From<StoreError> for ContactError {

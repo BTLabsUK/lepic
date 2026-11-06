@@ -126,6 +126,7 @@ impl Party {
             offline: false,
             host_features: 0,
             profile: 0,
+            domain: None,
         };
         let wallet = Wallet::new(config, ports).unwrap();
         runtime

@@ -903,6 +903,7 @@ where
                 lepic_contact::PairingExtras {
                     address_proof: opened.content.address_proof,
                     features: opened.content.features,
+                    domain: opened.content.domain.clone(),
                 }
             } else {
                 lepic_contact::PairingExtras::default()
@@ -1223,19 +1224,24 @@ where
         let features = self.wallet.config().pairing_features();
         let session = self.wallet.session()?;
         let payments = super::address_proof::Payments::of(&session.keychain, network, relays)?;
+        let domain = super::address_proof::domain_signer(
+            &session.keychain,
+            network,
+            self.wallet.config().domain.as_deref(),
+        )?;
         let sent = self
             .contact_work(move |ports, _| {
                 let now = ports.clock.now();
                 session.store.write(|repos| {
-                    super::address_proof::queue_address_cards(
-                        repos,
-                        &ports.rng,
-                        &session.keychain,
+                    let at = super::address_proof::CardUpdate {
+                        keychain: &session.keychain,
                         network,
-                        &payments,
+                        payments: &payments,
                         features,
+                        domain: domain.as_ref(),
                         now,
-                    )
+                    };
+                    super::address_proof::queue_address_cards(repos, &ports.rng, &at)
                 })
             })
             .await?;
@@ -1514,6 +1520,9 @@ fn store_card_news(
         if let Some(features) = extras.features {
             record.facts.peer_features = features;
         }
+        // The latest update speaks for the contact: an update without a claim drops the one
+        // stored.
+        record.facts.peer_domain = extras.domain.as_ref().map(super::pairing::claim_bytes);
     }
     let Some(mut mailbox) = repos.contact_mailbox(contact_id)? else {
         return Ok(CardStored::Unchanged);
