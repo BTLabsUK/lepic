@@ -12,12 +12,13 @@ use jiff::Timestamp;
 use lepic_epicbox::transport::EpicboxTransport;
 use lepic_epicbox::{ClientSettings, EpicboxAddress, Network as RelayNetwork, TRANSPORT_ID};
 use lepic_foreign::{
-    Exposure, ForeignClient, ForeignUrl, ListenSettings, PlainHttp, ReceiveHandler, Refusal,
-    webpki_tls_config,
+    BlockFees, CoinbaseAnswer, Exposure, ForeignClient, ForeignUrl, ListenSettings, PlainHttp,
+    ReceiveHandler, Refusal, webpki_tls_config,
 };
+use lepic_keychain::Identifier;
 use lepic_keychain::vault::MAX_WALLET_SEED_FILE_LEN;
 use lepic_node::{NodeApi, NodeClient, Propagation, RpcTransport};
-use lepic_primitives::amount::Height;
+use lepic_primitives::amount::{Fee, Height};
 use lepic_primitives::params::Network;
 use lepic_store::{
     ChainCheck, ContactId, ImportedKind, OutboxStatus, Repositories, SlateStage, StoredTransaction,
@@ -29,6 +30,7 @@ use lepic_transport::file::{FILE, FileTransport, response_path};
 use lepic_transport::registry::TransportRegistry;
 use lepic_transport::transport::{BoxFuture, Destination, Exchange as _, Location};
 use lepic_wallet::chain::ImplausibleNodeData;
+use lepic_wallet::coinbase::{Coinbase, CoinbaseRequest};
 use lepic_wallet::details::TransactionDetails;
 use lepic_wallet::epicbox_invoice::{
     IncomingInvoice, InvoiceExpiry, InvoiceSweep, PeerInvoiceSupport,
@@ -821,14 +823,20 @@ impl<H: Host> Run<'_, H> {
         });
         let port = args.port.unwrap_or(self.settings.tuning.listen_port);
         let handle = lepic_foreign::listen(
-            ListenSettings::new(exposure, port, self.settings.tuning.listen),
+            ListenSettings::new(exposure, port, self.settings.tuning.listen)
+                .with_coinbase(args.coinbase),
             receiver,
         )
         .await?;
         let port = handle.local_addr().port();
         if self.settings.output == OutputFormat::Human {
+            let what = if args.coinbase {
+                "payments and block rewards"
+            } else {
+                "payments"
+            };
             self.show_line(&format!(
-                "Listening for payments over HTTP on port {port} ({}). Ctrl-C stops.",
+                "Listening for {what} over HTTP on port {port} ({}). Ctrl-C stops.",
                 exposure.as_str()
             ));
         }
@@ -1606,6 +1614,42 @@ impl<N: NodeApi + 'static> ReceiveHandler for HttpReceiver<N> {
 
     fn refused(&self, _refusal: Refusal) {
         self.counts.refused.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn build_coinbase(&self, fees: BlockFees) -> BoxFuture<'_, Result<CoinbaseAnswer, Refusal>> {
+        Box::pin(async move {
+            let request = CoinbaseRequest {
+                fees: Fee::new(fees.fees),
+                height: Height::new(fees.height),
+                // A key that is no identifier is one the wallet never gave out: a new key is
+                // taken, as upstream does for a key it does not find.
+                key_id: fees
+                    .key_id
+                    .and_then(|bytes| Identifier::from_bytes(&bytes).ok()),
+            };
+            match self.opened.wallet.build_coinbase(request).await {
+                Ok(coinbase) => Ok(coinbase_answer(&coinbase)),
+                Err(error) => {
+                    tracing::warn!(
+                        transport = %self.transport,
+                        error = %lepic_telemetry::ErrorChain(&error),
+                        "coinbase refused"
+                    );
+                    Err(Refusal::Unavailable)
+                }
+            }
+        })
+    }
+}
+
+/// The node's view of a coinbase the wallet built.
+fn coinbase_answer(coinbase: &Coinbase) -> CoinbaseAnswer {
+    CoinbaseAnswer {
+        commit: *coinbase.output.commitment.as_bytes(),
+        proof: coinbase.output.proof.as_bytes().to_vec(),
+        excess: *coinbase.kernel.excess.as_bytes(),
+        excess_sig: coinbase.kernel.excess_sig.to_compact(),
+        key_id: coinbase.key_id.to_bytes(),
     }
 }
 

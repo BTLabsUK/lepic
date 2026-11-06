@@ -656,7 +656,12 @@ using `send -m http` or `lepic tx send --to http://...` are paid at once. Only p
 answered, never invoices. Without --internet it listens on 127.0.0.1 only. With --internet it
 listens on every interface, for a port forwarded from the internet: anyone who reaches the port
 can send the wallet payments. A request may take up to a minute; at most 16 connections are
-served at once and 30 payments a minute are taken.")]
+served at once and 30 payments a minute are taken.
+
+With --coinbase it also answers build_coinbase, so a mining node pointed at the listener pays
+its block rewards to this wallet's default account: set wallet_listener_url in the node's
+[server.stratum_mining_config] to http://127.0.0.1:<port>. The listener builds a reward for
+anyone who reaches the port, so keep it on this computer.")]
     Listen(HttpListenArgs),
 }
 
@@ -668,6 +673,9 @@ pub struct HttpListenArgs {
     /// Listen on every network interface instead of this computer only
     #[arg(long)]
     pub internet: bool,
+    /// Also build block rewards for a mining node, as epic-wallet's listener does
+    #[arg(long)]
+    pub coinbase: bool,
 }
 
 /// The tor binary the wallet runs for Tor.
