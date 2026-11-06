@@ -41,9 +41,9 @@ rebuilt for that setting:
   mining code, chain storage, LMDB, OpenSSL or C++.
 - **Works with app suspension.** The Epicbox client connects, collects waiting messages and
   disconnects, so receiving works when the phone pauses the app in the background.
-- **Keys in the platform keystore.** Seeds are kept in the Android Keystore or iOS Keychain, or on
-  desktop in a vault file encrypted with XChaCha20-Poly1305 under an Argon2id key. Transaction
-  secrets are encrypted at rest, and only a short, fixed list of secrets may cross the FFI boundary.
+- **Encrypted vault.** On desktop, seeds are kept in a vault file encrypted with XChaCha20-Poly1305
+  under an Argon2id key. Transaction secrets are encrypted at rest with XChaCha20-Poly1305. Only a
+  fixed list of secrets can cross the FFI API.
 
 ## What's different
 
@@ -57,18 +57,18 @@ LEPIC reads and writes the same formats as `epic-wallet` and adds:
   withdrawn or posted.
 - **Moving in from epic-wallet:** import its seed file and its transaction history, checked against
   a chain scan.
-- **Errors, not crashes.** Bad input from the network, files or other wallets becomes a typed error.
-  Code that can panic is rejected by lint outside tests.
+- **Typed errors.** Bad input from the network, files or other wallets is returned as a typed error.
+  Lint denies `unwrap` outside tests.
 - **Testable.** The node, storage, keys, network and clock are passed in, with no global state, so
   one test can run several wallets side by side.
 
-## Compatible and secure with Epic Cash releases
+## Compatible with Epic Cash releases
 
 LEPIC reimplements the transaction, key and slate logic of the Epic Cash node and wallet instead of
 linking their full code, and uses the same cryptography library Epic Cash uses,
 [rust-secp256k1-zkp](https://github.com/EpicCash/rust-secp256k1-zkp), vendored from an exact commit
 with upstream backports and build fixes (`third_party/grin_secp256k1zkp/PATCHES.md`).
-Matching is checked, not assumed:
+Matching is tested as follows:
 
 - **One target release.** LEPIC targets `epic-wallet` `v4.1.0` and the Epic node `v4.1.2`, pinned
   to exact commits. Moving to a new release means new pins, new test data and a review of every change.
@@ -78,8 +78,8 @@ Matching is checked, not assumed:
   unmodified `epic-wallet`, node and Epicbox relay on a private test network.
 - **Watching upstream.** `cargo xtask upstream-drift`, run every week, reports changes in the Epic
   Cash code that LEPIC has not reviewed yet.
-- **Dependencies checked.** Every change, and a weekly run, checks dependencies for known
-  vulnerabilities, licences and sources (`cargo deny`); dependencies and toolchains are pinned.
+- **Dependency checks.** `cargo deny` checks advisories, licences and sources, and a weekly run
+  checks advisories; dependencies and toolchains are pinned.
 - **Fuzzing.** The parsers of untrusted input (slates, Epicbox messages, node responses, vault
   files) are fuzzed.
 

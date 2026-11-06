@@ -137,12 +137,12 @@ I2 or S2, which hold every input, output and the final offset.
   transaction leaves that transaction as it is until a later refresh; the rest of the refresh
   goes on.
 - Receiving an S1 or paying an I1 whose height is more than 10 blocks above the node's tip is
-  refused, and nothing is stored. Upstream does not check the height.
+  refused, and nothing is stored. This check is LEPIC's own.
 - Paying an I1 whose TTL cutoff lies more than 2,880 blocks, two days, above the node's tip is
   refused, and nothing is stored: no issuer sets one that far ahead (the binding gives an
   invoice 1,440 blocks), so the request comes from another network, whose chain is longer, or
   from a wrong height. The second day allows for an issuer's node ahead of the payer's.
-  Upstream does not check it.
+  This check is LEPIC's own.
 - Paying an I1 whose TTL cutoff lies more than 525,600 blocks, a year, below the node's tip is
   refused as made for another network, not as expired, and nothing is stored: a floonet request
   read on mainnet has its cutoff millions of blocks below the tip, while nobody pays a real
