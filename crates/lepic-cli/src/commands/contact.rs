@@ -1015,6 +1015,11 @@ async fn collect<N: lepic_node::NodeApi + 'static>(
         .await?;
     Ok(Report::ContactCollect(ContactCollectReport {
         mailboxes: collected.mailboxes,
+        capped: collected.capped,
+        kept: collected.kept,
+        refused: collected.refused,
+        timed_out: collected.timed_out,
+        not_reached: collected.not_reached,
         messages: collected.messages,
         paired: collected.paired,
         delivered: collected.delivered,

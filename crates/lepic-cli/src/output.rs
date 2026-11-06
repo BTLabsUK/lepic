@@ -451,6 +451,11 @@ pub struct ContactLinkReport {
 #[derive(Debug, Serialize)]
 pub struct ContactCollectReport {
     pub mailboxes: usize,
+    pub capped: usize,
+    pub kept: usize,
+    pub refused: usize,
+    pub timed_out: usize,
+    pub not_reached: usize,
     pub messages: usize,
     pub paired: usize,
     pub delivered: usize,
@@ -1586,6 +1591,17 @@ fn write_pairing_human(out: &mut Vec<u8>, report: &Report) -> std::io::Result<()
                 "Collected {} messages from {} mailboxes; {} paired, {} sent.",
                 r.messages, r.mailboxes, r.paired, r.delivered
             )?;
+            for (count, what) in [
+                (r.capped, "stopped at the message limit"),
+                (r.kept, "kept a message for later"),
+                (r.refused, "had an acknowledgement refused"),
+                (r.timed_out, "ran out of time"),
+                (r.not_reached, "were not reached"),
+            ] {
+                if count > 0 {
+                    writeln!(out, "{count} mailboxes {what}.")?;
+                }
+            }
             for failed in &r.failed {
                 let why = match failed.reason {
                     "expired" => "it expired",
@@ -2295,6 +2311,11 @@ mod tests {
             (
                 Report::ContactCollect(ContactCollectReport {
                     mailboxes: 1,
+                    capped: 0,
+                    kept: 0,
+                    refused: 0,
+                    timed_out: 0,
+                    not_reached: 0,
                     messages: 2,
                     paired: 0,
                     delivered: 1,
@@ -2302,11 +2323,16 @@ mod tests {
                     unreachable: vec![],
                 }),
                 vec![
+                    "capped",
                     "delivered",
                     "failed",
+                    "kept",
                     "mailboxes",
                     "messages",
+                    "not_reached",
                     "paired",
+                    "refused",
+                    "timed_out",
                     "unreachable",
                 ],
             ),

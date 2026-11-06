@@ -51,6 +51,9 @@ Conventional Commit messages at release time.
   held, counted per socket and not reset by an acknowledgement. The held message is taken up
   again on the new socket. Drains are not affected. `EpicboxClient::listen_with_held_rounds`
   takes the limit.
+- `CollectReport` and the FFI's `ContactCollectReport` count mailboxes by how their drain ended:
+  `capped`, `kept`, `refused`, `timed_out` and `not_reached`. `lepic contact collect` prints
+  them.
 - `ChainParams::block_total_reward`, `foundation_levy`, `mining_reward` and `coinbase_value`,
   with vectors for the reward schedule.
 

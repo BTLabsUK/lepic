@@ -1335,6 +1335,16 @@ pub enum CollectTrigger {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ContactCollectReport {
     pub mailboxes: u32,
+    /// Mailboxes whose drain stopped at the per-mailbox message limit.
+    pub capped: u32,
+    /// Mailboxes whose drain stopped because a message was kept for later.
+    pub kept: u32,
+    /// Mailboxes whose drain stopped because the relay refused an acknowledgement.
+    pub refused: u32,
+    /// Mailboxes the drain's time ran out on.
+    pub timed_out: u32,
+    /// Mailboxes the drain ended before, including those of a relay that failed.
+    pub not_reached: u32,
     pub messages: u32,
     /// Pairings that completed.
     pub paired: u32,

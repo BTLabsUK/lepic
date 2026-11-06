@@ -496,6 +496,49 @@ fn more_invites_than_one_drain_takes_are_collected_in_turn() {
     assert_eq!(first.paired + second.paired, 2);
 }
 
+/// A relay that cannot be reached leaves its mailboxes not reached, and nothing else counts.
+#[test]
+fn collect_counts_the_mailboxes_of_a_failing_relay_as_not_reached() {
+    let world = World::new();
+    world.invite(&world.issuer, "Anna");
+    world.relay.set_refusing(true);
+    let report = world.collect(&world.issuer);
+    assert!(report.mailboxes > 0);
+    assert_eq!(report.not_reached, report.mailboxes);
+    assert_eq!(report.unreachable.len(), 1);
+    assert_eq!(
+        (report.capped, report.kept, report.refused, report.timed_out),
+        (0, 0, 0, 0)
+    );
+    world.relay.set_refusing(false);
+    let report = world.collect(&world.issuer);
+    assert_eq!(report.not_reached, 0);
+}
+
+/// A mailbox with more messages than one drain takes ends capped; the rest wait.
+#[test]
+fn collect_counts_a_mailbox_that_hit_the_message_limit_as_capped() {
+    let world = World::new();
+    let (_, ben_side) = world.pair_by_link();
+    let limit = u32::try_from(lepic_epicbox::MAX_MESSAGES_PER_MAILBOX).unwrap();
+    for seq in 2..2 + limit {
+        post_update(&world, ben_side, seq, "relay.test:80");
+    }
+    let report = world.collect(&world.issuer);
+    assert_eq!(report.capped, 1);
+    assert_eq!(
+        (
+            report.kept,
+            report.refused,
+            report.timed_out,
+            report.not_reached
+        ),
+        (0, 0, 0, 0)
+    );
+    let report = world.collect(&world.issuer);
+    assert_eq!(report.capped, 0, "the next collect finds the mailbox empty");
+}
+
 #[test]
 fn an_answer_stored_before_its_post_survives_a_relay_that_fails() {
     let world = World::new();

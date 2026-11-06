@@ -11,8 +11,8 @@ use blake2::digest::Digest;
 use jiff::Timestamp;
 use lepic_contact::{ContactCard, MessageType, Opened, SealedEnvelope, dearmor, looks_sealed};
 use lepic_epicbox::{
-    EpicboxAddress, Handled, Identity, MAX_MAILBOXES_PER_DRAIN, MailboxContent, MailboxError,
-    MailboxHandler, MailboxMessage, RelayEndpoint,
+    EpicboxAddress, Handled, Identity, MAX_MAILBOXES_PER_DRAIN, MailboxContent, MailboxEnd,
+    MailboxError, MailboxHandler, MailboxMessage, RelayEndpoint,
 };
 use lepic_node::NodeApi;
 use lepic_store::{
@@ -61,6 +61,17 @@ pub enum CollectTrigger {
 pub struct CollectReport {
     /// Mailboxes drained.
     pub mailboxes: usize,
+    /// Mailboxes whose drain stopped at the per-mailbox message limit; the rest wait for the
+    /// next collect.
+    pub capped: usize,
+    /// Mailboxes whose drain stopped because a message was kept for later.
+    pub kept: usize,
+    /// Mailboxes whose drain stopped because the relay refused an acknowledgement.
+    pub refused: usize,
+    /// Mailboxes the drain's time ran out on.
+    pub timed_out: usize,
+    /// Mailboxes the drain ended before, including those of a relay that failed.
+    pub not_reached: usize,
     /// Messages handed out by the relays.
     pub messages: usize,
     /// Pairings that completed.
@@ -447,7 +458,23 @@ where
             report.paired = report.paired.saturating_add(handler.paired);
             report.failed.append(&mut handler.failed);
             match drained {
-                Ok(_) => {
+                Ok(drain) => {
+                    for mailbox in &drain.mailboxes {
+                        match mailbox.end {
+                            MailboxEnd::Capped => report.capped = report.capped.saturating_add(1),
+                            MailboxEnd::Kept => report.kept = report.kept.saturating_add(1),
+                            MailboxEnd::Refused => {
+                                report.refused = report.refused.saturating_add(1);
+                            }
+                            MailboxEnd::TimedOut => {
+                                report.timed_out = report.timed_out.saturating_add(1);
+                            }
+                            MailboxEnd::NotReached => {
+                                report.not_reached = report.not_reached.saturating_add(1);
+                            }
+                            _ => {}
+                        }
+                    }
                     self.relay_answered(&host).await?;
                     // The relay held everything that reached it by `started`: what is past
                     // its deadline then has had its last chance.
@@ -462,6 +489,7 @@ where
                 }
                 Err(error @ (MailboxError::Unreachable(_) | MailboxError::Lost(_))) => {
                     warn!(peer_relay = %host, error = %ErrorChain(&error), "home relay not answering");
+                    report.not_reached = report.not_reached.saturating_add(identities.len());
                     self.relay_failed(&host).await?;
                     self.wallet
                         .emit(Event::HomeRelayUnreachable(UnreachableRelay {
@@ -471,6 +499,7 @@ where
                 }
                 Err(error) => {
                     warn!(peer_relay = %host, error = %ErrorChain(&error), "mailbox drain failed");
+                    report.not_reached = report.not_reached.saturating_add(identities.len());
                 }
             }
         }

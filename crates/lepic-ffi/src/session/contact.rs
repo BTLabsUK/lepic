@@ -639,6 +639,11 @@ impl Session {
             .await?;
         Ok(ContactCollectReport {
             mailboxes: count(report.mailboxes),
+            capped: count(report.capped),
+            kept: count(report.kept),
+            refused: count(report.refused),
+            timed_out: count(report.timed_out),
+            not_reached: count(report.not_reached),
             messages: count(report.messages),
             paired: count(report.paired),
             failed: report
