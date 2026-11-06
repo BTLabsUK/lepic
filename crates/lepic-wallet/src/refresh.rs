@@ -1259,7 +1259,14 @@ fn apply_outputs(
                     ..stored.clone()
                 }
             }
-            Some(location) => on_chain(repos, stored.clone(), location, now, &mut outcome)?,
+            Some(location) => on_chain(
+                repos,
+                stored.clone(),
+                location,
+                seen.coinbase_maturity,
+                now,
+                &mut outcome,
+            )?,
             None => {
                 if other_wallet::spent_elsewhere(repos, &stored, seen.tip, seen.coinbase_maturity)?
                 {
@@ -1288,6 +1295,7 @@ fn apply_outputs(
             repos, &elsewhere, after, seen.tip, now,
         )?);
     }
+    crate::coinbase::delete_stale(repos, seen.tip)?;
     Ok(outcome)
 }
 
@@ -1295,10 +1303,21 @@ fn on_chain(
     repos: &mut dyn Repositories,
     mut output: OutputRecord,
     location: &OutputLocation,
+    coinbase_maturity: u64,
     now: Timestamp,
     outcome: &mut StepOutcome,
 ) -> Result<OutputRecord, RefreshError> {
-    if output.status == OutputStatus::Unconfirmed {
+    if crate::coinbase::is_candidate(&output) {
+        outcome.confirmed_outputs = outcome.confirmed_outputs.saturating_add(1);
+        let lock_height = location.height.checked_add_blocks(coinbase_maturity)?;
+        outcome.changes.push(crate::coinbase::confirm(
+            repos,
+            &mut output,
+            location.height,
+            lock_height,
+            now,
+        )?);
+    } else if output.status == OutputStatus::Unconfirmed {
         output.status = OutputStatus::Unspent;
         outcome.confirmed_outputs = outcome.confirmed_outputs.saturating_add(1);
         debug!(height = %location.height, "output confirmed");

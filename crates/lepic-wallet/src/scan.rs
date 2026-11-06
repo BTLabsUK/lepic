@@ -1091,6 +1091,19 @@ fn reconcile(
         }
         // The repair deletes the unconfirmed outputs it started with that are left at the end;
         // one on chain is kept as unspent instead of being lost until the next scan.
+        // A coinbase the wallet built that the chain mined, before any refresh saw it.
+        OutputStatus::Unconfirmed if crate::coinbase::is_candidate(&stored) => {
+            let change = crate::coinbase::confirm(
+                repos,
+                &mut stored,
+                found.height,
+                found.lock_height,
+                ending.now,
+            )?;
+            outcome.changes.push(change);
+            repos.put_output(&stored)?;
+            return Ok(());
+        }
         OutputStatus::Unconfirmed if repaired(|repair| &repair.unconfirmed) => {
             stored.status = OutputStatus::Unspent;
             repos.put_output(&stored)?;
