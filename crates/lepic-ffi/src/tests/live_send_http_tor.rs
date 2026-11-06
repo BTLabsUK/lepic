@@ -71,6 +71,7 @@ fn live_send_http_through_tor() {
         tor_wanted: true,
         host_features: 0,
         profile: 0,
+        domain: None,
     };
     let secret = NodeSecret::take(&mut config);
 
@@ -216,6 +217,7 @@ fn live_tor_wanted_without_tor_reaches_nothing() {
         tor_wanted: true,
         host_features: 0,
         profile: 0,
+        domain: None,
     };
     let secret = NodeSecret::take(&mut config);
     rt.block_on(async {

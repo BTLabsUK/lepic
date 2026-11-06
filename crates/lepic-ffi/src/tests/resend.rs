@@ -55,6 +55,7 @@ impl World {
             tor_wanted: false,
             host_features: 0,
             profile: 0,
+            domain: None,
         };
         self._dirs.push(dir);
         EpicWallet::create(

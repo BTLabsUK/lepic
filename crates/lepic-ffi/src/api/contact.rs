@@ -29,11 +29,11 @@
 use crate::api::error::WalletError;
 use crate::api::types::{
     CollectTrigger, ContactCollectReport, ContactImportSummary, ContactInvoiceView, ContactKind,
-    ContactPayloadView, ContactRelayMode, ContactView, FinalizedTx, FoundInvite, InviteExpiry,
-    InvitePreview, IssuedInvoice, KeyCheckStart, KeysDecision, OutboxEntryView, OutboxReport,
-    PaidInvoice, PairRequestView, PairingAnswer, PairingCard, PairingClass, PairingInvite,
-    PairingLinkResult, PendingPairingView, SasDecision, SealedAnswer, SealedSlateView, SendOptions,
-    SentTx, SlatePurpose,
+    ContactPayloadView, ContactRelayMode, ContactView, DomainVerdict, FinalizedTx, FoundInvite,
+    InviteExpiry, InvitePreview, IssuedInvoice, KeyCheckStart, KeysDecision, OutboxEntryView,
+    OutboxReport, PaidInvoice, PairRequestView, PairingAnswer, PairingCard, PairingClass,
+    PairingInvite, PairingLinkResult, PendingPairingView, SasDecision, SealedAnswer,
+    SealedSlateView, SendOptions, SentTx, SlatePurpose,
 };
 use crate::api::wallet::EpicWallet;
 
@@ -203,6 +203,25 @@ impl EpicWallet {
     pub async fn contact_check(&self, contact_id: String) -> Result<(), WalletError> {
         self.run("contact_check", |session| async move {
             session.contact_check(&contact_id).await
+        })
+        .await
+    }
+
+    /// Whether `file`, the well-known file the app fetched from the domain the contact claimed
+    /// (`ContactView::peer_domain`, at `https://<domain>/.well-known/epic-wallet.json`), proves
+    /// the claim stored from the pairing. Nothing is fetched here and nothing is stored: the
+    /// app does the request, passes the body, and shows the result. A file longer than 4096
+    /// bytes is refused.
+    ///
+    /// Fails with `ContactNotFound` for no such contact and `InvalidArgument` for a contact
+    /// that claimed no domain.
+    pub async fn contact_domain_verify(
+        &self,
+        contact_id: String,
+        file: Vec<u8>,
+    ) -> Result<DomainVerdict, WalletError> {
+        self.run("contact_domain_verify", |session| async move {
+            session.contact_domain_verify(&contact_id, &file).await
         })
         .await
     }

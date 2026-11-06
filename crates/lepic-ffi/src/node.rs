@@ -600,6 +600,7 @@ mod refusal_tests {
             tor_wanted: false,
             host_features: 0,
             profile: 0,
+            domain: None,
         }
     }
 

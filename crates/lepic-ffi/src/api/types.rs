@@ -69,6 +69,10 @@ pub struct WalletConfig {
     /// features and never in a marker; LEPIC does not read a bit. 0 for none. Read when a
     /// wallet is created, restored or opened.
     pub profile: u16,
+    /// The domain this wallet claims to its paired contacts, proven by the well-known file the
+    /// domain serves (`contact_domain_verify`). `None` for an app wallet, which claims none.
+    /// Read when a wallet is created, restored or opened.
+    pub domain: Option<String>,
     /// Limits and presets that are the app's to choose. [`HostPolicy::default`], every field
     /// `None`, is what LEPIC did before they were fields. Read when a wallet is created,
     /// restored or opened.
@@ -174,6 +178,7 @@ impl std::fmt::Debug for WalletConfig {
             .field("offline", &self.offline)
             .field("host_features", &self.host_features)
             .field("profile", &self.profile)
+            .field("domain", &self.domain)
             .finish()
     }
 }
@@ -1055,8 +1060,24 @@ pub struct ContactView {
     /// The profile the contact sent, `peer_features` from bit 16 up moved down; 0 when none
     /// came. LEPIC reads no bit of it.
     pub peer_profile: u32,
+    /// The domain the contact claimed in this pairing. Unverified until the app fetches the
+    /// domain's well-known file and passes it to `contact_domain_verify`.
+    pub peer_domain: Option<String>,
+    /// The contact's claim as received, kept for a later check.
+    pub peer_domain_attestation: Option<Vec<u8>>,
     pub ended_reason: Option<PairingEndReason>,
     pub ended_at_ms: Option<i64>,
+}
+
+/// Whether a contact's domain claim is proven by the well-known file its domain serves.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DomainVerdict {
+    /// A key the file lists for the wallet's network signed the claim for this pairing.
+    Proven,
+    /// The claim is not proven; the reason is one snake_case word: `file_too_large`,
+    /// `file_malformed`, `unsupported_version`, `network_absent`, `domain_mismatch` or
+    /// `no_key_matches`.
+    Refused(String),
 }
 
 /// Where a pairing stands; derived from its record, never stored.
@@ -1818,6 +1839,7 @@ mod tests {
             tor_wanted: false,
             host_features: 0,
             profile: 0,
+            domain: None,
         };
         let printed = format!("{config:?}");
         assert!(!printed.contains("node-secret-value"));

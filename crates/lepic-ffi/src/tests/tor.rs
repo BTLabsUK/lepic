@@ -783,6 +783,7 @@ async fn the_onion_routes_of_the_config_are_there_from_the_open_and_checked() {
                 tor_wanted: false,
                 host_features: 0,
                 profile: 0,
+                domain: None,
             };
             let secret = crate::node::NodeSecret::take(&mut config);
             let session =
@@ -985,6 +986,7 @@ async fn the_onion_address_is_the_payment_proof_address_in_onion_form() {
         tor_wanted: false,
         host_features: 0,
         profile: 0,
+        domain: None,
     };
     let secret = crate::node::NodeSecret::take(&mut config);
     let session = Session::new(

@@ -519,6 +519,7 @@ fn engine(
         offline: config.offline,
         host_features: config.host_features,
         profile: config.profile,
+        domain: config.domain.clone(),
         policy: policy.wallet,
     };
     let ports = Ports {
@@ -2707,6 +2708,7 @@ mod tests {
             tor_wanted: false,
             host_features: 0,
             profile: 0,
+            domain: None,
         }
     }
 
@@ -3105,6 +3107,7 @@ mod tests {
                 tor_wanted: false,
                 host_features: 0,
                 profile: 0,
+                domain: None,
             };
             let secret = NodeSecret::take(&mut config);
             let session = Session::new(

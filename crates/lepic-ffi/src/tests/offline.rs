@@ -59,6 +59,7 @@ impl World {
             tor_wanted: false,
             host_features: 0,
             profile: 0,
+            domain: None,
         }
     }
 
@@ -101,6 +102,7 @@ async fn cold_wallet(world: &mut World) -> (EpicWallet, WalletConfig) {
         tor_wanted: false,
         host_features: 0,
         profile: 0,
+        domain: None,
         ..config
     };
     (world.open(&offline, &store).await, offline)
@@ -185,6 +187,7 @@ async fn offline_changes_only_by_opening_the_wallet_again() {
         tor_wanted: false,
         host_features: 0,
         profile: 0,
+        domain: None,
         ..offline.clone()
     };
 

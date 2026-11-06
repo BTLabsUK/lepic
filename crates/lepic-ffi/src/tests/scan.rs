@@ -83,6 +83,7 @@ async fn restored_from_height(
         tor_wanted: false,
         host_features: 0,
         profile: 0,
+        domain: None,
     };
     let secret = crate::node::NodeSecret::take(&mut config);
     let restored = Session::new(
@@ -258,6 +259,7 @@ async fn a_restore_scan_reports_the_outputs_it_restored() {
         tor_wanted: false,
         host_features: 0,
         profile: 0,
+        domain: None,
     };
     let secret = crate::node::NodeSecret::take(&mut config);
     let runtime = pair

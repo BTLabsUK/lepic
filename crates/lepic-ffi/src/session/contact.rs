@@ -22,9 +22,9 @@ use crate::api::error::{WalletError, WalletErrorKind};
 use crate::api::types::{
     CollectTrigger, ContactChange as FfiChange, ContactCollectReport, ContactImportSummary,
     ContactInvoiceView, ContactKind, ContactPayloadView, ContactRelayMode, ContactView,
-    EndedPairing, FailedPairing, FinalizedTx, FoundInvite, InviteExpiry, InvitePreview,
-    IssuedInvoice, KeyCheckStart, KeysDecision, OutboxEntryView, OutboxReport, OutboxState,
-    PaidInvoice, PairRequestView, PairingAnswer, PairingCard, PairingClass,
+    DomainVerdict, EndedPairing, FailedPairing, FinalizedTx, FoundInvite, InviteExpiry,
+    InvitePreview, IssuedInvoice, KeyCheckStart, KeysDecision, OutboxEntryView, OutboxReport,
+    OutboxState, PaidInvoice, PairRequestView, PairingAnswer, PairingCard, PairingClass,
     PairingEndReason as FfiEndReason, PairingFailureReason, PairingInvite, PairingLinkOutcome,
     PairingLinkResult, PairingState, PairingStatus as FfiStatus, PendingPairingView, SasDecision,
     SasEntry, SealState, SealedAnswer, SealedSlateView, SendOptions, SentTx, SlateMessage,
@@ -245,6 +245,8 @@ fn view(view: EngineContactView) -> ContactView {
         peer_verified_at_ms: view.peer_verified_at.map(ms),
         peer_features: view.peer_features,
         peer_profile: view.peer_profile,
+        peer_domain: view.peer_domain,
+        peer_domain_attestation: view.peer_domain_attestation,
         ended_reason: view.ended_reason.map(end_reason),
         ended_at_ms: view.ended_at.map(ms),
     }
@@ -814,6 +816,21 @@ impl Session {
             .contact_book()
             .contact_check(&relays, id)
             .await?)
+    }
+
+    pub(crate) async fn contact_domain_verify(
+        &self,
+        contact_id: &str,
+        file: &[u8],
+    ) -> Result<DomainVerdict, WalletError> {
+        let id = self::contact_id(contact_id)?;
+        let verdict = self.engine.contact_book().domain_verify(id, file).await?;
+        Ok(match verdict {
+            lepic_wallet_contacts::DomainVerdict::Proven => DomainVerdict::Proven,
+            lepic_wallet_contacts::DomainVerdict::Refused(reason) => {
+                DomainVerdict::Refused(reason.to_string())
+            }
+        })
     }
 
     pub(crate) async fn pairing_cancel(&self, contact_id: &str) -> Result<(), WalletError> {
