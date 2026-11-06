@@ -3,6 +3,8 @@
 Status: accepted
 Date: 2026-11-04
 
+Amended by 0042: the mover may drain its old mailboxes (decision 6).
+
 ## Context
 
 A wallet back after a long gap cannot tell whether a paired service still answers, or whether
@@ -42,6 +44,8 @@ contacts to follow, so it does not wait for them.
    moves to `host` in the same write. The old mailboxes are not read again: there is no drain,
    no keep period and no wait on contacts. A drain left by following a contact's own move
    (ADR 0039) runs to its end. Private pairings and pairings in progress keep their relay.
+   Amended by 0042: a non-zero drain keeps reading the old mailboxes and answers checks there;
+   a zero drain is the behaviour above.
 7. No feature bit. A wallet that predates type `09` reads the type field after it opens the
    envelope and before it checks the signature, finds an unknown type, and drops the envelope
    as malformed: acknowledged on the relay, remembered as seen, attributed to nobody, no heard
