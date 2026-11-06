@@ -546,6 +546,59 @@ fn a_withdrawal_through_the_mailbox_is_received_and_answered_through_the_outbox(
     assert_eq!(world.tx_state(&world.payer, sent.tx_id), TxState::Posted);
 }
 
+/// A wallet that refuses payments nobody asked for (ADR 0045) receives nothing from a contact's
+/// S1 and answers with a sealed `declined`; the sender cancels its send once.
+#[test]
+fn a_payment_through_the_mailbox_to_a_wallet_that_refuses_them_is_declined() {
+    let world = World::with_issuer_policy(lepic_wallet::WalletPolicy {
+        refuse_unsolicited_payments: true,
+        ..lepic_wallet::WalletPolicy::default()
+    });
+    let (_, ben_side) = world.pair_for_invoices(ContactKind::Exchange);
+    let mut payer_events = world.payer.wallet.subscribe();
+    let sent = world
+        .block_on(world.payer.wallet.send(
+            SendRequest {
+                minimum_confirmations: 1,
+                strategy: SelectionStrategy::Smallest,
+                ..SendRequest::new(ACCOUNT, Amount::new(AMOUNT))
+            },
+            Delivery::Export {
+                transport: lepic_transport::file::FILE,
+                to: lepic_transport::transport::Location::File(
+                    tempfile::tempdir().unwrap().keep().join("s1.tx"),
+                ),
+            },
+        ))
+        .unwrap();
+    world
+        .block_on(world.payer.wallet.contact_book().contact_post_slate(
+            &relays(&world.payer),
+            ben_side,
+            sent.tx_id,
+            None,
+        ))
+        .unwrap();
+
+    world.collect(&world.issuer);
+    world.collect(&world.payer);
+
+    let slate_id = uuid::Uuid::from_bytes(*sent.slate_id.as_bytes());
+    assert!(
+        world
+            .issuer
+            .read(|repos| repos.transaction_by_slate(slate_id, lepic_store::TxDirection::Incoming))
+            .is_none()
+    );
+    let declined: Vec<_> = events(&mut payer_events)
+        .into_iter()
+        .filter(|event| matches!(event, Event::PaymentDeclined(_)))
+        .collect();
+    assert_eq!(declined.len(), 1);
+    assert_eq!(world.tx_state(&world.payer, sent.tx_id), TxState::Cancelled);
+    assert!(world.node.pushed_transactions().is_empty());
+}
+
 /// A service and a person ask for a move the same way: the update is stored and reported, and
 /// our mailbox stays until the host applies the move.
 #[test]

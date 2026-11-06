@@ -184,12 +184,23 @@ pub struct WalletPolicy {
     /// How long after it was first kept such a message is still kept. At least a second, at
     /// most [`Self::MAX_CONTACT_HOLD_PATIENCE`].
     pub contact_hold_patience: Duration,
+    /// Refuse every payment nobody asked for: an S1 arriving at the Epicbox payments address,
+    /// over HTTP or Tor, or from a contact. The S1 is neither signed nor stored and is answered
+    /// at once with a `declined` notice where one can be sent (ADR 0045), so a LEPIC sender
+    /// unlocks its inputs. A payment to a listing and a slate the user takes by hand (file,
+    /// paste, sealed) are still received. Off by default.
+    pub refuse_unsolicited_payments: bool,
+    /// Refuse every invoice a contact sends: the I1 is not parked and the contact is answered
+    /// with a `declined` notice. A plain Epicbox I1 is refused whatever this says. The wallet's
+    /// own payments and invoices are not affected. Off by default.
+    pub refuse_unsolicited_invoices: bool,
 }
 
 impl WalletPolicy {
     /// The values every wallet used before they were parameters: 10 and 100 receipts, 6
-    /// confirmations, a contact's checks answered once an hour and three times a day, and a
-    /// failing contact message kept 3 times within 3 minutes.
+    /// confirmations, a contact's checks answered once an hour and three times a day, a
+    /// failing contact message kept 3 times within 3 minutes, and payments and invoices nobody
+    /// asked for taken.
     pub const DEFAULT: Self = Self {
         max_open_receipts_per_sender: 10,
         max_open_receipts: 100,
@@ -198,6 +209,8 @@ impl WalletPolicy {
         contact_check_answers_per_day: 3,
         contact_hold_attempts: 3,
         contact_hold_patience: Duration::from_secs(3 * 60),
+        refuse_unsolicited_payments: false,
+        refuse_unsolicited_invoices: false,
     };
 
     /// The bound on [`Self::contact_check_answers_per_day`]: each answer is a contact update,
@@ -367,6 +380,8 @@ mod tests {
         assert_eq!(policy.contact_check_answers_per_day, 3);
         assert_eq!(policy.contact_hold_attempts, 3);
         assert_eq!(policy.contact_hold_patience, Duration::from_secs(180));
+        assert!(!policy.refuse_unsolicited_payments);
+        assert!(!policy.refuse_unsolicited_invoices);
         assert!(policy.validate().is_ok());
     }
 

@@ -262,6 +262,7 @@ impl<H: Host> Run<'_, H> {
                     | Event::InvoiceBounced(_)
                     | Event::PaymentPosted(_)
                     | Event::PaymentCancelled(_)
+                    | Event::PaymentDeclined(_)
             ) && let Some(line) = receipt_line(&event)
             {
                 self.show_line(&line);
@@ -1383,7 +1384,11 @@ impl<H: Host> Run<'_, H> {
             network: self.settings.network,
             data_dir: self.settings.data_dir.clone(),
             node: self.settings.node.clone(),
-            policy: Default::default(),
+            policy: lepic_wallet::WalletPolicy {
+                refuse_unsolicited_payments: self.settings.refuse_unsolicited_payments,
+                refuse_unsolicited_invoices: self.settings.refuse_unsolicited_invoices,
+                ..Default::default()
+            },
             offline: false,
             host_features: self.settings.host_features,
             profile: self.settings.profile,
@@ -1694,6 +1699,11 @@ fn receipt_line(event: &Event) -> Option<String> {
         Event::PaymentCancelled(cancelled) => Some(format!(
             "payment {} reported cancelled by its sender; `lepic tx cancel {}` ends it here",
             cancelled.slate_id, cancelled.tx_id.0
+        )),
+        Event::PaymentDeclined(declined) => Some(format!(
+            "payment {} declined by the receiver; transaction {} was cancelled and its inputs \
+             are free",
+            declined.slate_id, declined.tx_id.0
         )),
         Event::InvoiceDeclined(declined) => Some(format!(
             "invoice {} declined by the payer; `lepic tx cancel {}` withdraws it",
@@ -2050,6 +2060,7 @@ fn show(repos: &dyn Repositories, details: &TransactionDetails) -> Result<TxRepo
         sender_reported_cancelled_at: details
             .sender_reported_cancelled_at
             .map(|at| at.to_string()),
+        receiver_declined_at: details.receiver_declined_at.map(|at| at.to_string()),
         receive_listing: details.receive_listing.map(|listing| ListingReport {
             service_key: listing.service_key().to_hex(),
             generation: listing.generation(),
@@ -2146,6 +2157,7 @@ fn tx_report(tx: &StoredTransaction, stages: Option<Vec<String>>) -> TxReport {
         imported: None,
         sender_reported_posted_at: None,
         sender_reported_cancelled_at: None,
+        receiver_declined_at: None,
         receive_listing: None,
     }
 }

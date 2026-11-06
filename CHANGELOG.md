@@ -7,6 +7,18 @@ Conventional Commit messages at release time.
 
 ## [Unreleased]
 
+### Added
+
+- Two wallet policy switches, off by default (ADR 0045): `refuse_unsolicited_payments` refuses an
+  S1 nobody asked for over Epicbox, HTTP, Tor or a contact's mailbox, and
+  `refuse_unsolicited_invoices` refuses a contact's I1. A refused slate is answered with the
+  `declined` notice where the sender can take one; over HTTP and Tor the request fails. The CLI
+  takes them as settings (`LEPIC_REFUSE_UNSOLICITED_PAYMENTS`,
+  `LEPIC_REFUSE_UNSOLICITED_INVOICES`) and the binding's `HostPolicy` as two optional fields.
+- A send whose receiver declines it is cancelled, which frees its inputs, and raises
+  `PaymentDeclined`. `TransactionDetails` gains `receiver_declined_at` (the binding
+  `receiver_declined_at_ms`), and `lepic tx show` prints it.
+
 ## [0.3.1] - 2026-11-06
 
 ### Added

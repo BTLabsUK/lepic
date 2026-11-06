@@ -73,6 +73,8 @@ Each setting comes from, in order: a flag, its environment variable, the config 
 | `output` | `LEPIC_OUTPUT` | `--output` | `human` |
 | `log_level` | `LEPIC_LOG_LEVEL` | `--log-level` | `warn` |
 | `log_format` | `LEPIC_LOG_FORMAT` | `--log-format` | `compact` |
+| `refuse_unsolicited_payments` | `LEPIC_REFUSE_UNSOLICITED_PAYMENTS` | | `false` |
+| `refuse_unsolicited_invoices` | `LEPIC_REFUSE_UNSOLICITED_INVOICES` | | `false` |
 | `invoice_expiry_hours` | `LEPIC_INVOICE_EXPIRY_HOURS` | | `24` |
 | `host_features` | `LEPIC_HOST_FEATURES` | | none |
 | `profile` | `LEPIC_PROFILE` | `--profile`, `--profile-bits` | `0` |
@@ -106,6 +108,29 @@ and `automated` (bit 1, 2), comma-separated; `--profile-bits <N>` takes a number
 decimal or `0x` hex, for bits the CLI has no name for. The two flags exclude each other. The
 config file and `LEPIC_PROFILE` take names or a number. An unknown name or a number above 65535
 is a usage error. The flag wins over the variable, the variable over the config file.
+
+#### Refusing slates nobody asked for
+
+`refuse_unsolicited_payments = true` makes the wallet refuse every payment it did not ask for
+(ADR 0045): an S1 that comes over Epicbox, over HTTP or Tor, or from a contact. Nothing is
+received. `refuse_unsolicited_invoices = true` makes it refuse invoices from contacts instead of
+keeping them to pay; a plain Epicbox invoice is refused already. Both are `true` or `false`, off
+by default and independent of each other and of the profile: `--profile no-payments` only tells
+contacts, it refuses nothing.
+
+The wallet's own sends and invoices, and their answers, go through as before. So do a payment
+for one of the wallet's own listings, a slate taken from a file or a paste, and an S1 the wallet
+answered before, whose answer goes back again.
+
+A refused sender learns of it where it can:
+
+- Over Epicbox, a `lepic` sender gets the `declined` notice, cancels the send, frees its inputs,
+  prints `payment … declined by the receiver` and shows `Receiver  declined at …` in `tx show`.
+  An older `lepic` or another wallet gets nothing and keeps the send until its user cancels it.
+- Over HTTP or Tor, the sender's request fails with `slate refused`.
+- A contact gets the `declined` notice in its mailbox.
+
+A self-send to the wallet's own address is refused too while the switch is on.
 
 #### Domain
 

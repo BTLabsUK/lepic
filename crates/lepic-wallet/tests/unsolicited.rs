@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Payments nobody asked for, as a listener receives them: open receipts of one transport are
-//! capped in total, and an S1 received before is still answered at the cap.
+//! capped in total, and an S1 received before is still answered at the cap. A wallet that
+//! refuses them (ADR 0045) receives none, but still answers an S1 it received before.
 
 // Tests may unwrap, index and panic (docs/rules.md), including in helpers that clippy does not
 // treat as test code.
@@ -161,4 +162,43 @@ fn below_the_cap_a_slate_that_is_not_a_payment_is_rejected_as_by_receive() {
         matches!(rejected, Err(ReceiveError::WrongStage { .. })),
         "{rejected:?}"
     );
+}
+
+fn refusing_receiver() -> Receiver {
+    let s1 = vector("send_file_ttl_s1_v3");
+    let s2 = vector("send_file_ttl_s2_v3");
+    let policy = WalletPolicy {
+        refuse_unsolicited_payments: true,
+        ..WalletPolicy::default()
+    };
+    Receiver::with_policy(&receiver_mnemonic(&s2), slate_height(&s1), policy)
+}
+
+#[test]
+fn a_wallet_that_refuses_unsolicited_payments_receives_nothing_new() {
+    let receiver = refusing_receiver();
+    let before = receiver.transaction_count();
+
+    let refused = unsolicited(&receiver, EPICBOX, 1);
+
+    assert!(matches!(refused, Err(ReceiveError::Refused)), "{refused:?}");
+    assert_eq!(receiver.transaction_count(), before);
+}
+
+#[test]
+fn a_wallet_that_refuses_unsolicited_payments_still_answers_one_taken_by_hand_again() {
+    let receiver = refusing_receiver();
+    let by_hand = receiver
+        .block_on(
+            receiver
+                .wallet
+                .receive(FILE, &wire(&s1_numbered(1)), ReceiveRequest::default()),
+        )
+        .unwrap();
+
+    let again = unsolicited(&receiver, FILE, 1).unwrap();
+
+    assert!(again.repeated);
+    assert_eq!(again.tx_id, by_hand.tx_id);
+    assert_eq!(again.reply.as_bytes(), by_hand.reply.as_bytes());
 }

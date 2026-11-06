@@ -11804,6 +11804,8 @@ impl SseDecode for crate::api::policy::HostPolicy {
         let mut var_contactCheckAnswersPerDay = <Option<u32>>::sse_decode(deserializer);
         let mut var_contactHoldAttempts = <Option<u32>>::sse_decode(deserializer);
         let mut var_contactHoldPatienceS = <Option<u64>>::sse_decode(deserializer);
+        let mut var_refuseUnsolicitedPayments = <Option<bool>>::sse_decode(deserializer);
+        let mut var_refuseUnsolicitedInvoices = <Option<bool>>::sse_decode(deserializer);
         return crate::api::policy::HostPolicy {
             default_strategy: var_defaultStrategy,
             send_ttl_blocks: var_sendTtlBlocks,
@@ -11820,6 +11822,8 @@ impl SseDecode for crate::api::policy::HostPolicy {
             contact_check_answers_per_day: var_contactCheckAnswersPerDay,
             contact_hold_attempts: var_contactHoldAttempts,
             contact_hold_patience_s: var_contactHoldPatienceS,
+            refuse_unsolicited_payments: var_refuseUnsolicitedPayments,
+            refuse_unsolicited_invoices: var_refuseUnsolicitedInvoices,
         };
     }
 }
@@ -13907,6 +13911,7 @@ impl SseDecode for crate::api::types::TransactionDetails {
         let mut var_spentCommits = <Vec<String>>::sse_decode(deserializer);
         let mut var_senderReportedPostedAtMs = <Option<i64>>::sse_decode(deserializer);
         let mut var_senderReportedCancelledAtMs = <Option<i64>>::sse_decode(deserializer);
+        let mut var_receiverDeclinedAtMs = <Option<i64>>::sse_decode(deserializer);
         let mut var_unverified = <bool>::sse_decode(deserializer);
         return crate::api::types::TransactionDetails {
             tx_id: var_txId,
@@ -13936,6 +13941,7 @@ impl SseDecode for crate::api::types::TransactionDetails {
             spent_commits: var_spentCommits,
             sender_reported_posted_at_ms: var_senderReportedPostedAtMs,
             sender_reported_cancelled_at_ms: var_senderReportedCancelledAtMs,
+            receiver_declined_at_ms: var_receiverDeclinedAtMs,
             unverified: var_unverified,
         };
     }
@@ -14342,6 +14348,7 @@ impl SseDecode for crate::api::types::WalletEventKind {
             36 => crate::api::types::WalletEventKind::NotPosted,
             37 => crate::api::types::WalletEventKind::ContactRelayMoveRequested,
             38 => crate::api::types::WalletEventKind::ContactPayloadsParked,
+            39 => crate::api::types::WalletEventKind::PaymentDeclined,
             _ => unreachable!("Invalid variant for WalletEventKind: {}", inner),
         };
     }
@@ -15813,6 +15820,12 @@ impl flutter_rust_bridge::IntoDart for crate::api::policy::HostPolicy {
                 .into_dart(),
             self.contact_hold_attempts.into_into_dart().into_dart(),
             self.contact_hold_patience_s.into_into_dart().into_dart(),
+            self.refuse_unsolicited_payments
+                .into_into_dart()
+                .into_dart(),
+            self.refuse_unsolicited_invoices
+                .into_into_dart()
+                .into_dart(),
         ]
         .into_dart()
     }
@@ -17868,6 +17881,7 @@ impl flutter_rust_bridge::IntoDart for crate::api::types::TransactionDetails {
             self.sender_reported_cancelled_at_ms
                 .into_into_dart()
                 .into_dart(),
+            self.receiver_declined_at_ms.into_into_dart().into_dart(),
             self.unverified.into_into_dart().into_dart(),
         ]
         .into_dart()
@@ -18283,6 +18297,7 @@ impl flutter_rust_bridge::IntoDart for crate::api::types::WalletEventKind {
             Self::NotPosted => 36.into_dart(),
             Self::ContactRelayMoveRequested => 37.into_dart(),
             Self::ContactPayloadsParked => 38.into_dart(),
+            Self::PaymentDeclined => 39.into_dart(),
             _ => unreachable!(),
         }
     }
@@ -18861,6 +18876,8 @@ impl SseEncode for crate::api::policy::HostPolicy {
         <Option<u32>>::sse_encode(self.contact_check_answers_per_day, serializer);
         <Option<u32>>::sse_encode(self.contact_hold_attempts, serializer);
         <Option<u64>>::sse_encode(self.contact_hold_patience_s, serializer);
+        <Option<bool>>::sse_encode(self.refuse_unsolicited_payments, serializer);
+        <Option<bool>>::sse_encode(self.refuse_unsolicited_invoices, serializer);
     }
 }
 
@@ -20612,6 +20629,7 @@ impl SseEncode for crate::api::types::TransactionDetails {
         <Vec<String>>::sse_encode(self.spent_commits, serializer);
         <Option<i64>>::sse_encode(self.sender_reported_posted_at_ms, serializer);
         <Option<i64>>::sse_encode(self.sender_reported_cancelled_at_ms, serializer);
+        <Option<i64>>::sse_encode(self.receiver_declined_at_ms, serializer);
         <bool>::sse_encode(self.unverified, serializer);
     }
 }
@@ -20989,6 +21007,7 @@ impl SseEncode for crate::api::types::WalletEventKind {
                 crate::api::types::WalletEventKind::NotPosted => 36,
                 crate::api::types::WalletEventKind::ContactRelayMoveRequested => 37,
                 crate::api::types::WalletEventKind::ContactPayloadsParked => 38,
+                crate::api::types::WalletEventKind::PaymentDeclined => 39,
                 _ => {
                     unimplemented!("");
                 }

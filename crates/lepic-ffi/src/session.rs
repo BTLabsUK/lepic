@@ -1994,6 +1994,7 @@ fn transaction_details(details: &EngineTransactionDetails) -> TransactionDetails
         sender_reported_cancelled_at_ms: details
             .sender_reported_cancelled_at
             .map(Timestamp::as_millisecond),
+        receiver_declined_at_ms: details.receiver_declined_at.map(Timestamp::as_millisecond),
         unverified: details.unverified,
     }
 }
@@ -2179,6 +2180,11 @@ fn invoice_event(event: &Event) -> Option<WalletEvent> {
             tx_id: Some(cancelled.tx_id.0),
             slate_id: Some(cancelled.slate_id.to_string()),
             ..WalletEvent::of(WalletEventKind::PaymentCancelled)
+        },
+        Event::PaymentDeclined(declined) => WalletEvent {
+            tx_id: Some(declined.tx_id.0),
+            slate_id: Some(declined.slate_id.to_string()),
+            ..WalletEvent::of(WalletEventKind::PaymentDeclined)
         },
         Event::NotPosted(not_posted) => WalletEvent {
             tx_id: Some(not_posted.tx_id.0),
@@ -2823,6 +2829,7 @@ mod tests {
             spent_commits: vec![output],
             sender_reported_posted_at: Some(confirmed),
             sender_reported_cancelled_at: Some(created),
+            receiver_declined_at: Some(confirmed),
             unverified: true,
         };
 
@@ -2868,6 +2875,7 @@ mod tests {
                 spent_commits: vec![output.to_hex()],
                 sender_reported_posted_at_ms: Some(1_790_000_600_456),
                 sender_reported_cancelled_at_ms: Some(1_790_000_000_123),
+                receiver_declined_at_ms: Some(1_790_000_600_456),
                 unverified: true,
             }
         );
@@ -3000,6 +3008,20 @@ mod tests {
         assert_eq!(event.tx_id, Some(11));
         assert_eq!(event.slate_id, Some(slate_id.to_string()));
         assert_eq!(event.kernel_excess, None);
+    }
+
+    #[test]
+    fn a_declined_send_is_its_own_event() {
+        use lepic_wallet::event::{DeclinedPayment, SlateId};
+        let slate_id = SlateId::from_bytes([10; 16]);
+        let event = wallet_event(&Event::PaymentDeclined(DeclinedPayment {
+            tx_id: TxId(12),
+            slate_id,
+        }))
+        .unwrap();
+        assert_eq!(event.kind, WalletEventKind::PaymentDeclined);
+        assert_eq!(event.tx_id, Some(12));
+        assert_eq!(event.slate_id, Some(slate_id.to_string()));
     }
 
     #[test]

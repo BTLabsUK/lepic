@@ -67,6 +67,13 @@ pub struct HostPolicy {
     /// How long such a message is kept after it was first kept, in seconds. From 1 to 86,400.
     /// Default 180.
     pub contact_hold_patience_s: Option<u64>,
+    /// Refuse a payment nobody asked for: an S1 at the payments address, over HTTP or Tor, or
+    /// from a contact. A LEPIC sender hears `declined` and cancels its send (ADR 0045). A
+    /// payment for a listing and a slate taken by hand are still received. Default off.
+    pub refuse_unsolicited_payments: Option<bool>,
+    /// Refuse an invoice from a contact instead of parking it, answered `declined`. A plain
+    /// Epicbox invoice is refused anyway. Default off.
+    pub refuse_unsolicited_invoices: Option<bool>,
 }
 
 /// How a runtime treats PINs, chosen when the app creates it with
@@ -199,6 +206,12 @@ impl Policy {
             contact_hold_patience: policy
                 .contact_hold_patience_s
                 .map_or(defaults.contact_hold_patience, Duration::from_secs),
+            refuse_unsolicited_payments: policy
+                .refuse_unsolicited_payments
+                .unwrap_or(defaults.refuse_unsolicited_payments),
+            refuse_unsolicited_invoices: policy
+                .refuse_unsolicited_invoices
+                .unwrap_or(defaults.refuse_unsolicited_invoices),
         };
         wallet
             .validate()
@@ -371,6 +384,26 @@ mod tests {
         assert_eq!(policy.wallet.max_open_receipts_per_sender, 10);
         assert_eq!(policy.wallet.max_open_receipts, 100);
         assert_eq!(policy.wallet.default_minimum_confirmations, 6);
+        assert!(!policy.wallet.refuse_unsolicited_payments);
+        assert!(!policy.wallet.refuse_unsolicited_invoices);
+    }
+
+    #[test]
+    fn the_refusal_switches_reach_the_wallet_one_by_one() {
+        let payments = Policy::resolve(&HostPolicy {
+            refuse_unsolicited_payments: Some(true),
+            ..HostPolicy::default()
+        })
+        .unwrap();
+        assert!(payments.wallet.refuse_unsolicited_payments);
+        assert!(!payments.wallet.refuse_unsolicited_invoices);
+        let invoices = Policy::resolve(&HostPolicy {
+            refuse_unsolicited_invoices: Some(true),
+            ..HostPolicy::default()
+        })
+        .unwrap();
+        assert!(!invoices.wallet.refuse_unsolicited_payments);
+        assert!(invoices.wallet.refuse_unsolicited_invoices);
     }
 
     #[test]

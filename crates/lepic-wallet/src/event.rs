@@ -102,6 +102,13 @@ pub enum Event {
     /// changed and nothing was released; the host decides whether to cancel the payment here,
     /// which [`crate::Wallet::cancel`] does by its usual rules.
     PaymentCancelled(CancelledPayment),
+    /// The receiver of a send this wallet made refused it unanswered, as a wallet set to refuse
+    /// payments nobody asked for does (ADR 0045). The send was cancelled as
+    /// [`crate::Wallet::cancel`] cancels it, which its [`Event::Transaction`] to `cancelled`
+    /// reports after this, so its inputs are free again. Raised once per send. The host shows
+    /// the send as declined by the receiver; its
+    /// [`crate::details::TransactionDetails::receiver_declined_at`] stays set.
+    PaymentDeclined(DeclinedPayment),
     /// A reply to one of this wallet's invites paired a contact; its SAS waits for the user's
     /// check (RFC 0002 7.3).
     PairingReplied(ContactEvent),
@@ -435,6 +442,13 @@ pub struct NotPosted {
     pub slate_id: SlateId,
     /// Why, as the node's error reads, for the host to log or show.
     pub reason: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DeclinedPayment {
+    /// The send.
+    pub tx_id: TxId,
+    pub slate_id: SlateId,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
