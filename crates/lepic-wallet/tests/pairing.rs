@@ -831,7 +831,7 @@ fn a_card_of_another_kind_than_its_invite_is_refused() {
 
 #[test]
 fn a_card_of_the_kind_its_invite_says_pairs() {
-    let (events, paired) = pair_with_invite_kind(ContactKind::Shop, ContactKind::Shop);
+    let (events, paired) = pair_with_invite_kind(ContactKind::Person, ContactKind::Person);
     assert!(paired);
     assert!(
         !events

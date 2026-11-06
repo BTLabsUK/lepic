@@ -214,6 +214,8 @@ pub struct ContactView {
     pub label: String,
     /// The name the contact gives itself, shown only as "calls themselves".
     pub claimed_name: Option<String>,
+    /// Deprecated: always written for wallets that read it, never to be read for meaning;
+    /// to be removed (docs/adr/0041 or RFC 0002 6.1).
     pub kind: Option<ContactKind>,
     pub state: ContactState,
     /// The four SAS entries, to show the check again.

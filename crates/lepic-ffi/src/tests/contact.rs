@@ -310,7 +310,7 @@ async fn two_wallets_pair_by_link_and_show_the_same_words() {
     assert!(invite.words.is_empty());
     let preview = ben.pairing_preview(invite.link.clone()).await.unwrap();
     assert_eq!(preview.claimed_name, "Anna");
-    assert_eq!(preview.kind, ContactKind::Shop);
+    assert_eq!(preview.kind, ContactKind::Person);
     assert_eq!(preview.home_relay, format!("{RELAY}:443"));
     assert!(!preview.service);
     // The link carries whole seconds.
@@ -341,7 +341,7 @@ async fn two_wallets_pair_by_link_and_show_the_same_words() {
     assert_eq!(ben_view.state, PairingState::Paired);
     assert_eq!(anna_view.claimed_name.as_deref(), Some("Ben"));
     assert_eq!(ben_view.claimed_name.as_deref(), Some("Anna"));
-    assert_eq!(ben_view.kind, Some(ContactKind::Shop));
+    assert_eq!(ben_view.kind, Some(ContactKind::Person));
     assert_eq!(anna_view.sas.len(), 4);
     assert_eq!(anna_view.sas, ben_view.sas);
     assert_eq!(

@@ -719,7 +719,9 @@ fn a_contact_moving_its_home_relay_moves_our_mailbox_once_applied(kind: ContactK
 #[allow(clippy::too_many_lines)] // A test reads best as one sequence of steps.
 fn a_relay_move_is_asked_only_by_an_update_and_never_by_a_plain_card() {
     let world = World::new();
-    let (shop_side, ben_side) = world.pair_for_invoices(ContactKind::Exchange);
+    // The kind is deprecated: a new pairing is a person whatever its request says (ADR 0041), and
+    // a card of another kind than the pairing's is refused.
+    let (shop_side, ben_side) = world.pair_for_invoices(ContactKind::Person);
     let mut payer_events = world.payer.wallet.subscribe();
     let keys = keys_for(&world.issuer, shop_side);
     let signer = SigningKey::from_bytes(&keys.expose_signing_key().to_bytes());
@@ -784,7 +786,7 @@ fn a_relay_move_is_asked_only_by_an_update_and_never_by_a_plain_card() {
 
     // A notice carrying a newer card for another relay in its tag 07.
     let mut notice = Content::new(MessageType::Notice, b"{}".to_vec());
-    notice.card = Some(card(2, "relay4.test:443", ContactKind::Exchange));
+    notice.card = Some(card(2, "relay4.test:443", ContactKind::Person));
     post_signed(&world, &world.issuer, shop_side, &notice);
     // An update that changes what the contact is.
     post_signed(
@@ -793,7 +795,7 @@ fn a_relay_move_is_asked_only_by_an_update_and_never_by_a_plain_card() {
         shop_side,
         &Content::new(
             MessageType::ContactUpdate,
-            card(3, "relay3.test:8443", ContactKind::Person)
+            card(3, "relay3.test:8443", ContactKind::Exchange)
                 .as_bytes()
                 .to_vec(),
         ),
@@ -810,7 +812,7 @@ fn a_relay_move_is_asked_only_by_an_update_and_never_by_a_plain_card() {
         shop_side,
         &Content::new(
             MessageType::ContactUpdate,
-            card(4, "10.0.0.7:443", ContactKind::Exchange)
+            card(4, "10.0.0.7:443", ContactKind::Person)
                 .as_bytes()
                 .to_vec(),
         ),

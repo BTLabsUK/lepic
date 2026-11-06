@@ -74,6 +74,8 @@ pub struct InviteRequest {
     pub account: AccountIndex,
     /// The name the inviter gives itself; the invitee sees it as claimed.
     pub name: String,
+    /// Deprecated: always written for wallets that read it, never to be read for meaning;
+    /// to be removed (docs/adr/0041 or RFC 0002 6.1).
     pub kind: ContactKind,
     pub expiry: InviteExpiry,
     /// Also offer five pairing words that find the invite (RFC 0002 7.7).
@@ -104,6 +106,8 @@ pub struct InviteOffer {
 pub struct InvitePreview {
     /// The inviter's own name for itself, unverified.
     pub claimed_name: String,
+    /// Deprecated: always written for wallets that read it, never to be read for meaning;
+    /// to be removed (docs/adr/0041 or RFC 0002 6.1).
     pub kind: ContactKind,
     pub expires_at: Timestamp,
     /// The relay where the pairing's mailboxes live.
@@ -148,6 +152,8 @@ pub struct AcceptOutcome {
 pub struct CardRequest {
     pub account: AccountIndex,
     pub name: String,
+    /// Deprecated: always written for wallets that read it, never to be read for meaning;
+    /// to be removed (docs/adr/0041 or RFC 0002 6.1).
     pub kind: ContactKind,
     /// Where the pairing's mailboxes live, `domain[:port]`; `None` is the wallet's own relay.
     pub home_relay: Option<String>,
@@ -597,7 +603,7 @@ where
                     network,
                     mailbox.address(),
                     &CardDetails {
-                        kind: request.kind,
+                        kind: WRITTEN_KIND,
                         name: &request.name,
                         seq: 1,
                         payments_address: None,
@@ -1577,6 +1583,12 @@ fn invite_lifetime(
     })
 }
 
+/// The kind every new invite and card writes. The request's `kind` is deprecated and ignored: a
+/// reader refuses a confirm or card update whose kind differs from the invite's or the stored
+/// one, so the invite and the pairing's cards must agree, and every later card clones this one
+/// (ADR 0041).
+const WRITTEN_KIND: ContactKind = ContactKind::Person;
+
 /// Our first card for a new record, its mailbox on the pairing's home relay.
 fn new_card(
     keys: &crate::key_schedule::ContactKeys,
@@ -1624,7 +1636,7 @@ fn store_invite(
         &new,
         private.as_ref(),
     )?;
-    let card = new_card(&keys, at, request.kind, &request.name)?;
+    let card = new_card(&keys, at, WRITTEN_KIND, &request.name)?;
     let (n_a, code) = {
         let mut guard = rng.lock();
         let mut rng = LockedRng(&mut **guard);
@@ -1636,7 +1648,7 @@ fn store_invite(
     let invite = Invite::new(
         contact_network(network),
         InviteFields {
-            kind: request.kind,
+            kind: WRITTEN_KIND,
             name: ContactName::new(&request.name).map_err(ContactError::Name)?,
             expires: unix_seconds(expires_at),
             code: code.clone(),
@@ -1722,7 +1734,7 @@ fn store_answer(
         &new,
         private.as_ref(),
     )?;
-    let card = new_card(&keys, at, ContactKind::Person, &request.name)?;
+    let card = new_card(&keys, at, WRITTEN_KIND, &request.name)?;
     let n_b = Nonce::from_bytes(new_id(&mut rng));
     let rc = ConfirmCode::from_bytes(new_id(&mut rng));
     let body = ReplyBody {

@@ -920,6 +920,9 @@ pub enum ContactRelayMode {
 
 /// What a contact says it is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+///
+/// Deprecated: always written for wallets that read it, never to be read for meaning;
+/// to be removed (docs/adr/0041 or RFC 0002 6.1).
 pub enum ContactKind {
     Person,
     Shop,
@@ -1003,6 +1006,8 @@ pub struct ContactView {
     pub label: String,
     /// The name the contact gives itself, unverified: show it only as "calls themselves".
     pub claimed_name: Option<String>,
+    /// Deprecated: always written for wallets that read it, never to be read for meaning;
+    /// to be removed (docs/adr/0041 or RFC 0002 6.1).
     pub kind: Option<ContactKind>,
     pub state: PairingState,
     /// The four entries of the words check, to show it again; empty before the pairing
@@ -1106,6 +1111,8 @@ pub struct PairRequestView {
     pub from_address: String,
     /// The name the invite gives its maker, unverified.
     pub claimed_name: String,
+    /// Deprecated: always written for wallets that read it, never to be read for meaning;
+    /// to be removed (docs/adr/0041 or RFC 0002 6.1).
     pub kind: ContactKind,
     pub received_at_ms: i64,
     pub expires_at_ms: i64,
@@ -1148,6 +1155,8 @@ pub struct PairingInvite {
 pub struct InvitePreview {
     /// The inviter's own name for itself, not checked.
     pub claimed_name: String,
+    /// Deprecated: always written for wallets that read it, never to be read for meaning;
+    /// to be removed (docs/adr/0041 or RFC 0002 6.1).
     pub kind: ContactKind,
     pub expires_at_ms: i64,
     /// `domain:port` of the relay the pairing's messages go through.

@@ -919,9 +919,9 @@ pub struct ContactInviteArgs {
     /// How long the invite may be answered
     #[arg(long, value_enum, default_value_t = InviteExpiryArg::Day)]
     pub expiry: InviteExpiryArg,
-    /// What this wallet is to the contact
-    #[arg(long, value_enum, default_value_t = ContactKindArg::Person)]
-    pub kind: ContactKindArg,
+    /// Deprecated and ignored: new pairings write person
+    #[arg(long, value_enum, hide = true)]
+    pub kind: Option<ContactKindArg>,
     /// Also offer five pairing words that find the invite
     #[arg(long)]
     pub pairing_words: bool,
@@ -1079,9 +1079,9 @@ pub struct ContactSasArgs {
 pub struct ContactCardArgs {
     #[command(flatten)]
     pub name: ContactNameArg,
-    /// What this wallet is to the contact
-    #[arg(long, value_enum, default_value_t = ContactKindArg::Person)]
-    pub kind: ContactKindArg,
+    /// Deprecated and ignored: new pairings write person
+    #[arg(long, value_enum, hide = true)]
+    pub kind: Option<ContactKindArg>,
 }
 
 #[derive(Debug, Args)]
