@@ -340,7 +340,7 @@ A card is the binary payload below, self-signed:
 | `06` | sig key | 32, Ed25519 `sig_pk` for this contact |
 | `07` | hint key | 32, `hint_key` for this contact |
 | `08` | mailbox | Epicbox address text, `key@domain[:port]`, at most 128 bytes: where this contact delivers to the owner. A wallet's `box_pk` at the home relay; a service's shared inbox (8.3) |
-| `09` | payments address | Optional: the owner's ordinary Epicbox address, for plain person-to-person sends as today. Never used for the relationship's own messages |
+| `09` | payments address | Optional: the owner's ordinary Epicbox address, for plain sends: from payers who are not paired, from other wallets, and as the fallback when the mailbox fails. Never used for the relationship's own messages |
 | `0A` | home onion | Optional onion domain of the home relay, used when Tor is on |
 | `0B` | caps | u16 bits: 0 opens sealed files, 1 pays invoices, 2 issues invoices, 3 `fixed-hint` (a service inbox), 4 sends withdrawals; rest zero |
 | `0C` | max envelope version | u8 |
@@ -900,8 +900,10 @@ connects to no Epicbox relay at all, home relays included. Then, as in Offline (
 When the recipient is a paired contact with `seal` on and caps bit 0, the file and paste methods
 write an envelope: type `01`, the marked V3 slate as body, purpose, our current card when its seq
 is newer than what the contact last saw, signed. The app shows "Sealed for Anna". Over Epicbox,
-a send to a paired contact goes to its payments address as today, unless the user chooses "Send
-through Anna's mailbox", which posts the envelope to the contact mailbox.
+the host picks the default route for a send to a paired contact. Epic Wallet sends through the
+contact mailbox, which posts the envelope there, and keeps the payments address as the fallback:
+the user can switch to it, and it is offered after a failed send or after 24 hours without an
+answer. The core takes no side; a host that wants the old default, the payments address, may keep it.
 
 A contact mailbox carries only sealed envelopes (11.2), so the mailbox path does not ask the
 `seal` switch: it needs a pairing that is `paired` or `verified`, not `keys-changed`, and the
@@ -1032,6 +1034,12 @@ and the contact keeps its record, its trust and its Verified mark. Only the rest
 settings for that contact ("Allow invoices", "Seal payments") start at their defaults, and its
 mailbox is new (new `box_salt`); messages left in the old mailbox expire on the relay after 7
 days. Pending pairings are not in the backup.
+
+A send that was already delivered to the old mailbox is lost, and a send to a restored side that
+has no pairing reaches nothing. After `ContactKeysRestored` the core redirects only undelivered
+outbox entries to the new mailbox. A host may post a waiting send again with `contact_post_slate`,
+because delivered entries are not redirected. A receiver that already holds the S1 sends its
+stored S2 again, and the slate id keeps the repost from doing harm.
 
 ### 11 Invoice trust on contacts
 
@@ -1287,7 +1295,7 @@ new SAS domain string.
 | Spam or DoS against a service from many paired keys | Each pairing needs a logged-in account and an invite (3 open per account); per-key and global rate limits (13.4); only hint-matched envelopes are opened; revocation | An attacker with many accounts costs the service drains and hint lookups, bounded per message |
 | Flood of address or relay updates | None needed for relay switches (8.3); updates signed, higher `seq` only, 3 a day per contact, 100 an hour in total; a move to another relay is only reported, and the host decides whether to follow (8.5) | A contact can ask its host to follow it to a relay of its choosing; the host shows the request or follows only relays it trusts |
 | Spam into a wallet's contact mailbox | Only the contact knows the mailbox; per-drain read limit and per-contact invoice caps; turning invoices off or removing the pairing stops it | A contact you paired with can annoy you until you remove it |
-| Downgrade to plain | Between contacts the sender seals by policy, not by a signal the channel could strip; plain only by the user's "Send as plain"; a plain payload in a contact mailbox is dropped | An attacker who strips the reply key from an unpaired plain S1 gets a plain S2, as today |
+| Downgrade to plain | Between contacts the sender seals by policy, not by a signal the channel could strip; plain only by the user's "Send as plain" or the user-approved fallback below; a plain payload in a contact mailbox is dropped. A relay that drops mailbox mail leaves the send unanswered; the host may push it to plain after 24 hours, and only after it asks the user (the waiting send is cancelled, then an ordinary send goes to the payments address) | An attacker who strips the reply key from an unpaired plain S1 gets a plain S2, as today |
 | Key reuse and linking | Contact keys and mailboxes share nothing with Epicbox, Tor or proofs; one set per slot | Two installs on one seed that meet in one slot give its two contacts the same keys (2.2). A person's card may carry the ordinary payments address (tag 09), the same for every contact; leave it out to stay unlinkable. A push service links mailboxes registered under one device token (8.6) |
 | Compromised phone | Out of scope: it holds the seed | Past sealed messages to it open with the keys from the seed |
 | Forward secrecy | Sender side: each envelope uses a fresh HPKE key | A recipient key leak opens past messages to that key (RFC 9180 section 9.7.4); re-pairing rotates |
