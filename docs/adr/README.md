@@ -53,6 +53,7 @@ record that supersedes the old one; accepted records are not rewritten.
 | [0045](0045-refusing-slates-nobody-asked-for.md) | Refusing slates nobody asked for | proposed |
 | [0046](0046-a-wallet-for-a-mining-node.md) | A wallet for a mining node | accepted |
 | [0047](0047-the-mailbox-is-the-default-between-paired-contacts.md) | The mailbox is the default between paired contacts | accepted |
+| [0048](0048-block-rewards-for-this-computer.md) | Block rewards are for this computer unless the host opens them | accepted |
 
 Template:
 

@@ -12,8 +12,8 @@ use jiff::Timestamp;
 use lepic_epicbox::transport::EpicboxTransport;
 use lepic_epicbox::{ClientSettings, EpicboxAddress, Network as RelayNetwork, TRANSPORT_ID};
 use lepic_foreign::{
-    BlockFees, CoinbaseAnswer, Exposure, ForeignClient, ForeignUrl, ListenSettings, PlainHttp,
-    ReceiveHandler, Refusal, webpki_tls_config,
+    BlockFees, CoinbaseAccess, CoinbaseAnswer, Exposure, ForeignClient, ForeignUrl, ListenSettings,
+    PlainHttp, ReceiveHandler, Refusal, webpki_tls_config,
 };
 use lepic_keychain::Identifier;
 use lepic_keychain::vault::MAX_WALLET_SEED_FILE_LEN;
@@ -843,9 +843,14 @@ impl<H: Host> Run<'_, H> {
             proof_key: ProofKey::Payments,
         });
         let port = args.port.unwrap_or(self.settings.tuning.listen_port);
+        let coinbase = match (args.coinbase, args.coinbase_remote) {
+            (_, true) => CoinbaseAccess::Remote,
+            (true, false) => CoinbaseAccess::LocalOnly,
+            (false, false) => CoinbaseAccess::Off,
+        };
         let handle = lepic_foreign::listen(
             ListenSettings::new(exposure, port, self.settings.tuning.listen)
-                .with_coinbase(args.coinbase),
+                .with_coinbase(coinbase),
             receiver,
         )
         .await?;

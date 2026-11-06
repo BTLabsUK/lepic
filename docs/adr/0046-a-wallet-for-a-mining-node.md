@@ -4,6 +4,8 @@ Status: accepted
 Date: 2026-11-06
 
 Extends 0017 (the foreign API over HTTP). Changes the "Mining" non-goal in `docs/rules.md`.
+0048 supersedes the line that core does not stop a host from serving it beyond this computer, and
+the statement that no store migration is needed.
 
 ## Context
 

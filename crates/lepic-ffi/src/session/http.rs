@@ -8,9 +8,9 @@ use std::sync::{Arc, Weak};
 use std::time::Duration;
 
 use lepic_foreign::{
-    BlockFees, CoinbaseAnswer, Exposure, ForeignClient, ForeignDialFuture, ForeignDialer,
-    ForeignStream, ForeignUrl, HttpTransport, ListenError, ListenSettings, ListenerHandle,
-    PlainHttp, ReceiveHandler, Refusal, TRANSPORT_ID, UrlError, webpki_tls_config,
+    BlockFees, CoinbaseAccess, CoinbaseAnswer, Exposure, ForeignClient, ForeignDialFuture,
+    ForeignDialer, ForeignStream, ForeignUrl, HttpTransport, ListenError, ListenSettings,
+    ListenerHandle, PlainHttp, ReceiveHandler, Refusal, TRANSPORT_ID, UrlError, webpki_tls_config,
 };
 use lepic_keychain::Identifier;
 use lepic_node::{Propagation, is_loopback_host};
@@ -27,8 +27,8 @@ use tracing::{debug, warn};
 use super::{DEFAULT_ACCOUNT, Session, invalid, lock};
 use crate::api::error::{WalletError, WalletErrorKind};
 use crate::api::http::{
-    HttpExposure, HttpListenerEvent, HttpListenerEventKind, HttpListenerInfo, HttpRefusal,
-    HttpResentTx, HttpSentTx,
+    HttpCoinbase, HttpExposure, HttpListenerEvent, HttpListenerEventKind, HttpListenerInfo,
+    HttpRefusal, HttpResentTx, HttpSentTx,
 };
 use crate::api::types::SendOptions;
 use crate::node::{RelayTor, RelayTorError};
@@ -283,12 +283,12 @@ impl Session {
     }
 
     /// Starts the HTTP listener unless one runs or starts, and reports its start or why it
-    /// could not to `report`. With `coinbase` it also builds block rewards for a mining node.
+    /// could not to `report`. `coinbase` says who it builds block rewards for.
     pub(crate) async fn start_http_listener(
         self: &Arc<Self>,
         exposure: HttpExposure,
         port: u16,
-        coinbase: bool,
+        coinbase: HttpCoinbase,
         report: HttpReport,
     ) -> Result<(), WalletError> {
         self.ensure_unlocked()?;
@@ -310,7 +310,7 @@ impl Session {
         }
         let receiver = self.http_receiver(Arc::clone(&report), TRANSPORT_ID, ProofKey::Payments);
         let settings = ListenSettings::new(self::exposure(exposure), port, self.tuning.listen)
-            .with_coinbase(coinbase);
+            .with_coinbase(self::coinbase_access(coinbase));
         let listening = lepic_foreign::listen(settings, receiver).await;
         let handle = match listening {
             Ok(handle) => handle,
@@ -506,6 +506,14 @@ impl ReceiveHandler for HttpReceiver {
                 }
             }
         })
+    }
+}
+
+fn coinbase_access(coinbase: HttpCoinbase) -> CoinbaseAccess {
+    match coinbase {
+        HttpCoinbase::Off => CoinbaseAccess::Off,
+        HttpCoinbase::LocalOnly => CoinbaseAccess::LocalOnly,
+        HttpCoinbase::Remote => CoinbaseAccess::Remote,
     }
 }
 

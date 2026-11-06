@@ -658,10 +658,11 @@ listens on every interface, for a port forwarded from the internet: anyone who r
 can send the wallet payments. A request may take up to a minute; at most 16 connections are
 served at once and 30 payments a minute are taken.
 
-With --coinbase it also answers build_coinbase, so a mining node pointed at the listener pays
-its block rewards to this wallet's default account: set wallet_listener_url in the node's
-[server.stratum_mining_config] to http://127.0.0.1:<port>. The listener builds a reward for
-anyone who reaches the port, so keep it on this computer.")]
+With --coinbase it also answers build_coinbase for a node on this computer, so the node pays its
+block rewards to this wallet's default account: set wallet_listener_url in the node's
+[server.stratum_mining_config] to http://127.0.0.1:<port>. A node elsewhere can reach it through
+a tunnel. With --coinbase-remote and --internet it answers every caller: anyone who reaches the
+port gets a reward built, up to the listener's limits.")]
     Listen(HttpListenArgs),
 }
 
@@ -673,9 +674,12 @@ pub struct HttpListenArgs {
     /// Listen on every network interface instead of this computer only
     #[arg(long)]
     pub internet: bool,
-    /// Also build block rewards for a mining node, as epic-wallet's listener does
+    /// Also build block rewards for a mining node on this computer
     #[arg(long)]
     pub coinbase: bool,
+    /// Build block rewards for a mining node on another computer too
+    #[arg(long, requires = "coinbase", requires = "internet")]
+    pub coinbase_remote: bool,
 }
 
 /// The tor binary the wallet runs for Tor.

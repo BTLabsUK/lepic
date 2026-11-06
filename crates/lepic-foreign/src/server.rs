@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //! The listener: serves `check_version` and `receive_tx` at `/v2/foreign`, as
 //! `epic-wallet listen -m http` does, so any wallet that sends over HTTP can pay this one. A
-//! listener can also serve a mining node's `build_coinbase` (ADR 0046); by default it
+//! listener can also serve a mining node's `build_coinbase` (ADR 0046, ADR 0048); by default it
 //! answers that method as unknown.
 //!
 //! Everything a caller sends is untrusted and its cost is bounded: connections at once, in all
@@ -15,6 +15,10 @@
 //! past the request budget holds a payment's place only until it turns out not to be one), and a
 //! payment the wallet refuses as invalid gives its share of the payment budget back, up to the
 //! budget again each minute.
+//!
+//! On a listener that serves `build_coinbase`, loopback peers have connections of their own and
+//! their `build_coinbase` spends no budget: a node that is refused retries for as long as it
+//! takes and gets no new job meanwhile, so nothing other callers do may hold it back.
 
 use std::collections::HashMap;
 use std::convert::Infallible;
@@ -72,6 +76,28 @@ impl Exposure {
     }
 }
 
+/// Who `build_coinbase` is served to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum CoinbaseAccess {
+    /// Nobody: the method is answered as unknown.
+    Off,
+    /// Loopback peers, a node on this computer or a tunnel to it. Every other caller gets the
+    /// answer of [`Self::Off`].
+    LocalOnly,
+    /// Every peer. Those beyond this computer stay under the listener's limits.
+    Remote,
+}
+
+impl CoinbaseAccess {
+    const fn serves(self, loopback: bool) -> bool {
+        match self {
+            Self::Off => false,
+            Self::LocalOnly => loopback,
+            Self::Remote => true,
+        }
+    }
+}
+
 /// Where the listener listens and what it allows.
 #[derive(Debug, Clone, Copy)]
 pub struct ListenSettings {
@@ -100,9 +126,9 @@ pub struct ListenSettings {
     /// refusals a minute: the wallet may refuse a slate only after costly checks, so at most
     /// twice this many reach it in a minute.
     pub receives_per_minute: u32,
-    /// Whether `build_coinbase` is served, for a mining node to pay its block rewards to this
-    /// wallet. Off unless the host turns it on; when off the method is answered as unknown.
-    pub coinbase: bool,
+    /// Who `build_coinbase` is served to, for a mining node to pay its block rewards to this
+    /// wallet. Off unless the host turns it on.
+    pub coinbase: CoinbaseAccess,
 }
 
 /// The caller's limits of a listener, as [`ListenSettings`] describes each.
@@ -131,13 +157,13 @@ impl ListenSettings {
             answer_timeout: limits.answer_timeout,
             requests_per_minute: limits.requests_per_minute,
             receives_per_minute: limits.receives_per_minute,
-            coinbase: false,
+            coinbase: CoinbaseAccess::Off,
         }
     }
 
-    /// These settings with `build_coinbase` served or not.
+    /// These settings with `build_coinbase` served to `coinbase`.
     #[must_use]
-    pub const fn with_coinbase(mut self, coinbase: bool) -> Self {
+    pub const fn with_coinbase(mut self, coinbase: CoinbaseAccess) -> Self {
         self.coinbase = coinbase;
         self
     }
@@ -178,8 +204,8 @@ pub trait ReceiveHandler: Send + Sync + 'static {
     /// it does over the per-minute limits.
     fn refused(&self, _refusal: Refusal) {}
 
-    /// Builds the reward output and kernel a mining node asks for, on a listener whose
-    /// [`ListenSettings::coinbase`] is on. A wallet that cannot build one refuses.
+    /// Builds the reward output and kernel a mining node asks for, when
+    /// [`ListenSettings::coinbase`] serves the caller. A wallet that cannot build one refuses.
     fn build_coinbase(&self, _fees: BlockFees) -> BoxFuture<'_, Result<CoinbaseAnswer, Refusal>> {
         Box::pin(async { Err(Refusal::Unavailable) })
     }
@@ -458,6 +484,9 @@ impl Drop for AddressShare {
 }
 
 enum Admission<'a> {
+    /// A loopback peer of a listener that serves `build_coinbase`. That call is free; any other
+    /// is admitted as any caller's once it is read.
+    Loopback,
     Any,
     /// Read past the request budget: served only if it is a payment.
     PaymentOnly(PaymentPlace<'a>),
@@ -542,6 +571,7 @@ impl Window {
 
 async fn accept_loop(listener: Bound, state: Arc<Served>, mut stopped: watch::Receiver<bool>) {
     let permits = Arc::new(Semaphore::new(state.settings.max_connections));
+    let loopback_permits = Arc::new(Semaphore::new(state.settings.max_connections));
     loop {
         let accepted = tokio::select! {
             accepted = listener.accept() => accepted,
@@ -556,8 +586,17 @@ async fn accept_loop(listener: Bound, state: Arc<Served>, mut stopped: watch::Re
                 continue;
             }
         };
+        // A Unix socket's callers are whoever came in over an onion, whatever `remote` says.
+        let loopback = state.settings.coinbase != CoinbaseAccess::Off
+            && matches!(stream, Accepted::Tcp(_))
+            && remote.is_loopback();
+        let pool = if loopback {
+            &loopback_permits
+        } else {
+            &permits
+        };
         // Over the connection limit the connection is closed at once, unanswered.
-        let Ok(permit) = Arc::clone(&permits).try_acquire_owned() else {
+        let Ok(permit) = Arc::clone(pool).try_acquire_owned() else {
             debug!("connection limit reached");
             continue;
         };
@@ -568,11 +607,11 @@ async fn accept_loop(listener: Bound, state: Arc<Served>, mut stopped: watch::Re
         let state = Arc::clone(&state);
         match stream {
             Accepted::Tcp(stream) => {
-                tokio::spawn(serve_connection(stream, state, share, permit));
+                tokio::spawn(serve_connection(stream, state, loopback, share, permit));
             }
             #[cfg(unix)]
             Accepted::Unix(stream) => {
-                tokio::spawn(serve_connection(stream, state, share, permit));
+                tokio::spawn(serve_connection(stream, state, loopback, share, permit));
             }
         }
     }
@@ -583,6 +622,7 @@ async fn accept_loop(listener: Bound, state: Arc<Served>, mut stopped: watch::Re
 async fn serve_connection<S>(
     stream: S,
     state: Arc<Served>,
+    loopback: bool,
     share: AddressShare,
     permit: tokio::sync::OwnedSemaphorePermit,
 ) where
@@ -592,7 +632,7 @@ async fn serve_connection<S>(
     let deadline = state.settings.connection_deadline();
     let service = service_fn(move |request| {
         let state = Arc::clone(&state);
-        async move { Ok::<_, Infallible>(answer(&state, request).await) }
+        async move { Ok::<_, Infallible>(answer(&state, loopback, request).await) }
     });
     let connection = http1::Builder::new()
         .timer(TokioTimer::new())
@@ -609,8 +649,17 @@ async fn serve_connection<S>(
     drop(permit);
 }
 
-async fn answer(state: &Served, request: Request<Incoming>) -> Response<Full<Bytes>> {
-    let Some(admission) = state.admit_request() else {
+async fn answer(
+    state: &Served,
+    loopback: bool,
+    request: Request<Incoming>,
+) -> Response<Full<Bytes>> {
+    let admission = if loopback {
+        Some(Admission::Loopback)
+    } else {
+        state.admit_request()
+    };
+    let Some(admission) = admission else {
         debug!("request limit reached");
         return status(StatusCode::SERVICE_UNAVAILABLE);
     };
@@ -620,7 +669,7 @@ async fn answer(state: &Served, request: Request<Incoming>) -> Response<Full<Byt
     if request.method() != Method::POST {
         return status(StatusCode::METHOD_NOT_ALLOWED);
     }
-    let serving = serve(state, admission, request);
+    let serving = serve(state, loopback, admission, request);
     match tokio::time::timeout(state.settings.request_timeout, serving).await {
         Ok(response) => response,
         Err(_) => {
@@ -632,6 +681,7 @@ async fn answer(state: &Served, request: Request<Incoming>) -> Response<Full<Byt
 
 async fn serve(
     state: &Served,
+    loopback: bool,
     mut admission: Admission<'_>,
     request: Request<Incoming>,
 ) -> Response<Full<Bytes>> {
@@ -652,7 +702,17 @@ async fn serve(
             return status(StatusCode::REQUEST_TIMEOUT);
         }
     };
-    let request = match rpc::decode_request(&body) {
+    let decoded = rpc::decode_request(&body);
+    let coinbase =
+        matches!(&decoded, Ok(request) if matches!(request.call, Call::BuildCoinbase(_)));
+    if matches!(admission, Admission::Loopback) && !coinbase {
+        let Some(shared) = state.admit_request() else {
+            debug!("request limit reached");
+            return status(StatusCode::SERVICE_UNAVAILABLE);
+        };
+        admission = shared;
+    }
+    let request = match decoded {
         Ok(request) => request,
         Err(_) if matches!(admission, Admission::PaymentOnly(_)) => {
             return status(StatusCode::SERVICE_UNAVAILABLE);
@@ -706,7 +766,7 @@ async fn serve(
                 }
             }
         }
-        Call::BuildCoinbase(_) if !state.settings.coinbase => {
+        Call::BuildCoinbase(_) if !state.settings.coinbase.serves(loopback) => {
             json(rpc::encode_error_response(&Unanswerable {
                 id: request.id,
                 code: rpc::METHOD_NOT_FOUND,

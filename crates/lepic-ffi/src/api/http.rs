@@ -26,6 +26,18 @@ pub enum HttpExposure {
     Internet,
 }
 
+/// Who the HTTP listener builds block rewards for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HttpCoinbase {
+    /// Nobody: `build_coinbase` is answered as unknown.
+    Off,
+    /// A mining node on this device, or a tunnel to it. Anyone else gets the answer of `Off`.
+    LocalOnly,
+    /// A mining node anywhere: whoever reaches the port. Needs `HttpExposure::Internet` to mean
+    /// more than `LocalOnly`.
+    Remote,
+}
+
 /// A running HTTP listener.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct HttpListenerInfo {
@@ -188,9 +200,8 @@ impl EpicWallet {
     /// 0 lets the system pick one, which the `Started` event and
     /// [`EpicWallet::http_listener_status`] report; `epic-wallet` listens on 3415.
     ///
-    /// With `coinbase` the listener also answers a mining node's `build_coinbase` (ADR 0046),
-    /// so the node pays its block rewards to this wallet; off, it answers that method as
-    /// unknown. Only a node the user runs should reach it: keep `exposure` `LocalOnly` then.
+    /// With `coinbase` the listener also answers a mining node's `build_coinbase` (ADR 0046,
+    /// ADR 0048), so the node pays its block rewards to this wallet.
     ///
     /// The first event is `Started`, `PortInUse` or `BindFailed`; after a start the last one
     /// is `Stopped`. A wallet runs one HTTP listener: a call while one runs or starts gets a
@@ -200,7 +211,7 @@ impl EpicWallet {
         &self,
         exposure: HttpExposure,
         port: u16,
-        coinbase: bool,
+        coinbase: HttpCoinbase,
         events: StreamSink<HttpListenerEvent>,
     ) {
         let sink = events.clone();

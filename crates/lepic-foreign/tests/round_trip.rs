@@ -9,9 +9,9 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use lepic_foreign::{
-    BlockFees, ClientError, CoinbaseAnswer, Exposure, ForeignClient, ForeignUrl, HttpTransport,
-    ListenError, ListenSettings, PlainHttp, ReceiveHandler, Refusal, RpcError, listen,
-    webpki_tls_config,
+    BlockFees, ClientError, CoinbaseAccess, CoinbaseAnswer, Exposure, ForeignClient, ForeignUrl,
+    HttpTransport, ListenError, ListenSettings, PlainHttp, ReceiveHandler, Refusal, RpcError,
+    listen, webpki_tls_config,
 };
 use lepic_slate::codec::{MediaType, WireSlate};
 use lepic_transport::error::TransportError;
@@ -755,9 +755,12 @@ async fn serves_build_coinbase_only_when_turned_on() {
     assert_eq!(answer_body(&answer)["error"]["code"], -32601);
     off.shutdown().await;
 
-    let on = listen(settings.with_coinbase(true), Arc::new(Mining))
-        .await
-        .unwrap();
+    let on = listen(
+        settings.with_coinbase(CoinbaseAccess::LocalOnly),
+        Arc::new(Mining),
+    )
+    .await
+    .unwrap();
     let port = on.local_addr().port();
     let answer = answer_body(&raw_exchange(port, build_coinbase_request(5).as_bytes()).await);
     assert!(answer["error"].is_null());
@@ -768,6 +771,129 @@ async fn serves_build_coinbase_only_when_turned_on() {
     on.shutdown().await;
 }
 
+#[cfg(unix)]
+async fn unix_exchange(path: &std::path::Path, request: &[u8]) -> serde_json::Value {
+    let mut stream = tokio::net::UnixStream::connect(path).await.unwrap();
+    stream.write_all(request).await.unwrap();
+    let mut answer = Vec::new();
+    stream.read_to_end(&mut answer).await.unwrap();
+    answer_body(&String::from_utf8_lossy(&answer))
+}
+
+/// A caller beyond loopback gets the answer of a listener with the method off, unless the host
+/// opened it. A Unix socket's callers are such callers, and Tor's reach the wallet that way.
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn only_the_opt_in_serves_a_caller_beyond_loopback() {
+    let path = std::env::temp_dir().join(format!("lepic-coinbase-{}.sock", std::process::id()));
+    let settings = ListenSettings::new(
+        Exposure::LocalOnly,
+        0,
+        lepic_foreign::testing::listen_limits(),
+    );
+    let request = build_coinbase_request(5);
+
+    let off = lepic_foreign::listen_unix(&path, settings, Arc::new(Mining))
+        .await
+        .unwrap();
+    let unknown = unix_exchange(&path, request.as_bytes()).await;
+    assert_eq!(unknown["error"]["code"], -32601);
+    off.shutdown().await;
+
+    let local = lepic_foreign::listen_unix(
+        &path,
+        settings.with_coinbase(CoinbaseAccess::LocalOnly),
+        Arc::new(Mining),
+    )
+    .await
+    .unwrap();
+    assert_eq!(unix_exchange(&path, request.as_bytes()).await, unknown);
+    local.shutdown().await;
+
+    let remote = lepic_foreign::listen_unix(
+        &path,
+        settings.with_coinbase(CoinbaseAccess::Remote),
+        Arc::new(Mining),
+    )
+    .await
+    .unwrap();
+    let served = unix_exchange(&path, request.as_bytes()).await;
+    assert_eq!(served["result"]["Ok"]["output"]["features"], "Coinbase");
+    remote.shutdown().await;
+}
+
+fn check_version_request() -> String {
+    let body = r#"{"jsonrpc":"2.0","method":"check_version","id":1,"params":[]}"#;
+    format!(
+        "POST /v2/foreign HTTP/1.1\r\nhost: x\r\ncontent-length: {}\r\n\r\n{body}",
+        body.len()
+    )
+}
+
+/// Past every budget other requests are turned away and the node on this computer is not.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_loopback_node_spends_no_request_budget() {
+    let mut limits = lepic_foreign::testing::listen_limits();
+    limits.requests_per_minute = 1;
+    limits.receives_per_minute = 1;
+    let settings = ListenSettings::new(Exposure::LocalOnly, 0, limits)
+        .with_coinbase(CoinbaseAccess::LocalOnly);
+    let listener = listen(settings, Arc::new(Mining)).await.unwrap();
+    let port = listener.local_addr().port();
+
+    let version = raw_exchange(port, check_version_request().as_bytes()).await;
+    assert!(version.starts_with("HTTP/1.1 200"), "{version}");
+    let spent = raw_exchange(port, check_version_request().as_bytes()).await;
+    assert!(spent.starts_with("HTTP/1.1 503"), "{spent}");
+
+    for height in 1..=5 {
+        let request = build_coinbase_request(height);
+        let answer = answer_body(&raw_exchange(port, request.as_bytes()).await);
+        assert_eq!(answer["result"]["Ok"]["output"]["features"], "Coinbase");
+    }
+    listener.shutdown().await;
+}
+
+/// The address this computer reaches others from, when it has one beyond loopback.
+fn address_beyond_loopback() -> Option<std::net::IpAddr> {
+    let socket = std::net::UdpSocket::bind("0.0.0.0:0").ok()?;
+    socket.connect("192.0.2.1:9").ok()?;
+    let address = socket.local_addr().ok()?.ip();
+    (!address.is_loopback() && !address.is_unspecified()).then_some(address)
+}
+
+/// Connections from beyond loopback that fill the listener leave a loopback node its own. Over
+/// TCP they also get the answer of a listener with the method off.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_loopback_node_is_not_held_back_by_the_connection_cap() {
+    let Some(address) = address_beyond_loopback() else {
+        return;
+    };
+    let mut limits = lepic_foreign::testing::listen_limits();
+    limits.max_connections = 1;
+    let settings =
+        ListenSettings::new(Exposure::Internet, 0, limits).with_coinbase(CoinbaseAccess::LocalOnly);
+    let listener = listen(settings, Arc::new(Mining)).await.unwrap();
+    let port = listener.local_addr().port();
+
+    let mut stream = TcpStream::connect((address, port)).await.unwrap();
+    stream
+        .write_all(build_coinbase_request(5).as_bytes())
+        .await
+        .unwrap();
+    let mut answer = Vec::new();
+    stream.read_to_end(&mut answer).await.unwrap();
+    let answer = answer_body(&String::from_utf8_lossy(&answer));
+    assert_eq!(answer["error"]["code"], -32601);
+
+    let _held = TcpStream::connect((address, port)).await.unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    let request = build_coinbase_request(5);
+    let served = answer_body(&raw_exchange(port, request.as_bytes()).await);
+    assert_eq!(served["result"]["Ok"]["output"]["features"], "Coinbase");
+    listener.shutdown().await;
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_wallet_without_a_coinbase_builder_refuses() {
     let wallet = handler(None);
@@ -776,7 +902,7 @@ async fn a_wallet_without_a_coinbase_builder_refuses() {
         0,
         lepic_foreign::testing::listen_limits(),
     )
-    .with_coinbase(true);
+    .with_coinbase(CoinbaseAccess::LocalOnly);
     let listener = listen(settings, wallet).await.unwrap();
     let answer = answer_body(
         &raw_exchange(

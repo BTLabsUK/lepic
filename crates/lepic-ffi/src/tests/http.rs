@@ -11,7 +11,7 @@ use zeroize::Zeroizing;
 use super::{eventually, kind};
 use crate::api::diagnostics::LogLevel;
 use crate::api::error::WalletErrorKind;
-use crate::api::http::{HttpExposure, HttpListenerEvent, HttpListenerEventKind};
+use crate::api::http::{HttpCoinbase, HttpExposure, HttpListenerEvent, HttpListenerEventKind};
 use crate::api::runtime::LepicRuntime;
 use crate::api::secret_store::AppSecretStore;
 use crate::api::testing::MockChain;
@@ -221,7 +221,12 @@ async fn a_listener_with_coinbase_builds_a_block_reward() {
     let pair = funded_pair().await;
     let events = Events::default();
     pair.bob
-        .start_http_listener(HttpExposure::LocalOnly, 0, true, events.report())
+        .start_http_listener(
+            HttpExposure::LocalOnly,
+            0,
+            HttpCoinbase::LocalOnly,
+            events.report(),
+        )
         .await
         .unwrap();
     let port = pair.bob.http_listener_status().unwrap().port;

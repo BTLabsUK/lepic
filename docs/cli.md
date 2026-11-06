@@ -503,7 +503,7 @@ were received, repeated and refused. Invoices are never answered over HTTP.
 ### Block rewards for a mining node
 
 A node that mines asks a wallet for each block's coinbase. `--coinbase` makes the listener
-answer it, as `epic-wallet listen` does:
+answer a node on this computer:
 
 ```
 $ lepic http listen --coinbase
@@ -519,9 +519,13 @@ wallet_listener_url = "http://127.0.0.1:3415"
 
 Rewards go to the default account. A mined reward shows as an incoming transaction after the
 next refresh, and can be spent once 1,440 blocks have passed on mainnet (30 on floonet). A
-reward built for a block that was not mined is deleted 50 blocks later. The listener builds a
-reward for anyone who reaches the port, so keep it on this computer and do not add
-`--internet`.
+reward built for a block that was not mined is deleted 50 blocks later, and a wallet keeps at
+most 4,096 of them.
+
+Payments still work over `--internet`: only loopback callers get a reward built, and anyone else
+is told the method does not exist. A node on another computer can reach the wallet through a
+tunnel, or with `--coinbase --coinbase-remote --internet`. The listener then builds a reward for
+anyone who reaches the port, within its limits.
 
 ## Direct over Tor
 

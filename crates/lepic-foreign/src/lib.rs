@@ -20,7 +20,8 @@ pub use rpc::{BlockFees, CoinbaseAnswer};
 #[cfg(unix)]
 pub use server::listen_unix;
 pub use server::{
-    Exposure, ListenLimits, ListenSettings, ListenerHandle, ReceiveHandler, Refusal, listen,
+    CoinbaseAccess, Exposure, ListenLimits, ListenSettings, ListenerHandle, ReceiveHandler,
+    Refusal, listen,
 };
 pub use transport::{HttpPolicy, HttpTransport, TRANSPORT_ID};
 pub use url::{DEFAULT_LISTEN_PORT, ForeignUrl, PlainHttp, Scheme};
