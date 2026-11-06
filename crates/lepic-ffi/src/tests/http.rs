@@ -155,7 +155,12 @@ impl Events {
 /// Starts `session`'s listener on a port the system picks and returns the port.
 async fn listen(session: &Arc<Session>, events: &Events) -> u16 {
     session
-        .start_http_listener(HttpExposure::LocalOnly, 0, HttpCoinbase::Off, events.report())
+        .start_http_listener(
+            HttpExposure::LocalOnly,
+            0,
+            HttpCoinbase::Off,
+            events.report(),
+        )
         .await
         .unwrap();
     let started = events.last();
@@ -370,7 +375,12 @@ async fn a_second_listener_on_a_taken_port_reports_it() {
     let events = Events::default();
 
     pair.bob
-        .start_http_listener(HttpExposure::LocalOnly, port, HttpCoinbase::Off, events.report())
+        .start_http_listener(
+            HttpExposure::LocalOnly,
+            port,
+            HttpCoinbase::Off,
+            events.report(),
+        )
         .await
         .unwrap();
 
@@ -388,7 +398,12 @@ async fn a_wallet_runs_one_http_listener() {
     let second = Events::default();
 
     pair.bob
-        .start_http_listener(HttpExposure::LocalOnly, 0, HttpCoinbase::Off, second.report())
+        .start_http_listener(
+            HttpExposure::LocalOnly,
+            0,
+            HttpCoinbase::Off,
+            second.report(),
+        )
         .await
         .unwrap();
 
@@ -409,7 +424,12 @@ async fn lock_stops_the_http_listener_and_frees_its_port() {
     std::net::TcpListener::bind(("127.0.0.1", port)).unwrap();
     let locked = pair
         .bob
-        .start_http_listener(HttpExposure::LocalOnly, 0, HttpCoinbase::Off, events.report())
+        .start_http_listener(
+            HttpExposure::LocalOnly,
+            0,
+            HttpCoinbase::Off,
+            events.report(),
+        )
         .await;
     assert_eq!(kind(locked), WalletErrorKind::Locked);
 }
