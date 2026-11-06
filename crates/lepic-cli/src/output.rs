@@ -138,6 +138,12 @@ pub struct InfoReport {
     pub height: u64,
     /// True when the node is behind the last refresh, so the balances were not updated.
     pub node_behind: bool,
+    /// True when the node's tip is too far above the wallet's confirmed height to be taken from
+    /// one answer, so the balances are at `height`, below the node's tip.
+    pub catching_up: bool,
+    /// The node's tip while `catching_up`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub node_height: Option<u64>,
     pub accounts: Vec<AccountReport>,
 }
 
@@ -1136,6 +1142,14 @@ fn write_wallet_human(out: &mut Vec<u8>, report: &Report) -> std::io::Result<()>
         }
         Report::Info(r) => {
             writeln!(out, "Network {}, chain height {}.", r.network, r.height)?;
+            if let Some(node_height) = r.node_height {
+                writeln!(
+                    out,
+                    "Catching up to the node's tip {node_height}; balances are at height {}. \
+                     Run `lepic wallet info` again.",
+                    r.height
+                )?;
+            }
             if r.node_behind {
                 writeln!(
                     out,
@@ -1837,12 +1851,34 @@ mod tests {
     }
 
     #[test]
+    fn info_catching_up_names_both_heights() {
+        let report = || InfoReport {
+            network: text("floonet"),
+            height: 800,
+            node_behind: false,
+            catching_up: true,
+            node_height: Some(863),
+            accounts: vec![],
+        };
+        let human = render(&Report::Info(report()), OutputFormat::Human).to_string();
+        assert!(
+            human.contains("Catching up to the node's tip 863; balances are at height 800."),
+            "{human}"
+        );
+        let json: Value = serde_json::from_str(&json_line(&report())).unwrap();
+        assert_eq!(json["catching_up"], true, "{json}");
+        assert_eq!(json["node_height"], 863, "{json}");
+    }
+
+    #[test]
     fn a_node_behind_the_wallet_names_the_reset_scan() {
         let info = |node_behind| {
             let report = Report::Info(InfoReport {
                 network: text("floonet"),
                 height: 20,
                 node_behind,
+                catching_up: false,
+                node_height: None,
                 accounts: vec![],
             });
             render(&report, OutputFormat::Human).to_string()
@@ -1916,9 +1952,17 @@ mod tests {
                     network: text("floonet"),
                     height: 1,
                     node_behind: false,
+                    catching_up: false,
+                    node_height: None,
                     accounts: vec![],
                 }),
-                vec!["accounts", "height", "network", "node_behind"],
+                vec![
+                    "accounts",
+                    "catching_up",
+                    "height",
+                    "network",
+                    "node_behind",
+                ],
             ),
             (
                 Report::Address(AddressReport { address: text("a") }),
@@ -2484,6 +2528,8 @@ mod tests {
             network: text("floonet"),
             height: 1,
             node_behind: false,
+            catching_up: false,
+            node_height: None,
             accounts: vec![account],
         });
         let value: Value = serde_json::from_str(&info).unwrap();

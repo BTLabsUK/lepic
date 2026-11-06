@@ -18,6 +18,7 @@ use lepic_epicbox::mock_relay::Unanswered;
 use lepic_node::LocatedKernel;
 use lepic_node::mock::ChainOutput;
 use lepic_primitives::amount::Height;
+use lepic_wallet::chain::TIP_STEP_BLOCKS;
 
 use support::{FUNDING, Instance, SENDER_MNEMONIC, TIP, TestHost, keys, text};
 
@@ -330,6 +331,43 @@ fn tx_show_gives_the_kernel_and_the_confirmation_height() {
         human.contains(&format!("Confirmed at {}\n", TIP + 1)),
         "{human}"
     );
+}
+
+/// A wallet whose last refresh is more than [`TIP_STEP_BLOCKS`] behind the node holds the
+/// node's tip after one answer. `wallet info` catches up rather than printing the balance at the
+/// old height next to the new one.
+#[test]
+fn info_far_behind_the_node_shows_the_balance_at_the_tip_it_reports() {
+    let (host, sender, receiver) = two_wallets();
+    let slate = sender.path("far.slate");
+    sender
+        .run(
+            &host,
+            &["tx", "send", "1", "--to-file", slate.to_str().unwrap()],
+        )
+        .ok();
+    let received = receiver
+        .run(&host, &["tx", "receive", slate.to_str().unwrap()])
+        .ok()
+        .json();
+    sender
+        .run(&host, &["tx", "finalize", text(&received, "reply_file")])
+        .ok();
+    let before = receiver.run(&host, &["wallet", "info"]).ok().json();
+    assert_eq!(before["height"], TIP, "{before}");
+
+    mine_pushed(&host, TIP + 2);
+    let ahead = TIP + TIP_STEP_BLOCKS + 2;
+    host.node
+        .update_chain(|chain| chain.tip.height = Height::new(ahead));
+    let info = receiver.run(&host, &["wallet", "info"]).ok().json();
+    assert_eq!(info["height"], ahead, "{info}");
+    assert_eq!(info["accounts"][0]["spendable"], "1.00000000", "{info}");
+    assert_eq!(
+        info["accounts"][0]["awaiting_confirmation"], "0.00000000",
+        "{info}"
+    );
+    assert_eq!(info["catching_up"], false, "{info}");
 }
 
 #[test]

@@ -612,26 +612,43 @@ impl<H: Host> Run<'_, H> {
 
     async fn info(&mut self) -> Result<Report, CliError> {
         let opened = self.open().await?;
-        let mut events = opened.wallet.subscribe();
         let mut attempt = 1;
-        let outcome = loop {
-            match opened.wallet.refresh().await {
+        let mut catch_up = 0;
+        let (outcome, balances) = loop {
+            let mut events = opened.wallet.subscribe();
+            let outcome = match opened.wallet.refresh().await {
                 Err(error) if attempt < REFRESH_ATTEMPTS && chain_moved_during(&error) => {
                     attempt = attempt.saturating_add(1);
                     tracing::debug!(attempt, error = %error, "refresh repeated");
+                    continue;
                 }
-                outcome => break outcome?,
+                outcome => outcome?,
+            };
+            let mut balances: Vec<Balance> = Vec::new();
+            while let Ok(event) = events.try_recv() {
+                if let Event::Balance(balance) = event {
+                    balances.push(balance);
+                }
             }
+            // A tip too far above the last confirmed one is held until a later answer agrees,
+            // and the balances stay at the confirmed height; the next refresh is that answer.
+            if let RefreshOutcome::Refreshed(summary) = &outcome
+                && balances_height(&balances).is_some_and(|height| height < summary.height)
+                && catch_up < CATCH_UP_REFRESHES
+            {
+                catch_up = catch_up.saturating_add(1);
+                tracing::debug!(tip = %summary.height, "refresh repeated for a held tip");
+                continue;
+            }
+            break (outcome, balances);
         };
-        let mut balances: Vec<Balance> = Vec::new();
-        while let Ok(event) = events.try_recv() {
-            if let Event::Balance(balance) = event {
-                balances.push(balance);
+        let (height, node_behind, node_height) = match outcome {
+            RefreshOutcome::Refreshed(summary) => {
+                let height = balances_height(&balances).unwrap_or(summary.height);
+                let held = (height < summary.height).then_some(summary.height.value());
+                (height, false, held)
             }
-        }
-        let (height, node_behind) = match outcome {
-            RefreshOutcome::Refreshed(summary) => (summary.height, false),
-            RefreshOutcome::NodeBehind { tip, .. } => (tip, true),
+            RefreshOutcome::NodeBehind { tip, .. } => (tip, true, None),
         };
         let accounts = opened
             .wallet
@@ -656,6 +673,8 @@ impl<H: Host> Run<'_, H> {
             network: self.settings.network.to_string(),
             height: height.value(),
             node_behind,
+            catching_up: node_height.is_some(),
+            node_height,
             accounts,
         }))
     }
@@ -1712,6 +1731,16 @@ async fn next_event(
 
 /// How often `wallet info` asks for a refresh the chain outgrew while it ran.
 const REFRESH_ATTEMPTS: u32 = 3;
+
+/// How many more refreshes `wallet info` asks for while the wallet holds the node's tip as
+/// pending. One agreeing answer confirms it; a second covers a chain that grew past the bound
+/// in between.
+const CATCH_UP_REFRESHES: u32 = 2;
+
+/// The lowest height the balances of a refresh were computed at.
+fn balances_height(balances: &[Balance]) -> Option<Height> {
+    balances.iter().map(|balance| balance.height).min()
+}
 
 /// True when a refresh was refused because a block arrived between two of its node requests:
 /// an answer from above the tip it read first, or a second tip that differs. Nothing was stored,

@@ -233,6 +233,12 @@ Awaiting confirmation is received but not yet buried under 3 blocks, as the Epic
 counts; awaiting finalization is a receive the sender has not posted yet; locked is spent by a
 transaction that is not confirmed yet, change included.
 
+The chain height is the one the balances are at. A wallet more than 60 blocks behind its node
+takes the node's tip only once a second answer agrees, so `wallet info` refreshes again until
+it does. If the chain still outgrows it, the report adds `Catching up to the node's tip <n>;
+balances are at height <m>.` (JSON: `"catching_up": true` and `"node_height"`), and the next
+`wallet info` catches up.
+
 ## Restore
 
 From the recovery phrase:
