@@ -24,17 +24,15 @@
 #![crate_type = "rlib"]
 #![crate_type = "dylib"]
 #![crate_name = "secp256k1zkp"]
-
 // Coding conventions
 #![deny(non_upper_case_globals)]
 #![deny(non_camel_case_types)]
 #![deny(non_snake_case)]
 #![deny(unused_mut)]
 #![warn(missing_docs)]
-
-
 #![cfg_attr(all(test, feature = "unstable"), feature(test))]
-#[cfg(all(test, feature = "unstable"))] extern crate test;
+#[cfg(all(test, feature = "unstable"))]
+extern crate test;
 
 extern crate arrayvec;
 extern crate serde;
@@ -46,20 +44,20 @@ pub extern crate rand;
 extern crate zeroize;
 
 use libc::size_t;
-use std::{fmt, ops, ptr};
 use rand::Rng;
+use std::{fmt, ops, ptr};
 
 #[macro_use]
 mod macros;
+pub mod aggsig;
 pub mod constants;
 pub mod ecdh;
 pub mod ffi;
 pub mod key;
 pub mod pedersen;
-pub mod aggsig;
 
-pub use key::SecretKey;
 pub use key::PublicKey;
+pub use key::SecretKey;
 
 /// A tag used for recovering the public key from a compact signature
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
@@ -95,7 +93,7 @@ impl RecoveryId {
     pub fn from_i32(id: i32) -> Result<RecoveryId, Error> {
         match id {
             0 | 1 | 2 | 3 => Ok(RecoveryId(id)),
-            _ => Err(Error::InvalidRecoveryId)
+            _ => Err(Error::InvalidRecoveryId),
         }
     }
 
@@ -113,8 +111,13 @@ impl Signature {
         let mut ret = unsafe { ffi::Signature::blank() };
 
         unsafe {
-            if ffi::secp256k1_ecdsa_signature_parse_der(secp.ctx, &mut ret,
-                                                        data.as_ptr(), data.len() as libc::size_t) == 1 {
+            if ffi::secp256k1_ecdsa_signature_parse_der(
+                secp.ctx,
+                &mut ret,
+                data.as_ptr(),
+                data.len() as libc::size_t,
+            ) == 1
+            {
                 Ok(Signature(ret))
             } else {
                 Err(Error::InvalidSignature)
@@ -130,8 +133,8 @@ impl Signature {
         }
 
         unsafe {
-            if ffi::secp256k1_ecdsa_signature_parse_compact(secp.ctx, &mut ret,
-                                                            data.as_ptr()) == 1 {
+            if ffi::secp256k1_ecdsa_signature_parse_compact(secp.ctx, &mut ret, data.as_ptr()) == 1
+            {
                 Ok(Signature(ret))
             } else {
                 Err(Error::InvalidSignature)
@@ -140,7 +143,7 @@ impl Signature {
     }
 
     /// Stores raw bytes provided as a signature, with no conversion
-    pub fn from_raw_data(data: &[u8;64]) -> Result<Signature, Error> {
+    pub fn from_raw_data(data: &[u8; 64]) -> Result<Signature, Error> {
         Ok(Signature(ffi::Signature::from_data(data.clone())))
     }
 
@@ -151,8 +154,13 @@ impl Signature {
     pub fn from_der_lax(secp: &Secp256k1, data: &[u8]) -> Result<Signature, Error> {
         unsafe {
             let mut ret = ffi::Signature::blank();
-            if ffi::ecdsa_signature_parse_der_lax(secp.ctx, &mut ret,
-                                                  data.as_ptr(), data.len() as libc::size_t) == 1 {
+            if ffi::ecdsa_signature_parse_der_lax(
+                secp.ctx,
+                &mut ret,
+                data.as_ptr(),
+                data.len() as libc::size_t,
+            ) == 1
+            {
                 Ok(Signature(ret))
             } else {
                 Err(Error::InvalidSignature)
@@ -181,8 +189,7 @@ impl Signature {
         unsafe {
             // Ignore return value, which indicates whether the sig
             // was already normalized. We don't care.
-            ffi::secp256k1_ecdsa_signature_normalize(secp.ctx, self.as_mut_ptr(),
-                                                     self.as_ptr());
+            ffi::secp256k1_ecdsa_signature_normalize(secp.ctx, self.as_mut_ptr(), self.as_ptr());
         }
     }
 
@@ -204,8 +211,12 @@ impl Signature {
         let mut ret = Vec::with_capacity(72);
         let mut len: size_t = ret.capacity() as size_t;
         unsafe {
-            let err = ffi::secp256k1_ecdsa_signature_serialize_der(secp.ctx, ret.as_mut_ptr(),
-                                                                   &mut len, self.as_ptr());
+            let err = ffi::secp256k1_ecdsa_signature_serialize_der(
+                secp.ctx,
+                ret.as_mut_ptr(),
+                &mut len,
+                self.as_ptr(),
+            );
             debug_assert!(err == 1);
             ret.set_len(len as usize);
         }
@@ -217,8 +228,11 @@ impl Signature {
     pub fn serialize_compact(&self, secp: &Secp256k1) -> [u8; 64] {
         let mut ret = [0; 64];
         unsafe {
-            let err = ffi::secp256k1_ecdsa_signature_serialize_compact(secp.ctx, ret.as_mut_ptr(),
-                                                                       self.as_ptr());
+            let err = ffi::secp256k1_ecdsa_signature_serialize_compact(
+                secp.ctx,
+                ret.as_mut_ptr(),
+                self.as_ptr(),
+            );
             debug_assert!(err == 1);
         }
         ret
@@ -233,7 +247,8 @@ impl Signature {
 
 impl serde::Serialize for Signature {
     fn serialize<S>(&self, s: S) -> Result<S::Ok, S::Error>
-        where S: serde::Serializer
+    where
+        S: serde::Serializer,
     {
         let secp = Secp256k1::with_caps(crate::ContextFlag::None);
         (&self.serialize_compact(&secp)[..]).serialize(s)
@@ -242,7 +257,8 @@ impl serde::Serialize for Signature {
 
 impl<'de> serde::Deserialize<'de> for Signature {
     fn deserialize<D>(d: D) -> Result<Signature, D::Error>
-        where D: serde::Deserializer<'de>
+    where
+        D: serde::Deserializer<'de>,
     {
         use serde::de;
         struct Visitor {
@@ -253,40 +269,47 @@ impl<'de> serde::Deserialize<'de> for Signature {
 
             #[inline]
             fn visit_seq<A>(self, mut a: A) -> Result<Signature, A::Error>
-                where A: de::SeqAccess<'de>
+            where
+                A: de::SeqAccess<'de>,
             {
                 let s = Secp256k1::with_caps(crate::ContextFlag::None);
-                
-                    let mut ret: [u8; constants::COMPACT_SIGNATURE_SIZE] = [0; constants::COMPACT_SIGNATURE_SIZE];
 
-                    for i in 0..constants::COMPACT_SIGNATURE_SIZE {
-                        ret[i] = match a.next_element()? {
-                            Some(c) => c,
-                            None => return Err(::serde::de::Error::invalid_length(i, &self))
-                        };
-                    }
-                    let one_after_last : Option<u8> = a.next_element()?;
-                    if one_after_last.is_some() {
-                        return Err(serde::de::Error::invalid_length(constants::COMPACT_SIGNATURE_SIZE + 1, &self));
-                    }
+                let mut ret: [u8; constants::COMPACT_SIGNATURE_SIZE] =
+                    [0; constants::COMPACT_SIGNATURE_SIZE];
 
-                    Signature::from_compact(&s, &ret).map_err(
-                        |e| match e {
-                            Error::InvalidSignature => de::Error::invalid_value(de::Unexpected::Seq, &self),
-                            _ => de::Error::custom(&e.to_string()),
-                        }
-                    )
-                
+                for i in 0..constants::COMPACT_SIGNATURE_SIZE {
+                    ret[i] = match a.next_element()? {
+                        Some(c) => c,
+                        None => return Err(::serde::de::Error::invalid_length(i, &self)),
+                    };
+                }
+                let one_after_last: Option<u8> = a.next_element()?;
+                if one_after_last.is_some() {
+                    return Err(serde::de::Error::invalid_length(
+                        constants::COMPACT_SIGNATURE_SIZE + 1,
+                        &self,
+                    ));
+                }
+
+                Signature::from_compact(&s, &ret).map_err(|e| match e {
+                    Error::InvalidSignature => de::Error::invalid_value(de::Unexpected::Seq, &self),
+                    _ => de::Error::custom(&e.to_string()),
+                })
             }
 
             fn expecting(&self, f: &mut ::std::fmt::Formatter) -> ::std::fmt::Result {
-                write!(f, "a sequence of {} bytes representing a syntactically well-formed compact signature",
-                       constants::COMPACT_SIGNATURE_SIZE)
+                write!(
+                    f,
+                    "a sequence of {} bytes representing a syntactically well-formed compact signature",
+                    constants::COMPACT_SIGNATURE_SIZE
+                )
             }
         }
 
         // Begin actual function
-        d.deserialize_seq(Visitor { marker: std::marker::PhantomData })
+        d.deserialize_seq(Visitor {
+            marker: std::marker::PhantomData,
+        })
     }
 }
 
@@ -320,20 +343,28 @@ impl From<ffi::AggSigPartialSignature> for AggSigPartialSignature {
     }
 }
 
-
 impl RecoverableSignature {
     #[inline]
     /// Converts a compact-encoded byte slice to a signature. This
     /// representation is nonstandard and defined by the libsecp256k1
     /// library.
-    pub fn from_compact(secp: &Secp256k1, data: &[u8], recid: RecoveryId) -> Result<RecoverableSignature, Error> {
+    pub fn from_compact(
+        secp: &Secp256k1,
+        data: &[u8],
+        recid: RecoveryId,
+    ) -> Result<RecoverableSignature, Error> {
         let mut ret = unsafe { ffi::RecoverableSignature::blank() };
 
         unsafe {
             if data.len() != 64 {
                 Err(Error::InvalidSignature)
-            } else if ffi::secp256k1_ecdsa_recoverable_signature_parse_compact(secp.ctx, &mut ret,
-                                                                               data.as_ptr(), recid.0) == 1 {
+            } else if ffi::secp256k1_ecdsa_recoverable_signature_parse_compact(
+                secp.ctx,
+                &mut ret,
+                data.as_ptr(),
+                recid.0,
+            ) == 1
+            {
                 Ok(RecoverableSignature(ret))
             } else {
                 Err(Error::InvalidSignature)
@@ -354,7 +385,11 @@ impl RecoverableSignature {
         let mut recid = 0i32;
         unsafe {
             let err = ffi::secp256k1_ecdsa_recoverable_signature_serialize_compact(
-                secp.ctx, ret.as_mut_ptr(), &mut recid, self.as_ptr());
+                secp.ctx,
+                ret.as_mut_ptr(),
+                &mut recid,
+                self.as_ptr(),
+            );
             assert!(err == 1);
         }
         (RecoveryId(recid), ret)
@@ -366,7 +401,11 @@ impl RecoverableSignature {
     pub fn to_standard(&self, secp: &Secp256k1) -> Signature {
         let mut ret = unsafe { ffi::Signature::blank() };
         unsafe {
-            let err = ffi::secp256k1_ecdsa_recoverable_signature_convert(secp.ctx, &mut ret, self.as_ptr());
+            let err = ffi::secp256k1_ecdsa_recoverable_signature_convert(
+                secp.ctx,
+                &mut ret,
+                self.as_ptr(),
+            );
             assert!(err == 1);
         }
         Signature(ret)
@@ -433,7 +472,7 @@ impl Message {
                 ret[..].copy_from_slice(data);
                 Ok(Message(ret))
             }
-            _ => Err(Error::InvalidMessage)
+            _ => Err(Error::InvalidMessage),
         }
     }
 }
@@ -490,7 +529,9 @@ impl Error {
             Error::IncorrectCommitSum => "secp: invalid pedersen commitment sum",
             Error::InvalidRangeProof => "secp: invalid range proof",
             Error::PartialSigFailure => "secp: partial sig (aggsig) failure",
-            Error::SigSubtractionFailure => "secp: subtraction (aggsig) did not result in any valid signatures",
+            Error::SigSubtractionFailure => {
+                "secp: subtraction (aggsig) did not result in any valid signatures"
+            }
         }
     }
 }
@@ -503,14 +544,15 @@ impl fmt::Display for Error {
 }
 
 impl std::error::Error for Error {
-    fn description(&self) -> &str { self.as_str() }
+    fn description(&self) -> &str {
+        self.as_str()
+    }
 }
-
 
 /// The secp256k1 engine, used to execute all signature operations
 pub struct Secp256k1 {
     ctx: *mut ffi::Context,
-    caps: ContextFlag
+    caps: ContextFlag,
 }
 
 unsafe impl Send for Secp256k1 {}
@@ -544,15 +586,17 @@ impl Clone for Secp256k1 {
     fn clone(&self) -> Secp256k1 {
         Secp256k1 {
             ctx: unsafe { ffi::secp256k1_context_clone(self.ctx) },
-            caps: self.caps
+            caps: self.caps,
         }
     }
 }
 
 impl PartialEq for Secp256k1 {
-    fn eq(&self, other: &Secp256k1) -> bool { self.caps == other.caps }
+    fn eq(&self, other: &Secp256k1) -> bool {
+        self.caps == other.caps
+    }
 }
-impl Eq for Secp256k1 { }
+impl Eq for Secp256k1 {}
 
 impl fmt::Debug for Secp256k1 {
     fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
@@ -562,7 +606,9 @@ impl fmt::Debug for Secp256k1 {
 
 impl Drop for Secp256k1 {
     fn drop(&mut self) {
-        unsafe { ffi::secp256k1_context_destroy(self.ctx); }
+        unsafe {
+            ffi::secp256k1_context_destroy(self.ctx);
+        }
     }
 }
 
@@ -583,7 +629,10 @@ impl Secp256k1 {
                 ffi::SECP256K1_START_SIGN | ffi::SECP256K1_START_VERIFY
             }
         };
-        Secp256k1 { ctx: unsafe { ffi::secp256k1_context_create(flag) }, caps: caps }
+        Secp256k1 {
+            ctx: unsafe { ffi::secp256k1_context_create(flag) },
+            caps,
+        }
     }
 
     /// Creates a new Secp256k1 context with no capabilities (just de/serialization)
@@ -614,8 +663,10 @@ impl Secp256k1 {
     /// and `key::PublicKey::from_secret_key`; call those functions directly for
     /// batch key generation. Requires a signing-capable context.
     #[inline]
-    pub fn generate_keypair<R: Rng>(&self, rng: &mut R)
-                                   -> Result<(key::SecretKey, key::PublicKey), Error> {
+    pub fn generate_keypair<R: Rng>(
+        &self,
+        rng: &mut R,
+    ) -> Result<(key::SecretKey, key::PublicKey), Error> {
         let sk = key::SecretKey::new(self, rng);
         let pk = key::PublicKey::from_secret_key(self, &sk)?;
         Ok((sk, pk))
@@ -623,8 +674,7 @@ impl Secp256k1 {
 
     /// Constructs a signature for `msg` using the secret key `sk` and RFC6979 nonce
     /// Requires a signing-capable context.
-    pub fn sign(&self, msg: &Message, sk: &key::SecretKey)
-                -> Result<Signature, Error> {
+    pub fn sign(&self, msg: &Message, sk: &key::SecretKey) -> Result<Signature, Error> {
         if self.caps == ContextFlag::VerifyOnly || self.caps == ContextFlag::None {
             return Err(Error::IncapableContext);
         }
@@ -633,17 +683,28 @@ impl Secp256k1 {
         unsafe {
             // We can assume the return value because it's not possible to construct
             // an invalid signature from a valid `Message` and `SecretKey`
-            assert_eq!(ffi::secp256k1_ecdsa_sign(self.ctx, &mut ret, msg.as_ptr(),
-                                                 sk.as_ptr(), ffi::secp256k1_nonce_function_rfc6979,
-                                                 ptr::null()), 1);
+            assert_eq!(
+                ffi::secp256k1_ecdsa_sign(
+                    self.ctx,
+                    &mut ret,
+                    msg.as_ptr(),
+                    sk.as_ptr(),
+                    ffi::secp256k1_nonce_function_rfc6979,
+                    ptr::null()
+                ),
+                1
+            );
         }
         Ok(Signature::from(ret))
     }
 
     /// Constructs a signature for `msg` using the secret key `sk` and RFC6979 nonce
     /// Requires a signing-capable context.
-    pub fn sign_recoverable(&self, msg: &Message, sk: &key::SecretKey)
-                -> Result<RecoverableSignature, Error> {
+    pub fn sign_recoverable(
+        &self,
+        msg: &Message,
+        sk: &key::SecretKey,
+    ) -> Result<RecoverableSignature, Error> {
         if self.caps == ContextFlag::VerifyOnly || self.caps == ContextFlag::None {
             return Err(Error::IncapableContext);
         }
@@ -652,17 +713,28 @@ impl Secp256k1 {
         unsafe {
             // We can assume the return value because it's not possible to construct
             // an invalid signature from a valid `Message` and `SecretKey`
-            assert_eq!(ffi::secp256k1_ecdsa_sign_recoverable(self.ctx, &mut ret, msg.as_ptr(),
-                                                             sk.as_ptr(), ffi::secp256k1_nonce_function_rfc6979,
-                                                             ptr::null()), 1);
+            assert_eq!(
+                ffi::secp256k1_ecdsa_sign_recoverable(
+                    self.ctx,
+                    &mut ret,
+                    msg.as_ptr(),
+                    sk.as_ptr(),
+                    ffi::secp256k1_nonce_function_rfc6979,
+                    ptr::null()
+                ),
+                1
+            );
         }
         Ok(RecoverableSignature::from(ret))
     }
 
     /// Determines the public key for which `sig` is a valid signature for
     /// `msg`. Requires a verify-capable context.
-    pub fn recover(&self, msg: &Message, sig: &RecoverableSignature)
-                  -> Result<key::PublicKey, Error> {
+    pub fn recover(
+        &self,
+        msg: &Message,
+        sig: &RecoverableSignature,
+    ) -> Result<key::PublicKey, Error> {
         if self.caps == ContextFlag::SignOnly || self.caps == ContextFlag::None {
             return Err(Error::IncapableContext);
         }
@@ -670,8 +742,7 @@ impl Secp256k1 {
         let mut pk = unsafe { ffi::PublicKey::blank() };
 
         unsafe {
-            if ffi::secp256k1_ecdsa_recover(self.ctx, &mut pk,
-                                            sig.as_ptr(), msg.as_ptr()) != 1 {
+            if ffi::secp256k1_ecdsa_recover(self.ctx, &mut pk, sig.as_ptr(), msg.as_ptr()) != 1 {
                 return Err(Error::InvalidSignature);
             }
         };
@@ -691,8 +762,10 @@ impl Secp256k1 {
 
         if !pk.is_valid() {
             Err(Error::InvalidPublicKey)
-        } else if unsafe { ffi::secp256k1_ecdsa_verify(self.ctx, sig.as_ptr(), msg.as_ptr(),
-                                                       pk.as_ptr()) } == 0 {
+        } else if unsafe {
+            ffi::secp256k1_ecdsa_verify(self.ctx, sig.as_ptr(), msg.as_ptr(), pk.as_ptr())
+        } == 0
+        {
             Err(Error::IncorrectSignature)
         } else {
             Ok(())
@@ -702,12 +775,13 @@ impl Secp256k1 {
 
 #[cfg(test)]
 mod tests {
-    use rand::{Rng, rng};
-    use crate::key::{SecretKey, PublicKey};
+    use super::Error::{
+        IncapableContext, IncorrectSignature, InvalidMessage, InvalidPublicKey, InvalidSignature,
+    };
     use super::constants;
-    use super::{Secp256k1, Signature, RecoverableSignature, Message, RecoveryId, ContextFlag};
-    use super::Error::{InvalidMessage, InvalidPublicKey, IncorrectSignature, InvalidSignature,
-                       IncapableContext};
+    use super::{ContextFlag, Message, RecoverableSignature, RecoveryId, Secp256k1, Signature};
+    use crate::key::{PublicKey, SecretKey};
+    use rand::{Rng, rng};
 
     macro_rules! hex {
         ($hex:expr) => {{
@@ -750,7 +824,10 @@ mod tests {
         assert!(sign.sign_recoverable(&msg, &sk).is_ok());
         assert!(full.sign_recoverable(&msg, &sk).is_ok());
         assert_eq!(sign.sign(&msg, &sk), full.sign(&msg, &sk));
-        assert_eq!(sign.sign_recoverable(&msg, &sk), full.sign_recoverable(&msg, &sk));
+        assert_eq!(
+            sign.sign_recoverable(&msg, &sk),
+            full.sign_recoverable(&msg, &sk)
+        );
         let sig = full.sign(&msg, &sk).unwrap();
         let sigr = full.sign_recoverable(&msg, &sk).unwrap();
 
@@ -766,8 +843,7 @@ mod tests {
         assert!(vrfy.recover(&msg, &sigr).is_ok());
         assert!(full.recover(&msg, &sigr).is_ok());
 
-        assert_eq!(vrfy.recover(&msg, &sigr),
-                   full.recover(&msg, &sigr));
+        assert_eq!(vrfy.recover(&msg, &sigr), full.recover(&msg, &sigr));
         assert_eq!(full.recover(&msg, &sigr), Ok(pk));
 
         // Check that we can produce keys from slices with no precomputation
@@ -793,30 +869,39 @@ mod tests {
         rng().fill(&mut msg);
         let msg = Message::from_slice(&msg).unwrap();
 
-        assert_eq!(s.verify(&msg, &sig.to_standard(&s), &pk), Err(InvalidPublicKey));
+        assert_eq!(
+            s.verify(&msg, &sig.to_standard(&s), &pk),
+            Err(InvalidPublicKey)
+        );
     }
 
     #[test]
     fn sign() {
         let mut s = Secp256k1::new();
         s.randomize(&mut rng());
-        let one = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-                   0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1];
+        let one = [
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 1,
+        ];
 
         let sk = SecretKey::from_slice(&s, &one).unwrap();
         let msg = Message::from_slice(&one).unwrap();
 
         let sig = s.sign_recoverable(&msg, &sk).unwrap();
-        assert_eq!(Ok(sig), RecoverableSignature::from_compact(&s, &[
-            0x66, 0x73, 0xff, 0xad, 0x21, 0x47, 0x74, 0x1f,
-            0x04, 0x77, 0x2b, 0x6f, 0x92, 0x1f, 0x0b, 0xa6,
-            0xaf, 0x0c, 0x1e, 0x77, 0xfc, 0x43, 0x9e, 0x65,
-            0xc3, 0x6d, 0xed, 0xf4, 0x09, 0x2e, 0x88, 0x98,
-            0x4c, 0x1a, 0x97, 0x16, 0x52, 0xe0, 0xad, 0xa8,
-            0x80, 0x12, 0x0e, 0xf8, 0x02, 0x5e, 0x70, 0x9f,
-            0xff, 0x20, 0x80, 0xc4, 0xa3, 0x9a, 0xae, 0x06,
-            0x8d, 0x12, 0xee, 0xd0, 0x09, 0xb6, 0x8c, 0x89],
-            RecoveryId(1)))
+        assert_eq!(
+            Ok(sig),
+            RecoverableSignature::from_compact(
+                &s,
+                &[
+                    0x66, 0x73, 0xff, 0xad, 0x21, 0x47, 0x74, 0x1f, 0x04, 0x77, 0x2b, 0x6f, 0x92,
+                    0x1f, 0x0b, 0xa6, 0xaf, 0x0c, 0x1e, 0x77, 0xfc, 0x43, 0x9e, 0x65, 0xc3, 0x6d,
+                    0xed, 0xf4, 0x09, 0x2e, 0x88, 0x98, 0x4c, 0x1a, 0x97, 0x16, 0x52, 0xe0, 0xad,
+                    0xa8, 0x80, 0x12, 0x0e, 0xf8, 0x02, 0x5e, 0x70, 0x9f, 0xff, 0x20, 0x80, 0xc4,
+                    0xa3, 0x9a, 0xae, 0x06, 0x8d, 0x12, 0xee, 0xd0, 0x09, 0xb6, 0x8c, 0x89
+                ],
+                RecoveryId(1)
+            )
+        )
     }
 
     #[test]
@@ -845,7 +930,7 @@ mod tests {
             assert!(Signature::from_compact(&s, &compact[0..4]).is_err());
             assert!(Signature::from_der(&s, &compact[..]).is_err());
             assert!(Signature::from_der(&s, &der[0..4]).is_err());
-         }
+        }
     }
 
     #[test]
@@ -858,13 +943,27 @@ mod tests {
             })
         );
 
-        check_lax_sig!("304402204c2dd8a9b6f8d425fcd8ee9a20ac73b619906a6367eac6cb93e70375225ec0160220356878eff111ff3663d7e6bf08947f94443845e0dcc54961664d922f7660b80c");
-        check_lax_sig!("304402202ea9d51c7173b1d96d331bd41b3d1b4e78e66148e64ed5992abd6ca66290321c0220628c47517e049b3e41509e9d71e480a0cdc766f8cdec265ef0017711c1b5336f");
-        check_lax_sig!("3045022100bf8e050c85ffa1c313108ad8c482c4849027937916374617af3f2e9a881861c9022023f65814222cab09d5ec41032ce9c72ca96a5676020736614de7b78a4e55325a");
-        check_lax_sig!("3046022100839c1fbc5304de944f697c9f4b1d01d1faeba32d751c0f7acb21ac8a0f436a72022100e89bd46bb3a5a62adc679f659b7ce876d83ee297c7a5587b2011c4fcc72eab45");
-        check_lax_sig!("3046022100eaa5f90483eb20224616775891397d47efa64c68b969db1dacb1c30acdfc50aa022100cf9903bbefb1c8000cf482b0aeeb5af19287af20bd794de11d82716f9bae3db1");
-        check_lax_sig!("3045022047d512bc85842ac463ca3b669b62666ab8672ee60725b6c06759e476cebdc6c102210083805e93bd941770109bcc797784a71db9e48913f702c56e60b1c3e2ff379a60");
-        check_lax_sig!("3044022023ee4e95151b2fbbb08a72f35babe02830d14d54bd7ed1320e4751751d1baa4802206235245254f58fd1be6ff19ca291817da76da65c2f6d81d654b5185dd86b8acf");
+        check_lax_sig!(
+            "304402204c2dd8a9b6f8d425fcd8ee9a20ac73b619906a6367eac6cb93e70375225ec0160220356878eff111ff3663d7e6bf08947f94443845e0dcc54961664d922f7660b80c"
+        );
+        check_lax_sig!(
+            "304402202ea9d51c7173b1d96d331bd41b3d1b4e78e66148e64ed5992abd6ca66290321c0220628c47517e049b3e41509e9d71e480a0cdc766f8cdec265ef0017711c1b5336f"
+        );
+        check_lax_sig!(
+            "3045022100bf8e050c85ffa1c313108ad8c482c4849027937916374617af3f2e9a881861c9022023f65814222cab09d5ec41032ce9c72ca96a5676020736614de7b78a4e55325a"
+        );
+        check_lax_sig!(
+            "3046022100839c1fbc5304de944f697c9f4b1d01d1faeba32d751c0f7acb21ac8a0f436a72022100e89bd46bb3a5a62adc679f659b7ce876d83ee297c7a5587b2011c4fcc72eab45"
+        );
+        check_lax_sig!(
+            "3046022100eaa5f90483eb20224616775891397d47efa64c68b969db1dacb1c30acdfc50aa022100cf9903bbefb1c8000cf482b0aeeb5af19287af20bd794de11d82716f9bae3db1"
+        );
+        check_lax_sig!(
+            "3045022047d512bc85842ac463ca3b669b62666ab8672ee60725b6c06759e476cebdc6c102210083805e93bd941770109bcc797784a71db9e48913f702c56e60b1c3e2ff379a60"
+        );
+        check_lax_sig!(
+            "3044022023ee4e95151b2fbbb08a72f35babe02830d14d54bd7ed1320e4751751d1baa4802206235245254f58fd1be6ff19ca291817da76da65c2f6d81d654b5185dd86b8acf"
+        );
     }
 
     #[test]
@@ -880,7 +979,7 @@ mod tests {
             let (sk, pk) = s.generate_keypair(&mut rng()).unwrap();
             let sig = s.sign(&msg, &sk).unwrap();
             assert_eq!(s.verify(&msg, &sig, &pk), Ok(()));
-         }
+        }
     }
 
     #[test]
@@ -904,8 +1003,14 @@ mod tests {
         wild_keys[1][0] -= 1;
         wild_msgs[1][0] -= 1;
 
-        for key in wild_keys.iter().map(|k| SecretKey::from_slice(&s, &k[..]).unwrap()) {
-            for msg in wild_msgs.iter().map(|m| Message::from_slice(&m[..]).unwrap()) {
+        for key in wild_keys
+            .iter()
+            .map(|k| SecretKey::from_slice(&s, &k[..]).unwrap())
+        {
+            for msg in wild_msgs
+                .iter()
+                .map(|m| Message::from_slice(&m[..]).unwrap())
+            {
                 let sig = s.sign(&msg, &key).unwrap();
                 let pk = PublicKey::from_secret_key(&s, &key).unwrap();
                 assert_eq!(s.verify(&msg, &sig, &pk), Ok(()));
@@ -970,38 +1075,54 @@ mod tests {
     #[test]
     fn test_bad_slice() {
         let s = Secp256k1::new();
-        assert_eq!(Signature::from_der(&s, &[0; constants::MAX_SIGNATURE_SIZE + 1]),
-                   Err(InvalidSignature));
-        assert_eq!(Signature::from_der(&s, &[0; constants::MAX_SIGNATURE_SIZE]),
-                   Err(InvalidSignature));
+        assert_eq!(
+            Signature::from_der(&s, &[0; constants::MAX_SIGNATURE_SIZE + 1]),
+            Err(InvalidSignature)
+        );
+        assert_eq!(
+            Signature::from_der(&s, &[0; constants::MAX_SIGNATURE_SIZE]),
+            Err(InvalidSignature)
+        );
 
-        assert_eq!(Message::from_slice(&[0; constants::MESSAGE_SIZE - 1]),
-                   Err(InvalidMessage));
-        assert_eq!(Message::from_slice(&[0; constants::MESSAGE_SIZE + 1]),
-                   Err(InvalidMessage));
+        assert_eq!(
+            Message::from_slice(&[0; constants::MESSAGE_SIZE - 1]),
+            Err(InvalidMessage)
+        );
+        assert_eq!(
+            Message::from_slice(&[0; constants::MESSAGE_SIZE + 1]),
+            Err(InvalidMessage)
+        );
         assert!(Message::from_slice(&[0; constants::MESSAGE_SIZE]).is_ok());
     }
 
     #[test]
     fn test_debug_output() {
         let s = Secp256k1::new();
-        let sig = RecoverableSignature::from_compact(&s, &[
-            0x66, 0x73, 0xff, 0xad, 0x21, 0x47, 0x74, 0x1f,
-            0x04, 0x77, 0x2b, 0x6f, 0x92, 0x1f, 0x0b, 0xa6,
-            0xaf, 0x0c, 0x1e, 0x77, 0xfc, 0x43, 0x9e, 0x65,
-            0xc3, 0x6d, 0xed, 0xf4, 0x09, 0x2e, 0x88, 0x98,
-            0x4c, 0x1a, 0x97, 0x16, 0x52, 0xe0, 0xad, 0xa8,
-            0x80, 0x12, 0x0e, 0xf8, 0x02, 0x5e, 0x70, 0x9f,
-            0xff, 0x20, 0x80, 0xc4, 0xa3, 0x9a, 0xae, 0x06,
-            0x8d, 0x12, 0xee, 0xd0, 0x09, 0xb6, 0x8c, 0x89],
-            RecoveryId(1)).unwrap();
-        assert_eq!(&format!("{:?}", sig), "RecoverableSignature(98882e09f4ed6dc3659e43fc771e0cafa60b1f926f2b77041f744721adff7366898cb609d0ee128d06ae9aa3c48020ff9f705e02f80e1280a8ade05216971a4c01)");
+        let sig = RecoverableSignature::from_compact(
+            &s,
+            &[
+                0x66, 0x73, 0xff, 0xad, 0x21, 0x47, 0x74, 0x1f, 0x04, 0x77, 0x2b, 0x6f, 0x92, 0x1f,
+                0x0b, 0xa6, 0xaf, 0x0c, 0x1e, 0x77, 0xfc, 0x43, 0x9e, 0x65, 0xc3, 0x6d, 0xed, 0xf4,
+                0x09, 0x2e, 0x88, 0x98, 0x4c, 0x1a, 0x97, 0x16, 0x52, 0xe0, 0xad, 0xa8, 0x80, 0x12,
+                0x0e, 0xf8, 0x02, 0x5e, 0x70, 0x9f, 0xff, 0x20, 0x80, 0xc4, 0xa3, 0x9a, 0xae, 0x06,
+                0x8d, 0x12, 0xee, 0xd0, 0x09, 0xb6, 0x8c, 0x89,
+            ],
+            RecoveryId(1),
+        )
+        .unwrap();
+        assert_eq!(
+            &format!("{:?}", sig),
+            "RecoverableSignature(98882e09f4ed6dc3659e43fc771e0cafa60b1f926f2b77041f744721adff7366898cb609d0ee128d06ae9aa3c48020ff9f705e02f80e1280a8ade05216971a4c01)"
+        );
 
-        let msg = Message([1, 2, 3, 4, 5, 6, 7, 8,
-                           9, 10, 11, 12, 13, 14, 15, 16,
-                           17, 18, 19, 20, 21, 22, 23, 24,
-                           25, 26, 27, 28, 29, 30, 31, 255]);
-        assert_eq!(&format!("{:?}", msg), "Message(0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1fff)");
+        let msg = Message([
+            1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24,
+            25, 26, 27, 28, 29, 30, 31, 255,
+        ]);
+        assert_eq!(
+            &format!("{:?}", msg),
+            "Message(0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1fff)"
+        );
     }
 
     #[test]
@@ -1010,16 +1131,13 @@ mod tests {
 
         let recid_in = RecoveryId(1);
         let bytes_in = &[
-            0x66, 0x73, 0xff, 0xad, 0x21, 0x47, 0x74, 0x1f,
-            0x04, 0x77, 0x2b, 0x6f, 0x92, 0x1f, 0x0b, 0xa6,
-            0xaf, 0x0c, 0x1e, 0x77, 0xfc, 0x43, 0x9e, 0x65,
-            0xc3, 0x6d, 0xed, 0xf4, 0x09, 0x2e, 0x88, 0x98,
-            0x4c, 0x1a, 0x97, 0x16, 0x52, 0xe0, 0xad, 0xa8,
-            0x80, 0x12, 0x0e, 0xf8, 0x02, 0x5e, 0x70, 0x9f,
-            0xff, 0x20, 0x80, 0xc4, 0xa3, 0x9a, 0xae, 0x06,
-            0x8d, 0x12, 0xee, 0xd0, 0x09, 0xb6, 0x8c, 0x89];
-        let sig = RecoverableSignature::from_compact(
-            &s, bytes_in, recid_in).unwrap();
+            0x66, 0x73, 0xff, 0xad, 0x21, 0x47, 0x74, 0x1f, 0x04, 0x77, 0x2b, 0x6f, 0x92, 0x1f,
+            0x0b, 0xa6, 0xaf, 0x0c, 0x1e, 0x77, 0xfc, 0x43, 0x9e, 0x65, 0xc3, 0x6d, 0xed, 0xf4,
+            0x09, 0x2e, 0x88, 0x98, 0x4c, 0x1a, 0x97, 0x16, 0x52, 0xe0, 0xad, 0xa8, 0x80, 0x12,
+            0x0e, 0xf8, 0x02, 0x5e, 0x70, 0x9f, 0xff, 0x20, 0x80, 0xc4, 0xa3, 0x9a, 0xae, 0x06,
+            0x8d, 0x12, 0xee, 0xd0, 0x09, 0xb6, 0x8c, 0x89,
+        ];
+        let sig = RecoverableSignature::from_compact(&s, bytes_in, recid_in).unwrap();
         let (recid_out, bytes_out) = sig.serialize_compact(&s);
         assert_eq!(recid_in, recid_out);
         assert_eq!(&bytes_in[..], &bytes_out[..]);
@@ -1044,7 +1162,9 @@ mod tests {
         // nb this is a transaction on testnet
         // txid 8ccc87b72d766ab3128f03176bb1c98293f2d1f85ebfaf07b82cc81ea6891fa9
         //      input number 3
-        let sig = hex!("3046022100839c1fbc5304de944f697c9f4b1d01d1faeba32d751c0f7acb21ac8a0f436a72022100e89bd46bb3a5a62adc679f659b7ce876d83ee297c7a5587b2011c4fcc72eab45");
+        let sig = hex!(
+            "3046022100839c1fbc5304de944f697c9f4b1d01d1faeba32d751c0f7acb21ac8a0f436a72022100e89bd46bb3a5a62adc679f659b7ce876d83ee297c7a5587b2011c4fcc72eab45"
+        );
         let pk = hex!("031ee99d2b786ab3b0991325f2de8489246a6a3fdb700f6d0511b1d80cf5f4cd43");
         let msg = hex!("a4965ca63b7d8562736ceec36dfa5a11bf426eb65be8ea3f7a49ae363032da0d");
 
@@ -1066,18 +1186,21 @@ mod benches {
     use rand::{Rng, rng};
     use test::{Bencher, black_box};
 
-    use super::{Secp256k1, Message};
+    use super::{Message, Secp256k1};
 
     #[bench]
     pub fn generate(bh: &mut Bencher) {
         struct CounterRng(u32);
         impl Rng for CounterRng {
-            fn next_u32(&mut self) -> u32 { self.0 += 1; self.0 }
+            fn next_u32(&mut self) -> u32 {
+                self.0 += 1;
+                self.0
+            }
         }
 
         let s = Secp256k1::new();
         let mut r = CounterRng(0);
-        bh.iter( || {
+        bh.iter(|| {
             let (sk, pk) = s.generate_keypair(&mut r).unwrap();
             black_box(sk);
             black_box(pk);

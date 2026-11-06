@@ -144,8 +144,8 @@ fn builds_a_coinbase_the_node_accepts_and_a_restore_finds() {
     assert!(sender.transactions().is_empty());
 }
 
-both_stores!(replaces_the_candidate_whose_key_the_node_passes_back);
-fn replaces_the_candidate_whose_key_the_node_passes_back() {
+both_stores!(keeps_the_candidate_whose_key_the_node_passes_back);
+fn keeps_the_candidate_whose_key_the_node_passes_back() {
     let sender = wallet();
     let first = build(&sender, 5, None);
 
@@ -162,9 +162,47 @@ fn replaces_the_candidate_whose_key_the_node_passes_back() {
     assert_eq!(again.key_id, first.key_id);
     assert_ne!(again.output.commitment, first.output.commitment);
     let stored = candidates(&sender);
-    assert_eq!(stored.len(), 1);
-    assert_eq!(stored[0].id, again.output.identifier());
+    assert_eq!(stored.len(), 2);
+    assert!(
+        stored
+            .iter()
+            .any(|output| output.id == first.output.identifier())
+    );
+    assert!(
+        stored
+            .iter()
+            .any(|output| output.id == again.output.identifier())
+    );
     assert_eq!(sender.next_child(), NEXT_CHILD + 1);
+}
+
+both_stores!(a_block_found_on_the_older_template_still_pays_the_wallet);
+fn a_block_found_on_the_older_template_still_pays_the_wallet() {
+    let sender = wallet();
+    let first = build(&sender, 5, None);
+    let _newer = sender
+        .harness
+        .block_on(sender.wallet.build_coinbase(CoinbaseRequest {
+            fees: Fee::new(FEES + 1),
+            height: Height::new(5),
+            key_id: Some(first.key_id),
+        }))
+        .unwrap();
+
+    sender
+        .harness
+        .node
+        .update_chain(|chain| chain.outputs.push(mined(&first, 5, 7)));
+    refresh_at(&sender, 6);
+
+    let output = sender
+        .read(|repos| repos.output(first.output.commitment.as_bytes()))
+        .unwrap();
+    assert_eq!(output.status, OutputStatus::Unspent);
+    assert_eq!(sender.transactions().len(), 1);
+    // The mined key blinds a spendable output now, so the node gets a new one.
+    let next = build(&sender, 7, Some(first.key_id));
+    assert_ne!(next.key_id, first.key_id);
 }
 
 both_stores!(takes_a_new_key_for_a_key_that_blinds_anything_else);
@@ -251,6 +289,33 @@ fn deletes_candidates_no_block_confirmed() {
     assert_eq!(left.len(), 1);
     assert_eq!(left[0].id, recent.output.identifier());
     assert!(sender.transactions().is_empty());
+}
+
+both_stores!(deletes_candidates_at_height_zero_or_far_above_the_tip);
+fn deletes_candidates_at_height_zero_or_far_above_the_tip() {
+    let sender = wallet();
+    let tip = 10;
+    let at_zero = build(&sender, 0, None);
+    let far_above = build(&sender, tip + STALE_AFTER + 1, None);
+    let in_reach = build(&sender, tip + STALE_AFTER, None);
+    let next = build(&sender, tip + 1, None);
+
+    refresh_at(&sender, tip);
+
+    for gone in [&at_zero, &far_above] {
+        assert_eq!(
+            sender.read(|repos| repos.output(gone.output.commitment.as_bytes())),
+            None
+        );
+    }
+    let left = candidates(&sender);
+    assert_eq!(left.len(), 2);
+    for kept in [&in_reach, &next] {
+        assert!(
+            left.iter()
+                .any(|output| output.id == kept.output.identifier())
+        );
+    }
 }
 
 #[test]

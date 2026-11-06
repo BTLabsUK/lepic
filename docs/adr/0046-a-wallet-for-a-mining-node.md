@@ -30,9 +30,11 @@ falls short of `epic-wallet`, and the parity rule wins.
   `ChainParams::coinbase_lock_height`.
 - A refresh that finds a candidate on chain records an incoming, confirmed transaction for it.
   `TransactionDetails::coinbase` marks it, and marks a coinbase output found by scan.
-- A node that passes back the key of a candidate gets that key again, and the old candidate is
-  deleted. A key that blinds anything else, or nothing, is not reused. A candidate more than 50
-  blocks below the tip is deleted, as upstream's `clean_old_unconfirmed` does.
+- A node that passes back the key of a candidate gets that key again, and the old candidate
+  stays, as a block can still be found on the older template. A key that blinds anything else,
+  or nothing, is not reused. A refresh deletes a candidate more than 50 blocks below the tip, as
+  upstream's `clean_old_unconfirmed` does, and one at height 0 or more than 50 blocks above the
+  tip. Candidates leave no other way.
 - `lepic-foreign` serves `build_coinbase` only when the host turns it on
   (`ListenSettings::with_coinbase`). It is off by default. Off, the method answers
   `METHOD_NOT_FOUND` as before. The CLI turns it on with `http listen --coinbase`. The FFI

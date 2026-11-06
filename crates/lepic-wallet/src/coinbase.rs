@@ -4,9 +4,10 @@
 //! wallet's keychain, so a restore from the phrase finds the output again.
 //!
 //! The output is stored as an unconfirmed coinbase with no transaction, a candidate. A
-//! refresh that finds it on chain records the incoming transaction then. A node that mines no
-//! block with it passes its key back on the next template and the candidate is replaced; one
-//! left unconfirmed [`STALE_AFTER`] blocks below the tip is deleted.
+//! refresh that finds it on chain records the incoming transaction then. A node passes its key
+//! back on the next template and gets a candidate with the same key; the earlier one stays,
+//! as a block can still be found on the older template. Only the cleanup deletes candidates:
+//! one more than [`STALE_AFTER`] blocks from the tip, or built for height 0.
 
 use jiff::Timestamp;
 use lepic_crypto::aggsig::{create_secnonce, sign_single, verify_single_from_commit};
@@ -30,8 +31,8 @@ use crate::ports::{SecretVault, StoreOpener};
 use crate::state::StateChange;
 use crate::wallet::Wallet;
 
-/// Blocks below the tip after which a candidate no block confirmed is deleted, as
-/// `clean_old_unconfirmed` does upstream.
+/// Blocks from the tip after which a candidate no block confirmed is deleted, below it as
+/// `clean_old_unconfirmed` does upstream, and above it for a height no tip has come near.
 pub const STALE_AFTER: u64 = 50;
 
 /// What the node sends: the fees of the block's transactions, the block's height, and the key
@@ -80,8 +81,8 @@ where
     /// network's coinbase maturity has passed above the block.
     ///
     /// The output takes the key the node passed back when that key blinds only candidates of
-    /// this wallet, which this one replaces; any other key, or none, takes the account's next
-    /// output key. The kernel is checked against its excess before it is returned.
+    /// this wallet; any other key, or none, takes the account's next output key. Candidates
+    /// already stored stay. The kernel is checked against its excess before it is returned.
     ///
     /// Fails with [`WalletError::Locked`] inside [`CoinbaseError::Wallet`] when the wallet is
     /// locked, and with [`WalletError::RestoreScanRequired`] on a database rebuilt from the
@@ -101,7 +102,7 @@ where
             Ok(session.store.write(|repos| {
                 let account = account::account_by_label(repos, DEFAULT_ACCOUNT_LABEL)?;
                 let key_id = match request.key_id {
-                    Some(key_id) if replace_candidates(repos, account.index, key_id)? => key_id,
+                    Some(key_id) if key_reusable(&*repos, account.index, key_id)? => key_id,
                     _ => account::next_output_key(repos, account.index)?,
                 };
                 let value = params.coinbase_value(request.fees, request.height);
@@ -168,16 +169,15 @@ pub(crate) fn is_candidate(output: &OutputRecord) -> bool {
         && output.id.features == OutputFeatures::Coinbase
 }
 
-/// Deletes the candidates of `account` that `key_id` blinds, and says whether the key may be
-/// used again: some output has it, and every one is such a candidate. A key that blinds
-/// anything else, or nothing this wallet stored, is not reused.
-fn replace_candidates(
-    repos: &mut dyn Repositories,
+/// Says whether `key_id` may be used again: some output has it, and every one is a candidate of
+/// `account`. A key that blinds anything else, or nothing this wallet stored, is not reused.
+fn key_reusable(
+    repos: &dyn Repositories,
     account: AccountIndex,
     key_id: Identifier,
 ) -> Result<bool, StoreError> {
     let key = KeyId(key_id.to_bytes());
-    let mut candidates = Vec::new();
+    let mut found = false;
     for accounts in repos.accounts()? {
         for output in repos.outputs(accounts.index, None)? {
             if output.key_id != key {
@@ -186,13 +186,10 @@ fn replace_candidates(
             if output.account != account || !is_candidate(&output) {
                 return Ok(false);
             }
-            candidates.push(*output.commitment());
+            found = true;
         }
     }
-    for commitment in &candidates {
-        repos.delete_output(commitment)?;
-    }
-    Ok(!candidates.is_empty())
+    Ok(found)
 }
 
 /// Records the incoming transaction of a candidate a block confirmed at `height`, links the
@@ -229,16 +226,16 @@ pub(crate) fn confirm(
     })
 }
 
-/// Deletes the candidates built for a block more than [`STALE_AFTER`] below `tip`, which no
-/// block confirmed, and returns how many.
+/// Deletes the candidates no block confirmed that were built for height 0 or for a block more
+/// than [`STALE_AFTER`] from `tip` either way, and returns how many.
 pub(crate) fn delete_stale(repos: &mut dyn Repositories, tip: Height) -> Result<u64, StoreError> {
-    let Some(below) = tip.value().checked_sub(STALE_AFTER) else {
-        return Ok(0);
-    };
+    let lowest = tip.value().saturating_sub(STALE_AFTER);
+    let highest = tip.value().saturating_add(STALE_AFTER);
+    let stale = |height: u64| height == 0 || height < lowest || height > highest;
     let mut deleted = 0u64;
     for account in repos.accounts()? {
         for output in repos.outputs(account.index, Some(OutputStatus::Unconfirmed))? {
-            if is_candidate(&output) && output.height.value() > 0 && output.height.value() < below {
+            if is_candidate(&output) && stale(output.height.value()) {
                 repos.delete_output(output.commitment())?;
                 deleted = deleted.saturating_add(1);
             }
