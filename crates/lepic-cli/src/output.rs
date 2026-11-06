@@ -272,6 +272,10 @@ pub struct TxReport {
     /// cancelled it; `tx show` only.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sender_reported_cancelled_at: Option<String>,
+    /// For a send its receiver refused unanswered, when it said so (ADR 0045); the send was
+    /// cancelled then. `tx show` only.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub receiver_declined_at: Option<String>,
     /// For a payment received at a listing address, the service key (hex) and generation of
     /// that listing; `tx show` only.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1326,6 +1330,9 @@ fn write_show(out: &mut Vec<u8>, tx: &TxReport) -> std::io::Result<()> {
     if let Some(at) = &tx.sender_reported_cancelled_at {
         writeln!(out, "{:<12} cancelled at {at}", "Sender says")?;
     }
+    if let Some(at) = &tx.receiver_declined_at {
+        writeln!(out, "{:<12} declined at {at}", "Receiver")?;
+    }
     if let Some(origin) = &tx.origin {
         writeln!(out, "{:<12} {origin}", "Origin")?;
     }
@@ -1794,6 +1801,7 @@ mod tests {
             imported: None,
             sender_reported_posted_at: None,
             sender_reported_cancelled_at: None,
+            receiver_declined_at: None,
             receive_listing: None,
         }
     }

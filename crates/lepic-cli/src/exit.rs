@@ -449,7 +449,8 @@ fn receive_kind(error: &ReceiveError) -> ErrorKind {
         | ReceiveError::FeeOverflow
         | ReceiveError::MessageSignature { .. }
         | ReceiveError::ForeignProofAddress
-        | ReceiveError::ZeroAmount => ErrorKind::Rejected,
+        | ReceiveError::ZeroAmount
+        | ReceiveError::Refused => ErrorKind::Rejected,
         _ => ErrorKind::Internal,
     }
 }

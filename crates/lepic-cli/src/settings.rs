@@ -74,6 +74,16 @@ pub const SETTINGS: &[(&str, &str, &str)] = &[
         "true to reach the node through the tor named by the epicbox_tor settings",
     ),
     (
+        "refuse_unsolicited_payments",
+        "LEPIC_REFUSE_UNSOLICITED_PAYMENTS",
+        "true to refuse payments nobody asked for and tell a lepic sender they were declined",
+    ),
+    (
+        "refuse_unsolicited_invoices",
+        "LEPIC_REFUSE_UNSOLICITED_INVOICES",
+        "true to refuse invoices from contacts instead of keeping them to pay",
+    ),
+    (
         "invoice_expiry_hours",
         "LEPIC_INVOICE_EXPIRY_HOURS",
         "hours an unpaid invoice is kept, 1 to 48",
@@ -273,6 +283,10 @@ pub struct Settings {
     pub relay_tor: RelayTor,
     /// Node requests go through the same tor as the relay (ADR 0022). Only with a tor named.
     pub node_over_tor: bool,
+    /// Refuse an S1 nobody asked for, answered `declined` (ADR 0045). Off unless set.
+    pub refuse_unsolicited_payments: bool,
+    /// Refuse a contact's invoice instead of parking it, answered `declined`. Off unless set.
+    pub refuse_unsolicited_invoices: bool,
     /// How long an unpaid invoice is kept, on either side.
     pub invoice_expiry: InvoiceExpiry,
     /// The host bits the wallet's marker claims (ADR 0034), only bits of
@@ -360,13 +374,7 @@ impl Settings {
         let host_features = lookup
             .parse("host_features", parse_host_features)?
             .unwrap_or(0);
-        let node_over_tor = lookup
-            .parse("node_over_tor", |text| match text {
-                "true" => Some(true),
-                "false" => Some(false),
-                _ => None,
-            })?
-            .unwrap_or(false);
+        let node_over_tor = lookup.switch("node_over_tor")?;
         if node_over_tor && relay_tor == RelayTor::Off {
             let origin = lookup
                 .raw("node_over_tor")
@@ -398,6 +406,8 @@ impl Settings {
             tuning: config.tuning,
             relay_tor,
             node_over_tor,
+            refuse_unsolicited_payments: lookup.switch("refuse_unsolicited_payments")?,
+            refuse_unsolicited_invoices: lookup.switch("refuse_unsolicited_invoices")?,
             invoice_expiry,
             host_features,
             profile: profile(args, &lookup)?,
@@ -575,6 +585,15 @@ fn parse_relay(text: &str) -> Option<RelayEndpoint> {
     Some(endpoint)
 }
 
+/// `true` or `false`.
+fn parse_switch(text: &str) -> Option<bool> {
+    match text {
+        "true" => Some(true),
+        "false" => Some(false),
+        _ => None,
+    }
+}
+
 struct Lookup<'a> {
     env: &'a Env,
     config: &'a Config,
@@ -614,6 +633,11 @@ impl Lookup<'_> {
                 .map(Some)
                 .ok_or(SettingsError::InvalidValue { key, origin }),
         }
+    }
+
+    /// `true` or `false`; off unless set.
+    fn switch(&self, key: &'static str) -> Result<bool, SettingsError> {
+        Ok(self.parse(key, parse_switch)?.unwrap_or(false))
     }
 
     /// A path from the config file is relative to the file's directory.
@@ -947,6 +971,26 @@ mod tests {
                 "{vars:?}"
             );
         }
+    }
+
+    #[test]
+    fn the_refusal_switches_are_off_unless_set_and_independent() {
+        let none = resolve(&[]).unwrap();
+        assert!(!none.refuse_unsolicited_payments);
+        assert!(!none.refuse_unsolicited_invoices);
+        let payments = resolve(&[("LEPIC_REFUSE_UNSOLICITED_PAYMENTS", "true")]).unwrap();
+        assert!(payments.refuse_unsolicited_payments);
+        assert!(!payments.refuse_unsolicited_invoices);
+        let invoices = resolve(&[("LEPIC_REFUSE_UNSOLICITED_INVOICES", "true")]).unwrap();
+        assert!(!invoices.refuse_unsolicited_payments);
+        assert!(invoices.refuse_unsolicited_invoices);
+        assert!(matches!(
+            resolve(&[("LEPIC_REFUSE_UNSOLICITED_PAYMENTS", "yes")]),
+            Err(SettingsError::InvalidValue {
+                key: "refuse_unsolicited_payments",
+                ..
+            })
+        ));
     }
 
     #[test]
