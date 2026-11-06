@@ -267,13 +267,24 @@ impl EpicboxClient {
 
     /// Holds a connection, keeps it alive and reconnects after failures until stopped.
     pub fn listen(&self) -> Result<Subscription, ClientError> {
-        Subscription::start(Arc::clone(&self.context), Mode::Listen)
+        self.listen_with_held_rounds(None)
+    }
+
+    /// As [`Self::listen`], and the listener moves to a fresh socket after `held_rounds` rounds
+    /// that began with a message held, counted per socket and not reset by an acknowledgement.
+    /// The held message stays held and is taken up again on the new socket. `None` keeps the
+    /// socket.
+    pub fn listen_with_held_rounds(
+        &self,
+        held_rounds: Option<u32>,
+    ) -> Result<Subscription, ClientError> {
+        Subscription::start(Arc::clone(&self.context), Mode::Listen, held_rounds)
     }
 
     /// Connects once, hands out every pending message, and disconnects when the relay has none
     /// left and every handed-out message was acknowledged. A connection failure ends it.
     pub fn drain(&self) -> Result<Subscription, ClientError> {
-        Subscription::start(Arc::clone(&self.context), Mode::Drain)
+        Subscription::start(Arc::clone(&self.context), Mode::Drain, None)
     }
 
     /// Encrypts `plaintext` for `to`, signs exactly the `str` it sends, posts it through this

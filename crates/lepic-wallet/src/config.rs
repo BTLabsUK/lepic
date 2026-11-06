@@ -194,6 +194,11 @@ pub struct WalletPolicy {
     /// with a `declined` notice. A plain Epicbox I1 is refused whatever this says. The wallet's
     /// own payments and invoices are not affected. Off by default.
     pub refuse_unsolicited_invoices: bool,
+    /// A listener moves to a fresh socket after this many rounds that began with a message
+    /// held, counted per socket and not reset by an acknowledgement. The held message is taken
+    /// up again on the new socket. `None` keeps the socket. A drain is not affected. At least
+    /// 1, at most [`Self::MAX_LISTENER_HELD_ROUNDS`].
+    pub listener_held_rounds: Option<u32>,
 }
 
 impl WalletPolicy {
@@ -211,6 +216,7 @@ impl WalletPolicy {
         contact_hold_patience: Duration::from_secs(3 * 60),
         refuse_unsolicited_payments: false,
         refuse_unsolicited_invoices: false,
+        listener_held_rounds: None,
     };
 
     /// The bound on [`Self::contact_check_answers_per_day`]: each answer is a contact update,
@@ -222,6 +228,9 @@ impl WalletPolicy {
     /// mailbox when one message stays unacknowledged for long, and every message behind a kept
     /// one waits meanwhile.
     pub const MAX_CONTACT_HOLD_ATTEMPTS: u32 = 10;
+
+    /// The bound on [`Self::listener_held_rounds`].
+    pub const MAX_LISTENER_HELD_ROUNDS: u32 = 64;
 
     /// The bound on [`Self::contact_hold_patience`], for the same reason: a day, after which the
     /// count of a kept message is forgotten.
@@ -284,6 +293,19 @@ impl WalletPolicy {
                 return Err(ConfigError::PolicyAboveBound {
                     what,
                     max: u64::from(max),
+                });
+            }
+        }
+        if let Some(rounds) = self.listener_held_rounds {
+            if rounds == 0 {
+                return Err(ConfigError::PolicyOutOfRange {
+                    what: "listener held rounds",
+                });
+            }
+            if rounds > Self::MAX_LISTENER_HELD_ROUNDS {
+                return Err(ConfigError::PolicyAboveBound {
+                    what: "listener held rounds",
+                    max: u64::from(Self::MAX_LISTENER_HELD_ROUNDS),
                 });
             }
         }
@@ -382,7 +404,28 @@ mod tests {
         assert_eq!(policy.contact_hold_patience, Duration::from_secs(180));
         assert!(!policy.refuse_unsolicited_payments);
         assert!(!policy.refuse_unsolicited_invoices);
+        assert_eq!(policy.listener_held_rounds, None);
         assert!(policy.validate().is_ok());
+    }
+
+    #[test]
+    fn the_listener_held_rounds_are_bounded() {
+        let with = |rounds: Option<u32>| {
+            let mut policy = WalletPolicy::default();
+            policy.listener_held_rounds = rounds;
+            policy.validate()
+        };
+        assert!(with(None).is_ok());
+        assert!(with(Some(1)).is_ok());
+        assert!(with(Some(WalletPolicy::MAX_LISTENER_HELD_ROUNDS)).is_ok());
+        assert!(matches!(
+            with(Some(0)),
+            Err(ConfigError::PolicyOutOfRange { .. })
+        ));
+        assert!(matches!(
+            with(Some(65)),
+            Err(ConfigError::PolicyAboveBound { max: 64, .. })
+        ));
     }
 
     #[test]

@@ -195,7 +195,11 @@ pub struct Subscription {
 }
 
 impl Subscription {
-    pub(crate) fn start(context: Arc<ClientContext>, mode: Mode) -> Result<Self, ClientError> {
+    pub(crate) fn start(
+        context: Arc<ClientContext>,
+        mode: Mode,
+        held_rounds: Option<u32>,
+    ) -> Result<Self, ClientError> {
         let runtime = Handle::try_current().map_err(|_| ClientError::NoRuntime)?;
         let (commands, receiver) = mpsc::unbounded_channel();
         let (status, _) = watch::channel(ConnectionState::Connecting { attempt: 1 });
@@ -218,6 +222,7 @@ impl Subscription {
             shared: Arc::clone(&shared),
             commands: receiver,
             mode,
+            held_rounds,
             cancel: cancel.clone(),
         };
         // The host's subscriber is scoped to the calling thread, so the task carries it along.
@@ -661,6 +666,9 @@ struct Manager {
     shared: Arc<Shared>,
     commands: mpsc::UnboundedReceiver<Command>,
     mode: Mode,
+    /// A listener moves to a fresh socket after this many rounds with a message held. `None`
+    /// keeps the socket. Never applies to a drain.
+    held_rounds: Option<u32>,
     cancel: CancelToken,
 }
 
@@ -814,6 +822,12 @@ struct Session<'a> {
     /// `Subscribe` that answers it.
     challenge_due: Option<Instant>,
     subscribed_at: Option<Instant>,
+    /// Rounds this socket saw while a message was held. An acknowledgement does not reset it.
+    held_rounds: u32,
+    /// Set once `held_rounds` reached the limit: the socket is replaced when nothing is in
+    /// flight on it, or at this instant.
+    rotate_by: Option<Instant>,
+    rotated: bool,
 }
 
 impl<'a> Session<'a> {
@@ -827,6 +841,9 @@ impl<'a> Session<'a> {
             outstanding: None,
             challenge_due: None,
             subscribed_at: None,
+            held_rounds: 0,
+            rotate_by: None,
+            rotated: false,
         }
     }
 
@@ -836,9 +853,10 @@ impl<'a> Session<'a> {
     async fn run(mut self, attempt: &mut u32) -> Result<End, ClientError> {
         let outcome = self.serve().await;
         let ping_every = self.manager.context.settings.ping_interval;
-        if self
-            .subscribed_at
-            .is_some_and(|at| at.elapsed() >= ping_every)
+        if self.rotated
+            || self
+                .subscribed_at
+                .is_some_and(|at| at.elapsed() >= ping_every)
         {
             *attempt = 0;
         }
@@ -877,6 +895,17 @@ impl<'a> Session<'a> {
                 self.leave().await;
                 return Err(ClientError::Closed);
             }
+            if let Some(by) = self.rotate_by
+                && ((self.outstanding.is_none() && self.queue.is_empty()) || Instant::now() >= by)
+            {
+                info!(
+                    rounds = self.held_rounds,
+                    "epicbox listener moving to a fresh socket"
+                );
+                self.rotated = true;
+                self.leave().await;
+                return Err(ClientError::Closed);
+            }
             if self.is_drained() {
                 return Ok(self.finish_drain().await);
             }
@@ -898,6 +927,7 @@ impl<'a> Session<'a> {
                     reroute_by = Some(deadline_after(REROUTE_GRACE));
                 }
                 () = sleep_until(reroute_by.unwrap_or_else(Instant::now)), if reroute_by.is_some() => {}
+                () = sleep_until(self.rotate_by.unwrap_or_else(Instant::now)), if self.rotate_by.is_some() => {}
                 _ = pings.tick() => {
                     if connection.idle_for() > silence_limit {
                         return Err(ClientError::Timeout { awaiting: Awaiting::Traffic });
@@ -1006,6 +1036,7 @@ impl<'a> Session<'a> {
                 self.challenge = str;
                 self.challenge_number = self.challenge_number.wrapping_add(1);
                 self.challenge_due = None;
+                self.count_held_round();
                 if !self.queue.iter().any(|r| matches!(r, Request::Subscribe)) {
                     self.queue.push_back(Request::Subscribe);
                 }
@@ -1057,6 +1088,20 @@ impl<'a> Session<'a> {
             }
         }
         Ok(())
+    }
+
+    /// Counts a round that began while a message is held, for a listener with a limit.
+    fn count_held_round(&mut self) {
+        let Some(limit) = self.manager.held_rounds else {
+            return;
+        };
+        if self.manager.mode != Mode::Listen || self.manager.shared.lock().is_settled() {
+            return;
+        }
+        self.held_rounds = self.held_rounds.saturating_add(1);
+        if self.held_rounds >= limit && self.rotate_by.is_none() {
+            self.rotate_by = Some(deadline_after(REROUTE_GRACE));
+        }
     }
 
     fn mark_subscribed(&mut self) {

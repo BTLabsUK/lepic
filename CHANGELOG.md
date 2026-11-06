@@ -46,6 +46,11 @@ Conventional Commit messages at release time.
   it; past 4,096 the one built longest ago goes. Store schema 15.
 - `TransactionDetails::coinbase` (engine and FFI) marks an incoming transaction whose output is
   a coinbase output; `lepic tx show` prints it as `Kind mining reward`.
+- `WalletPolicy::listener_held_rounds` and `HostPolicy::listener_held_rounds` (1 to 64, default
+  none): a listener moves to a fresh socket after this many rounds that began with a message
+  held, counted per socket and not reset by an acknowledgement. The held message is taken up
+  again on the new socket. Drains are not affected. `EpicboxClient::listen_with_held_rounds`
+  takes the limit.
 - `ChainParams::block_total_reward`, `foundation_levy`, `mining_reward` and `coinbase_value`,
   with vectors for the reward schedule.
 

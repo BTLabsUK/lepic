@@ -722,7 +722,9 @@ where
         handle: &ListenHandle,
     ) -> Result<InboxSummary, InboxError> {
         let client = self.inbox_client(epicbox).await?;
-        let subscription = client.listen().map_err(InboxError::Subscription)?;
+        let subscription = client
+            .listen_with_held_rounds(self.config().policy.listener_held_rounds)
+            .map_err(InboxError::Subscription)?;
         self.run_inbox(&subscription, Some(handle), backoff(epicbox))
             .await
     }

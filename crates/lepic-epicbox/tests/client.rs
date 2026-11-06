@@ -216,6 +216,113 @@ async fn relay_discards_messages_left_unacknowledged_for_three_rounds() {
     bob.stop().await.unwrap();
 }
 
+/// Stores one message and takes it, so the listener holds it unacknowledged.
+async fn hold_one(
+    relay: &MockRelay,
+    limit: Option<u32>,
+) -> (lepic_epicbox::Subscription, Envelope) {
+    let bob = client(relay, BOB).listen_with_held_rounds(limit).unwrap();
+    relay.store(&address(ALICE), &address(BOB), &sealed(ALICE, BOB, "held"));
+    within(LONG, bob.delivery_available()).await;
+    let envelope = next(&bob).await.unwrap();
+    (bob, envelope)
+}
+
+#[tokio::test]
+async fn a_listener_moves_to_a_fresh_socket_after_the_held_rounds_and_handles_the_message_once() {
+    let relay = MockRelay::new(Network::Mainnet);
+    let (bob, envelope) = hold_one(&relay, Some(2)).await;
+    assert_eq!(relay.received("Subscribe"), 1);
+
+    relay.send_challenges();
+    until(|| relay.received("Subscribe") >= 2).await;
+    assert_eq!(relay.connections(), 1, "one round is below the limit");
+    relay.send_challenges();
+    // The second round reaches the limit: the socket is replaced and the new one subscribes.
+    until(|| relay.received("Subscribe") >= 4).await;
+    reach(&bob, |s| s == ConnectionState::Subscribed).await;
+    until(|| relay.received("Unsubscribe") >= 1).await;
+    assert_eq!(relay.connections(), 1);
+
+    // The relay delivered the held message again; it is not surfaced a second time.
+    assert!(next(&bob).await.is_none());
+    assert_eq!(relay.received("Made"), 0, "nothing was acknowledged early");
+    within(LONG, bob.acknowledge(envelope.ack_token()))
+        .await
+        .unwrap();
+    assert_eq!(relay.pending(&address(BOB)), 0);
+    bob.stop().await.unwrap();
+}
+
+#[tokio::test]
+async fn the_held_round_count_is_not_reset_by_an_acknowledgement() {
+    let relay = MockRelay::new(Network::Mainnet);
+    let (bob, first) = hold_one(&relay, Some(2)).await;
+    relay.send_challenges();
+    until(|| relay.received("Subscribe") >= 2).await;
+    within(LONG, bob.acknowledge(first.ack_token()))
+        .await
+        .unwrap();
+
+    // A second message is held on the same socket; one more round reaches the limit.
+    relay.store(&address(ALICE), &address(BOB), &sealed(ALICE, BOB, "next"));
+    within(LONG, bob.delivery_available()).await;
+    let second = next(&bob).await.unwrap();
+    let before = relay.received("Unsubscribe");
+    relay.send_challenges();
+    until(|| relay.received("Unsubscribe") > before).await;
+    reach(&bob, |s| s == ConnectionState::Subscribed).await;
+    assert!(next(&bob).await.is_none());
+    within(LONG, bob.acknowledge(second.ack_token()))
+        .await
+        .unwrap();
+    assert_eq!(relay.pending(&address(BOB)), 0);
+    bob.stop().await.unwrap();
+}
+
+#[tokio::test]
+async fn a_listener_without_a_limit_keeps_its_socket() {
+    let relay = MockRelay::new(Network::Mainnet);
+    let (bob, _held) = hold_one(&relay, None).await;
+    for round in 1..=3 {
+        relay.send_challenges();
+        until(|| relay.received("Subscribe") > round).await;
+    }
+    assert_eq!(relay.received("Unsubscribe"), 0);
+    assert_eq!(relay.connections(), 1);
+    bob.stop().await.unwrap();
+}
+
+#[tokio::test]
+async fn rounds_without_a_held_message_do_not_count() {
+    let relay = MockRelay::new(Network::Mainnet);
+    let bob = client(&relay, BOB)
+        .listen_with_held_rounds(Some(1))
+        .unwrap();
+    reach(&bob, |s| s == ConnectionState::Subscribed).await;
+    for round in 1..=3 {
+        relay.send_challenges();
+        until(|| relay.received("Subscribe") > round).await;
+    }
+    assert_eq!(relay.received("Unsubscribe"), 0);
+    bob.stop().await.unwrap();
+}
+
+#[tokio::test]
+async fn a_drain_never_leaves_on_the_held_rounds() {
+    let relay = MockRelay::new(Network::Mainnet);
+    relay.store(&address(ALICE), &address(BOB), &sealed(ALICE, BOB, "held"));
+    let drain = client(&relay, BOB).drain().unwrap();
+    let _held = next(&drain).await.unwrap();
+    for round in 1..=3 {
+        relay.send_challenges();
+        until(|| relay.received("Subscribe") > round).await;
+    }
+    assert_eq!(relay.received("Unsubscribe"), 0);
+    assert_eq!(relay.connections(), 1);
+    drain.stop().await.unwrap();
+}
+
 #[tokio::test]
 async fn unknown_frames_and_bare_pong_do_not_end_the_session() {
     let relay = MockRelay::new(Network::Mainnet);

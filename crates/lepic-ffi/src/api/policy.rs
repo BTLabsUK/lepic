@@ -74,6 +74,10 @@ pub struct HostPolicy {
     /// Refuse an invoice from a contact instead of parking it, answered `declined`. A plain
     /// Epicbox invoice is refused anyway. Default off.
     pub refuse_unsolicited_invoices: Option<bool>,
+    /// A listener moves to a fresh socket after this many rounds with a message held, counted
+    /// per socket and not reset by an acknowledgement; the held message is taken up again on the
+    /// new socket. From 1 to 64. Default none: the listener keeps its socket.
+    pub listener_held_rounds: Option<u32>,
     /// Whether `start_tor` with `publish_onion` also publishes the previous onion, the one
     /// LEPIC 0.3.1 and earlier published (ADR 0044), on its own listener, so senders that saved
     /// it still reach the wallet. Payment proofs asked for there are signed with the
@@ -219,6 +223,7 @@ impl Policy {
             refuse_unsolicited_invoices: policy
                 .refuse_unsolicited_invoices
                 .unwrap_or(defaults.refuse_unsolicited_invoices),
+            listener_held_rounds: policy.listener_held_rounds,
         };
         wallet
             .validate()
@@ -484,6 +489,19 @@ mod tests {
     }
 
     #[test]
+    fn the_listener_keeps_its_socket_unless_the_host_sets_a_limit() {
+        assert_eq!(Policy::shipped().wallet.listener_held_rounds, None);
+        for rounds in [1, 64] {
+            let policy = Policy::resolve(&HostPolicy {
+                listener_held_rounds: Some(rounds),
+                ..HostPolicy::default()
+            })
+            .unwrap();
+            assert_eq!(policy.wallet.listener_held_rounds, Some(rounds));
+        }
+    }
+
+    #[test]
     fn the_invoice_ttl_does_not_move_the_lead_cap() {
         let policy = Policy::resolve(&HostPolicy {
             invoice_ttl_blocks: Some(5_000),
@@ -502,6 +520,14 @@ mod tests {
             );
         };
         let none = HostPolicy::default;
+        refused(HostPolicy {
+            listener_held_rounds: Some(0),
+            ..none()
+        });
+        refused(HostPolicy {
+            listener_held_rounds: Some(65),
+            ..none()
+        });
         refused(HostPolicy {
             send_ttl_blocks: Some(0),
             ..none()
