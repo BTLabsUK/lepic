@@ -469,6 +469,31 @@ fn a_collect_limited_to_contacts_drains_only_their_mailboxes() {
     assert_eq!(only(&[]), 0);
 }
 
+/// More reply mailboxes than one drain takes are collected in turn: each cycle drains at most
+/// 50, and every invite's answer is taken within two cycles.
+#[test]
+fn more_invites_than_one_drain_takes_are_collected_in_turn() {
+    let world = World::new();
+    let stranger = world.stranger();
+    let links: Vec<String> = (0..60).map(|_| world.invite(&world.issuer, "Anna")).collect();
+    for (invitee, link) in [(&world.payer, &links[0]), (&stranger, &links[59])] {
+        let answered = world
+            .block_on(
+                invitee
+                    .wallet
+                    .contact_book()
+                    .pairing_accept(&relays(invitee), accept(link, "Ben", false)),
+            )
+            .unwrap();
+        assert!(answered.posted);
+    }
+    let first = world.collect(&world.issuer);
+    let second = world.collect(&world.issuer);
+    assert_eq!(first.mailboxes, lepic_epicbox::MAX_MAILBOXES_PER_DRAIN);
+    assert_eq!(second.mailboxes, lepic_epicbox::MAX_MAILBOXES_PER_DRAIN);
+    assert_eq!(first.paired + second.paired, 2);
+}
+
 #[test]
 fn an_answer_stored_before_its_post_survives_a_relay_that_fails() {
     let world = World::new();

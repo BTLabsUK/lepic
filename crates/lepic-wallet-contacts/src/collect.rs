@@ -149,6 +149,10 @@ struct OldSalt {
 const BACKOFF_KEY: &str = "contact.backoff";
 const UPDATES_KEY: &str = "contact.updates";
 const CURSOR_KEY: &str = "contact.cursor";
+/// The turn of the pairings in progress, as [`CURSOR_KEY`] is the contacts'.
+const PENDING_CURSOR_KEY: &str = "contact.pending_cursor";
+/// The part of a cycle kept for the contacts while more pairings are in progress than fit.
+const CONTACT_SHARE: usize = MAX_MAILBOXES_PER_DRAIN / 2;
 
 /// Which mailbox a drained message came from.
 #[derive(Debug, Clone, Copy)]
@@ -594,9 +598,10 @@ where
         .await
     }
 
-    /// The mailboxes this cycle drains: every pending pairing's, then the contacts' in turn,
-    /// leaving out relays in backoff, at most [`MAX_MAILBOXES_PER_DRAIN`] in all. With `only`,
-    /// just those of the contacts it holds, without moving the turn.
+    /// The mailboxes this cycle drains: the pending pairings', then the contacts', each in turn
+    /// across cycles, leaving out relays in backoff, at most [`MAX_MAILBOXES_PER_DRAIN`] in all.
+    /// Pairings take what the contacts leave, and at least all but [`CONTACT_SHARE`]. With
+    /// `only`, just those of the contacts it holds, without moving the turns.
     async fn mailboxes_to_collect(
         &self,
         relays: &ContactRelays,
@@ -614,25 +619,24 @@ where
                 let wanted = |contact_id: ContactId| {
                     only.as_ref().is_none_or(|only| only.contains(&contact_id))
                 };
-                let mut mailboxes =
+                let mut pending =
                     pending_mailboxes(repos, network, &relays, &backoffs, now, &wanted)?;
                 let mut contacts = contact_mailboxes(repos, &relays, now, &wanted)?;
                 if trigger == CollectTrigger::Foreground {
                     keep_active_when_many(repos, &mut contacts, now)?;
                 }
-                let room = MAX_MAILBOXES_PER_DRAIN.saturating_sub(mailboxes.len());
-                let count = contacts.len();
-                let taken = room.min(count);
+                let pending_room =
+                    MAX_MAILBOXES_PER_DRAIN.saturating_sub(contacts.len().min(CONTACT_SHARE));
+                let pending_taken = pending.len().min(pending_room);
+                let taken = contacts
+                    .len()
+                    .min(MAX_MAILBOXES_PER_DRAIN.saturating_sub(pending_taken));
                 if only.is_none() {
-                    let cursor = repos
-                        .setting(CURSOR_KEY)?
-                        .and_then(|text| text.parse::<usize>().ok())
-                        .unwrap_or(0);
-                    let start = cursor.checked_rem(count).unwrap_or(0);
-                    contacts.rotate_left(start);
-                    let next = start.saturating_add(taken).checked_rem(count).unwrap_or(0);
-                    repos.put_setting(CURSOR_KEY, &next.to_string())?;
+                    take_turn(repos, PENDING_CURSOR_KEY, &mut pending, pending_taken)?;
+                    take_turn(repos, CURSOR_KEY, &mut contacts, taken)?;
                 }
+                pending.truncate(pending_taken);
+                let mut mailboxes = pending;
                 for (record, home, onion, salt, read) in contacts.into_iter().take(taken) {
                     if backoffs.waiting(&host_text(&home), now) {
                         continue;
@@ -1319,6 +1323,25 @@ fn has_pending(repos: &dyn Repositories, contact_id: ContactId) -> Result<bool, 
         }
     }
     Ok(false)
+}
+
+/// Turns `items` to this cycle's start, kept under `key`, and moves the start past the `taken`
+/// first of them.
+fn take_turn<T>(
+    repos: &mut dyn Repositories,
+    key: &str,
+    items: &mut [T],
+    taken: usize,
+) -> Result<(), StoreError> {
+    let count = items.len();
+    let cursor = repos
+        .setting(key)?
+        .and_then(|text| text.parse::<usize>().ok())
+        .unwrap_or(0);
+    let start = cursor.checked_rem(count).unwrap_or(0);
+    items.rotate_left(start);
+    let next = start.saturating_add(taken).checked_rem(count).unwrap_or(0);
+    repos.put_setting(key, &next.to_string())
 }
 
 /// The reply and confirm mailboxes of the pairings in progress `wanted` holds, leaving out
