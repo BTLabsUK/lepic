@@ -475,7 +475,9 @@ fn a_collect_limited_to_contacts_drains_only_their_mailboxes() {
 fn more_invites_than_one_drain_takes_are_collected_in_turn() {
     let world = World::new();
     let stranger = world.stranger();
-    let links: Vec<String> = (0..60).map(|_| world.invite(&world.issuer, "Anna")).collect();
+    let links: Vec<String> = (0..60)
+        .map(|_| world.invite(&world.issuer, "Anna"))
+        .collect();
     for (invitee, link) in [(&world.payer, &links[0]), (&stranger, &links[59])] {
         let answered = world
             .block_on(
