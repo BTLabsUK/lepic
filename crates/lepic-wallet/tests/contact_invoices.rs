@@ -1587,11 +1587,12 @@ fn a_contact_waiting_on_a_mailbox_payment_is_collected_on_the_foreground_tick() 
             ))
             .unwrap()
     };
-    assert_eq!(tick().mailboxes, 0);
+    // Both previous homes are still drained, so they are read even while quiet.
+    assert_eq!(tick().mailboxes, 2);
 
     send_through_mailbox(&world, &relays(&world.payer), ben_side);
-    // Ben's current and previous mailboxes; the quiet stranger stays out.
-    assert_eq!(tick().mailboxes, 2);
+    // Ben's current mailbox joins; the quiet stranger's current one stays out.
+    assert_eq!(tick().mailboxes, 3);
 }
 
 /// The S2 of a payment sent through a contact's mailbox finalizes it with an event naming that
