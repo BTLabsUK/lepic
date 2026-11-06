@@ -89,6 +89,9 @@ pub struct GlobalArgs {
     /// Profile bits to tell paired contacts, as a number 0 to 65535 or 0x hex [env: LEPIC_PROFILE]
     #[arg(long, global = true, value_name = "N")]
     pub profile_bits: Option<String>,
+    /// Domain to claim to paired contacts, like example.com [env: LEPIC_DOMAIN] [default: none]
+    #[arg(long, global = true, value_name = "DOMAIN")]
+    pub domain: Option<String>,
     /// Run the command on the `lepic serve` process listening at SOCKET [default: lepic.sock in
     /// the data directory]
     #[arg(
@@ -715,6 +718,43 @@ pub enum ProfileCommand {
 Sends one contact update to each paired contact; `lepic contact collect` takes their answers. \
 Set `profile` in the config file too, or later updates tell the configured value again.")]
     Set(ProfileSetArgs),
+    /// Show, write or attach the proof of this wallet's domain
+    Domain(DomainArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct DomainArgs {
+    #[command(subcommand)]
+    pub command: DomainCommand,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum DomainCommand {
+    /// Show the configured domain and this wallet's domain key
+    Show,
+    /// Write the well-known file the domain must serve
+    #[command(after_help = "\
+Serve the file at https://<domain>/.well-known/epic-wallet.json over HTTPS, with no redirect, \
+and keep it under 4 KiB. The key comes from the recovery phrase, so a restored wallet keeps it.")]
+    File(DomainFileArgs),
+    /// Tell paired contacts the configured domain now
+    #[command(after_help = "\
+Needs the `domain` setting. Pairings made while `domain` is set carry the claim by themselves; \
+`attach` is for pairings made before. `lepic contact collect` takes the answers.")]
+    Attach,
+}
+
+#[derive(Debug, Args)]
+pub struct DomainFileArgs {
+    /// Where to write the file [default: ./epic-wallet.json]
+    #[arg(long, value_name = "PATH")]
+    pub out: Option<PathBuf>,
+    /// A relay the file names, as HOST:PORT; repeat for more
+    #[arg(long, value_name = "HOST:PORT")]
+    pub relay: Vec<String>,
+    /// Replace the file when it exists
+    #[arg(long)]
+    pub force: bool,
 }
 
 #[derive(Debug, Args)]

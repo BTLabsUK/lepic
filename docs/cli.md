@@ -76,6 +76,7 @@ Each setting comes from, in order: a flag, its environment variable, the config 
 | `invoice_expiry_hours` | `LEPIC_INVOICE_EXPIRY_HOURS` | | `24` |
 | `host_features` | `LEPIC_HOST_FEATURES` | | none |
 | `profile` | `LEPIC_PROFILE` | `--profile`, `--profile-bits` | `0` |
+| `domain` | `LEPIC_DOMAIN` | `--domain` | none |
 | `settings_file` | `LEPIC_SETTINGS` | `--settings` | `~/.lepic/settings.toml` |
 
 The config file is `~/.lepic/config.toml` when it exists, or the file `--config` or `LEPIC_CONFIG`
@@ -105,6 +106,15 @@ and `automated` (bit 1, 2), comma-separated; `--profile-bits <N>` takes a number
 decimal or `0x` hex, for bits the CLI has no name for. The two flags exclude each other. The
 config file and `LEPIC_PROFILE` take names or a number. An unknown name or a number above 65535
 is a usage error. The flag wins over the variable, the variable over the config file.
+
+#### Domain
+
+`domain` (`--domain <DOMAIN>`, `LEPIC_DOMAIN`, `domain = "example.com"`) is the domain the wallet
+claims to its paired contacts. It is lowercased and loses one trailing dot; a value that is not a
+domain name (labels of letters, digits and hyphens, at least one dot) is a usage error. Pairings
+made while it is set carry the claim by themselves. The claim is proven by a file the domain
+serves (see `lepic profile domain` below), signed for by the wallet's domain key. That key derives
+from the recovery phrase (account 0), so a restored wallet keeps it.
 
 ### The settings file and the built-in configuration
 
@@ -663,6 +673,23 @@ clear) queues an update for every paired contact; `contact collect` sends them. 
 were queued. The new value is not saved: later updates tell the configured one again, so set
 `profile` in the config file too. Updates count against the contact update limits (3 a day per
 contact, 100 an hour).
+
+`lepic profile domain` handles the proof of the `domain` setting:
+
+- `show` prints the configured domain (or `none`), the wallet's network, its domain key as 64 hex
+  digits and the JSON fragment `{"<network>":{"domain_keys":["<hex>"]}}`. It opens the wallet and
+  reaches no relay.
+- `file [--out PATH] [--relay HOST:PORT ...] [--force]` writes the well-known file to `PATH`
+  (default `./epic-wallet.json`) and prints the path, its size and the URL it must be served at,
+  `https://<domain>/.well-known/epic-wallet.json`. It refuses to replace an existing file without
+  `--force`. The file must stay under 4 KiB, and the domain must serve it over HTTPS with no
+  redirect, or contacts cannot verify it.
+- `attach` tells every paired contact the configured domain now and prints `<n> contact updates
+  queued for <domain>; `lepic contact collect` takes the answers.` It needs `domain`. Pairings made
+  while `domain` is set carry the claim already; `attach` is for pairings made before.
+
+JSON reports: `{"domain","network","domain_key"}`, `{"path","bytes","url"}` and
+`{"domain","queued"}`.
 
 For services: run the wallet with the profile in its config and change it live with `profile set`.
 

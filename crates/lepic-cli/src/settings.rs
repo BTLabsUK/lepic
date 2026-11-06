@@ -91,6 +91,12 @@ pub const SETTINGS: &[(&str, &str, &str)] = &[
          comma-separated, or a number 0 to 65535",
     ),
     (
+        "domain",
+        "LEPIC_DOMAIN",
+        "domain the wallet claims to paired contacts, like example.com; its well-known file \
+         proves the claim",
+    ),
+    (
         "settings_file",
         "LEPIC_SETTINGS",
         "settings.toml with the servers: [node] servers, [epicbox] servers",
@@ -274,6 +280,8 @@ pub struct Settings {
     pub host_features: u32,
     /// The profile told to paired contacts (ADR 0041); none unless `profile` says so.
     pub profile: u16,
+    /// The domain claimed to paired contacts, normalized; none unless `domain` says so.
+    pub domain: Option<String>,
 }
 
 /// The output format alone, for reporting errors that happen before the rest resolves.
@@ -352,7 +360,6 @@ impl Settings {
         let host_features = lookup
             .parse("host_features", parse_host_features)?
             .unwrap_or(0);
-        let profile = profile(args, &lookup)?;
         let node_over_tor = lookup
             .parse("node_over_tor", |text| match text {
                 "true" => Some(true),
@@ -393,7 +400,8 @@ impl Settings {
             node_over_tor,
             invoice_expiry,
             host_features,
-            profile,
+            profile: profile(args, &lookup)?,
+            domain: domain(args, &lookup)?,
         })
     }
 }
@@ -467,6 +475,23 @@ fn profile(args: &GlobalArgs, lookup: &Lookup<'_>) -> Result<u16, SettingsError>
     Ok(profile_flag(args)?
         .or(lookup.parse("profile", crate::profile::parse_setting)?)
         .unwrap_or(0))
+}
+
+/// The domain a flag, `LEPIC_DOMAIN` or the config file gives, lowercased and without a trailing
+/// dot; one that is not a domain name is a usage error like any setting.
+fn domain(args: &GlobalArgs, lookup: &Lookup<'_>) -> Result<Option<String>, SettingsError> {
+    let parse = |text: &str| {
+        lepic_contact::DomainName::new(text)
+            .ok()
+            .map(|name| name.to_string())
+    };
+    match &args.domain {
+        Some(text) => parse(text).map(Some).ok_or(SettingsError::InvalidValue {
+            key: "domain",
+            origin: Origin::Flag,
+        }),
+        None => lookup.parse("domain", parse),
+    }
 }
 
 /// The profile `--profile` or `--profile-bits` gives.
@@ -795,6 +820,19 @@ mod tests {
                 key: "host_features",
                 ..
             })
+        ));
+    }
+
+    #[test]
+    fn domain_setting_parses_and_rejects() {
+        assert_eq!(resolve(&[]).unwrap().domain, None);
+        assert_eq!(
+            resolve(&[("LEPIC_DOMAIN", "BTLabs.UK.")]).unwrap().domain,
+            Some("btlabs.uk".to_owned())
+        );
+        assert!(matches!(
+            resolve(&[("LEPIC_DOMAIN", "not a domain")]),
+            Err(SettingsError::InvalidValue { key: "domain", .. })
         ));
     }
 

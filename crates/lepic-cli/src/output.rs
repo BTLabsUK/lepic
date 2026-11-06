@@ -61,6 +61,9 @@ pub enum Report {
     ContactMoveHome(ContactMoveHomeReport),
     ProfileShow(ProfileShowReport),
     ProfileSet(ProfileSetReport),
+    ProfileDomainShow(ProfileDomainShowReport),
+    ProfileDomainFile(ProfileDomainFileReport),
+    ProfileDomainAttach(ProfileDomainAttachReport),
     ContactSlate(ContactSlateReport),
     ContactInvoiceIssue(ContactInvoiceIssueReport),
     ContactInvoices(ContactInvoiceListReport),
@@ -551,6 +554,33 @@ pub struct ProfileSetReport {
     pub queued: u32,
     /// The profile the settings give, which later updates tell again when it differs.
     pub configured: u16,
+}
+
+/// `lepic profile domain show`.
+#[derive(Debug, Serialize)]
+pub struct ProfileDomainShowReport {
+    /// The domain the settings give; none when unset.
+    pub domain: Option<String>,
+    pub network: String,
+    /// This wallet's domain key on the network, 64 hex digits.
+    pub domain_key: String,
+}
+
+/// `lepic profile domain file`.
+#[derive(Debug, Serialize)]
+pub struct ProfileDomainFileReport {
+    pub path: String,
+    pub bytes: usize,
+    /// Where the file must be served; none when no domain is configured.
+    pub url: Option<String>,
+}
+
+/// `lepic profile domain attach`.
+#[derive(Debug, Serialize)]
+pub struct ProfileDomainAttachReport {
+    pub domain: String,
+    /// How many contact updates were queued.
+    pub queued: u32,
 }
 
 #[derive(Debug, Serialize)]
@@ -1051,6 +1081,9 @@ fn write_human(out: &mut Vec<u8>, report: &Report) -> std::io::Result<()> {
         | Report::ContactMoveHome(_)
         | Report::ProfileShow(_)
         | Report::ProfileSet(_)
+        | Report::ProfileDomainShow(_)
+        | Report::ProfileDomainFile(_)
+        | Report::ProfileDomainAttach(_)
         | Report::ContactInvoiceIssue(_)
         | Report::ContactInvoices(_)
         | Report::ContactExport(_)
@@ -1568,6 +1601,31 @@ fn write_profile(out: &mut Vec<u8>, report: &Report) -> std::io::Result<()> {
             }
             Ok(())
         }
+        Report::ProfileDomainShow(r) => {
+            writeln!(out, "Domain {}", r.domain.as_deref().unwrap_or("none"))?;
+            writeln!(out, "Network {}", r.network)?;
+            writeln!(out, "Domain key {}", r.domain_key)?;
+            writeln!(
+                out,
+                "{{\"{}\":{{\"domain_keys\":[\"{}\"]}}}}",
+                r.network, r.domain_key
+            )
+        }
+        Report::ProfileDomainFile(r) => {
+            writeln!(out, "Wrote {} ({} bytes).", r.path, r.bytes)?;
+            match &r.url {
+                Some(url) => writeln!(out, "Serve it at {url}, over HTTPS with no redirect."),
+                None => writeln!(
+                    out,
+                    "The domain is not configured; set `domain` to see where to serve it."
+                ),
+            }
+        }
+        Report::ProfileDomainAttach(r) => writeln!(
+            out,
+            "{} contact updates queued for {}; `lepic contact collect` takes the answers.",
+            r.queued, r.domain
+        ),
         _ => Ok(()),
     }
 }
@@ -1610,7 +1668,11 @@ fn write_contact_human(out: &mut Vec<u8>, report: &Report) -> std::io::Result<()
             "Check sent to {}; `lepic contact collect` takes the answer.",
             r.contact_id
         ),
-        Report::ProfileShow(_) | Report::ProfileSet(_) => write_profile(out, report),
+        Report::ProfileShow(_)
+        | Report::ProfileSet(_)
+        | Report::ProfileDomainShow(_)
+        | Report::ProfileDomainFile(_)
+        | Report::ProfileDomainAttach(_) => write_profile(out, report),
         Report::ContactMoveHome(r) => write_move_home(out, r),
         Report::ContactKeyCheck(r) => writeln!(
             out,
@@ -2267,6 +2329,29 @@ mod tests {
                     configured: 0,
                 }),
                 vec!["configured", "names", "profile", "queued", "unnamed"],
+            ),
+            (
+                Report::ProfileDomainShow(ProfileDomainShowReport {
+                    domain: Some(text("d")),
+                    network: text("n"),
+                    domain_key: text("k"),
+                }),
+                vec!["domain", "domain_key", "network"],
+            ),
+            (
+                Report::ProfileDomainFile(ProfileDomainFileReport {
+                    path: text("p"),
+                    bytes: 1,
+                    url: None,
+                }),
+                vec!["bytes", "path", "url"],
+            ),
+            (
+                Report::ProfileDomainAttach(ProfileDomainAttachReport {
+                    domain: text("d"),
+                    queued: 1,
+                }),
+                vec!["domain", "queued"],
             ),
             (
                 Report::ContactMoveHome(ContactMoveHomeReport {

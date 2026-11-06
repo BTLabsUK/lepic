@@ -1,13 +1,18 @@
 // SPDX-License-Identifier: Apache-2.0
 //! `lepic profile`: what the wallet tells its paired contacts about the host (ADR 0041).
 
-use lepic_wallet_contacts::{ContactRelays, RelayMode, WalletContacts as _};
+use lepic_wallet_contacts::{
+    ContactRelays, DOMAIN_FILE_MAX, DomainFile, RelayMode, WalletContacts as _,
+};
 
 use super::Run;
-use crate::cli::{ProfileCommand, ProfileSetArgs};
+use crate::cli::{DomainCommand, DomainFileArgs, ProfileCommand, ProfileSetArgs};
 use crate::exit::CliError;
 use crate::host::Host;
-use crate::output::{ProfileSetReport, ProfileShowReport, Report};
+use crate::output::{
+    ProfileDomainAttachReport, ProfileDomainFileReport, ProfileDomainShowReport, ProfileSetReport,
+    ProfileShowReport, Report,
+};
 use crate::profile::{describe, parse_bits, parse_names};
 use crate::settings::{Origin, SettingsError};
 
@@ -42,8 +47,105 @@ impl<H: Host> Run<'_, H> {
                     configured,
                 }))
             }
+            ProfileCommand::Domain(args) => self.domain(args.command).await,
         }
     }
+
+    async fn domain(&mut self, command: DomainCommand) -> Result<Report, CliError> {
+        match command {
+            DomainCommand::Show => {
+                let opened = self.open().await?;
+                let key = opened.wallet.contact_book().own_domain_key()?;
+                Ok(Report::ProfileDomainShow(ProfileDomainShowReport {
+                    domain: self.settings.domain.clone(),
+                    network: self.settings.network.to_string(),
+                    domain_key: key_hex(&key),
+                }))
+            }
+            DomainCommand::File(args) => {
+                let opened = self.open().await?;
+                let key = opened.wallet.contact_book().own_domain_key()?;
+                write_file(
+                    &args,
+                    self.settings.network,
+                    &key,
+                    self.settings.domain.as_deref(),
+                )
+            }
+            DomainCommand::Attach => {
+                let domain = self
+                    .settings
+                    .domain
+                    .clone()
+                    .ok_or(CliError::DomainNotConfigured)?;
+                let opened = self.open().await?;
+                let relays = ContactRelays::new(opened.epicbox.clone(), RelayMode::Online)
+                    .with_meeting(self.settings.servers.meeting_relays.clone());
+                let queued = opened
+                    .wallet
+                    .contact_book()
+                    .contacts_tell_domain(&relays)
+                    .await?;
+                Ok(Report::ProfileDomainAttach(ProfileDomainAttachReport {
+                    domain,
+                    queued,
+                }))
+            }
+        }
+    }
+}
+
+fn key_hex(key: &lepic_contact::VerifyingKey) -> String {
+    use std::fmt::Write as _;
+    key.as_bytes().iter().fold(String::new(), |mut hex, byte| {
+        let _ = write!(hex, "{byte:02x}");
+        hex
+    })
+}
+
+fn write_file(
+    args: &DomainFileArgs,
+    network: lepic_primitives::params::Network,
+    key: &lepic_contact::VerifyingKey,
+    domain: Option<&str>,
+) -> Result<Report, CliError> {
+    use std::io::Write as _;
+    let path = args
+        .out
+        .clone()
+        .unwrap_or_else(|| std::path::PathBuf::from("epic-wallet.json"));
+    let network = match network {
+        lepic_primitives::params::Network::Mainnet => lepic_contact::Network::Mainnet,
+        lepic_primitives::params::Network::Floonet => lepic_contact::Network::Floonet,
+    };
+    let text = DomainFile::render(network, std::slice::from_ref(key), &args.relay);
+    if text.len() > DOMAIN_FILE_MAX {
+        return Err(CliError::DomainFileTooLarge);
+    }
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true);
+    if args.force {
+        options.create(true).truncate(true);
+    } else {
+        options.create_new(true);
+    }
+    let mut file = options.open(&path).map_err(|error| {
+        if error.kind() == std::io::ErrorKind::AlreadyExists {
+            CliError::FileExists { path: path.clone() }
+        } else {
+            CliError::Io {
+                what: "write the domain file",
+                source: error,
+            }
+        }
+    })?;
+    file.write_all(text.as_bytes())
+        .map_err(CliError::io("write the domain file"))?;
+    Ok(Report::ProfileDomainFile(ProfileDomainFileReport {
+        path: path.display().to_string(),
+        bytes: text.len(),
+        url: domain.map(|domain| format!("https://{domain}/.well-known/epic-wallet.json")),
+    }))
 }
 
 fn set_value(args: &ProfileSetArgs) -> Result<u16, CliError> {

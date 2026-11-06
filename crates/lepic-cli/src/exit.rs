@@ -212,6 +212,12 @@ pub enum CliError {
     SasTable,
     #[error("contact id is not 32 hex digits")]
     ContactId,
+    #[error("the domain is not configured: set `domain`, --domain or LEPIC_DOMAIN")]
+    DomainNotConfigured,
+    #[error("the domain file would be over 4 KiB: name fewer relays")]
+    DomainFileTooLarge,
+    #[error("{} exists; --force replaces it", path.display())]
+    FileExists { path: std::path::PathBuf },
     #[error("payload id is not 32 hex digits")]
     PayloadId,
     #[error("--hex is not an even number of hex digits")]
@@ -265,6 +271,9 @@ impl CliError {
             | Self::ContactId
             | Self::PayloadId
             | Self::PayloadHex
+            | Self::DomainNotConfigured
+            | Self::FileExists { .. }
+            | Self::DomainFileTooLarge
             | Self::ServiceRefused { .. }
             | Self::ServiceOption { .. }
             | Self::ServiceOnly { .. }
@@ -390,6 +399,8 @@ fn contact_kind(error: &ContactError) -> ErrorKind {
         | ContactError::RelayAddress
         | ContactError::WordsUnavailable
         | ContactError::Words(_)
+        | ContactError::Domain(_)
+        | ContactError::NoDomainConfigured
         | ContactError::TooLarge { .. } => ErrorKind::Usage,
         ContactError::UnknownContact
         | ContactError::UnknownPairing
@@ -415,6 +426,7 @@ fn contact_kind(error: &ContactError) -> ErrorKind {
         | ContactError::OtherAddress
         | ContactError::KindDiffers
         | ContactError::AddressProofMissing
+        | ContactError::NoDomainClaim
         | ContactError::RelayMoveNotRequested => ErrorKind::Rejected,
         ContactError::Post(_) => ErrorKind::Transport,
         ContactError::NotCancelled { cause, .. } => contact_kind(cause),
@@ -706,6 +718,7 @@ mod tests {
             (CliError::SlateId, ErrorKind::Usage),
             (CliError::PayloadId, ErrorKind::Usage),
             (CliError::PayloadHex, ErrorKind::Usage),
+            (CliError::DomainNotConfigured, ErrorKind::Usage),
             (CliError::NotRandomSlateId, ErrorKind::Usage),
             (CliError::SlateIdReused { tx_id: 1 }, ErrorKind::Rejected),
             (CliError::NoSendWithSlate, ErrorKind::NotFound),
