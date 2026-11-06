@@ -7,6 +7,29 @@ Conventional Commit messages at release time.
 
 ## [Unreleased]
 
+### Added
+
+- The domain claim, ADR 0043: envelope extension `0x83` carries a domain and an Ed25519
+  signature by a domain key over the pairing's signing key, in a reply, a confirm and a contact
+  update. `lepic-contact` gains `DomainClaim`, `DomainName` and `DomainKey`;
+  `lepic-wallet-contacts` derives the key from the contact root (`epic-domain/1`) and gains the
+  pure `ContactBook::domain_verify`, which takes the file bytes the host fetched and answers
+  `Proven` or `Refused` with a reason, and `contacts_tell_domain`, which sends paired contacts the
+  claim. `WalletConfig.domain` sets the domain. Schema 14 adds `peer_domain` and
+  `peer_domain_attestation` to contacts, stored as received; backups carry them as optional
+  fields, so schema 13 stores and v1 backups still load. `ContactView.peer_domain` and
+  `peer_domain_attestation` give the contact's claim. Vectors: `pairing/domain.json`. Core does
+  no fetching and keeps no verification state; a wallet that predates the extension ignores it.
+- `lepic` domain settings: `domain` in the config file, `LEPIC_DOMAIN` and `--domain`, and
+  `lepic profile domain show|file|attach`, which print the domain key, write the
+  `epic-wallet.json` file and send the claim to paired contacts.
+- `lepic-ffi` gains `contact_domain_verify`, `DomainVerdict`, `WalletConfig.domain` and the
+  claim on `ContactView`.
+
+### Changed
+
+- `PairingExtras` (`lepic-contact`) is `Clone` and no longer `Copy`.
+
 ## [0.2.0] - 2026-11-06
 
 ### Added

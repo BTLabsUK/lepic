@@ -218,6 +218,7 @@ optional fields, covered by the signature). The signature, tag `FF`, is last.
 | `07` | card | bytes | The sender's current contact card (section 6), so every message refreshes delivery addresses |
 | `08` | sender key | 32 | The sender's Ed25519 `sig_pk` for this contact. Required when tag `FF` is present |
 | `80` | sent at | u64 unix seconds | When the sender sealed it, in every signed slate, notice and payload. An extension, so a reader that predates it skips it; a value of another length is skipped too. Recipients refuse one sealed over 30 days ago or over a day ahead of their clock, remember what they took for longer than that, and, once a contact sent it, refuse that contact's slates, notices and payloads without it |
+| `83` | domain claim | `issued_at` (8) \|\| Ed25519 signature (64) \|\| domain (1 to 253) | A service's claim to a domain, in a reply, a confirm and a contact update only (6.3). An extension: a malformed value reads as absent |
 | `FF` | signature | 64 | Ed25519 by `sig_sk` over the signing input below. Last |
 
 > **Amended by ADR 0034.** Extension `82` is the sender's feature word: a `u32`, big-endian, in a
@@ -232,6 +233,12 @@ optional fields, covered by the signature). The signature, tag `FF`, is last.
 > only carries. Profile bits ride in this word only, to paired contacts: never in the marker, and
 > a plain sender claims none. A receiver stores the whole word and shows the upper half as the
 > peer's profile; it only removes an offer or changes wording, and is never an identifier.
+
+> **Amended by ADR 0043.** Extension `83` is a domain claim: `issued_at (8, u64 big-endian) ||
+> Ed25519 signature (64) || domain (1 to 253 bytes)`, in a reply, a confirm and a contact update.
+> It is signed like every field before tag `FF`. A value that is too short or names an invalid
+> domain is read as absent, like any malformed extension; a reader that predates it skips it. The
+> message, the normalization and the check are in 6.3.
 
 > **Amended by ADR 0040.** Type `09` is a contact check: signed, empty body, between paired
 > contacts only (8.5). A reader that predates it refuses the type as malformed before it checks
@@ -379,6 +386,52 @@ app shows the user's own label for the contact and the claimed name only as "cal
 RFC (`contact`, `pair`, `pair-reply`, `pair-confirm`) appends the same 4-byte checksum to its
 payload before base64url. About 400 characters (470 with every
 optional field), a version 11 to 13 QR code at medium error correction. In-person pairing shows this card (section 7.4).
+
+#### 6.3 Domain claim
+
+A service may claim a domain, so that the other side can show where it runs. The claim is a
+signature by a domain key over the pairing's signing key. A reader checks it against a file the
+domain publishes. The card has no tag for it and takes no extensions (6.1), so the claim travels
+in the reply, the confirm and the contact update, as extension `83` (3.3).
+
+Message, signed with Ed25519 by the domain key:
+
+```
+"epic-domain/1" || net (1 byte: 00 mainnet, 01 floonet) || sig_key (32) || issued_at (u64 BE, seconds) || domain
+```
+
+`sig_key` is the Ed25519 key of tag `06` of the card, the key that signs this pairing's envelopes.
+`domain` is the normalized UTF-8 text of the extension.
+
+Normalization: ASCII only, lowercased, one trailing dot removed. Labels are 1 to 63 characters of
+`a-z`, `0-9` and `-`, and neither start nor end with `-`. There is at least one dot and the whole
+name is 1 to 253 bytes. A name that fails is not a claim and the extension reads as absent.
+
+Domain key: `HKDF-SHA256(salt = "epic-domain/1", ikm = contact root, info = "sign" || net)`, 32
+bytes, used as an Ed25519 seed. It is one key for each account and network, and a phrase restore
+brings it back.
+
+File, served at `https://<domain>/.well-known/epic-wallet.json`, at most 4,096 bytes:
+
+```json
+{"version":1,"networks":{"mainnet":{"domain_keys":["<hex 32>"]},"floonet":{"domain_keys":["<hex 32>"]}},"relays":["host:port"]}
+```
+
+`relays` is optional and informational. Each network lists at most 8 keys. Unknown members are
+ignored.
+
+Verify takes the domain, the file bytes, the claim, the pairing's `sig_key` and the network. The
+answer is `Proven` when the file parses, its version is 1, the network lists a key under which the
+signature checks, and the claim's domain equals the domain asked about. Otherwise it is `Refused`
+with one reason: file too large, file malformed, unsupported version, network absent, domain
+mismatch, or no key matches. A file that lists a key only under the other network is
+`network absent`.
+
+LEPIC stores the domain and the extension value as received and does no network access. The host
+fetches the file (HTTPS only, no redirects, 4,096 bytes at most), calls verify and keeps the
+result. The claim is a statement by the contact that anyone holding the domain key can check; it
+changes no check of the pairing, and "Verified" (7.5) still means only the short authentication
+string.
 
 ### 7 Pairing
 
@@ -1205,6 +1258,7 @@ two-implementation test. Areas under `testdata/vectors/pairing/`:
 | `envelopes.json` | Each type (01 to 07), anonymous and signed, with fixed RNG: bytes, armored text, hint, opened fields |
 | `cards_invites.json` | Card, invite, reply and confirm bytes and their URI forms |
 | `sas.json` | Inputs → four bytes → emoji and names |
+| `domain.json` | Domain key, claim and file for fixed inputs on both networks: the 0x83 value, the file text and the verdict, with refused cases for the other network, a different domain, a key not listed and an oversize file |
 | `malformed.json` | Each rejection of 3.1, 3.3, 3.5, 6.1 and 7.1 with its typed error |
 
 The SAS table `testdata/sas/emoji-v1.txt` is frozen once released; a change is `emoji-v2` with a
