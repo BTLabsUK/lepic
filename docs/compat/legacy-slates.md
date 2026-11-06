@@ -136,8 +136,7 @@ without it; the file path removes the V3-only keys before a header-2 file reache
 `v4.1.0` refuses an offset of the wrong length on both paths (`malformed_offset_too_short`), and on
 the file path also a duplicate participant id and a zero participant count
 (`malformed_duplicate_participant_id`, `malformed_num_participants_zero`), which its Epicbox path
-still reads; `v4.0.2` read all three; the other checks are LEPIC's own and stricter
-than upstream's parse step.
+still reads; `v4.0.2` read all three; the other checks are LEPIC's own.
 Integer fields written as strings take ASCII digits only: a leading `+`, which upstream's
 `str::parse::<u64>` accepts, is refused, as are spaces and other signs. No `epic-wallet` version
 writes a sign, and the strict form keeps decode and encode exact inverses.
