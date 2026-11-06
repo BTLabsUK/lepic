@@ -221,10 +221,17 @@ fn records_a_mined_coinbase_as_an_incoming_transaction() {
         sender.read(|repos| repos.confirmed_height(tx_id)),
         Some(Height::new(5))
     );
+    let details = sender
+        .harness
+        .block_on(sender.wallet.transaction_details(tx_id))
+        .unwrap();
+    assert!(details.coinbase);
+    assert_eq!(details.output_commits, vec![coinbase.output.commitment]);
 
     // A second refresh records nothing more.
+    let before = sender.transactions().len();
     refresh_at(&sender, 7);
-    assert_eq!(sender.transactions().len(), 1);
+    assert_eq!(sender.transactions().len(), before);
 }
 
 both_stores!(deletes_candidates_no_block_confirmed);

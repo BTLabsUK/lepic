@@ -6,6 +6,7 @@ use lepic_crypto::Commitment;
 use lepic_epicbox::TRANSPORT_ID as EPICBOX;
 use lepic_node::NodeApi;
 use lepic_primitives::amount::Height;
+use lepic_primitives::output::OutputFeatures;
 use lepic_slate::model::{Slate, SlateId};
 use lepic_slate::registry::CodecRegistry;
 use lepic_slate::role::Role;
@@ -111,6 +112,10 @@ pub struct TransactionDetails {
     /// after it ended here. Advisory: nothing was released on the report, and a payment the
     /// chain still confirms clears it. `None` for any other transaction.
     pub sender_reported_cancelled_at: Option<Timestamp>,
+    /// Whether the transaction is a block reward this wallet received: an incoming entry with
+    /// no slate whose output is a coinbase output, whether a mining node had this wallet build
+    /// it or a scan found it. Its output is locked until its `lock_height`.
+    pub coinbase: bool,
 }
 
 /// What an imported transaction carries beyond its log entry.
@@ -348,7 +353,9 @@ fn details(
     let sender_reported_cancelled_at = sender_cancel_report(repos, &transaction)?;
     let unverified =
         origin == TxOrigin::OtherWallet && crate::other_wallet::is_unverified(repos, tx_id)?;
+    let coinbase = is_coinbase(repos, &transaction, &output_commits)?;
     Ok(TransactionDetails {
+        coinbase,
         unverified,
         sender_reported_posted_at,
         sender_reported_cancelled_at,
@@ -380,6 +387,28 @@ fn details(
         flow,
         transaction,
     })
+}
+
+/// A block reward comes with no slate, and its output keeps the coinbase features after it is
+/// spent.
+fn is_coinbase(
+    repos: &dyn Repositories,
+    transaction: &StoredTransaction,
+    output_commits: &[Commitment],
+) -> Result<bool, StoreError> {
+    let entry = &transaction.entry;
+    if entry.direction != TxDirection::Incoming || entry.slate_id.is_some() {
+        return Ok(false);
+    }
+    for commitment in output_commits {
+        if repos
+            .output(commitment.as_bytes())?
+            .is_some_and(|output| output.id.features == OutputFeatures::Coinbase)
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 /// The slate ids of the pending outbox entries, read for the first row that needs them.
