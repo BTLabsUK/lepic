@@ -116,7 +116,8 @@ pub(super) async fn funded_pair_with(bob_policy: crate::api::policy::HostPolicy)
     chain.fund(phrase, Chain::Floonet, 10 * EPIC, 0).unwrap();
     chain.set_height(20);
     alice.scan_to_tip().await;
-    let bob = session_with_policy(&runtime, &dirs[1], AppSecretStore::in_memory(), bob_policy).await;
+    let bob =
+        session_with_policy(&runtime, &dirs[1], AppSecretStore::in_memory(), bob_policy).await;
     bob.create(SeedOrigin::Generate, password()).await.unwrap();
     bob.scan_to_tip().await;
     Pair {

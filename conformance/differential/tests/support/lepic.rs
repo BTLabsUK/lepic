@@ -198,6 +198,7 @@ impl LepicParty {
         let request = ReceiveRequest {
             account: None,
             message: message.map(str::to_owned),
+            ..Default::default()
         };
         let received = self
             .runtime
