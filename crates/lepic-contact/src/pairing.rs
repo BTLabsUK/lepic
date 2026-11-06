@@ -8,6 +8,7 @@ use rand_core::CryptoRng;
 use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
 use crate::card::ContactCard;
+use crate::domain::DomainClaim;
 use crate::envelope::{Content, MessageType, Opened, SealedEnvelope, seal, seal_psk};
 use crate::error::{DecodeError, EncodeError, Malformed};
 use crate::hash::{first8, sha256};
@@ -133,11 +134,13 @@ impl ReplyBody {
 const STATUS_ACCEPTED: u8 = 0x01;
 
 /// What a reply, confirm or contact update carries beside its body, as signed (or, for a
-/// reply, sealed) envelope extensions: the sender's address proof and the features it claims.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+/// reply, sealed) envelope extensions: the sender's address proof, the features it claims and
+/// the domain it claims to speak for (RFC 0002 6.3).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct PairingExtras {
     pub address_proof: Option<[u8; 32]>,
     pub features: Option<u32>,
+    pub domain: Option<DomainClaim>,
 }
 
 impl PairingExtras {
@@ -145,12 +148,14 @@ impl PairingExtras {
         Self {
             address_proof: content.address_proof,
             features: content.features,
+            domain: content.domain.clone(),
         }
     }
 
     pub(crate) fn apply(&self, content: &mut Content) {
         content.address_proof = self.address_proof;
         content.features = self.features;
+        content.domain.clone_from(&self.domain);
     }
 }
 

@@ -16,9 +16,9 @@ use hpke::kdf::HkdfSha256;
 use hpke::kem::X25519HkdfSha256;
 use hpke::{Deserializable, Kem, OpModeR, OpModeS, Serializable};
 use lepic_contact::{
-    Content, DecodeError, EncPublicKey, EncSecretKey, EncodeError, Hint, HintKey, HintRule,
-    MAX_ARMOR_LEN, MAX_ENVELOPE_LEN, Malformed, MessageType, Network, Purpose, Reference,
-    SealedEnvelope, armor, dearmor, looks_sealed, seal,
+    Content, DecodeError, DomainClaim, DomainKey, DomainName, EncPublicKey, EncSecretKey,
+    EncodeError, Hint, HintKey, HintRule, MAX_ARMOR_LEN, MAX_ENVELOPE_LEN, Malformed, MessageType,
+    Network, Purpose, Reference, SealedEnvelope, armor, dearmor, looks_sealed, seal,
 };
 use proptest::prelude::*;
 
@@ -36,7 +36,18 @@ fn full_content(card_owner: &Side) -> Content {
         sent_at: Some(1_790_000_000),
         address_proof: None,
         features: None,
+        domain: None,
     }
+}
+
+fn sample_claim() -> DomainClaim {
+    DomainClaim::sign(
+        &DomainKey::from_seed([7; 32]),
+        NET,
+        &Side::new(1).sig.verifying_key(),
+        DomainName::new("btlabs.uk").unwrap(),
+        1_762_387_200,
+    )
 }
 
 fn seal_to(recipient: &Side, content: &Content, signer: Option<&Side>, seed: u8) -> Vec<u8> {
@@ -509,12 +520,58 @@ fn features_and_proof_are_extensions_read_in_any_combination_and_signed() {
 }
 
 #[test]
+fn claim_with_bad_domain_reads_as_absent() {
+    let (alice, bob) = (Side::new(1), Side::new(11));
+    let header = header([0; 8]);
+    let claim = sample_claim().to_bytes();
+    let mut capitals = claim[..72].to_vec();
+    capitals.extend_from_slice(b"BTLabs.UK.");
+    let good = signed_with(
+        &alice,
+        &header,
+        &bob.enc_pk(),
+        &minimal(),
+        &field(0x83, &claim),
+    );
+    let opened = open(&seal_raw(&bob.enc_pk(), &header, &good), &bob.enc).unwrap();
+    assert_eq!(opened.content.domain, Some(sample_claim()));
+    // Mixed case and a trailing dot still parse, normalized.
+    let inner = signed_with(
+        &alice,
+        &header,
+        &bob.enc_pk(),
+        &minimal(),
+        &field(0x83, &capitals),
+    );
+    let opened = open(&seal_raw(&bob.enc_pk(), &header, &inner), &bob.enc).unwrap();
+    assert_eq!(opened.content.domain.unwrap().domain.as_str(), "btlabs.uk");
+
+    let mut no_dot = claim[..72].to_vec();
+    no_dot.extend_from_slice(b"nodot");
+    let mut empty_name = claim[..72].to_vec();
+    empty_name.push(b'.');
+    for value in [vec![0; 10], claim[..72].to_vec(), no_dot, empty_name] {
+        let inner = signed_with(
+            &alice,
+            &header,
+            &bob.enc_pk(),
+            &minimal(),
+            &field(0x83, &value),
+        );
+        let opened = open(&seal_raw(&bob.enc_pk(), &header, &inner), &bob.enc).unwrap();
+        assert_eq!(opened.content.domain, None);
+        assert_eq!(opened.content.kind, MessageType::Slate);
+    }
+}
+
+#[test]
 fn extensions_are_written_in_ascending_tag_order() {
     let (alice, bob) = (Side::new(1), Side::new(11));
     let mut content = Content::new(MessageType::ContactUpdate, vec![1]);
     content.sent_at = Some(5);
     content.address_proof = Some([7; 32]);
     content.features = Some(9);
+    content.domain = Some(sample_claim());
     let envelope = seal_to(&bob, &content, Some(&alice), 3);
     let opened = open(&envelope, &bob.enc).unwrap();
     assert_eq!(opened.content, content);
@@ -683,6 +740,7 @@ proptest! {
         sent_at in proptest::option::of(any::<u64>()),
         address_proof in proptest::option::of(any::<[u8; 32]>()),
         features in proptest::option::of(any::<u32>()),
+        with_domain in any::<bool>(),
         seed in any::<u8>(),
     ) {
         let (alice, bob) = (Side::new(1), Side::new(11));
@@ -697,6 +755,7 @@ proptest! {
             sent_at,
             address_proof,
             features,
+            domain: with_domain.then(sample_claim),
         };
         let envelope = seal_to(&bob, &content, signed.then_some(&alice), seed);
         let armored = armor(&envelope);

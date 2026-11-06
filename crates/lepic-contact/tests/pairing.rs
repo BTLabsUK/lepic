@@ -1138,3 +1138,87 @@ fn the_private_words_check_covers_both_secrets() {
     );
     assert_ne!(sas, Sas::compute(NET, &a, &b, &n_a, &n_b));
 }
+
+// Domain claims (RFC 0002 6.3).
+
+#[test]
+fn envelope_carries_domain_claim() {
+    use lepic_contact::{
+        DomainClaim, DomainKey, DomainName, PairingExtras, open_confirm_with, open_reply_with,
+        seal_confirm_with_extras, seal_contact_update_with, seal_reply_with,
+    };
+
+    let (alice, bob) = (Side::new(1), Side::new(11));
+    let card_a = alice.card("Alice", NET);
+    let card_b = bob.card("Bob", NET);
+    let na = Nonce::from_bytes([0xa1; 16]);
+    let invite = invite_for(&alice, &card_a, &na);
+    let domain_key = DomainKey::from_seed([7; 32]);
+    let claim_of = |side: &Side| {
+        DomainClaim::sign(
+            &domain_key,
+            NET,
+            &side.sig.verifying_key(),
+            DomainName::new("btlabs.uk").unwrap(),
+            1_762_387_200,
+        )
+    };
+    let extras = |side: &Side| PairingExtras {
+        domain: Some(claim_of(side)),
+        ..PairingExtras::default()
+    };
+
+    // The reply carries the invitee's claim.
+    let reply = ReplyBody {
+        code: invite.fields().code.clone(),
+        nonce: Nonce::from_bytes([0xb2; 16]),
+        confirm_code: ConfirmCode::from_bytes([0xcc; 16]),
+        card: card_b.clone(),
+    };
+    let envelope =
+        seal_reply_with(&invite, &reply, &extras(&bob), &mut ScriptedRng::seeded(1)).unwrap();
+    let sealed = SealedEnvelope::decode(&envelope, NET).unwrap();
+    let (got, got_extras) = open_reply_with(&sealed, &alice.enc).unwrap();
+    assert_eq!(got, reply);
+    assert_eq!(got_extras, extras(&bob));
+    let claim = got_extras.domain.unwrap();
+    assert!(claim.verify_with(&domain_key.public(), NET, got.card.sig_key()));
+
+    // The confirm carries the inviter's.
+    let confirm = ConfirmBody {
+        nonce: na,
+        card: card_a.clone(),
+    };
+    let envelope = seal_confirm_with_extras(
+        &card_b,
+        &confirm,
+        &alice.sig,
+        &extras(&alice),
+        &mut ScriptedRng::seeded(2),
+    )
+    .unwrap();
+    let sealed = SealedEnvelope::decode(&envelope, NET).unwrap();
+    let (got, got_extras) = open_confirm_with(&sealed, &bob.enc).unwrap();
+    assert!(matches!(got, Confirm::Accepted(_)));
+    assert_eq!(got_extras, extras(&alice));
+
+    // A contact update carries the sender's current claim.
+    let envelope = seal_contact_update_with(
+        &card_b,
+        &card_a,
+        &alice.sig,
+        &extras(&alice),
+        &mut ScriptedRng::seeded(3),
+    )
+    .unwrap();
+    let sealed = SealedEnvelope::decode(&envelope, NET).unwrap();
+    let opened = sealed.open(&bob.enc).unwrap();
+    assert_eq!(opened.content.domain, Some(claim_of(&alice)));
+    assert_eq!(opened.sender, Some(alice.sig.verifying_key()));
+
+    // Without extras there is no claim.
+    let envelope =
+        seal_confirm(&card_b, &confirm, &alice.sig, &mut ScriptedRng::seeded(2)).unwrap();
+    let sealed = SealedEnvelope::decode(&envelope, NET).unwrap();
+    assert_eq!(open_confirm_with(&sealed, &bob.enc).unwrap().1.domain, None);
+}

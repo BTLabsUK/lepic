@@ -23,14 +23,14 @@ use hpke::kdf::HkdfSha256;
 use hpke::kem::X25519HkdfSha256;
 use hpke::{Deserializable, Kem, OpModeR, OpModeS, Serializable};
 use lepic_contact::{
-    Confirm, ConfirmBody, ContactCard, Content, DecodeError, EncSecretKey, Hint, HintKey, HintRule,
-    Invite, InviteId, KeyCheck, KeyCheckAnswer, Malformed, MessageType, Network, Nonce,
-    PairingCode, PairingLink, PairingWords, Purpose, Refusal, ReplyBody, Sas, SealedEnvelope,
-    SigningKey, VerifyingKey, WordsError, WordsKey, WordsWindow, accept_found, accept_restored,
-    armor, dearmor, key_check_tag, open_confirm, open_contact_update, open_key_check,
-    open_key_check_answer, open_reply, pairing_envelope_from_link, pairing_envelope_link, seal,
-    seal_confirm, seal_found, seal_key_check, seal_not_found, seal_refusal, seal_reply,
-    seal_restored,
+    Confirm, ConfirmBody, ContactCard, Content, DecodeError, DomainClaim, DomainKey, EncSecretKey,
+    Hint, HintKey, HintRule, Invite, InviteId, KeyCheck, KeyCheckAnswer, Malformed, MessageType,
+    Network, Nonce, PairingCode, PairingLink, PairingWords, Purpose, Refusal, ReplyBody, Sas,
+    SealedEnvelope, SigningKey, VerifyingKey, WordsError, WordsKey, WordsWindow, accept_found,
+    accept_restored, armor, dearmor, key_check_tag, open_confirm, open_contact_update,
+    open_key_check, open_key_check_answer, open_reply, pairing_envelope_from_link,
+    pairing_envelope_link, seal, seal_confirm, seal_found, seal_key_check, seal_not_found,
+    seal_refusal, seal_reply, seal_restored,
 };
 use serde_json::Value;
 
@@ -48,7 +48,12 @@ fn vectors(file: &str) -> Vec<Value> {
     assert_eq!(meta["kit_version"], KIT_VERSION, "{file}: kit version");
     assert_eq!(meta["git_commit"], KIT_COMMIT, "{file}: kit commit");
     assert_eq!(meta["file"], file, "{file}: name");
-    let vectors = document["vectors"].as_array().unwrap().clone();
+    let vectors = document
+        .get("vectors")
+        .or_else(|| document.get("cases"))
+        .and_then(Value::as_array)
+        .unwrap_or_else(|| panic!("{file}: no vectors or cases"))
+        .clone();
     assert!(!vectors.is_empty(), "{file}: no vectors");
     vectors
 }
@@ -250,6 +255,14 @@ fn check_opened(opened: &lepic_contact::Opened, expected: &Value, name: &str) {
         "{name}"
     );
     assert_eq!(
+        content
+            .domain
+            .as_ref()
+            .map(|claim| to_hex(&claim.to_bytes())),
+        expected["domain"].as_str().map(str::to_owned),
+        "{name}"
+    );
+    assert_eq!(
         opened.sender.map(|key| to_hex(key.as_bytes())),
         expected["sender_key"].as_str().map(str::to_owned),
         "{name}"
@@ -333,6 +346,78 @@ fn envelopes_open_and_seal_byte_for_byte() {
         resealed += 1;
     }
     assert!(resealed > 20);
+}
+
+#[test]
+fn domain_claims_sign_and_verify_byte_for_byte() {
+    let mut proven = 0;
+    for vector in vectors("domain.json") {
+        let name = text(&vector["name"]);
+        let net = network(&vector["net"]);
+        let sig_key = verifying_key(&vector["sig_key"]);
+        let domain_key = DomainKey::from_seed(array(&vector["domain_sk"]));
+        assert_eq!(
+            domain_key.public().to_bytes().to_vec(),
+            bytes(&vector["domain_pk"]),
+            "{name}"
+        );
+
+        // The claim in the file is the one this crate signs for its own fields.
+        let claim = DomainClaim::from_bytes(&bytes(&vector["claim"])).unwrap();
+        assert_eq!(to_hex(&claim.to_bytes()), vector["claim"], "{name}");
+        let signed = DomainClaim::sign(
+            &domain_key,
+            net,
+            &sig_key,
+            claim.domain.clone(),
+            claim.issued_at,
+        );
+        assert_eq!(signed, claim, "{name}");
+        assert_eq!(
+            vector["issued_at"].as_u64(),
+            Some(claim.issued_at),
+            "{name}"
+        );
+        assert!(
+            claim.verify_with(&domain_key.public(), net, &sig_key),
+            "{name}"
+        );
+        let other_net = match net {
+            Network::Mainnet => Network::Floonet,
+            Network::Floonet => Network::Mainnet,
+        };
+        assert!(
+            !claim.verify_with(&domain_key.public(), other_net, &sig_key),
+            "{name}"
+        );
+
+        // The verdict follows from the file: it is Proven when the file is within its limit,
+        // lists a key of this network that verifies the claim, and the claim is for the domain
+        // the file was fetched from.
+        let file = text(&vector["file"]);
+        let listed: Value = serde_json::from_str(file).unwrap_or(Value::Null);
+        let net_name = match net {
+            Network::Mainnet => "mainnet",
+            Network::Floonet => "floonet",
+        };
+        let keys_listed = listed["networks"][net_name]["domain_keys"]
+            .as_array()
+            .map(Vec::as_slice)
+            .unwrap_or_default();
+        let verifies = keys_listed.iter().any(|key| {
+            key.as_str()
+                .and_then(|key| <[u8; 32]>::try_from(hex(key)).ok())
+                .and_then(|key| VerifyingKey::from_bytes(&key).ok())
+                .is_some_and(|key| claim.verify_with(&key, net, &sig_key))
+        });
+        let expected = file.len() <= 4096
+            && listed["version"].as_u64() == Some(1)
+            && verifies
+            && claim.domain.as_str() == text(&vector["domain"]);
+        assert_eq!(text(&vector["verdict"]) == "proven", expected, "{name}");
+        proven += usize::from(expected);
+    }
+    assert!(proven > 0);
 }
 
 #[test]

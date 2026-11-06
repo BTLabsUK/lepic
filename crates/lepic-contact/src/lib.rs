@@ -5,6 +5,7 @@
 
 mod armor;
 mod card;
+mod domain;
 mod envelope;
 mod error;
 mod hash;
@@ -23,6 +24,7 @@ mod words;
 
 pub use armor::{MAX_ARMOR_LEN, SEALED_FILE_EXTENSION, armor, dearmor, looks_sealed};
 pub use card::{CARD_FORMAT, Capabilities, CardFields, ContactCard, ContactKind, MAX_CARD_LEN};
+pub use domain::{DOMAIN_TAG, DomainClaim, DomainError, DomainKey, DomainName, MAX_DOMAIN_LEN};
 pub use ed25519_dalek::{SigningKey, VerifyingKey};
 pub use envelope::{
     Content, ENVELOPE_VERSION, HEADER_LEN, MAGIC, MAX_ENVELOPE_LEN, MessageType, Opened, Purpose,

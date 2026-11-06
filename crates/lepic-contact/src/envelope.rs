@@ -14,6 +14,7 @@ use rand_core::CryptoRng;
 use zeroize::Zeroizing;
 
 use crate::card::ContactCard;
+use crate::domain::DomainClaim;
 use crate::error::{DecodeError, EncodeError, Malformed};
 use crate::hint::{Hint, HintRule};
 use crate::keys::{EncPublicKey, EncSecretKey, sig_key};
@@ -53,6 +54,9 @@ const TAG_ADDRESS_PROOF: u8 = 0x81;
 /// The feature bits the sender claims, a big-endian `u32`, unknown bits kept; skipped when it
 /// is not four bytes.
 const TAG_FEATURES: u8 = 0x82;
+/// The sender's domain claim (RFC 0002 6.3): `issued_at (8) || signature (64) || domain`; skipped
+/// when it is shorter or its domain is not a valid name.
+const TAG_DOMAIN: u8 = 0x83;
 const TAG_SIGNATURE: u8 = 0xff;
 
 type SealKem = X25519HkdfSha256;
@@ -165,6 +169,9 @@ pub struct Content {
     pub address_proof: Option<[u8; 32]>,
     /// The feature bits the sender claims; a claim, never a reason to skip a check.
     pub features: Option<u32>,
+    /// The domain the sender claims to speak for, signed by its domain key; a claim until the
+    /// host checks the domain's file (ADR 0043).
+    pub domain: Option<DomainClaim>,
 }
 
 impl fmt::Debug for Content {
@@ -180,6 +187,7 @@ impl fmt::Debug for Content {
             .field("sent_at", &self.sent_at)
             .field("address_proof", &self.address_proof.is_some())
             .field("features", &self.features)
+            .field("domain", &self.domain)
             .finish()
     }
 }
@@ -197,6 +205,7 @@ impl Content {
             sent_at: None,
             address_proof: None,
             features: None,
+            domain: None,
         }
     }
 }
@@ -417,6 +426,14 @@ fn encode_content(
             .map(u32::to_be_bytes)
             .as_ref()
             .map(|bytes| &bytes[..]),
+    )?;
+    writer.optional(
+        TAG_DOMAIN,
+        content
+            .domain
+            .as_ref()
+            .map(DomainClaim::to_bytes)
+            .as_deref(),
     )?;
     if let Some(signer) = signer {
         let signature = signer.sign(&signing_input(header, recipient, writer.as_bytes()));
@@ -645,6 +662,9 @@ pub fn decode_content(
         .extension(TAG_FEATURES)
         .and_then(|bytes| <[u8; 4]>::try_from(bytes).ok())
         .map(u32::from_be_bytes);
+    let domain = fields
+        .extension(TAG_DOMAIN)
+        .and_then(|bytes| DomainClaim::from_bytes(bytes).ok());
 
     let sender = match (
         fields.optional_array::<32>(TAG_SENDER_KEY)?,
@@ -690,6 +710,7 @@ pub fn decode_content(
             sent_at,
             address_proof,
             features,
+            domain,
         },
         sender,
     })
