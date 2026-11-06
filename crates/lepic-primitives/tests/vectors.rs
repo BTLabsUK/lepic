@@ -556,6 +556,39 @@ fn chain_parameters_match_upstream() {
 }
 
 #[test]
+fn reward_schedule_matches_upstream() {
+    for network in Network::ALL {
+        let vector = load(&format!("reward_schedule_{network}"));
+        assert_eq!(vector["inputs"]["network"], network.as_str());
+        let params = network.params();
+        for case in cases(&vector) {
+            let height = Height::new(decimal(case, "height"));
+            let fees = Fee::new(decimal(case, "fees"));
+            assert_eq!(
+                params.block_total_reward(height).value(),
+                decimal(case, "block_total_reward"),
+                "{case}"
+            );
+            assert_eq!(
+                params.foundation_levy(height).value(),
+                decimal(case, "foundation_levy"),
+                "{case}"
+            );
+            assert_eq!(
+                params.mining_reward(height).value(),
+                decimal(case, "mining_reward"),
+                "{case}"
+            );
+            assert_eq!(
+                params.coinbase_value(fees, height).value(),
+                decimal(case, "coinbase_value"),
+                "{case}"
+            );
+        }
+    }
+}
+
+#[test]
 fn weights_and_fees_match_upstream_over_the_grid() {
     let vector = load("fee_grid");
     let base_fee = Network::Mainnet.params().default_base_fee();

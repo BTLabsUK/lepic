@@ -7,7 +7,7 @@
 //! Per-network chain parameters. Each wallet holds its own [`ChainParams`]; nothing here is
 //! process-global (ADR 0011).
 
-use crate::amount::{ArithmeticError, Fee, Height, MILLI_EPIC};
+use crate::amount::{Amount, ArithmeticError, EPIC_BASE, Fee, Height, MILLI_EPIC};
 use crate::ser::ProtocolVersion;
 
 /// Block weight of one input.
@@ -107,4 +107,101 @@ impl ChainParams {
     pub const fn default_base_fee(&self) -> Fee {
         Fee::new(MILLI_EPIC)
     }
+
+    /// Everything a block at `height` creates: the miner's reward plus the foundation levy.
+    pub fn block_total_reward(&self, height: Height) -> Amount {
+        let height = height.value();
+        let epics: u64 = match self.network {
+            Network::Floonet if height <= FLOONET_BLOCK_ERA_1 => 16,
+            Network::Floonet => 8,
+            Network::Mainnet if height <= BLOCK_ERA_1 => 16,
+            Network::Mainnet if height <= BLOCK_ERA_2 => 8,
+            Network::Mainnet if height <= BLOCK_ERA_3 => 4,
+            Network::Mainnet if height <= BLOCK_ERA_4 => 2,
+            Network::Mainnet if height <= BLOCK_ERA_5 => 1,
+            Network::Mainnet => {
+                // Halved every era of `BLOCK_ERA_6_ONWARDS` blocks. Upstream shifts without a
+                // check, which overflows some 250 years after era 5; the reward is zero there.
+                let halvings = height
+                    .saturating_sub(BLOCK_ERA_5 + 1)
+                    .checked_div(BLOCK_ERA_6_ONWARDS)
+                    .unwrap_or(0);
+                let reward = u32::try_from(halvings)
+                    .ok()
+                    .and_then(|halvings| 1u64.checked_shl(halvings))
+                    .and_then(|divisor| BASE_REWARD_ERA_6_ONWARDS.checked_div(divisor))
+                    .unwrap_or(0);
+                return Amount::new(reward);
+            }
+        };
+        Amount::new(epics.saturating_mul(EPIC_BASE))
+    }
+
+    /// The share of the block total at `height` that goes to the foundation output the node
+    /// adds itself. Zero at genesis and from the ninth levy era on.
+    pub fn foundation_levy(&self, height: Height) -> Amount {
+        let index = match height.value() {
+            0 => return Amount::ZERO,
+            height if height <= FOUNDATION_LEVY_ERA_1 => 0,
+            height => height
+                .saturating_sub(FOUNDATION_LEVY_ERA_1 + 1)
+                .checked_div(FOUNDATION_LEVY_ERA_2_ONWARDS)
+                .unwrap_or(0)
+                .saturating_add(1),
+        };
+        let Some(&levy) = usize::try_from(index)
+            .ok()
+            .and_then(|index| FOUNDATION_LEVY.get(index))
+        else {
+            return Amount::ZERO;
+        };
+        // At most 16 EPIC times 888, far inside u64.
+        let levy = self
+            .block_total_reward(height)
+            .value()
+            .saturating_mul(levy)
+            .checked_div(FOUNDATION_LEVY_RATIO)
+            .unwrap_or(0);
+        Amount::new(levy)
+    }
+
+    /// The miner's reward at `height`, without fees: upstream `reward_at_height`.
+    pub fn mining_reward(&self, height: Height) -> Amount {
+        let total = self.block_total_reward(height).value();
+        Amount::new(total.saturating_sub(self.foundation_levy(height).value()))
+    }
+
+    /// The value of the coinbase output of a block at `height` whose transactions pay `fees`:
+    /// upstream `reward`, which saturates.
+    pub fn coinbase_value(&self, fees: Fee, height: Height) -> Amount {
+        Amount::new(
+            self.mining_reward(height)
+                .value()
+                .saturating_add(fees.value()),
+        )
+    }
 }
+
+/// Blocks in a day at the target block time of one minute.
+const DAY_HEIGHT: u64 = 1_440;
+
+/// Last heights of mainnet's first five emission eras.
+const BLOCK_ERA_1: u64 = DAY_HEIGHT * 334;
+const BLOCK_ERA_2: u64 = BLOCK_ERA_1 + DAY_HEIGHT * 470;
+const BLOCK_ERA_3: u64 = BLOCK_ERA_2 + DAY_HEIGHT * 601;
+const BLOCK_ERA_4: u64 = BLOCK_ERA_3 + DAY_HEIGHT * 800;
+const BLOCK_ERA_5: u64 = BLOCK_ERA_4 + DAY_HEIGHT * 1_019;
+
+/// Length of each mainnet era after the fifth.
+const BLOCK_ERA_6_ONWARDS: u64 = DAY_HEIGHT * 1_460;
+
+/// The block total of era 6, 0.15625 EPIC.
+const BASE_REWARD_ERA_6_ONWARDS: u64 = 15_625_000;
+
+/// Last height of floonet's first emission era.
+const FLOONET_BLOCK_ERA_1: u64 = DAY_HEIGHT * 334;
+
+const FOUNDATION_LEVY_ERA_1: u64 = DAY_HEIGHT * 120;
+const FOUNDATION_LEVY_ERA_2_ONWARDS: u64 = DAY_HEIGHT * 365;
+const FOUNDATION_LEVY_RATIO: u64 = 10_000;
+const FOUNDATION_LEVY: [u64; 9] = [888, 777, 666, 555, 444, 333, 222, 111, 111];
