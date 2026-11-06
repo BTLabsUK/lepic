@@ -348,8 +348,8 @@ fn solve(job: &Job, states: &mut [RxState]) -> Result<(Option<Solution>, u64)> {
                     while !stop.load(Ordering::Relaxed) && started.elapsed() < JOB_TIME {
                         let mut header = job.prefix.clone();
                         header.extend_from_slice(&nonce.to_be_bytes());
-                        let hash =
-                            to_hash_bytes(&slow_hash(state, &header, &job.seed).to_bytes_be());
+                        // The node takes the hash as RandomX returns it.
+                        let hash = slow_hash(state, &header, &job.seed);
                         done += 1;
                         let pow = ProofOfWork {
                             proof: Proof::RandomXProof { hash },
@@ -379,13 +379,4 @@ fn solve(job: &Job, states: &mut [RxState]) -> Result<(Option<Solution>, u64)> {
     let done = results.iter().map(|(_, done)| done).sum();
     let found = results.into_iter().find_map(|(found, _)| found);
     Ok((found, done))
-}
-
-/// The 32-byte big-endian form of a RandomX hash, as the node encodes it in a proof.
-fn to_hash_bytes(bytes: &[u8]) -> [u8; 32] {
-    let mut hash = [0u8; 32];
-    let skip = bytes.len().saturating_sub(32);
-    let tail = &bytes[skip..];
-    hash[32 - tail.len()..].copy_from_slice(tail);
-    hash
 }
