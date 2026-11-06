@@ -1075,13 +1075,13 @@ pub struct ContactView {
 
 /// Whether a contact's domain claim is proven by the well-known file its domain serves.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum DomainVerdict {
+pub struct DomainVerdict {
     /// A key the file lists for the wallet's network signed the claim for this pairing.
-    Proven,
-    /// The claim is not proven; the reason is one snake_case word: `file_too_large`,
+    pub proven: bool,
+    /// When not proven, the reason as one snake_case word: `file_too_large`,
     /// `file_malformed`, `unsupported_version`, `network_absent`, `domain_mismatch` or
-    /// `no_key_matches`.
-    Refused(String),
+    /// `no_key_matches`. `None` when proven.
+    pub refused: Option<String>,
 }
 
 /// Where a pairing stands; derived from its record, never stored.

@@ -838,10 +838,14 @@ impl Session {
         let id = self::contact_id(contact_id)?;
         let verdict = self.engine.contact_book().domain_verify(id, file).await?;
         Ok(match verdict {
-            lepic_wallet_contacts::DomainVerdict::Proven => DomainVerdict::Proven,
-            lepic_wallet_contacts::DomainVerdict::Refused(reason) => {
-                DomainVerdict::Refused(reason.to_string())
-            }
+            lepic_wallet_contacts::DomainVerdict::Proven => DomainVerdict {
+                proven: true,
+                refused: None,
+            },
+            lepic_wallet_contacts::DomainVerdict::Refused(reason) => DomainVerdict {
+                proven: false,
+                refused: Some(reason.to_string()),
+            },
         })
     }
 
