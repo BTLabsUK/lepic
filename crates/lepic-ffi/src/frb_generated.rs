@@ -8274,7 +8274,7 @@ fn wire__crate__api__wallet__EpicWallet_start_http_listener_impl(
             >>::sse_decode(&mut deserializer);
             let api_exposure = <crate::api::http::HttpExposure>::sse_decode(&mut deserializer);
             let api_port = <u16>::sse_decode(&mut deserializer);
-            let api_coinbase = <bool>::sse_decode(&mut deserializer);
+            let api_coinbase = <crate::api::http::HttpCoinbase>::sse_decode(&mut deserializer);
             let api_events = <StreamSink<
                 crate::api::http::HttpListenerEvent,
                 flutter_rust_bridge::for_generated::SseCodec,
@@ -11886,6 +11886,19 @@ impl SseDecode for crate::api::policy::HostPolicy {
             refuse_unsolicited_payments: var_refuseUnsolicitedPayments,
             refuse_unsolicited_invoices: var_refuseUnsolicitedInvoices,
             publish_previous_onion: var_publishPreviousOnion,
+        };
+    }
+}
+
+impl SseDecode for crate::api::http::HttpCoinbase {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut inner = <i32>::sse_decode(deserializer);
+        return match inner {
+            0 => crate::api::http::HttpCoinbase::Off,
+            1 => crate::api::http::HttpCoinbase::LocalOnly,
+            2 => crate::api::http::HttpCoinbase::Remote,
+            _ => unreachable!("Invalid variant for HttpCoinbase: {}", inner),
         };
     }
 }
@@ -15913,6 +15926,28 @@ impl flutter_rust_bridge::IntoIntoDart<crate::api::policy::HostPolicy>
     }
 }
 // Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for crate::api::http::HttpCoinbase {
+    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+        match self {
+            Self::Off => 0.into_dart(),
+            Self::LocalOnly => 1.into_dart(),
+            Self::Remote => 2.into_dart(),
+            _ => unreachable!(),
+        }
+    }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive
+    for crate::api::http::HttpCoinbase
+{
+}
+impl flutter_rust_bridge::IntoIntoDart<crate::api::http::HttpCoinbase>
+    for crate::api::http::HttpCoinbase
+{
+    fn into_into_dart(self) -> crate::api::http::HttpCoinbase {
+        self
+    }
+}
+// Codec=Dco (DartCObject based), see doc to use other codecs
 impl flutter_rust_bridge::IntoDart for crate::api::http::HttpExposure {
     fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
         match self {
@@ -18951,6 +18986,23 @@ impl SseEncode for crate::api::policy::HostPolicy {
         <Option<bool>>::sse_encode(self.refuse_unsolicited_payments, serializer);
         <Option<bool>>::sse_encode(self.refuse_unsolicited_invoices, serializer);
         <Option<bool>>::sse_encode(self.publish_previous_onion, serializer);
+    }
+}
+
+impl SseEncode for crate::api::http::HttpCoinbase {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <i32>::sse_encode(
+            match self {
+                crate::api::http::HttpCoinbase::Off => 0,
+                crate::api::http::HttpCoinbase::LocalOnly => 1,
+                crate::api::http::HttpCoinbase::Remote => 2,
+                _ => {
+                    unimplemented!("");
+                }
+            },
+            serializer,
+        );
     }
 }
 
