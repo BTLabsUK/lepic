@@ -10,10 +10,10 @@ use crate::account::{AccountIndex, AccountRecord, AccountRepository};
 use crate::contact::{
     self, CARD_KEY_LEN, ContactCap, ContactId, ContactKind, ContactMailbox, ContactOutboxEntry,
     ContactOutboxId, ContactOutboxState, ContactRecord, ContactRepository, ContactState,
-    INVITE_ID_LEN, MAX_CANCELLED_PAIRINGS, MAX_CONTACTS, MAX_PENDING_PAIRINGS, PAYMENTS_KEY_LEN,
-    PairRequest, PairingEndReason, PairingFacts, PairingId, PairingRole, PairingState, PeerCard,
-    PendingPairing, PreviousHome, RelayBackoff, SealMode, StatusKind, StatusNotice, StatusNoticeId,
-    StoredContactOutbox, StoredStatusNotice,
+    DomainClaimBytes, INVITE_ID_LEN, MAX_CANCELLED_PAIRINGS, MAX_CONTACTS, MAX_PENDING_PAIRINGS,
+    PAYMENTS_KEY_LEN, PairRequest, PairingEndReason, PairingFacts, PairingId, PairingRole,
+    PairingState, PeerCard, PendingPairing, PreviousHome, RelayBackoff, SealMode, StatusKind,
+    StatusNotice, StatusNoticeId, StoredContactOutbox, StoredStatusNotice,
 };
 use crate::context::{
     self, ContextKey, ContextRepository, ParticipantId, PrivateContext, StoreKeys,
@@ -1682,7 +1682,8 @@ const CONTACT_COLUMNS: &str = "contact_id, card, peer_sig_key, peer_enc_key, pee
     alt_kind, alt_name, label, state, verified_at, allow_invoices, seal, last_sealed_in, \
     app_contact, imported_from_backup, created_at, updated_at, account, slot, box_salt, sas, own_card, \
     payments_address, payments_key, peer_features, peer_heard_at, peer_verified_at, peer_verdict, \
-    ended_reason, ended_at, heard_wait, heard_wait_mark";
+    ended_reason, ended_at, heard_wait, heard_wait_mark, \
+    peer_domain, peer_domain_attestation";
 
 fn decode_contact(row: &Row<'_>) -> Result<ContactRecord, StoreError> {
     let record = Record::Contact;
@@ -1731,6 +1732,18 @@ fn decode_facts(row: &Row<'_>, first: usize) -> Result<PairingFacts, StoreError>
     let verdict: Option<Vec<u8>> = row.get(at(5))?;
     let ended: Option<String> = row.get(at(6))?;
     let wait: i64 = row.get(at(8))?;
+    let domain: Option<String> = row.get(at(10))?;
+    let attestation: Option<Vec<u8>> = row.get(at(11))?;
+    let peer_domain = match (domain, attestation) {
+        (None, None) => None,
+        (Some(domain), Some(attestation)) if attestation.len() <= MAX_DOMAIN_ATTESTATION_LEN => {
+            Some(DomainClaimBytes {
+                domain,
+                attestation,
+            })
+        }
+        _ => return Err(corrupt(record, "peer domain")),
+    };
     Ok(PairingFacts {
         payments_address,
         payments_key,
@@ -1748,10 +1761,19 @@ fn decode_facts(row: &Row<'_>, first: usize) -> Result<PairingFacts, StoreError>
             u64::try_from(wait).map_err(|_| corrupt(record, "heard wait"))?,
         ),
         heard_wait_mark: optional_time(row.get(at(9))?, record, "heard wait mark")?,
+        peer_domain,
     })
 }
 
+/// The most bytes of a domain proof the store keeps.
+const MAX_DOMAIN_ATTESTATION_LEN: usize = 4096;
+
 fn facts_params(facts: &PairingFacts) -> Result<Vec<rusqlite::types::Value>, StoreError> {
+    if let Some(claim) = &facts.peer_domain
+        && claim.attestation.len() > MAX_DOMAIN_ATTESTATION_LEN
+    {
+        return Err(corrupt(Record::Contact, "peer domain"));
+    }
     Ok(vec![
         facts.payments_address.clone().into(),
         facts.payments_key.map(|key| key.to_vec()).into(),
@@ -1766,6 +1788,16 @@ fn facts_params(facts: &PairingFacts) -> Result<Vec<rusqlite::types::Value>, Sto
         optional_column(facts.ended_at)?.into(),
         contact::duration_to_column(facts.heard_wait)?.into(),
         optional_column(facts.heard_wait_mark)?.into(),
+        facts
+            .peer_domain
+            .as_ref()
+            .map(|claim| claim.domain.clone())
+            .into(),
+        facts
+            .peer_domain
+            .as_ref()
+            .map(|claim| claim.attestation.clone())
+            .into(),
     ])
 }
 
