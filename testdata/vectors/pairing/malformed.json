@@ -1,8 +1,8 @@
 {
   "meta": {
     "generator": "epic-pairing-kit",
-    "kit_version": "0.3.0",
-    "git_commit": "8e79dc1262691c95a08ede386ca96efd28b803c4",
+    "kit_version": "0.3.1",
+    "git_commit": "a532c691513d88ce775752c6e342e5094545d366",
     "rfc": "0002-contact-pairing",
     "file": "malformed.json"
   },
@@ -254,6 +254,26 @@
       "inner": "010001080200027b7d",
       "expected_error": "tlv_bad_value",
       "input_hex": "89455345010001000101010101010101f17499781c549f2576befeed0f4829b2b0f036aef428b287e77ccacdc7792c2ba8df386ccb888eef8ce2f2a4b7e4715044d4f24eab0969e2ef"
+    },
+    {
+      "name": "tlv_type_0a",
+      "section": "3.3",
+      "kind": "envelope_open",
+      "net": 0,
+      "recipient_enc_sk": "3f8edba9e72d2858ea086eae042d7f35cc67b0cf723476d8f2bf511e1d34d035",
+      "inner": "0100010a0200027b7d",
+      "expected_error": "tlv_bad_value",
+      "input_hex": "894553450100010001010101010101010a9fbb0c7fc35e81e4ee5426e9d8c8c5f1eb45ddac9751645e10ac099bce6f178cd3b446b316154482c71eeb06afe4d9370966babbc9b1d8f7"
+    },
+    {
+      "name": "tlv_type_41",
+      "section": "3.3",
+      "kind": "envelope_open",
+      "net": 0,
+      "recipient_enc_sk": "3f8edba9e72d2858ea086eae042d7f35cc67b0cf723476d8f2bf511e1d34d035",
+      "inner": "010001410200027b7d",
+      "expected_error": "tlv_bad_value",
+      "input_hex": "894553450100010001010101010101012126be21ee965beb692362b439916f5a37bdbbeb8aa2316982a8ac5745d38b5adaeaac769cc2870b19700f511ff2113de1c2ff3c3b4dcab5a2"
     },
     {
       "name": "tlv_type_00",

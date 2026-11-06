@@ -69,7 +69,7 @@ Out of scope:
 | MITM check | none (TOFU); SAS over keys; SAS with commitments | SAS with a commitment from the inviter | A plain SAS of 32 bits can be ground by a MITM; the commitment makes one try per pairing (section 7) |
 | SAS alphabet | BIP39 words; PGP words; emoji | 256 emoji, each with a one-word name not in BIP39 | One table serves sight and voice; users are never asked to read BIP39 words aloud |
 | Invoice trust | allowlist of Epicbox addresses (today); paired contacts | Paired contacts, allowlist removed | No users yet; trust follows the key; the address is exchanged in pairing |
-| Exchange side | LEPIC as the exchange's wallet; a separate kit beside the exchange's `epic-wallet` | A Python kit beside `epic-wallet`'s owner API | Exchanges keep their wallet; the kit is also the independent second implementation for test vectors |
+| Exchange side | LEPIC as the exchange's wallet; a separate kit beside the exchange's `epic-wallet` | A Python kit beside `epic-wallet`'s owner API | Exchanges keep their wallet; the kit is also the second implementation for test vectors |
 
 ## Specification
 
@@ -209,7 +209,7 @@ optional fields, covered by the signature). The signature, tag `FF`, is last.
 
 | Tag | Name | Value | Rules |
 |---|---|---|---|
-| `01` | type | u8 | `01` slate (V3 JSON), `02` notice (JSON, ADR 0016 shape), `03` pairing reply, `04` pairing confirm, `05` contact update, `06` key check, `07` key check answer (7.8). Required |
+| `01` | type | u8 | `01` slate (V3 JSON), `02` notice (JSON, ADR 0016 shape), `03` pairing reply, `04` pairing confirm, `05` contact update, `06` key check, `07` key check answer (7.8), `09` contact check (8.5, ADR 0040), `40` app payload: bytes for the host application, never read by LEPIC; a reader with no use for them drops the message. Every other value is refused as malformed; the vectors pin the set. Required |
 | `02` | body | bytes | Per type. Slates at most `MAX_WIRE_SLATE_LEN` and in practice under 64 KiB (armor bound, 3.5). Required |
 | `03` | reply key | 32 | Where the answer should be sealed, for an anonymous envelope |
 | `04` | purpose | u8 | `01` payment, `02` deposit request (invoice from a service), `03` withdrawal, `04` refund, `05` request between people. Shown to the user |
@@ -755,6 +755,10 @@ the new mailbox, higher `seq`, signed) to the customer's mailbox on the old home
 contact is (its card's kind) plays no part on the receiving side: any contact's update is treated
 the same way.
 
+A person's wallet that moves its own home relay keeps nothing on the old one (ADR 0040): it
+announces the move once and a contact that misses the update re-pairs. The 7-day drain is a
+service's duty (13.3), because a service has many customers and cannot ask each to re-pair.
+
 The receiving wallet never follows a move by itself. An update whose card names a mailbox on the
 same relay is applied at once. An update whose card names a mailbox on another relay is stored as
 the contact's card, the mailbox in use stays, and the wallet reports the request to the host
@@ -1065,6 +1069,10 @@ one account. The slate id ties it to the deposit or withdrawal; no memo or addre
 5. The wallet shows confirmations from the chain as for any payment (refresh watches the kernel
    and the change output), with or without the notice.
 
+A service may stop honouring an invoice before the TTL; `expires` (3.3) says when, and 12.6
+applies to a payment that arrives after it. The demo uses 15 minutes. Crediting is the
+service's rule, counted in kernel sightings from the chain, never from the `posted` notice.
+
 #### 12.4 Delivery that survives
 
 The outbox holds each I2 or S2 that must reach a relay: the armored payload, the destination (the
@@ -1114,8 +1122,15 @@ contact's mailbox on the home relay), the attempt count and the next try.
 ### 13 Reference exchange kit
 
 A Python package (`epic-pairing`, Python 3.11+, MIT or Apache-2.0) that an exchange runs beside
-its own `epic-wallet` v4.1.0 owner API. It is the second, independent implementation of this RFC
+its own `epic-wallet` v4.1.0 owner API. Its crypto core is the second implementation of this RFC
 and generates the test vectors LEPIC checks (14).
+
+> **Status (2026-11-06).** Sections 1 to 12 and 14 are built: LEPIC (`lepic-contact`,
+> `lepic-wallet-contacts`) and the kit's crypto core, replayed against each other through the
+> vectors. This section is not built. The kit has the parts of 13.1 up to `wallet` and no
+> `service`; the Python demo (epic-pairing-demo) is a deposit-only showcase of 12.3 that credits
+> no balance; the endpoints, hooks, worker and limits of 13.2 to 13.4 are requirements for
+> `lepic-connect`, the planned Rust connector, and will be rewritten when it is designed.
 
 #### 13.1 Parts
 
@@ -1136,7 +1151,7 @@ and generates the test vectors LEPIC checks (14).
 |---|---|
 | `create_invite(account_id)` | Makes the invite of 12.2 and returns the link and QR payload |
 | `pairing_status(invite_id)` | Pending, replied (with the SAS), verified, expired |
-| `confirm_sas(invite_id)` | The user clicked Confirm on the page |
+| `confirm_sas(invite_id)` | The user clicked Confirm on the page. Deposits are taken only after it; a service offers no skip |
 | `request_deposit(account_id, amount, idempotency_key)` | Issues and sends the sealed invoice; returns the open one for a repeated key |
 | `request_withdrawal(account_id, contact_id, amount, idempotency_key)` | Makes, locks and sends the sealed S1 |
 | `on_credit(callback)` | Called once per posted deposit with account, amount, slate id and kernel |
