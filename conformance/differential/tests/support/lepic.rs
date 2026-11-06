@@ -332,6 +332,8 @@ fn engine(
         policy: WalletPolicy::DEFAULT,
         offline: false,
         host_features: 0,
+        profile: 0,
+        domain: None,
     };
     let ports = Ports {
         node,
