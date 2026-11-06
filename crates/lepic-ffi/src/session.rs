@@ -518,6 +518,7 @@ fn engine(
             .map_err(|_| invalid("node url is not an http or https url with a host"))?,
         offline: config.offline,
         host_features: config.host_features,
+        profile: config.profile,
         policy: policy.wallet,
     };
     let ports = Ports {
@@ -2705,6 +2706,7 @@ mod tests {
             offline: false,
             tor_wanted: false,
             host_features: 0,
+            profile: 0,
         }
     }
 
@@ -3102,6 +3104,7 @@ mod tests {
                 offline: false,
                 tor_wanted: false,
                 host_features: 0,
+                profile: 0,
             };
             let secret = NodeSecret::take(&mut config);
             let session = Session::new(

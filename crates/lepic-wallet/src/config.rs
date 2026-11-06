@@ -132,6 +132,9 @@ pub struct WalletConfig {
     /// The feature bits the host app claims, a constant of its build, never a setting. Only
     /// the host bits ([`lepic_epicbox::marker::features::HOST_FEATURES`]) are kept.
     pub host_features: u32,
+    /// The host's profile of the wallet's owner, 0 for none: sent to paired contacts as bits
+    /// 16 to 31 of the pairing features, never in a marker, never read by LEPIC.
+    pub profile: u16,
     /// Values the host chooses; [`WalletPolicy::default`] is what LEPIC did before they were
     /// parameters.
     pub policy: WalletPolicy,
@@ -288,6 +291,18 @@ impl WalletConfig {
     pub fn claimed_features(&self) -> u32 {
         lepic_epicbox::marker::features::claimed(self.host_features)
     }
+
+    /// The feature word of a pairing envelope or a contact update: the claimed bits and the
+    /// profile in bits 16 to 31. A plain-send marker uses [`Self::claimed_features`] alone.
+    pub fn pairing_features(&self) -> u32 {
+        self.pairing_features_with(self.profile)
+    }
+
+    /// [`Self::pairing_features`] with `profile` in place of the configured one.
+    pub fn pairing_features_with(&self, profile: u16) -> u32 {
+        self.claimed_features()
+            | (u32::from(profile) << lepic_epicbox::marker::features::PROFILE_SHIFT)
+    }
 }
 
 #[cfg(test)]
@@ -304,12 +319,35 @@ mod tests {
             node: NodeEndpoint::parse("http://127.0.0.1:1").unwrap(),
             offline: false,
             host_features,
+            profile: 0,
             policy: WalletPolicy::default(),
         };
         assert_eq!(config(0).claimed_features(), LEPIC_FEATURES);
         assert_eq!(
             config(NAME_SERVICE | 0b1110 | 1 << 31).claimed_features(),
             LEPIC_FEATURES | NAME_SERVICE
+        );
+    }
+
+    #[test]
+    fn the_profile_rides_the_pairing_word_and_never_the_claimed_one() {
+        use lepic_epicbox::marker::features::{HOST_PROFILE, LEPIC_FEATURES};
+        let config = WalletConfig {
+            name: WalletName::new("w").unwrap(),
+            network: Network::Floonet,
+            data_dir: PathBuf::from("/w"),
+            node: NodeEndpoint::parse("http://127.0.0.1:1").unwrap(),
+            offline: false,
+            host_features: 0,
+            profile: 3,
+            policy: WalletPolicy::default(),
+        };
+        assert_eq!(config.claimed_features() & HOST_PROFILE, 0);
+        assert_eq!(config.pairing_features(), LEPIC_FEATURES | 3 << 16);
+        assert_eq!(config.pairing_features_with(0), LEPIC_FEATURES);
+        assert_eq!(
+            config.pairing_features_with(u16::MAX),
+            LEPIC_FEATURES | HOST_PROFILE
         );
     }
 

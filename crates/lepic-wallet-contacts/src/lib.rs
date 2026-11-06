@@ -214,6 +214,8 @@ pub struct ContactView {
     pub label: String,
     /// The name the contact gives itself, shown only as "calls themselves".
     pub claimed_name: Option<String>,
+    /// Deprecated: always written for wallets that read it, never to be read for meaning;
+    /// to be removed (docs/adr/0041 or RFC 0002 6.1).
     pub kind: Option<ContactKind>,
     pub state: ContactState,
     /// The four SAS entries, to show the check again.
@@ -252,6 +254,9 @@ pub struct ContactView {
     pub peer_verified_at: Option<Timestamp>,
     /// The features the contact claimed in this pairing; 0 when none were received.
     pub peer_features: u32,
+    /// The profile the contact sent: `peer_features` from bit 16 up, moved down. LEPIC never
+    /// reads a bit of it; the host names them.
+    pub peer_profile: u32,
     pub ended_reason: Option<PairingEndReason>,
     pub ended_at: Option<Timestamp>,
 }

@@ -11561,6 +11561,7 @@ impl SseDecode for crate::api::types::ContactView {
         let mut var_peerHeardAtMs = <Option<i64>>::sse_decode(deserializer);
         let mut var_peerVerifiedAtMs = <Option<i64>>::sse_decode(deserializer);
         let mut var_peerFeatures = <u32>::sse_decode(deserializer);
+        let mut var_peerProfile = <u32>::sse_decode(deserializer);
         let mut var_endedReason =
             <Option<crate::api::types::PairingEndReason>>::sse_decode(deserializer);
         let mut var_endedAtMs = <Option<i64>>::sse_decode(deserializer);
@@ -11587,6 +11588,7 @@ impl SseDecode for crate::api::types::ContactView {
             peer_heard_at_ms: var_peerHeardAtMs,
             peer_verified_at_ms: var_peerVerifiedAtMs,
             peer_features: var_peerFeatures,
+            peer_profile: var_peerProfile,
             ended_reason: var_endedReason,
             ended_at_ms: var_endedAtMs,
         };
@@ -13997,6 +13999,7 @@ impl SseDecode for crate::api::types::WalletConfig {
         let mut var_offline = <bool>::sse_decode(deserializer);
         let mut var_torWanted = <bool>::sse_decode(deserializer);
         let mut var_hostFeatures = <u32>::sse_decode(deserializer);
+        let mut var_profile = <u16>::sse_decode(deserializer);
         let mut var_policy = <crate::api::policy::HostPolicy>::sse_decode(deserializer);
         return crate::api::types::WalletConfig {
             data_dir: var_dataDir,
@@ -14010,6 +14013,7 @@ impl SseDecode for crate::api::types::WalletConfig {
             offline: var_offline,
             tor_wanted: var_torWanted,
             host_features: var_hostFeatures,
+            profile: var_profile,
             policy: var_policy,
         };
     }
@@ -15478,6 +15482,7 @@ impl flutter_rust_bridge::IntoDart for crate::api::types::ContactView {
             self.peer_heard_at_ms.into_into_dart().into_dart(),
             self.peer_verified_at_ms.into_into_dart().into_dart(),
             self.peer_features.into_into_dart().into_dart(),
+            self.peer_profile.into_into_dart().into_dart(),
             self.ended_reason.into_into_dart().into_dart(),
             self.ended_at_ms.into_into_dart().into_dart(),
         ]
@@ -17916,6 +17921,7 @@ impl flutter_rust_bridge::IntoDart for crate::api::types::WalletConfig {
             self.offline.into_into_dart().into_dart(),
             self.tor_wanted.into_into_dart().into_dart(),
             self.host_features.into_into_dart().into_dart(),
+            self.profile.into_into_dart().into_dart(),
             self.policy.into_into_dart().into_dart(),
         ]
         .into_dart()
@@ -18615,6 +18621,7 @@ impl SseEncode for crate::api::types::ContactView {
         <Option<i64>>::sse_encode(self.peer_heard_at_ms, serializer);
         <Option<i64>>::sse_encode(self.peer_verified_at_ms, serializer);
         <u32>::sse_encode(self.peer_features, serializer);
+        <u32>::sse_encode(self.peer_profile, serializer);
         <Option<crate::api::types::PairingEndReason>>::sse_encode(self.ended_reason, serializer);
         <Option<i64>>::sse_encode(self.ended_at_ms, serializer);
     }
@@ -20634,6 +20641,7 @@ impl SseEncode for crate::api::types::WalletConfig {
         <bool>::sse_encode(self.offline, serializer);
         <bool>::sse_encode(self.tor_wanted, serializer);
         <u32>::sse_encode(self.host_features, serializer);
+        <u16>::sse_encode(self.profile, serializer);
         <crate::api::policy::HostPolicy>::sse_encode(self.policy, serializer);
     }
 }

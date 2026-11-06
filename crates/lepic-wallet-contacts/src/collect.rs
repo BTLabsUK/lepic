@@ -1220,7 +1220,7 @@ where
     /// write per contact.
     async fn send_address_cards(&self, relays: &ContactRelays) -> Result<(), ContactError> {
         let network = self.wallet.config().network;
-        let features = self.wallet.config().claimed_features();
+        let features = self.wallet.config().pairing_features();
         let session = self.wallet.session()?;
         let payments = super::address_proof::Payments::of(&session.keychain, network, relays)?;
         let sent = self

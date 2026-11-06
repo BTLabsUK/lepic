@@ -244,6 +244,7 @@ fn view(view: EngineContactView) -> ContactView {
         peer_heard_at_ms: view.peer_heard_at.map(ms),
         peer_verified_at_ms: view.peer_verified_at.map(ms),
         peer_features: view.peer_features,
+        peer_profile: view.peer_profile,
         ended_reason: view.ended_reason.map(end_reason),
         ended_at_ms: view.ended_at.map(ms),
     }

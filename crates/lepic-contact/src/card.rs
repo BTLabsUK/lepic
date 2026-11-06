@@ -36,6 +36,8 @@ const TAG_SEQ: u8 = 0x0d;
 const TAG_SIGNATURE: u8 = 0x0e;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Deprecated: always written for wallets that read it, never to be read for meaning;
+/// to be removed (docs/adr/0041 or RFC 0002 6.1).
 pub enum ContactKind {
     Person,
     Shop,
@@ -97,6 +99,8 @@ impl Capabilities {
 /// The content of a card, before it is signed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CardFields {
+    /// Deprecated: always written for wallets that read it, never to be read for meaning;
+    /// to be removed (docs/adr/0041 or RFC 0002 6.1).
     pub kind: ContactKind,
     pub name: ContactName,
     pub enc_key: EncPublicKey,

@@ -65,6 +65,10 @@ pub struct WalletConfig {
     /// (linked-device forwarding) and 5 (name service), and ignores the rest. Read when a wallet
     /// is created, restored or opened.
     pub host_features: u32,
+    /// The app's profile of its owner, sent to paired contacts in bits 16 to 31 of the pairing
+    /// features and never in a marker; LEPIC does not read a bit. 0 for none. Read when a
+    /// wallet is created, restored or opened.
+    pub profile: u16,
     /// Limits and presets that are the app's to choose. [`HostPolicy::default`], every field
     /// `None`, is what LEPIC did before they were fields. Read when a wallet is created,
     /// restored or opened.
@@ -169,6 +173,7 @@ impl std::fmt::Debug for WalletConfig {
             .field("tuning", &self.tuning)
             .field("offline", &self.offline)
             .field("host_features", &self.host_features)
+            .field("profile", &self.profile)
             .finish()
     }
 }
@@ -915,6 +920,9 @@ pub enum ContactRelayMode {
 
 /// What a contact says it is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+///
+/// Deprecated: always written for wallets that read it, never to be read for meaning;
+/// to be removed (docs/adr/0041 or RFC 0002 6.1).
 pub enum ContactKind {
     Person,
     Shop,
@@ -998,6 +1006,8 @@ pub struct ContactView {
     pub label: String,
     /// The name the contact gives itself, unverified: show it only as "calls themselves".
     pub claimed_name: Option<String>,
+    /// Deprecated: always written for wallets that read it, never to be read for meaning;
+    /// to be removed (docs/adr/0041 or RFC 0002 6.1).
     pub kind: Option<ContactKind>,
     pub state: PairingState,
     /// The four entries of the words check, to show it again; empty before the pairing
@@ -1042,6 +1052,9 @@ pub struct ContactView {
     pub peer_verified_at_ms: Option<i64>,
     /// The feature bits the contact claimed in this pairing; 0 when none came.
     pub peer_features: u32,
+    /// The profile the contact sent, `peer_features` from bit 16 up moved down; 0 when none
+    /// came. LEPIC reads no bit of it.
+    pub peer_profile: u32,
     pub ended_reason: Option<PairingEndReason>,
     pub ended_at_ms: Option<i64>,
 }
@@ -1098,6 +1111,8 @@ pub struct PairRequestView {
     pub from_address: String,
     /// The name the invite gives its maker, unverified.
     pub claimed_name: String,
+    /// Deprecated: always written for wallets that read it, never to be read for meaning;
+    /// to be removed (docs/adr/0041 or RFC 0002 6.1).
     pub kind: ContactKind,
     pub received_at_ms: i64,
     pub expires_at_ms: i64,
@@ -1140,6 +1155,8 @@ pub struct PairingInvite {
 pub struct InvitePreview {
     /// The inviter's own name for itself, not checked.
     pub claimed_name: String,
+    /// Deprecated: always written for wallets that read it, never to be read for meaning;
+    /// to be removed (docs/adr/0041 or RFC 0002 6.1).
     pub kind: ContactKind,
     pub expires_at_ms: i64,
     /// `domain:port` of the relay the pairing's messages go through.
@@ -1800,6 +1817,7 @@ mod tests {
             offline: false,
             tor_wanted: false,
             host_features: 0,
+            profile: 0,
         };
         let printed = format!("{config:?}");
         assert!(!printed.contains("node-secret-value"));

@@ -110,6 +110,9 @@ impl fmt::Debug for PairingId {
 
 stored_enum! {
     /// What the contact says it is.
+    ///
+    /// Deprecated: always written for wallets that read it, never to be read for meaning;
+    /// to be removed (docs/adr/0041 or RFC 0002 6.1).
     pub enum ContactKind {
         Person => "person",
         Shop => "shop",
@@ -163,6 +166,8 @@ pub struct PeerCard {
     pub enc_key: [u8; CARD_KEY_LEN],
     pub hint_key: [u8; CARD_KEY_LEN],
     pub seq: u32,
+    /// Deprecated: always written for wallets that read it, never to be read for meaning;
+    /// to be removed (docs/adr/0041 or RFC 0002 6.1).
     pub kind: ContactKind,
     /// The name the contact claims. The wallet shows the user's own label.
     pub claimed_name: String,

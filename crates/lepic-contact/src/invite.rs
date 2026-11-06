@@ -41,6 +41,9 @@ pub const MAILBOX_KEY_LEN: usize = 33;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InviteFields {
     /// The inviter's card kind.
+    ///
+    /// Deprecated: always written for wallets that read it, never to be read for meaning;
+    /// to be removed (docs/adr/0041 or RFC 0002 6.1).
     pub kind: ContactKind,
     /// The inviter's claimed name.
     pub name: ContactName,

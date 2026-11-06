@@ -85,6 +85,12 @@ pub const SETTINGS: &[(&str, &str, &str)] = &[
          device-forwarding, name-service",
     ),
     (
+        "profile",
+        "LEPIC_PROFILE",
+        "profile bits told to paired contacts: names (no-payments, automated), \
+         comma-separated, or a number 0 to 65535",
+    ),
+    (
         "settings_file",
         "LEPIC_SETTINGS",
         "settings.toml with the servers: [node] servers, [epicbox] servers",
@@ -266,6 +272,8 @@ pub struct Settings {
     /// The host bits the wallet's marker claims (ADR 0034), only bits of
     /// `features::HOST_FEATURES`; none unless `host_features` names them.
     pub host_features: u32,
+    /// The profile told to paired contacts (ADR 0041); none unless `profile` says so.
+    pub profile: u16,
 }
 
 /// The output format alone, for reporting errors that happen before the rest resolves.
@@ -344,6 +352,7 @@ impl Settings {
         let host_features = lookup
             .parse("host_features", parse_host_features)?
             .unwrap_or(0);
+        let profile = profile(args, &lookup)?;
         let node_over_tor = lookup
             .parse("node_over_tor", |text| match text {
                 "true" => Some(true),
@@ -384,6 +393,7 @@ impl Settings {
             node_over_tor,
             invoice_expiry,
             host_features,
+            profile,
         })
     }
 }
@@ -449,6 +459,31 @@ fn parse_expiry_hours(text: &str) -> Option<InvoiceExpiry> {
     let hours: u64 = text.parse().ok()?;
     let seconds = hours.checked_mul(SECONDS_PER_HOUR)?;
     InvoiceExpiry::new(std::time::Duration::from_secs(seconds)).ok()
+}
+
+/// The profile a flag, `LEPIC_PROFILE` or the config file gives; a flag that is invalid is a usage
+/// error like any setting.
+fn profile(args: &GlobalArgs, lookup: &Lookup<'_>) -> Result<u16, SettingsError> {
+    Ok(profile_flag(args)?
+        .or(lookup.parse("profile", crate::profile::parse_setting)?)
+        .unwrap_or(0))
+}
+
+/// The profile `--profile` or `--profile-bits` gives.
+pub fn profile_flag(args: &GlobalArgs) -> Result<Option<u16>, SettingsError> {
+    let invalid = || SettingsError::InvalidValue {
+        key: "profile",
+        origin: Origin::Flag,
+    };
+    if let Some(names) = &args.profile {
+        return crate::profile::parse_names(names)
+            .map(Some)
+            .ok_or_else(invalid);
+    }
+    args.profile_bits
+        .as_deref()
+        .map(|bits| crate::profile::parse_bits(bits).ok_or_else(invalid))
+        .transpose()
 }
 
 /// The host bits a `host_features` value names. Each name is one bit of
@@ -759,6 +794,43 @@ mod tests {
             Err(SettingsError::InvalidValue {
                 key: "host_features",
                 ..
+            })
+        ));
+    }
+
+    #[test]
+    fn the_profile_comes_from_a_flag_before_the_variable_and_is_zero_by_default() {
+        assert_eq!(resolve(&[]).unwrap().profile, 0);
+        assert_eq!(
+            resolve(&[("LEPIC_PROFILE", "automated")]).unwrap().profile,
+            2
+        );
+        assert_eq!(
+            resolve(&[("LEPIC_PROFILE", "0x8001")]).unwrap().profile,
+            0x8001
+        );
+        assert!(matches!(
+            resolve(&[("LEPIC_PROFILE", "65536")]),
+            Err(SettingsError::InvalidValue { key: "profile", .. })
+        ));
+        let env = Env::new(vec![
+            ("HOME".to_owned(), "/home/test".to_owned()),
+            ("LEPIC_PROFILE".to_owned(), "automated".to_owned()),
+        ]);
+        let flag = GlobalArgs {
+            profile_bits: Some("0x1".to_owned()),
+            ..GlobalArgs::default()
+        };
+        assert_eq!(Settings::resolve(&flag, &env).unwrap().profile, 1);
+        let bad = GlobalArgs {
+            profile: Some("everything".to_owned()),
+            ..GlobalArgs::default()
+        };
+        assert!(matches!(
+            Settings::resolve(&bad, &env),
+            Err(SettingsError::InvalidValue {
+                key: "profile",
+                origin: Origin::Flag
             })
         ));
     }

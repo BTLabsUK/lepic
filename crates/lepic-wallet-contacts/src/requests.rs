@@ -64,6 +64,8 @@ pub struct PairRequestView {
     pub from_address: String,
     /// The name the invite gives its maker, unverified.
     pub claimed_name: String,
+    /// Deprecated: always written for wallets that read it, never to be read for meaning;
+    /// to be removed (docs/adr/0041 or RFC 0002 6.1).
     pub kind: ContactKind,
     pub received_at: Timestamp,
     pub expires_at: Timestamp,

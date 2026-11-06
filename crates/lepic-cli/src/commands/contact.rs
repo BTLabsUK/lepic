@@ -25,11 +25,11 @@ use crate::amount::{format_amount, format_fee, parse_amount};
 use crate::cli::{
     ContactAcceptArgs, ContactArgs, ContactCardArgs, ContactCommand, ContactEnterArgs,
     ContactExportArgs, ContactImportArgs, ContactInviteArgs, ContactInvoiceArgs,
-    ContactKeyCheckArgs, ContactKeysArgs, ContactKindArg, ContactLabelArgs, ContactMoveArgs,
-    ContactMoveHomeArgs, ContactOpenSealedArgs, ContactPayArgs, ContactPayloadArgs,
-    ContactPayloadCommand, ContactPayloadPostArgs, ContactPlainArgs, ContactRequestArgs,
-    ContactSasArgs, ContactSealArgs, ContactSendSlateArgs, ContactSlateIdArg, ContactSwitchArgs,
-    InviteExpiryArg, KeysArg, OnOffArg, PurposeArg, SasArg,
+    ContactKeyCheckArgs, ContactKeysArgs, ContactLabelArgs, ContactMoveArgs, ContactMoveHomeArgs,
+    ContactOpenSealedArgs, ContactPayArgs, ContactPayloadArgs, ContactPayloadCommand,
+    ContactPayloadPostArgs, ContactPlainArgs, ContactRequestArgs, ContactSasArgs, ContactSealArgs,
+    ContactSendSlateArgs, ContactSlateIdArg, ContactSwitchArgs, InviteExpiryArg, KeysArg, OnOffArg,
+    PurposeArg, SasArg,
 };
 use crate::exit::CliError;
 use crate::host::Host;
@@ -57,14 +57,6 @@ pub(super) fn contact_id(text: &str) -> Result<ContactId, CliError> {
         *slot = u8::from_str_radix(pair, 16).map_err(|_| CliError::ContactId)?;
     }
     Ok(ContactId(id))
-}
-
-fn kind(kind: ContactKindArg) -> ContactKind {
-    match kind {
-        ContactKindArg::Person => ContactKind::Person,
-        ContactKindArg::Shop => ContactKind::Shop,
-        ContactKindArg::Exchange => ContactKind::Exchange,
-    }
 }
 
 fn kind_name(kind: ContactKind) -> &'static str {
@@ -165,6 +157,7 @@ fn contact_report(view: &ContactView) -> Result<ContactReport, CliError> {
         peer_heard_at: view.peer_heard_at.map(|at| at.to_string()),
         peer_verified_at: view.peer_verified_at.map(|at| at.to_string()),
         peer_features: view.peer_features,
+        peer_profile: view.peer_profile,
         ended_reason: view.ended_reason.map(|reason| match reason {
             PairingEndReason::Mismatch => "mismatch",
             PairingEndReason::PeerMismatch => "peer-mismatch",
@@ -306,12 +299,21 @@ fn answer_text(answer: SealedAnswer) -> String {
 }
 
 impl<H: Host> Run<'_, H> {
+    fn note_ignored_kind(&mut self, kind: Option<crate::cli::ContactKindArg>) {
+        if kind.is_some() {
+            self.show_line(KIND_IGNORED);
+        }
+    }
+
     pub(super) async fn contact(&mut self, args: ContactArgs) -> Result<Report, CliError> {
         let opened = self.open().await?;
         let wallet = &opened.wallet;
         let relays = relays(&opened, &args, &self.settings.servers.meeting_relays);
         Ok(match args.command {
-            ContactCommand::Invite(args) => invite(&opened, &relays, args).await?,
+            ContactCommand::Invite(args) => {
+                self.note_ignored_kind(args.kind);
+                invite(&opened, &relays, args).await?
+            }
             ContactCommand::Request(args) => request(&opened, &relays, args).await?,
             ContactCommand::Open(args) => {
                 let preview = wallet.contact_book().pairing_preview(&args.link).await?;
@@ -332,7 +334,10 @@ impl<H: Host> Run<'_, H> {
                 report
             }
             ContactCommand::Sas(args) => sas(&opened, &relays, args).await?,
-            ContactCommand::ShowCard(args) => show_card(&opened, &relays, args).await?,
+            ContactCommand::ShowCard(args) => {
+                self.note_ignored_kind(args.kind);
+                show_card(&opened, &relays, args).await?
+            }
             ContactCommand::ScanCard(args) => {
                 let id = contact_id(&args.contact.contact)?;
                 let view = wallet
@@ -407,7 +412,7 @@ async fn invite<N: lepic_node::NodeApi + 'static>(
             InviteRequest {
                 account: CONTACT_ACCOUNT,
                 name: args.name.name,
-                kind: kind(args.kind),
+                kind: ContactKind::Person,
                 expiry: match args.expiry {
                     InviteExpiryArg::Hour => InviteExpiry::OneHour,
                     InviteExpiryArg::Day => InviteExpiry::OneDay,
@@ -565,7 +570,7 @@ async fn show_card<N: lepic_node::NodeApi + 'static>(
             CardRequest {
                 account: CONTACT_ACCOUNT,
                 name: args.name.name,
-                kind: kind(args.kind),
+                kind: ContactKind::Person,
                 home_relay: None,
             },
         )
@@ -889,6 +894,9 @@ async fn import<N: lepic_node::NodeApi + 'static>(
         skipped_conflict: summary.skipped_conflict,
     }))
 }
+
+/// What `--kind` prints: the flag stays accepted for old scripts and changes nothing (ADR 0041).
+const KIND_IGNORED: &str = "note: --kind is deprecated and ignored; new pairings write person";
 
 /// The warning a post prints when the other wallet's features are known and lack app payloads.
 const PEER_LACKS_APP_PAYLOADS: &str =

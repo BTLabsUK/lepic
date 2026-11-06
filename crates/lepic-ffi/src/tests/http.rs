@@ -63,6 +63,7 @@ async fn session_on(
         offline: false,
         tor_wanted: false,
         host_features: 0,
+        profile: 0,
     };
     let secret = crate::node::NodeSecret::take(&mut config);
     Arc::new(

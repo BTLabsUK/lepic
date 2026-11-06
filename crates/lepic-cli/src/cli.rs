@@ -77,6 +77,18 @@ pub struct GlobalArgs {
     /// Command output on stdout [env: LEPIC_OUTPUT] [default: human]
     #[arg(long, global = true, value_name = "FORMAT")]
     pub output: Option<OutputArg>,
+    /// Profile bits to tell paired contacts, by name: no-payments, automated [env:
+    /// LEPIC_PROFILE] [default: none]
+    #[arg(
+        long,
+        global = true,
+        value_name = "NAMES",
+        conflicts_with = "profile_bits"
+    )]
+    pub profile: Option<String>,
+    /// Profile bits to tell paired contacts, as a number 0 to 65535 or 0x hex [env: LEPIC_PROFILE]
+    #[arg(long, global = true, value_name = "N")]
+    pub profile_bits: Option<String>,
     /// Run the command on the `lepic serve` process listening at SOCKET [default: lepic.sock in
     /// the data directory]
     #[arg(
@@ -133,6 +145,9 @@ pub enum Command {
     Node(NodeCommand),
     /// Pair with contacts, and exchange invoices and slates with them through their mailboxes
     Contact(ContactArgs),
+    /// Show or change what this wallet tells its paired contacts about the host
+    #[command(subcommand)]
+    Profile(ProfileCommand),
     /// Hold the wallet open and answer commands sent with --service
     #[command(after_help = SERVE_HELP)]
     Serve(ServeArgs),
@@ -691,6 +706,31 @@ pub enum NodeCommand {
     Status,
 }
 
+#[derive(Debug, Subcommand)]
+pub enum ProfileCommand {
+    /// Show the profile this wallet tells its contacts
+    Show,
+    /// Tell every paired contact a new profile now
+    #[command(after_help = "\
+Sends one contact update to each paired contact; `lepic contact collect` takes their answers. \
+Set `profile` in the config file too, or later updates tell the configured value again.")]
+    Set(ProfileSetArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct ProfileSetArgs {
+    /// Bit names: no-payments, automated; empty clears the profile
+    #[arg(
+        value_name = "NAMES",
+        required_unless_present = "bits",
+        conflicts_with = "bits"
+    )]
+    pub names: Option<String>,
+    /// The profile as a number 0 to 65535 or 0x hex
+    #[arg(long, value_name = "N")]
+    pub bits: Option<String>,
+}
+
 #[derive(Debug, Args)]
 pub struct ContactArgs {
     #[command(subcommand)]
@@ -879,9 +919,9 @@ pub struct ContactInviteArgs {
     /// How long the invite may be answered
     #[arg(long, value_enum, default_value_t = InviteExpiryArg::Day)]
     pub expiry: InviteExpiryArg,
-    /// What this wallet is to the contact
-    #[arg(long, value_enum, default_value_t = ContactKindArg::Person)]
-    pub kind: ContactKindArg,
+    /// Deprecated and ignored: new pairings write person
+    #[arg(long, value_enum, hide = true)]
+    pub kind: Option<ContactKindArg>,
     /// Also offer five pairing words that find the invite
     #[arg(long)]
     pub pairing_words: bool,
@@ -1039,9 +1079,9 @@ pub struct ContactSasArgs {
 pub struct ContactCardArgs {
     #[command(flatten)]
     pub name: ContactNameArg,
-    /// What this wallet is to the contact
-    #[arg(long, value_enum, default_value_t = ContactKindArg::Person)]
-    pub kind: ContactKindArg,
+    /// Deprecated and ignored: new pairings write person
+    #[arg(long, value_enum, hide = true)]
+    pub kind: Option<ContactKindArg>,
 }
 
 #[derive(Debug, Args)]

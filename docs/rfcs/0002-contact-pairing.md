@@ -227,6 +227,12 @@ optional fields, covered by the signature). The signature, tag `FF`, is last.
 > update; a value of another length is skipped like any unknown extension. Both extensions are
 > signed like every field before tag `FF`. The MAC input and the errors are in 6.1.
 
+> **Amended by ADR 0041.** The feature word has two halves. Bits 0-15 are capabilities, the
+> registry of ADR 0034. Bits 16-31 are the owner's profile, 16 bits the host names and the library
+> only carries. Profile bits ride in this word only, to paired contacts: never in the marker, and
+> a plain sender claims none. A receiver stores the whole word and shows the upper half as the
+> peer's profile; it only removes an offer or changes wording, and is never an identifier.
+
 > **Amended by ADR 0040.** Type `09` is a contact check: signed, empty body, between paired
 > contacts only (8.5). A reader that predates it refuses the type as malformed before it checks
 > the signature, so the envelope is acknowledged, attributed to nobody and left unanswered.
@@ -321,7 +327,7 @@ A card is the binary payload below, self-signed:
 |---|---|---|
 | `01` | format | u8 `01` |
 | `02` | network | `net` |
-| `03` | kind | u8 `01` person, `02` shop, `03` exchange |
+| `03` | kind | u8 `01` person, `02` shop, `03` exchange. Deprecated: always written for old wallets, never read for meaning, to be removed (ADR 0041). New wallets write `01` |
 | `04` | name | 1 to 48 bytes UTF-8, the owner's chosen name. No control, format, bidi, line or paragraph separator characters (Unicode categories Cc, Cf, Cs, Zl, Zp) |
 | `05` | enc key | 32, X25519 `enc_pk` for this contact |
 | `06` | sig key | 32, Ed25519 `sig_pk` for this contact |
@@ -384,7 +390,7 @@ optional field), a version 11 to 13 QR code at medium error correction. In-perso
 |---|---|---|
 | `01` | format | u8 `01` |
 | `02` | network | `net` |
-| `03` | kind | the inviter's card kind |
+| `03` | kind | the inviter's card kind. Deprecated like the card's (6.1) |
 | `04` | name | the inviter's name (6.1 rules) |
 | `05` | expires | u64 unix seconds |
 | `06` | code | 16 |

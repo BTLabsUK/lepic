@@ -269,6 +269,18 @@ impl Party {
         relay: &MockRelay,
         runtime: &tokio::runtime::Runtime,
     ) -> Self {
+        Self::with_profile(mnemonic, name, seed_rng, 0, node, relay, runtime)
+    }
+
+    fn with_profile(
+        mnemonic: &str,
+        name: &str,
+        seed_rng: u64,
+        profile: u16,
+        node: &MockNode,
+        relay: &MockRelay,
+        runtime: &tokio::runtime::Runtime,
+    ) -> Self {
         let epicbox = EpicboxTransport::new(settings(), RelayNetwork::Floonet, relay.connector());
         let delivered_to = Arc::default();
         let deliveries_failing = Arc::default();
@@ -303,6 +315,7 @@ impl Party {
             policy: Default::default(),
             offline: false,
             host_features: 0,
+            profile,
         };
         let wallet = Wallet::new(config, ports).unwrap();
         lepic_wallet_contacts::install(&wallet);
@@ -484,6 +497,12 @@ pub struct World {
 
 impl World {
     pub fn new() -> Self {
+        Self::with_profiles(0, 0)
+    }
+
+    /// As [`Self::new`], the issuer's wallet configured with profile `issuer` and the payer's
+    /// with `payer`.
+    pub fn with_profiles(issuer: u16, payer: u16) -> Self {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
@@ -499,8 +518,16 @@ impl World {
                 last_block_pushed: Hash::from_slice(&[0; 32]).unwrap(),
             },
         ));
-        let issuer = Party::new(ISSUER_MNEMONIC, "issuer", 1, &node, &relay, &runtime);
-        let payer = Party::new(PAYER_MNEMONIC, "payer", 2, &node, &relay, &runtime);
+        let issuer = Party::with_profile(
+            ISSUER_MNEMONIC,
+            "issuer",
+            1,
+            issuer,
+            &node,
+            &relay,
+            &runtime,
+        );
+        let payer = Party::with_profile(PAYER_MNEMONIC, "payer", 2, payer, &node, &relay, &runtime);
         payer.fund(0, FUNDING);
         Self {
             runtime,

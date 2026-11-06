@@ -61,6 +61,7 @@ pub(crate) fn view(
             .peer_verified_at
             .filter(|_| record.sas.as_ref().map(super::status::verdict_hash) == facts.peer_verdict),
         peer_features: facts.peer_features,
+        peer_profile: facts.peer_features >> lepic_epicbox::marker::features::PROFILE_SHIFT,
         ended_reason: facts.ended_reason,
         ended_at: facts.ended_at,
     }
@@ -460,7 +461,7 @@ where
     ) -> Result<u32, ContactError> {
         let name = lepic_contact::ContactName::new(name).map_err(ContactError::Name)?;
         let network = self.wallet.config().network;
-        let features = self.wallet.config().claimed_features();
+        let features = self.wallet.config().pairing_features();
         let session = self.wallet.session()?;
         let payments = super::address_proof::Payments::of(&session.keychain, network, relays)?;
         let net = super::keys::contact_network(network);
@@ -501,6 +502,55 @@ where
         Ok(queued)
     }
 
+    /// Tells every contact pairing that has not ended the owner's new `profile` (bits 16 to
+    /// 31 of the pairing features), as a contact update the next collect posts: our card
+    /// again with the next sequence number, and a features word built from `profile`; private
+    /// pairings are left alone. Returns how many were queued.
+    ///
+    /// Nothing stored says what a contact was last told, so every eligible contact gets an
+    /// update, also one that already has this value. The session's configured profile is not
+    /// changed: later updates carry it again until the host opens the wallet with the new one.
+    #[instrument(skip_all, fields(wallet = %self.wallet.config().name))]
+    pub async fn contacts_set_own_profile(
+        &self,
+        relays: &ContactRelays,
+        profile: u16,
+    ) -> Result<u32, ContactError> {
+        let network = self.wallet.config().network;
+        let features = self.wallet.config().pairing_features_with(profile);
+        let session = self.wallet.session()?;
+        let payments = super::address_proof::Payments::of(&session.keychain, network, relays)?;
+        let queued = self
+            .contact_work(move |ports, _| {
+                let now = ports.clock.now();
+                session.store.write(|repos| {
+                    let at = super::address_proof::CardUpdate {
+                        keychain: &session.keychain,
+                        network,
+                        payments: &payments,
+                        features,
+                        now,
+                    };
+                    let mut queued = 0u32;
+                    for record in repos.contacts()? {
+                        if super::address_proof::queue_card_update(
+                            repos,
+                            &ports.rng,
+                            &at,
+                            record,
+                            |_| {},
+                        )? {
+                            queued = queued.saturating_add(1);
+                        }
+                    }
+                    Ok::<_, ContactError>(queued)
+                })
+            })
+            .await?;
+        info!(count = queued, "own profile given to contacts");
+        Ok(queued)
+    }
+
     /// Moves this wallet's home relay for its contacts to `host`, `domain[:port]` (RFC 0002
     /// 8.5): every paired contact pairing that has not ended and is not at home there gets our
     /// card naming our mailbox on `host`, once, as a contact update queued for the mailbox it
@@ -527,7 +577,7 @@ where
         let home = super::relay::endpoint_for(&host.trim().to_ascii_lowercase(), relays)?;
         let home_relay = super::relay::host_text(&home);
         let network = self.wallet.config().network;
-        let features = self.wallet.config().claimed_features();
+        let features = self.wallet.config().pairing_features();
         let session = self.wallet.session()?;
         let payments = super::address_proof::Payments::of(&session.keychain, network, relays)?;
         // A collect on its way would drain the mailboxes this moves away from.

@@ -22,6 +22,14 @@ pub const APP_PAYLOADS: u32 = 1 << 6;
 /// The bits the host app may claim; it passes them as one constant of its build.
 pub const HOST_FEATURES: u32 = DEVICE_FORWARDING | NAME_SERVICE;
 
+/// Bits 16 to 31: the host's profile of its owner, named by the host, carried only to paired
+/// contacts in the pairing envelope's features extension, never read by LEPIC and never in
+/// the marker. A profile bit only removes an offer or changes wording.
+pub const HOST_PROFILE: u32 = 0xFFFF_0000;
+
+/// How far the profile sits above the claimed bits.
+pub const PROFILE_SHIFT: u32 = 16;
+
 /// The bits this build of LEPIC claims for itself, the same for every wallet it runs, never
 /// derived from a setting.
 pub const LEPIC_FEATURES: u32 =
@@ -46,6 +54,13 @@ mod tests {
             claimed(NAME_SERVICE | 1 << 7),
             LEPIC_FEATURES | NAME_SERVICE
         );
+    }
+
+    #[test]
+    fn the_profile_half_is_apart_from_every_claimed_bit() {
+        assert_eq!(HOST_PROFILE & (LEPIC_FEATURES | HOST_FEATURES), 0);
+        assert_eq!(claimed(u32::MAX) & HOST_PROFILE, 0);
+        assert_eq!(HOST_PROFILE, u32::from(u16::MAX) << PROFILE_SHIFT);
     }
 
     #[test]
