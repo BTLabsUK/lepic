@@ -175,18 +175,27 @@ impl EpicWallet {
 
     /// Moves this wallet's home relay for its contacts to `relay` (`domain[:port]`): every
     /// paired contact that has not ended gets this wallet's card naming its mailbox there,
-    /// once, as a contact update, and this wallet reads only the new mailbox from then on.
-    /// Returns how many contacts were told. The old mailboxes are not read again: a contact
-    /// that takes the update sees `ContactRelayMoveRequested` and follows once the app on its
-    /// side applies it; one that never takes it stops reaching this wallet and has to pair
-    /// again, which `contact_check` shows as no answer. Private pairings and pairings in
-    /// progress keep their relay. Switch the wallet's Epicbox relay to `relay` too, so new
+    /// once, as a contact update. Returns how many contacts were told. A contact that takes
+    /// the update sees `ContactRelayMoveRequested` and follows once the app on its side
+    /// applies it. For `drain_days` (0 to 365) every collect still reads the old mailboxes:
+    /// what a contact sends there is taken, and a `contact_check` there is answered with the
+    /// card naming the new mailbox, so a contact away longer than the relay keeps the update
+    /// still learns of the move. The drain takes the one previous-home slot a contact has,
+    /// replacing one left by following that contact's move. With 0 the old mailboxes are not
+    /// read again: a contact that never takes the update stops reaching this wallet and has
+    /// to pair again, which `contact_check` shows as no answer. Private pairings and pairings
+    /// in progress keep their relay. Switch the wallet's Epicbox relay to `relay` too, so new
     /// invites name it.
     ///
-    /// Fails with `InvalidArgument` for a host that is not a relay's name.
-    pub async fn contacts_move_home(&self, relay: String) -> Result<u32, WalletError> {
+    /// Fails with `InvalidArgument` for a host that is not a relay's name, or a drain longer
+    /// than 365 days.
+    pub async fn contacts_move_home(
+        &self,
+        relay: String,
+        drain_days: u32,
+    ) -> Result<u32, WalletError> {
         self.run("contacts_move_home", |session| async move {
-            session.contacts_move_home(relay).await
+            session.contacts_move_home(relay, drain_days).await
         })
         .await
     }

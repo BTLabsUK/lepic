@@ -38,8 +38,9 @@ to core. the owner decided on 2026-11-04 that core stops judging relay moves.
 
 ## Consequences
 
-- The app decides which relays to follow. BT Wallet follows only relays in its own Epicbox
-  server list and shows any other request to the user.
+- The app decides which relays to follow. BT Wallet (since 2026-11) asks the user to accept or
+  refuse a move from a service it recognises by key, and follows any other contact's move
+  without a notice when the relay is a public DNS name; the contact pages show the relay in use.
 - Moves core applied by kind before this change stay as they are: no migration touches existing
   mailboxes.
 - The meeting-relay and default-port rule is gone from core. A host that wants it applies it

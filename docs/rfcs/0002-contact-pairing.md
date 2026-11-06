@@ -844,10 +844,16 @@ Limits on updates, on the receiver (wallet and kit):
 > **Amended by ADR 0040.** A wallet or service moves its own home relay with
 > `contacts_move_home(host)`: each paired contact pairing that has not ended gets one `05` with
 > the card naming its mailbox on `host`, queued for the mailbox the contact reads now, and the
-> mover's mailbox for it moves to `host` in the same write. The mover announces once and does
-> not drain: the old mailboxes are not read again and nothing waits for contacts, so the old
-> relay need not keep running for them. A contact that misses the update stops reaching the
-> mover and pairs again. Private pairings and pairings in progress keep their relay.
+> mover's mailbox for it moves to `host` in the same write. Nothing waits for contacts.
+> Private pairings and pairings in progress keep their relay.
+>
+> **Amended by ADR 0042.** The mover passes a drain, at most a year. During it, every collect
+> still reads the old mailbox, as a previous home (one slot per contact; it replaces one left by
+> following the contact's move). What arrives there is handled as usual, and a check there is
+> answered with the card naming the new mailbox, sent to the contact's unchanged mailbox. So a
+> contact that missed the update learns of the move when it checks. With a zero drain the old
+> mailboxes are not read again, and a contact that misses the update stops reaching the mover
+> and pairs again.
 >
 > A contact check (type `09`) asks a paired contact for its current card. A wallet that takes
 > one from a paired contact whose pairing has not ended answers with a `05`: its current card,

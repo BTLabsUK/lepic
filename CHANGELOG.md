@@ -9,6 +9,7 @@ Conventional Commit messages at release time.
 
 ### Added
 
+<<<<<<< HEAD
 - The domain claim, ADR 0043: envelope extension `0x83` carries a domain and an Ed25519
   signature by a domain key over the pairing's signing key, in a reply, a confirm and a contact
   update. `lepic-contact` gains `DomainClaim`, `DomainName` and `DomainKey`;
@@ -29,6 +30,20 @@ Conventional Commit messages at release time.
 ### Changed
 
 - `PairingExtras` (`lepic-contact`) is `Clone` and no longer `Copy`.
+=======
+- Draining the old home after moving one's own, ADR 0042: `ContactBook::contacts_move_home`
+  takes a `drain` (at most `MAX_HOME_DRAIN`, a year), and for that long every collect still
+  reads the old mailboxes and answers contact checks there with the new card. FFI
+  `contacts_move_home(relay, drain_days)`; CLI `lepic contact move-home HOST --drain-days N`
+  (0 to 365, default 0), with `drain_until` in the report.
+- `ContactView.peer_enc_key` (`lepic-wallet-contacts` and `lepic-ffi`): the contact's card
+  encryption key (tag 05), so a host can recognise a service by its key.
+
+### Fixed
+
+- On more than three relays, a foreground collect no longer drops the previous home of a quiet
+  contact while its drain lasts.
+>>>>>>> main
 
 ## [0.2.0] - 2026-11-06
 

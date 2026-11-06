@@ -738,14 +738,27 @@ async fn move_home<N: lepic_node::NodeApi + 'static>(
     relays: &ContactRelays,
     args: ContactMoveHomeArgs,
 ) -> Result<Report, CliError> {
+    let drain =
+        std::time::Duration::from_secs(24 * 60 * 60).saturating_mul(u32::from(args.drain_days));
     let moved = opened
         .wallet
         .contact_book()
-        .contacts_move_home(relays, &args.host)
+        .contacts_move_home(relays, &args.host, drain)
         .await?;
+    // The core stamps the drain's end with its own clock; this reads the same moment to
+    // the second.
+    let drain_until = (args.drain_days > 0)
+        .then(|| {
+            let seconds = i64::try_from(drain.as_secs()).ok()?;
+            jiff::Timestamp::from_second(jiff::Timestamp::now().as_second().checked_add(seconds)?)
+                .ok()
+        })
+        .flatten()
+        .map(|until| until.to_string());
     Ok(Report::ContactMoveHome(ContactMoveHomeReport {
         home_relay: args.host.trim().to_ascii_lowercase(),
         moved,
+        drain_until,
     }))
 }
 

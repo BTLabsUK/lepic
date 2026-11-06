@@ -624,10 +624,15 @@ A contact that moves to another relay asks for it in an update; `contact list` t
 `asks to move to relay <HOST>`, and `contact move <ID> --apply <HOST>` moves this wallet's
 mailbox with it there. Until then the contact's mailbox stays where it was.
 
-`contact move-home <HOST>` moves this wallet's own home relay for every paired contact: each is
-sent our card naming our mailbox on `<HOST>` once, and our mailboxes move there at once. The old
-mailboxes are not read again, so a contact that misses the update stops reaching this wallet
-until it pairs again. Set `<HOST>` as the wallet's Epicbox relay too, so new invites name it.
+`contact move-home <HOST> [--drain-days N]` moves this wallet's own home relay for every paired
+contact: each is sent our card naming our mailbox on `<HOST>` once, and our mailboxes move there
+at once. With `--drain-days N` (0 to 365, default 0), every collect, `serve` included, still
+reads the old mailboxes for N days. What a contact sends there is taken, and a `contact check`
+there is answered with the card naming the new mailbox, so a contact that missed the update is
+asked to follow. The drain replaces one left by following that contact's own move. The report
+gives the drain's end in RFC 3339 (`drain_until` in JSON). With 0 the old mailboxes are not
+read again, so a contact that misses the update stops reaching this wallet until it pairs
+again. Set `<HOST>` as the wallet's Epicbox relay too, so new invites name it.
 
 `contact check <ID>` asks a paired contact to answer with its current card; a later `contact
 collect` takes the answer, and `contact list` shows when the contact was last heard

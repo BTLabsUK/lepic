@@ -60,7 +60,7 @@ pub use lepic_contact::{ContactKind, PairingClass, Purpose, Refusal, SasSymbol};
 pub use lepic_store::PairingEndReason;
 pub use lepic_store::PairingRole;
 pub use lepic_wallet::event::PairingFailure;
-pub use manage::{MAX_APP_CONTACT_LEN, MAX_BACKUP_LEN, PendingPairingView};
+pub use manage::{MAX_APP_CONTACT_LEN, MAX_BACKUP_LEN, MAX_HOME_DRAIN, PendingPairingView};
 pub use outbox::{NOT_POSTED_AFTER, OUTBOX_STUCK_AFTER, OutboxReport, OutboxView};
 pub use pairing::{
     AcceptOutcome, AcceptRequest, CardOffer, CardRequest, InviteExpiry, InviteOffer, InvitePreview,
@@ -264,6 +264,10 @@ pub struct ContactView {
     pub peer_domain: Option<String>,
     /// The claim as received (extension 0x83), kept so a host can verify it later.
     pub peer_domain_attestation: Option<Vec<u8>>,
+    /// The X25519 encryption key (card tag 05) of the contact's stored card; `None` before
+    /// the contact's card arrived. A completed pairing shows the contact holds it, so a host
+    /// may recognise a service by it.
+    pub peer_enc_key: Option<[u8; 32]>,
     pub ended_reason: Option<PairingEndReason>,
     pub ended_at: Option<Timestamp>,
 }

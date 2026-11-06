@@ -1065,6 +1065,10 @@ pub struct ContactView {
     pub peer_domain: Option<String>,
     /// The contact's claim as received, kept for a later check.
     pub peer_domain_attestation: Option<Vec<u8>>,
+    /// The contact's X25519 encryption key (card tag 05), 32 bytes, from the card stored for
+    /// it; `None` before its card arrived. A completed pairing shows the contact holds it, so
+    /// a host may recognise a service by it.
+    pub peer_enc_key: Option<Vec<u8>>,
     pub ended_reason: Option<PairingEndReason>,
     pub ended_at_ms: Option<i64>,
 }
