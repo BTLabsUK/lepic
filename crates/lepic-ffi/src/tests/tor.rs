@@ -281,7 +281,7 @@ async fn serve_control(
                     ),
                 };
                 let service_id = &service_ids[added.min(1)];
-                added += 1;
+                added = added.saturating_add(1);
                 onions.lock().unwrap().insert(service_id.clone(), target);
                 format!(
                     "250-ServiceID={service_id}\r\n250 OK\r\n650 HS_DESC UPLOADED {service_id} UNKNOWN $AAAA~relay\r\n"
