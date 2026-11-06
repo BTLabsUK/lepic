@@ -6,8 +6,10 @@
 //! The output is stored as an unconfirmed coinbase with no transaction, a candidate. A
 //! refresh that finds it on chain records the incoming transaction then. A node passes its key
 //! back on the next template and gets a candidate with the same key; the earlier one stays,
-//! as a block can still be found on the older template. Only the cleanup deletes candidates:
-//! one more than [`STALE_AFTER`] blocks from the tip, or built for height 0.
+//! as a block can still be found on the older template. Two things delete candidates: the
+//! cleanup, one more than [`STALE_AFTER`] blocks from the tip or built for height 0, and
+//! [`MAX_CANDIDATES`]. A node is never refused for their number: it would retry for as long as
+//! it took and get no new job meanwhile.
 
 use jiff::Timestamp;
 use lepic_crypto::aggsig::{create_secnonce, sign_single, verify_single_from_commit};
@@ -34,6 +36,9 @@ use crate::wallet::Wallet;
 /// Blocks from the tip after which a candidate no block confirmed is deleted, below it as
 /// `clean_old_unconfirmed` does upstream, and above it for a height no tip has come near.
 pub const STALE_AFTER: u64 = 50;
+
+/// Candidates a wallet keeps. Past it the one built longest ago goes (ADR 0048).
+pub const MAX_CANDIDATES: usize = 4096;
 
 /// What the node sends: the fees of the block's transactions, the block's height, and the key
 /// of the candidate it built the last template with, if any.
@@ -120,6 +125,8 @@ where
                     mmr_index: None,
                     tx: None,
                 })?;
+                repos.touch_output(coinbase.output.commitment.as_bytes())?;
+                delete_over_cap(repos)?;
                 debug!(amount = %value, "coinbase built");
                 Ok::<_, CoinbaseError>(coinbase)
             }))
@@ -190,6 +197,17 @@ fn key_reusable(
         }
     }
     Ok(found)
+}
+
+/// Deletes the candidates past [`MAX_CANDIDATES`], least recently touched first.
+fn delete_over_cap(repos: &mut dyn Repositories) -> Result<(), StoreError> {
+    let mut candidates = repos.outputs_by_touch(OutputStatus::Unconfirmed)?;
+    candidates.retain(is_candidate);
+    let over = candidates.len().saturating_sub(MAX_CANDIDATES);
+    for output in candidates.iter().take(over) {
+        repos.delete_output(output.commitment())?;
+    }
+    Ok(())
 }
 
 /// Records the incoming transaction of a candidate a block confirmed at `height`, links the

@@ -40,8 +40,10 @@ Conventional Commit messages at release time.
   and kernel from the wallet's keys, and a refresh records a mined one as an incoming
   transaction. `lepic-foreign` answers `build_coinbase` when the host turns it on with
   `ListenSettings::with_coinbase`, `lepic http listen --coinbase` does, and the FFI's
-  `start_http_listener` takes a `coinbase` flag. A candidate stays until a refresh finds it more
-  than 50 blocks from the tip, or built for height 0, and deletes it.
+  `start_http_listener` takes `coinbase` (`HttpCoinbase`). Only loopback callers are served,
+  with `CoinbaseAccess::Remote` (`--coinbase-remote`) every caller (ADR 0048). A candidate stays
+  until a refresh finds it more than 50 blocks from the tip, or built for height 0, and deletes
+  it; past 4,096 the one built longest ago goes. Store schema 15.
 - `TransactionDetails::coinbase` (engine and FFI) marks an incoming transaction whose output is
   a coinbase output; `lepic tx show` prints it as `Kind mining reward`.
 - `ChainParams::block_total_reward`, `foundation_levy`, `mining_reward` and `coinbase_value`,

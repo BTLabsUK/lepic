@@ -682,6 +682,11 @@ const UPGRADES: &[UpgradeCase] = &[
         seed: "",
         check: check_v13_seed,
     },
+    UpgradeCase {
+        from: 15,
+        seed: "",
+        check: check_v13_seed,
+    },
 ];
 
 fn key() -> StoreKeys {

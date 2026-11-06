@@ -318,6 +318,26 @@ impl OutputRepository for SqliteRepos<'_> {
         )
     }
 
+    fn touch_output(&mut self, commitment: &CommitmentBytes) -> Result<(), StoreError> {
+        self.conn.execute(
+            "UPDATE outputs SET touched = (SELECT MAX(touched) + 1 FROM outputs)
+             WHERE commitment = ?1",
+            [&commitment[..]],
+        )?;
+        Ok(())
+    }
+
+    fn outputs_by_touch(&self, status: OutputStatus) -> Result<Vec<OutputRecord>, StoreError> {
+        self.collect(
+            &format!(
+                "SELECT {OUTPUT_COLUMNS} FROM outputs WHERE status = ?1
+                 ORDER BY touched, commitment"
+            ),
+            [status.code()],
+            decode_output,
+        )
+    }
+
     fn delete_output(&mut self, commitment: &CommitmentBytes) -> Result<(), StoreError> {
         self.conn.execute(
             "DELETE FROM outputs WHERE commitment = ?1",

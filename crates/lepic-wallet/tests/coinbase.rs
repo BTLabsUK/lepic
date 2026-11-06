@@ -15,8 +15,8 @@
 mod send_support;
 mod support;
 
-use lepic_crypto::RangeProof;
 use lepic_crypto::aggsig::verify_single_from_commit;
+use lepic_crypto::{Commitment, RangeProof};
 use lepic_keychain::proof::OutputRewinder;
 use lepic_keychain::{Identifier, SwitchCommitment};
 use lepic_node::mock::ChainOutput;
@@ -24,9 +24,11 @@ use lepic_primitives::amount::{Fee, Height};
 use lepic_primitives::kernel::KernelFeatures;
 use lepic_primitives::output::OutputFeatures;
 use lepic_primitives::params::Network;
-use lepic_store::{KeyId, OutputRecord, OutputStatus, TxDirection, TxState};
+use lepic_store::{KeyId, OutputRecord, OutputStatus, TxDirection, TxState, WalletStore};
 use lepic_wallet::WalletError;
-use lepic_wallet::coinbase::{Coinbase, CoinbaseError, CoinbaseRequest, STALE_AFTER};
+use lepic_wallet::coinbase::{
+    Coinbase, CoinbaseError, CoinbaseRequest, MAX_CANDIDATES, STALE_AFTER,
+};
 use lepic_wallet::refresh::RefreshOutcome;
 use send_support::{NEXT_CHILD, Sender};
 use support::both_stores;
@@ -289,6 +291,50 @@ fn deletes_candidates_no_block_confirmed() {
     assert_eq!(left.len(), 1);
     assert_eq!(left[0].id, recent.output.identifier());
     assert!(sender.transactions().is_empty());
+}
+
+both_stores!(past_the_cap_the_candidate_touched_longest_ago_goes);
+fn past_the_cap_the_candidate_touched_longest_ago_goes() {
+    let sender = wallet();
+    let oldest = build(&sender, 5, None);
+    let live = build(&sender, 5, None);
+    let template = candidates(&sender)
+        .into_iter()
+        .find(|output| output.id == live.output.identifier())
+        .unwrap();
+    let fill = MAX_CANDIDATES - 3;
+    sender
+        .store
+        .write(|repos| {
+            for n in 1..=fill {
+                let mut output = template.clone();
+                output.id.commitment = Commitment::commit_value(n as u64).unwrap();
+                repos.put_output(&output)?;
+                repos.touch_output(output.commitment())?;
+            }
+            Ok::<_, lepic_store::StoreError>(())
+        })
+        .unwrap();
+    // The node's next template touches its row, here with the same fees and key.
+    let again = build(&sender, 5, Some(live.key_id));
+    assert_eq!(again.output.identifier(), live.output.identifier());
+    assert_eq!(candidates(&sender).len(), MAX_CANDIDATES - 1);
+
+    // At the cap a build is answered as ever.
+    let first = build(&sender, 6, None);
+    assert_eq!(candidates(&sender).len(), MAX_CANDIDATES);
+    let second = build(&sender, 6, None);
+    let left = candidates(&sender);
+    assert_eq!(left.len(), MAX_CANDIDATES);
+
+    let holds = |coinbase: &Coinbase| {
+        left.iter()
+            .any(|output| output.id == coinbase.output.identifier())
+    };
+    assert!(!holds(&oldest));
+    assert!(holds(&live));
+    assert!(holds(&first));
+    assert!(holds(&second));
 }
 
 both_stores!(deletes_candidates_at_height_zero_or_far_above_the_tip);

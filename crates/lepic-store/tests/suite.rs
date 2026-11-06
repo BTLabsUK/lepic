@@ -200,6 +200,40 @@ fn rejects_output_for_unknown_account_or_transaction<B: Backend>() {
     ));
 }
 
+fn outputs_by_touch_lists_the_least_recently_touched_first<B: Backend>() {
+    let backend = with_default_account::<B>();
+    let store = backend.store();
+    let first = output(0, DEFAULT, OutputStatus::Unconfirmed);
+    let second = output(1, DEFAULT, OutputStatus::Unconfirmed);
+    let never = output(2, DEFAULT, OutputStatus::Unconfirmed);
+    write(store, |repos| {
+        for record in [&first, &second, &never] {
+            repos.put_output(record)?;
+        }
+        repos.touch_output(first.commitment())?;
+        repos.touch_output(second.commitment())?;
+        repos.touch_output(first.commitment())?;
+        // Storing the output again leaves its place.
+        repos.put_output(&second)?;
+        repos.touch_output(&[9; 33])
+    })
+    .unwrap();
+    let listed = read(store, |repos| {
+        repos.outputs_by_touch(OutputStatus::Unconfirmed)
+    })
+    .unwrap();
+    assert_eq!(listed, [never.clone(), second.clone(), first.clone()]);
+    let other = read(store, |repos| repos.outputs_by_touch(OutputStatus::Unspent)).unwrap();
+    assert!(other.is_empty());
+
+    write(store, |repos| repos.delete_output(first.commitment())).unwrap();
+    let left = read(store, |repos| {
+        repos.outputs_by_touch(OutputStatus::Unconfirmed)
+    })
+    .unwrap();
+    assert_eq!(left, [never, second]);
+}
+
 fn outputs_of_transaction_lists_linked_outputs<B: Backend>() {
     let backend = with_default_account::<B>();
     let store = backend.store();
@@ -2821,6 +2855,7 @@ for_each_backend!(
     put_output_replaces_and_delete_removes,
     insert_output_refuses_a_stored_commitment_and_keeps_it,
     rejects_output_for_unknown_account_or_transaction,
+    outputs_by_touch_lists_the_least_recently_touched_first,
     outputs_of_transaction_lists_linked_outputs,
     transactions_get_sequential_ids_and_round_trip,
     a_deleted_transactions_id_is_never_handed_out_again,

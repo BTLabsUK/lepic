@@ -73,6 +73,13 @@ pub trait OutputRepository {
     /// Outputs linked to a transaction, ordered by commitment.
     fn outputs_of_transaction(&self, tx: TxId) -> Result<Vec<OutputRecord>, StoreError>;
 
+    /// Makes the output the most recently touched of all, if it is stored. An output no one
+    /// touched is older than any that was.
+    fn touch_output(&mut self, commitment: &CommitmentBytes) -> Result<(), StoreError>;
+
+    /// Outputs of every account with `status`, least recently touched first, then by commitment.
+    fn outputs_by_touch(&self, status: OutputStatus) -> Result<Vec<OutputRecord>, StoreError>;
+
     /// Removes the output if it is stored.
     fn delete_output(&mut self, commitment: &CommitmentBytes) -> Result<(), StoreError>;
 }

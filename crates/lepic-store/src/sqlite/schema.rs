@@ -499,11 +499,19 @@ ALTER TABLE contacts ADD COLUMN peer_domain TEXT;
 ALTER TABLE contacts ADD COLUMN peer_domain_attestation BLOB;
 ";
 
-pub(crate) const MIGRATIONS: &[&str] =
-    &[V1, V2, V3, V4, V5, V6, V7, V8, V9, V10, V11, V12, V13, V14];
+/// When a block reward no block confirmed yet was last built, which decides the one to drop at
+/// the cap (ADR 0048). 0 for an output nothing touched.
+const V15: &str = "
+ALTER TABLE outputs ADD COLUMN touched INTEGER NOT NULL DEFAULT 0;
+CREATE INDEX outputs_touched ON outputs (touched);
+";
+
+pub(crate) const MIGRATIONS: &[&str] = &[
+    V1, V2, V3, V4, V5, V6, V7, V8, V9, V10, V11, V12, V13, V14, V15,
+];
 
 /// The version this build writes.
-pub const SCHEMA_VERSION: u32 = 14;
+pub const SCHEMA_VERSION: u32 = 15;
 
 /// The schema version stored in the database; 0 for a database without a schema.
 pub(crate) fn stored_version(conn: &Connection) -> Result<u32, StoreError> {

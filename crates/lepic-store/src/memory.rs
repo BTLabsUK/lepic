@@ -46,6 +46,7 @@ type SlateKey = ([u8; 16], &'static str);
 struct State {
     accounts: BTreeMap<AccountIndex, AccountRecord>,
     outputs: BTreeMap<CommitmentBytes, OutputRecord>,
+    output_touches: BTreeMap<CommitmentBytes, u64>,
     transactions: BTreeMap<TxId, TransactionEntry>,
     confirmed_heights: BTreeMap<TxId, Height>,
     counterparties: BTreeMap<TxId, String>,
@@ -294,8 +295,34 @@ impl OutputRepository for MemoryRepos<'_> {
             .collect())
     }
 
+    fn touch_output(&mut self, commitment: &CommitmentBytes) -> Result<(), StoreError> {
+        if self.state.outputs.contains_key(commitment) {
+            let last = self.state.output_touches.values().max().copied();
+            let touch = last.unwrap_or(0).saturating_add(1);
+            self.state.output_touches.insert(*commitment, touch);
+        }
+        Ok(())
+    }
+
+    fn outputs_by_touch(&self, status: OutputStatus) -> Result<Vec<OutputRecord>, StoreError> {
+        let touch = |output: &OutputRecord| {
+            let touch = self.state.output_touches.get(output.commitment());
+            (touch.copied().unwrap_or(0), *output.commitment())
+        };
+        let mut outputs: Vec<OutputRecord> = self
+            .state
+            .outputs
+            .values()
+            .filter(|output| output.status == status)
+            .cloned()
+            .collect();
+        outputs.sort_by_key(touch);
+        Ok(outputs)
+    }
+
     fn delete_output(&mut self, commitment: &CommitmentBytes) -> Result<(), StoreError> {
         self.state.outputs.remove(commitment);
+        self.state.output_touches.remove(commitment);
         Ok(())
     }
 }
