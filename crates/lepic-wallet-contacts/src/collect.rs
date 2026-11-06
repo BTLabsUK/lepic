@@ -194,8 +194,25 @@ impl Backoffs {
 }
 
 /// A contact mailbox to drain: the record, the relay and onion it is on, the box salt it is
-/// read with, and whether our current card names it.
-type ContactBox = (ContactRecord, RelayEndpoint, Option<String>, [u8; 16], bool);
+/// read with, and which of the contact's mailboxes it is.
+type ContactBox = (
+    ContactRecord,
+    RelayEndpoint,
+    Option<String>,
+    [u8; 16],
+    BoxRead,
+);
+
+/// Which of a contact's mailboxes a drain reads.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BoxRead {
+    /// The one our current card names.
+    Current,
+    /// The one of an old box salt, read until the contact writes to the current one.
+    OldSalt,
+    /// Ours on a previous home relay, read until its drain ends.
+    PreviousHome,
+}
 
 #[derive(Default, Serialize, Deserialize)]
 struct Updates {
@@ -616,7 +633,7 @@ where
                     let next = start.saturating_add(taken).checked_rem(count).unwrap_or(0);
                     repos.put_setting(CURSOR_KEY, &next.to_string())?;
                 }
-                for (record, home, onion, salt, current) in contacts.into_iter().take(taken) {
+                for (record, home, onion, salt, read) in contacts.into_iter().take(taken) {
                     if backoffs.waiting(&host_text(&home), now) {
                         continue;
                     }
@@ -625,7 +642,7 @@ where
                         continue;
                     };
                     mailboxes.push(Mailbox {
-                        job: Job::Contact(record.contact_id, current),
+                        job: Job::Contact(record.contact_id, read == BoxRead::Current),
                         identity: box_identity(&keys, network, &home)?,
                         relay: home,
                         onion,
@@ -1347,8 +1364,9 @@ fn pending_mailboxes(
     Ok(mailboxes)
 }
 
-/// The mailboxes of the paired contacts `wanted` holds: a service's previous home while it is
-/// kept, the mailbox of an old box salt while it is read, and the current one.
+/// The mailboxes of the paired contacts `wanted` holds: our previous home while it is drained,
+/// after following a contact's move or moving our own, the mailbox of an old box salt while it
+/// is read, and the current one.
 fn contact_mailboxes(
     repos: &dyn Repositories,
     relays: &ContactRelays,
@@ -1371,7 +1389,13 @@ fn contact_mailboxes(
         let home = endpoint_for(&mailbox.home_relay, relays)?;
         if let Some(previous) = mailbox.previous.filter(|previous| previous.until > now) {
             let old = endpoint_for(&previous.relay, relays)?;
-            contacts.push((record.clone(), old, None, record.box_salt, false));
+            contacts.push((
+                record.clone(),
+                old,
+                None,
+                record.box_salt,
+                BoxRead::PreviousHome,
+            ));
         }
         let old_salt = repos
             .setting(&old_salt_key(record.contact_id))?
@@ -1383,17 +1407,18 @@ fn contact_mailboxes(
                 home.clone(),
                 mailbox.onion.clone(),
                 salt,
-                false,
+                BoxRead::OldSalt,
             ));
         }
         let salt = record.box_salt;
-        contacts.push((record, home, mailbox.onion, salt, true));
+        contacts.push((record, home, mailbox.onion, salt, BoxRead::Current));
     }
     Ok(contacts)
 }
 
-/// Keeps only the active contacts and those something waits on when their mailboxes are on
-/// more than [`FEW_RELAYS`] relays.
+/// Keeps only the active contacts, those something waits on, and previous homes still drained
+/// when the mailboxes are on more than [`FEW_RELAYS`] relays. A contact that missed our move is
+/// inactive by nature: it is away, and writes only to our previous home when it is back.
 fn keep_active_when_many(
     repos: &dyn Repositories,
     contacts: &mut Vec<ContactBox>,
@@ -1410,8 +1435,10 @@ fn keep_active_when_many(
                 pending.push(record.contact_id);
             }
         }
-        contacts.retain(|(record, _, _, _, _)| {
-            active(record, now) || pending.contains(&record.contact_id)
+        contacts.retain(|(record, _, _, _, read)| {
+            *read == BoxRead::PreviousHome
+                || active(record, now)
+                || pending.contains(&record.contact_id)
         });
     }
     Ok(())
@@ -1905,6 +1932,78 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn record(byte: u8, created_at: Timestamp) -> ContactRecord {
+        ContactRecord {
+            contact_id: ContactId([byte; 16]),
+            account: lepic_store::AccountIndex(0),
+            slot: 0,
+            box_salt: [0; 16],
+            own_card: Vec::new(),
+            peer: None,
+            alternate: None,
+            label: String::new(),
+            state: ContactState::Verified,
+            sas: None,
+            verified_at: None,
+            allow_invoices: false,
+            seal: SealMode::On,
+            last_sealed_in: None,
+            app_contact: None,
+            imported_from_backup: false,
+            created_at,
+            updated_at: created_at,
+            facts: lepic_store::PairingFacts::default(),
+        }
+    }
+
+    /// On more than a few relays a foreground tick drops the quiet contacts' mailboxes but
+    /// keeps a previous home still drained: a contact that missed our move is quiet by nature.
+    #[test]
+    fn a_drained_previous_home_is_kept_on_many_relays() {
+        let now = Timestamp::from_second(100 * 24 * 60 * 60).unwrap();
+        let long_ago = Timestamp::from_second(0).unwrap();
+        let relay = |host: &str| {
+            RelayEndpoint::new(
+                lepic_epicbox::Domain::parse(host).unwrap(),
+                Some(80),
+                lepic_epicbox::Security::Plain,
+            )
+        };
+        let quiet = record(1, long_ago);
+        let fresh = record(2, now);
+        let mut boxes: Vec<ContactBox> = vec![
+            (
+                quiet.clone(),
+                relay("a.test"),
+                None,
+                [0; 16],
+                BoxRead::Current,
+            ),
+            (
+                quiet.clone(),
+                relay("b.test"),
+                None,
+                [0; 16],
+                BoxRead::PreviousHome,
+            ),
+            (quiet, relay("c.test"), None, [0; 16], BoxRead::OldSalt),
+            (fresh, relay("d.test"), None, [0; 16], BoxRead::Current),
+        ];
+        let store =
+            lepic_store::MemoryStore::new(lepic_store::StoreKeys::from_bytes([1; 32], [1; 32]));
+        store
+            .read(|repos| keep_active_when_many(repos, &mut boxes, now))
+            .unwrap();
+        let kept: Vec<_> = boxes
+            .iter()
+            .map(|(record, _, _, _, read)| (record.contact_id.0[0], *read))
+            .collect();
+        assert_eq!(
+            kept,
+            vec![(1, BoxRead::PreviousHome), (2, BoxRead::Current)]
+        );
+    }
 
     #[test]
     fn a_message_is_held_for_a_few_tries_and_a_few_minutes() {

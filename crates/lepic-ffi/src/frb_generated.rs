@@ -2347,6 +2347,7 @@ fn wire__crate__api__wallet__EpicWallet_contacts_move_home_impl(
                 flutter_rust_bridge::for_generated::RustAutoOpaqueInner<EpicWallet>,
             >>::sse_decode(&mut deserializer);
             let api_relay = <String>::sse_decode(&mut deserializer);
+            let api_drain_days = <u32>::sse_decode(&mut deserializer);
             deserializer.end();
             move |context| async move {
                 transform_result_sse::<_, crate::api::error::WalletError>(
@@ -2371,6 +2372,7 @@ fn wire__crate__api__wallet__EpicWallet_contacts_move_home_impl(
                         let output_ok = crate::api::wallet::EpicWallet::contacts_move_home(
                             &*api_that_guard,
                             api_relay,
+                            api_drain_days,
                         )
                         .await?;
                         std::result::Result::Ok(output_ok)
@@ -11562,6 +11564,7 @@ impl SseDecode for crate::api::types::ContactView {
         let mut var_peerVerifiedAtMs = <Option<i64>>::sse_decode(deserializer);
         let mut var_peerFeatures = <u32>::sse_decode(deserializer);
         let mut var_peerProfile = <u32>::sse_decode(deserializer);
+        let mut var_peerEncKey = <Option<Vec<u8>>>::sse_decode(deserializer);
         let mut var_endedReason =
             <Option<crate::api::types::PairingEndReason>>::sse_decode(deserializer);
         let mut var_endedAtMs = <Option<i64>>::sse_decode(deserializer);
@@ -11589,6 +11592,7 @@ impl SseDecode for crate::api::types::ContactView {
             peer_verified_at_ms: var_peerVerifiedAtMs,
             peer_features: var_peerFeatures,
             peer_profile: var_peerProfile,
+            peer_enc_key: var_peerEncKey,
             ended_reason: var_endedReason,
             ended_at_ms: var_endedAtMs,
         };
@@ -12844,6 +12848,17 @@ impl SseDecode for Option<Vec<String>> {
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
         if (<bool>::sse_decode(deserializer)) {
             return Some(<Vec<String>>::sse_decode(deserializer));
+        } else {
+            return None;
+        }
+    }
+}
+
+impl SseDecode for Option<Vec<u8>> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        if (<bool>::sse_decode(deserializer)) {
+            return Some(<Vec<u8>>::sse_decode(deserializer));
         } else {
             return None;
         }
@@ -15483,6 +15498,7 @@ impl flutter_rust_bridge::IntoDart for crate::api::types::ContactView {
             self.peer_verified_at_ms.into_into_dart().into_dart(),
             self.peer_features.into_into_dart().into_dart(),
             self.peer_profile.into_into_dart().into_dart(),
+            self.peer_enc_key.into_into_dart().into_dart(),
             self.ended_reason.into_into_dart().into_dart(),
             self.ended_at_ms.into_into_dart().into_dart(),
         ]
@@ -18622,6 +18638,7 @@ impl SseEncode for crate::api::types::ContactView {
         <Option<i64>>::sse_encode(self.peer_verified_at_ms, serializer);
         <u32>::sse_encode(self.peer_features, serializer);
         <u32>::sse_encode(self.peer_profile, serializer);
+        <Option<Vec<u8>>>::sse_encode(self.peer_enc_key, serializer);
         <Option<crate::api::types::PairingEndReason>>::sse_encode(self.ended_reason, serializer);
         <Option<i64>>::sse_encode(self.ended_at_ms, serializer);
     }
@@ -19639,6 +19656,16 @@ impl SseEncode for Option<Vec<String>> {
         <bool>::sse_encode(self.is_some(), serializer);
         if let Some(value) = self {
             <Vec<String>>::sse_encode(value, serializer);
+        }
+    }
+}
+
+impl SseEncode for Option<Vec<u8>> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <bool>::sse_encode(self.is_some(), serializer);
+        if let Some(value) = self {
+            <Vec<u8>>::sse_encode(value, serializer);
         }
     }
 }

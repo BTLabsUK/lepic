@@ -559,6 +559,9 @@ pub struct ContactMoveHomeReport {
     pub home_relay: String,
     /// How many contacts were told.
     pub moved: u32,
+    /// When the old mailboxes stop being read, RFC 3339; absent without a drain.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub drain_until: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -1569,6 +1572,23 @@ fn write_profile(out: &mut Vec<u8>, report: &Report) -> std::io::Result<()> {
     }
 }
 
+/// The line `lepic contact move-home` prints: where the home went, and until when the old
+/// mailboxes are read.
+fn write_move_home(out: &mut Vec<u8>, r: &ContactMoveHomeReport) -> std::io::Result<()> {
+    match &r.drain_until {
+        Some(until) => writeln!(
+            out,
+            "Home relay moved to {}; {} contact(s) told. The old mailboxes are read until {until}.",
+            r.home_relay, r.moved
+        ),
+        None => writeln!(
+            out,
+            "Home relay moved to {}; {} contact(s) told. The old mailboxes are not read again.",
+            r.home_relay, r.moved
+        ),
+    }
+}
+
 /// A report on paired contacts. Writes nothing for any other.
 fn write_contact_human(out: &mut Vec<u8>, report: &Report) -> std::io::Result<()> {
     match report {
@@ -1591,11 +1611,7 @@ fn write_contact_human(out: &mut Vec<u8>, report: &Report) -> std::io::Result<()
             r.contact_id
         ),
         Report::ProfileShow(_) | Report::ProfileSet(_) => write_profile(out, report),
-        Report::ContactMoveHome(r) => writeln!(
-            out,
-            "Home relay moved to {}; {} contact(s) told. The old mailboxes are not read again.",
-            r.home_relay, r.moved
-        ),
+        Report::ContactMoveHome(r) => write_move_home(out, r),
         Report::ContactKeyCheck(r) => writeln!(
             out,
             "Key check sent over pairing {} for {}; `lepic contact collect` takes the answer.",
@@ -2256,8 +2272,9 @@ mod tests {
                 Report::ContactMoveHome(ContactMoveHomeReport {
                     home_relay: text("h"),
                     moved: 1,
+                    drain_until: Some(text("t")),
                 }),
-                vec!["home_relay", "moved"],
+                vec!["drain_until", "home_relay", "moved"],
             ),
             (
                 Report::ContactKeyCheck(ContactKeyCheckReport {

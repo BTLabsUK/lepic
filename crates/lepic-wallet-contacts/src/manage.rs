@@ -62,6 +62,7 @@ pub(crate) fn view(
             .filter(|_| record.sas.as_ref().map(super::status::verdict_hash) == facts.peer_verdict),
         peer_features: facts.peer_features,
         peer_profile: facts.peer_features >> lepic_epicbox::marker::features::PROFILE_SHIFT,
+        peer_enc_key: record.peer.as_ref().map(|peer| peer.enc_key),
         ended_reason: facts.ended_reason,
         ended_at: facts.ended_at,
     }
@@ -103,6 +104,9 @@ pub const MAX_APP_CONTACT_LEN: usize = 256;
 
 /// The largest contact backup document read: 10,000 contacts with room to spare.
 pub const MAX_BACKUP_LEN: usize = 32 * 1024 * 1024;
+
+/// The longest a wallet that moved its own home relay drains the old mailboxes: a year.
+pub const MAX_HOME_DRAIN: std::time::Duration = std::time::Duration::from_secs(365 * 24 * 60 * 60);
 
 /// A pairing still in progress, as the host lists it. Holds no key and no secret.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -557,13 +561,19 @@ where
     /// reads now, and our mailbox for it moves to `host` in the same write. Returns how many
     /// moved.
     ///
-    /// The move announces and does not drain: the old mailboxes are not read again, whether
-    /// or not the contact follows. A contact that takes the update sees
+    /// A contact that takes the update sees
     /// [`Event::ContactRelayMoveRequested`](lepic_wallet::event::Event::ContactRelayMoveRequested)
-    /// and writes to the new mailbox once it applies the move; what it sends before that, or
-    /// all of it when it never takes the update, is lost, and the pairing has to be made
-    /// again. Private pairings and pairings in progress keep their relay. New invites name the
-    /// relay of `relays`, so the host switches its own relay too.
+    /// and writes to the new mailbox once it applies the move. For `drain`, at most
+    /// [`MAX_HOME_DRAIN`] (a longer one is cut to it), every collect still reads our old
+    /// mailbox for each moved contact, as it reads a previous home after following a
+    /// contact's move: what the contact sends there is taken as usual, and a contact check
+    /// there is answered with the card naming the new mailbox, so a contact away longer than
+    /// the relay keeps the update still learns of the move. There is one previous home per
+    /// contact: this drain replaces one left by following a contact's move. A zero `drain`
+    /// announces only: the old mailboxes are not read again, and what a contact sends before
+    /// it follows, or all of it when it never takes the update, is lost and the pairing has
+    /// to be made again. Private pairings and pairings in progress keep their relay. New
+    /// invites name the relay of `relays`, so the host switches its own relay too.
     ///
     /// Fails with [`ContactError::RelayAddress`] for a host that is not a relay's name, and as
     /// the store does.
@@ -572,7 +582,9 @@ where
         &self,
         relays: &ContactRelays,
         host: &str,
+        drain: std::time::Duration,
     ) -> Result<u32, ContactError> {
+        let drain = drain.min(MAX_HOME_DRAIN);
         self.check_contact_network(relays)?;
         let home = super::relay::endpoint_for(&host.trim().to_ascii_lowercase(), relays)?;
         let home_relay = super::relay::host_text(&home);
@@ -585,6 +597,7 @@ where
         let moved = self
             .contact_work(move |ports, _| {
                 let now = ports.clock.now();
+                let until = now.checked_add(drain).unwrap_or(now);
                 session.store.write(|repos| {
                     let at = super::address_proof::CardUpdate {
                         keychain: &session.keychain,
@@ -622,8 +635,17 @@ where
                         )? {
                             continue;
                         }
+                        if until > now {
+                            mailbox.previous = Some(lepic_store::PreviousHome {
+                                relay: mailbox.home_relay.clone(),
+                                peer_mailbox: mailbox.peer_mailbox.clone(),
+                                our_mailbox: mailbox.our_mailbox.clone(),
+                                until,
+                            });
+                        }
+                        // Without a drain, only one left by following a contact's own move
+                        // stays, to its end.
                         mailbox.home_relay.clone_from(&home_relay);
-                        // Only a drain left by following a contact's own move stays, to its end.
                         mailbox.our_mailbox = ours;
                         repos.put_contact_mailbox(&mailbox)?;
                         moved = moved.saturating_add(1);

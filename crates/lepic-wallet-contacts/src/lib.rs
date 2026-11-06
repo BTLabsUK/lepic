@@ -58,7 +58,7 @@ pub use lepic_contact::{ContactKind, PairingClass, Purpose, Refusal, SasSymbol};
 pub use lepic_store::PairingEndReason;
 pub use lepic_store::PairingRole;
 pub use lepic_wallet::event::PairingFailure;
-pub use manage::{MAX_APP_CONTACT_LEN, MAX_BACKUP_LEN, PendingPairingView};
+pub use manage::{MAX_APP_CONTACT_LEN, MAX_BACKUP_LEN, MAX_HOME_DRAIN, PendingPairingView};
 pub use outbox::{NOT_POSTED_AFTER, OUTBOX_STUCK_AFTER, OutboxReport, OutboxView};
 pub use pairing::{
     AcceptOutcome, AcceptRequest, CardOffer, CardRequest, InviteExpiry, InviteOffer, InvitePreview,
@@ -257,6 +257,10 @@ pub struct ContactView {
     /// The profile the contact sent: `peer_features` from bit 16 up, moved down. LEPIC never
     /// reads a bit of it; the host names them.
     pub peer_profile: u32,
+    /// The X25519 encryption key (card tag 05) of the contact's stored card; `None` before
+    /// the contact's card arrived. A completed pairing shows the contact holds it, so a host
+    /// may recognise a service by it.
+    pub peer_enc_key: Option<[u8; 32]>,
     pub ended_reason: Option<PairingEndReason>,
     pub ended_at: Option<Timestamp>,
 }

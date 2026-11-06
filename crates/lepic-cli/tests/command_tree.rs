@@ -373,3 +373,28 @@ fn a_send_spends_the_smallest_outputs_by_default() {
     };
     assert_eq!(args.spend.selection, lepic_cli::cli::SelectionArg::Smallest);
 }
+
+#[test]
+fn move_home_takes_a_drain_of_up_to_a_year() {
+    let drain = |extra: &[&str]| {
+        let args = ["lepic", "contact", "move-home", "relay.example"]
+            .into_iter()
+            .chain(extra.iter().copied());
+        let cli = Cli::try_parse_from(args).map_err(|error| error.kind())?;
+        let lepic_cli::cli::Command::Contact(contact) = cli.command else {
+            panic!("not a contact command");
+        };
+        let lepic_cli::cli::ContactCommand::MoveHome(args) = contact.command else {
+            panic!("not a move-home");
+        };
+        Ok(args.drain_days)
+    };
+    assert_eq!(drain(&[]), Ok(0));
+    assert_eq!(drain(&["--drain-days", "30"]), Ok(30));
+    assert_eq!(drain(&["--drain-days", "365"]), Ok(365));
+    assert_eq!(
+        drain(&["--drain-days", "366"]),
+        Err(clap::error::ErrorKind::ValueValidation)
+    );
+    assert!(drain(&["--drain-days", "-1"]).is_err());
+}

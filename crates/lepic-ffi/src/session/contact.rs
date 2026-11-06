@@ -245,6 +245,7 @@ fn view(view: EngineContactView) -> ContactView {
         peer_verified_at_ms: view.peer_verified_at.map(ms),
         peer_features: view.peer_features,
         peer_profile: view.peer_profile,
+        peer_enc_key: view.peer_enc_key.map(|key| key.to_vec()),
         ended_reason: view.ended_reason.map(end_reason),
         ended_at_ms: view.ended_at.map(ms),
     }
@@ -797,12 +798,23 @@ impl Session {
             .await?)
     }
 
-    pub(crate) async fn contacts_move_home(&self, relay: String) -> Result<u32, WalletError> {
+    pub(crate) async fn contacts_move_home(
+        &self,
+        relay: String,
+        drain_days: u32,
+    ) -> Result<u32, WalletError> {
+        if drain_days > 365 {
+            return Err(WalletError::new(
+                WalletErrorKind::InvalidArgument,
+                "drain longer than 365 days",
+            ));
+        }
+        let drain = std::time::Duration::from_secs(24 * 60 * 60).saturating_mul(drain_days);
         let relays = self.contact_relays(ContactRelayMode::Online)?;
         Ok(self
             .engine
             .contact_book()
-            .contacts_move_home(&relays, &relay)
+            .contacts_move_home(&relays, &relay, drain)
             .await?)
     }
 

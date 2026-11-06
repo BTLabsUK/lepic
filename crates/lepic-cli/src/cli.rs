@@ -780,8 +780,8 @@ with `lepic contact accept`.")]
     Label(ContactLabelArgs),
     /// Move to the relay a contact asked for; `contact list` shows the request
     Move(ContactMoveArgs),
-    /// Move your own home relay for every paired contact; each is told once and the old
-    /// mailboxes are not read again
+    /// Move your own home relay for every paired contact; each is told once, and the old
+    /// mailboxes are read for `--drain-days`
     MoveHome(ContactMoveHomeArgs),
     /// Ask a paired contact to answer with its current card; `contact collect` takes the answer
     Check(ContactIdArg),
@@ -1065,6 +1065,15 @@ pub struct ContactMoveHomeArgs {
     /// The relay to move to, `domain[:port]`; set it as the wallet's Epicbox relay too
     #[arg(value_name = "HOST")]
     pub host: String,
+    /// Days to keep reading the old mailboxes, 0 to 365; a check there is answered with the
+    /// new mailbox
+    #[arg(
+        long = "drain-days",
+        value_name = "N",
+        default_value_t = 0,
+        value_parser = clap::value_parser!(u16).range(0..=365)
+    )]
+    pub drain_days: u16,
 }
 
 #[derive(Debug, Args)]
