@@ -978,7 +978,7 @@ impl<H: Host> Run<'_, H> {
             })
         };
         let settings = lepic_tor::listen_settings(self.settings.tuning.listen);
-        let handle = lepic_foreign::listen(settings.clone(), receiver(ProofKey::Onion)).await?;
+        let handle = lepic_foreign::listen(settings, receiver(ProofKey::Onion)).await?;
         let previous_handle = match previous_key {
             Some(_) => match lepic_foreign::listen(settings, receiver(ProofKey::Payments)).await {
                 Ok(handle) => Some(handle),

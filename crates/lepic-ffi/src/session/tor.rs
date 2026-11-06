@@ -323,6 +323,21 @@ impl Session {
         Ok(lepic_tor::onion_address(key.public_key()))
     }
 
+    /// How tor runs for this session.
+    fn tor_settings(&self, tor_binary: String, lib_dir: Option<String>) -> TorSettings {
+        let mut settings = TorSettings::new(
+            PathBuf::from(tor_binary),
+            self.data_dir.join(TOR_DIR),
+            self.tuning.tor_timings(),
+        );
+        settings.lib_dir = lib_dir.map(PathBuf::from);
+        #[cfg(test)]
+        if let Some(timings) = *lock(&self.tor_timings) {
+            settings.timings = timings;
+        }
+        settings
+    }
+
     /// Starts tor and, with `publish_onion`, its listener behind the published onion, unless
     /// tor runs or starts, and reports what they do to `report`. When the policy publishes the
     /// previous onion, it gets a listener of its own, which signs payment proofs with the
@@ -397,16 +412,7 @@ impl Session {
                 return Ok(());
             }
         };
-        let mut settings = TorSettings::new(
-            PathBuf::from(tor_binary),
-            self.data_dir.join(TOR_DIR),
-            self.tuning.tor_timings(),
-        );
-        settings.lib_dir = lib_dir.map(PathBuf::from);
-        #[cfg(test)]
-        if let Some(timings) = *lock(&self.tor_timings) {
-            settings.timings = timings;
-        }
+        let settings = self.tor_settings(tor_binary, lib_dir);
         let (listener, previous_listener) = listeners;
         let publish = listener.as_ref().map(|listener| Publish {
             key,
