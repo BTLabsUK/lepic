@@ -382,7 +382,9 @@ fn a_wallet_moving_its_home_relay_with_a_drain_answers_a_check_at_the_old_mailbo
             )
             .unwrap()
     };
-    let read = collect_issuer().mailboxes;
+    // The link stays open until it expires, inside the days below, so count only the contact's.
+    let open = world.issuer.read(|repos| repos.pending_pairings()).len();
+    let read = collect_issuer().mailboxes - open;
 
     let moved_at = world.issuer.clock.now();
     let moved = world
