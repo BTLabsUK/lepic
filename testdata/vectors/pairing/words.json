@@ -1,8 +1,8 @@
 {
   "meta": {
     "generator": "epic-pairing-kit",
-    "kit_version": "0.3.1",
-    "git_commit": "a532c691513d88ce775752c6e342e5094545d366",
+    "kit_version": "0.4.0",
+    "git_commit": "faae1e09ce1d8f48dadeb3b7f74781291e8f9b2c",
     "rfc": "0002-contact-pairing",
     "file": "words.json"
   },

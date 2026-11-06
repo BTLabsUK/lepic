@@ -35,8 +35,8 @@ use lepic_contact::{
 use serde_json::Value;
 
 const KIT_GENERATOR: &str = "epic-pairing-kit";
-const KIT_VERSION: &str = "0.3.1";
-const KIT_COMMIT: &str = "a532c691513d88ce775752c6e342e5094545d366";
+const KIT_VERSION: &str = "0.4.0";
+const KIT_COMMIT: &str = "faae1e09ce1d8f48dadeb3b7f74781291e8f9b2c";
 
 fn vectors(file: &str) -> Vec<Value> {
     let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
