@@ -41,6 +41,9 @@ Conventional Commit messages at release time.
 
 ### Fixed
 
+- A collect with more than 50 pairings in progress on one relay no longer drains nothing on that
+  relay: pairings in progress now take turns across cycles as contacts do, and while they are
+  more than fit, contacts keep up to half of a cycle's 50 mailboxes.
 - On more than three relays, a foreground collect no longer drops the previous home of a quiet
   contact while its drain lasts.
 >>>>>>> main
