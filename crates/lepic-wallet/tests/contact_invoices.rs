@@ -14,6 +14,8 @@
 
 #[path = "pairing/helpers.rs"]
 mod helpers;
+#[path = "contact_invoices/quarantine.rs"]
+mod quarantine;
 mod support;
 #[path = "epicbox_invoices/world.rs"]
 mod world;

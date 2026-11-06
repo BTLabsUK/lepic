@@ -25,6 +25,7 @@ use tracing::{debug, info, instrument, warn};
 
 use super::keys::{box_identity, contact_keys, contact_network, enc_secret, pairing_mailbox};
 use super::pairing::{Taken, peer_card};
+use super::quarantine::{Message, QuarantineReason};
 use super::relay::{check_online, endpoint_for, host_text, mailbox_client};
 use super::{
     ContactError, ContactRelays, LATE_DRAIN_WAIT, PairingFailure, UPDATES_PER_CONTACT_PER_DAY,
@@ -86,6 +87,11 @@ pub struct CollectReport {
     /// Pairings that ended in this cycle; their records are kept. Each also raised
     /// [`Event::ContactUpdated`] or [`Event::ContactUnpaired`].
     pub ended: Vec<super::EndedPairing>,
+    /// Contact messages kept in quarantine in this cycle.
+    pub quarantined: usize,
+    /// Contact messages lost to the quarantine's cap in this cycle: entries that went to make
+    /// room, and messages too large to keep.
+    pub quarantine_dropped: usize,
 }
 
 /// Relays that keep failing wait this long before the next try, one step per failure.
@@ -130,6 +136,16 @@ const HELD_PREFIX: &str = "contact.held.";
 /// a failing message is held are the host's ([`WalletPolicy::contact_hold_attempts`] and
 /// [`WalletPolicy::contact_hold_patience`]), within this bound.
 const HELD_FORGOTTEN: Duration = WalletPolicy::MAX_CONTACT_HOLD_PATIENCE;
+
+/// How long a hold count is kept while the host keeps a quarantine: past the week a relay keeps a
+/// message, so a wallet that collects rarely still reaches the hold bound of a message that keeps
+/// coming back.
+const HELD_KEPT_FOR_QUARANTINE: Duration = Duration::from_secs(14 * 24 * 60 * 60);
+
+/// The setting that holds the hold count of the envelope with `hash`.
+pub(crate) fn held_key(hash: [u8; 32]) -> String {
+    format!("{HELD_PREFIX}{}", hex::encode(&hash))
+}
 
 /// The setting that marks a contact whose envelopes carry their send time: from then on one
 /// without it is refused.
@@ -341,6 +357,7 @@ fn end_late_pairing(
     };
     super::pairing::end_pending(repos, pending.pairing_id)?;
     super::invoices::drop_contact_invoices(repos, contact_id)?;
+    super::quarantine::delete_contact_entries(repos, contact_id)?;
     repos.delete_contact(contact_id)?;
     super::private::delete_secrets(repos, contact_id)?;
     Ok(Some(Some(FailedPairing { contact_id, reason })))
@@ -503,6 +520,8 @@ where
                 }
             }
         }
+        report.quarantined = told.quarantined;
+        report.quarantine_dropped = told.quarantine_dropped;
         debug!(count = report.mailboxes, "contact mailboxes collected");
         for ended in self.ended_since(&ended_before).await? {
             if !report.ended.contains(&ended) {
@@ -763,7 +782,7 @@ where
         let policy = self.wallet.config().policy;
         self.contact_work(move |ports, _| {
             let now = u64::try_from(ports.clock.now().as_second()).unwrap_or(0);
-            let key = format!("{HELD_PREFIX}{}", hex::encode(&hash));
+            let key = held_key(hash);
             session.store.write(|repos| {
                 let (first, holds) = repos
                     .setting(&key)?
@@ -789,7 +808,7 @@ where
     async fn clear_hold(&self, hash: [u8; 32]) -> Result<(), ContactError> {
         let session = self.wallet.session()?;
         self.contact_work(move |_, _| {
-            let key = format!("{HELD_PREFIX}{}", hex::encode(&hash));
+            let key = held_key(hash);
             Ok(session.store.write(|repos| repos.delete_setting(&key))?)
         })
         .await
@@ -797,10 +816,16 @@ where
 
     /// Forgets envelopes seen longer ago than a relay keeps a message, and a little longer, the
     /// payload acknowledgement marks and parked payloads as old, and the hold counts of messages
-    /// first held longer ago than [`HELD_FORGOTTEN`].
+    /// first held longer ago than [`HELD_FORGOTTEN`], or [`HELD_KEPT_FOR_QUARANTINE`] while the
+    /// host keeps a quarantine.
     async fn forget_old_envelopes(&self) -> Result<(), ContactError> {
         let session = self.wallet.session()?;
-        let patience = self.wallet.config().policy.contact_hold_patience;
+        let policy = self.wallet.config().policy;
+        let patience = policy.contact_hold_patience;
+        let kept = match policy.quarantine_max_bytes {
+            Some(_) => HELD_KEPT_FOR_QUARANTINE,
+            None => HELD_FORGOTTEN,
+        };
         self.contact_work(move |ports, _| {
             let now = ports.clock.now();
             let cutoff = now.checked_sub(SEEN_LIFETIME).unwrap_or(now);
@@ -809,7 +834,7 @@ where
                 repos.forget_envelopes_before(cutoff)?;
                 super::payload::forget_old_marks(repos, now, SEEN_LIFETIME)?;
                 for (key, value) in repos.settings_with_prefix(HELD_PREFIX)? {
-                    if hold_forgotten(&value, seconds, patience) {
+                    if hold_forgotten(&value, seconds, patience, kept) {
                         repos.delete_setting(&key)?;
                     }
                 }
@@ -862,7 +887,7 @@ where
     /// Takes an envelope from a contact's mailbox. It must be signed by the contact's recorded
     /// key; an anonymous one is dropped and never attributed. A contact update or a newer card in
     /// the envelope refreshes the record within the limits of RFC 0002 8.5.
-    async fn take_contact_message(
+    pub(crate) async fn take_contact_message(
         &self,
         relays: &ContactRelays,
         contact_id: ContactId,
@@ -929,6 +954,7 @@ where
         {
             return Ok(Handled::Stored);
         }
+        told.opened = true;
         // Ended is final: only answers to this wallet's own sends still settle.
         let ended = record.facts.ended_reason.is_some();
         if ended && opened.content.kind != MessageType::Slate {
@@ -991,9 +1017,12 @@ where
         };
         Ok(match opened.content.kind {
             MessageType::ContactUpdate => Handled::Stored,
-            MessageType::Slate => self.take_contact_slate(&record, opened.content).await?,
+            MessageType::Slate => {
+                self.take_contact_slate(&record, opened.content, told)
+                    .await?
+            }
             MessageType::Notice => {
-                self.take_contact_notice(&record, &opened.content.body)
+                self.take_contact_notice(&record, &opened.content.body, told)
                     .await?
             }
             MessageType::KeyCheck => self.take_key_check(&record, envelope).await?,
@@ -1799,17 +1828,15 @@ fn hold_expired(first: u64, holds: u32, now: u64, policy: &WalletPolicy) -> bool
 }
 
 /// Whether the hold count `value` (`first-seen seconds:holds`) may be forgotten at `now`: first
-/// held longer ago than [`HELD_FORGOTTEN`], ahead of a clock set back by more than `patience`,
-/// or unreadable.
-fn hold_forgotten(value: &str, now: u64, patience: Duration) -> bool {
+/// held longer ago than `kept`, ahead of a clock set back by more than `patience`, or unreadable.
+fn hold_forgotten(value: &str, now: u64, patience: Duration, kept: Duration) -> bool {
     let Some(first) = value
         .split_once(':')
         .and_then(|(first, _)| first.parse::<u64>().ok())
     else {
         return true;
     };
-    now.saturating_sub(first) > HELD_FORGOTTEN.as_secs()
-        || first > now.saturating_add(patience.as_secs())
+    now.saturating_sub(first) > kept.as_secs() || first > now.saturating_add(patience.as_secs())
 }
 
 /// Whether `error` passes by itself: the node, a relay or the store did not answer, or the
@@ -1866,13 +1893,20 @@ struct Collector<'a, N, S: StoreOpener, V> {
     told: &'a mut Told,
 }
 
-/// The contacts a cycle already told the host about, so each is told once a cycle.
+/// What a cycle told the host and counted: the contacts told about, so each is told once a
+/// cycle, and how the message in hand went.
 #[derive(Default)]
-struct Told {
+pub(crate) struct Told {
     /// Reported with [`Event::SealedUnopenable`].
     unopenable: BTreeSet<ContactId>,
     /// Reported with [`Event::ContactPayloadsParked`].
     parked: BTreeSet<ContactId>,
+    /// The message in hand opened under the contact's key and is one the contact may send now.
+    pub(crate) opened: bool,
+    /// Why the message in hand, reported stored, could not be taken.
+    pub(crate) dropped: Option<QuarantineReason>,
+    quarantined: usize,
+    quarantine_dropped: usize,
 }
 
 impl<N, S, V> MailboxHandler for Collector<'_, N, S, V>
@@ -1900,7 +1934,7 @@ where
             };
             match self.take(job, &envelope).await {
                 Ok(handled) => handled,
-                Err(error) => self.hold_or_settle(&envelope, &error).await,
+                Err(error) => self.hold_or_settle(job, &envelope, &error).await,
             }
         })
     }
@@ -1916,9 +1950,9 @@ where
     /// ([`passes`]) keeps it without counting; any other keeps it until it has been held
     /// [`WalletPolicy::contact_hold_attempts`] times or [`WalletPolicy::contact_hold_patience`]
     /// has passed since it was first held: then it is settled, so the relay keeps nothing
-    /// behind it waiting. An error counting the attempt itself does not stop the message being
-    /// kept.
-    async fn hold_or_settle(&self, envelope: &[u8], error: &ContactError) -> Handled {
+    /// behind it waiting, and a contact's message that opened goes to quarantine when the host
+    /// keeps one. An error counting the attempt itself does not stop the message being kept.
+    async fn hold_or_settle(&mut self, job: Job, envelope: &[u8], error: &ContactError) -> Handled {
         if passes(error) {
             warn!(error = %ErrorChain(error), "mailbox message kept until the failure passes");
             return Handled::Later;
@@ -1930,6 +1964,20 @@ where
                 Handled::Later
             }
             Ok(false) => {
+                if self.told.opened
+                    && let Some(result) = self
+                        .quarantine(job, envelope, QuarantineReason::HoldBound)
+                        .await
+                {
+                    warn!(error = %ErrorChain(error), "mailbox message settled after being held too long");
+                    return match result {
+                        Ok(()) => Handled::Stored,
+                        Err(error) => {
+                            warn!(error = %ErrorChain(&error), "mailbox message not quarantined, kept for later");
+                            Handled::Later
+                        }
+                    };
+                }
                 warn!(error = %ErrorChain(error), "mailbox message dropped after being held too long");
                 if let Err(error) = self.wallet.remember(hash).await {
                     warn!(error = %ErrorChain(&error), "dropped mailbox message not remembered");
@@ -1943,7 +1991,45 @@ where
         }
     }
 
+    /// Keeps a contact's message in quarantine, with its marks settled as for a stored message.
+    /// `None` when there is nothing to do: not a contact's message, or the host keeps none.
+    async fn quarantine(
+        &mut self,
+        job: Job,
+        envelope: &[u8],
+        reason: QuarantineReason,
+    ) -> Option<Result<(), ContactError>> {
+        let Job::Contact(contact_id, current) = job else {
+            return None;
+        };
+        let cap = self.wallet.wallet.config().policy.quarantine_max_bytes?;
+        let message = Message {
+            hash: envelope_hash(envelope),
+            envelope,
+            contact_id,
+            current,
+            reason,
+        };
+        let kept = match self.wallet.quarantine_message(cap, message).await {
+            Ok(kept) => kept,
+            Err(error) => return Some(Err(error)),
+        };
+        self.told.quarantine_dropped = self.told.quarantine_dropped.saturating_add(kept.dropped);
+        if kept.kept {
+            self.told.quarantined = self.told.quarantined.saturating_add(1);
+            info!(reason = reason.name(), "contact message quarantined");
+        } else {
+            warn!(
+                reason = reason.name(),
+                "contact message too large for the quarantine dropped"
+            );
+        }
+        Some(Ok(()))
+    }
+
     async fn take(&mut self, job: Job, envelope: &[u8]) -> Result<Handled, ContactError> {
+        self.told.opened = false;
+        self.told.dropped = None;
         let hash = envelope_hash(envelope);
         if self.wallet.seen_before(hash).await? {
             return Ok(Handled::Stored);
@@ -1974,8 +2060,17 @@ where
             }
         };
         if handled == Handled::Stored {
-            self.wallet.remember(hash).await?;
-            self.wallet.clear_hold(hash).await?;
+            let quarantined = match self.told.dropped.take() {
+                Some(reason) => self.quarantine(job, envelope, reason).await,
+                None => None,
+            };
+            match quarantined {
+                Some(result) => result?,
+                None => {
+                    self.wallet.remember(hash).await?;
+                    self.wallet.clear_hold(hash).await?;
+                }
+            }
         }
         Ok(handled)
     }
@@ -2083,6 +2178,26 @@ mod tests {
     }
 
     #[test]
+    fn a_hold_count_kept_for_a_quarantine_outlives_the_relay() {
+        let first = 1_000_000;
+        let kept = HELD_KEPT_FOR_QUARANTINE;
+        let patience = WalletPolicy::DEFAULT.contact_hold_patience;
+        assert!(kept.as_secs() > 7 * 24 * 60 * 60);
+        assert!(!hold_forgotten(
+            &format!("{first}:1"),
+            first + kept.as_secs(),
+            patience,
+            kept
+        ));
+        assert!(hold_forgotten(
+            &format!("{first}:1"),
+            first + kept.as_secs() + 1,
+            patience,
+            kept
+        ));
+    }
+
+    #[test]
     fn a_hold_count_is_forgotten_a_day_after_the_first_hold() {
         let first = 1_000_000;
         let forgotten = HELD_FORGOTTEN.as_secs();
@@ -2090,24 +2205,28 @@ mod tests {
         assert!(!hold_forgotten(
             &format!("{first}:1"),
             first + patience.as_secs(),
-            patience
+            patience,
+            HELD_FORGOTTEN
         ));
         assert!(!hold_forgotten(
             &format!("{first}:3"),
             first + forgotten,
-            patience
+            patience,
+            HELD_FORGOTTEN
         ));
         assert!(hold_forgotten(
             &format!("{first}:3"),
             first + forgotten + 1,
-            patience
+            patience,
+            HELD_FORGOTTEN
         ));
         assert!(hold_forgotten(
             &format!("{first}:1"),
             first - patience.as_secs() - 1,
-            patience
+            patience,
+            HELD_FORGOTTEN
         ));
-        assert!(hold_forgotten("damaged", first, patience));
+        assert!(hold_forgotten("damaged", first, patience, HELD_FORGOTTEN));
     }
 
     #[test]

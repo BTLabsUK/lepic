@@ -25,6 +25,7 @@ mod outbox;
 mod pairing;
 mod payload;
 mod private;
+mod quarantine;
 mod relay;
 mod requests;
 mod sealed;
@@ -73,6 +74,7 @@ pub use payload::{
     ContactPayload, MAX_APP_PAYLOAD_LEN, MAX_KEPT_PAYLOADS, MAX_KEPT_PAYLOADS_PER_CONTACT,
     PayloadId, PostedPayload,
 };
+pub use quarantine::{QuarantineReason, QuarantineRetry, QuarantinedMessage};
 pub use relay::{MAX_MEETING_RELAYS, meeting_host, meeting_relays};
 pub use requests::{MAX_LIVE_REQUESTS, MAX_SETTLED_REQUESTS, PairRequestView, REQUEST_EXPIRY};
 pub use sealed::{SEAL_LAPSE, SealedAnswer, SealedPayment, SealedReceived, SealedSlate};

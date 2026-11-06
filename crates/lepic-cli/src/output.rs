@@ -72,6 +72,7 @@ pub enum Report {
     ContactPayloadPost(ContactPayloadPostReport),
     ContactPayloadList(ContactPayloadListReport),
     ContactPayloadAck(ContactPayloadAckReport),
+    ContactQuarantine(ContactQuarantineReport),
 }
 
 #[derive(Serialize)]
@@ -456,6 +457,8 @@ pub struct ContactCollectReport {
     pub refused: usize,
     pub timed_out: usize,
     pub not_reached: usize,
+    pub quarantined: usize,
+    pub quarantine_dropped: usize,
     pub messages: usize,
     pub paired: usize,
     pub delivered: usize,
@@ -670,6 +673,21 @@ pub struct ContactPayloadPostReport {
     /// The other wallet's recorded features are known and do not claim app payloads; the
     /// payload was queued all the same.
     pub peer_lacks_app_payloads: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ContactQuarantineReport {
+    pub messages: Vec<QuarantinedMessageReport>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct QuarantinedMessageReport {
+    pub id: String,
+    pub contact_id: String,
+    pub reason: &'static str,
+    pub first_seen: String,
+    pub attempts: u32,
+    pub size: u64,
 }
 
 #[derive(Debug, Serialize)]
@@ -1111,7 +1129,8 @@ fn write_human(out: &mut Vec<u8>, report: &Report) -> std::io::Result<()> {
         | Report::ContactImport(_)
         | Report::ContactPayloadPost(_)
         | Report::ContactPayloadList(_)
-        | Report::ContactPayloadAck(_) => write_contact_human(out, report),
+        | Report::ContactPayloadAck(_)
+        | Report::ContactQuarantine(_) => write_contact_human(out, report),
     }
 }
 
@@ -1602,6 +1621,16 @@ fn write_pairing_human(out: &mut Vec<u8>, report: &Report) -> std::io::Result<()
                     writeln!(out, "{count} mailboxes {what}.")?;
                 }
             }
+            if r.quarantined > 0 {
+                writeln!(out, "{} messages quarantined.", r.quarantined)?;
+            }
+            if r.quarantine_dropped > 0 {
+                writeln!(
+                    out,
+                    "{} messages dropped from quarantine.",
+                    r.quarantine_dropped
+                )?;
+            }
             for failed in &r.failed {
                 let why = match failed.reason {
                     "expired" => "it expired",
@@ -1798,8 +1827,28 @@ fn write_contact_human(out: &mut Vec<u8>, report: &Report) -> std::io::Result<()
         Report::ContactPayloadAck(r) => {
             writeln!(out, "{} payload(s) acknowledged.", r.acknowledged)
         }
+        Report::ContactQuarantine(r) => write_contact_quarantine(out, r),
         _ => Ok(()),
     }
+}
+
+fn write_contact_quarantine(out: &mut Vec<u8>, r: &ContactQuarantineReport) -> std::io::Result<()> {
+    if r.messages.is_empty() {
+        return writeln!(out, "No messages in quarantine.");
+    }
+    for message in &r.messages {
+        writeln!(
+            out,
+            "{}  from {}  {}  {}  {} bytes, {} attempts",
+            message.id,
+            message.contact_id,
+            message.first_seen,
+            message.reason,
+            message.size,
+            message.attempts
+        )?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -2316,6 +2365,8 @@ mod tests {
                     refused: 0,
                     timed_out: 0,
                     not_reached: 0,
+                    quarantined: 0,
+                    quarantine_dropped: 0,
                     messages: 2,
                     paired: 0,
                     delivered: 1,
@@ -2331,6 +2382,8 @@ mod tests {
                     "messages",
                     "not_reached",
                     "paired",
+                    "quarantine_dropped",
+                    "quarantined",
                     "refused",
                     "timed_out",
                     "unreachable",
@@ -2516,6 +2569,10 @@ mod tests {
                     peer_lacks_app_payloads: false,
                 }),
                 vec!["contact_id", "payload_id", "peer_lacks_app_payloads"],
+            ),
+            (
+                Report::ContactQuarantine(ContactQuarantineReport { messages: vec![] }),
+                vec!["messages"],
             ),
             (
                 Report::ContactPayloadList(ContactPayloadListReport { payloads: vec![] }),

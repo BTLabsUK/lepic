@@ -78,6 +78,11 @@ pub struct HostPolicy {
     /// per socket and not reset by an acknowledgement; the held message is taken up again on the
     /// new socket. From 1 to 64. Default none: the listener keeps its socket.
     pub listener_held_rounds: Option<u32>,
+    /// Bytes of contact messages kept in local quarantine across the wallet, instead of being
+    /// dropped once they cannot be taken. Over this, the contact's own oldest entry goes first,
+    /// then the wallet's oldest; a larger message is not kept. From 1 to 67,108,864. Default
+    /// none: nothing is kept, and a message is dropped as it was before.
+    pub quarantine_max_bytes: Option<u64>,
     /// Whether `start_tor` with `publish_onion` also publishes the previous onion, the one
     /// LEPIC 0.3.1 and earlier published (ADR 0044), on its own listener, so senders that saved
     /// it still reach the wallet. Payment proofs asked for there are signed with the
@@ -224,6 +229,7 @@ impl Policy {
                 .refuse_unsolicited_invoices
                 .unwrap_or(defaults.refuse_unsolicited_invoices),
             listener_held_rounds: policy.listener_held_rounds,
+            quarantine_max_bytes: policy.quarantine_max_bytes,
         };
         wallet
             .validate()

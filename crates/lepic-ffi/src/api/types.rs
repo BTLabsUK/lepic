@@ -1357,6 +1357,11 @@ pub struct ContactCollectReport {
     pub unreachable: Vec<String>,
     /// Pairings that ended in this cycle; their records are kept.
     pub ended: Vec<EndedPairing>,
+    /// Contact messages kept in quarantine in this cycle.
+    pub quarantined: u32,
+    /// Contact messages lost to `HostPolicy::quarantine_max_bytes` in this cycle: entries that
+    /// went to make room, and messages too large to keep.
+    pub quarantine_dropped: u32,
 }
 
 /// A pairing in progress that ended with nothing stored.
@@ -1460,6 +1465,32 @@ pub struct ContactPayloadView {
     pub received_at_ms: i64,
     /// The bytes as the contact's app sent them; LEPIC does not read them.
     pub payload: Vec<u8>,
+}
+
+/// A contact's message kept in quarantine, from `EpicWallet::contact_quarantine`. The envelope
+/// stays in the wallet.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct QuarantinedMessageView {
+    /// The id `EpicWallet::contact_quarantine_retry` and `contact_quarantine_discard` take.
+    pub id: String,
+    pub contact_id: String,
+    /// `hold_bound`, `undecodable_slate`, `unknown_notice`, `receipt_cap` or `receive_refused`.
+    pub reason: String,
+    pub first_seen_ms: i64,
+    /// Retries so far.
+    pub attempts: u32,
+    /// Bytes of the envelope.
+    pub size: u64,
+}
+
+/// What `EpicWallet::contact_quarantine_retry` did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct QuarantineRetryReport {
+    pub retried: u32,
+    /// Handled, and gone from quarantine.
+    pub cleared: u32,
+    /// Not handled, kept with one more attempt counted.
+    pub kept: u32,
 }
 
 /// A message for a contact's mailbox, from `EpicWallet::contact_outbox`.

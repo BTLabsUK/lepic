@@ -887,6 +887,8 @@ answer: the keys are back and the new pairing goes, or the new pairing shows key
 LEPIC never reads the bytes. `lepic contact collect`, or `lepic serve` on its own, takes arriving \
 payloads; they wait in `contact payload list` until acknowledged.")]
     Payload(ContactPayloadArgs),
+    /// List the contact messages kept in quarantine; the host app retries and discards them
+    Quarantine,
 }
 
 #[derive(Debug, Args)]

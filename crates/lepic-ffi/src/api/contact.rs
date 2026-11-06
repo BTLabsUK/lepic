@@ -32,8 +32,9 @@ use crate::api::types::{
     ContactPayloadView, ContactRelayMode, ContactView, DomainVerdict, FinalizedTx, FoundInvite,
     InviteExpiry, InvitePreview, IssuedInvoice, KeyCheckStart, KeysDecision, OutboxEntryView,
     OutboxReport, PaidInvoice, PairRequestView, PairingAnswer, PairingCard, PairingClass,
-    PairingInvite, PairingLinkResult, PendingPairingView, SasDecision, SealedAnswer,
-    SealedSlateView, SendOptions, SentTx, SlatePurpose,
+    PairingInvite, PairingLinkResult, PendingPairingView, QuarantineRetryReport,
+    QuarantinedMessageView, SasDecision, SealedAnswer, SealedSlateView, SendOptions, SentTx,
+    SlatePurpose,
 };
 use crate::api::wallet::EpicWallet;
 
@@ -973,6 +974,36 @@ impl EpicWallet {
     pub async fn contact_payloads_ack(&self, ids: Vec<String>) -> Result<u32, WalletError> {
         self.run("contact_payloads_ack", |session| async move {
             session.contact_payloads_ack(ids).await
+        })
+        .await
+    }
+
+    /// The messages kept in quarantine, oldest first, without their envelopes.
+    pub async fn contact_quarantine(&self) -> Result<Vec<QuarantinedMessageView>, WalletError> {
+        self.run("contact_quarantine", |session| async move {
+            session.contact_quarantine().await
+        })
+        .await
+    }
+
+    /// Runs the normal handling again on the kept message `id`, or on all of them for `None`,
+    /// oldest first. A message handled leaves quarantine; any other stays with one more attempt
+    /// counted. LEPIC never retries on its own: when to call this is the app's choice.
+    pub async fn contact_quarantine_retry(
+        &self,
+        id: Option<String>,
+        relay_mode: ContactRelayMode,
+    ) -> Result<QuarantineRetryReport, WalletError> {
+        self.run("contact_quarantine_retry", |session| async move {
+            session.contact_quarantine_retry(id, relay_mode).await
+        })
+        .await
+    }
+
+    /// Forgets the kept message `id`. Returns whether there was one.
+    pub async fn contact_quarantine_discard(&self, id: String) -> Result<bool, WalletError> {
+        self.run("contact_quarantine_discard", |session| async move {
+            session.contact_quarantine_discard(id).await
         })
         .await
     }

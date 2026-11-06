@@ -106,6 +106,7 @@ fn the_tree_has_every_planned_command() {
         "contact payload post",
         "contact payload list",
         "contact payload ack",
+        "contact quarantine",
     ] {
         assert!(
             paths.iter().any(|path| path == expected),

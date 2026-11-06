@@ -26,9 +26,10 @@ use crate::api::types::{
     InvitePreview, IssuedInvoice, KeyCheckStart, KeysDecision, OutboxEntryView, OutboxReport,
     OutboxState, PaidInvoice, PairRequestView, PairingAnswer, PairingCard, PairingClass,
     PairingEndReason as FfiEndReason, PairingFailureReason, PairingInvite, PairingLinkOutcome,
-    PairingLinkResult, PairingState, PairingStatus as FfiStatus, PendingPairingView, SasDecision,
-    SasEntry, SealState, SealedAnswer, SealedSlateView, SendOptions, SentTx, SlateMessage,
-    SlatePurpose, SlateStage, WalletEvent, WalletEventKind,
+    PairingLinkResult, PairingState, PairingStatus as FfiStatus, PendingPairingView,
+    QuarantineRetryReport, QuarantinedMessageView, SasDecision, SasEntry, SealState, SealedAnswer,
+    SealedSlateView, SendOptions, SentTx, SlateMessage, SlatePurpose, SlateStage, WalletEvent,
+    WalletEventKind,
 };
 
 /// The longest sealed text taken from the app: a slate with its envelope and armor fits many
@@ -644,6 +645,8 @@ impl Session {
             refused: count(report.refused),
             timed_out: count(report.timed_out),
             not_reached: count(report.not_reached),
+            quarantined: count(report.quarantined),
+            quarantine_dropped: count(report.quarantine_dropped),
             messages: count(report.messages),
             paired: count(report.paired),
             failed: report
@@ -1353,6 +1356,52 @@ impl Session {
                 payload: kept.payload,
             })
             .collect())
+    }
+
+    pub(crate) async fn contact_quarantine(
+        &self,
+    ) -> Result<Vec<QuarantinedMessageView>, WalletError> {
+        Ok(self
+            .engine
+            .contact_book()
+            .contact_quarantine()
+            .await?
+            .into_iter()
+            .map(|kept| QuarantinedMessageView {
+                id: kept.id,
+                contact_id: kept.contact_id.to_string(),
+                reason: kept.reason.name().to_owned(),
+                first_seen_ms: ms(kept.first_seen),
+                attempts: kept.attempts,
+                size: kept.size,
+            })
+            .collect())
+    }
+
+    pub(crate) async fn contact_quarantine_retry(
+        &self,
+        id: Option<String>,
+        mode: ContactRelayMode,
+    ) -> Result<QuarantineRetryReport, WalletError> {
+        let relays = self.contact_relays(mode)?;
+        let retry = self
+            .engine
+            .contact_book()
+            .contact_quarantine_retry(&relays, id.as_deref())
+            .await?;
+        Ok(QuarantineRetryReport {
+            retried: count(retry.retried),
+            cleared: count(retry.cleared),
+            kept: count(retry.kept),
+        })
+    }
+
+    pub(crate) async fn contact_quarantine_discard(&self, id: String) -> Result<bool, WalletError> {
+        Ok(self
+            .engine
+            .contact_book()
+            .contact_quarantine_discard(&id)
+            .await?)
     }
 
     pub(crate) async fn contact_payloads_ack(&self, ids: Vec<String>) -> Result<u32, WalletError> {

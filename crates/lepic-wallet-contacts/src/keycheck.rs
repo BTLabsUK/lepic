@@ -309,12 +309,14 @@ where
                 match decision {
                     KeysDecision::KeepOld => {
                         drop_contact_invoices(repos, new)?;
+                        super::quarantine::delete_contact_entries(repos, new)?;
                         repos.delete_contact(new)?;
                         super::private::delete_secrets(repos, new)?;
                     }
                     KeysDecision::UseNew => {
                         if let Some(old) = old {
                             drop_contact_invoices(repos, old)?;
+                            super::quarantine::delete_contact_entries(repos, old)?;
                             repos.delete_contact(old)?;
                             super::private::delete_secrets(repos, old)?;
                         }
@@ -624,6 +626,7 @@ where
                         {
                             super::pairing::end_pending(repos, pairing_id_of(id))?;
                             drop_contact_invoices(repos, id)?;
+                            super::quarantine::delete_contact_entries(repos, id)?;
                             repos.delete_contact(id)?;
                             super::private::delete_secrets(repos, id)?;
                             repos.delete_setting(&key(FOLD_PREFIX, id))?;

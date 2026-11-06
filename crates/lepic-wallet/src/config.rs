@@ -199,6 +199,12 @@ pub struct WalletPolicy {
     /// up again on the new socket. `None` keeps the socket. A drain is not affected. At least
     /// 1, at most [`Self::MAX_LISTENER_HELD_ROUNDS`].
     pub listener_held_rounds: Option<u32>,
+    /// Bytes of contact messages kept in local quarantine across the wallet, instead of being
+    /// acknowledged and dropped once they cannot be taken (ADR 0049). When the total would pass
+    /// this, the contact's own oldest entry goes first, then the wallet's oldest; a message
+    /// larger than this is not kept. `None`, the default, keeps nothing. At least 1, at most
+    /// [`Self::MAX_QUARANTINE_BYTES`].
+    pub quarantine_max_bytes: Option<u64>,
 }
 
 impl WalletPolicy {
@@ -217,6 +223,7 @@ impl WalletPolicy {
         refuse_unsolicited_payments: false,
         refuse_unsolicited_invoices: false,
         listener_held_rounds: None,
+        quarantine_max_bytes: None,
     };
 
     /// The bound on [`Self::contact_check_answers_per_day`]: each answer is a contact update,
@@ -235,6 +242,10 @@ impl WalletPolicy {
     /// The bound on [`Self::contact_hold_patience`], for the same reason: a day, after which the
     /// count of a kept message is forgotten.
     pub const MAX_CONTACT_HOLD_PATIENCE: Duration = Duration::from_secs(24 * 60 * 60);
+
+    /// The bound on [`Self::quarantine_max_bytes`]: kept messages are store rows, read when one
+    /// is added.
+    pub const MAX_QUARANTINE_BYTES: u64 = 64 * 1024 * 1024;
 }
 
 impl WalletPolicy {
@@ -313,6 +324,20 @@ impl WalletPolicy {
             return Err(ConfigError::PolicyAboveBound {
                 what: "contact hold patience in seconds",
                 max: Self::MAX_CONTACT_HOLD_PATIENCE.as_secs(),
+            });
+        }
+        if self.quarantine_max_bytes == Some(0) {
+            return Err(ConfigError::PolicyOutOfRange {
+                what: "quarantine bytes",
+            });
+        }
+        if self
+            .quarantine_max_bytes
+            .is_some_and(|bytes| bytes > Self::MAX_QUARANTINE_BYTES)
+        {
+            return Err(ConfigError::PolicyAboveBound {
+                what: "quarantine bytes",
+                max: Self::MAX_QUARANTINE_BYTES,
             });
         }
         Ok(())
@@ -475,6 +500,25 @@ mod tests {
                 policy.contact_hold_patience =
                     WalletPolicy::MAX_CONTACT_HOLD_PATIENCE + Duration::from_secs(1);
             }),
+            Err(ConfigError::PolicyAboveBound { .. })
+        ));
+    }
+
+    #[test]
+    fn the_quarantine_is_off_by_default_and_bounded() {
+        assert_eq!(WalletPolicy::DEFAULT.quarantine_max_bytes, None);
+        let with = |bytes| WalletPolicy {
+            quarantine_max_bytes: Some(bytes),
+            ..WalletPolicy::DEFAULT
+        };
+        assert_eq!(with(1).validate(), Ok(()));
+        assert_eq!(with(WalletPolicy::MAX_QUARANTINE_BYTES).validate(), Ok(()));
+        assert!(matches!(
+            with(0).validate(),
+            Err(ConfigError::PolicyOutOfRange { .. })
+        ));
+        assert!(matches!(
+            with(WalletPolicy::MAX_QUARANTINE_BYTES + 1).validate(),
             Err(ConfigError::PolicyAboveBound { .. })
         ));
     }

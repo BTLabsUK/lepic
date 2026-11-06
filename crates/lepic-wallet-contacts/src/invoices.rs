@@ -25,7 +25,9 @@ use serde::{Deserialize, Serialize};
 use tracing::{debug, info, instrument, warn};
 use uuid::Uuid;
 
+use super::collect::Told;
 use super::keys::{contact_network, signing_key};
+use super::quarantine::QuarantineReason;
 use super::{ContactError, ContactRelays, LockedRng, RelayMode};
 use crate::ContactBook;
 use lepic_primitives::error_chain::ErrorChain;
@@ -522,11 +524,13 @@ where
         &self,
         record: &ContactRecord,
         content: Content,
+        told: &mut Told,
     ) -> Result<lepic_epicbox::Handled, ContactError> {
         use lepic_epicbox::Handled;
         let network = self.wallet.config().network;
         let contact_id = record.contact_id;
         let Ok(text) = String::from_utf8(content.body) else {
+            told.dropped = Some(QuarantineReason::UndecodableSlate);
             return Ok(Handled::Stored);
         };
         let wire = WireSlate::text(MediaType::JSON, text);
@@ -535,6 +539,7 @@ where
             .decode(&wire)
         else {
             debug!("undecodable slate from a contact dropped");
+            told.dropped = Some(QuarantineReason::UndecodableSlate);
             return Ok(Handled::Stored);
         };
         if record.facts.ended_reason.is_some() && matches!(slate.stage(), Stage::S1 | Stage::I1) {
@@ -564,7 +569,7 @@ where
                 Ok(Handled::Stored)
             }
             Stage::S1 => {
-                self.take_contact_payment(contact_id, &wire, &slate, content.purpose)
+                self.take_contact_payment(contact_id, &wire, &slate, content.purpose, told)
                     .await
             }
             Stage::S2 | Stage::I2
@@ -580,7 +585,10 @@ where
                     .await
             }
             Stage::I2 => self.finalize_contact_invoice(&wire, &slate).await,
-            _ => Ok(Handled::Stored),
+            _ => {
+                told.dropped = Some(QuarantineReason::UndecodableSlate);
+                Ok(Handled::Stored)
+            }
         }
     }
 
@@ -592,6 +600,7 @@ where
         wire: &WireSlate,
         slate: &lepic_slate::model::Slate,
         purpose: Option<Purpose>,
+        told: &mut Told,
     ) -> Result<lepic_epicbox::Handled, ContactError> {
         use lepic_epicbox::Handled;
         if !self
@@ -606,6 +615,7 @@ where
             .await?
         {
             debug!("payment from a contact over the open receipt caps dropped");
+            told.dropped = Some(QuarantineReason::ReceiptCap);
             return Ok(Handled::Stored);
         }
         if self.wallet.config().policy.refuse_unsolicited_payments
@@ -624,6 +634,7 @@ where
             }
             Err(error) => {
                 debug!(error = %ErrorChain(&error), "slate from a contact refused");
+                told.dropped = Some(QuarantineReason::ReceiveRefused);
                 return Ok(Handled::Stored);
             }
         };
@@ -995,9 +1006,11 @@ where
         &self,
         record: &ContactRecord,
         body: &[u8],
+        told: &mut Told,
     ) -> Result<lepic_epicbox::Handled, ContactError> {
         use lepic_epicbox::Handled;
         let Ok(text) = std::str::from_utf8(body) else {
+            told.dropped = Some(QuarantineReason::UnknownNotice);
             return Ok(Handled::Stored);
         };
         if lepic_wallet::notice::is_unpaired(text) {
@@ -1013,6 +1026,7 @@ where
             return Ok(Handled::Stored);
         }
         let Payload::Notice(notice) = classify_text(text) else {
+            told.dropped = Some(QuarantineReason::UnknownNotice);
             return Ok(Handled::Stored);
         };
         let Ok(effect) = self

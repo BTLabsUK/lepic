@@ -39,8 +39,9 @@ use crate::output::{
     ContactInvoiceIssueReport, ContactInvoiceListReport, ContactInvoiceReport,
     ContactKeyCheckReport, ContactLinkReport, ContactListReport, ContactMoveHomeReport,
     ContactPayloadAckReport, ContactPayloadListReport, ContactPayloadPostReport,
-    ContactPayloadReport, ContactPreviewReport, ContactRemoveReport, ContactReport,
-    ContactSlateReport, InvoiceDeclineReport, InvoicePayReport, Report,
+    ContactPayloadReport, ContactPreviewReport, ContactQuarantineReport, ContactRemoveReport,
+    ContactReport, ContactSlateReport, InvoiceDeclineReport, InvoicePayReport,
+    QuarantinedMessageReport, Report,
 };
 
 /// Contacts belong to the default account.
@@ -385,6 +386,7 @@ impl<H: Host> Run<'_, H> {
             ContactCommand::Decline(args) => decline(&opened, &relays, args).await?,
             ContactCommand::Export(args) => export(&opened, args).await?,
             ContactCommand::Import(args) => import(&opened, args).await?,
+            ContactCommand::Quarantine => quarantine(&opened).await?,
             ContactCommand::Payload(args) => {
                 let report = payload(&opened, &relays, args).await?;
                 if let Report::ContactPayloadPost(posted) = &report
@@ -878,6 +880,26 @@ async fn decline<N: lepic_node::NodeApi + 'static>(
     }))
 }
 
+/// `lepic contact quarantine`: lists the contact messages kept for the host.
+async fn quarantine<N: lepic_node::NodeApi + 'static>(
+    opened: &Opened<N>,
+) -> Result<Report, CliError> {
+    let messages = opened.wallet.contact_book().contact_quarantine().await?;
+    Ok(Report::ContactQuarantine(ContactQuarantineReport {
+        messages: messages
+            .into_iter()
+            .map(|kept| QuarantinedMessageReport {
+                id: kept.id,
+                contact_id: kept.contact_id.to_string(),
+                reason: kept.reason.name(),
+                first_seen: kept.first_seen.to_string(),
+                attempts: kept.attempts,
+                size: kept.size,
+            })
+            .collect(),
+    }))
+}
+
 /// `lepic contact export`: writes the contact backup.
 async fn export<N: lepic_node::NodeApi + 'static>(
     opened: &Opened<N>,
@@ -1020,6 +1042,8 @@ async fn collect<N: lepic_node::NodeApi + 'static>(
         refused: collected.refused,
         timed_out: collected.timed_out,
         not_reached: collected.not_reached,
+        quarantined: collected.quarantined,
+        quarantine_dropped: collected.quarantine_dropped,
         messages: collected.messages,
         paired: collected.paired,
         delivered: collected.delivered,
