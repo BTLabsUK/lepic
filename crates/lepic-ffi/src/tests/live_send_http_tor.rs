@@ -127,6 +127,7 @@ fn live_send_http_through_tor() {
             .start_http_listener(
                 HttpExposure::LocalOnly,
                 port,
+                false,
                 Arc::new(|event: HttpListenerEvent| eprintln!("listener: {:?}", event.kind)),
             )
             .await

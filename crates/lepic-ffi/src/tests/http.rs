@@ -139,7 +139,7 @@ impl Events {
 /// Starts `session`'s listener on a port the system picks and returns the port.
 async fn listen(session: &Arc<Session>, events: &Events) -> u16 {
     session
-        .start_http_listener(HttpExposure::LocalOnly, 0, events.report())
+        .start_http_listener(HttpExposure::LocalOnly, 0, false, events.report())
         .await
         .unwrap();
     let started = events.last();
@@ -179,6 +179,60 @@ fn stalled_port() -> (u16, std::sync::mpsc::Sender<()>) {
         }
     });
     (port, guard)
+}
+
+/// Posts `body` to the foreign API on `port` and returns the JSON answer.
+async fn post_foreign(port: u16, body: &str) -> serde_json::Value {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let mut stream = tokio::net::TcpStream::connect(("127.0.0.1", port))
+        .await
+        .unwrap();
+    let request = format!(
+        "POST /v2/foreign HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\n\
+         Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    );
+    stream.write_all(request.as_bytes()).await.unwrap();
+    let mut answer = String::new();
+    stream.read_to_string(&mut answer).await.unwrap();
+    let (_, json) = answer.split_once("\r\n\r\n").unwrap();
+    serde_json::from_str(json).unwrap()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_listener_with_coinbase_builds_a_block_reward() {
+    let pair = funded_pair().await;
+    let events = Events::default();
+    pair.bob
+        .start_http_listener(HttpExposure::LocalOnly, 0, true, events.report())
+        .await
+        .unwrap();
+    let port = pair.bob.http_listener_status().unwrap().port;
+
+    let answer = post_foreign(
+        port,
+        r#"{"jsonrpc":"2.0","id":1,"method":"build_coinbase",
+            "params":{"block_fees":{"fees":0,"height":30,"key_id":null}}}"#,
+    )
+    .await;
+
+    let built = &answer["result"]["Ok"];
+    assert_eq!(built["output"]["features"], "Coinbase", "{answer}");
+    assert_eq!(built["kernel"]["features"], "Coinbase");
+    let commit = built["output"]["commit"].as_str().unwrap();
+    let stored = pair.bob.outputs().unwrap();
+    let candidate = stored
+        .iter()
+        .find(|output| output.commitment == commit)
+        .unwrap();
+    assert!(candidate.is_coinbase);
+    assert_eq!(
+        candidate.status,
+        crate::api::types::OutputStatus::Unconfirmed
+    );
+    assert_eq!(candidate.category, None);
+    assert_eq!(candidate.height, 30);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -295,7 +349,7 @@ async fn a_second_listener_on_a_taken_port_reports_it() {
     let events = Events::default();
 
     pair.bob
-        .start_http_listener(HttpExposure::LocalOnly, port, events.report())
+        .start_http_listener(HttpExposure::LocalOnly, port, false, events.report())
         .await
         .unwrap();
 
@@ -313,7 +367,7 @@ async fn a_wallet_runs_one_http_listener() {
     let second = Events::default();
 
     pair.bob
-        .start_http_listener(HttpExposure::LocalOnly, 0, second.report())
+        .start_http_listener(HttpExposure::LocalOnly, 0, false, second.report())
         .await
         .unwrap();
 
@@ -334,7 +388,7 @@ async fn lock_stops_the_http_listener_and_frees_its_port() {
     std::net::TcpListener::bind(("127.0.0.1", port)).unwrap();
     let locked = pair
         .bob
-        .start_http_listener(HttpExposure::LocalOnly, 0, events.report())
+        .start_http_listener(HttpExposure::LocalOnly, 0, false, events.report())
         .await;
     assert_eq!(kind(locked), WalletErrorKind::Locked);
 }

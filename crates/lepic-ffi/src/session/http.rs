@@ -8,13 +8,16 @@ use std::sync::{Arc, Weak};
 use std::time::Duration;
 
 use lepic_foreign::{
-    Exposure, ForeignClient, ForeignDialFuture, ForeignDialer, ForeignStream, ForeignUrl,
-    HttpTransport, ListenError, ListenSettings, ListenerHandle, PlainHttp, ReceiveHandler, Refusal,
-    TRANSPORT_ID, UrlError, webpki_tls_config,
+    BlockFees, CoinbaseAnswer, Exposure, ForeignClient, ForeignDialFuture, ForeignDialer,
+    ForeignStream, ForeignUrl, HttpTransport, ListenError, ListenSettings, ListenerHandle,
+    PlainHttp, ReceiveHandler, Refusal, TRANSPORT_ID, UrlError, webpki_tls_config,
 };
+use lepic_keychain::Identifier;
 use lepic_node::{Propagation, is_loopback_host};
+use lepic_primitives::amount::{Fee, Height};
 use lepic_store::TxId;
 use lepic_transport::transport::{BoxFuture, Destination, TransportId};
+use lepic_wallet::coinbase::{Coinbase, CoinbaseRequest};
 use lepic_wallet::send::Delivery;
 use lepic_wallet::slate::WireSlate;
 use lepic_wallet::{ReceiveError, ReceiveRequest};
@@ -280,11 +283,12 @@ impl Session {
     }
 
     /// Starts the HTTP listener unless one runs or starts, and reports its start or why it
-    /// could not to `report`.
+    /// could not to `report`. With `coinbase` it also builds block rewards for a mining node.
     pub(crate) async fn start_http_listener(
         self: &Arc<Self>,
         exposure: HttpExposure,
         port: u16,
+        coinbase: bool,
         report: HttpReport,
     ) -> Result<(), WalletError> {
         self.ensure_unlocked()?;
@@ -305,7 +309,8 @@ impl Session {
             *slot = HttpListener::Starting(generation);
         }
         let receiver = self.http_receiver(Arc::clone(&report), TRANSPORT_ID);
-        let settings = ListenSettings::new(self::exposure(exposure), port, self.tuning.listen);
+        let settings = ListenSettings::new(self::exposure(exposure), port, self.tuning.listen)
+            .with_coinbase(coinbase);
         let listening = lepic_foreign::listen(settings, receiver).await;
         let handle = match listening {
             Ok(handle) => handle,
@@ -456,6 +461,54 @@ impl ReceiveHandler for HttpReceiver {
             refusal: Some(http_refusal(refusal)),
             ..HttpListenerEvent::of(HttpListenerEventKind::Refused)
         });
+    }
+
+    fn build_coinbase(&self, fees: BlockFees) -> BoxFuture<'_, Result<CoinbaseAnswer, Refusal>> {
+        Box::pin(async move {
+            let Some(session) = self.session.upgrade() else {
+                return Err(Refusal::Unavailable);
+            };
+            let request = CoinbaseRequest {
+                fees: Fee::new(fees.fees),
+                height: Height::new(fees.height),
+                // A key that is no identifier is one the wallet never gave out: a new key is
+                // taken, as upstream does for a key it does not find.
+                key_id: fees
+                    .key_id
+                    .and_then(|bytes| Identifier::from_bytes(&bytes).ok()),
+            };
+            let boundary = session.runtime().boundary.clone();
+            let built = boundary
+                .run("http_build_coinbase", async move {
+                    Ok(session.engine.build_coinbase(request).await)
+                })
+                .await;
+            match built {
+                Ok(Ok(coinbase)) => Ok(coinbase_answer(&coinbase)),
+                Ok(Err(error)) => {
+                    warn!(
+                        error = %lepic_telemetry::ErrorChain(&error),
+                        "coinbase refused"
+                    );
+                    Err(Refusal::Unavailable)
+                }
+                Err(error) => {
+                    warn!(error = %error, "coinbase refused");
+                    Err(Refusal::Unavailable)
+                }
+            }
+        })
+    }
+}
+
+/// The node's view of a coinbase the wallet built.
+fn coinbase_answer(coinbase: &Coinbase) -> CoinbaseAnswer {
+    CoinbaseAnswer {
+        commit: *coinbase.output.commitment.as_bytes(),
+        proof: coinbase.output.proof.as_bytes().to_vec(),
+        excess: *coinbase.kernel.excess.as_bytes(),
+        excess_sig: coinbase.kernel.excess_sig.to_compact(),
+        key_id: coinbase.key_id.to_bytes(),
     }
 }
 
