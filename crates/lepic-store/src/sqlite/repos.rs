@@ -1736,7 +1736,9 @@ fn decode_facts(row: &Row<'_>, first: usize) -> Result<PairingFacts, StoreError>
     let attestation: Option<Vec<u8>> = row.get(at(11))?;
     let peer_domain = match (domain, attestation) {
         (None, None) => None,
-        (Some(domain), Some(attestation)) if attestation.len() <= MAX_DOMAIN_ATTESTATION_LEN => {
+        (Some(domain), Some(attestation))
+            if attestation.len() <= contact::MAX_DOMAIN_ATTESTATION_LEN =>
+        {
             Some(DomainClaimBytes {
                 domain,
                 attestation,
@@ -1765,15 +1767,7 @@ fn decode_facts(row: &Row<'_>, first: usize) -> Result<PairingFacts, StoreError>
     })
 }
 
-/// The most bytes of a domain proof the store keeps.
-const MAX_DOMAIN_ATTESTATION_LEN: usize = 4096;
-
 fn facts_params(facts: &PairingFacts) -> Result<Vec<rusqlite::types::Value>, StoreError> {
-    if let Some(claim) = &facts.peer_domain
-        && claim.attestation.len() > MAX_DOMAIN_ATTESTATION_LEN
-    {
-        return Err(corrupt(Record::Contact, "peer domain"));
-    }
     Ok(vec![
         facts.payments_address.clone().into(),
         facts.payments_key.map(|key| key.to_vec()).into(),

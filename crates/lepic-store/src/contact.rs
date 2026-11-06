@@ -667,6 +667,9 @@ pub trait ContactRepository {
 }
 
 /// Rejects timestamps the SQLite backend could not hold, so both backends accept the same data.
+/// The most bytes of a domain proof the store keeps.
+pub(crate) const MAX_DOMAIN_ATTESTATION_LEN: usize = 4096;
+
 pub(crate) fn check_contact(contact: &ContactRecord) -> Result<(), StoreError> {
     if contact.slot >= PRIVATE_SLOT_END {
         return Err(StoreError::OutOfRange { field: "slot" });
@@ -688,6 +691,15 @@ pub(crate) fn check_contact(contact: &ContactRecord) -> Result<(), StoreError> {
         timestamp_to_column(time)?;
     }
     duration_to_column(facts.heard_wait)?;
+    if facts
+        .peer_domain
+        .as_ref()
+        .is_some_and(|claim| claim.attestation.len() > MAX_DOMAIN_ATTESTATION_LEN)
+    {
+        return Err(StoreError::OutOfRange {
+            field: "peer domain",
+        });
+    }
     if facts.payments_address.is_some() != facts.payments_key.is_some() {
         return Err(StoreError::OutOfRange {
             field: "payments address",
