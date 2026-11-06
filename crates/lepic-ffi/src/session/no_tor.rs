@@ -27,6 +27,10 @@ impl Session {
         Err(tor_not_built())
     }
 
+    pub(crate) fn previous_onion_address(&self) -> Result<String, WalletError> {
+        Err(tor_not_built())
+    }
+
     /// Fails with `Unsupported`, reporting nothing.
     #[allow(clippy::needless_pass_by_value)]
     pub(crate) async fn start_tor(
