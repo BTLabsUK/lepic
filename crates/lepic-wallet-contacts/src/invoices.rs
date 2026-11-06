@@ -15,8 +15,9 @@ use lepic_slate::codec::{MediaType, WireSlate};
 use lepic_slate::model::SlateId;
 use lepic_slate::stage::Stage;
 use lepic_store::{
-    ContactId, ContactRecord, ContactState, PendingInvoice, PendingInvoiceStatus, Repositories,
-    SlateStage, StoreError, TxDirection, TxId, TxState, WalletStore,
+    ContactId, ContactOutboxState, ContactRecord, ContactState, PendingInvoice,
+    PendingInvoiceStatus, Repositories, SlateStage, StoreError, TxDirection, TxId, TxState,
+    WalletStore,
 };
 use lepic_transport::file::FILE;
 use lepic_transport::transport::Destination;
@@ -546,6 +547,9 @@ where
                     debug!("invoice from a contact not allowed to send them dropped");
                     return Ok(Handled::Stored);
                 }
+                if self.wallet.config().policy.refuse_unsolicited_invoices {
+                    return self.refuse_contact_slate(contact_id, &slate).await;
+                }
                 self.park_contact_invoice(
                     record,
                     &wire,
@@ -603,6 +607,11 @@ where
         {
             debug!("payment from a contact over the open receipt caps dropped");
             return Ok(Handled::Stored);
+        }
+        if self.wallet.config().policy.refuse_unsolicited_payments
+            && !self.received_before(uuid(slate.id())).await?
+        {
+            return self.refuse_contact_slate(contact_id, slate).await;
         }
         let received = match self
             .wallet
@@ -797,6 +806,63 @@ where
         .await
     }
 
+    /// Whether this wallet received the S1 `slate_id` before, so its stored S2 goes back again
+    /// whatever the policy says now.
+    async fn received_before(&self, slate_id: Uuid) -> Result<bool, ContactError> {
+        let session = self.wallet.session()?;
+        self.contact_work(move |_, _| {
+            Ok(session.store.read(|repos| {
+                Ok::<_, StoreError>(
+                    repos
+                        .transaction_by_slate(slate_id, TxDirection::Incoming)?
+                        .is_some(),
+                )
+            })?)
+        })
+        .await
+    }
+
+    /// Refuses a contact's S1 or I1 nobody asked for, under the wallet policy's
+    /// `refuse_unsolicited_payments` or `refuse_unsolicited_invoices` (ADR 0045): nothing is
+    /// received or parked, and a sealed `declined` is queued for the contact's mailbox, under
+    /// the stage this wallet would have answered with. A slate sent again while its `declined`
+    /// still waits in the outbox queues nothing more.
+    async fn refuse_contact_slate(
+        &self,
+        contact_id: ContactId,
+        slate: &lepic_slate::model::Slate,
+    ) -> Result<lepic_epicbox::Handled, ContactError> {
+        let stage = match slate.stage() {
+            Stage::I1 => SlateStage::Invoice1,
+            _ => SlateStage::Standard2,
+        };
+        let slate_uuid = uuid(slate.id());
+        let session = self.wallet.session()?;
+        let waiting = self
+            .contact_work(move |_, _| {
+                Ok(session.store.read(|repos| {
+                    Ok::<_, StoreError>(repos.contact_outbox(contact_id)?.iter().any(|stored| {
+                        stored.entry.slate_id == slate_uuid
+                            && stored.entry.stage == stage
+                            && stored.entry.state == ContactOutboxState::Queued
+                    }))
+                })?)
+            })
+            .await?;
+        if waiting {
+            debug!("slate from a contact refused again; its declined still waits");
+            return Ok(lepic_epicbox::Handled::Stored);
+        }
+        let notice = Notice {
+            slate_id: slate.id(),
+            kind: NoticeKind::Declined,
+        };
+        self.queue_contact_notice_as(contact_id, notice, stage)
+            .await?;
+        info!(slate_id = %slate.id(), "slate from a contact nobody asked for refused");
+        Ok(lepic_epicbox::Handled::Stored)
+    }
+
     /// Whether a new S1 `slate_id` from the contact fits the open receipt caps the inbox keeps
     /// for senders (RFC 0002 12.5): at most the wallet policy's
     /// `max_open_receipts_per_sender` open from this contact and its `max_open_receipts` from
@@ -957,11 +1023,12 @@ where
             return Ok(Handled::Later);
         };
         if let Some(tx_id) = effect {
-            // A signed withdrawn for a paid invoice ends the payment (RFC 0002 11.4).
+            // A signed withdrawn for a paid invoice ends the payment (RFC 0002 11.4), and a
+            // signed declined for a send the contact never answered ends the send (ADR 0045).
             if let Err(error) = self.wallet.cancel(tx_id).await {
-                warn!(tx_id = %tx_id, error = %ErrorChain(&error), "withdrawn payment not cancelled");
+                warn!(tx_id = %tx_id, error = %ErrorChain(&error), "payment not cancelled on the contact's notice");
             } else {
-                info!(tx_id = %tx_id, "payment cancelled on the contact's withdrawn notice");
+                info!(tx_id = %tx_id, "payment cancelled on the contact's notice");
             }
         }
         Ok(Handled::Stored)
