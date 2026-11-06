@@ -56,7 +56,10 @@ pub use key_schedule::{
 };
 pub use keycheck::{KEY_CHECK_WINDOW, KeyCheckStart, KeysDecision};
 /// The contact formats a host names in these calls.
-pub use lepic_contact::{ContactKind, PairingClass, Purpose, Refusal, SasSymbol};
+pub use lepic_contact::{
+    ContactKind, DomainName, Network as ContactNetwork, PairingClass, Purpose, Refusal, SasSymbol,
+    VerifyingKey,
+};
 pub use lepic_store::PairingEndReason;
 pub use lepic_store::PairingRole;
 pub use lepic_wallet::event::PairingFailure;

@@ -481,7 +481,7 @@ fn profile(args: &GlobalArgs, lookup: &Lookup<'_>) -> Result<u16, SettingsError>
 /// dot; one that is not a domain name is a usage error like any setting.
 fn domain(args: &GlobalArgs, lookup: &Lookup<'_>) -> Result<Option<String>, SettingsError> {
     let parse = |text: &str| {
-        lepic_contact::DomainName::new(text)
+        lepic_wallet_contacts::DomainName::new(text)
             .ok()
             .map(|name| name.to_string())
     };

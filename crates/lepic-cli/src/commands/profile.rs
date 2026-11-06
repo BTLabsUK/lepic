@@ -95,7 +95,7 @@ impl<H: Host> Run<'_, H> {
     }
 }
 
-fn key_hex(key: &lepic_contact::VerifyingKey) -> String {
+fn key_hex(key: &lepic_wallet_contacts::VerifyingKey) -> String {
     use std::fmt::Write as _;
     key.as_bytes().iter().fold(String::new(), |mut hex, byte| {
         let _ = write!(hex, "{byte:02x}");
@@ -106,17 +106,18 @@ fn key_hex(key: &lepic_contact::VerifyingKey) -> String {
 fn write_file(
     args: &DomainFileArgs,
     network: lepic_primitives::params::Network,
-    key: &lepic_contact::VerifyingKey,
+    key: &lepic_wallet_contacts::VerifyingKey,
     domain: Option<&str>,
 ) -> Result<Report, CliError> {
+    use lepic_wallet_contacts::ContactNetwork;
     use std::io::Write as _;
     let path = args
         .path
         .clone()
         .unwrap_or_else(|| std::path::PathBuf::from("epic-wallet.json"));
     let network = match network {
-        lepic_primitives::params::Network::Mainnet => lepic_contact::Network::Mainnet,
-        lepic_primitives::params::Network::Floonet => lepic_contact::Network::Floonet,
+        lepic_primitives::params::Network::Mainnet => ContactNetwork::Mainnet,
+        lepic_primitives::params::Network::Floonet => ContactNetwork::Floonet,
     };
     let text = DomainFile::render(network, std::slice::from_ref(key), &args.relay);
     if text.len() > DOMAIN_FILE_MAX {

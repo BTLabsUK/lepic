@@ -1083,7 +1083,6 @@ version = "0.3.0"
 dependencies = [
  "clap",
  "jiff",
- "lepic-contact",
  "lepic-epicbox",
  "lepic-foreign",
  "lepic-keychain",
