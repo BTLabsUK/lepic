@@ -475,6 +475,10 @@ pub struct TransactionDetails {
     /// node's answers are its only evidence. Show it as unverified until a scan confirms it.
     /// `false` for every other transaction.
     pub unverified: bool,
+    /// A block reward: an incoming transaction with no slate whose output is a coinbase
+    /// output, built for a mining node or found by a scan. Its output stays immature until
+    /// the `lock_height` of its `WalletOutput`. `false` for every other transaction.
+    pub coinbase: bool,
 }
 
 /// Which scan stored an entry for an output it found with no record.

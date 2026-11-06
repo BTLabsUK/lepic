@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 //! The listener: serves `check_version` and `receive_tx` at `/v2/foreign`, as
-//! `epic-wallet listen -m http` does, so any wallet that sends over HTTP can pay this one.
+//! `epic-wallet listen -m http` does, so any wallet that sends over HTTP can pay this one. A
+//! listener can also serve a mining node's `build_coinbase` (ADR 0046); by default it
+//! answers that method as unknown.
 //!
 //! Everything a caller sends is untrusted and its cost is bounded: connections at once, in all
 //! and from one address, time to send the headers and the body and to take the answer, body
@@ -41,7 +43,7 @@ use tokio::sync::{Semaphore, watch};
 use tracing::{debug, info, warn};
 
 use crate::error::ListenError;
-use crate::rpc::{self, Call, MAX_BODY_LEN};
+use crate::rpc::{self, BlockFees, Call, CoinbaseAnswer, MAX_BODY_LEN, Unanswerable};
 
 const ENDPOINT: &str = "/v2/foreign";
 
@@ -98,6 +100,9 @@ pub struct ListenSettings {
     /// refusals a minute: the wallet may refuse a slate only after costly checks, so at most
     /// twice this many reach it in a minute.
     pub receives_per_minute: u32,
+    /// Whether `build_coinbase` is served, for a mining node to pay its block rewards to this
+    /// wallet. Off unless the host turns it on; when off the method is answered as unknown.
+    pub coinbase: bool,
 }
 
 /// The caller's limits of a listener, as [`ListenSettings`] describes each.
@@ -126,7 +131,15 @@ impl ListenSettings {
             answer_timeout: limits.answer_timeout,
             requests_per_minute: limits.requests_per_minute,
             receives_per_minute: limits.receives_per_minute,
+            coinbase: false,
         }
+    }
+
+    /// These settings with `build_coinbase` served or not.
+    #[must_use]
+    pub const fn with_coinbase(mut self, coinbase: bool) -> Self {
+        self.coinbase = coinbase;
+        self
     }
 
     /// The longest a connection is served.
@@ -164,6 +177,12 @@ pub trait ReceiveHandler: Send + Sync + 'static {
     /// Told of a payment the listener refused before handing it to [`Self::receive`], as
     /// it does over the per-minute limits.
     fn refused(&self, _refusal: Refusal) {}
+
+    /// Builds the reward output and kernel a mining node asks for, on a listener whose
+    /// [`ListenSettings::coinbase`] is on. A wallet that cannot build one refuses.
+    fn build_coinbase(&self, _fees: BlockFees) -> BoxFuture<'_, Result<CoinbaseAnswer, Refusal>> {
+        Box::pin(async { Err(Refusal::Unavailable) })
+    }
 }
 
 /// A running listener. Stops when [`ListenerHandle::stop`] is called or the handle is dropped.
@@ -687,6 +706,22 @@ async fn serve(
                 }
             }
         }
+        Call::BuildCoinbase(_) if !state.settings.coinbase => {
+            json(rpc::encode_error_response(&Unanswerable {
+                id: request.id,
+                code: rpc::METHOD_NOT_FOUND,
+            }))
+        }
+        Call::BuildCoinbase(fees) => match state.handler.build_coinbase(fees).await {
+            Ok(answer) => {
+                info!(height = fees.height, "coinbase built");
+                json(rpc::encode_coinbase_response(&request.id, &answer))
+            }
+            Err(refusal) => {
+                debug!(reason = refusal.reason(), "coinbase not built");
+                json(rpc::encode_refusal_response(&request.id, refusal.reason()))
+            }
+        },
     }
 }
 

@@ -5,15 +5,15 @@
 // (Apache-2.0); see NOTICE and upstream.toml.
 
 //! The JSON-RPC 2.0 messages of the wallet foreign API at `/v2/foreign`, as `epic-wallet`
-//! `v4.1.0` writes and reads them: `check_version` and `receive_tx`, with every answer wrapped
-//! in `result.Ok` or `result.Err`. Pure functions over bytes, so both sides and the fuzz
-//! targets share them.
+//! `v4.1.0` writes and reads them: `check_version`, `receive_tx` and the node's `build_coinbase`,
+//! with every answer wrapped in `result.Ok` or `result.Err`. Pure functions over bytes, so both
+//! sides and the fuzz targets share them.
 
 use lepic_slate::codec::{MAX_WIRE_SLATE_LEN, MediaType, WireSlate};
 use std::fmt;
 
 use serde::Deserialize;
-use serde::de::{self, Deserializer, IgnoredAny, SeqAccess, Visitor};
+use serde::de::{self, Deserializer, IgnoredAny, MapAccess, SeqAccess, Visitor};
 use serde_json::value::RawValue;
 
 use crate::error::RpcError;
@@ -41,6 +41,33 @@ pub enum Call {
     CheckVersion,
     /// The sender's S1, as the text that came in.
     ReceiveTx(WireSlate),
+    /// A mining node asking for the reward output and kernel of the block it is building.
+    BuildCoinbase(BlockFees),
+}
+
+/// The length of a keychain identifier: a depth byte and four path indexes.
+pub const KEY_ID_LEN: usize = 17;
+
+/// What `build_coinbase` asks for, as the node's `BlockFees`: the fees of the block's
+/// transactions, the height of the block, and the key of the wallet's last answer at this
+/// height, if the node kept one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BlockFees {
+    pub fees: u64,
+    pub height: u64,
+    pub key_id: Option<[u8; KEY_ID_LEN]>,
+}
+
+/// The answer to `build_coinbase`: the reward output and its kernel, and the key the output
+/// is on, which the node passes back on its next request at the same height.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CoinbaseAnswer {
+    pub commit: [u8; 33],
+    pub proof: Vec<u8>,
+    pub excess: [u8; 33],
+    /// The compact signature, as `epic-wallet` writes it.
+    pub excess_sig: [u8; 64],
+    pub key_id: [u8; KEY_ID_LEN],
 }
 
 /// A request read by the listener: its id, echoed in the answer, and the call.
@@ -71,7 +98,24 @@ struct RawRequest<'a> {
     #[serde(borrow)]
     id: Option<&'a RawValue>,
     #[serde(borrow, default, deserialize_with = "bounded_params")]
-    params: Vec<&'a RawValue>,
+    params: Params<'a>,
+}
+
+/// The parameters of a request: by position, as wallets send them, or by name, as the node
+/// sends `build_coinbase`.
+#[derive(Debug)]
+enum Params<'a> {
+    List(Vec<&'a RawValue>),
+    /// The one named parameter this wallet reads; any other name is skipped.
+    Named {
+        block_fees: Option<&'a RawValue>,
+    },
+}
+
+impl Default for Params<'_> {
+    fn default() -> Self {
+        Self::List(Vec::new())
+    }
 }
 
 // `receive_tx` takes at most this many parameters.
@@ -79,8 +123,9 @@ const MAX_PARAMS: usize = 4;
 
 /// `params` with at most one entry past [`MAX_PARAMS`] kept, which is enough for the call to
 /// refuse the request, and the rest skipped unparsed, so the memory a request spends does not
-/// grow with the length of the array. `null` reads as no parameters.
-fn bounded_params<'de, D>(deserializer: D) -> Result<Vec<&'de RawValue>, D::Error>
+/// grow with the length of the array. `null` reads as no parameters. Of an object only
+/// `block_fees` is kept.
+fn bounded_params<'de, D>(deserializer: D) -> Result<Params<'de>, D::Error>
 where
     D: Deserializer<'de>,
 {
@@ -90,22 +135,22 @@ where
 struct ParamsVisitor;
 
 impl<'de> Visitor<'de> for ParamsVisitor {
-    type Value = Vec<&'de RawValue>;
+    type Value = Params<'de>;
 
     fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str("an array or null")
+        formatter.write_str("an array, an object or null")
     }
 
     fn visit_none<E: de::Error>(self) -> Result<Self::Value, E> {
-        Ok(Vec::new())
+        Ok(Params::default())
     }
 
     fn visit_unit<E: de::Error>(self) -> Result<Self::Value, E> {
-        Ok(Vec::new())
+        Ok(Params::default())
     }
 
     fn visit_some<D: Deserializer<'de>>(self, deserializer: D) -> Result<Self::Value, D::Error> {
-        deserializer.deserialize_seq(self)
+        deserializer.deserialize_any(self)
     }
 
     fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<Self::Value, A::Error> {
@@ -113,17 +158,61 @@ impl<'de> Visitor<'de> for ParamsVisitor {
         while kept.len() <= MAX_PARAMS {
             match seq.next_element::<&'de RawValue>()? {
                 Some(param) => kept.push(param),
-                None => return Ok(kept),
+                None => return Ok(Params::List(kept)),
             }
         }
         while seq.next_element::<IgnoredAny>()?.is_some() {}
-        Ok(kept)
+        Ok(Params::List(kept))
+    }
+
+    fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Self::Value, A::Error> {
+        let mut block_fees = None;
+        while let Some(name) = map.next_key::<ParamName>()? {
+            match name {
+                ParamName::BlockFees if block_fees.is_some() => {
+                    return Err(de::Error::duplicate_field("block_fees"));
+                }
+                ParamName::BlockFees => block_fees = Some(map.next_value::<&'de RawValue>()?),
+                ParamName::Other => {
+                    map.next_value::<IgnoredAny>()?;
+                }
+            }
+        }
+        Ok(Params::Named { block_fees })
+    }
+}
+
+/// A parameter name, read without keeping it.
+enum ParamName {
+    BlockFees,
+    Other,
+}
+
+impl<'de> Deserialize<'de> for ParamName {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct NameVisitor;
+        impl Visitor<'_> for NameVisitor {
+            type Value = ParamName;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+                formatter.write_str("a parameter name")
+            }
+
+            fn visit_str<E: de::Error>(self, name: &str) -> Result<Self::Value, E> {
+                Ok(if name == "block_fees" {
+                    ParamName::BlockFees
+                } else {
+                    ParamName::Other
+                })
+            }
+        }
+        deserializer.deserialize_identifier(NameVisitor)
     }
 }
 
 /// Reads a listener request body. A body that is not a JSON-RPC 2.0 request is an
-/// [`Unanswerable`] with id `null`; a method other than the two this wallet serves is
-/// [`METHOD_NOT_FOUND`].
+/// [`Unanswerable`] with id `null`; a method other than the three this wallet knows is
+/// [`METHOD_NOT_FOUND`]. Whether a listener serves `build_coinbase` is the listener's setting.
 pub fn decode_request(body: &[u8]) -> Result<Request, Unanswerable> {
     let null = || "null".to_owned();
     if body.len() > MAX_BODY_LEN {
@@ -153,16 +242,19 @@ pub fn decode_request(body: &[u8]) -> Result<Request, Unanswerable> {
             code: INVALID_REQUEST,
         });
     }
+    let invalid = |id| Unanswerable {
+        id,
+        code: INVALID_PARAMS,
+    };
     let call = match raw.method {
         "check_version" => Call::CheckVersion,
         "receive_tx" => match receive_tx_slate(&raw.params) {
             Some(slate) => Call::ReceiveTx(slate),
-            None => {
-                return Err(Unanswerable {
-                    id,
-                    code: INVALID_PARAMS,
-                });
-            }
+            None => return Err(invalid(id)),
+        },
+        "build_coinbase" => match build_coinbase_fees(&raw.params) {
+            Some(fees) => Call::BuildCoinbase(fees),
+            None => return Err(invalid(id)),
         },
         _ => {
             return Err(Unanswerable {
@@ -186,7 +278,10 @@ fn is_id(text: &str) -> bool {
 /// address, each optional; `epic-wallet` 4.0 sends three of them and 4.1 four. Only the slate
 /// is used: this wallet receives into its default account and the sender's extras are
 /// unauthenticated.
-fn receive_tx_slate(params: &[&RawValue]) -> Option<WireSlate> {
+fn receive_tx_slate(params: &Params<'_>) -> Option<WireSlate> {
+    let Params::List(params) = params else {
+        return None;
+    };
     let (slate, rest) = params.split_first()?;
     if params.len() > MAX_PARAMS || !slate.get().starts_with('{') {
         return None;
@@ -198,6 +293,96 @@ fn receive_tx_slate(params: &[&RawValue]) -> Option<WireSlate> {
         )
     });
     extras_ok.then(|| WireSlate::text(MediaType::JSON, slate.get().to_owned()))
+}
+
+/// `build_coinbase` takes one parameter, `block_fees`, by name as the node sends it or by
+/// position. Fees and height are numbers or decimal text, as `epic-wallet` reads them; the key
+/// is `null` or 17 bytes in hex. Other fields of `block_fees` are skipped.
+fn build_coinbase_fees(params: &Params<'_>) -> Option<BlockFees> {
+    let block_fees = match params {
+        Params::Named { block_fees } => (*block_fees)?,
+        Params::List(params) => match params.as_slice() {
+            [block_fees] => *block_fees,
+            _ => return None,
+        },
+    };
+    let raw: RawBlockFees = serde_json::from_str(block_fees.get()).ok()?;
+    let key_id = match raw.key_id {
+        None => None,
+        Some(hex) => Some(from_hex::<KEY_ID_LEN>(&hex)?),
+    };
+    Some(BlockFees {
+        fees: raw.fees.value()?,
+        height: raw.height.value()?,
+        key_id,
+    })
+}
+
+#[derive(Deserialize)]
+struct RawBlockFees {
+    fees: Decimal,
+    height: Decimal,
+    #[serde(default)]
+    key_id: Option<String>,
+}
+
+/// A `u64` as a JSON number or as decimal text.
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum Decimal {
+    Number(u64),
+    Text(String),
+}
+
+impl Decimal {
+    fn value(&self) -> Option<u64> {
+        match self {
+            Self::Number(value) => Some(*value),
+            Self::Text(text) if !text.is_empty() && text.bytes().all(|b| b.is_ascii_digit()) => {
+                text.parse().ok()
+            }
+            Self::Text(_) => None,
+        }
+    }
+}
+
+fn from_hex<const N: usize>(text: &str) -> Option<[u8; N]> {
+    let digits = text.as_bytes();
+    if digits.len() != N.checked_mul(2)? || !digits.iter().all(u8::is_ascii_hexdigit) {
+        return None;
+    }
+    let mut bytes = [0u8; N];
+    let (pairs, _) = digits.as_chunks::<2>();
+    for (byte, pair) in bytes.iter_mut().zip(pairs) {
+        let pair = std::str::from_utf8(pair).ok()?;
+        *byte = u8::from_str_radix(pair, 16).ok()?;
+    }
+    Some(bytes)
+}
+
+fn to_hex(bytes: &[u8]) -> String {
+    use fmt::Write as _;
+    bytes.iter().fold(
+        String::with_capacity(bytes.len().saturating_mul(2)),
+        |mut hex, byte| {
+            let _ = write!(hex, "{byte:02x}");
+            hex
+        },
+    )
+}
+
+/// The answer to `build_coinbase` in `epic-wallet`'s `CoinbaseV3` shape: a coinbase output, a
+/// coinbase kernel with no fee and no lock height, and the key.
+pub fn encode_coinbase_response(id: &str, answer: &CoinbaseAnswer) -> Vec<u8> {
+    format!(
+        r#"{{"id":{id},"jsonrpc":"2.0","result":{{"Ok":{{"output":{{"features":"Coinbase","commit":"{}","proof":"{}"}},"kernel":{{"features":"Coinbase","fee":"0","lock_height":"0","excess":"{}","excess_sig":"{}"}},"key_id":"{}"}}}}}}"#,
+        to_hex(&answer.commit),
+        to_hex(&answer.proof),
+        to_hex(&answer.excess),
+        to_hex(&answer.excess_sig),
+        to_hex(&answer.key_id),
+    )
+    .into_bytes()
 }
 
 /// The answer to `check_version`: version 2 with the V3 and V2 slates.
@@ -391,8 +576,12 @@ mod tests {
             METHOD_NOT_FOUND
         );
         assert_eq!(
-            code(r#"{"jsonrpc":"2.0","method":"build_coinbase","id":1,"params":[{}]}"#),
+            code(r#"{"jsonrpc":"2.0","method":"build_foundation","id":1,"params":[{}]}"#),
             METHOD_NOT_FOUND
+        );
+        assert_eq!(
+            code(r#"{"jsonrpc":"2.0","method":"receive_tx","id":1,"params":{"slate":{}}}"#),
+            INVALID_PARAMS
         );
         assert_eq!(
             code(r#"{"jsonrpc":"2.0","method":"receive_tx","id":1,"params":[]}"#),
@@ -430,7 +619,10 @@ mod tests {
             ",0".repeat(1_000_000)
         );
         let raw: RawRequest<'_> = serde_json::from_str(&many).unwrap();
-        assert_eq!(raw.params.len(), MAX_PARAMS + 1);
+        let Params::List(kept) = raw.params else {
+            panic!("not a list");
+        };
+        assert_eq!(kept.len(), MAX_PARAMS + 1);
         let refused = decode_request(many.as_bytes()).unwrap_err();
         assert_eq!(refused.code, INVALID_PARAMS);
         assert_eq!(refused.id, "5");
@@ -439,7 +631,7 @@ mod tests {
             let body =
                 format!(r#"{{"jsonrpc":"2.0","method":"check_version","id":1,"params":{params}}}"#);
             let raw: RawRequest<'_> = serde_json::from_str(&body).unwrap();
-            assert!(raw.params.is_empty());
+            assert!(matches!(raw.params, Params::List(kept) if kept.is_empty()));
         }
         let not_array = r#"{"jsonrpc":"2.0","method":"check_version","id":1,"params":5}"#;
         assert_eq!(
@@ -508,6 +700,97 @@ mod tests {
         let body = encode_receive_request(&slate).unwrap();
         let request = decode_request(&body).unwrap();
         assert_eq!(request.call, Call::ReceiveTx(slate));
+    }
+
+    const KEY: &str = "0200000000000000000000000500000000";
+
+    fn coinbase_call(body: &str) -> Result<BlockFees, i32> {
+        match decode_request(body.as_bytes()) {
+            Ok(Request {
+                call: Call::BuildCoinbase(fees),
+                ..
+            }) => Ok(fees),
+            Ok(other) => panic!("not a build_coinbase: {other:?}"),
+            Err(unanswerable) => Err(unanswerable.code),
+        }
+    }
+
+    #[test]
+    fn reads_build_coinbase_as_the_node_sends_it() {
+        let node = format!(
+            r#"{{"jsonrpc":"2.0","method":"build_coinbase","id":1,"params":{{"block_fees":{{"fees":"7000000","height":"812","key_id":"{KEY}"}}}}}}"#
+        );
+        let mut key = [0u8; KEY_ID_LEN];
+        key[0] = 2;
+        key[12] = 5;
+        assert_eq!(
+            coinbase_call(&node),
+            Ok(BlockFees {
+                fees: 7_000_000,
+                height: 812,
+                key_id: Some(key),
+            })
+        );
+        for body in [
+            r#"{"jsonrpc":"2.0","method":"build_coinbase","id":1,"params":{"block_fees":{"fees":0,"height":3,"key_id":null}}}"#,
+            r#"{"jsonrpc":"2.0","method":"build_coinbase","id":1,"params":[{"fees":"0","height":3}]}"#,
+            r#"{"jsonrpc":"2.0","method":"build_coinbase","id":1,"params":{"other":[1],"block_fees":{"fees":0,"height":"3","extra":true}}}"#,
+        ] {
+            assert_eq!(
+                coinbase_call(body),
+                Ok(BlockFees {
+                    fees: 0,
+                    height: 3,
+                    key_id: None,
+                }),
+                "{body}"
+            );
+        }
+    }
+
+    #[test]
+    fn refuses_build_coinbase_with_bad_block_fees() {
+        for body in [
+            r#"{"jsonrpc":"2.0","method":"build_coinbase","id":1,"params":{}}"#,
+            r#"{"jsonrpc":"2.0","method":"build_coinbase","id":1,"params":[]}"#,
+            r#"{"jsonrpc":"2.0","method":"build_coinbase","id":1,"params":[{"fees":0,"height":1},null]}"#,
+            r#"{"jsonrpc":"2.0","method":"build_coinbase","id":1,"params":{"block_fees":{"fees":0}}}"#,
+            r#"{"jsonrpc":"2.0","method":"build_coinbase","id":1,"params":{"block_fees":{"fees":-1,"height":1}}}"#,
+            r#"{"jsonrpc":"2.0","method":"build_coinbase","id":1,"params":{"block_fees":{"fees":"+1","height":1}}}"#,
+            r#"{"jsonrpc":"2.0","method":"build_coinbase","id":1,"params":{"block_fees":{"fees":"18446744073709551616","height":1}}}"#,
+            r#"{"jsonrpc":"2.0","method":"build_coinbase","id":1,"params":{"block_fees":{"fees":0,"height":1,"key_id":"02"}}}"#,
+            r#"{"jsonrpc":"2.0","method":"build_coinbase","id":1,"params":{"block_fees":{"fees":0,"height":1,"key_id":"+200000000000000000000000500000000"}}}"#,
+            r#"{"jsonrpc":"2.0","method":"build_coinbase","id":1,"params":{"block_fees":"x"}}"#,
+        ] {
+            assert_eq!(coinbase_call(body), Err(INVALID_PARAMS), "{body}");
+        }
+        let twice = r#"{"jsonrpc":"2.0","method":"build_coinbase","id":1,"params":{"block_fees":{"fees":0,"height":1},"block_fees":{"fees":0,"height":2}}}"#;
+        assert_eq!(coinbase_call(twice), Err(PARSE_ERROR));
+    }
+
+    #[test]
+    fn coinbase_answer_has_the_shape_the_node_reads() {
+        let answer = CoinbaseAnswer {
+            commit: [8; 33],
+            proof: vec![0xab; 3],
+            excess: [9; 33],
+            excess_sig: [1; 64],
+            key_id: from_hex::<KEY_ID_LEN>(KEY).unwrap(),
+        };
+        let body = encode_coinbase_response("\"n\"", &answer);
+        let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(value["id"], "n");
+        assert!(value["error"].is_null());
+        let ok = &value["result"]["Ok"];
+        assert_eq!(ok["output"]["features"], "Coinbase");
+        assert_eq!(ok["output"]["commit"], "08".repeat(33));
+        assert_eq!(ok["output"]["proof"], "ababab");
+        assert_eq!(ok["kernel"]["features"], "Coinbase");
+        assert_eq!(ok["kernel"]["fee"], "0");
+        assert_eq!(ok["kernel"]["lock_height"], "0");
+        assert_eq!(ok["kernel"]["excess"], "09".repeat(33));
+        assert_eq!(ok["kernel"]["excess_sig"], "01".repeat(64));
+        assert_eq!(ok["key_id"], KEY);
     }
 
     proptest::proptest! {

@@ -51,6 +51,7 @@ record that supersedes the old one; accepted records are not rewritten.
 | [0043](0043-domain-proof-for-paired-contacts.md) | Domain proof for paired contacts | accepted |
 | [0044](0044-the-onion-has-its-own-key.md) | The onion has its own key | proposed |
 | [0045](0045-refusing-slates-nobody-asked-for.md) | Refusing slates nobody asked for | proposed |
+| [0046](0046-a-wallet-for-a-mining-node.md) | A wallet for a mining node | accepted |
 
 Template:
 

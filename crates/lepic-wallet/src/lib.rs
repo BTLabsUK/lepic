@@ -13,6 +13,7 @@ pub mod account;
 mod app_data;
 mod cancel;
 pub mod chain;
+pub mod coinbase;
 mod codecs;
 pub mod config;
 pub mod contact_link;

@@ -9,8 +9,9 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use lepic_foreign::{
-    ClientError, Exposure, ForeignClient, ForeignUrl, HttpTransport, ListenError, ListenSettings,
-    PlainHttp, ReceiveHandler, Refusal, RpcError, listen, webpki_tls_config,
+    BlockFees, ClientError, CoinbaseAnswer, Exposure, ForeignClient, ForeignUrl, HttpTransport,
+    ListenError, ListenSettings, PlainHttp, ReceiveHandler, Refusal, RpcError, listen,
+    webpki_tls_config,
 };
 use lepic_slate::codec::{MediaType, WireSlate};
 use lepic_transport::error::TransportError;
@@ -697,4 +698,93 @@ async fn a_wallet_without_the_foreign_api_is_not_found() {
     });
     let error = client().check_version(&url(port)).await.unwrap_err();
     assert!(matches!(error, ClientError::NotFound));
+}
+
+/// A wallet that builds a fixed coinbase answer, keyed to the height it is asked for.
+struct Mining;
+
+impl ReceiveHandler for Mining {
+    fn receive(&self, _slate: WireSlate) -> BoxFuture<'_, Result<WireSlate, Refusal>> {
+        Box::pin(async { Err(Refusal::Rejected) })
+    }
+
+    fn build_coinbase(&self, fees: BlockFees) -> BoxFuture<'_, Result<CoinbaseAnswer, Refusal>> {
+        Box::pin(async move {
+            if fees.height == 0 {
+                return Err(Refusal::Unavailable);
+            }
+            Ok(CoinbaseAnswer {
+                commit: [8; 33],
+                proof: vec![1, 2],
+                excess: [9; 33],
+                excess_sig: [3; 64],
+                key_id: [u8::try_from(fees.height % 256).unwrap(); 17],
+            })
+        })
+    }
+}
+
+fn build_coinbase_request(height: u64) -> String {
+    let body = format!(
+        r#"{{"jsonrpc":"2.0","method":"build_coinbase","id":1,"params":{{"block_fees":{{"fees":"0","height":"{height}","key_id":null}}}}}}"#
+    );
+    format!(
+        "POST /v2/foreign HTTP/1.1\r\nhost: x\r\ncontent-length: {}\r\n\r\n{body}",
+        body.len()
+    )
+}
+
+fn answer_body(answer: &str) -> serde_json::Value {
+    let (_, body) = answer.split_once("\r\n\r\n").unwrap();
+    serde_json::from_str(body).unwrap()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn serves_build_coinbase_only_when_turned_on() {
+    let settings = ListenSettings::new(
+        Exposure::LocalOnly,
+        0,
+        lepic_foreign::testing::listen_limits(),
+    );
+    let off = listen(settings, Arc::new(Mining)).await.unwrap();
+    let answer = raw_exchange(
+        off.local_addr().port(),
+        build_coinbase_request(5).as_bytes(),
+    )
+    .await;
+    assert_eq!(answer_body(&answer)["error"]["code"], -32601);
+    off.shutdown().await;
+
+    let on = listen(settings.with_coinbase(true), Arc::new(Mining))
+        .await
+        .unwrap();
+    let port = on.local_addr().port();
+    let answer = answer_body(&raw_exchange(port, build_coinbase_request(5).as_bytes()).await);
+    assert!(answer["error"].is_null());
+    assert_eq!(answer["result"]["Ok"]["output"]["features"], "Coinbase");
+    assert_eq!(answer["result"]["Ok"]["key_id"], "05".repeat(17));
+    let refused = answer_body(&raw_exchange(port, build_coinbase_request(0).as_bytes()).await);
+    assert_eq!(refused["result"]["Err"]["GenericError"], "wallet not ready");
+    on.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_wallet_without_a_coinbase_builder_refuses() {
+    let wallet = handler(None);
+    let settings = ListenSettings::new(
+        Exposure::LocalOnly,
+        0,
+        lepic_foreign::testing::listen_limits(),
+    )
+    .with_coinbase(true);
+    let listener = listen(settings, wallet).await.unwrap();
+    let answer = answer_body(
+        &raw_exchange(
+            listener.local_addr().port(),
+            build_coinbase_request(5).as_bytes(),
+        )
+        .await,
+    );
+    assert_eq!(answer["result"]["Err"]["GenericError"], "wallet not ready");
+    listener.shutdown().await;
 }

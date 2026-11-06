@@ -24,7 +24,9 @@ maintainer's approval and a note in the change that makes it.
 Mining, running a node, Keybase, the emoji method, transactions with more than two parties. Direct
 transactions (HTTP send, the HTTP listener's foreign API, Tor) are in scope (ADR 0017), and so is
 importing an `epic-wallet` wallet's transaction history, read-only and reconciled with the scan
-(ADR 0019); funds still come from the seed and the scan.
+(ADR 0019); funds still come from the seed and the scan. Building the coinbase a mining node
+asks for, over the HTTP listener when the host turns it on, is in scope (ADR 0046); mining itself
+is not.
 
 ## Minimal and unopinionated
 

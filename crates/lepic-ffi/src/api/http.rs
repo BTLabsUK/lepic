@@ -188,6 +188,10 @@ impl EpicWallet {
     /// 0 lets the system pick one, which the `Started` event and
     /// [`EpicWallet::http_listener_status`] report; `epic-wallet` listens on 3415.
     ///
+    /// With `coinbase` the listener also answers a mining node's `build_coinbase` (ADR 0046),
+    /// so the node pays its block rewards to this wallet; off, it answers that method as
+    /// unknown. Only a node the user runs should reach it: keep `exposure` `LocalOnly` then.
+    ///
     /// The first event is `Started`, `PortInUse` or `BindFailed`; after a start the last one
     /// is `Stopped`. A wallet runs one HTTP listener: a call while one runs or starts gets a
     /// stream that ends at once. On a locked wallet the stream ends with `Locked` as its error
@@ -196,6 +200,7 @@ impl EpicWallet {
         &self,
         exposure: HttpExposure,
         port: u16,
+        coinbase: bool,
         events: StreamSink<HttpListenerEvent>,
     ) {
         let sink = events.clone();
@@ -203,7 +208,9 @@ impl EpicWallet {
             .run_until_stopped("start_http_listener", |session| async move {
                 // A closed stream only means the app stopped listening.
                 let report = Arc::new(move |event| drop(sink.add(event)));
-                session.start_http_listener(exposure, port, report).await
+                session
+                    .start_http_listener(exposure, port, coinbase, report)
+                    .await
             })
             .await;
         end_stream(&events, started);

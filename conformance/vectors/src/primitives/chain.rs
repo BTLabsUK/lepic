@@ -197,6 +197,63 @@ fn weight_limits(network: &'static str) -> Result<Vec<WeightLimitRow>, Error> {
         .collect()
 }
 
+/// The reward schedule at one height: everything the block creates, the foundation's levy, the
+/// miner's reward, and the coinbase value with `fees` added (`consensus::reward`).
+#[derive(Serialize)]
+struct RewardRow {
+    height: String,
+    fees: String,
+    block_total_reward: String,
+    foundation_levy: String,
+    mining_reward: String,
+    coinbase_value: String,
+}
+
+/// Every era and levy boundary of the network, each with its neighbours, and fees from zero to
+/// one that saturates.
+fn reward_schedule() -> Vec<RewardRow> {
+    let era_6 = consensus::BLOCK_ERA_5.saturating_add(consensus::BLOCK_ERA_6_ONWARDS);
+    let mut boundaries = vec![
+        0,
+        consensus::DAY_HEIGHT,
+        consensus::FOUNDATION_LEVY_ERA_1,
+        consensus::BLOCK_ERA_1,
+        consensus::BLOCK_ERA_2,
+        consensus::BLOCK_ERA_3,
+        consensus::BLOCK_ERA_4,
+        consensus::BLOCK_ERA_5,
+        era_6,
+        era_6.saturating_add(consensus::BLOCK_ERA_6_ONWARDS),
+        era_6.saturating_add(consensus::BLOCK_ERA_6_ONWARDS.saturating_mul(10)),
+    ];
+    for levy_era in 1..=9u64 {
+        boundaries.push(
+            consensus::FOUNDATION_LEVY_ERA_1
+                .saturating_add(consensus::FOUNDATION_LEVY_ERA_2_ONWARDS.saturating_mul(levy_era)),
+        );
+    }
+    let mut heights: Vec<u64> = boundaries
+        .into_iter()
+        .flat_map(|height| [height.saturating_sub(1), height, height.saturating_add(1)])
+        .collect();
+    heights.sort_unstable();
+    heights.dedup();
+    let mut rows = Vec::new();
+    for height in heights {
+        for fees in [0, 7_000_000, u64::MAX] {
+            rows.push(RewardRow {
+                height: height.to_string(),
+                fees: fees.to_string(),
+                block_total_reward: consensus::block_total_reward_at_height(height).to_string(),
+                foundation_levy: consensus::reward_foundation_at_height(height).to_string(),
+                mining_reward: consensus::reward_at_height(height).to_string(),
+                coinbase_value: consensus::reward(fees, height).to_string(),
+            });
+        }
+    }
+    rows
+}
+
 pub(super) fn generate(pins: &Pins) -> Result<Vec<Rendered>, Error> {
     let mut rendered = Vec::new();
     let mut limits = Vec::new();
@@ -208,6 +265,15 @@ pub(super) fn generate(pins: &Pins) -> Result<Vec<Rendered>, Error> {
             &pins.node,
             NetworkInputs { network: name },
             chain_params(),
+        )?);
+        rendered.push(render(
+            AREA,
+            &format!("reward_schedule_{name}"),
+            &pins.node,
+            NetworkInputs { network: name },
+            Cases {
+                cases: reward_schedule(),
+            },
         )?);
         limits.extend(weight_limits(name)?);
     }

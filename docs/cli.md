@@ -500,6 +500,29 @@ also takes at most 30 payments a minute. `--port` picks another
 port; 0 lets the system choose. Each payment prints a line on stderr, and Ctrl-C prints how many
 were received, repeated and refused. Invoices are never answered over HTTP.
 
+### Block rewards for a mining node
+
+A node that mines asks a wallet for each block's coinbase. `--coinbase` makes the listener
+answer it, as `epic-wallet listen` does:
+
+```
+$ lepic http listen --coinbase
+Listening for payments and block rewards over HTTP on port 3415 (local). Ctrl-C stops.
+```
+
+Point the node at it in `epic-server.toml`:
+
+```
+[server.stratum_mining_config]
+wallet_listener_url = "http://127.0.0.1:3415"
+```
+
+Rewards go to the default account. A mined reward shows as an incoming transaction after the
+next refresh, and can be spent once 1,440 blocks have passed on mainnet (30 on floonet). A
+reward built for a block that was not mined is deleted 50 blocks later. The listener builds a
+reward for anyone who reaches the port, so keep it on this computer and do not add
+`--internet`.
+
 ## Direct over Tor
 
 Every wallet has an onion address with a key of its own, derived from the recovery phrase, so
@@ -802,6 +825,8 @@ When a reorganisation mines a confirming output at another height, the next refr
 height with it. A transaction with no change output is confirmed by its kernel instead, and
 keeps the height of that first confirmation: a reorganisation is not followed. Human output
 prints `-` for what is unknown; the JSON document leaves the key out.
+A mining reward (see [Block rewards for a mining node](#block-rewards-for-a-mining-node)) adds
+`Kind mining reward` (JSON `"coinbase": true`).
 
 `tx show` also lists the parties' messages, one `Message` line each, `sender:` or `receiver:` of
 the money before the text (JSON `messages`, an array of `role` and `text`), from the latest slate

@@ -1,0 +1,1433 @@
+{
+  "schema": 1,
+  "area": "primitives",
+  "name": "reward_schedule_mainnet",
+  "generator": "conformance/vectors/primitives",
+  "upstream": {
+    "repo": "https://github.com/EpicCash/epic",
+    "commit": "82fa7e813dc3b9bf137b9dd523d847f4210f5ba4"
+  },
+  "inputs": {
+    "network": "mainnet"
+  },
+  "expected": {
+    "cases": [
+      {
+        "height": "0",
+        "fees": "0",
+        "block_total_reward": "1600000000",
+        "foundation_levy": "0",
+        "mining_reward": "1600000000",
+        "coinbase_value": "1600000000"
+      },
+      {
+        "height": "0",
+        "fees": "7000000",
+        "block_total_reward": "1600000000",
+        "foundation_levy": "0",
+        "mining_reward": "1600000000",
+        "coinbase_value": "1607000000"
+      },
+      {
+        "height": "0",
+        "fees": "18446744073709551615",
+        "block_total_reward": "1600000000",
+        "foundation_levy": "0",
+        "mining_reward": "1600000000",
+        "coinbase_value": "18446744073709551615"
+      },
+      {
+        "height": "1",
+        "fees": "0",
+        "block_total_reward": "1600000000",
+        "foundation_levy": "142080000",
+        "mining_reward": "1457920000",
+        "coinbase_value": "1457920000"
+      },
+      {
+        "height": "1",
+        "fees": "7000000",
+        "block_total_reward": "1600000000",
+        "foundation_levy": "142080000",
+        "mining_reward": "1457920000",
+        "coinbase_value": "1464920000"
+      },
+      {
+        "height": "1",
+        "fees": "18446744073709551615",
+        "block_total_reward": "1600000000",
+        "foundation_levy": "142080000",
+        "mining_reward": "1457920000",
+        "coinbase_value": "18446744073709551615"
+      },
+      {
+        "height": "1439",
+        "fees": "0",
+        "block_total_reward": "1600000000",
+        "foundation_levy": "142080000",
+        "mining_reward": "1457920000",
+        "coinbase_value": "1457920000"
+      },
+      {
+        "height": "1439",
+        "fees": "7000000",
+        "block_total_reward": "1600000000",
+        "foundation_levy": "142080000",
+        "mining_reward": "1457920000",
+        "coinbase_value": "1464920000"
+      },
+      {
+        "height": "1439",
+        "fees": "18446744073709551615",
+        "block_total_reward": "1600000000",
+        "foundation_levy": "142080000",
+        "mining_reward": "1457920000",
+        "coinbase_value": "18446744073709551615"
+      },
+      {
+        "height": "1440",
+        "fees": "0",
+        "block_total_reward": "1600000000",
+        "foundation_levy": "142080000",
+        "mining_reward": "1457920000",
+        "coinbase_value": "1457920000"
+      },
+      {
+        "height": "1440",
+        "fees": "7000000",
+        "block_total_reward": "1600000000",
+        "foundation_levy": "142080000",
+        "mining_reward": "1457920000",
+        "coinbase_value": "1464920000"
+      },
+      {
+        "height": "1440",
+        "fees": "18446744073709551615",
+        "block_total_reward": "1600000000",
+        "foundation_levy": "142080000",
+        "mining_reward": "1457920000",
+        "coinbase_value": "18446744073709551615"
+      },
+      {
+        "height": "1441",
+        "fees": "0",
+        "block_total_reward": "1600000000",
+        "foundation_levy": "142080000",
+        "mining_reward": "1457920000",
+        "coinbase_value": "1457920000"
+      },
+      {
+        "height": "1441",
+        "fees": "7000000",
+        "block_total_reward": "1600000000",
+        "foundation_levy": "142080000",
+        "mining_reward": "1457920000",
+        "coinbase_value": "1464920000"
+      },
+      {
+        "height": "1441",
+        "fees": "18446744073709551615",
+        "block_total_reward": "1600000000",
+        "foundation_levy": "142080000",
+        "mining_reward": "1457920000",
+        "coinbase_value": "18446744073709551615"
+      },
+      {
+        "height": "172799",
+        "fees": "0",
+        "block_total_reward": "1600000000",
+        "foundation_levy": "142080000",
+        "mining_reward": "1457920000",
+        "coinbase_value": "1457920000"
+      },
+      {
+        "height": "172799",
+        "fees": "7000000",
+        "block_total_reward": "1600000000",
+        "foundation_levy": "142080000",
+        "mining_reward": "1457920000",
+        "coinbase_value": "1464920000"
+      },
+      {
+        "height": "172799",
+        "fees": "18446744073709551615",
+        "block_total_reward": "1600000000",
+        "foundation_levy": "142080000",
+        "mining_reward": "1457920000",
+        "coinbase_value": "18446744073709551615"
+      },
+      {
+        "height": "172800",
+        "fees": "0",
+        "block_total_reward": "1600000000",
+        "foundation_levy": "142080000",
+        "mining_reward": "1457920000",
+        "coinbase_value": "1457920000"
+      },
+      {
+        "height": "172800",
+        "fees": "7000000",
+        "block_total_reward": "1600000000",
+        "foundation_levy": "142080000",
+        "mining_reward": "1457920000",
+        "coinbase_value": "1464920000"
+      },
+      {
+        "height": "172800",
+        "fees": "18446744073709551615",
+        "block_total_reward": "1600000000",
+        "foundation_levy": "142080000",
+        "mining_reward": "1457920000",
+        "coinbase_value": "18446744073709551615"
+      },
+      {
+        "height": "172801",
+        "fees": "0",
+        "block_total_reward": "1600000000",
+        "foundation_levy": "124320000",
+        "mining_reward": "1475680000",
+        "coinbase_value": "1475680000"
+      },
+      {
+        "height": "172801",
+        "fees": "7000000",
+        "block_total_reward": "1600000000",
+        "foundation_levy": "124320000",
+        "mining_reward": "1475680000",
+        "coinbase_value": "1482680000"
+      },
+      {
+        "height": "172801",
+        "fees": "18446744073709551615",
+        "block_total_reward": "1600000000",
+        "foundation_levy": "124320000",
+        "mining_reward": "1475680000",
+        "coinbase_value": "18446744073709551615"
+      },
+      {
+        "height": "480959",
+        "fees": "0",
+        "block_total_reward": "1600000000",
+        "foundation_levy": "124320000",
+        "mining_reward": "1475680000",
+        "coinbase_value": "1475680000"
+      },
+      {
+        "height": "480959",
+        "fees": "7000000",
+        "block_total_reward": "1600000000",
+        "foundation_levy": "124320000",
+        "mining_reward": "1475680000",
+        "coinbase_value": "1482680000"
+      },
+      {
+        "height": "480959",
+        "fees": "18446744073709551615",
+        "block_total_reward": "1600000000",
+        "foundation_levy": "124320000",
+        "mining_reward": "1475680000",
+        "coinbase_value": "18446744073709551615"
+      },
+      {
+        "height": "480960",
+        "fees": "0",
+        "block_total_reward": "1600000000",
+        "foundation_levy": "124320000",
+        "mining_reward": "1475680000",
+        "coinbase_value": "1475680000"
+      },
+      {
+        "height": "480960",
+        "fees": "7000000",
+        "block_total_reward": "1600000000",
+        "foundation_levy": "124320000",
+        "mining_reward": "1475680000",
+        "coinbase_value": "1482680000"
+      },
+      {
+        "height": "480960",
+        "fees": "18446744073709551615",
+        "block_total_reward": "1600000000",
+        "foundation_levy": "124320000",
+        "mining_reward": "1475680000",
+        "coinbase_value": "18446744073709551615"
+      },
+      {
+        "height": "480961",
+        "fees": "0",
+        "block_total_reward": "800000000",
+        "foundation_levy": "62160000",
+        "mining_reward": "737840000",
+        "coinbase_value": "737840000"
+      },
+      {
+        "height": "480961",
+        "fees": "7000000",
+        "block_total_reward": "800000000",
+        "foundation_levy": "62160000",
+        "mining_reward": "737840000",
+        "coinbase_value": "744840000"
+      },
+      {
+        "height": "480961",
+        "fees": "18446744073709551615",
+        "block_total_reward": "800000000",
+        "foundation_levy": "62160000",
+        "mining_reward": "737840000",
+        "coinbase_value": "18446744073709551615"
+      },
+      {
+        "height": "698399",
+        "fees": "0",
+        "block_total_reward": "800000000",
+        "foundation_levy": "62160000",
+        "mining_reward": "737840000",
+        "coinbase_value": "737840000"
+      },
+      {
+        "height": "698399",
+        "fees": "7000000",
+        "block_total_reward": "800000000",
+        "foundation_levy": "62160000",
+        "mining_reward": "737840000",
+        "coinbase_value": "744840000"
+      },
+      {
+        "height": "698399",
+        "fees": "18446744073709551615",
+        "block_total_reward": "800000000",
+        "foundation_levy": "62160000",
+        "mining_reward": "737840000",
+        "coinbase_value": "18446744073709551615"
+      },
+      {
+        "height": "698400",
+        "fees": "0",
+        "block_total_reward": "800000000",
+        "foundation_levy": "62160000",
+        "mining_reward": "737840000",
+        "coinbase_value": "737840000"
+      },
+      {
+        "height": "698400",
+        "fees": "7000000",
+        "block_total_reward": "800000000",
+        "foundation_levy": "62160000",
+        "mining_reward": "737840000",
+        "coinbase_value": "744840000"
+      },
+      {
+        "height": "698400",
+        "fees": "18446744073709551615",
+        "block_total_reward": "800000000",
+        "foundation_levy": "62160000",
+        "mining_reward": "737840000",
+        "coinbase_value": "18446744073709551615"
+      },
+      {
+        "height": "698401",
+        "fees": "0",
+        "block_total_reward": "800000000",
+        "foundation_levy": "53280000",
+        "mining_reward": "746720000",
+        "coinbase_value": "746720000"
+      },
+      {
+        "height": "698401",
+        "fees": "7000000",
+        "block_total_reward": "800000000",
+        "foundation_levy": "53280000",
+        "mining_reward": "746720000",
+        "coinbase_value": "753720000"
+      },
+      {
+        "height": "698401",
+        "fees": "18446744073709551615",
+        "block_total_reward": "800000000",
+        "foundation_levy": "53280000",
+        "mining_reward": "746720000",
+        "coinbase_value": "18446744073709551615"
+      },
+      {
+        "height": "1157759",
+        "fees": "0",
+        "block_total_reward": "800000000",
+        "foundation_levy": "53280000",
+        "mining_reward": "746720000",
+        "coinbase_value": "746720000"
+      },
+      {
+        "height": "1157759",
+        "fees": "7000000",
+        "block_total_reward": "800000000",
+        "foundation_levy": "53280000",
+        "mining_reward": "746720000",
+        "coinbase_value": "753720000"
+      },
+      {
+        "height": "1157759",
+        "fees": "18446744073709551615",
+        "block_total_reward": "800000000",
+        "foundation_levy": "53280000",
+        "mining_reward": "746720000",
+        "coinbase_value": "18446744073709551615"
+      },
+      {
+        "height": "1157760",
+        "fees": "0",
+        "block_total_reward": "800000000",
+        "foundation_levy": "53280000",
+        "mining_reward": "746720000",
+        "coinbase_value": "746720000"
+      },
+      {
+        "height": "1157760",
+        "fees": "7000000",
+        "block_total_reward": "800000000",
+        "foundation_levy": "53280000",
+        "mining_reward": "746720000",
+        "coinbase_value": "753720000"
+      },
+      {
+        "height": "1157760",
+        "fees": "18446744073709551615",
+        "block_total_reward": "800000000",
+        "foundation_levy": "53280000",
+        "mining_reward": "746720000",
+        "coinbase_value": "18446744073709551615"
+      },
+      {
+        "height": "1157761",
+        "fees": "0",
+        "block_total_reward": "400000000",
+        "foundation_levy": "26640000",
+        "mining_reward": "373360000",
+        "coinbase_value": "373360000"
+      },
+      {
+        "height": "1157761",
+        "fees": "7000000",
+        "block_total_reward": "400000000",
+        "foundation_levy": "26640000",
+        "mining_reward": "373360000",
+        "coinbase_value": "380360000"
+      },
+      {
+        "height": "1157761",
+        "fees": "18446744073709551615",
+        "block_total_reward": "400000000",
+        "foundation_levy": "26640000",
+        "mining_reward": "373360000",
+        "coinbase_value": "18446744073709551615"
+      },
+      {
+        "height": "1223999",
+        "fees": "0",
+        "block_total_reward": "400000000",
+        "foundation_levy": "26640000",
+        "mining_reward": "373360000",
+        "coinbase_value": "373360000"
+      },
+      {
+        "height": "1223999",
+        "fees": "7000000",
+        "block_total_reward": "400000000",
+        "foundation_levy": "26640000",
+        "mining_reward": "373360000",
+        "coinbase_value": "380360000"
+      },
+      {
+        "height": "1223999",
+        "fees": "18446744073709551615",
+        "block_total_reward": "400000000",
+        "foundation_levy": "26640000",
+        "mining_reward": "373360000",
+        "coinbase_value": "18446744073709551615"
+      },
+      {
+        "height": "1224000",
+        "fees": "0",
+        "block_total_reward": "400000000",
+        "foundation_levy": "26640000",
+        "mining_reward": "373360000",
+        "coinbase_value": "373360000"
+      },
+      {
+        "height": "1224000",
+        "fees": "7000000",
+        "block_total_reward": "400000000",
+        "foundation_levy": "26640000",
+        "mining_reward": "373360000",
+        "coinbase_value": "380360000"
+      },
+      {
+        "height": "1224000",
+        "fees": "18446744073709551615",
+        "block_total_reward": "400000000",
+        "foundation_levy": "26640000",
+        "mining_reward": "373360000",
+        "coinbase_value": "18446744073709551615"
+      },
+      {
+        "height": "1224001",
+        "fees": "0",
+        "block_total_reward": "400000000",
+        "foundation_levy": "22200000",
+        "mining_reward": "377800000",
+        "coinbase_value": "377800000"
+      },
+      {
+        "height": "1224001",
+        "fees": "7000000",
+        "block_total_reward": "400000000",
+        "foundation_levy": "22200000",
+        "mining_reward": "377800000",
+        "coinbase_value": "384800000"
+      },
+      {
+        "height": "1224001",
+        "fees": "18446744073709551615",
+        "block_total_reward": "400000000",
+        "foundation_levy": "22200000",
+        "mining_reward": "377800000",
+        "coinbase_value": "18446744073709551615"
+      },
+      {
+        "height": "1749599",
+        "fees": "0",
+        "block_total_reward": "400000000",
+        "foundation_levy": "22200000",
+        "mining_reward": "377800000",
+        "coinbase_value": "377800000"
+      },
+      {
+        "height": "1749599",
+        "fees": "7000000",
+        "block_total_reward": "400000000",
+        "foundation_levy": "22200000",
+        "mining_reward": "377800000",
+        "coinbase_value": "384800000"
+      },
+      {
+        "height": "1749599",
+        "fees": "18446744073709551615",
+        "block_total_reward": "400000000",
+        "foundation_levy": "22200000",
+        "mining_reward": "377800000",
+        "coinbase_value": "18446744073709551615"
+      },
+      {
+        "height": "1749600",
+        "fees": "0",
+        "block_total_reward": "400000000",
+        "foundation_levy": "22200000",
+        "mining_reward": "377800000",
+        "coinbase_value": "377800000"
+      },
+      {
+        "height": "1749600",
+        "fees": "7000000",
+        "block_total_reward": "400000000",
+        "foundation_levy": "22200000",
+        "mining_reward": "377800000",
+        "coinbase_value": "384800000"
+      },
+      {
+        "height": "1749600",
+        "fees": "18446744073709551615",
+        "block_total_reward": "400000000",
+        "foundation_levy": "22200000",
+        "mining_reward": "377800000",
+        "coinbase_value": "18446744073709551615"
+      },
+      {
+        "height": "1749601",
+        "fees": "0",
+        "block_total_reward": "400000000",
+        "foundation_levy": "17760000",
+        "mining_reward": "382240000",
+        "coinbase_value": "382240000"
+      },
+      {
+        "height": "1749601",
+        "fees": "7000000",
+        "block_total_reward": "400000000",
+        "foundation_levy": "17760000",
+        "mining_reward": "382240000",
+        "coinbase_value": "389240000"
+      },
+      {
+        "height": "1749601",
+        "fees": "18446744073709551615",
+        "block_total_reward": "400000000",
+        "foundation_levy": "17760000",
+        "mining_reward": "382240000",
+        "coinbase_value": "18446744073709551615"
+      },
+      {
+        "height": "2023199",
+        "fees": "0",
+        "block_total_reward": "400000000",
+        "foundation_levy": "17760000",
+        "mining_reward": "382240000",
+        "coinbase_value": "382240000"
+      },
+      {
+        "height": "2023199",
+        "fees": "7000000",
+        "block_total_reward": "400000000",
+        "foundation_levy": "17760000",
+        "mining_reward": "382240000",
+        "coinbase_value": "389240000"
+      },
+      {
+        "height": "2023199",
+        "fees": "18446744073709551615",
+        "block_total_reward": "400000000",
+        "foundation_levy": "17760000",
+        "mining_reward": "382240000",
+        "coinbase_value": "18446744073709551615"
+      },
+      {
+        "height": "2023200",
+        "fees": "0",
+        "block_total_reward": "400000000",
+        "foundation_levy": "17760000",
+        "mining_reward": "382240000",
+        "coinbase_value": "382240000"
+      },
+      {
+        "height": "2023200",
+        "fees": "7000000",
+        "block_total_reward": "400000000",
+        "foundation_levy": "17760000",
+        "mining_reward": "382240000",
+        "coinbase_value": "389240000"
+      },
+      {
+        "height": "2023200",
+        "fees": "18446744073709551615",
+        "block_total_reward": "400000000",
+        "foundation_levy": "17760000",
+        "mining_reward": "382240000",
+        "coinbase_value": "18446744073709551615"
+      },
+      {
+        "height": "2023201",
+        "fees": "0",
+        "block_total_reward": "200000000",
+        "foundation_levy": "8880000",
+        "mining_reward": "191120000",
+        "coinbase_value": "191120000"
+      },
+      {
+        "height": "2023201",
+        "fees": "7000000",
+        "block_total_reward": "200000000",
+        "foundation_levy": "8880000",
+        "mining_reward": "191120000",
+        "coinbase_value": "198120000"
+      },
+      {
+        "height": "2023201",
+        "fees": "18446744073709551615",
+        "block_total_reward": "200000000",
+        "foundation_levy": "8880000",
+        "mining_reward": "191120000",
+        "coinbase_value": "18446744073709551615"
+      },
+      {
+        "height": "2275199",
+        "fees": "0",
+        "block_total_reward": "200000000",
+        "foundation_levy": "8880000",
+        "mining_reward": "191120000",
+        "coinbase_value": "191120000"
+      },
+      {
+        "height": "2275199",
+        "fees": "7000000",
+        "block_total_reward": "200000000",
+        "foundation_levy": "8880000",
+        "mining_reward": "191120000",
+        "coinbase_value": "198120000"
+      },
+      {
+        "height": "2275199",
+        "fees": "18446744073709551615",
+        "block_total_reward": "200000000",
+        "foundation_levy": "8880000",
+        "mining_reward": "191120000",
+        "coinbase_value": "18446744073709551615"
+      },
+      {
+        "height": "2275200",
+        "fees": "0",
+        "block_total_reward": "200000000",
+        "foundation_levy": "8880000",
+        "mining_reward": "191120000",
+        "coinbase_value": "191120000"
+      },
+      {
+        "height": "2275200",
+        "fees": "7000000",
+        "block_total_reward": "200000000",
+        "foundation_levy": "8880000",
+        "mining_reward": "191120000",
+        "coinbase_value": "198120000"
+      },
+      {
+        "height": "2275200",
+        "fees": "18446744073709551615",
+        "block_total_reward": "200000000",
+        "foundation_levy": "8880000",
+        "mining_reward": "191120000",
+        "coinbase_value": "18446744073709551615"
+      },
+      {
+        "height": "2275201",
+        "fees": "0",
+        "block_total_reward": "200000000",
+        "foundation_levy": "6660000",
+        "mining_reward": "193340000",
+        "coinbase_value": "193340000"
+      },
+      {
+        "height": "2275201",
+        "fees": "7000000",
+        "block_total_reward": "200000000",
+        "foundation_levy": "6660000",
+        "mining_reward": "193340000",
+        "coinbase_value": "200340000"
+      },
+      {
+        "height": "2275201",
+        "fees": "18446744073709551615",
+        "block_total_reward": "200000000",
+        "foundation_levy": "6660000",
+        "mining_reward": "193340000",
+        "coinbase_value": "18446744073709551615"
+      },
+      {
+        "height": "2800799",
+        "fees": "0",
+        "block_total_reward": "200000000",
+        "foundation_levy": "6660000",
+        "mining_reward": "193340000",
+        "coinbase_value": "193340000"
+      },
+      {
+        "height": "2800799",
+        "fees": "7000000",
+        "block_total_reward": "200000000",
+        "foundation_levy": "6660000",
+        "mining_reward": "193340000",
+        "coinbase_value": "200340000"
+      },
+      {
+        "height": "2800799",
+        "fees": "18446744073709551615",
+        "block_total_reward": "200000000",
+        "foundation_levy": "6660000",
+        "mining_reward": "193340000",
+        "coinbase_value": "18446744073709551615"
+      },
+      {
+        "height": "2800800",
+        "fees": "0",
+        "block_total_reward": "200000000",
+        "foundation_levy": "6660000",
+        "mining_reward": "193340000",
+        "coinbase_value": "193340000"
+      },
+      {
+        "height": "2800800",
+        "fees": "7000000",
+        "block_total_reward": "200000000",
+        "foundation_levy": "6660000",
+        "mining_reward": "193340000",
+        "coinbase_value": "200340000"
+      },
+      {
+        "height": "2800800",
+        "fees": "18446744073709551615",
+        "block_total_reward": "200000000",
+        "foundation_levy": "6660000",
+        "mining_reward": "193340000",
+        "coinbase_value": "18446744073709551615"
+      },
+      {
+        "height": "2800801",
+        "fees": "0",
+        "block_total_reward": "200000000",
+        "foundation_levy": "4440000",
+        "mining_reward": "195560000",
+        "coinbase_value": "195560000"
+      },
+      {
+        "height": "2800801",
+        "fees": "7000000",
+        "block_total_reward": "200000000",
+        "foundation_levy": "4440000",
+        "mining_reward": "195560000",
+        "coinbase_value": "202560000"
+      },
+      {
+        "height": "2800801",
+        "fees": "18446744073709551615",
+        "block_total_reward": "200000000",
+        "foundation_levy": "4440000",
+        "mining_reward": "195560000",
+        "coinbase_value": "18446744073709551615"
+      },
+      {
+        "height": "3175199",
+        "fees": "0",
+        "block_total_reward": "200000000",
+        "foundation_levy": "4440000",
+        "mining_reward": "195560000",
+        "coinbase_value": "195560000"
+      },
+      {
+        "height": "3175199",
+        "fees": "7000000",
+        "block_total_reward": "200000000",
+        "foundation_levy": "4440000",
+        "mining_reward": "195560000",
+        "coinbase_value": "202560000"
+      },
+      {
+        "height": "3175199",
+        "fees": "18446744073709551615",
+        "block_total_reward": "200000000",
+        "foundation_levy": "4440000",
+        "mining_reward": "195560000",
+        "coinbase_value": "18446744073709551615"
+      },
+      {
+        "height": "3175200",
+        "fees": "0",
+        "block_total_reward": "200000000",
+        "foundation_levy": "4440000",
+        "mining_reward": "195560000",
+        "coinbase_value": "195560000"
+      },
+      {
+        "height": "3175200",
+        "fees": "7000000",
+        "block_total_reward": "200000000",
+        "foundation_levy": "4440000",
+        "mining_reward": "195560000",
+        "coinbase_value": "202560000"
+      },
+      {
+        "height": "3175200",
+        "fees": "18446744073709551615",
+        "block_total_reward": "200000000",
+        "foundation_levy": "4440000",
+        "mining_reward": "195560000",
+        "coinbase_value": "18446744073709551615"
+      },
+      {
+        "height": "3175201",
+        "fees": "0",
+        "block_total_reward": "100000000",
+        "foundation_levy": "2220000",
+        "mining_reward": "97780000",
+        "coinbase_value": "97780000"
+      },
+      {
+        "height": "3175201",
+        "fees": "7000000",
+        "block_total_reward": "100000000",
+        "foundation_levy": "2220000",
+        "mining_reward": "97780000",
+        "coinbase_value": "104780000"
+      },
+      {
+        "height": "3175201",
+        "fees": "18446744073709551615",
+        "block_total_reward": "100000000",
+        "foundation_levy": "2220000",
+        "mining_reward": "97780000",
+        "coinbase_value": "18446744073709551615"
+      },
+      {
+        "height": "3326399",
+        "fees": "0",
+        "block_total_reward": "100000000",
+        "foundation_levy": "2220000",
+        "mining_reward": "97780000",
+        "coinbase_value": "97780000"
+      },
+      {
+        "height": "3326399",
+        "fees": "7000000",
+        "block_total_reward": "100000000",
+        "foundation_levy": "2220000",
+        "mining_reward": "97780000",
+        "coinbase_value": "104780000"
+      },
+      {
+        "height": "3326399",
+        "fees": "18446744073709551615",
+        "block_total_reward": "100000000",
+        "foundation_levy": "2220000",
+        "mining_reward": "97780000",
+        "coinbase_value": "18446744073709551615"
+      },
+      {
+        "height": "3326400",
+        "fees": "0",
+        "block_total_reward": "100000000",
+        "foundation_levy": "2220000",
+        "mining_reward": "97780000",
+        "coinbase_value": "97780000"
+      },
+      {
+        "height": "3326400",
+        "fees": "7000000",
+        "block_total_reward": "100000000",
+        "foundation_levy": "2220000",
+        "mining_reward": "97780000",
+        "coinbase_value": "104780000"
+      },
+      {
+        "height": "3326400",
+        "fees": "18446744073709551615",
+        "block_total_reward": "100000000",
+        "foundation_levy": "2220000",
+        "mining_reward": "97780000",
+        "coinbase_value": "18446744073709551615"
+      },
+      {
+        "height": "3326401",
+        "fees": "0",
+        "block_total_reward": "100000000",
+        "foundation_levy": "1110000",
+        "mining_reward": "98890000",
+        "coinbase_value": "98890000"
+      },
+      {
+        "height": "3326401",
+        "fees": "7000000",
+        "block_total_reward": "100000000",
+        "foundation_levy": "1110000",
+        "mining_reward": "98890000",
+        "coinbase_value": "105890000"
+      },
+      {
+        "height": "3326401",
+        "fees": "18446744073709551615",
+        "block_total_reward": "100000000",
+        "foundation_levy": "1110000",
+        "mining_reward": "98890000",
+        "coinbase_value": "18446744073709551615"
+      },
+      {
+        "height": "3851999",
+        "fees": "0",
+        "block_total_reward": "100000000",
+        "foundation_levy": "1110000",
+        "mining_reward": "98890000",
+        "coinbase_value": "98890000"
+      },
+      {
+        "height": "3851999",
+        "fees": "7000000",
+        "block_total_reward": "100000000",
+        "foundation_levy": "1110000",
+        "mining_reward": "98890000",
+        "coinbase_value": "105890000"
+      },
+      {
+        "height": "3851999",
+        "fees": "18446744073709551615",
+        "block_total_reward": "100000000",
+        "foundation_levy": "1110000",
+        "mining_reward": "98890000",
+        "coinbase_value": "18446744073709551615"
+      },
+      {
+        "height": "3852000",
+        "fees": "0",
+        "block_total_reward": "100000000",
+        "foundation_levy": "1110000",
+        "mining_reward": "98890000",
+        "coinbase_value": "98890000"
+      },
+      {
+        "height": "3852000",
+        "fees": "7000000",
+        "block_total_reward": "100000000",
+        "foundation_levy": "1110000",
+        "mining_reward": "98890000",
+        "coinbase_value": "105890000"
+      },
+      {
+        "height": "3852000",
+        "fees": "18446744073709551615",
+        "block_total_reward": "100000000",
+        "foundation_levy": "1110000",
+        "mining_reward": "98890000",
+        "coinbase_value": "18446744073709551615"
+      },
+      {
+        "height": "3852001",
+        "fees": "0",
+        "block_total_reward": "100000000",
+        "foundation_levy": "1110000",
+        "mining_reward": "98890000",
+        "coinbase_value": "98890000"
+      },
+      {
+        "height": "3852001",
+        "fees": "7000000",
+        "block_total_reward": "100000000",
+        "foundation_levy": "1110000",
+        "mining_reward": "98890000",
+        "coinbase_value": "105890000"
+      },
+      {
+        "height": "3852001",
+        "fees": "18446744073709551615",
+        "block_total_reward": "100000000",
+        "foundation_levy": "1110000",
+        "mining_reward": "98890000",
+        "coinbase_value": "18446744073709551615"
+      },
+      {
+        "height": "4377599",
+        "fees": "0",
+        "block_total_reward": "100000000",
+        "foundation_levy": "1110000",
+        "mining_reward": "98890000",
+        "coinbase_value": "98890000"
+      },
+      {
+        "height": "4377599",
+        "fees": "7000000",
+        "block_total_reward": "100000000",
+        "foundation_levy": "1110000",
+        "mining_reward": "98890000",
+        "coinbase_value": "105890000"
+      },
+      {
+        "height": "4377599",
+        "fees": "18446744073709551615",
+        "block_total_reward": "100000000",
+        "foundation_levy": "1110000",
+        "mining_reward": "98890000",
+        "coinbase_value": "18446744073709551615"
+      },
+      {
+        "height": "4377600",
+        "fees": "0",
+        "block_total_reward": "100000000",
+        "foundation_levy": "1110000",
+        "mining_reward": "98890000",
+        "coinbase_value": "98890000"
+      },
+      {
+        "height": "4377600",
+        "fees": "7000000",
+        "block_total_reward": "100000000",
+        "foundation_levy": "1110000",
+        "mining_reward": "98890000",
+        "coinbase_value": "105890000"
+      },
+      {
+        "height": "4377600",
+        "fees": "18446744073709551615",
+        "block_total_reward": "100000000",
+        "foundation_levy": "1110000",
+        "mining_reward": "98890000",
+        "coinbase_value": "18446744073709551615"
+      },
+      {
+        "height": "4377601",
+        "fees": "0",
+        "block_total_reward": "100000000",
+        "foundation_levy": "0",
+        "mining_reward": "100000000",
+        "coinbase_value": "100000000"
+      },
+      {
+        "height": "4377601",
+        "fees": "7000000",
+        "block_total_reward": "100000000",
+        "foundation_levy": "0",
+        "mining_reward": "100000000",
+        "coinbase_value": "107000000"
+      },
+      {
+        "height": "4377601",
+        "fees": "18446744073709551615",
+        "block_total_reward": "100000000",
+        "foundation_levy": "0",
+        "mining_reward": "100000000",
+        "coinbase_value": "18446744073709551615"
+      },
+      {
+        "height": "4642559",
+        "fees": "0",
+        "block_total_reward": "100000000",
+        "foundation_levy": "0",
+        "mining_reward": "100000000",
+        "coinbase_value": "100000000"
+      },
+      {
+        "height": "4642559",
+        "fees": "7000000",
+        "block_total_reward": "100000000",
+        "foundation_levy": "0",
+        "mining_reward": "100000000",
+        "coinbase_value": "107000000"
+      },
+      {
+        "height": "4642559",
+        "fees": "18446744073709551615",
+        "block_total_reward": "100000000",
+        "foundation_levy": "0",
+        "mining_reward": "100000000",
+        "coinbase_value": "18446744073709551615"
+      },
+      {
+        "height": "4642560",
+        "fees": "0",
+        "block_total_reward": "100000000",
+        "foundation_levy": "0",
+        "mining_reward": "100000000",
+        "coinbase_value": "100000000"
+      },
+      {
+        "height": "4642560",
+        "fees": "7000000",
+        "block_total_reward": "100000000",
+        "foundation_levy": "0",
+        "mining_reward": "100000000",
+        "coinbase_value": "107000000"
+      },
+      {
+        "height": "4642560",
+        "fees": "18446744073709551615",
+        "block_total_reward": "100000000",
+        "foundation_levy": "0",
+        "mining_reward": "100000000",
+        "coinbase_value": "18446744073709551615"
+      },
+      {
+        "height": "4642561",
+        "fees": "0",
+        "block_total_reward": "15625000",
+        "foundation_levy": "0",
+        "mining_reward": "15625000",
+        "coinbase_value": "15625000"
+      },
+      {
+        "height": "4642561",
+        "fees": "7000000",
+        "block_total_reward": "15625000",
+        "foundation_levy": "0",
+        "mining_reward": "15625000",
+        "coinbase_value": "22625000"
+      },
+      {
+        "height": "4642561",
+        "fees": "18446744073709551615",
+        "block_total_reward": "15625000",
+        "foundation_levy": "0",
+        "mining_reward": "15625000",
+        "coinbase_value": "18446744073709551615"
+      },
+      {
+        "height": "4903199",
+        "fees": "0",
+        "block_total_reward": "15625000",
+        "foundation_levy": "0",
+        "mining_reward": "15625000",
+        "coinbase_value": "15625000"
+      },
+      {
+        "height": "4903199",
+        "fees": "7000000",
+        "block_total_reward": "15625000",
+        "foundation_levy": "0",
+        "mining_reward": "15625000",
+        "coinbase_value": "22625000"
+      },
+      {
+        "height": "4903199",
+        "fees": "18446744073709551615",
+        "block_total_reward": "15625000",
+        "foundation_levy": "0",
+        "mining_reward": "15625000",
+        "coinbase_value": "18446744073709551615"
+      },
+      {
+        "height": "4903200",
+        "fees": "0",
+        "block_total_reward": "15625000",
+        "foundation_levy": "0",
+        "mining_reward": "15625000",
+        "coinbase_value": "15625000"
+      },
+      {
+        "height": "4903200",
+        "fees": "7000000",
+        "block_total_reward": "15625000",
+        "foundation_levy": "0",
+        "mining_reward": "15625000",
+        "coinbase_value": "22625000"
+      },
+      {
+        "height": "4903200",
+        "fees": "18446744073709551615",
+        "block_total_reward": "15625000",
+        "foundation_levy": "0",
+        "mining_reward": "15625000",
+        "coinbase_value": "18446744073709551615"
+      },
+      {
+        "height": "4903201",
+        "fees": "0",
+        "block_total_reward": "15625000",
+        "foundation_levy": "0",
+        "mining_reward": "15625000",
+        "coinbase_value": "15625000"
+      },
+      {
+        "height": "4903201",
+        "fees": "7000000",
+        "block_total_reward": "15625000",
+        "foundation_levy": "0",
+        "mining_reward": "15625000",
+        "coinbase_value": "22625000"
+      },
+      {
+        "height": "4903201",
+        "fees": "18446744073709551615",
+        "block_total_reward": "15625000",
+        "foundation_levy": "0",
+        "mining_reward": "15625000",
+        "coinbase_value": "18446744073709551615"
+      },
+      {
+        "height": "6744959",
+        "fees": "0",
+        "block_total_reward": "15625000",
+        "foundation_levy": "0",
+        "mining_reward": "15625000",
+        "coinbase_value": "15625000"
+      },
+      {
+        "height": "6744959",
+        "fees": "7000000",
+        "block_total_reward": "15625000",
+        "foundation_levy": "0",
+        "mining_reward": "15625000",
+        "coinbase_value": "22625000"
+      },
+      {
+        "height": "6744959",
+        "fees": "18446744073709551615",
+        "block_total_reward": "15625000",
+        "foundation_levy": "0",
+        "mining_reward": "15625000",
+        "coinbase_value": "18446744073709551615"
+      },
+      {
+        "height": "6744960",
+        "fees": "0",
+        "block_total_reward": "15625000",
+        "foundation_levy": "0",
+        "mining_reward": "15625000",
+        "coinbase_value": "15625000"
+      },
+      {
+        "height": "6744960",
+        "fees": "7000000",
+        "block_total_reward": "15625000",
+        "foundation_levy": "0",
+        "mining_reward": "15625000",
+        "coinbase_value": "22625000"
+      },
+      {
+        "height": "6744960",
+        "fees": "18446744073709551615",
+        "block_total_reward": "15625000",
+        "foundation_levy": "0",
+        "mining_reward": "15625000",
+        "coinbase_value": "18446744073709551615"
+      },
+      {
+        "height": "6744961",
+        "fees": "0",
+        "block_total_reward": "7812500",
+        "foundation_levy": "0",
+        "mining_reward": "7812500",
+        "coinbase_value": "7812500"
+      },
+      {
+        "height": "6744961",
+        "fees": "7000000",
+        "block_total_reward": "7812500",
+        "foundation_levy": "0",
+        "mining_reward": "7812500",
+        "coinbase_value": "14812500"
+      },
+      {
+        "height": "6744961",
+        "fees": "18446744073709551615",
+        "block_total_reward": "7812500",
+        "foundation_levy": "0",
+        "mining_reward": "7812500",
+        "coinbase_value": "18446744073709551615"
+      },
+      {
+        "height": "8847359",
+        "fees": "0",
+        "block_total_reward": "7812500",
+        "foundation_levy": "0",
+        "mining_reward": "7812500",
+        "coinbase_value": "7812500"
+      },
+      {
+        "height": "8847359",
+        "fees": "7000000",
+        "block_total_reward": "7812500",
+        "foundation_levy": "0",
+        "mining_reward": "7812500",
+        "coinbase_value": "14812500"
+      },
+      {
+        "height": "8847359",
+        "fees": "18446744073709551615",
+        "block_total_reward": "7812500",
+        "foundation_levy": "0",
+        "mining_reward": "7812500",
+        "coinbase_value": "18446744073709551615"
+      },
+      {
+        "height": "8847360",
+        "fees": "0",
+        "block_total_reward": "7812500",
+        "foundation_levy": "0",
+        "mining_reward": "7812500",
+        "coinbase_value": "7812500"
+      },
+      {
+        "height": "8847360",
+        "fees": "7000000",
+        "block_total_reward": "7812500",
+        "foundation_levy": "0",
+        "mining_reward": "7812500",
+        "coinbase_value": "14812500"
+      },
+      {
+        "height": "8847360",
+        "fees": "18446744073709551615",
+        "block_total_reward": "7812500",
+        "foundation_levy": "0",
+        "mining_reward": "7812500",
+        "coinbase_value": "18446744073709551615"
+      },
+      {
+        "height": "8847361",
+        "fees": "0",
+        "block_total_reward": "3906250",
+        "foundation_levy": "0",
+        "mining_reward": "3906250",
+        "coinbase_value": "3906250"
+      },
+      {
+        "height": "8847361",
+        "fees": "7000000",
+        "block_total_reward": "3906250",
+        "foundation_levy": "0",
+        "mining_reward": "3906250",
+        "coinbase_value": "10906250"
+      },
+      {
+        "height": "8847361",
+        "fees": "18446744073709551615",
+        "block_total_reward": "3906250",
+        "foundation_levy": "0",
+        "mining_reward": "3906250",
+        "coinbase_value": "18446744073709551615"
+      },
+      {
+        "height": "27768959",
+        "fees": "0",
+        "block_total_reward": "15258",
+        "foundation_levy": "0",
+        "mining_reward": "15258",
+        "coinbase_value": "15258"
+      },
+      {
+        "height": "27768959",
+        "fees": "7000000",
+        "block_total_reward": "15258",
+        "foundation_levy": "0",
+        "mining_reward": "15258",
+        "coinbase_value": "7015258"
+      },
+      {
+        "height": "27768959",
+        "fees": "18446744073709551615",
+        "block_total_reward": "15258",
+        "foundation_levy": "0",
+        "mining_reward": "15258",
+        "coinbase_value": "18446744073709551615"
+      },
+      {
+        "height": "27768960",
+        "fees": "0",
+        "block_total_reward": "15258",
+        "foundation_levy": "0",
+        "mining_reward": "15258",
+        "coinbase_value": "15258"
+      },
+      {
+        "height": "27768960",
+        "fees": "7000000",
+        "block_total_reward": "15258",
+        "foundation_levy": "0",
+        "mining_reward": "15258",
+        "coinbase_value": "7015258"
+      },
+      {
+        "height": "27768960",
+        "fees": "18446744073709551615",
+        "block_total_reward": "15258",
+        "foundation_levy": "0",
+        "mining_reward": "15258",
+        "coinbase_value": "18446744073709551615"
+      },
+      {
+        "height": "27768961",
+        "fees": "0",
+        "block_total_reward": "7629",
+        "foundation_levy": "0",
+        "mining_reward": "7629",
+        "coinbase_value": "7629"
+      },
+      {
+        "height": "27768961",
+        "fees": "7000000",
+        "block_total_reward": "7629",
+        "foundation_levy": "0",
+        "mining_reward": "7629",
+        "coinbase_value": "7007629"
+      },
+      {
+        "height": "27768961",
+        "fees": "18446744073709551615",
+        "block_total_reward": "7629",
+        "foundation_levy": "0",
+        "mining_reward": "7629",
+        "coinbase_value": "18446744073709551615"
+      }
+    ]
+  }
+}

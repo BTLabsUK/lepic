@@ -8216,6 +8216,7 @@ fn wire__crate__api__wallet__EpicWallet_start_http_listener_impl(
             >>::sse_decode(&mut deserializer);
             let api_exposure = <crate::api::http::HttpExposure>::sse_decode(&mut deserializer);
             let api_port = <u16>::sse_decode(&mut deserializer);
+            let api_coinbase = <bool>::sse_decode(&mut deserializer);
             let api_events = <StreamSink<
                 crate::api::http::HttpListenerEvent,
                 flutter_rust_bridge::for_generated::SseCodec,
@@ -8246,6 +8247,7 @@ fn wire__crate__api__wallet__EpicWallet_start_http_listener_impl(
                                 &*api_that_guard,
                                 api_exposure,
                                 api_port,
+                                api_coinbase,
                                 api_events,
                             )
                             .await;
@@ -13913,6 +13915,7 @@ impl SseDecode for crate::api::types::TransactionDetails {
         let mut var_senderReportedCancelledAtMs = <Option<i64>>::sse_decode(deserializer);
         let mut var_receiverDeclinedAtMs = <Option<i64>>::sse_decode(deserializer);
         let mut var_unverified = <bool>::sse_decode(deserializer);
+        let mut var_coinbase = <bool>::sse_decode(deserializer);
         return crate::api::types::TransactionDetails {
             tx_id: var_txId,
             direction: var_direction,
@@ -13943,6 +13946,7 @@ impl SseDecode for crate::api::types::TransactionDetails {
             sender_reported_cancelled_at_ms: var_senderReportedCancelledAtMs,
             receiver_declined_at_ms: var_receiverDeclinedAtMs,
             unverified: var_unverified,
+            coinbase: var_coinbase,
         };
     }
 }
@@ -17883,6 +17887,7 @@ impl flutter_rust_bridge::IntoDart for crate::api::types::TransactionDetails {
                 .into_dart(),
             self.receiver_declined_at_ms.into_into_dart().into_dart(),
             self.unverified.into_into_dart().into_dart(),
+            self.coinbase.into_into_dart().into_dart(),
         ]
         .into_dart()
     }
@@ -20631,6 +20636,7 @@ impl SseEncode for crate::api::types::TransactionDetails {
         <Option<i64>>::sse_encode(self.sender_reported_cancelled_at_ms, serializer);
         <Option<i64>>::sse_encode(self.receiver_declined_at_ms, serializer);
         <bool>::sse_encode(self.unverified, serializer);
+        <bool>::sse_encode(self.coinbase, serializer);
     }
 }
 

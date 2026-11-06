@@ -883,6 +883,10 @@ fn details_of_a_restored_output_show_its_height_and_no_kernel() {
         assert_eq!(details.kernel_excess, None);
         assert_eq!(details.confirmed_height, Some(output.height));
         assert_eq!(details.flow, TxFlow::Payment);
+        assert_eq!(
+            details.coinbase,
+            output.id.features == OutputFeatures::Coinbase
+        );
     }
 }
 

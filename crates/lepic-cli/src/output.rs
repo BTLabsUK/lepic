@@ -267,6 +267,9 @@ pub struct TxReport {
     /// `wallet`, `imported` or `found-by-scan`; shown by `tx show` only.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub origin: Option<&'static str>,
+    /// `true` for a mining reward: an incoming coinbase output with no slate; `tx show` only.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub coinbase: Option<bool>,
     /// For an imported transaction, what the old wallet recorded; `tx show` only.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub imported: Option<Box<ImportedReport>>,
@@ -1353,6 +1356,9 @@ fn write_show(out: &mut Vec<u8>, tx: &TxReport) -> std::io::Result<()> {
     if let Some(origin) = &tx.origin {
         writeln!(out, "{:<12} {origin}", "Origin")?;
     }
+    if tx.coinbase == Some(true) {
+        writeln!(out, "{:<12} mining reward", "Kind")?;
+    }
     if let Some(imported) = &tx.imported {
         writeln!(
             out,
@@ -1821,6 +1827,7 @@ mod tests {
             releasable: None,
             messages: None,
             origin: None,
+            coinbase: None,
             imported: None,
             sender_reported_posted_at: None,
             sender_reported_cancelled_at: None,

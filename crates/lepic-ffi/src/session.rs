@@ -1996,6 +1996,7 @@ fn transaction_details(details: &EngineTransactionDetails) -> TransactionDetails
             .map(Timestamp::as_millisecond),
         receiver_declined_at_ms: details.receiver_declined_at.map(Timestamp::as_millisecond),
         unverified: details.unverified,
+        coinbase: details.coinbase,
     }
 }
 
@@ -2831,6 +2832,7 @@ mod tests {
             sender_reported_cancelled_at: Some(created),
             receiver_declined_at: Some(confirmed),
             unverified: true,
+            coinbase: true,
         };
 
         assert_eq!(
@@ -2877,6 +2879,7 @@ mod tests {
                 sender_reported_cancelled_at_ms: Some(1_790_000_000_123),
                 receiver_declined_at_ms: Some(1_790_000_600_456),
                 unverified: true,
+                coinbase: true,
             }
         );
         let hex = excess.to_hex();

@@ -15,6 +15,8 @@ Conventional Commit messages at release time.
   not change. A payment proof asked for over the onion names the onion's key and is signed with
   it; `ReceiveRequest` takes the key as `proof_key` (`ProofKey::Payments` by default), and a
   proof for the other key's address is refused with `ForeignProofAddress`.
+- The FFI's `start_http_listener` takes a `coinbase` flag; pass `false` to keep the old
+  behaviour.
 
 ### Added
 
@@ -34,6 +36,16 @@ Conventional Commit messages at release time.
 - A send whose receiver declines it is cancelled, which frees its inputs, and raises
   `PaymentDeclined`. `TransactionDetails` gains `receiver_declined_at` (the binding
   `receiver_declined_at_ms`), and `lepic tx show` prints it.
+- Block rewards for a mining node, ADR 0046: `Wallet::build_coinbase` builds the coinbase output
+  and kernel from the wallet's keys, and a refresh records a mined one as an incoming
+  transaction. `lepic-foreign` answers `build_coinbase` when the host turns it on with
+  `ListenSettings::with_coinbase`, `lepic http listen --coinbase` does, and the FFI's
+  `start_http_listener` takes a `coinbase` flag. Candidates no block confirmed are deleted 50
+  blocks later.
+- `TransactionDetails::coinbase` (engine and FFI) marks an incoming transaction whose output is
+  a coinbase output; `lepic tx show` prints it as `Kind mining reward`.
+- `ChainParams::block_total_reward`, `foundation_levy`, `mining_reward` and `coinbase_value`,
+  with vectors for the reward schedule.
 
 ## [0.3.1] - 2026-11-06
 

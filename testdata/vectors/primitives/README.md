@@ -40,6 +40,7 @@ generator's own test (`cargo test -p vectors` in `conformance/`) fails if they d
 | `kernel_features_decode` | Kernel feature decoding at both versions, including the zero-field checks of version 1. |
 | `inputs`, `outputs`, `kernels` | Each part with features variants, layouts and hashes. Kernels are signed and verify. |
 | `chain_params_mainnet`, `chain_params_floonet` | Coinbase maturity, block and transaction weight limits, weights per item, protocol version, unit constants, default base fee. |
+| `reward_schedule_mainnet`, `reward_schedule_floonet` | Block reward by era, foundation levy, miner reward and coinbase value with fees, at every era boundary and one block either side. |
 | `fee_grid` | `weight`, `weight_as_block` and `tx_fee` over an input, output and kernel grid. |
 | `weight_limits` | The `AsTransaction` weight rule and the body reader's count check near both limits, per network. |
 | `tx_valid_*`, `tx_invalid_*` | Whole transactions, below. |
