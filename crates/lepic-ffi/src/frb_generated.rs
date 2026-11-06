@@ -11560,6 +11560,11 @@ impl SseDecode for crate::api::types::ContactCollectReport {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
         let mut var_mailboxes = <u32>::sse_decode(deserializer);
+        let mut var_capped = <u32>::sse_decode(deserializer);
+        let mut var_kept = <u32>::sse_decode(deserializer);
+        let mut var_refused = <u32>::sse_decode(deserializer);
+        let mut var_timedOut = <u32>::sse_decode(deserializer);
+        let mut var_notReached = <u32>::sse_decode(deserializer);
         let mut var_messages = <u32>::sse_decode(deserializer);
         let mut var_paired = <u32>::sse_decode(deserializer);
         let mut var_failed = <Vec<crate::api::types::FailedPairing>>::sse_decode(deserializer);
@@ -11568,6 +11573,11 @@ impl SseDecode for crate::api::types::ContactCollectReport {
         let mut var_ended = <Vec<crate::api::types::EndedPairing>>::sse_decode(deserializer);
         return crate::api::types::ContactCollectReport {
             mailboxes: var_mailboxes,
+            capped: var_capped,
+            kept: var_kept,
+            refused: var_refused,
+            timed_out: var_timedOut,
+            not_reached: var_notReached,
             messages: var_messages,
             paired: var_paired,
             failed: var_failed,
@@ -11866,6 +11876,7 @@ impl SseDecode for crate::api::policy::HostPolicy {
         let mut var_contactHoldPatienceS = <Option<u64>>::sse_decode(deserializer);
         let mut var_refuseUnsolicitedPayments = <Option<bool>>::sse_decode(deserializer);
         let mut var_refuseUnsolicitedInvoices = <Option<bool>>::sse_decode(deserializer);
+        let mut var_listenerHeldRounds = <Option<u32>>::sse_decode(deserializer);
         let mut var_publishPreviousOnion = <Option<bool>>::sse_decode(deserializer);
         return crate::api::policy::HostPolicy {
             default_strategy: var_defaultStrategy,
@@ -11885,6 +11896,7 @@ impl SseDecode for crate::api::policy::HostPolicy {
             contact_hold_patience_s: var_contactHoldPatienceS,
             refuse_unsolicited_payments: var_refuseUnsolicitedPayments,
             refuse_unsolicited_invoices: var_refuseUnsolicitedInvoices,
+            listener_held_rounds: var_listenerHeldRounds,
             publish_previous_onion: var_publishPreviousOnion,
         };
     }
@@ -15509,6 +15521,11 @@ impl flutter_rust_bridge::IntoDart for crate::api::types::ContactCollectReport {
     fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
         [
             self.mailboxes.into_into_dart().into_dart(),
+            self.capped.into_into_dart().into_dart(),
+            self.kept.into_into_dart().into_dart(),
+            self.refused.into_into_dart().into_dart(),
+            self.timed_out.into_into_dart().into_dart(),
+            self.not_reached.into_into_dart().into_dart(),
             self.messages.into_into_dart().into_dart(),
             self.paired.into_into_dart().into_dart(),
             self.failed.into_into_dart().into_dart(),
@@ -15909,6 +15926,7 @@ impl flutter_rust_bridge::IntoDart for crate::api::policy::HostPolicy {
             self.refuse_unsolicited_invoices
                 .into_into_dart()
                 .into_dart(),
+            self.listener_held_rounds.into_into_dart().into_dart(),
             self.publish_previous_onion.into_into_dart().into_dart(),
         ]
         .into_dart()
@@ -18767,6 +18785,11 @@ impl SseEncode for crate::api::types::ContactCollectReport {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
         <u32>::sse_encode(self.mailboxes, serializer);
+        <u32>::sse_encode(self.capped, serializer);
+        <u32>::sse_encode(self.kept, serializer);
+        <u32>::sse_encode(self.refused, serializer);
+        <u32>::sse_encode(self.timed_out, serializer);
+        <u32>::sse_encode(self.not_reached, serializer);
         <u32>::sse_encode(self.messages, serializer);
         <u32>::sse_encode(self.paired, serializer);
         <Vec<crate::api::types::FailedPairing>>::sse_encode(self.failed, serializer);
@@ -18985,6 +19008,7 @@ impl SseEncode for crate::api::policy::HostPolicy {
         <Option<u64>>::sse_encode(self.contact_hold_patience_s, serializer);
         <Option<bool>>::sse_encode(self.refuse_unsolicited_payments, serializer);
         <Option<bool>>::sse_encode(self.refuse_unsolicited_invoices, serializer);
+        <Option<u32>>::sse_encode(self.listener_held_rounds, serializer);
         <Option<bool>>::sse_encode(self.publish_previous_onion, serializer);
     }
 }
