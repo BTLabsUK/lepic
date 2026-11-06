@@ -49,7 +49,7 @@ record that supersedes the old one; accepted records are not rewritten.
 | [0041](0041-the-owners-profile-in-the-feature-word.md) | The owner's profile in the feature word | accepted |
 | [0042](0042-draining-the-old-home-after-moving-ones-own.md) | Draining the old home after moving one's own | accepted |
 | [0043](0043-domain-proof-for-paired-contacts.md) | Domain proof for paired contacts | accepted |
-| [0044](0044-the-onion-has-its-own-key.md) | The onion has its own key | proposed |
+| [0044](0044-the-onion-has-its-own-key.md) | The onion has its own key | accepted |
 | [0045](0045-refusing-slates-nobody-asked-for.md) | Refusing slates nobody asked for | proposed |
 | [0046](0046-a-wallet-for-a-mining-node.md) | A wallet for a mining node | accepted |
 | [0047](0047-the-mailbox-is-the-default-between-paired-contacts.md) | The mailbox is the default between paired contacts | accepted |

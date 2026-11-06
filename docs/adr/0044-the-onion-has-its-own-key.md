@@ -1,6 +1,6 @@
 # 0044 The onion has its own key
 
-Status: proposed
+Status: accepted
 Date: 2026-11-06
 
 ## Context
@@ -31,18 +31,21 @@ must still give back every address the wallet answers at.
   sender's own proof address stays the payment-proof key.
 - The previous onion, the one LEPIC 0.3.1 and earlier, the GUI wallet and `epic-wallet` publish,
   stays available as a key: `Wallet::previous_onion_key`, `lepic tor address --previous` and the
-  binding's `previous_onion_address`. Publishing it is a host choice (ADR 0036):
-  - the binding's `HostPolicy::publish_previous_onion`, default true: `start_tor` with
-    `publish_onion` adds the previous onion as well, behind a listener of its own whose proofs
-    are signed with the payment-proof key, and removes it at `stop_tor`;
+  binding's `previous_onion_address`. Publishing it is a host choice (ADR 0036), off unless the
+  host asks:
+  - the binding's `HostPolicy::publish_previous_onion`, default false: when true, `start_tor`
+    with `publish_onion` adds the previous onion as well, behind a listener of its own whose
+    proofs are signed with the payment-proof key, and removes it at `stop_tor`;
   - `lepic tor listen --previous-onion` does the same in the CLI; without it only the onion is
     published.
-  Core sets no date to stop: the host turns the parameter off when it decides to.
+  Epic Wallet does not publish the previous onion: it has few users, who are told of the new
+  address, and publishing it would keep the two identities linked. The lookup stays.
 
 ## Consequences
 
-- An updated install shows a new onion. Senders that saved the old one still reach it while
-  the host publishes the previous onion, and their proofs verify as before.
+- An updated install shows a new onion. The old address stops working for that install, and
+  anyone who saved it needs the new one, unless the host publishes the previous onion; then
+  those senders still reach it and their proofs verify as before.
 - A restore from the phrase gives the same onion and the same previous onion, so both addresses
   come back.
 - Pairing never carries the wallet's own onion (RFC 0002 carries only relay onions), so no
@@ -64,4 +67,5 @@ must still give back every address the wallet answers at.
   the phrase drains that mailbox, so they cannot move.
 - Sign every proof with the payment-proof key: a slate sent to the onion could then ask for a
   proof to the payment-proof address and link the two.
-- Drop the previous onion at once: senders who saved it would fail to reach the wallet.
+- Publish the previous onion by default for a period: senders who saved it keep working, but
+  the two identities stay linked for that period, which is what this change removes.

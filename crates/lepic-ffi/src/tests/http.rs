@@ -50,8 +50,18 @@ async fn session_on(
     dir: &tempfile::TempDir,
     store: AppSecretStore,
 ) -> Arc<Session> {
+    session_with_policy(runtime, dir, store, Default::default()).await
+}
+
+/// A session as [`session_on`] makes it, under the host's `policy`.
+async fn session_with_policy(
+    runtime: &LepicRuntime,
+    dir: &tempfile::TempDir,
+    store: AppSecretStore,
+    policy: crate::api::policy::HostPolicy,
+) -> Arc<Session> {
     let mut config = WalletConfig {
-        policy: Default::default(),
+        policy,
         data_dir: dir.path().to_string_lossy().into_owned(),
         chain: Chain::Floonet,
         node_url: "http://127.0.0.1:1".to_owned(),
@@ -89,6 +99,11 @@ async fn reopen_alice(pair: &Pair) -> Arc<Session> {
 
 /// Alice holds 10 EPIC; Bob holds nothing.
 pub(super) async fn funded_pair() -> Pair {
+    funded_pair_with(Default::default()).await
+}
+
+/// A pair as [`funded_pair`] makes it, with Bob under the host's `bob_policy`.
+pub(super) async fn funded_pair_with(bob_policy: crate::api::policy::HostPolicy) -> Pair {
     let chain = MockChain::new(1).unwrap();
     let runtime = chain.runtime(LogLevel::Warn).unwrap();
     let dirs = [tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap()];
@@ -101,7 +116,7 @@ pub(super) async fn funded_pair() -> Pair {
     chain.fund(phrase, Chain::Floonet, 10 * EPIC, 0).unwrap();
     chain.set_height(20);
     alice.scan_to_tip().await;
-    let bob = session(&runtime, &dirs[1]).await;
+    let bob = session_with_policy(&runtime, &dirs[1], AppSecretStore::in_memory(), bob_policy).await;
     bob.create(SeedOrigin::Generate, password()).await.unwrap();
     bob.scan_to_tip().await;
     Pair {

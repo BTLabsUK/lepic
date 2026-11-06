@@ -18,7 +18,7 @@ use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{TcpListener, TcpStream};
 use zeroize::Zeroizing;
 
-use super::http::{EPIC, Pair, funded_pair, password, sends};
+use super::http::{EPIC, Pair, funded_pair, funded_pair_with, password, sends};
 use super::{eventually, kind};
 use crate::api::diagnostics::LogLevel;
 use crate::api::error::WalletErrorKind;
@@ -1046,11 +1046,16 @@ async fn the_previous_onion_is_the_payment_proof_address_in_onion_form_and_the_o
     );
 }
 
-/// Bob's tor publishes his onion and his previous onion, each behind a listener of its own,
-/// and a payment to the previous onion is received.
+/// With `publish_previous_onion` on, Bob's tor publishes his onion and his previous onion, each
+/// behind a listener of its own, and a payment to the previous onion is received.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn the_previous_onion_is_published_behind_its_own_listener_and_takes_payments() {
-    let (pair, network) = tor_pair().await;
+    let pair = funded_pair_with(crate::api::policy::HostPolicy {
+        publish_previous_onion: Some(true),
+        ..Default::default()
+    })
+    .await;
+    let network = FakeNetwork::start().await;
     let (bob_events, commands) = start_tor(&network, &pair.bob, pair.dirs[1].path()).await;
     start_tor(&network, &pair.alice, pair.dirs[0].path()).await;
     let onion = pair.bob.onion_address().unwrap();
@@ -1091,18 +1096,15 @@ async fn the_previous_onion_is_published_behind_its_own_listener_and_takes_payme
     assert!(is_closed(&target), "the previous onion's listener stopped");
 }
 
-/// With `publish_previous_onion` off, only the onion is added and only its listener runs.
+/// By default only the onion is added and only its listener runs.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_host_that_turns_the_previous_onion_off_publishes_only_the_onion() {
+async fn by_default_only_the_onion_is_published() {
     let network = FakeNetwork::start().await;
     let chain = crate::api::testing::MockChain::new(1).unwrap();
     let runtime = chain.runtime(LogLevel::Warn).unwrap();
     let dir = tempfile::tempdir().unwrap();
     let mut config = WalletConfig {
-        policy: crate::api::policy::HostPolicy {
-            publish_previous_onion: Some(false),
-            ..Default::default()
-        },
+        policy: Default::default(),
         data_dir: dir.path().to_string_lossy().into_owned(),
         chain: Chain::Floonet,
         node_url: "http://127.0.0.1:1".to_owned(),

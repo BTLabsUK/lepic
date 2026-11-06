@@ -77,7 +77,8 @@ pub struct HostPolicy {
     /// Whether `start_tor` with `publish_onion` also publishes the previous onion, the one
     /// LEPIC 0.3.1 and earlier published (ADR 0044), on its own listener, so senders that saved
     /// it still reach the wallet. Payment proofs asked for there are signed with the
-    /// payment-proof key, as before. Default true.
+    /// payment-proof key, as before. While it is published it links the Tor and Epicbox
+    /// identities. Default false.
     pub publish_previous_onion: Option<bool>,
 }
 
@@ -241,7 +242,7 @@ impl Policy {
             invoice_expiry_default: expiry_default,
             invoice_expiry_max: expiry_max,
             max_invoice_ttl_lead_blocks: lead,
-            publish_previous_onion: policy.publish_previous_onion.unwrap_or(true),
+            publish_previous_onion: policy.publish_previous_onion.unwrap_or(false),
             wallet,
         })
     }
@@ -472,14 +473,14 @@ mod tests {
     }
 
     #[test]
-    fn the_previous_onion_is_published_unless_the_host_turns_it_off() {
-        assert!(Policy::shipped().publish_previous_onion);
-        let off = Policy::resolve(&HostPolicy {
-            publish_previous_onion: Some(false),
+    fn the_previous_onion_is_not_published_unless_the_host_turns_it_on() {
+        assert!(!Policy::shipped().publish_previous_onion);
+        let on = Policy::resolve(&HostPolicy {
+            publish_previous_onion: Some(true),
             ..HostPolicy::default()
         })
         .unwrap();
-        assert!(!off.publish_previous_onion);
+        assert!(on.publish_previous_onion);
     }
 
     #[test]

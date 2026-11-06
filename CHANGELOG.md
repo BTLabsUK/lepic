@@ -23,7 +23,7 @@ Conventional Commit messages at release time.
 - `Wallet::previous_onion_key`, `lepic tor address --previous` and the binding's
   `previous_onion_address`: the onion of LEPIC 0.3.1 and earlier, the one `epic-wallet` and the
   GUI wallet publish.
-- `lepic tor listen --previous-onion` and `HostPolicy::publish_previous_onion` (default on)
+- `lepic tor listen --previous-onion` and `HostPolicy::publish_previous_onion` (default off)
   publish the previous onion too, on a listener of its own whose proofs are signed with the
   payment-proof key, so senders that saved it still reach the wallet.
 - `lepic_tor::TorProcess::add_onion_to` adds a further onion to a running tor.
