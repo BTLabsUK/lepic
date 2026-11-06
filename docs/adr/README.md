@@ -49,6 +49,7 @@ record that supersedes the old one; accepted records are not rewritten.
 | [0041](0041-the-owners-profile-in-the-feature-word.md) | The owner's profile in the feature word | accepted |
 | [0042](0042-draining-the-old-home-after-moving-ones-own.md) | Draining the old home after moving one's own | accepted |
 | [0043](0043-domain-proof-for-paired-contacts.md) | Domain proof for paired contacts | accepted |
+| [0047](0047-the-mailbox-is-the-default-between-paired-contacts.md) | The mailbox is the default between paired contacts | accepted |
 
 Template:
 
