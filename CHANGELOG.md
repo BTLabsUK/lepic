@@ -16,7 +16,7 @@ Conventional Commit messages at release time.
   `start_http_listener` takes a `coinbase` flag. Candidates no block confirmed are deleted 50
   blocks later.
 - `TransactionDetails::coinbase` (engine and FFI) marks an incoming transaction whose output is
-  a coinbase output.
+  a coinbase output; `lepic tx show` prints it as `Kind mining reward`.
 - `ChainParams::block_total_reward`, `foundation_levy`, `mining_reward` and `coinbase_value`,
   with vectors for the reward schedule.
 

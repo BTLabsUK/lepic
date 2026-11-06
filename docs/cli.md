@@ -774,6 +774,8 @@ When a reorganisation mines a confirming output at another height, the next refr
 height with it. A transaction with no change output is confirmed by its kernel instead, and
 keeps the height of that first confirmation: a reorganisation is not followed. Human output
 prints `-` for what is unknown; the JSON document leaves the key out.
+A mining reward (see [Block rewards for a mining node](#block-rewards-for-a-mining-node)) adds
+`Kind mining reward` (JSON `"coinbase": true`).
 
 `tx show` also lists the parties' messages, one `Message` line each, `sender:` or `receiver:` of
 the money before the text (JSON `messages`, an array of `role` and `text`), from the latest slate

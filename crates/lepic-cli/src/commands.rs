@@ -2085,6 +2085,7 @@ fn show(repos: &dyn Repositories, details: &TransactionDetails) -> Result<TxRepo
             TxOrigin::FoundByScan => "found-by-scan",
             TxOrigin::OtherWallet => "other-wallet",
         }),
+        coinbase: details.coinbase.then_some(true),
         imported: details.imported.as_ref().map(|imported| {
             Box::new(ImportedReport {
                 source_id: imported.source_id,
@@ -2158,6 +2159,7 @@ fn tx_report(tx: &StoredTransaction, stages: Option<Vec<String>>) -> TxReport {
         releasable: None,
         messages: None,
         origin: None,
+        coinbase: None,
         imported: None,
         sender_reported_posted_at: None,
         sender_reported_cancelled_at: None,
