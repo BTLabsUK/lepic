@@ -35,6 +35,7 @@ use lepic_transport::registry::TransportRegistry;
 use lepic_transport::transport::{Destination, TransportId};
 use lepic_wallet::{
     NodeEndpoint, Ports, ReceiveError, ReceiveRequest, SharedRng, Wallet, WalletConfig, WalletName,
+    WalletPolicy,
 };
 use rand_core::{TryCryptoRng, TryRng};
 use serde_json::Value;
@@ -199,8 +200,19 @@ impl Receiver {
         receiver
     }
 
+    /// The wallet under `policy`, restored and scanned, ready to receive.
+    pub fn with_policy(mnemonic: &str, tip: u64, policy: WalletPolicy) -> Self {
+        let receiver = Self::restored_with(mnemonic, tip, policy);
+        receiver.complete_restore_scan();
+        receiver
+    }
+
     /// The wallet restored onto an empty database, before the scan it needs.
     pub fn restored_without_scan(mnemonic: &str, tip: u64) -> Self {
+        Self::restored_with(mnemonic, tip, WalletPolicy::default())
+    }
+
+    fn restored_with(mnemonic: &str, tip: u64, policy: WalletPolicy) -> Self {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .build()
             .unwrap();
@@ -233,7 +245,7 @@ impl Receiver {
             network: Network::Floonet,
             data_dir: PathBuf::from(DATA_DIR),
             node: NodeEndpoint::parse("http://127.0.0.1:13413").unwrap(),
-            policy: Default::default(),
+            policy,
             offline: false,
             host_features: 0,
             profile: 0,

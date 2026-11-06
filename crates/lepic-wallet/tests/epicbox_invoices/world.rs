@@ -55,6 +55,7 @@ use lepic_wallet::selection::SelectionStrategy;
 use lepic_wallet::send::Delivery;
 use lepic_wallet::{
     Clock, NodeEndpoint, Ports, SharedRng, StoreOpener, Wallet, WalletConfig, WalletName,
+    WalletPolicy,
 };
 use rand::SeedableRng;
 use rand::rngs::StdRng;
@@ -282,11 +283,20 @@ impl Party {
         runtime: &tokio::runtime::Runtime,
     ) -> Self {
         Self::with_domain(
-            mnemonic, name, seed_rng, profile, None, node, relay, runtime,
+            mnemonic,
+            name,
+            seed_rng,
+            profile,
+            None,
+            WalletPolicy::default(),
+            node,
+            relay,
+            runtime,
         )
     }
 
-    /// As [`Self::with_profile`], the wallet claiming `domain` in the cards it sends.
+    /// As [`Self::with_profile`], the wallet claiming `domain` in the cards it sends and
+    /// configured with `policy`.
     #[allow(clippy::too_many_arguments)]
     fn with_domain(
         mnemonic: &str,
@@ -294,6 +304,7 @@ impl Party {
         seed_rng: u64,
         profile: u16,
         domain: Option<&str>,
+        policy: WalletPolicy,
         node: &MockNode,
         relay: &MockRelay,
         runtime: &tokio::runtime::Runtime,
@@ -329,7 +340,7 @@ impl Party {
             network: Network::Floonet,
             data_dir: data_dir.clone(),
             node: NodeEndpoint::parse("http://127.0.0.1:13413").unwrap(),
-            policy: Default::default(),
+            policy,
             offline: false,
             host_features: 0,
             profile,
@@ -521,16 +532,25 @@ impl World {
     /// As [`Self::new`], the issuer's wallet configured with profile `issuer` and the payer's
     /// with `payer`.
     pub fn with_profiles(issuer: u16, payer: u16) -> Self {
-        Self::with_parties((issuer, None), (payer, None))
+        Self::with_parties((issuer, None), (payer, None), WalletPolicy::default())
+    }
+
+    /// As [`Self::new`], the issuer's wallet configured with `policy`.
+    pub fn with_issuer_policy(policy: WalletPolicy) -> Self {
+        Self::with_parties((0, None), (0, None), policy)
     }
 
     /// As [`Self::new`], the issuer's wallet claiming the domain `issuer` and the payer's the
     /// domain `payer`, where one is given.
     pub fn with_domains(issuer: Option<&str>, payer: Option<&str>) -> Self {
-        Self::with_parties((0, issuer), (0, payer))
+        Self::with_parties((0, issuer), (0, payer), WalletPolicy::default())
     }
 
-    fn with_parties(issuer: (u16, Option<&str>), payer: (u16, Option<&str>)) -> Self {
+    fn with_parties(
+        issuer: (u16, Option<&str>),
+        payer: (u16, Option<&str>),
+        issuer_policy: WalletPolicy,
+    ) -> Self {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
@@ -552,6 +572,7 @@ impl World {
             1,
             issuer.0,
             issuer.1,
+            issuer_policy,
             &node,
             &relay,
             &runtime,
@@ -562,6 +583,7 @@ impl World {
             2,
             payer.0,
             payer.1,
+            WalletPolicy::default(),
             &node,
             &relay,
             &runtime,
