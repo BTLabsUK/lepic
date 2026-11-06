@@ -44,6 +44,23 @@ Rules for the profile half:
 `WalletConfig.profile` (u16) is the configured value; `ContactView.peer_profile` is the peer's
 upper half. The CLI sets it with `profile`, `LEPIC_PROFILE`, `--profile` or `--profile-bits`.
 
+## Kind
+
+The card's and the invite's `kind` (person, shop, exchange) is an assumption about the peer, and
+it is deprecated. It stays on the wire and in the store, and is still parsed (one byte, 1 to 3),
+but a new wallet writes `person` at every invite and every first card, whatever a request says
+(the request fields stay so the host API does not change). A pairing keeps the kind it started
+with: a later card clones our stored card, and the inviter's confirm carries the stored card, so
+the checks of shipped readers hold (a confirm whose kind differs from its invite is refused with
+`KindDiffers`; a card update whose kind differs from the stored one is dropped). Nothing reads
+the kind for meaning. Removal, in order:
+
+1. A release whose readers accept a card and an invite without the kind field or with any byte,
+   and ignore kind in the update and confirm checks.
+2. Installs older than that release age out.
+3. Writers stop writing tag `03`.
+4. The store columns stay; dropping them is a migration of its own.
+
 ## Consequences
 
 - No card change, no new vectors, no schema change.

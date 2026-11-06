@@ -646,6 +646,12 @@ A wallet answers at most `contact_check_answers_per_hour` (default 1) and
 and its JSON carries `peer_profile` (0 when none). A pairing restored from a backup shows 0 until
 the contact answers a `contact check`.
 
+The contact's `kind` (person, shop or exchange) in the JSON of `contact list` is deprecated: it
+is an assumption about the peer, kept for machine consumers, and will be removed (ADR 0041). The
+`--kind` option of `contact invite` and `contact show-card` is hidden from `--help`, still
+accepted, and ignored: it prints `note: --kind is deprecated and ignored; new pairings write
+person` on stderr, and new pairings write person.
+
 `lepic profile show` prints the profile this wallet tells, as a number and names (bits without a
 name as hex). `lepic profile set no-payments,automated` (or `set --bits 0x1`, or `set ""` to
 clear) queues an update for every paired contact; `contact collect` sends them. It prints how many

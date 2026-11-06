@@ -327,7 +327,7 @@ A card is the binary payload below, self-signed:
 |---|---|---|
 | `01` | format | u8 `01` |
 | `02` | network | `net` |
-| `03` | kind | u8 `01` person, `02` shop, `03` exchange |
+| `03` | kind | u8 `01` person, `02` shop, `03` exchange. Deprecated: always written for old wallets, never read for meaning, to be removed (ADR 0041). New wallets write `01` |
 | `04` | name | 1 to 48 bytes UTF-8, the owner's chosen name. No control, format, bidi, line or paragraph separator characters (Unicode categories Cc, Cf, Cs, Zl, Zp) |
 | `05` | enc key | 32, X25519 `enc_pk` for this contact |
 | `06` | sig key | 32, Ed25519 `sig_pk` for this contact |
@@ -390,7 +390,7 @@ optional field), a version 11 to 13 QR code at medium error correction. In-perso
 |---|---|---|
 | `01` | format | u8 `01` |
 | `02` | network | `net` |
-| `03` | kind | the inviter's card kind |
+| `03` | kind | the inviter's card kind. Deprecated like the card's (6.1) |
 | `04` | name | the inviter's name (6.1 rules) |
 | `05` | expires | u64 unix seconds |
 | `06` | code | 16 |
