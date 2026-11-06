@@ -679,7 +679,7 @@ contact, 100 an hour).
 - `show` prints the configured domain (or `none`), the wallet's network, its domain key as 64 hex
   digits and the JSON fragment `{"<network>":{"domain_keys":["<hex>"]}}`. It opens the wallet and
   reaches no relay.
-- `file [--out PATH] [--relay HOST:PORT ...] [--force]` writes the well-known file to `PATH`
+- `file [--path PATH] [--relay HOST:PORT ...] [--force]` writes the well-known file to `PATH`
   (default `./epic-wallet.json`) and prints the path, its size and the URL it must be served at,
   `https://<domain>/.well-known/epic-wallet.json`. It refuses to replace an existing file without
   `--force`. The file must stay under 4 KiB, and the domain must serve it over HTTPS with no

@@ -111,7 +111,7 @@ fn write_file(
 ) -> Result<Report, CliError> {
     use std::io::Write as _;
     let path = args
-        .out
+        .path
         .clone()
         .unwrap_or_else(|| std::path::PathBuf::from("epic-wallet.json"));
     let network = match network {

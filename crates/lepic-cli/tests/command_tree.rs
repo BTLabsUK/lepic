@@ -250,7 +250,7 @@ fn no_short_or_long_flag_has_two_meanings() {
 }
 
 #[test]
-fn global_options_are_exactly_the_planned_ten() {
+fn global_options_are_exactly_the_planned_eleven() {
     let root = Cli::command();
     let mut globals: Vec<&str> = root
         .get_arguments()
@@ -263,6 +263,7 @@ fn global_options_are_exactly_the_planned_ten() {
         [
             "config",
             "data-dir",
+            "domain",
             "log-format",
             "log-level",
             "network",

@@ -7,6 +7,11 @@ Conventional Commit messages at release time.
 
 ## [Unreleased]
 
+### Changed
+
+- `lepic profile domain file` takes the file's path as `--path PATH`, not `--out`: `--out`
+  elsewhere means "write to this file instead of printing".
+
 ## [0.3.0] - 2026-11-06
 
 ### Added

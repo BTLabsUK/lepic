@@ -748,7 +748,7 @@ Needs the `domain` setting. Pairings made while `domain` is set carry the claim 
 pub struct DomainFileArgs {
     /// Where to write the file [default: ./epic-wallet.json]
     #[arg(long, value_name = "PATH")]
-    pub out: Option<PathBuf>,
+    pub path: Option<PathBuf>,
     /// A relay the file names, as HOST:PORT; repeat for more
     #[arg(long, value_name = "HOST:PORT")]
     pub relay: Vec<String>,
