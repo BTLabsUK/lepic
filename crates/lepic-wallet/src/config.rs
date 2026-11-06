@@ -411,9 +411,11 @@ mod tests {
     #[test]
     fn the_listener_held_rounds_are_bounded() {
         let with = |rounds: Option<u32>| {
-            let mut policy = WalletPolicy::default();
-            policy.listener_held_rounds = rounds;
-            policy.validate()
+            WalletPolicy {
+                listener_held_rounds: rounds,
+                ..WalletPolicy::default()
+            }
+            .validate()
         };
         assert!(with(None).is_ok());
         assert!(with(Some(1)).is_ok());
