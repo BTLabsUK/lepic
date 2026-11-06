@@ -7,10 +7,21 @@ Conventional Commit messages at release time.
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-11-06
+
+### Added
+
+- `lepic-wallet-contacts` re-exports `DomainName`, `VerifyingKey` and the contact `Network` (as
+  `ContactNetwork`), so the CLI no longer depends on `lepic-contact` directly.
+
 ### Changed
 
 - `lepic profile domain file` takes the file's path as `--path PATH`, not `--out`: `--out`
   elsewhere means "write to this file instead of printing".
+
+### Fixed
+
+- The in-memory store refuses a contact's domain proof over 4,096 bytes, as SQLite already did.
 
 ## [0.3.0] - 2026-11-06
 
