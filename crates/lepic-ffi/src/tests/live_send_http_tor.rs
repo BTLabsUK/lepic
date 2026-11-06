@@ -21,7 +21,7 @@ use zeroize::Zeroizing;
 
 use crate::api::diagnostics::LogLevel;
 use crate::api::error::WalletErrorKind;
-use crate::api::http::{HttpExposure, HttpListenerEvent};
+use crate::api::http::{HttpCoinbase, HttpExposure, HttpListenerEvent};
 use crate::api::runtime::LepicRuntime;
 use crate::api::secret_store::AppSecretStore;
 use crate::api::tor::{TorEvent, TorEventKind};
@@ -127,7 +127,7 @@ fn live_send_http_through_tor() {
             .start_http_listener(
                 HttpExposure::LocalOnly,
                 port,
-                false,
+                HttpCoinbase::Off,
                 Arc::new(|event: HttpListenerEvent| eprintln!("listener: {:?}", event.kind)),
             )
             .await
