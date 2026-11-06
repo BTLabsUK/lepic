@@ -7,6 +7,8 @@ Conventional Commit messages at release time.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-11-06
+
 ### Added
 
 - The domain claim, ADR 0043: envelope extension `0x83` carries a domain and an Ed25519

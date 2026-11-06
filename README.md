@@ -8,7 +8,7 @@
 
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![MSRV 1.99](https://img.shields.io/badge/rust-1.99-orange.svg)](rust-toolchain.toml)
-[![Version 0.2.0](https://img.shields.io/badge/version-0.2.0-informational.svg)](CHANGELOG.md)
+[![Version 0.3.0](https://img.shields.io/badge/version-0.3.0-informational.svg)](CHANGELOG.md)
 
 [Quick start](#quick-start) · [Build](#build-from-source) · [Architecture](docs/architecture.md) ·
 [Documentation](https://docs.btlabs.uk/developers/lepic/) ·
