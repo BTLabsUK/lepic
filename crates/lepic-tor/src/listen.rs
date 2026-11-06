@@ -18,6 +18,10 @@ pub enum OnionTarget {
 /// The socket's name in tor's folder.
 pub const ONION_SOCKET: &str = "onion.sock";
 
+/// The name of the socket behind the previous onion, the one LEPIC 0.3.1 and earlier published
+/// (ADR 0044), in tor's folder.
+pub const PREVIOUS_ONION_SOCKET: &str = "previous-onion.sock";
+
 /// The longest socket path used: a Unix socket address holds 104 bytes on macOS and 108 on
 /// Linux, with the closing zero.
 const MAX_SOCKET_PATH: usize = 100;
@@ -28,10 +32,20 @@ const MAX_SOCKET_PATH: usize = 100;
 /// unquoted (a space, a comma, a quote, a backslash; macOS's `Application Support` has a space).
 #[must_use]
 pub fn onion_socket_path(tor_dir: &Path) -> Option<PathBuf> {
+    socket_path(tor_dir, ONION_SOCKET)
+}
+
+/// [`onion_socket_path`] for the listener behind the previous onion.
+#[must_use]
+pub fn previous_onion_socket_path(tor_dir: &Path) -> Option<PathBuf> {
+    socket_path(tor_dir, PREVIOUS_ONION_SOCKET)
+}
+
+fn socket_path(tor_dir: &Path, name: &str) -> Option<PathBuf> {
     if cfg!(not(unix)) {
         return None;
     }
-    let path = tor_dir.join(ONION_SOCKET);
+    let path = tor_dir.join(name);
     usable_socket_path(&path).then_some(path)
 }
 
@@ -85,6 +99,11 @@ mod tests {
         assert_eq!(
             onion_socket_path(Path::new("/w/tor")),
             Some(PathBuf::from("/w/tor/onion.sock"))
+        );
+        #[cfg(unix)]
+        assert_eq!(
+            previous_onion_socket_path(Path::new("/w/tor")),
+            Some(PathBuf::from("/w/tor/previous-onion.sock"))
         );
         #[cfg(not(unix))]
         assert_eq!(onion_socket_path(Path::new("/w/tor")), None);

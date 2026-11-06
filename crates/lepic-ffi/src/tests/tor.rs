@@ -119,8 +119,14 @@ impl FakeNetwork {
     }
 
     /// Leaves what the fake tor of the wallet in `wallet_dir` copies, and serves its control
-    /// port, publishing the onion `onion` as that wallet's. Returns the commands it receives.
-    async fn prepare(&self, wallet_dir: &Path, onion: &str) -> Arc<Mutex<Vec<String>>> {
+    /// port, publishing the onions of `session` as that wallet's: its onion first, then its
+    /// previous onion. Returns the commands it receives.
+    async fn prepare(&self, wallet_dir: &Path, session: &Session) -> Arc<Mutex<Vec<String>>> {
+        let service_ids = [
+            session.onion_address().unwrap(),
+            session.previous_onion_address().unwrap(),
+        ]
+        .map(|onion| onion.trim_end_matches(".onion").to_owned());
         let control = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let cookie = fresh_cookie();
         std::fs::write(wallet_dir.join("fake-cookie"), cookie).unwrap();
@@ -135,7 +141,7 @@ impl FakeNetwork {
             cookie,
             self.socks,
             Arc::clone(&self.onions),
-            onion.trim_end_matches(".onion").to_owned(),
+            service_ids,
             wallet_dir.to_path_buf(),
             Arc::clone(&commands),
         ));
@@ -196,13 +202,14 @@ async fn serve_socks(mut stream: TcpStream, onions: Onions) {
 }
 
 /// Answers as tor's control port does for a bootstrap that completes and an onion whose
-/// descriptor uploads at once. `SIGNAL SHUTDOWN` makes the fake tor exit.
+/// descriptor uploads at once, the nth `ADD_ONION` answered with the nth of `service_ids`.
+/// `SIGNAL SHUTDOWN` makes the fake tor exit.
 async fn serve_control(
     listener: TcpListener,
     cookie: [u8; 32],
     socks: SocketAddr,
     onions: Onions,
-    service_id: String,
+    service_ids: [String; 2],
     wallet_dir: PathBuf,
     commands: Arc<Mutex<Vec<String>>>,
 ) {
@@ -210,6 +217,7 @@ async fn serve_control(
     let (read, mut write) = stream.into_split();
     let mut lines = BufReader::new(read).lines();
     let mut nonces = None;
+    let mut added = 0;
     while let Ok(Some(line)) = lines.next_line().await {
         let mut words = line.split(' ');
         let verb = words.next().unwrap_or_default();
@@ -272,6 +280,8 @@ async fn serve_control(
                         target.strip_prefix("127.0.0.1:").unwrap().parse().unwrap(),
                     ),
                 };
+                let service_id = &service_ids[added.min(1)];
+                added += 1;
                 onions.lock().unwrap().insert(service_id.clone(), target);
                 format!(
                     "250-ServiceID={service_id}\r\n250 OK\r\n650 HS_DESC UPLOADED {service_id} UNKNOWN $AAAA~relay\r\n"
@@ -353,7 +363,7 @@ async fn start_tor(
     dir: &Path,
 ) -> (Events, Arc<Mutex<Vec<String>>>) {
     let onion = session.onion_address().unwrap();
-    let commands = network.prepare(dir, &onion).await;
+    let commands = network.prepare(dir, session).await;
     let events = Events::default();
     session.set_tor_timings(quick());
     session
@@ -581,7 +591,7 @@ async fn a_tor_started_without_publishing_adds_no_onion_and_runs_no_listener() {
     let (pair, network) = tor_pair().await;
     let bob = &pair.bob;
     let onion = bob.onion_address().unwrap();
-    let commands = network.prepare(pair.dirs[1].path(), &onion).await;
+    let commands = network.prepare(pair.dirs[1].path(), bob).await;
     let events = Events::default();
     bob.set_tor_timings(quick());
 
@@ -814,7 +824,7 @@ async fn a_start_right_after_a_stop_waits_for_the_stopped_tor_to_be_down() {
     let (first, _) = start_tor(&network, &pair.bob, pair.dirs[1].path()).await;
     let onion = pair.bob.onion_address().unwrap();
     // What the next fake tor copies; the running one copied its own already.
-    network.prepare(pair.dirs[1].path(), &onion).await;
+    network.prepare(pair.dirs[1].path(), &pair.bob).await;
 
     pair.bob.stop_tor();
     let second = Events::default();
@@ -954,10 +964,11 @@ async fn a_missing_tor_binary_is_reported_and_ends_the_stream() {
     assert!(eventually(|| pair.bob.tor_status().kind == TorStatusKind::Off).await);
 }
 
-/// `testdata/vectors/keys/address_keys_seed32.json`: the onion `epic-wallet` derives from the
-/// payment-proof key of the vector's seed.
+/// `testdata/vectors/keys/address_keys_seed32.json`: the previous onion is the onion
+/// `epic-wallet` derives from the payment-proof key of the vector's seed;
+/// `onion_key_seed32.json`: the onion is that of the seed's LEPIC-namespace onion key.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn the_onion_address_is_the_payment_proof_address_in_onion_form() {
+async fn the_previous_onion_is_the_payment_proof_address_in_onion_form_and_the_onion_is_not() {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../testdata/vectors/keys/address_keys_seed32.json");
     let vector: serde_json::Value =
@@ -1008,16 +1019,135 @@ async fn the_onion_address_is_the_payment_proof_address_in_onion_form() {
         .await
         .unwrap();
 
+    let previous = session.previous_onion_address().unwrap();
     let onion = session.onion_address().unwrap();
 
     assert_eq!(
-        onion,
+        previous,
         format!("{}.onion", case["payment_proof_onion_v3"].as_str().unwrap())
     );
     let public_key: [u8; 32] = unhex(case["payment_proof_public_key"].as_str().unwrap())
         .try_into()
         .unwrap();
-    assert_eq!(onion, lepic_tor::onion_address(&public_key));
+    assert_eq!(previous, lepic_tor::onion_address(&public_key));
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../testdata/vectors/keys/onion_key_seed32.json");
+    let vector: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+    assert_eq!(
+        onion,
+        format!("{}.onion", vector["expected"]["onion_v3"].as_str().unwrap())
+    );
+    assert_ne!(onion, previous);
+    session.lock();
+    assert_eq!(
+        kind(session.previous_onion_address()),
+        WalletErrorKind::Locked
+    );
+}
+
+/// Bob's tor publishes his onion and his previous onion, each behind a listener of its own,
+/// and a payment to the previous onion is received.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_previous_onion_is_published_behind_its_own_listener_and_takes_payments() {
+    let (pair, network) = tor_pair().await;
+    let (bob_events, commands) = start_tor(&network, &pair.bob, pair.dirs[1].path()).await;
+    start_tor(&network, &pair.alice, pair.dirs[0].path()).await;
+    let onion = pair.bob.onion_address().unwrap();
+    let previous = pair.bob.previous_onion_address().unwrap();
+    assert!(eventually(|| network.listener(&previous).is_some()).await);
+    assert!(pair.bob.previous_onion_listener_runs());
+    let tor_dir = pair.dirs[1].path().join("tor");
+    assert_eq!(
+        network.listener(&onion),
+        Some(OnionTarget::Unix(
+            lepic_tor::onion_socket_path(&tor_dir).unwrap()
+        ))
+    );
+    assert_eq!(
+        network.listener(&previous),
+        Some(OnionTarget::Unix(
+            lepic_tor::previous_onion_socket_path(&tor_dir).unwrap()
+        ))
+    );
+    assert_eq!(pair.bob.tor_status().onion, Some(onion.clone()));
+
+    let sent = pair
+        .alice
+        .send_tor(2 * EPIC, 1, &previous, None, None)
+        .await
+        .unwrap();
+
+    assert!(sent.posted);
+    let received = bob_events.wait_for(TorEventKind::Received).await;
+    assert_eq!(received.amount, Some(2 * EPIC));
+    let target = network.listener(&previous).unwrap();
+    pair.bob.stop_tor();
+    bob_events.wait_for(TorEventKind::Stopped).await;
+    let commands = commands.lock().unwrap().clone();
+    for id in [&onion, &previous] {
+        assert!(commands.contains(&format!("DEL_ONION {}", id.trim_end_matches(".onion"))));
+    }
+    assert!(is_closed(&target), "the previous onion's listener stopped");
+}
+
+/// With `publish_previous_onion` off, only the onion is added and only its listener runs.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_host_that_turns_the_previous_onion_off_publishes_only_the_onion() {
+    let network = FakeNetwork::start().await;
+    let chain = crate::api::testing::MockChain::new(1).unwrap();
+    let runtime = chain.runtime(LogLevel::Warn).unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let mut config = WalletConfig {
+        policy: crate::api::policy::HostPolicy {
+            publish_previous_onion: Some(false),
+            ..Default::default()
+        },
+        data_dir: dir.path().to_string_lossy().into_owned(),
+        chain: Chain::Floonet,
+        node_url: "http://127.0.0.1:1".to_owned(),
+        node_api_secret: None,
+        epicbox_domain: String::new(),
+        epicbox_port: 443,
+        onion_routes: Vec::new(),
+        tuning: crate::tuning::shipped(),
+        offline: false,
+        tor_wanted: false,
+        host_features: 0,
+        profile: 0,
+        domain: None,
+    };
+    let secret = crate::node::NodeSecret::take(&mut config);
+    let session = Arc::new(
+        Session::new(
+            &runtime.inner,
+            &config,
+            &secret,
+            AppSecretStore::in_memory(),
+        )
+        .await
+        .unwrap(),
+    );
+    session
+        .create(SeedOrigin::Generate, password())
+        .await
+        .unwrap();
+
+    let (events, commands) = start_tor(&network, &session, dir.path()).await;
+
+    assert!(session.tor_listener_runs());
+    assert!(!session.previous_onion_listener_runs());
+    let previous = session.previous_onion_address().unwrap();
+    assert_eq!(network.listener(&previous), None);
+    let added = commands
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|command| *command == "ADD_ONION")
+        .count();
+    assert_eq!(added, 1);
+    session.stop_tor();
+    events.wait_for(TorEventKind::Stopped).await;
 }
 
 /// Opt-in: two wallets on the scripted chain, each with a real tor, pay each other over the

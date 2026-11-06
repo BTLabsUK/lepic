@@ -278,14 +278,25 @@ impl Receiver {
         json: &str,
         message: Option<&str>,
     ) -> Result<lepic_wallet::Received, ReceiveError> {
-        self.runtime.block_on(self.wallet.receive(
+        self.receive_with(
             transport,
-            &wire(json),
+            json,
             ReceiveRequest {
                 account: None,
                 message: message.map(str::to_owned),
+                ..ReceiveRequest::default()
             },
-        ))
+        )
+    }
+
+    pub fn receive_with(
+        &self,
+        transport: TransportId,
+        json: &str,
+        request: ReceiveRequest,
+    ) -> Result<lepic_wallet::Received, ReceiveError> {
+        self.runtime
+            .block_on(self.wallet.receive(transport, &wire(json), request))
     }
 
     /// The wallet's database, opened with the key the engine seals contexts under.

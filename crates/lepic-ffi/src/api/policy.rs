@@ -74,6 +74,11 @@ pub struct HostPolicy {
     /// Refuse an invoice from a contact instead of parking it, answered `declined`. A plain
     /// Epicbox invoice is refused anyway. Default off.
     pub refuse_unsolicited_invoices: Option<bool>,
+    /// Whether `start_tor` with `publish_onion` also publishes the previous onion, the one
+    /// LEPIC 0.3.1 and earlier published (ADR 0044), on its own listener, so senders that saved
+    /// it still reach the wallet. Payment proofs asked for there are signed with the
+    /// payment-proof key, as before. Default true.
+    pub publish_previous_onion: Option<bool>,
 }
 
 /// How a runtime treats PINs, chosen when the app creates it with
@@ -127,6 +132,7 @@ pub(crate) struct Policy {
     pub(crate) invoice_expiry_default: Duration,
     pub(crate) invoice_expiry_max: Duration,
     pub(crate) max_invoice_ttl_lead_blocks: u64,
+    pub(crate) publish_previous_onion: bool,
     pub(crate) wallet: WalletPolicy,
 }
 
@@ -235,6 +241,7 @@ impl Policy {
             invoice_expiry_default: expiry_default,
             invoice_expiry_max: expiry_max,
             max_invoice_ttl_lead_blocks: lead,
+            publish_previous_onion: policy.publish_previous_onion.unwrap_or(true),
             wallet,
         })
     }
@@ -462,6 +469,17 @@ mod tests {
         })
         .unwrap();
         assert!(long.invoice_expiry(Some(1_000_000)).is_ok());
+    }
+
+    #[test]
+    fn the_previous_onion_is_published_unless_the_host_turns_it_off() {
+        assert!(Policy::shipped().publish_previous_onion);
+        let off = Policy::resolve(&HostPolicy {
+            publish_previous_onion: Some(false),
+            ..HostPolicy::default()
+        })
+        .unwrap();
+        assert!(!off.publish_previous_onion);
     }
 
     #[test]

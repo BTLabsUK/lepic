@@ -7,8 +7,24 @@ Conventional Commit messages at release time.
 
 ## [Unreleased]
 
+### Changed
+
+- The wallet's onion has a key of its own, the namespace key `lepic-wallet onion key v1`, and is
+  no longer the payment-proof address in onion form (ADR 0044). Updated installs show a new
+  onion; a restore from the phrase gives the same one. Epicbox and payment-proof addresses do
+  not change. A payment proof asked for over the onion names the onion's key and is signed with
+  it; `ReceiveRequest` takes the key as `proof_key` (`ProofKey::Payments` by default), and a
+  proof for the other key's address is refused with `ForeignProofAddress`.
+
 ### Added
 
+- `Wallet::previous_onion_key`, `lepic tor address --previous` and the binding's
+  `previous_onion_address`: the onion of LEPIC 0.3.1 and earlier, the one `epic-wallet` and the
+  GUI wallet publish.
+- `lepic tor listen --previous-onion` and `HostPolicy::publish_previous_onion` (default on)
+  publish the previous onion too, on a listener of its own whose proofs are signed with the
+  payment-proof key, so senders that saved it still reach the wallet.
+- `lepic_tor::TorProcess::add_onion_to` adds a further onion to a running tor.
 - Two wallet policy switches, off by default (ADR 0045): `refuse_unsolicited_payments` refuses an
   S1 nobody asked for over Epicbox, HTTP, Tor or a contact's mailbox, and
   `refuse_unsolicited_invoices` refuses a contact's I1. A refused slate is answered with the

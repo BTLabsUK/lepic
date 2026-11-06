@@ -196,7 +196,9 @@ pub struct SendRequest {
     /// Cut to [`lepic_slate::model::MAX_MESSAGE_LEN`] bytes, on a character boundary, before
     /// it is signed.
     pub message: Option<String>,
-    /// The receiver's payment proof address. Asks the receiver to sign a payment proof.
+    /// The receiver's payment proof address. Asks the receiver to sign a payment proof. For
+    /// a wallet reached at its onion this is the onion's public key, which a LEPIC receiver
+    /// signs with its onion key and a stock one with its payment-proof key (ADR 0044).
     pub payment_proof_recipient: Option<ProofAddress>,
     /// Outputs selection must not take, whatever their state.
     pub exclude_outputs: Vec<Commitment>,
@@ -435,6 +437,8 @@ fn sign_message(
     Ok(ParticipantMessage::new(text.to_owned(), signature)?)
 }
 
+/// The proof the sender asks for. Its sender address is always the payment-proof key, never
+/// the onion key, whatever the transport (ADR 0044).
 fn payment_proof(
     keychain: &Keychain,
     account: AccountIndex,

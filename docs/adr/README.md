@@ -23,7 +23,7 @@ record that supersedes the old one; accepted records are not rewritten.
 | [0015](0015-file-method-writes-v3.md) | The file method writes V3; Epicbox stays V2 for S1, V3 for invoice stages | accepted |
 | [0016](0016-epicbox-notices.md) | LEPIC notices over Epicbox, sent only to proven peers | accepted |
 | [0017](0017-foreign-api-over-http.md) | The wallet foreign API over HTTP in its own crate | accepted |
-| [0018](0018-tor-on-desktop.md) | Tor on desktop through a bundled tor child process | accepted |
+| [0018](0018-tor-on-desktop.md) | Tor on desktop through a bundled tor child process | accepted, the onion key superseded by 0044 |
 | [0019](0019-import-epic-wallet-history.md) | Import the transaction history of an epic-wallet wallet, reconciled with the scan | accepted |
 | [0020](0020-reference-epic-wallet-4-1.md) | Reference wallet and node move to epic-wallet v4.1.0 | accepted, node row for interop and `upstream.toml` superseded by 0038 |
 | [0021](0021-epicbox-over-tor.md) | Epicbox over Tor | accepted |
@@ -49,6 +49,7 @@ record that supersedes the old one; accepted records are not rewritten.
 | [0041](0041-the-owners-profile-in-the-feature-word.md) | The owner's profile in the feature word | accepted |
 | [0042](0042-draining-the-old-home-after-moving-ones-own.md) | Draining the old home after moving one's own | accepted |
 | [0043](0043-domain-proof-for-paired-contacts.md) | Domain proof for paired contacts | accepted |
+| [0044](0044-the-onion-has-its-own-key.md) | The onion has its own key | proposed |
 | [0045](0045-refusing-slates-nobody-asked-for.md) | Refusing slates nobody asked for | proposed |
 
 Template:

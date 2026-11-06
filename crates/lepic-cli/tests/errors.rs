@@ -164,15 +164,29 @@ fn onion_of(mnemonic: &str) -> String {
 }
 
 #[test]
-fn tor_address_prints_the_onion_of_the_payment_proof_key() {
+fn tor_address_prints_an_onion_of_its_own_and_previous_prints_the_payment_proof_one() {
     let host = TestHost::new();
     let wallet = Instance::new("right password");
     wallet.restore(&host, SENDER_MNEMONIC);
+    let again = Instance::new("other password");
+    again.restore(&host, SENDER_MNEMONIC);
 
-    let outcome = wallet.run(&host, &["tor", "address"]);
+    let onion = wallet.run(&host, &["tor", "address"]);
+    let previous = wallet.run(&host, &["tor", "address", "--previous"]);
+    let restored = again.run(&host, &["tor", "address"]);
 
-    assert_eq!(outcome.code, 0);
-    assert_eq!(text(&outcome.json(), "onion"), onion_of(SENDER_MNEMONIC));
+    assert_eq!(onion.code, 0);
+    assert_eq!(previous.code, 0);
+    let onion = text(&onion.json(), "onion").to_owned();
+    assert_eq!(text(&previous.json(), "onion"), onion_of(SENDER_MNEMONIC));
+    assert_ne!(onion, onion_of(SENDER_MNEMONIC));
+    assert_eq!(onion.len(), 62, "{onion}");
+    assert!(onion.ends_with(".onion"), "{onion}");
+    assert_eq!(
+        text(&restored.json(), "onion"),
+        onion,
+        "a restore gives the same onion"
+    );
 }
 
 #[test]

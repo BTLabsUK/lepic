@@ -144,11 +144,11 @@ fn refresh_then_update_scan_ends_where_upstream_update_ended() {
     }
 }
 
-/// `testdata/vectors/keys/address_keys_seed32.json`: the onion key of a wallet restored from
-/// the vector's seed is the address secret key of `m/0/0`, index 0, and its public key is the
-/// payment-proof key `epic-wallet` derives.
+/// `testdata/vectors/keys/address_keys_seed32.json`: the previous onion key of a wallet
+/// restored from the vector's seed is the address secret key of `m/0/0`, index 0, and its
+/// public key is the payment-proof key `epic-wallet` derives.
 #[test]
-fn the_onion_key_is_the_payment_proof_key_of_the_default_account() {
+fn the_previous_onion_key_is_the_payment_proof_key_of_the_default_account() {
     let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../testdata/vectors/keys/address_keys_seed32.json");
     let vector: Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
@@ -169,14 +169,14 @@ fn the_onion_key_is_the_payment_proof_key_of_the_default_account() {
     let harness = support::Harness::new();
     let wallet = harness.wallet();
     assert!(matches!(
-        wallet.onion_key(),
+        wallet.previous_onion_key(),
         Err(lepic_wallet::WalletError::Locked)
     ));
 
     harness
         .block_on(wallet.restore(support::password("vector password"), &phrase))
         .unwrap();
-    let key = wallet.onion_key().unwrap();
+    let key = wallet.previous_onion_key().unwrap();
 
     assert_eq!(
         key.expose_seed().as_slice(),
@@ -189,9 +189,36 @@ fn the_onion_key_is_the_payment_proof_key_of_the_default_account() {
     assert_eq!(format!("{key:?}"), "OnionKey([redacted])");
     wallet.lock();
     assert!(matches!(
-        wallet.onion_key(),
+        wallet.previous_onion_key(),
         Err(lepic_wallet::WalletError::Locked)
     ));
+}
+
+/// `testdata/vectors/keys/onion_key_*.json`: the onion key of a wallet restored from the
+/// vector's seed is the generator's LEPIC-namespace key, not the payment-proof key.
+#[test]
+fn the_onion_key_is_the_namespace_key_of_the_vectors() {
+    for name in ["onion_key_seed32", "onion_key_seed16"] {
+        let vector = keys_vector(name);
+        let harness = support::Harness::new();
+        let wallet = restored(&harness, vector["inputs"]["seed"].as_str().unwrap());
+        let expected = &vector["expected"];
+
+        let key = wallet.onion_key().unwrap();
+
+        assert_eq!(
+            key.expose_seed().as_slice(),
+            hex_bytes(expected["ed25519_seed"].as_str().unwrap()),
+            "{name}"
+        );
+        assert_eq!(
+            key.public_key().as_slice(),
+            hex_bytes(expected["public_key"].as_str().unwrap()),
+            "{name}"
+        );
+        let previous = wallet.previous_onion_key().unwrap();
+        assert_ne!(key.public_key(), previous.public_key(), "{name}");
+    }
 }
 
 /// `testdata/vectors/store_key/*.json`: the store key derived from the vector's phrase is the

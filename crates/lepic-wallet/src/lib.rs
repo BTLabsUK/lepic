@@ -65,7 +65,7 @@ pub use ports::{
     SqliteStores,
 };
 pub use process::{crypto_context_is_randomized, randomize_crypto_context};
-pub use receive::{ReceiveError, ReceiveRequest, Received};
+pub use receive::{ProofKey, ReceiveError, ReceiveRequest, Received};
 pub use wallet::Wallet;
 
 /// What a host needs to decode a slate without a wallet, for example to show it to the user

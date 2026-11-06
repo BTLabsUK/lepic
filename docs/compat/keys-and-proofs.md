@@ -39,6 +39,12 @@ secret key for the account and derivation index (`libwallet/src/address.rs`, `ed
 from `libwallet/src/internal/tx.rs` and `api_impl/owner.rs`). Its public key is the payment-proof
 address, also shown in onion v3 form. Vectors: `testdata/vectors/keys/address_keys_*`.
 
+LEPIC signs with this key too, except for a proof asked for over its onion: its onion has a key of
+its own, the namespace key `lepic-wallet onion key v1` (ADR 0044), and such a proof names that
+key as the receiver address and is signed with it. The onion `epic-wallet` publishes, the
+payment-proof address in onion form, is LEPIC's previous onion. Vectors:
+`testdata/vectors/keys/onion_key_*`.
+
 ## Switch commitments
 
 - Output blinding factors use the "regular" switch commitment: the derived key is replaced by

@@ -68,8 +68,8 @@ a listing address never signs with index 0 and refuses a payment-proof request.
 ### Recorded exception: index 0
 
 One secret, `m/<a>/1/0`, serves the Epicbox address (ECDSA over the relay's challenge text),
-Epicbox ECDH, the Ed25519 receiver and sender payment-proof key, and the onion seed, as in
-`epic-wallet`. Stock wallets send to this address and every wallet on the phrase drains its
+Epicbox ECDH, the Ed25519 receiver and sender payment-proof key, and the seed of the previous
+onion, as in `epic-wallet`. The onion LEPIC publishes has a key of its own (0044). Stock wallets send to this address and every wallet on the phrase drains its
 mailbox, so it cannot move. LEPIC adds one use: an ECDH with a contact's mailbox key whose
 output feeds only HKDF under `lepic/addr-proof/1` to make a MAC (0034). LEPIC makes no signature
 of its own with this key: the device-link hello and the listing signer have keys of their own.
@@ -102,7 +102,7 @@ used again and never reused.
 | Path | Type | Purpose | Owner | First | Status | Vector |
 |---|---|---|---|---|---|---|
 | `m/<a>/0/<c>` | secp256k1 (Grin BIP32), switch commitment | Output blinding factors | `lepic-keychain` | ≤ 26.10.24-r2 | live | `keys/commitments_*`, `keys/derivation_*` |
-| `m/<a>/1/0` | secp256k1; its bytes are also the Ed25519 and onion seed | Epicbox address, relay challenge signature, Epicbox ECDH, payment-proof key, onion (exception above) | `lepic-keychain`, `lepic-epicbox`, `lepic-tor` | ≤ 26.10.24-r2 | live | `keys/address_keys_*`, `epicbox/signature_*` |
+| `m/<a>/1/0` | secp256k1; its bytes are also the Ed25519 and previous onion seed | Epicbox address, relay challenge signature, Epicbox ECDH, payment-proof key, previous onion (exception above, 0044) | `lepic-keychain`, `lepic-epicbox`, `lepic-tor` | ≤ 26.10.24-r2 | live | `keys/address_keys_*`, `epicbox/signature_*` |
 | `m/<a>/1/1` to `m/<a>/1/0x7FFF_FFFF` | secp256k1 | Invoice inbox addresses of 26.10.0 to 26.10.15 | `lepic-wallet` | 26.10.0 | retired-reserved | none |
 | `m/<a>/1/0x8000_0000` and above | none | Never used: reserved so no LEPIC key sits on the branch other wallets walk | none | none | retired-reserved | none |
 | `m/<a>/2/0` | secp256k1, hashed into the contact root | Input of the contact root (below) | `lepic-wallet-contacts` | 26.10.20 | live | `pairing/contact_keys.json` |
@@ -119,6 +119,7 @@ used again and never reused.
 | `lepic-wallet store key v1` | 32-byte raw key | Page encryption of the wallet database (0032) | `lepic-wallet` | 26.10.25 | live | `store_key/store_key_seed_*` |
 | `lepic-wallet store check v1` ‖ salt(16) | BLAKE2b-128 keyed by the store key | The `.check` file that proves the store key before the database opens (0032) | `lepic-wallet` | 26.10.25 | live | `store_key/store_key_seed_*` |
 | `lepic-wallet listing key v1` ‖ service_key(33) ‖ gen(u32 BE) ‖ ctr | secp256k1 (counter until valid) | Address, ECDH and signing key of one name-service listing (exception above) | `lepic-wallet::namespace` | 26.10.25 | live | `keys/listing_keys_seed32`, `keys/listing_keys_seed16` |
+| `lepic-wallet onion key v1` | Ed25519 | The wallet's onion and the key that signs payment proofs asked for over it (0044). The 32 bytes are the Ed25519 seed; the context is empty | `lepic-wallet::namespace` | unreleased | live | `keys/onion_key_seed32`, `keys/onion_key_seed16` |
 | `lepic-wallet device link key v1` | Ed25519 | Signs the hello of a linked device; both devices on one phrase hold it, so a valid signature proves the same phrase. The 32 bytes are the Ed25519 seed; the context is empty | `lepic-wallet::namespace` | 26.10.25 | live | `keys/device_link_key_seed32`, `keys/device_link_key_seed16` |
 
 #### HKDF and codes

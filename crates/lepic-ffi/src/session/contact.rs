@@ -1085,6 +1085,7 @@ impl Session {
                 ReceiveRequest {
                     account: None,
                     message,
+                    ..ReceiveRequest::default()
                 },
             )
             .await?;

@@ -587,6 +587,67 @@ async fn republishing_removes_the_old_onion_first() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn another_onion_is_added_beside_the_published_one_and_removed_at_the_stop() {
+    const PREVIOUS_SEED: [u8; 32] = [10; 32];
+    let fake = FakeTor::start(HONEST).await;
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let other_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let other_port = other_listener.local_addr().unwrap().port();
+    let tor = TorProcess::start(fake.settings(quick()));
+    tor.wait_bootstrapped().await.unwrap();
+    let onion = tor.publish_onion(&SEED, port).await.unwrap();
+    let previous = tor
+        .add_onion_to(&PREVIOUS_SEED, OnionTarget::Port(other_port))
+        .await
+        .unwrap();
+    assert_eq!(
+        previous,
+        OnionAddress::from_public_key(&public_key_of_seed(&PREVIOUS_SEED))
+    );
+    // The state keeps naming the published onion.
+    assert_eq!(
+        tor.state(),
+        TorState::Ready {
+            onion: onion.clone()
+        }
+    );
+    tor.stop().await;
+    let commands = fake.commands();
+    let onion_commands: Vec<&str> = commands
+        .iter()
+        .map(String::as_str)
+        .filter(|c| c.starts_with("ADD_ONION") || c.starts_with("DEL_ONION"))
+        .collect();
+    assert_eq!(
+        onion_commands,
+        [
+            add_onion_command(port).as_str(),
+            add_onion_command(other_port).as_str(),
+            format!("DEL_ONION {}", onion.service_id()).as_str(),
+            format!("DEL_ONION {}", previous.service_id()).as_str(),
+        ]
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn another_onion_whose_listener_does_not_answer_is_not_added() {
+    let fake = FakeTor::start(HONEST).await;
+    let unused = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = unused.local_addr().unwrap().port();
+    drop(unused);
+    let tor = TorProcess::start(fake.settings(quick()));
+    tor.wait_bootstrapped().await.unwrap();
+    let failure = tor
+        .add_onion_to(&SEED, OnionTarget::Port(port))
+        .await
+        .unwrap_err();
+    assert_eq!(failure.kind, FailureKind::Listener);
+    assert!(tor.state().can_send());
+    assert!(!fake.commands().iter().any(|c| c.starts_with("ADD_ONION")));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn another_service_id_is_a_keys_failure_that_keeps_sending() {
     let fake = FakeTor::start(Script {
         bootstrap: Bootstrap::Completes,

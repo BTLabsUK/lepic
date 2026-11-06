@@ -16,8 +16,8 @@ use lepic_tor::{
     TorProcess, TorSendError, TorSettings, TorState, TorTransport,
 };
 use lepic_transport::transport::{BoxFuture, Destination};
-use lepic_wallet::OnionKey;
 use lepic_wallet::send::{Delivery, SendError};
+use lepic_wallet::{OnionKey, ProofKey};
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
 use tracing::{debug, info, warn};
@@ -125,6 +125,8 @@ pub(super) struct TorRun {
     tor: Arc<TorProcess>,
     /// The listener behind the onion; `None` when the onion is not published.
     listener: Option<ListenerHandle>,
+    /// The listener behind the previous onion; `None` when it is not published.
+    previous_listener: Option<ListenerHandle>,
     report: TorReport,
     /// Forwards tor's states to `report` and publishes the onion.
     driver: JoinHandle<()>,
@@ -315,8 +317,16 @@ impl Session {
         Ok(lepic_tor::onion_address(key.public_key()))
     }
 
+    /// The onion LEPIC 0.3.1 and earlier published, the payment-proof address in onion form.
+    pub(crate) fn previous_onion_address(&self) -> Result<String, WalletError> {
+        let key = self.engine.previous_onion_key()?;
+        Ok(lepic_tor::onion_address(key.public_key()))
+    }
+
     /// Starts tor and, with `publish_onion`, its listener behind the published onion, unless
-    /// tor runs or starts, and reports what they do to `report`.
+    /// tor runs or starts, and reports what they do to `report`. When the policy publishes the
+    /// previous onion, it gets a listener of its own, which signs payment proofs with the
+    /// payment-proof key; the onion's listener signs them with the onion's key.
     ///
     /// A start while the tor stopped last is still going down waits for it, as both use the
     /// same data directory; one that waits too long reports `Failed` and `Stopped`. iOS runs
@@ -330,6 +340,11 @@ impl Session {
         report: TorReport,
     ) -> Result<(), WalletError> {
         let key = self.engine.onion_key()?;
+        let previous_key = if publish_onion && self.policy.publish_previous_onion {
+            Some(self.engine.previous_onion_key()?)
+        } else {
+            None
+        };
         if cfg!(target_os = "ios") {
             report(failed(TorFailureKind::Missing));
             report(TorEvent::of(TorEventKind::Stopped));
@@ -364,8 +379,11 @@ impl Session {
                 return Ok(());
             }
         }
-        let listener = match self.onion_listener(publish_onion, &report).await {
-            Ok(listener) => listener,
+        let listeners = match self
+            .onion_listeners(publish_onion, previous_key.is_some(), &report)
+            .await
+        {
+            Ok(listeners) => listeners,
             Err(error) => {
                 let mut slot = lock(&self.tor_slot);
                 // The relay connection keeps waiting, as after tor ending on its own.
@@ -389,9 +407,12 @@ impl Session {
         if let Some(timings) = *lock(&self.tor_timings) {
             settings.timings = timings;
         }
-        let publish = listener
-            .as_ref()
-            .map(|listener| (key, onion_target(listener)));
+        let (listener, previous_listener) = listeners;
+        let publish = listener.as_ref().map(|listener| Publish {
+            key,
+            target: onion_target(listener),
+            previous: previous_key.zip(previous_listener.as_ref().map(onion_target)),
+        });
         let unclaimed = {
             let mut slot = lock(&self.tor_slot);
             if matches!(&*slot, TorSlot::Starting(started) if *started == generation) {
@@ -412,18 +433,19 @@ impl Session {
                     generation,
                     tor,
                     listener,
+                    previous_listener,
                     report: Arc::clone(&report),
                     driver,
                     publish_failure,
                 }));
                 None
             } else {
-                Some(listener)
+                Some((listener, previous_listener))
             }
         };
-        // Stopped or locked while the listener was binding.
-        if let Some(listener) = unclaimed {
-            if let Some(listener) = listener {
+        // Stopped or locked while the listeners were binding.
+        if let Some((listener, previous_listener)) = unclaimed {
+            for listener in listener.into_iter().chain(previous_listener) {
                 listener.shutdown().await;
             }
             report(TorEvent::of(TorEventKind::Stopped));
@@ -431,30 +453,59 @@ impl Session {
         Ok(())
     }
 
-    /// The listener behind the onion, when it is published.
-    async fn onion_listener(
+    /// The listeners behind the onion, when it is published, and behind the previous onion,
+    /// when that is published too. A previous listener that cannot start stops the first.
+    async fn onion_listeners(
         self: &Arc<Self>,
         publish_onion: bool,
+        publish_previous: bool,
         report: &TorReport,
-    ) -> Result<Option<ListenerHandle>, lepic_foreign::ListenError> {
+    ) -> Result<(Option<ListenerHandle>, Option<ListenerHandle>), lepic_foreign::ListenError> {
         if !publish_onion {
-            return Ok(None);
+            return Ok((None, None));
         }
-        let receiver = self.http_receiver(listener_report(report), TRANSPORT_ID);
+        let tor_dir = self.data_dir.join(TOR_DIR);
+        let socket = lepic_tor::onion_socket_path(&tor_dir);
+        let listener = self.onion_listener(socket, ProofKey::Onion, report).await?;
+        if !publish_previous {
+            return Ok((Some(listener), None));
+        }
+        let socket = lepic_tor::previous_onion_socket_path(&tor_dir);
+        match self
+            .onion_listener(socket, ProofKey::Payments, report)
+            .await
+        {
+            Ok(previous) => Ok((Some(listener), Some(previous))),
+            Err(error) => {
+                listener.shutdown().await;
+                Err(error)
+            }
+        }
+    }
+
+    /// A listener for an onion, on `socket` where it is given, signing payment proofs with
+    /// `proof_key`.
+    async fn onion_listener(
+        self: &Arc<Self>,
+        socket: Option<PathBuf>,
+        proof_key: ProofKey,
+        report: &TorReport,
+    ) -> Result<ListenerHandle, lepic_foreign::ListenError> {
+        let receiver = self.http_receiver(listener_report(report), TRANSPORT_ID, proof_key);
         let settings = lepic_tor::listen_settings(self.tuning.listen);
         // A socket in tor's folder where the platform and the path allow (not Windows): no
         // other program or app reaches it, where any can reach a loopback port.
         #[cfg(unix)]
-        if let Some(path) = lepic_tor::onion_socket_path(&self.data_dir.join(TOR_DIR)) {
+        if let Some(path) = socket {
             if let Some(dir) = path.parent() {
                 std::fs::create_dir_all(dir)
                     .map_err(|source| lepic_foreign::ListenError::Bind { port: 0, source })?;
             }
-            return lepic_foreign::listen_unix(&path, settings, receiver)
-                .await
-                .map(Some);
+            return lepic_foreign::listen_unix(&path, settings, receiver).await;
         }
-        lepic_foreign::listen(settings, receiver).await.map(Some)
+        #[cfg(not(unix))]
+        drop(socket);
+        lepic_foreign::listen(settings, receiver).await
     }
 
     /// Stops tor, then its listener. `Stopped` is reported once both are down; until then the
@@ -832,6 +883,12 @@ impl Session {
     pub(crate) fn tor_listener_runs(&self) -> bool {
         matches!(&*lock(&self.tor_slot), TorSlot::Running(run) if run.listener.is_some())
     }
+
+    /// Whether the running tor has a listener behind the previous onion.
+    #[cfg(all(test, unix))]
+    pub(crate) fn previous_onion_listener_runs(&self) -> bool {
+        matches!(&*lock(&self.tor_slot), TorSlot::Running(run) if run.previous_listener.is_some())
+    }
 }
 
 fn tor_not_running() -> WalletError {
@@ -841,13 +898,21 @@ fn tor_not_running() -> WalletError {
     )
 }
 
-/// Forwards tor's states to `report`, publishes the onion of `publish` to its listener port
-/// once tor has bootstrapped, and stops tor and its listener when tor ends on its own.
+/// The onions a tor publishes, each with its listener.
+struct Publish {
+    key: OnionKey,
+    target: OnionTarget,
+    /// The previous onion (ADR 0044), added once the onion is published.
+    previous: Option<(OnionKey, OnionTarget)>,
+}
+
+/// Forwards tor's states to `report`, publishes the onions of `publish` to their listeners
+/// once tor has bootstrapped, and stops tor and its listeners when tor ends on its own.
 async fn drive(
     session: Weak<Session>,
     generation: u64,
     tor: Arc<TorProcess>,
-    publish: Option<(OnionKey, OnionTarget)>,
+    publish: Option<Publish>,
     report: TorReport,
     publish_failure: Arc<std::sync::Mutex<Option<TorFailureKind>>>,
 ) {
@@ -875,7 +940,12 @@ async fn drive(
         }
     };
     let publish = async {
-        let Some((key, target)) = publish else {
+        let Some(Publish {
+            key,
+            target,
+            previous,
+        }) = publish
+        else {
             return;
         };
         if tor.wait_bootstrapped().await.is_err() {
@@ -891,9 +961,22 @@ async fn drive(
                     debug!(transport = "tor", error = %failure, "onion not published");
                     report(failed(kind));
                 }
+                return;
             }
         }
         drop(key);
+        let Some((previous_key, previous_target)) = previous else {
+            return;
+        };
+        // The onion is up: a previous onion that cannot be added is logged, not reported, so
+        // the app's state stays that of the onion it shows.
+        match tor
+            .add_onion_to(previous_key.expose_seed(), previous_target)
+            .await
+        {
+            Ok(_) => info!(transport = "tor", "previous onion added"),
+            Err(failure) => warn!(transport = "tor", error = %failure, "previous onion not added"),
+        }
     };
     tokio::join!(forward, publish);
     drop(tor);
@@ -913,6 +996,7 @@ async fn shut_down(run: TorRun, down: watch::Sender<bool>) {
     let TorRun {
         tor,
         listener,
+        previous_listener,
         report,
         driver,
         ..
@@ -920,7 +1004,7 @@ async fn shut_down(run: TorRun, down: watch::Sender<bool>) {
     driver.abort();
     let _ = driver.await;
     stop_tor_process(tor).await;
-    if let Some(listener) = listener {
+    for listener in listener.into_iter().chain(previous_listener) {
         listener.shutdown().await;
     }
     info!(transport = "tor", "tor stopped");

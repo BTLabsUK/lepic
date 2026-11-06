@@ -23,6 +23,10 @@ pub const LISTING_KEY_LABEL: &[u8] = b"lepic-wallet listing key v1";
 /// derives the same key, so a valid signature proves the same phrase.
 pub const DEVICE_LINK_KEY_LABEL: &[u8] = b"lepic-wallet device link key v1";
 
+/// The Ed25519 seed of the wallet's onion service (ADR 0044): no context. It is off the
+/// payment-proof key, so the Epicbox and payment-proof addresses do not give the onion.
+pub const ONION_KEY_LABEL: &[u8] = b"lepic-wallet onion key v1";
+
 /// What device-link signatures are made over: this tag, then the transcript.
 pub const DEVICE_LINK_TAG: &[u8] = b"lepic/device-link/v1";
 
@@ -130,6 +134,11 @@ pub(crate) fn listing_key(seed: &Seed, listing: &Listing) -> Result<SecretKey, W
 pub(crate) fn device_link_key(seed: &Seed) -> Result<SigningKey, WalletError> {
     let bytes = namespace_hash(seed, DEVICE_LINK_KEY_LABEL, &[])?;
     Ok(SigningKey::from_bytes(&bytes))
+}
+
+/// The seed of the onion key of the wallet of `seed`.
+pub(crate) fn onion_seed(seed: &Seed) -> Result<Zeroizing<[u8; 32]>, WalletError> {
+    namespace_hash(seed, ONION_KEY_LABEL, &[])
 }
 
 fn device_link_message(transcript: &[u8]) -> Vec<u8> {
@@ -249,5 +258,14 @@ mod tests {
         mac.update(b"lepic-wallet device link key v1");
         let expected: [u8; 32] = mac.finalize_fixed().into();
         assert_eq!(device_link_key(&seed(1)).unwrap().to_bytes(), expected);
+    }
+
+    #[test]
+    fn the_onion_seed_is_the_keyed_hash_of_its_label() {
+        let mut mac = <Blake2bMac<U32> as KeyInit>::new_from_slice(&[1; 32]).unwrap();
+        mac.update(b"lepic-wallet onion key v1");
+        let expected: [u8; 32] = mac.finalize_fixed().into();
+        assert_eq!(*onion_seed(&seed(1)).unwrap(), expected);
+        assert_ne!(*onion_seed(&seed(2)).unwrap(), expected);
     }
 }

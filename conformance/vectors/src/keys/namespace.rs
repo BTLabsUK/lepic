@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Keys of the LEPIC namespace and what they sign, which no upstream wallet has: listing keys,
-//! the device-link key, signatures by a listing key per service domain, and the pairing address
+//! the device-link key, the onion key, signatures by a listing key per service domain, and the pairing address
 //! proof. Each is written here from its description, with code independent of LEPIC's: keyed
 //! BLAKE2b-256 from `blake2-rfc`, secp256k1 keys, ECDH and ECDSA from the node's secp256k1-zkp,
 //! SHA-256, HKDF, HMAC and Ed25519 from `ring`. Listing addresses use the wallet's own Epicbox
@@ -10,6 +10,8 @@
 //!   generation (u32 BE) || counter (u8)), the counter from 0 up to the first valid secp256k1 key;
 //! - device-link key: Ed25519 from BLAKE2b(key = seed, "lepic-wallet device link key v1"), signing
 //!   "lepic/device-link/v1" || transcript;
+//! - onion key: Ed25519 from BLAKE2b(key = seed, "lepic-wallet onion key v1"), its onion v3
+//!   address written by the wallet's own onion address code;
 //! - listing signature: ECDSA by the listing key over SHA-256(SHA-256(tag) || SHA-256(tag) ||
 //!   len(domain) (u8) || domain || message), tag "lepic/listing-signature/v1";
 //! - address proof: K = HKDF-SHA256(salt "lepic/addr-proof/1", ikm = x(ECDH), info = "mac" ||
@@ -19,6 +21,7 @@
 use blake2_rfc::blake2b::blake2b;
 use epic_util::secp::key::{PublicKey, SecretKey};
 use epic_util::secp::{ContextFlag, Message, Secp256k1};
+use epic_wallet_libwallet::address;
 use ring::{digest, hkdf, hmac, signature};
 use serde::Serialize;
 
@@ -29,6 +32,7 @@ use crate::{Error, Rendered, hex, render};
 const LISTING_KEY_LABEL: &[u8] = b"lepic-wallet listing key v1";
 const DEVICE_LINK_KEY_LABEL: &[u8] = b"lepic-wallet device link key v1";
 const DEVICE_LINK_TAG: &[u8] = b"lepic/device-link/v1";
+const ONION_KEY_LABEL: &[u8] = b"lepic-wallet onion key v1";
 const LISTING_TAG: &[u8] = b"lepic/listing-signature/v1";
 const ADDRESS_PROOF_SALT: &[u8] = b"lepic/addr-proof/1";
 
@@ -287,6 +291,45 @@ fn device_link_keys(pins: &KeysPins<'_>) -> Result<Vec<Rendered>, Error> {
 }
 
 #[derive(Serialize)]
+struct OnionInputs {
+    seed: String,
+    label: &'static str,
+}
+
+#[derive(Serialize)]
+struct OnionExpected {
+    ed25519_seed: String,
+    public_key: String,
+    onion_v3: String,
+}
+
+fn onion_keys(pins: &KeysPins<'_>) -> Result<Vec<Rendered>, Error> {
+    let mut vectors = Vec::new();
+    for seed in &SEEDS {
+        let ed_seed = keyed(seed.entropy, &[ONION_KEY_LABEL]);
+        let pair = signature::Ed25519KeyPair::from_seed_unchecked(&ed_seed)
+            .map_err(|_| Error::reference("onion key")(Inconsistent("key rejected")))?;
+        let public = signature::KeyPair::public_key(&pair).as_ref().to_vec();
+        let dalek = address::ed25519_parse_pubkey(&hex(&public))
+            .map_err(Error::reference("onion public key"))?;
+        let onion =
+            address::onion_v3_from_pubkey(&dalek).map_err(Error::reference("onion v3 address"))?;
+        let inputs = OnionInputs {
+            seed: hex(seed.entropy),
+            label: "lepic-wallet onion key v1",
+        };
+        let expected = OnionExpected {
+            ed25519_seed: hex(ed_seed),
+            public_key: hex(public),
+            onion_v3: onion,
+        };
+        let name = format!("onion_key_{}", seed.name);
+        vectors.push(render(AREA, &name, &pins.wallet, inputs, expected)?);
+    }
+    Ok(vectors)
+}
+
+#[derive(Serialize)]
 struct ProofInputs {
     salt: &'static str,
     prover_address_secret: String,
@@ -444,6 +487,7 @@ pub(super) fn generate(pins: &KeysPins<'_>) -> Result<Vec<Rendered>, Error> {
     vectors.extend(listing_keys(pins)?);
     vectors.extend(listing_signatures(pins)?);
     vectors.extend(device_link_keys(pins)?);
+    vectors.extend(onion_keys(pins)?);
     vectors.extend(address_proofs(pins)?);
     Ok(vectors)
 }
