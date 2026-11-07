@@ -221,6 +221,18 @@ CLI starts.
 The recovery phrase is shown once, by `wallet init`. Write it down. It is the only way to get the
 funds back if the data directory is lost, and anyone who has it can spend them.
 
+### Change the password
+
+`lepic wallet password` re-encrypts the vault file under a new password. The current password
+comes as above. The new one comes from the first line of the file `--new-password-file` names
+(owner-only, like `password_file`), else from `LEPIC_NEW_PASSWORD`, else from a hidden prompt
+asked twice, else from the next line of standard input. An empty new password is refused (exit
+7), as is a wrong current one (exit 4, `wrong_password`); the vault is then unchanged. The new
+key uses the KDF cost of the build. The recovery phrase and the wallet database do not change:
+the database key comes from the phrase, not from the password. The command needs the data
+directory to itself, so stop `lepic serve` first; `wallet password` is refused through `serve`.
+Its JSON is `{"changed": true}`.
+
 ## Create a wallet
 
 ```
@@ -833,6 +845,16 @@ that cannot take the slate is refused before anything is locked, and a send that
 queued is cancelled. `contact collect` posts what is still queued and finalizes the answer.
 `--slate-id` works as for any send; a repeat must name the same contact. The send is stored with
 the `file` transport, since the slate leaves as a sealed file.
+
+## Outputs
+
+`lepic wallet outputs [-a LABEL]` lists the stored outputs of an account, spent ones included,
+from the wallet's database only; it does not call the node. Its JSON is `account` and `outputs`,
+each output with `commitment` (hex), `value` (EPIC), `status` (`unconfirmed`, `unspent`, `locked`
+or `spent`), `category` (where it counts in the balance: `spendable`, `awaiting_confirmation`,
+`awaiting_finalization`, `immature`, `locked` or `unpaid_invoice`; `null` for a spent output),
+`is_coinbase`, `height`, `lock_height` (`null` when none), `confirmations` and `tx_id` (`null`
+when no transaction is linked). Key ids and derivation paths are not shown.
 
 ## Transactions
 
