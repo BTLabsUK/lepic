@@ -113,6 +113,7 @@ the fees, so a lost or doubled effect fails the run.
 | epic-wallet invoices lepic by file | `epic-wallet invoice -d`, `lepic invoice pay --ttl-blocks`, `epic-wallet finalize -i` on the reply |
 | lepic sends over http | `epic-wallet listen -m http -l 23500` on loopback; `lepic tx send --to http://127.0.0.1:23500` reports `posted` in one command |
 | epic-wallet sends over http | `lepic http listen --port 23510`; `epic-wallet send -m http`; the listener's report counts one received payment |
+| epic-wallet sends over http to serve | `lepic serve --http --port 23510`; `epic-wallet send -m http`; serve's report counts one received payment under `http` |
 | same S1 twice over http | one S1 posted twice to `lepic http listen`: identical S2, one transaction, report counts one received and one repeated |
 | receiver cancels an unseen receipt | `epic-wallet` pays over Epicbox and does not finalize; `lepic tx cancel` succeeds and the amount leaves `wallet info`; `epic-wallet` then finalizes anyway, and once mined `lepic` confirms the transaction and the output comes back |
 | receiver cancel of a posted receipt | with the miner paused, `epic-wallet` finalizes and posts; `lepic tx cancel` is refused with exit 7 as in the node's pool, then, after the block, as on chain; state and balance stay |

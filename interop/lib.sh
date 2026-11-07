@@ -213,6 +213,16 @@ lepic_http_listen_start() {
     wait_until "the lepic http listener" 30 http_port_open lepic "${LEPIC_HTTP_PORT}"
 }
 
+# Starts `lepic serve --http` in the lepic container and waits until the port answers. It shares
+# the pid and log files of `lepic http listen`, so lepic_http_listen_stop ends it too; its report
+# then holds the listener's counts under `http`.
+lepic_serve_http_start() {
+    lepic_http_listen_stop >/dev/null
+    # shellcheck disable=SC2016 # expanded by the container's shell
+    dc exec -d lepic sh -c "rm -f /data/http.log; echo \$\$ >/data/http.pid; exec lepic serve --http --port ${LEPIC_HTTP_PORT} >/data/http.log 2>&1"
+    wait_until "the lepic serve http listener" 30 http_port_open lepic "${LEPIC_HTTP_PORT}"
+}
+
 # Interrupts the lepic listener as Ctrl-C would and prints its report (the last log line).
 lepic_http_listen_stop() {
     # shellcheck disable=SC2016 # expanded by the container's shell
