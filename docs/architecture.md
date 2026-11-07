@@ -140,6 +140,7 @@ its effect is stored or it was rejected for good.
 ## Mobile shape
 
 A phone suspends the app, so Epicbox runs in two modes: `listen` keeps a connection while the app is
-in the foreground, and `drain` connects, processes everything pending, and disconnects. Background
-work is a `drain` scheduled by the host app. Events (balance, transaction stage, sync progress,
+in the foreground, and `drain` connects, processes everything pending, and disconnects. A host
+that wants background work schedules a `drain`; BT Wallet schedules none, so messages wait on the
+relay until the app opens. Events (balance, transaction stage, sync progress,
 transport state) stream to the host through the binding.

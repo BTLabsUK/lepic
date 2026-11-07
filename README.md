@@ -29,17 +29,22 @@ Wallet. `lepic-ffi` is its FFI API, built on
 
 ## Why LEPIC
 
-The standard Epic Cash wallet is a separate program with its own API server. That works on a
-desktop, but a phone app cannot keep a second process running, and building the full wallet for
-Android and iOS drags in mining and chain-storage code a phone never uses. LEPIC is the wallet
-rebuilt for that setting:
+The standard Epic Cash wallet ships as a program with its own API server, and its crates pull in
+the node's. That works on a desktop, but a phone app cannot count on a second process staying
+alive, and building those crates for Android and iOS drags in mining and chain-storage code a
+phone never uses. LEPIC is the wallet rebuilt for that setting:
 
-- **No wallet process.** The engine is a library the app calls directly, from Rust or through its
-  FFI API. There is no wallet binary or API server to start and keep alive.
-- **Small mobile builds.** Android and iOS builds need Rust and a C compiler, nothing else: no
-  mining code, chain storage, LMDB, OpenSSL or C++.
+- **No wallet process needed.** An app embeds the engine as a library and calls it directly, from
+  Rust or through its FFI API, with no second process to start or keep alive. Hosts that want a
+  long-running wallet can use the optional `lepic` CLI: `lepic serve` keeps one unlocked wallet open
+  behind a local Unix socket, and `lepic http listen` serves the foreign API at `/v2/foreign`.
+- **Small mobile builds.** Android and iOS builds need Rust and a C toolchain (the Android NDK with
+  `cargo-ndk`, or Xcode): no mining code, chain storage, LMDB, OpenSSL or C++.
 - **Works with app suspension.** The Epicbox client connects, collects waiting messages and
-  disconnects, so receiving works when the phone pauses the app in the background.
+  disconnects, so nothing has to stay connected. A payment sent while the app is suspended waits
+  on the relay, which keeps it for 7 days, and is taken when the app next opens. LEPIC has no
+  push; a host that wants background receiving schedules a drain itself. Receiving over HTTP or
+  Tor needs the wallet running.
 - **Encrypted vault.** On desktop, seeds are kept in a vault file encrypted with XChaCha20-Poly1305
   under an Argon2id key. Transaction secrets are encrypted at rest with XChaCha20-Poly1305. Only a
   fixed list of secrets can cross the FFI API.
