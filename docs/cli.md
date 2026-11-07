@@ -500,6 +500,9 @@ also takes at most 30 payments a minute. `--port` picks another
 port; 0 lets the system choose. Each payment prints a line on stderr, and Ctrl-C prints how many
 were received, repeated and refused. Invoices are never answered over HTTP.
 
+`http listen` and `lepic serve` both hold `.lepic.lock`, so they cannot run on one wallet. To
+take payments over HTTP and use `serve`, run `lepic serve --http` (see Service).
+
 ### Block rewards for a mining node
 
 A node that mines asks a wallet for each block's coinbase. `--coinbase` makes the listener
@@ -920,6 +923,23 @@ Collect  3 failures in a row, last success 2026-11-04T10:12:01Z, last error: ...
 
 With `--output json`, each of `refresh` and `collect` holds `consecutive_failures`, `last_error`
 (`null` before any failure, kept after a success) and `last_success` (`null` before the first).
+
+`lepic serve --http` also answers payments over HTTP on the wallet it holds, with the listener of
+`http listen` (same limits, same `/v2/foreign` wire format). `--port`, `--internet`, `--coinbase`
+and `--coinbase-remote` mean what they mean for `http listen` and need `--http`; without `--port`
+the configured listen port is used. A port that cannot be bound stops `serve` from starting.
+Behind a local reverse proxy every caller is loopback, so `--coinbase` then serves every caller
+the proxy forwards. Payments and Epicbox receipts take turns on the wallet. `serve status` then
+shows the listener, and the report `serve` prints when it stops holds its counts:
+
+```
+{"refresh": {...}, "collect": {...},
+ "http": {"port": 3415, "exposure": "local", "received": 2, "repeated": 0, "refused": 0,
+          "coinbase": "off"}}
+```
+
+`coinbase` is `off`, `local` or `remote`. The `http` object is absent without `--http`; in the
+final report it has the same fields without `coinbase`.
 
 The socket is `<data_dir>/lepic.sock`; `--socket <PATH>` picks another. The path must fit a Unix
 socket (107 bytes on Linux), or `serve` exits with a usage error that names `--socket`. The socket
