@@ -20,6 +20,12 @@ Conventional Commit messages at release time.
 
 ### Added
 
+- Local quarantine and an early-notice buffer, both off by default (ADR 0049).
+  `quarantine_max_bytes` keeps contact messages that opened and could not be taken, with
+  `contact_quarantine`, `contact_quarantine_retry`, `contact_quarantine_discard` and
+  `lepic contact quarantine`. `early_notice_max_count` with `early_notice_max_age_s` keeps a
+  notice that came before its slate and applies it when the slate arrives. The inbox and contact
+  reports count `buffered`, and the contact report `quarantined` and `quarantine_dropped`.
 - `Wallet::previous_onion_key`, `lepic tor address --previous` and the binding's
   `previous_onion_address`: the onion of LEPIC 0.3.1 and earlier, the one `epic-wallet` and the
   GUI wallet publish.

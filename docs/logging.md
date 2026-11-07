@@ -32,6 +32,7 @@ message. Use these field names and add new ones to this list in the same change:
 | `peer_relay` | a contact's or a meeting relay's host; the log ring redacts it |
 | `node` | node host; the log ring redacts it |
 | `msg_id` | relay message id |
+| `reason` | why a contact message is in quarantine: a stable name |
 | `height` | block height |
 | `attempt` | retry number, starting at 1 |
 | `elapsed_ms` | duration of the operation |
