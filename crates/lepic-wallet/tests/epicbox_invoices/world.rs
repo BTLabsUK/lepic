@@ -532,24 +532,40 @@ impl World {
     /// As [`Self::new`], the issuer's wallet configured with profile `issuer` and the payer's
     /// with `payer`.
     pub fn with_profiles(issuer: u16, payer: u16) -> Self {
-        Self::with_parties((issuer, None), (payer, None), WalletPolicy::default())
+        Self::with_parties(
+            (issuer, None),
+            (payer, None),
+            WalletPolicy::default(),
+            WalletPolicy::default(),
+        )
     }
 
     /// As [`Self::new`], the issuer's wallet configured with `policy`.
     pub fn with_issuer_policy(policy: WalletPolicy) -> Self {
-        Self::with_parties((0, None), (0, None), policy)
+        Self::with_parties((0, None), (0, None), policy, WalletPolicy::default())
+    }
+
+    /// As [`Self::new`], the payer's wallet configured with `policy`.
+    pub fn with_payer_policy(policy: WalletPolicy) -> Self {
+        Self::with_parties((0, None), (0, None), WalletPolicy::default(), policy)
     }
 
     /// As [`Self::new`], the issuer's wallet claiming the domain `issuer` and the payer's the
     /// domain `payer`, where one is given.
     pub fn with_domains(issuer: Option<&str>, payer: Option<&str>) -> Self {
-        Self::with_parties((0, issuer), (0, payer), WalletPolicy::default())
+        Self::with_parties(
+            (0, issuer),
+            (0, payer),
+            WalletPolicy::default(),
+            WalletPolicy::default(),
+        )
     }
 
     fn with_parties(
         issuer: (u16, Option<&str>),
         payer: (u16, Option<&str>),
         issuer_policy: WalletPolicy,
+        payer_policy: WalletPolicy,
     ) -> Self {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -583,7 +599,7 @@ impl World {
             2,
             payer.0,
             payer.1,
-            WalletPolicy::default(),
+            payer_policy,
             &node,
             &relay,
             &runtime,
@@ -773,6 +789,7 @@ pub fn add(a: InboxSummary, b: InboxSummary) -> InboxSummary {
         bounced: a.bounced + b.bounced,
         dropped: a.dropped + b.dropped,
         notices: a.notices + b.notices,
+        buffered: a.buffered + b.buffered,
         requeued: a.requeued + b.requeued,
     }
 }

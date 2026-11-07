@@ -647,6 +647,7 @@ impl Session {
             not_reached: count(report.not_reached),
             quarantined: count(report.quarantined),
             quarantine_dropped: count(report.quarantine_dropped),
+            buffered: count(report.buffered),
             messages: count(report.messages),
             paired: count(report.paired),
             failed: report

@@ -1044,6 +1044,7 @@ async fn collect<N: lepic_node::NodeApi + 'static>(
         not_reached: collected.not_reached,
         quarantined: collected.quarantined,
         quarantine_dropped: collected.quarantine_dropped,
+        buffered: collected.buffered,
         messages: collected.messages,
         paired: collected.paired,
         delivered: collected.delivered,

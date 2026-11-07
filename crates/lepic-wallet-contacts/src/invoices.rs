@@ -442,7 +442,8 @@ where
         Ok(paid)
     }
 
-    /// Seals `reply` to the contact, signed, and queues it for the contact's mailbox.
+    /// Links the slate and the transaction to the contact, seals `reply` to it, signed, and
+    /// queues it for the contact's mailbox.
     async fn answer_contact(
         &self,
         contact_id: ContactId,
@@ -451,14 +452,42 @@ where
         stage: SlateStage,
         reply: &WireSlate,
     ) -> Result<(), ContactError> {
+        self.link_exchange(contact_id, tx_id, slate_id).await?;
+        self.send_answer(contact_id, slate_id, stage, reply).await
+    }
+
+    /// Records the exchange of `slate_id` and `tx_id` with the contact.
+    async fn link_exchange(
+        &self,
+        contact_id: ContactId,
+        tx_id: TxId,
+        slate_id: Uuid,
+    ) -> Result<(), ContactError> {
+        let session = self.wallet.session()?;
+        self.contact_work(move |_, _| {
+            session.store.write(|repos| {
+                if !link_slate(repos, slate_id, contact_id)? {
+                    return Err(ContactError::UnknownTransaction);
+                }
+                lepic_wallet::contact_link::link_tx(repos, tx_id, contact_id)?;
+                Ok(())
+            })
+        })
+        .await
+    }
+
+    /// Seals `reply` to the contact, signed, and queues it for the contact's mailbox.
+    async fn send_answer(
+        &self,
+        contact_id: ContactId,
+        slate_id: Uuid,
+        stage: SlateStage,
+        reply: &WireSlate,
+    ) -> Result<(), ContactError> {
         let session = self.wallet.session()?;
         let record = self
             .contact_work(move |_, _| {
-                session.store.write(|repos| {
-                    if !link_slate(repos, slate_id, contact_id)? {
-                        return Err(ContactError::UnknownTransaction);
-                    }
-                    lepic_wallet::contact_link::link_tx(repos, tx_id, contact_id)?;
+                session.store.read(|repos| {
                     repos
                         .contact(contact_id)?
                         .ok_or(ContactError::UnknownContact)
@@ -566,6 +595,9 @@ where
                     content.expires,
                 )
                 .await?;
+                if !self.apply_early_notices(slate.id()).await {
+                    return Ok(Handled::Later);
+                }
                 Ok(Handled::Stored)
             }
             Stage::S1 => {
@@ -638,14 +670,26 @@ where
                 return Ok(Handled::Stored);
             }
         };
-        self.answer_contact(
-            contact_id,
-            received.tx_id,
-            uuid(slate.id()),
-            SlateStage::Standard2,
-            &received.reply,
-        )
-        .await?;
+        self.link_exchange(contact_id, received.tx_id, uuid(slate.id()))
+            .await?;
+        // A notice that came before this S1 applies now, so a payment its sender cancelled is
+        // not answered.
+        if !self.apply_early_notices(slate.id()).await {
+            return Ok(Handled::Later);
+        }
+        match self.wallet.answer_withheld(received.tx_id).await {
+            Ok(false) => {
+                self.send_answer(
+                    contact_id,
+                    uuid(slate.id()),
+                    SlateStage::Standard2,
+                    &received.reply,
+                )
+                .await?;
+            }
+            Ok(true) => debug!(tx_id = %received.tx_id, "answer withheld for a cancelled payment"),
+            Err(_) => return Ok(Handled::Later),
+        }
         let news = ContactSlateEvent {
             contact_id,
             tx_id: received.tx_id,
@@ -1036,16 +1080,35 @@ where
         else {
             return Ok(Handled::Later);
         };
-        if let Some(tx_id) = effect {
-            // A signed withdrawn for a paid invoice ends the payment (RFC 0002 11.4), and a
-            // signed declined for a send the contact never answered ends the send (ADR 0045).
-            if let Err(error) = self.wallet.cancel(tx_id).await {
-                warn!(tx_id = %tx_id, error = %ErrorChain(&error), "payment not cancelled on the contact's notice");
-            } else {
-                info!(tx_id = %tx_id, "payment cancelled on the contact's notice");
-            }
+        if effect.buffered {
+            told.buffered = told.buffered.saturating_add(1);
+        }
+        if let Some(tx_id) = effect.cancel {
+            self.cancel_on_notice(tx_id).await;
         }
         Ok(Handled::Stored)
+    }
+
+    /// A signed withdrawn for a paid invoice ends the payment (RFC 0002 11.4), and a signed
+    /// declined for a send the contact never answered ends the send (ADR 0045).
+    async fn cancel_on_notice(&self, tx_id: TxId) {
+        if let Err(error) = self.wallet.cancel(tx_id).await {
+            warn!(tx_id = %tx_id, error = %ErrorChain(&error), "payment not cancelled on the contact's notice");
+        } else {
+            info!(tx_id = %tx_id, "payment cancelled on the contact's notice");
+        }
+    }
+
+    /// Applies the notices that came before a slate just stored. Returns `false` when that has
+    /// to wait, for the message to be taken again.
+    async fn apply_early_notices(&self, slate_id: SlateId) -> bool {
+        let Ok(cancels) = self.wallet.apply_early_notices(slate_id).await else {
+            return false;
+        };
+        for tx_id in cancels {
+            self.cancel_on_notice(tx_id).await;
+        }
+        true
     }
 
     /// Seals `notice` to the contact the slate was exchanged with and queues it for the

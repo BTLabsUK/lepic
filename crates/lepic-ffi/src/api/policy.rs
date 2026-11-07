@@ -83,6 +83,14 @@ pub struct HostPolicy {
     /// then the wallet's oldest; a larger message is not kept. From 1 to 67,108,864. Default
     /// none: nothing is kept, and a message is dropped as it was before.
     pub quarantine_max_bytes: Option<u64>,
+    /// `declined`, `withdrawn` and `cancelled` notices kept for slates this wallet does not hold
+    /// yet, and applied when the slate arrives. At the cap the oldest entry goes. From 1 to
+    /// 10,000. Set with `early_notice_max_age_s` or not at all; only one of the two fails with
+    /// `InvalidArgument`. Default none: no notice is kept.
+    pub early_notice_max_count: Option<u32>,
+    /// How long such a notice is kept, in seconds; one past this goes at the next write or
+    /// apply. From 1 to 2,592,000. Set with `early_notice_max_count` or not at all.
+    pub early_notice_max_age_s: Option<u64>,
     /// Whether `start_tor` with `publish_onion` also publishes the previous onion, the one
     /// LEPIC 0.3.1 and earlier published (ADR 0044), on its own listener, so senders that saved
     /// it still reach the wallet. Payment proofs asked for there are signed with the
@@ -230,6 +238,8 @@ impl Policy {
                 .unwrap_or(defaults.refuse_unsolicited_invoices),
             listener_held_rounds: policy.listener_held_rounds,
             quarantine_max_bytes: policy.quarantine_max_bytes,
+            early_notice_max_count: policy.early_notice_max_count,
+            early_notice_max_age: policy.early_notice_max_age_s.map(Duration::from_secs),
         };
         wallet
             .validate()
@@ -508,6 +518,24 @@ mod tests {
     }
 
     #[test]
+    fn the_early_notice_buffer_is_off_unless_the_host_sets_both_caps() {
+        let shipped = Policy::shipped().wallet;
+        assert_eq!(shipped.early_notice_max_count, None);
+        assert_eq!(shipped.early_notice_max_age, None);
+        let policy = Policy::resolve(&HostPolicy {
+            early_notice_max_count: Some(10_000),
+            early_notice_max_age_s: Some(2_592_000),
+            ..HostPolicy::default()
+        })
+        .unwrap();
+        assert_eq!(policy.wallet.early_notice_max_count, Some(10_000));
+        assert_eq!(
+            policy.wallet.early_notice_max_age,
+            Some(Duration::from_secs(2_592_000))
+        );
+    }
+
+    #[test]
     fn the_invoice_ttl_does_not_move_the_lead_cap() {
         let policy = Policy::resolve(&HostPolicy {
             invoice_ttl_blocks: Some(5_000),
@@ -528,6 +556,32 @@ mod tests {
         let none = HostPolicy::default;
         refused(HostPolicy {
             listener_held_rounds: Some(0),
+            ..none()
+        });
+        refused(HostPolicy {
+            quarantine_max_bytes: Some(0),
+            ..none()
+        });
+        refused(HostPolicy {
+            quarantine_max_bytes: Some(67_108_865),
+            ..none()
+        });
+        refused(HostPolicy {
+            early_notice_max_count: Some(1),
+            ..none()
+        });
+        refused(HostPolicy {
+            early_notice_max_age_s: Some(1),
+            ..none()
+        });
+        refused(HostPolicy {
+            early_notice_max_count: Some(10_001),
+            early_notice_max_age_s: Some(1),
+            ..none()
+        });
+        refused(HostPolicy {
+            early_notice_max_count: Some(1),
+            early_notice_max_age_s: Some(2_592_001),
             ..none()
         });
         refused(HostPolicy {

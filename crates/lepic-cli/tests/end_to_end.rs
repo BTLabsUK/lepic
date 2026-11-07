@@ -445,6 +445,7 @@ fn listen_handles_a_waiting_slate_and_stops_when_interrupted() {
         keys(&listened),
         [
             "bounced",
+            "buffered",
             "dropped",
             "expired",
             "finalized",

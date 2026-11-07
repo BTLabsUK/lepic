@@ -12,6 +12,8 @@
     clippy::arithmetic_side_effects
 )]
 
+#[path = "contact_invoices/early_notices.rs"]
+mod early_notices;
 #[path = "pairing/helpers.rs"]
 mod helpers;
 #[path = "contact_invoices/quarantine.rs"]

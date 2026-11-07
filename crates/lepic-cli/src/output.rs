@@ -395,6 +395,8 @@ pub struct InboxReport {
     pub dropped: u32,
     /// Notices about invoices accepted from the other party: posted, declined or withdrawn.
     pub notices: u32,
+    /// Notices for a slate this wallet does not hold yet, kept to apply when it arrives.
+    pub buffered: u32,
     /// What the invoice expiry did; `null` when it could not run, which the log says why.
     pub expired: Option<ExpiredReport>,
 }
@@ -459,6 +461,7 @@ pub struct ContactCollectReport {
     pub not_reached: usize,
     pub quarantined: usize,
     pub quarantine_dropped: usize,
+    pub buffered: usize,
     pub messages: usize,
     pub paired: usize,
     pub delivered: usize,
@@ -1559,6 +1562,9 @@ fn write_inbox(out: &mut Vec<u8>, r: &InboxReport) -> std::io::Result<()> {
         r.dropped,
         r.notices
     )?;
+    if r.buffered > 0 {
+        writeln!(out, "{} early notices kept.", r.buffered)?;
+    }
     write_expired(out, r.expired.as_ref())
 }
 
@@ -1620,6 +1626,9 @@ fn write_pairing_human(out: &mut Vec<u8>, report: &Report) -> std::io::Result<()
                 if count > 0 {
                     writeln!(out, "{count} mailboxes {what}.")?;
                 }
+            }
+            if r.buffered > 0 {
+                writeln!(out, "{} early notices kept.", r.buffered)?;
             }
             if r.quarantined > 0 {
                 writeln!(out, "{} messages quarantined.", r.quarantined)?;
@@ -2258,10 +2267,12 @@ mod tests {
                     bounced: 0,
                     dropped: 0,
                     notices: 0,
+                    buffered: 0,
                     expired: None,
                 }),
                 vec![
                     "bounced",
+                    "buffered",
                     "dropped",
                     "expired",
                     "finalized",
@@ -2287,6 +2298,7 @@ mod tests {
                         bounced: 0,
                         dropped: 0,
                         notices: 0,
+                        buffered: 0,
                         expired: None,
                     },
                 }),
@@ -2367,6 +2379,7 @@ mod tests {
                     not_reached: 0,
                     quarantined: 0,
                     quarantine_dropped: 0,
+                    buffered: 0,
                     messages: 2,
                     paired: 0,
                     delivered: 1,
@@ -2374,6 +2387,7 @@ mod tests {
                     unreachable: vec![],
                 }),
                 vec![
+                    "buffered",
                     "capped",
                     "delivered",
                     "failed",
@@ -2964,6 +2978,7 @@ mod tests {
                 bounced: 0,
                 dropped: 5,
                 notices: 1,
+                buffered: 0,
                 expired,
             });
             render(&report, OutputFormat::Human).to_string()

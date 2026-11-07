@@ -2029,6 +2029,7 @@ fn inbox_report(summary: InboxSummary, expired: Option<InvoiceSweep>) -> InboxRe
         bounced: summary.bounced,
         dropped: summary.dropped,
         notices: summary.notices,
+        buffered: summary.buffered,
         expired: expired.map(|sweep| ExpiredReport {
             deleted: sweep.deleted.iter().map(ToString::to_string).collect(),
             cancelled: sweep.cancelled.iter().map(|tx_id| tx_id.0).collect(),

@@ -92,6 +92,9 @@ pub struct CollectReport {
     /// Contact messages lost to the quarantine's cap in this cycle: entries that went to make
     /// room, and messages too large to keep.
     pub quarantine_dropped: usize,
+    /// Notices for a slate this wallet does not hold yet, kept to apply when it arrives
+    /// (ADR 0049).
+    pub buffered: usize,
 }
 
 /// Relays that keep failing wait this long before the next try, one step per failure.
@@ -522,6 +525,7 @@ where
         }
         report.quarantined = told.quarantined;
         report.quarantine_dropped = told.quarantine_dropped;
+        report.buffered = told.buffered;
         debug!(count = report.mailboxes, "contact mailboxes collected");
         for ended in self.ended_since(&ended_before).await? {
             if !report.ended.contains(&ended) {
@@ -1907,6 +1911,7 @@ pub(crate) struct Told {
     pub(crate) dropped: Option<QuarantineReason>,
     quarantined: usize,
     quarantine_dropped: usize,
+    pub(crate) buffered: usize,
 }
 
 impl<N, S, V> MailboxHandler for Collector<'_, N, S, V>

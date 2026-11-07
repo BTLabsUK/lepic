@@ -39,6 +39,7 @@ use tracing::{debug, info, warn};
 use uuid::Uuid;
 
 use crate::details::POSTED_REPORT_WINDOW;
+use crate::early_notice::{self, EarlyLimits};
 use crate::epicbox_invoice::stored_codecs;
 use crate::event::{
     CancelledPayment, DeclinedInvoice, DeclinedPayment, Event, PostedInvoice, PostedPayment,
@@ -116,6 +117,15 @@ fn counterparty_key(
     Ok(repos
         .counterparty(tx_id)?
         .and_then(|address| key_of(&address, network)))
+}
+
+/// What became of a contact's notice, from [`Wallet::apply_contact_notice`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ContactNotice {
+    /// The transaction the notice ends, for the caller to cancel.
+    pub cancel: Option<TxId>,
+    /// It is about a slate this wallet does not hold yet, and stayed in the buffer.
+    pub buffered: bool,
 }
 
 /// Who a notice is from.
@@ -215,6 +225,27 @@ fn apply_notice(
         record_marked(repos, &key, now, None)?;
     }
     Ok(effect)
+}
+
+/// [`apply_notice`], then keeps a notice for a slate this wallet does not hold while the host
+/// has the buffer on (ADR 0049). Returns what it changed and whether it was kept.
+fn apply_or_keep(
+    repos: &mut dyn Repositories,
+    codecs: &CodecRegistry,
+    network: RelayNetwork,
+    notice: Notice,
+    from: &NoticeFrom,
+    limits: Option<EarlyLimits>,
+    now: jiff::Timestamp,
+) -> Result<(Effect, bool), StoreError> {
+    let effect = apply_notice(repos, codecs, network, notice, from.clone(), now)?;
+    let kept = match limits {
+        Some(limits) if matches!(effect, Effect::Unheld) => {
+            early_notice::keep(repos, limits, notice, from, now)?
+        }
+        _ => false,
+    };
+    Ok((effect, kept))
 }
 
 /// The settings key recording that the decline of the invoice `slate_id` was taken.
@@ -534,7 +565,7 @@ where
 {
     /// Takes a notice that arrived from `reply_to`, and raises the event it calls for. One about
     /// a slate this wallet does not hold raises [`Event::NoticeUnmatched`], for the host to
-    /// forward to its other installs.
+    /// forward to its other installs, and stays in the buffer while the host keeps one.
     pub(crate) async fn take_notice(
         &self,
         notice: Notice,
@@ -544,7 +575,7 @@ where
         let Some(key) = key_of(reply_to.as_str(), network) else {
             return Ok(Handled::Dropped);
         };
-        let effect = self.apply_epicbox_notice(notice, key).await?;
+        let (effect, kept) = self.apply_epicbox_notice(notice, key).await?;
         let slate_id = notice.slate_id;
         if matches!(effect, Effect::Unheld) {
             debug!(slate_id = %slate_id, "notice for a slate held elsewhere passed on");
@@ -552,7 +583,11 @@ where
                 notice,
                 sender: reply_to.as_str().to_owned(),
             }));
-            return Ok(Handled::Dropped);
+            return Ok(if kept {
+                Handled::Buffered
+            } else {
+                Handled::Dropped
+            });
         }
         let handled = self.report_notice(slate_id, effect);
         if let Effect::SendDeclined { tx_id, .. } = effect {
@@ -566,7 +601,8 @@ where
     /// taken under exactly the rules of one received here: only from the recorded counterparty
     /// of its slate, `posted` only with the kernel excess the payment implies, and once. Returns
     /// whether it was accepted; one this wallet does not hold either, or from a `sender` that
-    /// is no address of the wallet's network, is dropped and never passed on again.
+    /// is no address of the wallet's network, is not accepted and never passed on again. The
+    /// former stays in the buffer while the host keeps one.
     ///
     /// Fails with [`crate::WalletError::Locked`] and as the store does.
     pub async fn notice_apply_forwarded(
@@ -578,7 +614,7 @@ where
         let Some(key) = key_of(sender, network) else {
             return Ok(false);
         };
-        let effect = self.apply_epicbox_notice(notice, key).await?;
+        let (effect, _) = self.apply_epicbox_notice(notice, key).await?;
         if matches!(effect, Effect::Unheld) {
             debug!(slate_id = %notice.slate_id, "passed-on notice for a slate not held dropped");
             return Ok(false);
@@ -612,12 +648,67 @@ where
         &self,
         notice: Notice,
         key: String,
-    ) -> Result<Effect, crate::WalletError> {
+    ) -> Result<(Effect, bool), crate::WalletError> {
         let network = relay_network(self.config().network);
         let from = NoticeFrom::Epicbox(key);
         let codecs = stored_codecs(self.config().network);
-        self.inbox_write(move |repos, now| apply_notice(repos, &codecs, network, notice, from, now))
-            .await
+        let limits = EarlyLimits::of(&self.config().policy);
+        self.inbox_write(move |repos, now| {
+            apply_or_keep(repos, &codecs, network, notice, &from, limits, now)
+        })
+        .await
+    }
+
+    /// Applies the notices kept for `slate_id`, now that the slate is here, and raises their
+    /// events. An entry that matches nothing goes. The entries leave the buffer in the store
+    /// transaction that applies them; the caller runs this after storing the slate and before
+    /// acknowledging it, so a delivery that repeats finds them there or their effect stored.
+    /// Returns what a contact's notice asks to cancel, for
+    /// [`apply_contact_notice`](Self::apply_contact_notice)'s caller to end the same way.
+    pub async fn apply_early_notices(&self, slate_id: SlateId) -> Result<Vec<TxId>, Hold> {
+        let Some(limits) = EarlyLimits::of(&self.config().policy) else {
+            return Ok(Vec::new());
+        };
+        let network = relay_network(self.config().network);
+        let codecs = stored_codecs(self.config().network);
+        let effects = self
+            .inbox_write(move |repos, now| {
+                let mut effects = Vec::new();
+                for (notice, from) in early_notice::take(repos, limits, slate_id, now)? {
+                    let contact = matches!(from, NoticeFrom::Contact(_));
+                    let effect = apply_notice(repos, &codecs, network, notice, from, now)?;
+                    effects.push((effect, contact));
+                }
+                Ok(effects)
+            })
+            .await?;
+        let mut cancels = Vec::new();
+        for (effect, contact) in effects {
+            self.report_notice(slate_id, effect);
+            match effect {
+                Effect::SendDeclined { tx_id, .. } if !contact => {
+                    self.cancel_declined(tx_id).await?;
+                }
+                Effect::SendDeclined { tx_id, .. } => cancels.push(tx_id),
+                Effect::Withdrawn { tx_id: Some(tx_id) } if contact => cancels.push(tx_id),
+                _ => {}
+            }
+        }
+        Ok(cancels)
+    }
+
+    /// Whether the payment `tx_id` just received is not to be answered: its sender reported that
+    /// it cancelled it, in a notice that came first. Always `false` while the host keeps no
+    /// buffer, so a repeat of an answered payment is answered as before.
+    pub async fn answer_withheld(&self, tx_id: TxId) -> Result<bool, Hold> {
+        if EarlyLimits::of(&self.config().policy).is_none() {
+            return Ok(false);
+        }
+        let session = self.session()?;
+        let reported = self
+            .blocking(move |_, _| Ok(session.store.read(|repos| cancelled_report(repos, tx_id))?))
+            .await?;
+        Ok(reported.is_some())
     }
 
     /// Raises the event an applied notice calls for, and says how its message is settled.
@@ -817,17 +908,21 @@ where
     /// Applies a notice the paired contact `contact_id` sent sealed and signed, for a slate
     /// exchanged with that contact only, and raises its event. Returns the payment to cancel
     /// for a `withdrawn` of an invoice this wallet paid, and the send to cancel for a
-    /// `declined` of a send the contact refused unanswered (ADR 0045).
+    /// `declined` of a send the contact refused unanswered (ADR 0045), and whether a notice for
+    /// a slate this wallet does not hold stayed in the buffer.
     pub async fn apply_contact_notice(
         &self,
         notice: Notice,
         contact_id: ContactId,
-    ) -> Result<Option<TxId>, Hold> {
+    ) -> Result<ContactNotice, Hold> {
         let from = NoticeFrom::Contact(contact_id);
         let network = relay_network(self.config().network);
         let codecs = stored_codecs(self.config().network);
-        let effect = self
-            .inbox_write(move |repos, now| apply_notice(repos, &codecs, network, notice, from, now))
+        let limits = EarlyLimits::of(&self.config().policy);
+        let (effect, buffered) = self
+            .inbox_write(move |repos, now| {
+                apply_or_keep(repos, &codecs, network, notice, &from, limits, now)
+            })
             .await?;
         let slate_id = notice.slate_id;
         let (event, cancel) = match effect {
@@ -875,7 +970,7 @@ where
             info!(slate_id = %slate_id, "notice received");
             self.emit(event);
         }
-        Ok(cancel)
+        Ok(ContactNotice { cancel, buffered })
     }
 
     /// Tells the payer that the paid invoice `tx_id` was pushed with `excess`. Over Epicbox

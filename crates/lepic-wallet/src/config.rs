@@ -24,6 +24,11 @@ pub enum ConfigError {
     PolicyOutOfRange { what: &'static str },
     #[error("{what} must be at most {max}")]
     PolicyAboveBound { what: &'static str, max: u64 },
+    #[error("{what} and {other} must be set together")]
+    PolicyNeedsBoth {
+        what: &'static str,
+        other: &'static str,
+    },
 }
 
 /// Names one wallet instance in logs and events. Not secret: it is neither the seed nor an
@@ -205,6 +210,15 @@ pub struct WalletPolicy {
     /// larger than this is not kept. `None`, the default, keeps nothing. At least 1, at most
     /// [`Self::MAX_QUARANTINE_BYTES`].
     pub quarantine_max_bytes: Option<u64>,
+    /// `declined`, `withdrawn` and `cancelled` notices kept for slates this wallet does not hold
+    /// yet, and applied when the slate arrives (ADR 0049). At the cap the oldest entry goes.
+    /// Set with [`Self::early_notice_max_age`] or not at all; `None`, the default, keeps none.
+    /// At least 1, at most [`Self::MAX_EARLY_NOTICES`].
+    pub early_notice_max_count: Option<u32>,
+    /// How long such a notice is kept; one past this goes at the next write or apply. Set with
+    /// [`Self::early_notice_max_count`] or not at all. At least a second, at most
+    /// [`Self::MAX_EARLY_NOTICE_AGE`].
+    pub early_notice_max_age: Option<Duration>,
 }
 
 impl WalletPolicy {
@@ -224,6 +238,8 @@ impl WalletPolicy {
         refuse_unsolicited_invoices: false,
         listener_held_rounds: None,
         quarantine_max_bytes: None,
+        early_notice_max_count: None,
+        early_notice_max_age: None,
     };
 
     /// The bound on [`Self::contact_check_answers_per_day`]: each answer is a contact update,
@@ -246,6 +262,13 @@ impl WalletPolicy {
     /// The bound on [`Self::quarantine_max_bytes`]: kept messages are store rows, read when one
     /// is added.
     pub const MAX_QUARANTINE_BYTES: u64 = 64 * 1024 * 1024;
+
+    /// The bound on [`Self::early_notice_max_count`]: the rows are read when one is added.
+    pub const MAX_EARLY_NOTICES: u32 = 10_000;
+
+    /// The bound on [`Self::early_notice_max_age`]: a contact message older than this is not
+    /// taken, and a relay keeps none as long.
+    pub const MAX_EARLY_NOTICE_AGE: Duration = Duration::from_secs(30 * 24 * 60 * 60);
 }
 
 impl WalletPolicy {
@@ -338,6 +361,42 @@ impl WalletPolicy {
             return Err(ConfigError::PolicyAboveBound {
                 what: "quarantine bytes",
                 max: Self::MAX_QUARANTINE_BYTES,
+            });
+        }
+        self.validate_early_notices()
+    }
+
+    fn validate_early_notices(&self) -> Result<(), ConfigError> {
+        let (count, age) = match (self.early_notice_max_count, self.early_notice_max_age) {
+            (None, None) => return Ok(()),
+            (Some(count), Some(age)) => (count, age),
+            (Some(_), None) | (None, Some(_)) => {
+                return Err(ConfigError::PolicyNeedsBoth {
+                    what: "early notice count",
+                    other: "early notice age",
+                });
+            }
+        };
+        if count == 0 {
+            return Err(ConfigError::PolicyOutOfRange {
+                what: "early notice count",
+            });
+        }
+        if count > Self::MAX_EARLY_NOTICES {
+            return Err(ConfigError::PolicyAboveBound {
+                what: "early notice count",
+                max: u64::from(Self::MAX_EARLY_NOTICES),
+            });
+        }
+        if age.as_secs() == 0 {
+            return Err(ConfigError::PolicyOutOfRange {
+                what: "early notice age in seconds",
+            });
+        }
+        if age > Self::MAX_EARLY_NOTICE_AGE {
+            return Err(ConfigError::PolicyAboveBound {
+                what: "early notice age in seconds",
+                max: Self::MAX_EARLY_NOTICE_AGE.as_secs(),
             });
         }
         Ok(())
@@ -519,6 +578,49 @@ mod tests {
         ));
         assert!(matches!(
             with(WalletPolicy::MAX_QUARANTINE_BYTES + 1).validate(),
+            Err(ConfigError::PolicyAboveBound { .. })
+        ));
+    }
+
+    #[test]
+    fn the_early_notice_buffer_needs_both_caps_within_their_bounds() {
+        assert_eq!(WalletPolicy::DEFAULT.early_notice_max_count, None);
+        assert_eq!(WalletPolicy::DEFAULT.early_notice_max_age, None);
+        let with = |count, age| WalletPolicy {
+            early_notice_max_count: count,
+            early_notice_max_age: age,
+            ..WalletPolicy::DEFAULT
+        };
+        let second = Duration::from_secs(1);
+        assert_eq!(with(Some(1), Some(second)).validate(), Ok(()));
+        assert_eq!(
+            with(
+                Some(WalletPolicy::MAX_EARLY_NOTICES),
+                Some(WalletPolicy::MAX_EARLY_NOTICE_AGE)
+            )
+            .validate(),
+            Ok(())
+        );
+        for lone in [with(Some(1), None), with(None, Some(second))] {
+            assert!(matches!(
+                lone.validate(),
+                Err(ConfigError::PolicyNeedsBoth { .. })
+            ));
+        }
+        assert!(matches!(
+            with(Some(0), Some(second)).validate(),
+            Err(ConfigError::PolicyOutOfRange { .. })
+        ));
+        assert!(matches!(
+            with(Some(1), Some(Duration::ZERO)).validate(),
+            Err(ConfigError::PolicyOutOfRange { .. })
+        ));
+        assert!(matches!(
+            with(Some(WalletPolicy::MAX_EARLY_NOTICES + 1), Some(second)).validate(),
+            Err(ConfigError::PolicyAboveBound { .. })
+        ));
+        assert!(matches!(
+            with(Some(1), Some(WalletPolicy::MAX_EARLY_NOTICE_AGE + second)).validate(),
             Err(ConfigError::PolicyAboveBound { .. })
         ));
     }

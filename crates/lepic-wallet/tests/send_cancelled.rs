@@ -37,7 +37,7 @@ use lepic_wallet::notice::{Notice, NoticeKind, Payload, classify_text};
 use lepic_wallet::peer_compat::PeerKind;
 use lepic_wallet::selection::SelectionStrategy;
 use lepic_wallet::send::{Delivery, SendRequest, SentSlate};
-use lepic_wallet::{Clock, Event};
+use lepic_wallet::{Clock, Event, WalletPolicy};
 use tokio::sync::broadcast::Receiver;
 use uuid::Uuid;
 use world::{ACCOUNT, AMOUNT, Party, World};
@@ -644,4 +644,118 @@ fn the_receivers_own_cancel_after_the_report_keeps_its_rules() {
             .is_some()
     );
     assert_eq!(world.report_shown(receipt.tx_id), reported);
+}
+
+const BUFFER: WalletPolicy = WalletPolicy {
+    early_notice_max_count: Some(8),
+    early_notice_max_age: Some(Duration::from_secs(3_600)),
+    ..WalletPolicy::DEFAULT
+};
+
+fn early_rows(world: &World) -> usize {
+    world
+        .receiver()
+        .read(|repos| repos.settings_with_prefix("notice.early."))
+        .len()
+}
+
+/// A `cancelled` that overtakes its S1 stays in the buffer and applies when the S1 arrives, so
+/// the payment is not answered, then or when the S1 is delivered again (ADR 0049).
+#[test]
+fn a_cancelled_before_its_payment_stops_the_answer() {
+    let world = World::with_issuer_policy(BUFFER);
+    let peer = world.peer_client(PEER);
+    let sent = world.send_to(&World::address_of(PEER));
+    let s1 = world.only_message(&peer);
+    let mut receiver_events = world.receiver().wallet.subscribe();
+
+    let text = cancelled_text(sent.slate_id);
+    world.post(PEER, &world.receiver().address, &text, 1);
+    let summary = world.drain(world.receiver());
+    assert_eq!((summary.buffered, summary.dropped), (1, 0));
+    assert_eq!(early_rows(&world), 1);
+
+    world.post(PEER, &world.receiver().address, &s1, 1);
+    assert_eq!(world.drain(world.receiver()).received, 1);
+    assert_eq!(cancelled_events(&mut receiver_events).len(), 1);
+    assert!(world.report_shown(world.incoming(sent.slate_id)).is_some());
+    assert_eq!(early_rows(&world), 0);
+    assert!(world.drain_peer(&peer).is_empty());
+
+    world.post(PEER, &world.receiver().address, &s1, 1);
+    world.drain(world.receiver());
+    assert!(cancelled_events(&mut receiver_events).is_empty());
+    assert!(world.drain_peer(&peer).is_empty());
+}
+
+/// A notice from a key other than the payment's sender stays in the buffer and has no effect.
+#[test]
+fn an_early_cancelled_from_another_key_has_no_effect() {
+    let world = World::with_issuer_policy(BUFFER);
+    let peer = world.peer_client(PEER);
+    let sent = world.send_to(&World::address_of(PEER));
+    let s1 = world.only_message(&peer);
+
+    world.post(
+        STRANGER,
+        &world.receiver().address,
+        &cancelled_text(sent.slate_id),
+        1,
+    );
+    assert_eq!(world.drain(world.receiver()).buffered, 1);
+    world.post(PEER, &world.receiver().address, &s1, 1);
+    world.drain(world.receiver());
+
+    assert_eq!(world.report_shown(world.incoming(sent.slate_id)), None);
+    assert_eq!(early_rows(&world), 0);
+    assert_eq!(world.drain_peer(&peer).len(), 1);
+}
+
+/// A notice passed on from another install is kept too, and reported as not accepted.
+#[test]
+fn a_passed_on_cancelled_for_a_slate_not_here_yet_is_kept() {
+    let world = World::with_issuer_policy(BUFFER);
+    let peer = world.peer_client(PEER);
+    let sent = world.send_to(&World::address_of(PEER));
+    let s1 = world.only_message(&peer);
+
+    let notice = Notice {
+        slate_id: sent.slate_id,
+        kind: NoticeKind::Cancelled,
+    };
+    let sender = World::address_of(PEER).to_string();
+    let accepted = world
+        .block_on(
+            world
+                .receiver()
+                .wallet
+                .notice_apply_forwarded(&sender, notice),
+        )
+        .unwrap();
+    assert!(!accepted);
+    assert_eq!(early_rows(&world), 1);
+
+    world.post(PEER, &world.receiver().address, &s1, 1);
+    world.drain(world.receiver());
+
+    assert!(world.report_shown(world.incoming(sent.slate_id)).is_some());
+    assert!(world.drain_peer(&peer).is_empty());
+}
+
+/// The notice that follows its S1 applies at once and leaves nothing in the buffer.
+#[test]
+fn a_cancelled_after_its_payment_is_not_kept() {
+    let world = World::with_issuer_policy(BUFFER);
+    let (receipt, _) = world.receipt_through_peer(|s1| s1);
+
+    world.post(
+        PEER,
+        &world.receiver().address,
+        &cancelled_text(receipt.slate_id),
+        1,
+    );
+    let summary = world.drain(world.receiver());
+
+    assert_eq!((summary.notices, summary.buffered), (1, 0));
+    assert_eq!(early_rows(&world), 0);
 }

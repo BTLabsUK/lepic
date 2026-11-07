@@ -18,6 +18,7 @@ pub mod coinbase;
 pub mod config;
 pub mod contact_link;
 pub mod details;
+mod early_notice;
 pub mod epicbox_invoice;
 mod epicbox_notice;
 pub mod error;
@@ -54,6 +55,7 @@ mod wallet;
 
 pub use account::{Account, AccountError, AccountLabel, DEFAULT_ACCOUNT_LABEL};
 pub use config::{ConfigError, NodeEndpoint, WalletConfig, WalletName, WalletPolicy};
+pub use epicbox_notice::ContactNotice;
 pub use error::WalletError;
 pub use event::{Event, SessionState};
 pub use finalize::{FinalizeError, Finalized};

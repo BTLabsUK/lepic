@@ -171,6 +171,9 @@ pub struct InboxSummary {
     pub dropped: u32,
     /// Notices accepted from the counterparty of their slate (ADR 0016).
     pub notices: u32,
+    /// Notices for a slate this wallet does not hold yet, kept to apply when it arrives
+    /// (ADR 0049).
+    pub buffered: u32,
     /// Answers for a slate this store does not know, posted back to the address for another
     /// install of the wallet and acknowledged.
     pub requeued: u32,
@@ -186,6 +189,7 @@ impl InboxSummary {
             Handled::Bounced => &mut self.bounced,
             Handled::Dropped => &mut self.dropped,
             Handled::Notice => &mut self.notices,
+            Handled::Buffered => &mut self.buffered,
             Handled::Requeued => &mut self.requeued,
         };
         *counter = counter.saturating_add(1);
@@ -267,6 +271,7 @@ pub(crate) enum Handled {
     Bounced,
     Dropped,
     Notice,
+    Buffered,
     Requeued,
 }
 
@@ -279,6 +284,7 @@ impl Handled {
             | Self::Repeated
             | Self::Bounced
             | Self::Notice
+            | Self::Buffered
             | Self::Requeued => InboxStatus::Processed,
         }
     }
@@ -1487,6 +1493,17 @@ where
         {
             Ok(received) => {
                 self.record_sending_peer(reply_to, marked, features).await;
+                // A notice that came before this S1 applies now, so a payment its sender
+                // cancelled is not answered.
+                self.apply_early_notices(received.slate.id()).await?;
+                if self.answer_withheld(received.tx_id).await? {
+                    debug!(tx_id = %received.tx_id, "answer withheld for a cancelled payment");
+                    return Ok(if received.repeated {
+                        Handled::Repeated
+                    } else {
+                        Handled::Received
+                    });
+                }
                 // A payment answers only from the address it came in on: the S1 of a listing
                 // payment that arrives again at the payments address, or the other way round,
                 // gets no answer from there.

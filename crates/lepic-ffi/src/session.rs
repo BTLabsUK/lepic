@@ -341,6 +341,7 @@ fn inbox_report(summary: &lepic_wallet::inbox::InboxSummary) -> InboxReport {
         notices: summary.notices,
         bounced: summary.bounced,
         dropped: summary.dropped,
+        buffered: summary.buffered,
     }
 }
 

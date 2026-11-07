@@ -876,6 +876,8 @@ pub struct InboxReport {
     /// Messages acknowledged and forgotten: notices not from the other party of their invoice,
     /// of a kind this version does not know, oversize or malformed.
     pub dropped: u32,
+    /// Notices for a slate this wallet does not hold yet, kept to apply when it arrives.
+    pub buffered: u32,
 }
 
 /// An invoice this wallet issued to a contact, from `EpicWallet::contact_issue_invoice`.
@@ -1362,6 +1364,8 @@ pub struct ContactCollectReport {
     /// Contact messages lost to `HostPolicy::quarantine_max_bytes` in this cycle: entries that
     /// went to make room, and messages too large to keep.
     pub quarantine_dropped: u32,
+    /// Notices for a slate this wallet does not hold yet, kept to apply when it arrives.
+    pub buffered: u32,
 }
 
 /// A pairing in progress that ended with nothing stored.
