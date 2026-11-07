@@ -164,13 +164,23 @@ while it runs, and answers other lepic commands on a local socket: run them with
 user that runs it can use the socket. Ctrl-C or SIGTERM stops it.";
 
 #[derive(Debug, Args)]
-#[command(args_conflicts_with_subcommands = true)]
+#[command(
+    args_conflicts_with_subcommands = true,
+    mut_arg("port", |arg| arg.requires("http")),
+    mut_arg("internet", |arg| arg.requires("http")),
+    mut_arg("coinbase", |arg| arg.requires("http"))
+)]
 pub struct ServeArgs {
     #[command(subcommand)]
     pub command: Option<ServeCommand>,
     /// Unix socket to listen on [default: lepic.sock in the data directory]
     #[arg(long, value_name = "SOCKET")]
     pub socket: Option<PathBuf>,
+    /// Also answer payments sent over HTTP, as `lepic http listen` does
+    #[arg(long)]
+    pub http: bool,
+    #[command(flatten)]
+    pub listen: HttpListenArgs,
 }
 
 #[derive(Debug, Subcommand)]
@@ -675,6 +685,9 @@ pub struct HttpListenArgs {
     #[arg(long)]
     pub internet: bool,
     /// Also build block rewards for a mining node on this computer
+    ///
+    /// Behind a local reverse proxy every caller is loopback, so --coinbase then serves every
+    /// caller the proxy forwards.
     #[arg(long)]
     pub coinbase: bool,
     /// Build block rewards for a mining node on another computer too

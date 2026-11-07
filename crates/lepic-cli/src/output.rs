@@ -721,6 +721,9 @@ pub struct ServeReport {
     pub requests: u32,
     /// What the Epicbox listener received.
     pub inbox: InboxReport,
+    /// What the HTTP listener answered; absent without `--http`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub http: Option<HttpListenReport>,
 }
 
 /// How the maintenance of a running `serve` went: `serve status`.
@@ -728,6 +731,18 @@ pub struct ServeReport {
 pub struct ServeStatusReport {
     pub refresh: MaintenanceReport,
     pub collect: MaintenanceReport,
+    /// The HTTP listener; absent without `--http`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub http: Option<ServeHttpStatus>,
+}
+
+/// The HTTP listener of a running `serve --http`, with its counts so far.
+#[derive(Debug, Serialize)]
+pub struct ServeHttpStatus {
+    #[serde(flatten)]
+    pub listener: HttpListenReport,
+    /// Who `build_coinbase` is answered to: `off`, `local` or `remote`.
+    pub coinbase: &'static str,
 }
 
 /// One maintenance task of `serve`, since it started.
@@ -741,7 +756,7 @@ pub struct MaintenanceReport {
     pub last_success: Option<String>,
 }
 
-/// What `http listen` did before it was stopped.
+/// What `http listen`, or the HTTP listener of `serve`, did before it was stopped.
 #[derive(Debug, Serialize)]
 pub struct HttpListenReport {
     pub port: u16,
@@ -1492,6 +1507,14 @@ fn write_invoice_human(out: &mut Vec<u8>, report: &Report) -> std::io::Result<()
     }
 }
 
+fn write_http_counts(out: &mut Vec<u8>, r: &HttpListenReport) -> std::io::Result<()> {
+    writeln!(
+        out,
+        "Listened on port {} ({}): received {}, repeated {}, refused {}.",
+        r.port, r.exposure, r.received, r.repeated, r.refused
+    )
+}
+
 fn write_maintenance(
     out: &mut Vec<u8>,
     name: &str,
@@ -1515,17 +1538,20 @@ fn write_transport_human(out: &mut Vec<u8>, report: &Report) -> std::io::Result<
         Report::Inbox(r) => write_inbox(out, r),
         Report::Serve(r) => {
             writeln!(out, "Served {} requests on {}.", r.requests, r.socket)?;
+            if let Some(http) = &r.http {
+                write_http_counts(out, http)?;
+            }
             write_inbox(out, &r.inbox)
         }
         Report::ServeStatus(r) => {
             write_maintenance(out, "Refresh", &r.refresh)?;
-            write_maintenance(out, "Collect", &r.collect)
+            write_maintenance(out, "Collect", &r.collect)?;
+            match &r.http {
+                Some(http) => write_http_counts(out, &http.listener),
+                None => Ok(()),
+            }
         }
-        Report::HttpListen(r) => writeln!(
-            out,
-            "Listened on port {} ({}): received {}, repeated {}, refused {}.",
-            r.port, r.exposure, r.received, r.repeated, r.refused
-        ),
+        Report::HttpListen(r) => write_http_counts(out, r),
         Report::TorAddress(r) => writeln!(out, "{}", r.onion),
         Report::TorListen(r) => {
             let at = match &r.previous_onion {
@@ -2301,6 +2327,7 @@ mod tests {
                         buffered: 0,
                         expired: None,
                     },
+                    http: None,
                 }),
                 vec!["inbox", "requests", "socket"],
             ),

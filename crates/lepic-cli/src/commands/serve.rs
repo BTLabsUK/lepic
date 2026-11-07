@@ -15,6 +15,7 @@ use std::time::Duration;
 use clap::Parser as _;
 use jiff::Timestamp;
 use lepic_epicbox::RelayEndpoint;
+use lepic_foreign::CoinbaseAccess;
 use lepic_node::NodeApi;
 use lepic_primitives::params::Network;
 use lepic_wallet::inbox::{InboxError, InboxSummary, ListenHandle};
@@ -24,7 +25,8 @@ use tokio::sync::watch;
 use tokio::time::MissedTickBehavior;
 
 use super::{
-    InvoiceSweep, Opened, Run, abort_on, contact, finish_listen, inbox_report, listen_and_sweep,
+    HttpListener, InvoiceSweep, Opened, Run, abort_on, contact, finish_listen, inbox_report,
+    listen_and_sweep,
 };
 use crate::Console;
 use crate::cli::{
@@ -33,7 +35,9 @@ use crate::cli::{
 };
 use crate::exit::CliError;
 use crate::host::{Host, HostNode};
-use crate::output::{MaintenanceReport, Report, ServeReport, ServeStatusReport, render};
+use crate::output::{
+    MaintenanceReport, Report, ServeHttpStatus, ServeReport, ServeStatusReport, render,
+};
 use crate::secret::SecretInput;
 use crate::service::{self, Listening, Reply, Request};
 use crate::settings::{Env, OutputFormat, Settings};
@@ -152,6 +156,8 @@ struct Service<'a, H: Host> {
     /// Turns true when serve stops, which interrupts every request as Ctrl-C interrupts a command.
     interrupt: watch::Receiver<bool>,
     maintenance: RefCell<Maintenance>,
+    /// The HTTP listener, when serve runs with `--http`.
+    http: Option<&'a HttpListener>,
 }
 
 impl<H: Host> Service<'_, H> {
@@ -259,6 +265,14 @@ impl<H: Host> Service<'_, H> {
             return Ok(Report::ServeStatus(ServeStatusReport {
                 refresh: maintenance.refresh.report(),
                 collect: maintenance.collect.report(),
+                http: self.http.map(|http| ServeHttpStatus {
+                    listener: http.report(),
+                    coinbase: match http.coinbase {
+                        CoinbaseAccess::Off => "off",
+                        CoinbaseAccess::LocalOnly => "local",
+                        CoinbaseAccess::Remote => "remote",
+                    },
+                }),
             }));
         }
         let graceful = Arc::new(AtomicBool::new(false));
@@ -411,6 +425,11 @@ impl<H: Host> Run<'_, H> {
             .unwrap_or_else(|| service::default_socket(&self.settings.data_dir));
         service::check_socket_path(&path)?;
         let opened = self.open().await?;
+        let http = if args.http {
+            Some(HttpListener::start(&opened, self.settings, &args.listen).await?)
+        } else {
+            None
+        };
         let listening = service::bind(&path)?;
         opened.wallet.epicbox_attach(&opened.epicbox)?;
         let handle = ListenHandle::new();
@@ -423,6 +442,7 @@ impl<H: Host> Run<'_, H> {
             held: Arc::clone(&opened),
             interrupt: stop.subscribe(),
             maintenance: RefCell::default(),
+            http: http.as_ref(),
         };
         let result = self
             .until_interrupted(
@@ -435,6 +455,10 @@ impl<H: Host> Run<'_, H> {
             )
             .await;
         drop(service);
+        let http = match http {
+            Some(http) => Some(http.shutdown().await),
+            None => None,
+        };
         drop(listening);
         opened.wallet.lock();
         let summary = result?;
@@ -443,6 +467,7 @@ impl<H: Host> Run<'_, H> {
             socket: path.display().to_string(),
             requests: served.get(),
             inbox: inbox_report(summary, expired),
+            http,
         }))
     }
 }
