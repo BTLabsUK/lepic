@@ -16,6 +16,7 @@ use crate::settings::Env;
 
 pub const PASSWORD_ENV: &str = "LEPIC_PASSWORD";
 pub const NEW_PASSWORD_ENV: &str = "LEPIC_NEW_PASSWORD";
+pub const NEW_PASSWORD_FILE_ENV: &str = "LEPIC_NEW_PASSWORD_FILE";
 
 /// Longer than any password or recovery phrase a person types.
 pub const MAX_SECRET_LEN: usize = 4096;

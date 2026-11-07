@@ -4,7 +4,7 @@
 use std::future::Future;
 use std::io::{Read as _, Write as _};
 use std::num::NonZeroUsize;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -61,7 +61,7 @@ use crate::amount::{format_amount, format_fee, format_units, parse_amount};
 use crate::cli::{
     Command, DestinationArgs, EpicboxCommand, FinalizeArgs, HttpCommand, HttpListenArgs,
     ImportHistoryArgs, ImportSeedArgs, InitArgs, InvoiceCommand, IssueArgs, ListingArgs,
-    NodeCommand, PasswordArgs, PayArgs, PostArgs, ReceiveArgs, ResendArgs, RestoreArgs, ScanArgs,
+    NodeCommand, PayArgs, PostArgs, ReceiveArgs, ResendArgs, RestoreArgs, ScanArgs,
     SelectionArg, SendArgs, SendDestinationArgs, SpendArgs, TorAddressArgs, TorBinaryArgs,
     TorCommand, TorListenArgs, TxCommand, WalletCommand, WalletScanArgs, WordsArg,
 };
@@ -77,6 +77,7 @@ use crate::output::{
     TxStateReport, WalletScanReport,
 };
 use crate::progress::Progress;
+use crate::secret::NEW_PASSWORD_FILE_ENV;
 use crate::settings::{OutputFormat, Settings};
 use crate::stores::{CliStores, SharedStore};
 use crate::vault::{FileVault, VAULT_FILE};
@@ -296,7 +297,7 @@ impl<H: Host> Run<'_, H> {
                     outputs: outputs.iter().map(output_report).collect(),
                 }))
             }
-            WalletCommand::Password(args) => self.change_password(&args).await,
+            WalletCommand::Password => self.change_password().await,
             WalletCommand::Address => {
                 let opened = self.open().await?;
                 let address = opened.wallet.epicbox_attach(&opened.epicbox)?;
@@ -1298,7 +1299,7 @@ impl<H: Host> Run<'_, H> {
         let spend = Spend::from_args(&args.spend)?;
         let opened = self.open().await?;
         let account = opened.wallet.account(&args.account.account)?;
-        let file = std::path::PathBuf::from(&args.invoice);
+        let file = PathBuf::from(&args.invoice);
         let files = FileTransport::new();
         let wire = files
             .import(&Location::File(file.clone()))
@@ -1328,7 +1329,7 @@ impl<H: Host> Run<'_, H> {
 
     /// Re-encrypts the vault under a new password. Only the vault file changes: the database key
     /// comes from the seed (ADR 0032).
-    async fn change_password(&mut self, args: &PasswordArgs) -> Result<Report, CliError> {
+    async fn change_password(&mut self) -> Result<Report, CliError> {
         let vault = self.settings.data_dir.join(VAULT_FILE);
         if !vault.exists() {
             return Err(WalletError::NoWallet.into());
@@ -1342,10 +1343,11 @@ impl<H: Host> Run<'_, H> {
                 false,
             )
             .await?;
+        let file = self.console.env.get(NEW_PASSWORD_FILE_ENV).map(PathBuf::from);
         let new = self
             .console
             .secrets
-            .changed_wallet_password(&mut self.console.env, args.new_password_file.as_deref())
+            .changed_wallet_password(&mut self.console.env, file.as_deref())
             .await?;
         check_private_dir(&self.settings.data_dir)?;
         let _lock = lock_data_dir(&self.settings.data_dir).await?;

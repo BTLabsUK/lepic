@@ -224,7 +224,7 @@ funds back if the data directory is lost, and anyone who has it can spend them.
 ### Change the password
 
 `lepic wallet password` re-encrypts the vault file under a new password. The current password
-comes as above. The new one comes from the first line of the file `--new-password-file` names
+comes as above. The new one comes from the first line of the file `LEPIC_NEW_PASSWORD_FILE` names
 (owner-only, like `password_file`), else from `LEPIC_NEW_PASSWORD`, else from a hidden prompt
 asked twice, else from the next line of standard input. An empty new password is refused (exit
 7), as is a wrong current one (exit 4, `wrong_password`); the vault is then unchanged. The new
