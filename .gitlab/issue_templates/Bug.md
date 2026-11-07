@@ -3,7 +3,7 @@
 
 ## Version and platform
 
-<!-- LEPIC version or commit, and the host (CLI, Epic Cash Desktop or Mobile). -->
+<!-- LEPIC version or commit, and the host (CLI or BT Wallet). -->
 
 ## What happened
 

@@ -38,7 +38,7 @@ must still give back every address the wallet answers at.
     proofs are signed with the payment-proof key, and removes it at `stop_tor`;
   - `lepic tor listen --previous-onion` does the same in the CLI; without it only the onion is
     published.
-  Epic Wallet does not publish the previous onion: it has few users, who are told of the new
+  BT Wallet does not publish the previous onion: it has few users, who are told of the new
   address, and publishing it would keep the two identities linked. The lookup stays.
 
 ## Consequences

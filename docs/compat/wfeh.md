@@ -1,6 +1,6 @@
 # App data files (`WFEH` version 1)
 
-The Epic Cash app encrypts its history backups (`.wfeh` files) in this format, and LEPIC seals
+BT Wallet encrypts its history backups (`.wfeh` files) in this format, and LEPIC seals
 and opens it so that files written before the app moved to LEPIC still open, with no key crossing
 the binding (ADR 0014). The format is frozen: a change is a new version byte, never an edit here.
 

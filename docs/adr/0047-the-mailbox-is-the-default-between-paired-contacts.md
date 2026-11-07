@@ -9,13 +9,13 @@ Amends RFC 0002 (sections 9.1, 10.5 and 15, and the tag `09` row). Uses 0033 (ad
 
 RFC 0002 said a send to a paired contact over Epicbox goes to the contact's payments address, unless
 the user chooses the mailbox. The core already sends through the pairing (`contact_send`) and
-checks it before it locks any input. Epic Wallet had the mailbox as an off-by-default switch on the phone and no route on the desktop.
+checks it before it locks any input. BT Wallet had the mailbox as an off-by-default switch on the phone and no route on the desktop.
 
 ## Decision
 
 The host picks the default route for a send to a paired contact. The core states no default.
 
-Epic Wallet sends through the pairing when the pairing can carry payments, and keeps the
+BT Wallet sends through the pairing when the pairing can carry payments, and keeps the
 payments address (tag `09`) as the fallback.
 
 | Case | Route |

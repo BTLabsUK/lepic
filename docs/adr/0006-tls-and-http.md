@@ -65,7 +65,7 @@ iOS was not built, because the spike machine had no Xcode.
 http elsewhere would put it on the wire unencrypted.
 
 Epic's node API answers plain http, and people run their node on their home network or reach it
-through a tailnet. The Epic Cash wallet app therefore relays such a node itself: a plain-http
+through a tailnet. BT Wallet therefore relays such a node itself: a plain-http
 node at a private or link-local address, at a `.local` / `.lan` name that resolves only to such
 addresses, or, once the user agreed for that node, at a 100.64.0.0/10 address (a Tailscale
 tailnet, which cannot be told apart from a provider's carrier-grade NAT), is handed to LEPIC as

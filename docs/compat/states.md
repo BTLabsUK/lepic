@@ -77,7 +77,7 @@ post, and a refresh expires it if it is still `sent`, as at a TTL cutoff. A fina
 send is still not expired. Upstream's `post_tx` checks no TTL.
 
 A release (`Wallet::release`) ends an outgoing `finalized` or `posted` send the network never took,
-as the Epic Cash app's `release_stuck_send` does. A refresh at or above 1,440 blocks after the
+as BT Wallet's `release_stuck_send` does. A refresh at or above 1,440 blocks after the
 height the send was finalized at (for a send finalized before that height was stored, after the
 height its slate was created at) looks up its kernel up to the tip, counting the highest confirmed
 tip and not a tip held as pending. A kernel found confirms the send; a missing one makes it

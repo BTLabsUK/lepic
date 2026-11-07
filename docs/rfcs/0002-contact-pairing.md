@@ -900,7 +900,7 @@ connects to no Epicbox relay at all, home relays included. Then, as in Offline (
 When the recipient is a paired contact with `seal` on and caps bit 0, the file and paste methods
 write an envelope: type `01`, the marked V3 slate as body, purpose, our current card when its seq
 is newer than what the contact last saw, signed. The app shows "Sealed for Anna". Over Epicbox,
-the host picks the default route for a send to a paired contact. Epic Wallet sends through the
+the host picks the default route for a send to a paired contact. BT Wallet sends through the
 contact mailbox, which posts the envelope there, and keeps the payments address as the fallback:
 the user can switch to it, and it is offered after a failed send or after 24 hours without an
 answer. The core takes no side; a host that wants the old default, the payments address, may keep it.
