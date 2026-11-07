@@ -442,6 +442,34 @@ scenario_http_epic_wallet_sends() {
     DETAIL="slate ${slate_id} received over http, confirmed on both sides"
 }
 
+# The same, with lepic running `serve --http`: one process takes the payment over http and holds
+# the wallet.
+scenario_serve_http_epic_wallet_sends() {
+    peer_listen_stop
+    wait_until "peer spendable" 180 ew_spendable_at_least peer "$(($(to_units 1.7) + UNIT))" ||
+        fail "epic-wallet has no spendable funds" || return 1
+    local last
+    last="$(lepic_last_tx_id)"
+    lepic_serve_http_start || fail "lepic serve --http did not start" || return 1
+    ew peer send -m http -d "http://127.0.0.1:${LEPIC_HTTP_PORT}" -c 1 -s smallest 1.7 >>"${RUN_LOG}" ||
+        { lepic_http_listen_stop >/dev/null; fail "epic-wallet http send failed"; return 1; }
+    local report
+    report="$(lepic_http_listen_stop)"
+    [[ "$(jq -r '[.http.received, .http.repeated, .http.refused] | join(",")' <<<"${report}")" == 1,0,0 ]] ||
+        fail "serve report is not one received http payment: ${report}" || return 1
+    local tx
+    tx="$(lepic_incoming_after "${last}")"
+    [[ "$(wc -l <<<"${tx}")" -eq 1 && -n "${tx}" ]] || fail "expected one new incoming tx, got: ${tx}" || return 1
+    [[ "$(jq -r .amount_credited <<<"${tx}")" == 1.70000000 ]] || fail "credited amount wrong: ${tx}" || return 1
+    local tx_id slate_id
+    tx_id="$(jq -r .tx_id <<<"${tx}")"
+    slate_id="$(jq -r .slate_id <<<"${tx}")"
+    confirm_both "${tx_id}" "${slate_id}" || return 1
+    EXPECTED_TOTAL=$((EXPECTED_TOTAL + $(to_units 1.7)))
+    check_lepic_total || return 1
+    DETAIL="slate ${slate_id} received over http by serve, confirmed on both sides"
+}
+
 # Posts a slate file to a wallet's foreign API as epic-wallet does, from the peer container, and
 # prints the JSON-RPC answer.
 post_receive_tx() {
@@ -687,6 +715,7 @@ SCENARIOS=(
     "epic-wallet invoices lepic by file:scenario_file_epic_wallet_invoices"
     "lepic sends over http:scenario_http_lepic_sends"
     "epic-wallet sends over http:scenario_http_epic_wallet_sends"
+    "epic-wallet sends over http to serve:scenario_serve_http_epic_wallet_sends"
     "same S1 twice over http:scenario_http_repeat"
     "receiver cancels an unseen receipt:scenario_cancel_unseen"
     "receiver cancel of a posted receipt:scenario_cancel_posted"

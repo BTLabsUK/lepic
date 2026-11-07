@@ -841,31 +841,7 @@ impl<H: Host> Run<'_, H> {
     /// Answers payments over HTTP until interrupted.
     async fn http_listen(&mut self, args: &HttpListenArgs) -> Result<Report, CliError> {
         let opened = self.open().await?;
-        let exposure = if args.internet {
-            Exposure::Internet
-        } else {
-            Exposure::LocalOnly
-        };
-        let counts = Arc::new(HttpCounts::default());
-        let receiver = Arc::new(HttpReceiver {
-            opened: Arc::clone(&opened),
-            counts: Arc::clone(&counts),
-            transport: lepic_foreign::TRANSPORT_ID,
-            proof_key: ProofKey::Payments,
-        });
-        let port = args.port.unwrap_or(self.settings.tuning.listen_port);
-        let coinbase = match (args.coinbase, args.coinbase_remote) {
-            (_, true) => CoinbaseAccess::Remote,
-            (true, false) => CoinbaseAccess::LocalOnly,
-            (false, false) => CoinbaseAccess::Off,
-        };
-        let handle = lepic_foreign::listen(
-            ListenSettings::new(exposure, port, self.settings.tuning.listen)
-                .with_coinbase(coinbase),
-            receiver,
-        )
-        .await?;
-        let port = handle.local_addr().port();
+        let listener = HttpListener::start(&opened, self.settings, args).await?;
         if self.settings.output == OutputFormat::Human {
             let what = if args.coinbase {
                 "payments and block rewards"
@@ -873,8 +849,9 @@ impl<H: Host> Run<'_, H> {
                 "payments"
             };
             self.show_line(&format!(
-                "Listening for {what} over HTTP on port {port} ({}). Ctrl-C stops.",
-                exposure.as_str()
+                "Listening for {what} over HTTP on port {} ({}). Ctrl-C stops.",
+                listener.port,
+                listener.exposure.as_str()
             ));
         }
         let stop = tokio::sync::Notify::new();
@@ -882,14 +859,7 @@ impl<H: Host> Run<'_, H> {
             stop.notify_one();
         })
         .await;
-        handle.shutdown().await;
-        Ok(Report::HttpListen(HttpListenReport {
-            port,
-            exposure: exposure.as_str(),
-            received: counts.received.load(Ordering::Relaxed),
-            repeated: counts.repeated.load(Ordering::Relaxed),
-            refused: counts.refused.load(Ordering::Relaxed),
-        }))
+        Ok(Report::HttpListen(listener.shutdown().await))
     }
 
     /// For a send over Tor, starts the wallet's tor from `binary`, waits until it can send and
@@ -1671,6 +1641,76 @@ struct HttpCounts {
     received: std::sync::atomic::AtomicU32,
     repeated: std::sync::atomic::AtomicU32,
     refused: std::sync::atomic::AtomicU32,
+}
+
+/// The HTTP payment listener of `http listen` and `serve --http`.
+struct HttpListener {
+    handle: lepic_foreign::ListenerHandle,
+    counts: Arc<HttpCounts>,
+    port: u16,
+    exposure: Exposure,
+    coinbase: CoinbaseAccess,
+}
+
+impl HttpListener {
+    /// Binds the listener on the wallet `opened`; a port that cannot be bound is an error.
+    async fn start<N: NodeApi + 'static>(
+        opened: &Arc<Opened<N>>,
+        settings: &Settings,
+        args: &HttpListenArgs,
+    ) -> Result<Self, CliError> {
+        let exposure = if args.internet {
+            Exposure::Internet
+        } else {
+            Exposure::LocalOnly
+        };
+        let counts = Arc::new(HttpCounts::default());
+        let receiver = Arc::new(HttpReceiver {
+            opened: Arc::clone(opened),
+            counts: Arc::clone(&counts),
+            transport: lepic_foreign::TRANSPORT_ID,
+            proof_key: ProofKey::Payments,
+        });
+        let port = args.port.unwrap_or(settings.tuning.listen_port);
+        let coinbase = match (args.coinbase, args.coinbase_remote) {
+            (_, true) => CoinbaseAccess::Remote,
+            (true, false) => CoinbaseAccess::LocalOnly,
+            (false, false) => CoinbaseAccess::Off,
+        };
+        let handle = lepic_foreign::listen(
+            ListenSettings::new(exposure, port, settings.tuning.listen).with_coinbase(coinbase),
+            receiver,
+        )
+        .await?;
+        Ok(Self {
+            port: handle.local_addr().port(),
+            handle,
+            counts,
+            exposure,
+            coinbase,
+        })
+    }
+
+    /// What was answered so far.
+    fn report(&self) -> HttpListenReport {
+        counted(self.port, self.exposure, &self.counts)
+    }
+
+    /// Stops the listener once its requests have ended and returns what it answered.
+    async fn shutdown(self) -> HttpListenReport {
+        self.handle.shutdown().await;
+        counted(self.port, self.exposure, &self.counts)
+    }
+}
+
+fn counted(port: u16, exposure: Exposure, counts: &HttpCounts) -> HttpListenReport {
+    HttpListenReport {
+        port,
+        exposure: exposure.as_str(),
+        received: counts.received.load(Ordering::Relaxed),
+        repeated: counts.repeated.load(Ordering::Relaxed),
+        refused: counts.refused.load(Ordering::Relaxed),
+    }
 }
 
 /// The wallet behind `http listen` and `tor listen`, recording receipts as `transport`'s and

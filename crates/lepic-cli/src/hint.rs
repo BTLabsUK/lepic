@@ -88,7 +88,7 @@ pub fn hint(error: &CliError, settings: Option<&Settings>) -> Option<String> {
             return Some(
                 "another lepic command, such as `lepic epicbox listen`, is using this wallet; \
                  stop it or wait for it to end. If it is `lepic serve`, run this command with \
-                 --service"
+                 --service; to take payments over HTTP next to it, start `lepic serve --http`"
                     .to_owned(),
             );
         }

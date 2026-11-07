@@ -252,3 +252,68 @@ fn serve_status_reports_refreshes_failing_in_a_row() {
     });
     served.ok();
 }
+
+/// `serve --http` answers the foreign API on a port the system picked, `serve status` shows the
+/// listener, and serve's report ends with its counts.
+#[test]
+fn serve_with_http_answers_the_foreign_api() {
+    let mut host = TestHost::new();
+    let wallet = Instance::new("serving password");
+    wallet.run(&host, &["wallet", "init"]).ok();
+
+    let stop = Arc::new(AtomicBool::new(false));
+    let signal = Arc::clone(&stop);
+    host.interrupt_when = Some(Arc::new(move || signal.load(Ordering::SeqCst)));
+    let client = host.without_interrupt();
+    let dir = tempfile::tempdir().unwrap();
+    let socket = dir.path().join("s.sock");
+    let service = format!("--service={}", socket.display());
+    let socket_arg = socket.to_str().unwrap();
+
+    let served = std::thread::scope(|scope| {
+        let server = scope.spawn(|| {
+            wallet.run(
+                &host,
+                &["serve", "--socket", socket_arg, "--http", "--port", "0"],
+            )
+        });
+        wait_for_socket(&socket);
+        let status = wallet
+            .run(&client, &[&service, "serve", "status"])
+            .ok()
+            .json();
+        let http = &status["http"];
+        assert_eq!(http["exposure"], "local", "{status}");
+        assert_eq!(http["coinbase"], "off", "{status}");
+        assert_eq!(http["received"], 0, "{status}");
+        let port = http["port"].as_u64().unwrap();
+        assert_ne!(port, 0, "{status}");
+
+        let body = r#"{"jsonrpc":"2.0","id":1,"method":"check_version","params":[]}"#;
+        let mut stream =
+            std::net::TcpStream::connect(("127.0.0.1", u16::try_from(port).unwrap())).unwrap();
+        write!(
+            stream,
+            "POST /v2/foreign HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\n\
+             Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        )
+        .unwrap();
+        let mut answer = String::new();
+        std::io::Read::read_to_string(&mut stream, &mut answer).unwrap();
+        assert!(answer.starts_with("HTTP/1.1 200"), "{answer}");
+        let json = answer.split("\r\n\r\n").nth(1).unwrap();
+        let version: serde_json::Value = serde_json::from_str(json).unwrap();
+        assert!(
+            version["result"]["Ok"]["foreign_api_version"].is_number(),
+            "{version}"
+        );
+
+        stop.store(true, Ordering::SeqCst);
+        server.join().unwrap()
+    });
+    let report = served.ok().json();
+    assert_eq!(report["http"]["exposure"], "local", "{report}");
+    assert_eq!(report["http"]["refused"], 0, "{report}");
+    assert_eq!(keys(&report), ["http", "inbox", "requests", "socket"]);
+}
