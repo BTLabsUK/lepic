@@ -26,8 +26,9 @@ LEPIC sends the S1 in the V2 shape, as over Epicbox, and finalizes the S2 like a
 - `receive_tx` takes one to four parameters (4.0 sends three extras, 4.1 four) and uses only the
   slate; the extras must be `null` or strings. The S2 goes back in the shape of the S1. A slate
   received before returns the same S2.
-- Every other method answers JSON-RPC error `-32601`. `finalize_invoice_tx` and
-  `build_coinbase` are not served.
+- Every other method answers JSON-RPC error `-32601`. `finalize_invoice_tx` is not served.
+  `build_coinbase` is served only when the host turns it on (`ListenSettings::with_coinbase`),
+  to loopback callers unless the host opens it to all (ADR 0048); otherwise it answers `-32601`.
 - A refusal is `result.Err` with `{"GenericError":"slate refused"}` or
   `{"GenericError":"wallet not ready"}`. "Wallet not ready" may be retried later: the wallet is
   locked or its node unreachable, the listener took its 30 payments of the minute, or 100

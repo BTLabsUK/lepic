@@ -14,8 +14,8 @@ In scope: anything that can lose or lock funds, leak keys or wallet data, make t
 invalid transaction, or crash it from untrusted input (node responses, relay messages, slates, files).
 
 Issues in the Epic Cash node, the reference wallet or the Epicbox relay belong to those projects. If
-you find one through LEPIC, report it to them privately and tell us only what we need to protect
-LEPIC users.
+you find one through LEPIC, report it to them privately and tell BT Labs only what is needed to
+protect LEPIC users.
 
 ## Supported versions
 

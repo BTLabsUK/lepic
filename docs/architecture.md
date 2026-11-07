@@ -22,7 +22,7 @@ between crates are fixed below and checked by `cargo xtask deps-check`.
 | `lepic-transport` | Transport traits, transport registry, format policy, the file transport. | disk |
 | `lepic-epicbox` | Epicbox addresses, message crypto, protocol frames, relay client and its transport. | network |
 | `lepic-foreign` | The wallet foreign API over HTTP (ADR 0017): JSON-RPC messages, the client and the `http` transport, the listener. | network |
-| `lepic-tor` | Tor on desktop (ADR 0018): onion v3 addresses and the wallet's onion key, a tor child process per wallet driven over its control port, SOCKS5, the `tor` transport. | network, child process |
+| `lepic-tor` | Tor on desktop and Android (ADR 0018): onion v3 addresses and the wallet's onion key, a tor child process per wallet driven over its control port, SOCKS5, the `tor` transport. | network, child process |
 | `lepic-wallet` | The engine: accounts, output selection, send, receive, finalize, cancel, scan, refresh, transaction state machine, events. | through ports |
 | `lepic-wallet-contacts` | Contacts on the engine (RFC 0002): pairing, contact mailboxes, sealed slates, contact invoices, key checks and app payloads. Drives `lepic-wallet` through its public calls and the hooks of `lepic_wallet::extension`. | through ports |
 | `lepic-telemetry` | Tracing subscribers for CLI and mobile, redaction helpers. | stderr, files |
@@ -104,8 +104,8 @@ pass it in.
               +---------------------------------------------------------+
                          ^ chosen by FormatPolicy of the transport
               +----------+-----------+
-              |  Transport           |  epicbox: accepts V2, V3; sends V2; replies in the inbound shape
-              |  (file, epicbox,...) |  file:    accepts V2, V3; writes V2 unless V3 fields are needed
+              |  Transport           |  epicbox: accepts V2, V3; sends V2, V3 for invoices; replies in the inbound shape
+              |  (file, epicbox,...) |  file:    accepts V2, V3; writes V3
               +----------------------+
 ```
 

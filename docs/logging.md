@@ -35,6 +35,8 @@ message. Use these field names and add new ones to this list in the same change:
 | `reason` | why a contact message is in quarantine: a stable name |
 | `height` | block height |
 | `attempt` | retry number, starting at 1 |
+| `retry_in_ms` | delay before the next attempt |
+| `code` | close code a relay sent |
 | `elapsed_ms` | duration of the operation |
 | `error` | the error, with its source chain |
 | `tag` | app-chosen tag of a line the app logs under target `dart` |

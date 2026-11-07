@@ -63,6 +63,12 @@ Conventional Commit messages at release time.
 - `ChainParams::block_total_reward`, `foundation_levy`, `mining_reward` and `coinbase_value`,
   with vectors for the reward schedule.
 
+### Fixed
+
+- `lepic wallet info` reports the height its balances are at, and says `catching_up` with
+  `node_height` when the chain outgrew it.
+- The FFI builds the previous onion lookup without the `tor` feature.
+
 ## [0.3.1] - 2026-11-06
 
 ### Added

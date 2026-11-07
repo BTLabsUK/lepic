@@ -20,13 +20,12 @@ Source: [GitHub](https://github.com/BTLabsUK/lepic)
 
 LEPIC (light Epic) is an Epic Cash wallet that runs as a library inside a mobile or desktop app, in
 the app's own process. It creates and restores wallets, scans the chain through an Epic node, and
-sends and receives transactions with the standard `epic-wallet`. It is the wallet core of Epic Cash
-Mobile and Epic Cash Desktop. `lepic-ffi` is its FFI API, built on
+sends and receives transactions with the standard `epic-wallet`. It is the wallet core of BT
+Wallet. `lepic-ffi` is its FFI API, built on
 [flutter_rust_bridge](https://github.com/fzyzcjy/flutter_rust_bridge); apps use it through the
 [Flutter binding](https://github.com/BTLabsUK/lepic-flutter), a separate repository.
 
-> **Status: beta.** LEPIC runs in production in Epic Cash Desktop and Epic Cash Mobile since
-> 26.10. Its APIs may still change before 1.0.
+> **Status: beta.** LEPIC runs in production in BT Wallet. Its APIs may still change before 1.0.
 
 ## Why LEPIC
 
@@ -162,8 +161,8 @@ cargo xtask check                # fmt, clippy, every test, cargo deny, the repo
 cargo test -p lepic-wallet       # one crate
 ```
 
-`cargo xtask check` is the gate every change passes. Builds and tests run on our own machines,
-not on hosted CI: run the same gate before you send a change. Run it from a git checkout:
+`cargo xtask check` is the gate every change passes. Builds and tests run on the maintainers'
+machines, not on hosted CI: run the same gate before you send a change. Run it from a git checkout:
 it lists files through `git`. Tests never touch the network; the few live ones are `#[ignore]`d
 and need `LEPIC_LIVE_TESTS=1`. The [interop suite](interop/README.md)
 runs LEPIC against the real `epic-wallet`, node and Epicbox relay in Docker on a private chain, by

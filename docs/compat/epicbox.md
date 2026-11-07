@@ -262,7 +262,8 @@ LEPIC-only use of ordinary relay messages; nothing on the wire or the relay chan
   from the sender's own mailbox key, so the relay sees two per-contact keys.
 - Payload. The Epicbox plaintext is the armored sealed envelope (`BEGINEPICSEALED. ...`). A plain
   payload, an anonymous envelope, or one signed by any key but the contact's is acknowledged and
-  dropped.
+  dropped. When the host turns quarantine on, a message that opened under the contact's key and
+  would otherwise be dropped is kept locally (ADR 0049).
 - Invoices. An I1 parks only from a verified contact the user allows invoices from; its payment
   (I2) goes back sealed through the outbox to the contact's mailbox, never over the payments
   address. S1 from a contact (a withdrawal) is received and its S2 goes back the same way. Notices
@@ -271,9 +272,10 @@ LEPIC-only use of ordinary relay messages; nothing on the wire or the relay chan
 - Outbox. Entries are stored, posted at once and retried after 30 s, 2 min, 10 min, then every
   30 min and on every collecting cycle, to the home relay whatever relay the wallet uses; after a
   day undelivered they stop as stuck.
-- Home relay moves. A newer card from a shop or exchange whose mailbox names another relay moves
-  this side's mailbox there too; the old one is drained for 7 days and queued entries follow the
-  new address. People re-pair instead.
+- Home relay moves. A contact update whose card names another relay is stored and the mailbox in
+  use stays. `Event::ContactRelayMoveRequested` tells the host, which may apply the move with
+  `ContactBook::apply_relay_move`; the old mailbox is then drained for 7 days and queued entries
+  follow the new address. What the contact is plays no part.
 
 ## Notices between LEPIC wallets
 
@@ -283,8 +285,9 @@ ADR 0016 has the reasons; this is the format and who sends what.
   and `slate_id` (hyphenated UUID). `posted` adds `excess`, the kernel excess as 66 hex
   characters. A slate never has a number under `lepic`, which is how a receiver tells the two
   apart.
-- `declined`: payer to issuer, from the payer's payments address to the parked invoice's sender.
-  `withdrawn`: issuer to payer, on a cancel or an expiry. `posted`: issuer to payer, after the
+- `declined`: payer to issuer, from the payer's payments address to the parked invoice's sender;
+  also from a receiver that refuses an unsolicited S1 or I1 (ADR 0045). `cancelled`: sender to
+  receiver of an ordinary payment the receiver had answered. `withdrawn`: issuer to payer, on a cancel or an expiry. `posted`: issuer to payer, after the
   paid invoice was pushed. Both go to the address the invoice was issued to. `posted` also goes
   from the sender of an ordinary payment to its receiver, from the payments address, after the
   sender pushed it.
@@ -299,7 +302,9 @@ ADR 0016 has the reasons; this is the format and who sends what.
 - Accepted only from the recorded counterparty of the slate, and for `posted` only with the
   excess the payment implies: the I2 for an invoice this wallet paid, the stored S2 for a
   payment it received. Every other notice, one of another version or an unknown type, and
-  one over 8 KiB, is acknowledged and dropped.
+  one over 8 KiB, is acknowledged and dropped. When the host turns the early-notice buffer on, a
+  `declined`, `withdrawn` or `cancelled` that came before its slate is kept and applied when the
+  slate arrives (ADR 0049).
 - Padded: every notice, sealed or plain, and every pairing request is written with a last `pad`
   key of zeros to one of three lengths drawn at random, those of a marked first slate with one,
   two and three inputs (2452, 2551 and 2650 bytes), so its size does not tell it from a payment.

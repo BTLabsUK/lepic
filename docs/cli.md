@@ -13,7 +13,7 @@ lepic --network floonet wallet init   # create a test wallet, write down the phr
 lepic --network floonet wallet info   # balances, from the node at 127.0.0.1:13413
 ```
 
-Status: pre-alpha. Use floonet. Do not put real funds in it.
+Status: beta. Its commands may still change before 1.0.
 
 ## Install
 
@@ -145,7 +145,7 @@ from the recovery phrase (account 0), so a restored wallet keeps it.
 
 The rule is "All configuration in settings.toml (no hardcoded configuration)" (ADR 0030): no
 library crate holds a server address, port, timeout, retry or server limit, and the CLI's code
-holds none either. As in the Epic Cash wallet app, they live in two files:
+holds none either. As in BT Wallet, they live in two files:
 
 - **`settings.toml`, the user's file.** Which servers to use. Without `--settings`,
   `LEPIC_SETTINGS` or `settings_file` it is `~/.lepic/settings.toml`; when that does not exist,
@@ -353,7 +353,7 @@ the other way: the receiver issues I1, the payer answers with I2, the issuer fin
 moves slates in one of three ways:
 
 - Slate files, which you carry to the other party yourself. `lepic` writes V3 slate JSON and reads
-  V2 and V3, so `epic-wallet` `v4.0.2` reads its files and it reads `epic-wallet`'s.
+  V2 and V3, so `epic-wallet` `v4.1.0` reads its files and it reads `epic-wallet`'s.
 - An Epicbox relay, which holds encrypted slates for an address until its wallet fetches them.
   Over Epicbox `lepic` sends payments as V2 slates, as `epic-wallet` does, and invoices as V3
   slates, which carry the payment's TTL.
@@ -429,7 +429,7 @@ it the next time it connects, with either of:
 
 - `lepic epicbox drain` handles everything waiting on the relay once and exits. It prints what it
   did: `Received 0, finalized 1, repeated 0, rejected 0, held for retry 0, parked 0, bounced 0,
-  dropped 0, notices 0.`
+  dropped 0, notices 0.` A further line counts early notices kept, if any (`buffered` in JSON).
 - `lepic epicbox listen` stays connected, answers incoming payments and finalizes answers as they
   arrive, printing each change on stderr, until Ctrl-C or SIGTERM. It then settles the message
   in hand (at most 30 seconds) and prints the same summary.
@@ -713,8 +713,8 @@ A contact that moves to another relay asks for it in an update; `contact list` t
 mailbox with it there. Until then the contact's mailbox stays where it was.
 
 `contact move-home <HOST> [--drain-days N]` moves this wallet's own home relay for every paired
-contact: each is sent our card naming our mailbox on `<HOST>` once, and our mailboxes move there
-at once. With `--drain-days N` (0 to 365, default 0), every collect, `serve` included, still
+contact: each is sent this wallet's card naming its mailbox on `<HOST>` once, and its mailboxes
+move there at once. With `--drain-days N` (0 to 365, default 0), every collect, `serve` included, still
 reads the old mailboxes for N days. What a contact sends there is taken, and a `contact check`
 there is answered with the card naming the new mailbox, so a contact that missed the update is
 asked to follow. The drain replaces one left by following that contact's own move. The report
@@ -732,8 +732,8 @@ indexes, in the order of `sas`; empty without a SAS), `peer_heard_at` and `peer_
 (RFC 3339, or null), `peer_features` (the feature bits the contact claimed, 0 when none) and,
 once the pairing ended, `ended_reason` (`mismatch`, `peer-mismatch`, `unpaired` or
 `never-finished`) and `ended_at`.
-A wallet answers at most `contact_check_answers_per_hour` (default 1) and
-`contact_check_answers_per_day` (default 3) checks per contact; more are taken and dropped.
+A wallet answers at most 1 check an hour and 3 a day per contact; more are taken and dropped. A
+host app sets these with `contact_check_answers_per_hour` and `contact_check_answers_per_day`.
 
 `contact list` shows a contact's profile when it is not 0 (`profile 3 (no-payments, automated)`),
 and its JSON carries `peer_profile` (0 when none). A pairing restored from a backup shows 0 until
@@ -788,6 +788,31 @@ Profile 3 (no-payments, automated)
 or `contact decline <SLATE_ID>`, which tells the contact.
 `contact invoice <ID> <AMOUNT>` invoices a contact. `contact collect` also sends what the outbox
 holds. `contact export <FILE>` and `contact import <FILE>` carry the pairings in a backup.
+
+`contact invite` takes `--expiry 1h`, `24h` or `7d` (default `24h`), `--pairing-words`, and
+`--name` (default `LEPIC`). `contact label <ID> <LABEL>` gives a contact a name of your own.
+`contact remove <ID>` removes a pairing; the contact is not told.
+
+`contact key-check <NEW> <OLD>` asks whether a contact paired again, for example after a restore,
+still holds the keys of the older pairing; `contact collect` takes the answer. Either the keys are
+back and the new pairing goes, or the new pairing shows keys-changed, and `contact keys <NEW>
+keep-old` or `use-new` settles it: `keep-old` deletes the new pairing, `use-new` deletes the old
+one and leaves the new one not verified.
+
+`contact seal <ID> <TX_ID>` seals a transaction's slate to a contact as text, for a file or a
+paste, and `contact send-slate <ID> <TX_ID>` sends it sealed through the contact's mailbox. Both
+take `--purpose` (`payment`, `deposit`, `withdrawal`, `refund` or `request`). `contact plain
+<TX_ID>` writes the slate plain, for a contact that cannot open sealed text. `seal` and `plain`
+take `--out <FILE>`.
+
+`contact collect` reports the mailboxes it read, the messages it took, and what was stopped at the
+message limit, kept, refused, timed out or not reached. Its JSON has `mailboxes`, `capped`, `kept`,
+`refused`, `timed_out`, `not_reached`, `quarantined`, `quarantine_dropped`, `buffered`, `messages`,
+`paired`, `delivered`, `failed` and `unreachable`.
+
+`contact quarantine` lists the contact messages kept in quarantine (ADR 0049), with `id`,
+`contact_id`, `reason`, `first_seen`, `attempts` and `size`. The host app retries and discards
+them.
 
 `contact payload post <ID> --hex <HEX>` (or `--file <FILE>`) sends the host app's bytes, at
 most 64 KiB, to a paired contact or a verified private pairing, and prints the payload's id; LEPIC
