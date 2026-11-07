@@ -198,12 +198,30 @@ pub enum WalletCommand {
     Info,
     /// Show the wallet's Epicbox address
     Address,
+    /// List the wallet's outputs, spent ones included
+    Outputs(AccountArg),
+    /// Change the wallet password
+    #[command(after_help = CHANGE_PASSWORD_HELP)]
+    Password(PasswordArgs),
     /// Scan the chain for the wallet's outputs and bring the wallet in line with it
     #[command(after_help = WALLET_SCAN_HELP)]
     Scan(WalletScanArgs),
     /// Import the transaction history of the epic-wallet wallet this one was made from
     #[command(after_help = IMPORT_HISTORY_HELP)]
     ImportHistory(ImportHistoryArgs),
+}
+
+const CHANGE_PASSWORD_HELP: &str = "\
+The current password comes as for any command that opens the wallet. The new password comes from
+the file --new-password-file names (owner-only), else LEPIC_NEW_PASSWORD, else a hidden prompt
+asked twice, else one line of standard input after the current password's. It cannot be empty.
+The recovery phrase and the wallet database do not change.";
+
+#[derive(Debug, Args)]
+pub struct PasswordArgs {
+    /// Read the new password from the first line of this file, which only its owner may read
+    #[arg(long, value_name = "FILE")]
+    pub new_password_file: Option<PathBuf>,
 }
 
 const IMPORT_HISTORY_HELP: &str = "\

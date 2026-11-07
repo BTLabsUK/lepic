@@ -21,7 +21,7 @@ use zeroize::Zeroizing;
 
 use crate::app_config::{AppConfig, Tuning};
 use crate::cli::{GlobalArgs, LogFormatArg, NetworkArg, OutputArg};
-use crate::secret::PASSWORD_ENV;
+use crate::secret::{NEW_PASSWORD_ENV, PASSWORD_ENV};
 use crate::settings_file::{self, Servers};
 
 /// Config files are a few lines; anything larger is not one.
@@ -162,7 +162,7 @@ impl fmt::Debug for Env {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_map()
             .entries(self.0.iter().map(|(key, value)| {
-                let shown = if key == PASSWORD_ENV {
+                let shown = if key == PASSWORD_ENV || key == NEW_PASSWORD_ENV {
                     "[redacted]"
                 } else {
                     value
