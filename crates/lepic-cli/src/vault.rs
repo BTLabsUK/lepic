@@ -101,6 +101,16 @@ impl SecretVault for FileVault {
     }
 }
 
+impl FileVault {
+    /// Re-encrypts the vault file under `new`, with this vault's parameters and a fresh salt.
+    /// The file keeps its old password if the write fails.
+    pub fn rekey(&self, current: &Password, new: &Password) -> Result<(), SecretVaultError> {
+        self.unlock(current)?
+            .rekey(new.expose_bytes(), self.kdf)
+            .map_err(vault_error)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::fs;
@@ -140,6 +150,34 @@ mod tests {
             vault.create(&password),
             Err(SecretVaultError::AlreadyExists)
         ));
+    }
+
+    #[test]
+    fn a_rekeyed_vault_opens_with_the_new_password_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = FileVault::new(dir.path(), cheap());
+        let old = Password::new("old".to_owned());
+        let new = Password::new("new".to_owned());
+        let name = SecretName::new("test/secret").unwrap();
+        vault
+            .create(&old)
+            .unwrap()
+            .put(&name, &SecretBytes::from_slice(b"value"))
+            .unwrap();
+        assert!(matches!(
+            vault.rekey(&new, &new),
+            Err(SecretVaultError::WrongPassword)
+        ));
+        vault.rekey(&old, &new).unwrap();
+        assert!(matches!(
+            vault.unlock(&old),
+            Err(SecretVaultError::WrongPassword)
+        ));
+        let reopened = vault.unlock(&new).unwrap();
+        assert_eq!(
+            reopened.get(&name).unwrap().unwrap().expose_bytes(),
+            b"value"
+        );
     }
 
     #[cfg(unix)]

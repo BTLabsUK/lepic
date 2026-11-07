@@ -21,8 +21,8 @@ use lepic_node::{NodeApi, NodeClient, Propagation, RpcTransport};
 use lepic_primitives::amount::{Fee, Height};
 use lepic_primitives::params::Network;
 use lepic_store::{
-    ChainCheck, ContactId, ImportedKind, OutboxStatus, Repositories, SlateStage, StoredTransaction,
-    TxDirection, TxId, WalletStore,
+    ChainCheck, ContactId, ImportedKind, OutboxStatus, OutputStatus, Repositories, SlateStage,
+    StoredTransaction, TxDirection, TxId, WalletStore,
 };
 use lepic_tor::{SocksProxy, TorProcess, TorSettings, TorState};
 use lepic_transport::error::TransportError;
@@ -40,7 +40,7 @@ use lepic_wallet::finalize::{FinalizeError, Posted};
 use lepic_wallet::inbox::{InboxSummary, ListenHandle};
 use lepic_wallet::invoice::{InvoiceError, InvoiceRequest, PayRequest};
 use lepic_wallet::legacy_history::{ImportWorkDir, LegacyImportStatus, TxOrigin};
-use lepic_wallet::refresh::{RefreshError, RefreshOutcome};
+use lepic_wallet::refresh::{BalanceCategory, OutputDetails, RefreshError, RefreshOutcome};
 use lepic_wallet::scan::{ScanCancel, ScanOptions, ScanStart, ScanSummary};
 use lepic_wallet::selection::SelectionStrategy;
 use lepic_wallet::send::{Delivery, SendRequest};
@@ -61,9 +61,9 @@ use crate::amount::{format_amount, format_fee, format_units, parse_amount};
 use crate::cli::{
     Command, DestinationArgs, EpicboxCommand, FinalizeArgs, HttpCommand, HttpListenArgs,
     ImportHistoryArgs, ImportSeedArgs, InitArgs, InvoiceCommand, IssueArgs, ListingArgs,
-    NodeCommand, PayArgs, PostArgs, ReceiveArgs, ResendArgs, RestoreArgs, ScanArgs, SelectionArg,
-    SendArgs, SendDestinationArgs, SpendArgs, TorAddressArgs, TorBinaryArgs, TorCommand,
-    TorListenArgs, TxCommand, WalletCommand, WalletScanArgs, WordsArg,
+    NodeCommand, PasswordArgs, PayArgs, PostArgs, ReceiveArgs, ResendArgs, RestoreArgs, ScanArgs,
+    SelectionArg, SendArgs, SendDestinationArgs, SpendArgs, TorAddressArgs, TorBinaryArgs,
+    TorCommand, TorListenArgs, TxCommand, WalletCommand, WalletScanArgs, WordsArg,
 };
 use crate::exit::{CliError, ErrorKind};
 use crate::host::{Host, HostNode};
@@ -71,9 +71,10 @@ use crate::output::{
     AccountReport, AddressReport, EpicboxStatusReport, ExpiredReport, FinalizeReport,
     HttpListenReport, ImportHistoryReport, ImportedReport, InboxReport, InfoReport, InitReport,
     InvoiceDeclineReport, InvoiceIssueReport, InvoiceListReport, InvoicePayReport, ListingReport,
-    MessageReport, NodeStatusReport, ParkedInvoiceReport, PeerReport, PostReport, ReceiveReport,
-    Report, ResendReport, RestoreReport, ScanReport, SendReport, TorAddressReport, TorListenReport,
-    TxListReport, TxReport, TxStateReport, WalletScanReport,
+    MessageReport, NodeStatusReport, OutputReport, OutputsReport, ParkedInvoiceReport,
+    PasswordReport, PeerReport, PostReport, ReceiveReport, Report, ResendReport, RestoreReport,
+    ScanReport, SendReport, TorAddressReport, TorListenReport, TxListReport, TxReport,
+    TxStateReport, WalletScanReport,
 };
 use crate::progress::Progress;
 use crate::settings::{OutputFormat, Settings};
@@ -286,6 +287,16 @@ impl<H: Host> Run<'_, H> {
             WalletCommand::Info => self.info().await,
             WalletCommand::Scan(args) => self.scan(&args).await,
             WalletCommand::ImportHistory(args) => self.import_history(&args).await,
+            WalletCommand::Outputs(args) => {
+                let opened = self.open().await?;
+                let account = opened.wallet.account(&args.account)?;
+                let outputs = opened.wallet.outputs(account.index)?;
+                Ok(Report::Outputs(OutputsReport {
+                    account: account.label,
+                    outputs: outputs.iter().map(output_report).collect(),
+                }))
+            }
+            WalletCommand::Password(args) => self.change_password(&args).await,
             WalletCommand::Address => {
                 let opened = self.open().await?;
                 let address = opened.wallet.epicbox_attach(&opened.epicbox)?;
@@ -1345,6 +1356,35 @@ impl<H: Host> Run<'_, H> {
         }))
     }
 
+    /// Re-encrypts the vault under a new password. Only the vault file changes: the database key
+    /// comes from the seed (ADR 0032).
+    async fn change_password(&mut self, args: &PasswordArgs) -> Result<Report, CliError> {
+        let vault = self.settings.data_dir.join(VAULT_FILE);
+        if !vault.exists() {
+            return Err(WalletError::NoWallet.into());
+        }
+        let current = self
+            .console
+            .secrets
+            .wallet_password(
+                &mut self.console.env,
+                self.settings.password_file.as_deref(),
+                false,
+            )
+            .await?;
+        let new = self
+            .console
+            .secrets
+            .changed_wallet_password(&mut self.console.env, args.new_password_file.as_deref())
+            .await?;
+        check_private_dir(&self.settings.data_dir)?;
+        let _lock = lock_data_dir(&self.settings.data_dir).await?;
+        FileVault::new(&self.settings.data_dir, self.host.vault_kdf())
+            .rekey(&password_from(current), &password_from(new))
+            .map_err(WalletError::from)?;
+        Ok(Report::Password(PasswordReport { changed: true }))
+    }
+
     async fn new_password(&mut self) -> Result<Password, CliError> {
         let password = self
             .console
@@ -1913,6 +1953,42 @@ fn pending_restore_start(pending: Option<Height>) -> Option<ScanStart> {
             ScanStart::Height(from)
         }
     })
+}
+
+/// The CLI's view of a stored output. Key ids and derivation paths stay inside the wallet.
+fn output_report(details: &OutputDetails) -> OutputReport {
+    let output = &details.output;
+    OutputReport {
+        commitment: output.id.commitment.to_hex(),
+        value: format_units(output.amount.value()),
+        status: status_name(output.status),
+        category: details.category.map(category_name),
+        is_coinbase: output.id.features.is_coinbase(),
+        height: output.height.value(),
+        lock_height: Some(output.lock_height.value()).filter(|height| *height != 0),
+        confirmations: details.confirmations,
+        tx_id: output.tx.map(|tx| tx.0),
+    }
+}
+
+const fn status_name(status: OutputStatus) -> &'static str {
+    match status {
+        OutputStatus::Unconfirmed => "unconfirmed",
+        OutputStatus::Unspent => "unspent",
+        OutputStatus::Locked => "locked",
+        OutputStatus::Spent => "spent",
+    }
+}
+
+const fn category_name(category: BalanceCategory) -> &'static str {
+    match category {
+        BalanceCategory::Spendable => "spendable",
+        BalanceCategory::AwaitingConfirmation => "awaiting_confirmation",
+        BalanceCategory::AwaitingFinalization => "awaiting_finalization",
+        BalanceCategory::Immature => "immature",
+        BalanceCategory::Locked => "locked",
+        BalanceCategory::UnpaidInvoice => "unpaid_invoice",
+    }
 }
 
 fn password_from(mut secret: Zeroizing<String>) -> Password {

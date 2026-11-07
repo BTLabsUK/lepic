@@ -15,6 +15,7 @@ use zeroize::Zeroizing;
 use crate::settings::Env;
 
 pub const PASSWORD_ENV: &str = "LEPIC_PASSWORD";
+pub const NEW_PASSWORD_ENV: &str = "LEPIC_NEW_PASSWORD";
 
 /// Longer than any password or recovery phrase a person types.
 pub const MAX_SECRET_LEN: usize = 4096;
@@ -87,24 +88,47 @@ impl SecretInput {
         file: Option<&Path>,
         new: bool,
     ) -> Result<Zeroizing<String>, SecretError> {
+        let prompts = ("Wallet password: ", "Repeat the wallet password: ");
+        self.password(env, PASSWORD_ENV, file, new, prompts).await
+    }
+
+    /// The password `wallet password` changes to: the first line of `file`, else
+    /// `LEPIC_NEW_PASSWORD`, else the prompt (asked twice at a terminal) or a line of input. It
+    /// must be non-empty.
+    pub async fn changed_wallet_password(
+        &mut self,
+        env: &mut Env,
+        file: Option<&Path>,
+    ) -> Result<Zeroizing<String>, SecretError> {
+        let prompts = ("New wallet password: ", "Repeat the new wallet password: ");
+        self.password(env, NEW_PASSWORD_ENV, file, true, prompts)
+            .await
+    }
+
+    async fn password(
+        &mut self,
+        env: &mut Env,
+        variable: &str,
+        file: Option<&Path>,
+        new: bool,
+        (prompt, repeat): (&str, &str),
+    ) -> Result<Zeroizing<String>, SecretError> {
         let non_empty = |password: Zeroizing<String>| {
             if new && password.is_empty() {
                 return Err(SecretError::EmptyNew);
             }
             Ok(password)
         };
-        let from_env = env.take(PASSWORD_ENV);
+        let from_env = env.take(variable);
         if let Some(path) = file {
             return non_empty(read_password_file(path)?);
         }
         if let Some(password) = from_env {
             return non_empty(password);
         }
-        let password = non_empty(self.read("wallet password", "Wallet password: ").await?)?;
+        let password = non_empty(self.read("wallet password", prompt).await?)?;
         if new && self.terminal {
-            let again = self
-                .read("wallet password", "Repeat the wallet password: ")
-                .await?;
+            let again = self.read("wallet password", repeat).await?;
             if *again != *password {
                 return Err(SecretError::Mismatch);
             }

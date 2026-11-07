@@ -24,6 +24,8 @@ pub enum Report {
     Scan(WalletScanReport),
     Info(InfoReport),
     Address(AddressReport),
+    Outputs(OutputsReport),
+    Password(PasswordReport),
     Send(SendReport),
     Resend(ResendReport),
     Receive(ReceiveReport),
@@ -163,6 +165,33 @@ pub struct AccountReport {
 #[derive(Debug, Serialize)]
 pub struct AddressReport {
     pub address: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct OutputsReport {
+    pub account: String,
+    pub outputs: Vec<OutputReport>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct OutputReport {
+    /// Hex commitment.
+    pub commitment: String,
+    pub value: String,
+    pub status: &'static str,
+    /// Where the output counts in the balance; none for a spent output.
+    pub category: Option<&'static str>,
+    pub is_coinbase: bool,
+    pub height: u64,
+    /// First height the output can be spent at, when it has one.
+    pub lock_height: Option<u64>,
+    pub confirmations: u64,
+    pub tx_id: Option<u32>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct PasswordReport {
+    pub changed: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -1085,6 +1114,8 @@ fn write_human(out: &mut Vec<u8>, report: &Report) -> std::io::Result<()> {
         | Report::Scan(_)
         | Report::Info(_)
         | Report::Address(_)
+        | Report::Outputs(_)
+        | Report::Password(_)
         | Report::ImportHistory(_)
         | Report::NodeStatus(_) => write_wallet_human(out, report),
         Report::Send(_)
@@ -1211,6 +1242,8 @@ fn write_wallet_human(out: &mut Vec<u8>, report: &Report) -> std::io::Result<()>
             Ok(())
         }
         Report::Address(r) => writeln!(out, "{}", r.address),
+        Report::Outputs(r) => write_outputs(out, r),
+        Report::Password(_) => writeln!(out, "Wallet password changed."),
         Report::ImportHistory(r) => {
             writeln!(out, "History import: {}.", r.status)?;
             writeln!(
@@ -1304,6 +1337,36 @@ fn write_transaction_human(out: &mut Vec<u8>, report: &Report) -> std::io::Resul
         Report::Show(tx) => write_show(out, tx),
         _ => Ok(()),
     }
+}
+
+/// The outputs of an account, one row per output.
+fn write_outputs(out: &mut Vec<u8>, r: &OutputsReport) -> std::io::Result<()> {
+    if r.outputs.is_empty() {
+        return writeln!(out, "No outputs in account {}.", r.account);
+    }
+    writeln!(
+        out,
+        "{:<66}  {:>20}  {:<11}  {:<21}  {:>9}  {:>7}  {:>5}",
+        "COMMITMENT", "VALUE", "STATUS", "CATEGORY", "HEIGHT", "CONFS", "TX"
+    )?;
+    for output in &r.outputs {
+        let tx = output
+            .tx_id
+            .map_or_else(|| "-".to_owned(), |id| id.to_string());
+        let coinbase = if output.is_coinbase { " coinbase" } else { "" };
+        writeln!(
+            out,
+            "{:<66}  {:>20}  {:<11}  {:<21}  {:>9}  {:>7}  {:>5}{coinbase}",
+            output.commitment,
+            output.value,
+            output.status,
+            output.category.unwrap_or("-"),
+            output.height,
+            output.confirmations,
+            tx
+        )?;
+    }
+    Ok(())
 }
 
 /// The transaction list of an account, one row per transaction.
@@ -2065,6 +2128,17 @@ mod tests {
             (
                 Report::Address(AddressReport { address: text("a") }),
                 vec!["address"],
+            ),
+            (
+                Report::Outputs(OutputsReport {
+                    account: text("default"),
+                    outputs: vec![],
+                }),
+                vec!["account", "outputs"],
+            ),
+            (
+                Report::Password(PasswordReport { changed: true }),
+                vec!["changed"],
             ),
             (
                 Report::Send(SendReport {

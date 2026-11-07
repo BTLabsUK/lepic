@@ -93,6 +93,7 @@ fn refusal(cli: &Cli, settings: &Settings) -> Option<CliError> {
         Command::Wallet(WalletCommand::Init(_)) => "wallet init",
         Command::Wallet(WalletCommand::Restore(_)) => "wallet restore",
         Command::Wallet(WalletCommand::ImportSeed(_)) => "wallet import-seed",
+        Command::Wallet(WalletCommand::Password(_)) => "wallet password",
         Command::Serve(ServeArgs { command: None, .. }) => "serve",
         Command::Epicbox(EpicboxCommand::Listen) => "epicbox listen",
         Command::Http(HttpCommand::Listen(_)) => "http listen",
