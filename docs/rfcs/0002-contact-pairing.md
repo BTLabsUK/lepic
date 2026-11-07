@@ -478,9 +478,10 @@ Pairing › Enter link or words field also takes the link pasted as text, for ap
 custom links.
 
 A keeps a pending pairing: `slot`, `box_salt`, `code`, `nA`, `cardA`, expiry, mailbox relay; the
-peer card is absent until the reply. Default expiry 24 hours; the user may choose 1 hour or 7
-days; services use 15 minutes; an invite offered as pairing words lasts 10 minutes (7.7). One
-invite pairs one contact.
+peer card is absent until the reply. The host chooses the expiry: 1 hour, 24 hours or 7 days.
+BT Wallet's contact invites and standing invite last 7 days, `lepic contact invite` defaults to
+24 hours, services use 15 minutes, and an invite offered as pairing words lasts 10 minutes (7.7).
+One invite pairs one contact.
 
 #### 7.2 Reply
 
@@ -574,9 +575,12 @@ argument, Vaudenay 2005). Without the commitment it could grind keys offline: ab
 one fixed card, and about 2^16 per side when it chooses the cards both sides see, as in person
 (7.4).
 
-Outcomes: "They match" → `verified`; "They don't match" → the record is deleted on this side, a
-status 04 confirm (A) or nothing (B) is sent, and the app says the link may have been changed on
-the way; "Skip" → `paired` (shown as "Paired, not verified", trust on first use).
+Outcomes: "They match" → `verified`; "They don't match" → the pairing ends on this side and the
+record is kept as ended, with reason `mismatch`. Its invoices and queued messages are dropped and
+its mailbox is no longer collected. A contact that claims the status notices is told with a sealed
+`pair-mismatch`, an inviter also posts a refusal to the invitee's confirm mailbox, best effort, and
+the app says the link may have been changed on the way; "Skip" → `paired` (shown as "Paired, not
+verified", trust on first use).
 
 #### 7.6 Pairing record
 
@@ -793,11 +797,10 @@ connection per relay:
 - on app open and resume, after unlock, and on pull-to-refresh: every contact mailbox;
 - every 45 s while the app is in the foreground: the mailboxes of contacts with something pending
   (an open invoice or withdrawal, an outbox entry, a pairing, or activity in the last 24 hours),
-  or all of them when they sit on at most 3 distinct relays;
-- on a push wake-up for a mailbox that registered push (8.6).
+  or all of them when they sit on at most 3 distinct relays.
 
 App open, resume, unlock and pull-to-refresh clear every relay's backoff and send every queued
-outbox entry at once; the foreground tick and push wake-ups respect the backoff. Collecting,
+outbox entry at once; the foreground tick respects the backoff. Collecting,
 entering a link by hand and outbox delivery take one lock, so they never interleave.
 
 At most 50 mailboxes per cycle, round-robin, so many contacts cost a bounded drain. A relay that
@@ -868,12 +871,9 @@ cases.
 
 #### 8.6 Push
 
-Push only works on relays that run LEPIC's push service. When the home relay does, the wallet
-registers its mailbox for that contact for push (signed with `box_sk`), so a
-deposit request or a withdrawal wakes the phone. Elsewhere the wallet collects on open. The push
-service learns which mailboxes share a device token; that is the cost of the wake-up, and the
-setting "Wake for contacts" lets the user turn it off. A service may run its own push later; out of
-scope.
+There is no push. The wallet registers no mailbox with a relay or a push service, and a message
+waits in its mailbox until the next collect (8.4). The core API keeps a `Push` collect trigger;
+neither the CLI nor BT Wallet calls it.
 
 #### 8.7 Transport, and Epicbox switched off
 
@@ -1045,18 +1045,17 @@ stored S2 again, and the slate id keeps the repost from doing harm.
 
 #### 11.1 Rules
 
-- "Allow invoices from <contact>" is a switch per pairing record, off by default, offered right
-  after pairing when the contact's card says it issues invoices (caps bit 2). It is never
-  preselected: an invite's kind and name are claims.
-- The switch can be turned on only for a `verified` contact; an unverified one shows "Check the
-  words first". Paying is money leaving on a contact's request, so it waits for the one check
+- "Allow invoices from <contact>" is a switch per pairing record, off by default. It is never
+  preselected: an invite's name is a claim.
+- The switch can be turned on only for a `verified` contact; an unverified one shows "Finish the
+  key check first". Paying is money leaving on a contact's request, so it waits for the one check
   that rules out a swapped invite.
 - An invoice is trusted when it arrives in the contact's mailbox, sealed and signed by that
   contact, with `allow_invoices` on and the record `verified`. Where it was posted from does not
   decide trust.
 - Turning the switch off is immediate: new invoices from the contact are acknowledged and dropped;
-  parked unpaid invoices from it are deleted with "Invoices from X are off"; a paid one finishes
-  as any paid invoice does.
+  parked unpaid invoices from it are deleted, each with a sealed `declined` to the contact, and
+  the app says "Invoices from X are off"; a paid one finishes as any paid invoice does.
 
 #### 11.2 Receiving an invoice
 
@@ -1069,9 +1068,10 @@ expiry. Nothing pays without the user's approval (PIN).
 #### 11.3 Abuse
 
 A mailbox is known only to its contact, so there is no prefilter to maintain. A contact that
-floods its mailbox is bounded by the per-drain read limit and the parked-invoice caps,
-counted per contact; over the cap its invoices are acknowledged and dropped and the contact shows
-"Exchange X sent too many requests". Turning invoices off stops it at once.
+floods its mailbox is bounded by the per-drain read limit (32 messages a mailbox) and the
+parked-invoice caps, 10 per contact and 100 in all. Over a cap its invoices are acknowledged and
+dropped, the drop is logged, and the contact's status does not change. Turning invoices off stops
+it at once.
 
 #### 11.4 Notices
 
@@ -1109,12 +1109,12 @@ directions the exchange, which runs reliable servers, does two of the three step
 #### 12.2 Pairing, bound to the account
 
 1. The user, logged in at Exchange X, opens Deposit › "Pair your Epic Cash wallet". The exchange's
-   kit makes an invite (7.1): kind exchange, 15 minutes expiry, home relay = the exchange's own
+   kit makes an invite (7.1): 15 minutes expiry, home relay = the exchange's own
    relay (with its onion), its fixed pairing inbox. It stores `invite_id → account`. The page shows
    the invite as a QR and as a button that opens `epiccash://pair/1/…` on the same device.
 2. The wallet shows "Pair with Exchange X?" with the name marked as claimed and, below, "Allow
-   Exchange X to request payments", off: the kind and name in an invite are not authenticated, so
-   nothing is preselected from them. The user taps Pair. The reply goes to the inbox.
+   Exchange X to request payments", off: the name in an invite is not authenticated, so nothing is
+   preselected from it. The user taps Pair. The reply goes to the inbox.
 3. The kit opens the reply by `invite_id`, binds the reply card's sig key to the account, and sends
    the confirm with its card: mailbox = its shared customer inbox (caps bits 2, 3, 4). The page and
    the wallet both show the SAS; the user compares the two screens and taps "They match" in the
@@ -1130,8 +1130,8 @@ one account. The slate id ties it to the deposit or withdrawal; no memo or addre
 1. The user clicks "Deposit 250 EPIC". The kit asks the exchange's `epic-wallet` for an invoice
    (`issue_invoice_tx`, V3) with a TTL of 1,440 blocks, and seals it: purpose deposit request,
    reference, expiry, signed. It posts it to the user's mailbox for the exchange, on the exchange's
-   relay; when the user's mailbox registered push there, the phone wakes.
-2. The wallet collects it (8.4): on push, on open, or within 45 s while the app is open. It opens
+   relay.
+2. The wallet collects it (8.4): on open, on pull, or within 45 s while the app is open. It opens
    it and raises `InvoiceFromContact`. The app shows "Exchange X requests 250 EPIC" with a Verified
    badge, the reference, the fee and the expiry. The user approves with the PIN.
 3. The wallet builds I2 once, locks its inputs, seals it to the exchange, signed, and puts it in
@@ -1183,7 +1183,7 @@ contact's mailbox on the home relay), the attempt count and the next try.
 | Home relay down | The outbox retries with backoff, collecting backs off; after 24 h `OutboxStuck` | "Exchange X's relay isn't answering" on the contact, then "Couldn't reach Exchange X yet" with Send again |
 | User's own relay down or switched | Nothing for this flow uses it | Nothing changes |
 | User offline after paying | If the post succeeded nothing more is needed; otherwise the outbox posts on the next open | Same states, later |
-| App closed when the request is sent | It waits in the mailbox; push wakes the phone when the home relay has push, else it appears on the next open | The request, later |
+| App closed when the request is sent | It waits in the mailbox and appears on the next open | The request, later |
 | Double click on Deposit | The kit returns the open invoice for the same account, amount and idempotency key within 60 s. Two that still arrive are two requests; the wallet groups same-amount requests from one contact within 10 minutes and asks "Pay both?" before a second payment | One request, or "Exchange X sent 2 requests for 250 EPIC" |
 | Invoice expires after payment | The kit finalizes a valid I2 until the TTL height; past it, it sends a signed `withdrawn` and the wallet cancels and releases its inputs | "Exchange X withdrew the request; your funds are unlocked" |
 | Withdrawn before payment | The parked invoice is deleted; approving it is refused | "Exchange X withdrew this request" |
@@ -1296,7 +1296,7 @@ new SAS domain string.
 | Flood of address or relay updates | None needed for relay switches (8.3); updates signed, higher `seq` only, 3 a day per contact, 100 an hour in total; a move to another relay is only reported, and the host decides whether to follow (8.5) | A contact can ask its host to follow it to a relay of its choosing; the host shows the request or follows only relays it trusts |
 | Spam into a wallet's contact mailbox | Only the contact knows the mailbox; per-drain read limit and per-contact invoice caps; turning invoices off or removing the pairing stops it | A contact you paired with can annoy you until you remove it |
 | Downgrade to plain | Between contacts the sender seals by policy, not by a signal the channel could strip; plain only by the user's "Send as plain" or the user-approved fallback below; a plain payload in a contact mailbox is dropped. A relay that drops mailbox mail leaves the send unanswered; the host may push it to plain after 24 hours, and only after it asks the user (the waiting send is cancelled, then an ordinary send goes to the payments address) | An attacker who strips the reply key from an unpaired plain S1 gets a plain S2, as today |
-| Key reuse and linking | Contact keys and mailboxes share nothing with Epicbox, Tor or proofs; one set per slot | Two installs on one seed that meet in one slot give its two contacts the same keys (2.2). A person's card may carry the ordinary payments address (tag 09), the same for every contact; leave it out to stay unlinkable. A push service links mailboxes registered under one device token (8.6) |
+| Key reuse and linking | Contact keys and mailboxes share nothing with Epicbox, Tor or proofs; one set per slot | Two installs on one seed that meet in one slot give its two contacts the same keys (2.2). A person's card may carry the ordinary payments address (tag 09), the same for every contact; leave it out to stay unlinkable |
 | Compromised phone | Out of scope: it holds the seed | Past sealed messages to it open with the keys from the seed |
 | Forward secrecy | Sender side: each envelope uses a fresh HPKE key | A recipient key leak opens past messages to that key (RFC 9180 section 9.7.4); re-pairing rotates |
 
@@ -1343,7 +1343,7 @@ screens, phone and desktop, in the app's themes.
 | Flow | Phone | Desktop |
 |---|---|---|
 | Pair in person | Contacts › Pair › In person: "Show my code" (QR) and "Scan theirs"; "Use words instead" shows pairing words; after both scans, the words check | No camera: "Show my code" with pairing words, and "Enter link or words" |
-| Pair online | Contacts › Pair › Invite: expiry 1 h / 24 h / 7 d, then the share sheet with the link; pending invites under Contacts › Pending | The same, with Copy instead of the share sheet |
+| Pair online | Contacts › Pair › Invite: the share sheet with the link; pending invites under Contacts › Pending | The same, with Copy instead of the share sheet |
 | Pairing words | Five emoji with their names, laid out as the words check, with a 10-minute countdown; the other side types the names, completed from the table | The same |
 | Open an invite | A bottom sheet "Pair with Anna?" with "Name chosen by them · not checked yet", expiry, Pair or Not now; then "Waiting for Anna's wallet…", which can be closed and continues in the background | A dialog with the same content |
 | Check the words | Four emoji with their names, large; "They match" (primary), "They don't match" (outline, leads to a warning and Stop pairing), "Skip for now" (Paired, not verified) | The same in a dialog |
@@ -1376,7 +1376,7 @@ Estimates, not measurements; one implementer per line unless noted.
 | Envelope and armor (X-05) | Seal, open, TLV, hint, armor, file type, fuzz targets | 3 |
 | Marker reply key (S-05) | Marked V3 writes `reply`; S1 over file marked; interop check | 1 |
 | Store (D-04) | Four tables, migration, drop allowlist and invoice-address state, backup export | 2 |
-| Mailboxes and collecting (E-15) | `drain_mailbox_once` over several keys, Tor routing, backoff, the collecting schedule, push for contact mailboxes | 3 |
+| Mailboxes and collecting (E-15) | `drain_mailbox_once` over several keys, Tor routing, backoff, the collecting schedule | 3 |
 | Pairing engine (W-28) | Cards, invites, reply, confirm, SAS, state machine, events | 4 |
 | Sealed send, reply and fallback (W-29) | File, paste and mailbox paths, attribution, the plain fallback | 3 |
 | Contact invoice trust and outbox (W-30) | Invoices and withdrawals through contact mailboxes, sealed notices, home relay moves, outbox, auto-cancel, retire the invoice address | 4 |
@@ -1393,7 +1393,7 @@ The critical path is K-04 → X-05 → W-28 → W-30 → U-24 → U-25 and V-15.
 | # | Question | Recommendation |
 |---|---|---|
 | OD-P1 | Invite links: `epiccash://` only, or also an `https://` universal link (needs a domain; the payload stays in the `#fragment`, never sent to the server) | `epiccash://` plus the pasteable code now; universal link later |
-| OD-P2 | Register contact mailboxes for push when the home relay runs LEPIC's push service (8.6); the push service then links them by device token | Yes, on by default, with "Wake for contacts" to turn it off |
+| OD-P2 | Push for contact mailboxes (8.6) | Decided: no push |
 | OD-P3 | A signed `withdrawn` for a paid invoice cancels automatically (11.4), changing ADR 0016's "host offers a cancel" | Yes: the contact's key is authenticated and the inputs are reusable |
 | OD-P4 | Exchange kit in Python beside `epic-wallet`, in its own private repository, with `cryptography` and `coincurve` installed in its virtualenv | Yes |
 

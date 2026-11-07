@@ -18,7 +18,7 @@ timings are in RFC section 12.6 and are tested in V-15 as listed there.
 | C-05 | Home relay down | Outbox and collecting back off; "X's relay isn't answering"; the relay's 7-day queue loses nothing once it is back |
 | C-06 | Many paired contacts on different relays | One connection per relay, 50 mailboxes per cycle, foreground drains only where something is pending |
 | C-07 | A contact moves to another relay; the update is lost; both sides move | The wallet reports the move and the host decides; once applied, the old relay is drained 7 days; a lost update is not healed by the card in a later envelope (it names another mailbox, so it is ignored); the contact sends the move again as a new 05; kind plays no part |
-| C-08 | Push registered on one relay while pairing on another | Push stays on the wallet's address; pairing mailboxes never use push; contact mailboxes use push only where their home relay has it |
+| C-08 | No push, with pairing on another relay | No mailbox is registered for push; pairing and contact mailboxes are drained by collecting |
 | C-09 | Tor on, off or Tor only | Mailbox drains and posts follow the wallet's Epicbox route; onion used when given; a relay unreachable over Tor falls back to the by-hand links |
 | C-10 | Offline | Online pairing and collecting are unavailable; in-person QR pairing and sealed files work |
 | C-11 | Two devices on one seed | Different slots (random start) and always different mailboxes (`box_salt`); the pairing lives on the device that paired |
@@ -131,17 +131,12 @@ timings are in RFC section 12.6 and are tested in V-15 as listed there.
   request, is refused. kit + engine: with the update dropped by the mock relay, the card in the
   next envelope does not move the mailbox, and a new 05 with a higher `seq` is reported again.
 
-### C-08 Push registration on one relay while pairing on another
+### C-08 No push, with pairing on another relay
 
-- **What happens.** The wallet's own push registration stays on its own address and relay.
-  Pairing mailboxes are never registered for push, so the push service never learns of a
-  pairing; they are drained on screen and on open (8.2). Contact mailboxes are registered for
-  push only when their home relay runs LEPIC's push service (8.6), signed with `box_sk`.
-- **User sees.** A deposit request wakes the phone when the exchange's home relay has push; else
-  it appears on the next open.
-- **Test.** engine: pairing makes no push registration; a contact on a push-enabled relay
-  registers its mailbox with a signature that verifies under `box_pk`; a contact elsewhere makes
-  none.
+- **What happens.** No mailbox is registered for push (8.6). Pairing mailboxes are drained on
+  screen and on open (8.2), contact mailboxes by collecting (8.4).
+- **User sees.** A deposit request appears on the next collect.
+- **Test.** engine: pairing and contacts make no push registration.
 
 ## Network modes
 
