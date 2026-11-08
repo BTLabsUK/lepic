@@ -107,6 +107,9 @@ fn the_tree_has_every_planned_command() {
         "contact payload list",
         "contact payload ack",
         "contact quarantine",
+        "api client add",
+        "api client list",
+        "api client remove",
     ] {
         assert!(
             paths.iter().any(|path| path == expected),
@@ -418,4 +421,25 @@ fn move_home_takes_a_drain_of_up_to_a_year() {
         Err(clap::error::ErrorKind::ValueValidation)
     );
     assert!(drain(&["--drain-days", "-1"]).is_err());
+}
+
+#[test]
+fn an_api_client_is_added_by_name_and_certificate_file() {
+    let cli =
+        Cli::try_parse_from(["lepic", "api", "client", "add", "laptop", "laptop.pem"]).unwrap();
+    let lepic_cli::cli::Command::Api(lepic_cli::cli::ApiCommand::Client(
+        lepic_cli::cli::ApiClientCommand::Add(args),
+    )) = cli.command
+    else {
+        panic!("not an api client add");
+    };
+    assert_eq!(args.name, "laptop");
+    assert_eq!(args.certificate, std::path::Path::new("laptop.pem"));
+    assert!(Cli::try_parse_from(["lepic", "api", "client", "add", "laptop"]).is_err());
+
+    let cli = Cli::try_parse_from(["lepic", "serve", "--owner-tls"]).unwrap();
+    let lepic_cli::cli::Command::Serve(args) = cli.command else {
+        panic!("not a serve");
+    };
+    assert!(args.owner_tls && !args.http);
 }
