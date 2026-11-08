@@ -10,7 +10,7 @@ use utoipa::ToSchema;
 use zeroize::Zeroizing;
 
 use super::events::{self, EventReport};
-use super::{Api, Body, Call, InFlight, Problem, Request, report, response};
+use super::{Api, Body, Call, InFlight, Listener, Problem, Request, report, response};
 use crate::cli::{
     AccountArg, Command, ContactAcceptArgs, ContactArgs, ContactCardArgs, ContactCommand,
     ContactEnterArgs, ContactIdArg, ContactInviteArgs, ContactKeyCheckArgs, ContactKeysArgs,
@@ -54,7 +54,8 @@ pub(crate) struct SendBody {
     /// The Epicbox address the slate goes to.
     to: String,
     /// A random version-4 UUID the caller stores before sending. A send made again under it
-    /// sends nothing and reports the first send with `repeated: true`.
+    /// sends nothing and reports the first send with `repeated: true`. Required on the owner
+    /// TLS listener.
     slate_id: Option<String>,
     /// The account label; the default account when absent.
     account: Option<String>,
@@ -467,6 +468,11 @@ pub(crate) async fn send(api: &Api<'_>, request: Request) -> Answer {
     let body: SendBody = request.json()?;
     if is_onion(&body.to) || body.to.contains("://") {
         return Err(Problem::usage("the API sends over Epicbox only"));
+    }
+    if request.listener == Listener::Tls && body.slate_id.is_none() {
+        return Err(Problem::usage(
+            "a send over the owner TLS listener needs a slate_id, so a repeated request is safe",
+        ));
     }
     let args = SendArgs {
         amount: body.amount,

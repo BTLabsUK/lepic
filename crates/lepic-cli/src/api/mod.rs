@@ -179,11 +179,13 @@ pub(crate) trait Owner {
     fn status(&self, requests: RequestsReport) -> Result<Report, CliError>;
 }
 
-/// A request, routed: its path parameters, query and body.
+/// A request, routed: its path parameters, query and body, and the listener it came in on.
 pub(crate) struct Request {
     params: Vec<(String, String)>,
     query: Option<String>,
-    body: Bytes,
+    /// Wiped when the request is done: a body can hold a password or a slate.
+    body: Zeroizing<Vec<u8>>,
+    listener: Listener,
     /// Turns true when its connection is closing: serve stops, or a TLS connection reached its
     /// age limit.
     closing: watch::Receiver<bool>,
@@ -532,6 +534,7 @@ impl<'o> Api<'o> {
                 params,
                 query,
                 body,
+                listener,
                 closing,
             },
         )
@@ -539,7 +542,7 @@ impl<'o> Api<'o> {
     }
 
     /// The request body, within the size limit and the body deadline.
-    async fn body(&self, request: hyper::Request<Incoming>) -> Result<Bytes, Problem> {
+    async fn body(&self, request: hyper::Request<Incoming>) -> Result<Zeroizing<Vec<u8>>, Problem> {
         let max = self.limits.max_body;
         let declared = request
             .headers()
@@ -550,7 +553,7 @@ impl<'o> Api<'o> {
         }
         let body = Limited::new(request.into_body(), max).collect();
         match tokio::time::timeout(self.limits.body_timeout, body).await {
-            Ok(Ok(collected)) => Ok(collected.to_bytes()),
+            Ok(Ok(collected)) => Ok(Zeroizing::new(collected.to_bytes().to_vec())),
             Ok(Err(error)) if error.downcast_ref::<LengthLimitError>().is_some() => {
                 Err(Problem::too_large())
             }
@@ -699,7 +702,8 @@ mod tests {
         let request = Request {
             params: Vec::new(),
             query: Some("account=my+savings%21".to_owned()),
-            body: Bytes::new(),
+            body: Zeroizing::new(Vec::new()),
+            listener: Listener::Socket,
             closing: watch::channel(false).1,
         };
         let fields: std::collections::BTreeMap<String, String> = request.query().unwrap();
