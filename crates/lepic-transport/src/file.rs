@@ -10,8 +10,8 @@ use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
 pub use lepic_slate::codec::MAX_WIRE_SLATE_LEN;
-use lepic_slate::codec::legacy::v2_json::LEGACY_V2_JSON;
-use lepic_slate::codec::legacy::v3_json::LEGACY_V3_JSON;
+use lepic_slate::codec::legacy::v2_json::{LEGACY_V2_JSON, V2JsonCodec};
+use lepic_slate::codec::legacy::v3_json::{LEGACY_V3_JSON, V3JsonCodec};
 use lepic_slate::codec::{Codec, CodecId, EncodeContext, MediaType, WireSlate};
 use lepic_slate::error::DecodeError;
 use lepic_slate::model::Slate;
@@ -22,9 +22,11 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 mod probe;
 
-use crate::error::{FileError, FileOperation, TransportError};
-use crate::method::{Carries, Method};
-use crate::policy::{Encoding, FormatPolicy};
+use crate::codecs;
+use crate::error::{FileError, FileOperation, FormatError, TransportError};
+use crate::marker::v3::MarkedV3JsonCodec;
+use crate::method::{Carries, Encoded, Method, Sending};
+use crate::policy::{Encoding, FormatPolicy, encode_with};
 use crate::transport::{BoxFuture, Exchange, Location, Transport, TransportId};
 
 pub const FILE: TransportId = TransportId::new("file");
@@ -143,6 +145,30 @@ impl Transport for FileTransport {
 impl Method for FileTransport {
     fn carries(&self) -> Carries {
         Carries { reply_key: true }
+    }
+
+    fn encode_new(
+        &self,
+        slate: &Slate,
+        context: &EncodeContext,
+        sending: &Sending,
+    ) -> Result<Encoded, FormatError> {
+        let base_fee = sending.network.params().default_base_fee();
+        // A slate that carries the reply key in the LEPIC marker lets a LEPIC receiver answer
+        // sealed (RFC 0002 5); stock wallets ignore the extra key.
+        let codecs = match sending.reply_key {
+            Some(key) => codecs::legacy_with(
+                Box::new(MarkedV3JsonCodec::new(V3JsonCodec::new(base_fee)).with_reply_key(key)),
+                Box::new(V2JsonCodec::new(base_fee)),
+            ),
+            None => codecs::legacy(base_fee),
+        };
+        let encoding = self.policy.for_new_slate(slate, context);
+        let wire = encode_with(&codecs, encoding, slate, context)?;
+        Ok(Encoded {
+            wire,
+            codec: encoding.codec,
+        })
     }
 }
 

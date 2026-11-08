@@ -21,16 +21,16 @@ use lepic_slate::stage::Stage;
 use lepic_slate::validate::check_size;
 use lepic_transport::codecs;
 use lepic_transport::error::{FormatError, TransportError};
+use lepic_transport::marker::v2::MarkedV2JsonCodec;
+use lepic_transport::marker::v3::{
+    MarkedV3JsonCodec, carries_lepic_marker, lepic_marker_features, lepic_marker_reply_key,
+};
 use lepic_transport::method::{Carries, Encoded, Method, SenderFacts, Sending};
 use lepic_transport::policy::{Encoding, FormatPolicy, encode_with};
 use lepic_transport::transport::{BoxFuture, Destination, Outbound, Transport, TransportId};
 
 use crate::address::{EpicboxAddress, Network};
 use crate::client::{ClientSettings, EpicboxClient, Identity, TRANSPORT_ID};
-use crate::marker::v2::MarkedV2JsonCodec;
-use crate::marker::v3::{
-    MarkedV3JsonCodec, carries_lepic_marker, lepic_marker_features, lepic_marker_reply_key,
-};
 use crate::session::Connector;
 
 /// The Epicbox policy of ADR 0003, as `epic-wallet` `v4.0.2` speaks it: the V3 and V2 shapes are

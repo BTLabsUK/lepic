@@ -12,6 +12,7 @@ publish.workspace = true
 loopback = []
 
 [dependencies]
+lepic-crypto.workspace = true
 lepic-primitives.workspace = true
 lepic-slate.workspace = true
 serde = { workspace = true, features = ["derive"] }

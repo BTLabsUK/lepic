@@ -1249,6 +1249,7 @@ dependencies = [
 name = "lepic-transport"
 version = "0.3.1"
 dependencies = [
+ "lepic-crypto",
  "lepic-primitives",
  "lepic-slate",
  "serde",

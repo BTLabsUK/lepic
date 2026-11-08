@@ -63,7 +63,7 @@ lepic-slate       -> lepic-crypto, lepic-primitives
 lepic-contact     -> (external only)
 lepic-node        -> lepic-primitives, lepic-crypto
 lepic-store       -> lepic-primitives
-lepic-transport   -> lepic-slate, lepic-primitives
+lepic-transport   -> lepic-slate, lepic-primitives, lepic-crypto
 lepic-epicbox     -> lepic-transport, lepic-slate, lepic-crypto, lepic-primitives
 lepic-foreign     -> lepic-transport, lepic-slate
 lepic-tor         -> lepic-foreign, lepic-transport, lepic-slate

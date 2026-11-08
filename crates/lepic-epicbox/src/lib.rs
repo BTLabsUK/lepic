@@ -9,7 +9,10 @@ mod crypto;
 mod frame;
 mod json;
 mod mailbox;
-pub mod marker;
+/// The LEPIC marker, which lives next to the codecs it extends.
+pub mod marker {
+    pub use lepic_transport::marker::*;
+}
 #[cfg(feature = "mock-relay")]
 pub mod mock_relay;
 mod prefilter;

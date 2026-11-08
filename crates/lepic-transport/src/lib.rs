@@ -6,6 +6,7 @@ pub mod error;
 pub mod file;
 #[cfg(any(test, feature = "loopback"))]
 pub mod loopback;
+pub mod marker;
 pub mod method;
 pub mod policy;
 pub mod registry;
