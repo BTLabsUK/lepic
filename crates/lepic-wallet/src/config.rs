@@ -135,7 +135,7 @@ pub struct WalletConfig {
     /// for the session: a change means opening the wallet again.
     pub offline: bool,
     /// The feature bits the host app claims, a constant of its build, never a setting. Only
-    /// the host bits ([`lepic_epicbox::marker::features::HOST_FEATURES`]) are kept.
+    /// the host bits ([`lepic_transport::marker::features::HOST_FEATURES`]) are kept.
     pub host_features: u32,
     /// The host's profile of the wallet's owner, 0 for none: sent to paired contacts as bits
     /// 16 to 31 of the pairing features, never in a marker, never read by LEPIC.
@@ -412,7 +412,7 @@ impl Default for WalletPolicy {
 impl WalletConfig {
     /// The feature bits this wallet claims to peers: LEPIC's own and the host's.
     pub fn claimed_features(&self) -> u32 {
-        lepic_epicbox::marker::features::claimed(self.host_features)
+        lepic_transport::marker::features::claimed(self.host_features)
     }
 
     /// The feature word of a pairing envelope or a contact update: the claimed bits and the
@@ -424,7 +424,7 @@ impl WalletConfig {
     /// [`Self::pairing_features`] with `profile` in place of the configured one.
     pub fn pairing_features_with(&self, profile: u16) -> u32 {
         self.claimed_features()
-            | (u32::from(profile) << lepic_epicbox::marker::features::PROFILE_SHIFT)
+            | (u32::from(profile) << lepic_transport::marker::features::PROFILE_SHIFT)
     }
 }
 
@@ -434,7 +434,7 @@ mod tests {
 
     #[test]
     fn only_host_bits_of_the_host_features_are_claimed() {
-        use lepic_epicbox::marker::features::{LEPIC_FEATURES, NAME_SERVICE};
+        use lepic_transport::marker::features::{LEPIC_FEATURES, NAME_SERVICE};
         let config = |host_features| WalletConfig {
             name: WalletName::new("w").unwrap(),
             network: Network::Floonet,
@@ -455,7 +455,7 @@ mod tests {
 
     #[test]
     fn the_profile_rides_the_pairing_word_and_never_the_claimed_one() {
-        use lepic_epicbox::marker::features::{HOST_PROFILE, LEPIC_FEATURES};
+        use lepic_transport::marker::features::{HOST_PROFILE, LEPIC_FEATURES};
         let config = WalletConfig {
             name: WalletName::new("w").unwrap(),
             network: Network::Floonet,

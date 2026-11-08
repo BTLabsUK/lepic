@@ -330,7 +330,7 @@ fn engine(
         clock: Arc::new(FixedClock(Timestamp::from_second(1_790_000_000).unwrap())),
         rng: SharedRng::new(StdRng::seed_from_u64(seed)),
         runtime: runtime.handle().clone(),
-        notices: None,
+        methods: None,
     };
     Wallet::new(config, ports).unwrap()
 }

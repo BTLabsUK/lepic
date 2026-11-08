@@ -1513,7 +1513,7 @@ where
 
     pub(crate) fn check_contact_network(&self, relays: &ContactRelays) -> Result<(), ContactError> {
         if relays.epicbox.network()
-            != lepic_wallet::inbox::relay_network(self.wallet.config().network)
+            != lepic_methods::epicbox::relay_network(self.wallet.config().network)
         {
             return Err(ContactError::NetworkMismatch);
         }
@@ -1549,7 +1549,7 @@ fn link_failure(reason: PairingFailure) -> Option<ContactError> {
 }
 
 fn relays_network(network: lepic_primitives::params::Network) -> lepic_epicbox::Network {
-    lepic_wallet::inbox::relay_network(network)
+    lepic_methods::epicbox::relay_network(network)
 }
 
 /// Takes the account's next slot, starting at a random slot for a new store, and a fresh salt
@@ -2032,7 +2032,7 @@ fn learn_requests_work(
     lepic_wallet::peer_compat::record_works(
         repos,
         &key,
-        lepic_epicbox::marker::features::PAIR_REQUESTS,
+        lepic_transport::marker::features::PAIR_REQUESTS,
         true,
     )
 }

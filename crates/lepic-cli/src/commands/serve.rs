@@ -368,7 +368,7 @@ impl<H: Host> Run<'_, H> {
             None => None,
         };
         let listening = service::bind(&path)?;
-        opened.wallet.epicbox_attach(&opened.epicbox)?;
+        opened.epicbox.attach_wallet(&opened.wallet)?;
         let handle = ListenHandle::new();
         let swept = Mutex::new(Some(InvoiceSweep::default()));
         let stop = watch::Sender::new(false);

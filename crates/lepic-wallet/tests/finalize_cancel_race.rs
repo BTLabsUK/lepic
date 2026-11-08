@@ -316,7 +316,7 @@ impl Race {
                     writes: writes.clone(),
                 },
                 secrets: ports.secrets,
-                notices: ports.notices,
+                methods: ports.methods,
                 clock: ports.clock,
                 rng: ports.rng,
                 runtime: ports.runtime,

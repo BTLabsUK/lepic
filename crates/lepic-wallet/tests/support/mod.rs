@@ -21,6 +21,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 use jiff::Timestamp;
 use lepic_keychain::vault::BackendError;
 use lepic_keychain::{KdfParams, Vault, VaultError, VaultStorage};
+use lepic_methods::registry::Methods;
 use lepic_node::NodeApi;
 use lepic_node::mock::{ChainState, MockNode};
 use lepic_node::{NodeClient, NodeVersion, Tip};
@@ -31,7 +32,7 @@ use lepic_store::{MemoryStore, Repositories, SqliteStore, StoreError, StoreKeys,
 use lepic_transport::file::{FilePolicy, FileTransport};
 use lepic_transport::loopback::LoopbackTransport;
 use lepic_transport::transport::{Destination, TransportId};
-use lepic_wallet::method::Method;
+use lepic_wallet::method::{Method, MethodLookup};
 use lepic_wallet::scan::{ScanCancel, ScanOptions};
 use lepic_wallet::{
     Clock, DATABASE_FILE, NodeEndpoint, Password, Ports, SecretVault, SecretVaultError, SharedRng,
@@ -507,7 +508,7 @@ impl Harness {
             clock: Arc::new(FixedClock(fixed_time())),
             rng: SharedRng::new(StdRng::seed_from_u64(42)),
             runtime: self.runtime.handle().clone(),
-            notices: None,
+            methods: None,
         }
     }
 
@@ -586,4 +587,13 @@ pub fn as_file_v3(v3_json: &str) -> String {
         .strip_prefix(&written)
         .unwrap_or_else(|| panic!("the header is not serialized first: {v3_json}"));
     format!(r#"{{"version_info":{{"version":3,"orig_version":3,{rest}"#)
+}
+
+/// A registry of `methods`, as the engine's ports take one.
+pub fn registry(methods: impl IntoIterator<Item = Arc<dyn Method>>) -> Arc<dyn MethodLookup> {
+    let mut registry = Methods::new();
+    for method in methods {
+        registry.register(method).unwrap();
+    }
+    Arc::new(registry)
 }

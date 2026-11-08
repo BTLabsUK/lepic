@@ -1143,11 +1143,19 @@ dependencies = [
 name = "lepic-methods"
 version = "0.3.1"
 dependencies = [
+ "jiff",
+ "lepic-crypto",
  "lepic-epicbox",
  "lepic-foreign",
+ "lepic-node",
+ "lepic-primitives",
+ "lepic-slate",
  "lepic-tor",
  "lepic-transport",
+ "lepic-wallet",
  "thiserror",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -1280,7 +1288,6 @@ dependencies = [
  "jiff",
  "lepic-contact",
  "lepic-crypto",
- "lepic-epicbox",
  "lepic-keychain",
  "lepic-node",
  "lepic-primitives",
@@ -1311,6 +1318,7 @@ dependencies = [
  "lepic-crypto",
  "lepic-epicbox",
  "lepic-keychain",
+ "lepic-methods",
  "lepic-node",
  "lepic-primitives",
  "lepic-slate",

@@ -1218,8 +1218,8 @@ where
 mod tests {
     use super::*;
 
-    use lepic_epicbox::marker::v3::{carries_lepic_marker, lepic_marker_features};
     use lepic_slate::codec::legacy::v2_json::V2JsonCodec;
+    use lepic_transport::marker::v3::{carries_lepic_marker, lepic_marker_features};
 
     fn key(byte: u8) -> SecretKey {
         SecretKey::from_array([byte; 32]).unwrap()
@@ -1325,7 +1325,7 @@ mod tests {
             None,
             lepic_epicbox::Security::Plain,
         );
-        let epicbox = lepic_epicbox::transport::EpicboxTransport::new(
+        let epicbox = lepic_methods::epicbox::Epicbox::new(
             lepic_epicbox::testing::client_settings(endpoint),
             lepic_epicbox::Network::Floonet,
             relay.connector(),

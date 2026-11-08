@@ -27,6 +27,7 @@ use tracing::{debug, info, warn};
 
 use super::{ContactError, ContactRelays, LockedRng};
 use crate::ContactBook;
+use lepic_methods::epicbox::NOTICE_LENGTHS;
 use lepic_primitives::error_chain::ErrorChain;
 use lepic_wallet::event::{ContactChange, ContactUpdate, Event};
 use lepic_wallet::notice::{NOTICE_VERSION, notice_length, pad_object, unpaired_notice_to};
@@ -34,7 +35,7 @@ use lepic_wallet::ports::{SecretVault, StoreOpener};
 
 /// The feature bit of a contact that sends and reads the pairing status notices, and makes
 /// its inviter wait until it is heard.
-pub const STATUS_NOTICES: u32 = lepic_epicbox::marker::features::STATUS_NOTICES;
+pub const STATUS_NOTICES: u32 = lepic_transport::marker::features::STATUS_NOTICES;
 
 /// How long a status notice is retried before it is dropped.
 pub const STATUS_RETRY_FOR: Duration = Duration::from_secs(7 * 24 * 60 * 60);
@@ -146,7 +147,11 @@ pub(crate) fn status_text(message: StatusMessage, length: usize) -> String {
         sas,
     };
     // A struct of strings and a number always serializes.
-    pad_object(&serde_json::to_string(&written).unwrap_or_default(), length)
+    pad_object(
+        &serde_json::to_string(&written).unwrap_or_default(),
+        &NOTICE_LENGTHS,
+        length,
+    )
 }
 
 /// Reads a status notice; `None` for anything else.
@@ -201,7 +206,7 @@ pub(crate) fn proven_key(
     record: &ContactRecord,
     network: lepic_primitives::params::Network,
 ) -> Option<String> {
-    let network = lepic_wallet::inbox::relay_network(network);
+    let network = lepic_methods::epicbox::relay_network(network);
     let address = record.facts.payments_address.as_deref()?;
     lepic_epicbox::EpicboxAddress::parse_key(address, network)
         .ok()
@@ -225,7 +230,7 @@ pub(crate) fn learn_from_pairing(
     lepic_wallet::peer_compat::record_works(
         repos,
         &key,
-        lepic_epicbox::marker::features::ADDRESS_PROOF,
+        lepic_transport::marker::features::ADDRESS_PROOF,
         true,
     )
 }
@@ -250,10 +255,10 @@ pub(crate) fn queue_status(
     let class = super::private::class_of(repos, record)?;
     let mut guard = rng.lock();
     let mut rng = LockedRng(&mut **guard);
-    let length = notice_length(&mut rng);
+    let length = notice_length(&NOTICE_LENGTHS, &mut rng);
     let text = match tell {
         Tell::Status(message) => status_text(*message, length),
-        Tell::Unpaired => unpaired_notice_to(length),
+        Tell::Unpaired => unpaired_notice_to(&NOTICE_LENGTHS, length),
     };
     let envelope = super::invoices::seal_to_record(
         keychain,
@@ -656,7 +661,7 @@ mod tests {
             StatusMessage::Match(hash),
             StatusMessage::Mismatch(hash),
         ] {
-            for length in lepic_wallet::notice::NOTICE_LENGTHS {
+            for length in NOTICE_LENGTHS {
                 let text = status_text(message, length);
                 assert_eq!(text.len(), length);
                 assert_eq!(parse_status(&text), Some(message));

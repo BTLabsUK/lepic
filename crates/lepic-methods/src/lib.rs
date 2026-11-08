@@ -12,12 +12,8 @@ pub mod file {
     pub use lepic_transport::file::*;
 }
 
-/// The Epicbox method.
 #[cfg(feature = "epicbox")]
-pub mod epicbox {
-    pub use lepic_epicbox::TRANSPORT_ID;
-    pub use lepic_epicbox::transport::*;
-}
+pub mod epicbox;
 
 /// The HTTP method.
 #[cfg(feature = "http")]

@@ -12,7 +12,7 @@ use std::sync::{Arc, PoisonError, RwLock};
 use std::time::Duration;
 
 use lepic_epicbox::TRANSPORT_ID;
-use lepic_epicbox::transport::{EpicboxPolicy, EpicboxTransport};
+use lepic_methods::epicbox::{Epicbox, EpicboxPolicy};
 use lepic_primitives::params::Network;
 use lepic_transport::error::{FormatError, TransportError};
 use lepic_transport::method::{Carries, EncodeContext, Encoded, Method, SenderFacts, Sending};
@@ -45,26 +45,26 @@ const NODE_CUT_GRACE: Duration = Duration::from_secs(3);
 /// it; a delivery goes through the relay set when it starts.
 #[derive(Clone)]
 pub(crate) struct EpicboxSlot {
-    current: Arc<RwLock<EpicboxTransport>>,
+    current: Arc<RwLock<Epicbox>>,
     policy: EpicboxPolicy,
 }
 
 impl EpicboxSlot {
-    pub(crate) fn new(transport: EpicboxTransport) -> Self {
+    pub(crate) fn new(transport: Epicbox) -> Self {
         Self {
             current: Arc::new(RwLock::new(transport)),
             policy: EpicboxPolicy,
         }
     }
 
-    pub(crate) fn current(&self) -> EpicboxTransport {
+    pub(crate) fn current(&self) -> Epicbox {
         self.current
             .read()
             .unwrap_or_else(PoisonError::into_inner)
             .clone()
     }
 
-    fn replace(&self, transport: EpicboxTransport) -> EpicboxTransport {
+    fn replace(&self, transport: Epicbox) -> Epicbox {
         std::mem::replace(
             &mut *self.current.write().unwrap_or_else(PoisonError::into_inner),
             transport,
@@ -210,7 +210,7 @@ impl Session {
         let relay = self.next_relay(config)?;
         if let Some((slot, transport)) = &relay {
             // Before anything changes, so a refusal leaves the old relay in place.
-            self.engine.epicbox_attach(transport)?;
+            transport.attach_wallet(&self.engine)?;
             self.move_listener().await;
             slot.replace(transport.clone()).detach();
             info!(relay = %transport.settings().endpoint.domain(), "epicbox relay switched");
@@ -225,7 +225,7 @@ impl Session {
     fn next_relay(
         &self,
         config: &WalletConfig,
-    ) -> Result<Option<(&EpicboxSlot, EpicboxTransport)>, WalletError> {
+    ) -> Result<Option<(&EpicboxSlot, Epicbox)>, WalletError> {
         match (&self.epicbox, config.epicbox_domain.is_empty()) {
             (None, true) => Ok(None),
             (None, false) | (Some(_), true) => Err(invalid(

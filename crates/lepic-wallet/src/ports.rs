@@ -11,7 +11,7 @@ use lepic_keychain::vault::BackendError;
 #[cfg(feature = "sqlite")]
 use lepic_store::{AtRest, MigrationObserver, SqliteStore};
 use lepic_store::{AtRestReport, StoreError, StoreKey, StoreKeys, WalletStore};
-use lepic_transport::method::Method;
+use lepic_transport::method::MethodLookup;
 use rand_core::CryptoRng;
 use thiserror::Error;
 use tokio::runtime::Handle;
@@ -264,9 +264,10 @@ pub struct Ports<N, S, V> {
     pub rng: SharedRng,
     /// Blocking work (key derivation, database access) runs on this runtime's blocking pool.
     pub runtime: Handle,
-    /// The method that carries LEPIC notices to counterparties when the engine changes state
-    /// on its own (cancel, release, decline); `None` sends none.
-    pub notices: Option<Arc<dyn Method>>,
+    /// The methods a stored payment may have gone over, as the engine finds the one that
+    /// carries a LEPIC notice to its counterparty when it changes state on its own (cancel,
+    /// release, decline) and matches notices replayed from the buffer; `None` sends none.
+    pub methods: Option<Arc<dyn MethodLookup>>,
 }
 
 impl<N, S, V> std::fmt::Debug for Ports<N, S, V> {

@@ -123,7 +123,7 @@ fn a_reply_the_relay_refuses_does_not_stop_the_payment_behind_it_in_a_drain() {
     let mut events = world.receiver_wallet.subscribe();
 
     let summary = world
-        .block_on(world.receiver_wallet.epicbox_drain(&world.receiver_epicbox))
+        .block_on(world.receiver_epicbox.drain(&world.receiver_wallet))
         .unwrap();
 
     assert_eq!(
@@ -160,8 +160,8 @@ fn a_reply_the_relay_refuses_does_not_stop_the_payment_behind_it_in_a_listen() {
 
     let summary = world.block_on(async {
         let listen = world
-            .receiver_wallet
-            .epicbox_listen(&world.receiver_epicbox, &handle);
+            .receiver_epicbox
+            .listen(&world.receiver_wallet, &handle);
         let script = async {
             world.until_acknowledged(&world.receiver_address).await;
             handle.stop();
@@ -185,7 +185,7 @@ fn a_drain_refreshes_the_tip_once_and_refuses_an_s1_expired_at_its_stale_tip() {
     });
 
     let summary = world
-        .block_on(world.receiver_wallet.epicbox_drain(&world.receiver_epicbox))
+        .block_on(world.receiver_epicbox.drain(&world.receiver_wallet))
         .unwrap();
 
     assert_eq!(
@@ -209,7 +209,7 @@ fn open_receipts_from_one_sender_key_are_capped() {
     }
 
     let summary = world
-        .block_on(world.receiver_wallet.epicbox_drain(&world.receiver_epicbox))
+        .block_on(world.receiver_epicbox.drain(&world.receiver_wallet))
         .unwrap();
 
     let cap = u32::try_from(MAX_OPEN_RECEIPTS_PER_SENDER).unwrap();
@@ -227,7 +227,7 @@ fn open_receipts_from_one_sender_key_are_capped() {
     // Another sender is still received.
     post_from(&world, 2, &s1_numbered(sent));
     let summary = world
-        .block_on(world.receiver_wallet.epicbox_drain(&world.receiver_epicbox))
+        .block_on(world.receiver_epicbox.drain(&world.receiver_wallet))
         .unwrap();
     assert_eq!(summary.received, 1);
 }
@@ -241,7 +241,7 @@ fn open_receipts_over_all_senders_are_capped_by_cancelling_the_oldest() {
     }
 
     let summary = world
-        .block_on(world.receiver_wallet.epicbox_drain(&world.receiver_epicbox))
+        .block_on(world.receiver_epicbox.drain(&world.receiver_wallet))
         .unwrap();
 
     assert_eq!(
@@ -300,8 +300,8 @@ fn a_reply_the_relay_never_answers_is_given_up_after_bounded_tries_in_a_listen()
 
     let summary = world.block_on(async {
         let listen = world
-            .receiver_wallet
-            .epicbox_listen(&world.receiver_epicbox, &handle);
+            .receiver_epicbox
+            .listen(&world.receiver_wallet, &handle);
         let script = async {
             world.until_acknowledged(&world.receiver_address).await;
             handle.stop();
@@ -334,7 +334,7 @@ fn a_drain_gives_up_an_unanswered_reply_once_its_message_waited_the_hold_bound()
     let mut events = world.receiver_wallet.subscribe();
 
     let held = world
-        .block_on(world.receiver_wallet.epicbox_drain(&world.receiver_epicbox))
+        .block_on(world.receiver_epicbox.drain(&world.receiver_wallet))
         .unwrap();
 
     assert_eq!(
@@ -362,7 +362,7 @@ fn a_drain_gives_up_an_unanswered_reply_once_its_message_waited_the_hold_bound()
         })
         .unwrap();
     let settled = world
-        .block_on(world.receiver_wallet.epicbox_drain(&world.receiver_epicbox))
+        .block_on(world.receiver_epicbox.drain(&world.receiver_wallet))
         .unwrap();
 
     assert_eq!(
@@ -498,7 +498,7 @@ fn fill_to_cap(world: &World) {
         post_from(world, n, &s1_numbered(n));
     }
     let summary = world
-        .block_on(world.receiver_wallet.epicbox_drain(&world.receiver_epicbox))
+        .block_on(world.receiver_epicbox.drain(&world.receiver_wallet))
         .unwrap();
     assert_eq!(summary.received, cap);
     assert_eq!(open_receipts(world).len(), MAX_OPEN_RECEIPTS);
@@ -506,7 +506,7 @@ fn fill_to_cap(world: &World) {
 
 fn drain(world: &World) -> InboxSummary {
     world
-        .block_on(world.receiver_wallet.epicbox_drain(&world.receiver_epicbox))
+        .block_on(world.receiver_epicbox.drain(&world.receiver_wallet))
         .unwrap()
 }
 

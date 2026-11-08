@@ -68,8 +68,8 @@ lepic-epicbox     -> lepic-transport, lepic-slate, lepic-crypto, lepic-primitive
 lepic-foreign     -> lepic-transport, lepic-slate
 lepic-tor         -> lepic-foreign, lepic-transport, lepic-slate
 lepic-wallet      -> all crates above
+lepic-methods     -> lepic-wallet, lepic-transport, lepic-epicbox, lepic-foreign, lepic-tor, lepic-node, lepic-slate, lepic-crypto, lepic-primitives
 lepic-wallet-contacts -> all crates above
-lepic-methods     -> lepic-wallet, lepic-transport, lepic-epicbox, lepic-foreign, lepic-tor, lepic-slate, lepic-primitives
 lepic-telemetry   -> (external only)
 lepic-cli         -> lepic-wallet, lepic-wallet-contacts, lepic-methods, lepic-telemetry, lepic-epicbox, lepic-foreign, lepic-tor, lepic-transport, lepic-node, lepic-store, lepic-keychain, lepic-primitives
 lepic-ffi         -> lepic-wallet, lepic-wallet-contacts, lepic-methods, lepic-telemetry, lepic-epicbox, lepic-foreign, lepic-tor, lepic-transport, lepic-node, lepic-store, lepic-keychain, lepic-primitives

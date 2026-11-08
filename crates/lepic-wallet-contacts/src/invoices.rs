@@ -29,6 +29,7 @@ use super::keys::{contact_network, signing_key};
 use super::quarantine::QuarantineReason;
 use super::{ContactError, ContactRelays, LockedRng, RelayMode};
 use crate::{ContactBook, file_method};
+use lepic_methods::epicbox::NOTICE_LENGTHS;
 use lepic_primitives::error_chain::ErrorChain;
 use lepic_wallet::event::{ContactInvoiceEvent, ContactSlateEvent, Event};
 use lepic_wallet::invoice::{InvoiceError, InvoiceRequest, IssuedInvoice, PaidInvoice, PayRequest};
@@ -1152,8 +1153,14 @@ where
                 })
             })
             .await?;
-        let length = lepic_wallet::notice::notice_length(&mut **self.wallet.ports().rng.lock());
-        let body = notice.encode_to(length).as_bytes().to_vec();
+        let length = lepic_wallet::notice::notice_length(
+            &NOTICE_LENGTHS,
+            &mut **self.wallet.ports().rng.lock(),
+        );
+        let body = notice
+            .encode_to(&NOTICE_LENGTHS, length)
+            .as_bytes()
+            .to_vec();
         let envelope = self
             .seal_for_contact(&record, Content::new(MessageType::Notice, body))
             .await?;

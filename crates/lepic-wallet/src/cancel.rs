@@ -139,7 +139,7 @@ where
             }
             // No payment of an invoice that still waited was taken, so over Epicbox its payer
             // is told now only when it declined, and otherwise once a marked payment arrives.
-            let _ = self.notify_withdrawn(tx_id, false).await;
+            let _ = self.notify_withdrawn(None, tx_id, false).await;
             let _ = self.notify_cancelled(tx_id, true).await;
         }
         Ok(())

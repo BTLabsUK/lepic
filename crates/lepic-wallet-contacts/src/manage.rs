@@ -12,6 +12,7 @@ use tracing::{info, instrument, warn};
 
 use super::{ContactError, ContactRelays, ContactView, DomainVerdict, RelayMode, pairing_id_of};
 use crate::ContactBook;
+use lepic_methods::epicbox::NOTICE_LENGTHS;
 use lepic_wallet::ports::{SecretVault, StoreOpener};
 
 fn kind(kind: lepic_store::ContactKind) -> ContactKind {
@@ -61,7 +62,7 @@ pub(crate) fn view(
             .peer_verified_at
             .filter(|_| record.sas.as_ref().map(super::status::verdict_hash) == facts.peer_verdict),
         peer_features: facts.peer_features,
-        peer_profile: facts.peer_features >> lepic_epicbox::marker::features::PROFILE_SHIFT,
+        peer_profile: facts.peer_features >> lepic_transport::marker::features::PROFILE_SHIFT,
         peer_domain: facts.peer_domain.as_ref().map(|claim| claim.domain.clone()),
         peer_domain_attestation: facts
             .peer_domain
@@ -157,7 +158,7 @@ fn restore_record(
         record.slot,
         record.box_salt,
     )?;
-    let relay_network = lepic_wallet::inbox::relay_network(network);
+    let relay_network = lepic_methods::epicbox::relay_network(network);
     let ours = lepic_epicbox::EpicboxAddress::parse(own.fields().mailbox.as_str(), relay_network);
     let mine = *own.sig_key() == super::keys::signing_key(&keys).verifying_key()
         && own.enc_key() == &super::keys::enc_secret(&keys).public_key()
@@ -398,8 +399,11 @@ where
         let Some((record, mailbox)) = found else {
             return Ok(false);
         };
-        let length = lepic_wallet::notice::notice_length(&mut **self.wallet.ports().rng.lock());
-        let notice = lepic_wallet::notice::unpaired_notice_to(length).into_bytes();
+        let length = lepic_wallet::notice::notice_length(
+            &NOTICE_LENGTHS,
+            &mut **self.wallet.ports().rng.lock(),
+        );
+        let notice = lepic_wallet::notice::unpaired_notice_to(&NOTICE_LENGTHS, length).into_bytes();
         let envelope = self
             .seal_for_contact(
                 &record,
@@ -871,7 +875,7 @@ where
             .map(|address| {
                 lepic_epicbox::EpicboxAddress::parse(
                     address,
-                    lepic_wallet::inbox::relay_network(self.wallet.config().network),
+                    lepic_methods::epicbox::relay_network(self.wallet.config().network),
                 )
                 .map(|address| address.public_key().to_bytes())
                 .map_err(|_| ContactError::RelayAddress)

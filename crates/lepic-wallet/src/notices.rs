@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Notices over Epicbox in the engine (ADR 0016): which peers may be sent one, what a received
-//! one does, and who sends which.
+//! Notices in the engine (ADR 0016): which peers may be sent one over the method, what a
+//! received one does, and who sends which.
 //!
 //! A plain notice goes to a payments address only when the exchange it is about came marked
 //! from that key and the key is LEPIC lately ([`crate::peer_compat`]), because any other
@@ -24,9 +24,10 @@
 //! late S2 of a send already cancelled. The receiver keeps the time of the first report it
 //! accepted while the payment waited, and leaves the payment as it is.
 
-use lepic_epicbox::marker::v3::carries_lepic_marker;
-use lepic_epicbox::{EpicboxAddress, Network as RelayNetwork, TRANSPORT_ID};
+use std::sync::Arc;
+
 use lepic_node::NodeApi;
+use lepic_primitives::params::Network;
 use lepic_slate::model::{Slate, SlateId};
 use lepic_slate::registry::CodecRegistry;
 use lepic_store::{
@@ -34,6 +35,7 @@ use lepic_store::{
     TxState, WalletStore,
 };
 use lepic_transport::error::TransportError;
+use lepic_transport::method::{Method, MethodLookup};
 use lepic_transport::transport::Destination;
 use tracing::{debug, info, warn};
 use uuid::Uuid;
@@ -46,7 +48,7 @@ use crate::event::{
     UnmatchedNotice, WithdrawnInvoice,
 };
 use crate::finalize::kernel_excess;
-use crate::inbox::{Handled, Hold, relay_network};
+use crate::inbox::{Handled, Hold};
 use crate::invoice::check_signed_payment;
 use crate::notice::{Notice, NoticeKind};
 use crate::peer_compat::{facts, record_marked, record_slate};
@@ -102,21 +104,49 @@ fn uuid(slate_id: SlateId) -> Uuid {
     Uuid::from_bytes(*slate_id.as_bytes())
 }
 
-/// The key of the address text, as the store keys peers.
-fn key_of(address: &str, network: RelayNetwork) -> Option<String> {
-    EpicboxAddress::parse_key(address, network)
-        .ok()
-        .map(|key| EpicboxAddress::key_text_of(&key, network))
+/// The methods notices are matched against and sent over. A notice that arrived over a method
+/// is matched only against payments made over that method; one replayed from the buffer, or
+/// sent when the engine changes state on its own, finds the method of the payment it is about
+/// by the name the payment stored.
+#[derive(Clone)]
+pub(crate) struct NoticeMethods {
+    via: Option<Arc<dyn Method>>,
+    lookup: Option<Arc<dyn MethodLookup>>,
+    network: Network,
 }
 
-fn counterparty_key(
-    repos: &dyn Repositories,
-    tx_id: TxId,
-    network: RelayNetwork,
-) -> Result<Option<String>, StoreError> {
-    Ok(repos
-        .counterparty(tx_id)?
-        .and_then(|address| key_of(&address, network)))
+impl NoticeMethods {
+    /// The method a payment that stored `transport` went over, as notices about it see it.
+    fn method_of(&self, transport: Option<&str>) -> Option<Arc<dyn Method>> {
+        let name = transport?;
+        match &self.via {
+            Some(via) => (via.id().as_str() == name).then(|| Arc::clone(via)),
+            None => self.lookup.as_ref()?.method_named(name),
+        }
+    }
+
+    /// The method a payment that stored `transport` went over, when it sends notices.
+    fn notices_over(&self, transport: Option<&str>) -> Option<Arc<dyn Method>> {
+        self.method_of(transport)
+            .filter(|method| !method.notice_lengths().is_empty())
+    }
+
+    /// The key `address` names under `method`, as the store keys peers.
+    fn key_of(&self, method: &dyn Method, address: &str) -> Option<String> {
+        method.peer_key(self.network, address).ok()
+    }
+
+    /// The key of the recorded counterparty of `tx_id`, under `method`.
+    fn counterparty_key(
+        &self,
+        repos: &dyn Repositories,
+        method: &dyn Method,
+        tx_id: TxId,
+    ) -> Result<Option<String>, StoreError> {
+        Ok(repos
+            .counterparty(tx_id)?
+            .and_then(|address| self.key_of(method, &address)))
+    }
 }
 
 /// What became of a contact's notice, from [`Wallet::apply_contact_notice`].
@@ -131,33 +161,37 @@ pub struct ContactNotice {
 /// Who a notice is from.
 #[derive(Debug, Clone)]
 pub(crate) enum NoticeFrom {
-    /// The Epicbox key a plain notice came from.
-    Epicbox(String),
+    /// The peer key, under the method that carried it, a plain notice came from.
+    Peer(String),
     /// The paired contact whose signed envelope carried it. Only the contact the slate was
     /// exchanged with counts; its mailbox, which it chooses itself, never decides (RFC 0002 3.4).
     Contact(ContactId),
 }
 
 /// The transaction for `slate_id` in `direction` that stored `stage`, when it was exchanged
-/// with `from`: over Epicbox with that counterparty key, or with that paired contact.
+/// with `from`: over one of `methods` with that counterparty key, or with that paired contact.
 fn transaction_with(
     repos: &dyn Repositories,
     slate_id: Uuid,
     direction: TxDirection,
     stage: SlateStage,
     from: &NoticeFrom,
-    network: RelayNetwork,
+    methods: &NoticeMethods,
 ) -> Result<Option<(TxId, TxState)>, StoreError> {
     let Some(stored) = repos.transaction_by_slate(slate_id, direction)? else {
         return Ok(None);
     };
     let contact = crate::contact_link::slate_contact(repos, slate_id)?;
     let exchanged = match from {
-        NoticeFrom::Epicbox(key) => {
-            contact.is_none()
-                && stored.entry.transport.as_deref() == Some(TRANSPORT_ID.as_str())
-                && counterparty_key(repos, stored.id, network)?.as_deref() == Some(key.as_str())
-        }
+        NoticeFrom::Peer(key) => match methods.method_of(stored.entry.transport.as_deref()) {
+            Some(method) if contact.is_none() => {
+                methods
+                    .counterparty_key(repos, &*method, stored.id)?
+                    .as_deref()
+                    == Some(key.as_str())
+            }
+            _ => false,
+        },
         // Matched by the transaction the exchange with the contact made, never by a slate id
         // a contact could have claimed.
         NoticeFrom::Contact(id) => {
@@ -173,7 +207,7 @@ fn transaction_with(
 fn apply_notice(
     repos: &mut dyn Repositories,
     codecs: &CodecRegistry,
-    network: RelayNetwork,
+    methods: &NoticeMethods,
     notice: Notice,
     from: NoticeFrom,
     now: jiff::Timestamp,
@@ -187,7 +221,7 @@ fn apply_notice(
                 TxDirection::Outgoing,
                 SlateStage::Invoice2,
                 &from,
-                network,
+                methods,
             )?;
             match payment {
                 Some((tx_id, _))
@@ -197,7 +231,7 @@ fn apply_notice(
                     Effect::Posted { tx_id, excess }
                 }
                 Some(_) => Effect::Dropped,
-                None => report_posted(repos, codecs, network, slate_id, excess, &from, now)?,
+                None => report_posted(repos, codecs, methods, slate_id, excess, &from, now)?,
             }
         }
         NoticeKind::Declined => match transaction_with(
@@ -206,20 +240,20 @@ fn apply_notice(
             TxDirection::Incoming,
             SlateStage::Invoice1,
             &from,
-            network,
+            methods,
         )? {
             Some((tx_id, TxState::Received)) => take_decline(repos, tx_id, slate_id)?,
             // The invoice was paid and finalized, or ended otherwise, before the decline came.
             Some(_) => Effect::Noted,
-            None => take_send_decline(repos, slate_id, &from, network, now)?,
+            None => take_send_decline(repos, slate_id, &from, methods, now)?,
         },
-        NoticeKind::Withdrawn => withdraw(repos, slate_id, &from, network)?,
-        NoticeKind::Cancelled => report_cancelled(repos, slate_id, &from, network, now)?,
+        NoticeKind::Withdrawn => withdraw(repos, slate_id, &from, methods)?,
+        NoticeKind::Cancelled => report_cancelled(repos, slate_id, &from, methods, now)?,
     };
     if matches!(effect, Effect::Dropped) && !holds_slate(repos, slate_id)? {
         return Ok(Effect::Unheld);
     }
-    if let NoticeFrom::Epicbox(key) = from
+    if let NoticeFrom::Peer(key) = from
         && !matches!(effect, Effect::Dropped)
     {
         record_marked(repos, &key, now, None)?;
@@ -232,13 +266,13 @@ fn apply_notice(
 fn apply_or_keep(
     repos: &mut dyn Repositories,
     codecs: &CodecRegistry,
-    network: RelayNetwork,
+    methods: &NoticeMethods,
     notice: Notice,
     from: &NoticeFrom,
     limits: Option<EarlyLimits>,
     now: jiff::Timestamp,
 ) -> Result<(Effect, bool), StoreError> {
-    let effect = apply_notice(repos, codecs, network, notice, from.clone(), now)?;
+    let effect = apply_notice(repos, codecs, methods, notice, from.clone(), now)?;
     let kept = match limits {
         Some(limits) if matches!(effect, Effect::Unheld) => {
             early_notice::keep(repos, limits, notice, from, now)?
@@ -254,7 +288,7 @@ fn declined_setting(slate_id: Uuid) -> String {
 }
 
 /// A `declined` for the invoice `tx_id`, which still waits for payment. Only the first one
-/// raises an event; it is recorded, so a repeat, as when the relay delivers it again, is noted.
+/// raises an event; it is recorded, so a repeat, as when the method delivers it again, is noted.
 fn take_decline(
     repos: &mut dyn Repositories,
     tx_id: TxId,
@@ -270,14 +304,14 @@ fn take_decline(
 
 /// A `declined` for a send this wallet made, from its receiver (ADR 0045). Taken only while the
 /// send waits unanswered: `sent`, with no S2 stored, so the receiver never signed and cannot
-/// complete it. The first one is recorded with its time; a repeat, as when the relay delivers
+/// complete it. The first one is recorded with its time; a repeat, as when the method delivers
 /// it again or a cancel before failed for a reason that passes, cancels again without an
 /// event. One for a send that was answered, finalized or ended is noted.
 fn take_send_decline(
     repos: &mut dyn Repositories,
     slate_id: Uuid,
     from: &NoticeFrom,
-    network: RelayNetwork,
+    methods: &NoticeMethods,
     now: jiff::Timestamp,
 ) -> Result<Effect, StoreError> {
     let Some((tx_id, state)) = transaction_with(
@@ -286,7 +320,7 @@ fn take_send_decline(
         TxDirection::Outgoing,
         SlateStage::Standard1,
         from,
-        network,
+        methods,
     )?
     else {
         return Ok(Effect::Dropped);
@@ -339,14 +373,14 @@ pub(crate) fn posted_report(
     Ok((!age.is_negative() && age < POSTED_REPORT_WINDOW).then_some(reported))
 }
 
-/// A `posted` from the sender of a payment received over Epicbox. Accepted only from the
+/// A `posted` from the sender of a payment received over a method. Accepted only from the
 /// payment's recorded counterparty, for a payment whose S2 is stored, with the kernel excess
 /// that S2 implies. Only the first report for a payment that still waits for its sender is kept
 /// and raises an event; a repeat, or a report for a payment that confirmed or ended, is noted.
 fn report_posted(
     repos: &mut dyn Repositories,
     codecs: &CodecRegistry,
-    network: RelayNetwork,
+    methods: &NoticeMethods,
     slate_id: Uuid,
     excess: lepic_crypto::Commitment,
     from: &NoticeFrom,
@@ -358,7 +392,7 @@ fn report_posted(
         TxDirection::Incoming,
         SlateStage::Standard2,
         from,
-        network,
+        methods,
     )?
     else {
         return Ok(Effect::Dropped);
@@ -377,7 +411,7 @@ fn report_posted(
     Ok(Effect::PaymentPosted { tx_id, excess })
 }
 
-/// A `cancelled` from the sender of a payment received over Epicbox or from a paired contact.
+/// A `cancelled` from the sender of a payment received over a method or from a paired contact.
 /// Accepted only from the payment's recorded counterparty, for a payment whose S2 is stored, so
 /// one this wallet answered. Only the first report for a payment that still waits for its sender
 /// is kept and raises an event; a repeat, or a report for a payment that confirmed or ended here,
@@ -386,7 +420,7 @@ fn report_cancelled(
     repos: &mut dyn Repositories,
     slate_id: Uuid,
     from: &NoticeFrom,
-    network: RelayNetwork,
+    methods: &NoticeMethods,
     now: jiff::Timestamp,
 ) -> Result<Effect, StoreError> {
     let Some((tx_id, state)) = transaction_with(
@@ -395,7 +429,7 @@ fn report_cancelled(
         TxDirection::Incoming,
         SlateStage::Standard2,
         from,
-        network,
+        methods,
     )?
     else {
         return Ok(Effect::Dropped);
@@ -424,10 +458,10 @@ fn withdraw(
     repos: &mut dyn Repositories,
     slate_id: Uuid,
     from: &NoticeFrom,
-    network: RelayNetwork,
+    methods: &NoticeMethods,
 ) -> Result<Effect, StoreError> {
     let parked_by_sender = match (repos.pending_invoice(slate_id)?, from) {
-        (Some(parked), NoticeFrom::Epicbox(key)) => {
+        (Some(parked), NoticeFrom::Peer(key)) => {
             parked.sender_key == *key && parked.status != PendingInvoiceStatus::Paid
         }
         (Some(parked), NoticeFrom::Contact(id)) => {
@@ -447,7 +481,7 @@ fn withdraw(
             TxDirection::Outgoing,
             SlateStage::Invoice2,
             from,
-            network,
+            methods,
         )? {
             Some((tx_id, TxState::Sent)) => Effect::Withdrawn { tx_id: Some(tx_id) },
             Some(_) => Effect::Noted,
@@ -456,23 +490,28 @@ fn withdraw(
     )
 }
 
+/// Where a notice about a stored transaction goes: the slate it is about, the counterparty, the
+/// method that carries it unless a paired contact's mailbox does, and one flag of the caller's.
+type NoticeTarget = (SlateId, Destination, Option<Arc<dyn Method>>, bool);
+
 /// Where a `withdrawn` for the cancelled transaction `tx_id` goes: the address an invoice over
-/// Epicbox was issued to, while no payment of it was finalized. With whether its payer declined
-/// it, which only LEPIC does.
+/// a method that sends notices was issued to, while no payment of it was finalized. With
+/// whether its payer declined it, which only LEPIC does.
 fn withdrawal_target(
     repos: &dyn Repositories,
+    methods: &NoticeMethods,
     tx_id: TxId,
-) -> Result<Option<(SlateId, Destination, bool)>, StoreError> {
+) -> Result<Option<NoticeTarget>, StoreError> {
     let Some(entry) = repos.transaction(tx_id)? else {
         return Ok(None);
     };
     let Some(slate_id) = entry.slate_id else {
         return Ok(None);
     };
-    let over_epicbox = entry.transport.as_deref() == Some(TRANSPORT_ID.as_str())
-        || crate::contact_link::slate_contact(repos, slate_id)?.is_some();
+    let method = methods.notices_over(entry.transport.as_deref());
+    let contact = crate::contact_link::slate_contact(repos, slate_id)?;
     if entry.direction != TxDirection::Incoming
-        || !over_epicbox
+        || (method.is_none() && contact.is_none())
         || repos.slate(slate_id, SlateStage::Invoice1)?.is_none()
         || repos.slate(slate_id, SlateStage::Invoice3)?.is_some()
     {
@@ -483,22 +522,24 @@ fn withdrawal_target(
         (
             SlateId::from_bytes(slate_id.into_bytes()),
             Destination::new(to),
+            method,
             declined,
         )
     }))
 }
 
 /// Where a `cancelled` for the cancelled send `tx_id` goes: the receiver of an ordinary payment
-/// sent over Epicbox or through a paired contact, while it was not told before. With
+/// sent over a method that sends notices or through a paired contact, while it was not told before. With
 /// `answered`, only when this wallet finalized the receiver's answer, so the receiver holds an
 /// S2 and waits for this wallet to post it; a send cancelled before any answer came is told
 /// when its late answer arrives. A contact's notice goes to its mailbox, which
 /// [`Wallet::send_notice`] finds by the slate, so its destination is not used.
 fn cancellation_target(
     repos: &dyn Repositories,
+    methods: &NoticeMethods,
     tx_id: TxId,
     answered: bool,
-) -> Result<Option<(SlateId, Destination, bool)>, StoreError> {
+) -> Result<Option<NoticeTarget>, StoreError> {
     let Some(entry) = repos.transaction(tx_id)? else {
         return Ok(None);
     };
@@ -506,12 +547,11 @@ fn cancellation_target(
         return Ok(None);
     };
     let contact = crate::contact_link::slate_contact(repos, slate_id)?;
-    let over_epicbox =
-        entry.transport.as_deref() == Some(TRANSPORT_ID.as_str()) || contact.is_some();
+    let method = methods.notices_over(entry.transport.as_deref());
     let marks = repos.tx_marks(tx_id)?;
     if entry.direction != TxDirection::Outgoing
         || entry.state != TxState::Cancelled
-        || !over_epicbox
+        || (method.is_none() && contact.is_none())
         || repos.slate(slate_id, SlateStage::Standard1)?.is_none()
         || (answered && repos.slate(slate_id, SlateStage::Standard3)?.is_none())
         || marks.cancelled_answered
@@ -526,6 +566,7 @@ fn cancellation_target(
     Ok(Some((
         SlateId::from_bytes(slate_id.into_bytes()),
         Destination::new(to),
+        method,
         marks.answer_marked,
     )))
 }
@@ -563,25 +604,40 @@ where
     S: StoreOpener + 'static,
     V: SecretVault + 'static,
 {
-    /// Takes a notice that arrived from `reply_to`, and raises the event it calls for. One about
-    /// a slate this wallet does not hold raises [`Event::NoticeUnmatched`], for the host to
-    /// forward to its other installs, and stays in the buffer while the host keeps one.
-    pub(crate) async fn take_notice(
+    /// The methods notices are matched against and sent over: only `via` when a notice arrived
+    /// over it, otherwise those of [`crate::ports::Ports::methods`].
+    fn notice_methods(&self, via: Option<&Arc<dyn Method>>) -> NoticeMethods {
+        NoticeMethods {
+            via: via.cloned(),
+            lookup: self.ports().methods.clone(),
+            network: self.config().network,
+        }
+    }
+
+    /// Takes a notice that arrived over `method` from `from`, and raises the event it calls
+    /// for. It is matched only against payments made over `method`, and dropped when `from`
+    /// names no peer key of the method. One about a slate this wallet does not hold raises
+    /// [`Event::NoticeUnmatched`], for the host to forward to its other installs, and stays in
+    /// the buffer while the host keeps one.
+    ///
+    /// Fails with the [`Hold`] the message is kept for: the wallet locked or the store not
+    /// answering.
+    pub async fn notice_arrived(
         &self,
+        method: &Arc<dyn Method>,
+        from: &Destination,
         notice: Notice,
-        reply_to: &Destination,
     ) -> Result<Handled, Hold> {
-        let network = relay_network(self.config().network);
-        let Some(key) = key_of(reply_to.as_str(), network) else {
+        let Ok(key) = method.peer_key(self.config().network, from.as_str()) else {
             return Ok(Handled::Dropped);
         };
-        let (effect, kept) = self.apply_epicbox_notice(notice, key).await?;
+        let (effect, kept) = self.apply_peer_notice(method, notice, key).await?;
         let slate_id = notice.slate_id;
         if matches!(effect, Effect::Unheld) {
             debug!(slate_id = %slate_id, "notice for a slate held elsewhere passed on");
             self.emit(Event::NoticeUnmatched(UnmatchedNotice {
                 notice,
-                sender: reply_to.as_str().to_owned(),
+                sender: from.as_str().to_owned(),
             }));
             return Ok(if kept {
                 Handled::Buffered
@@ -596,25 +652,25 @@ where
         Ok(handled)
     }
 
-    /// Applies a notice another install of this wallet received over Epicbox from `sender`,
-    /// the address the relay reported, and passed on from its [`Event::NoticeUnmatched`]. It is
-    /// taken under exactly the rules of one received here: only from the recorded counterparty
-    /// of its slate, `posted` only with the kernel excess the payment implies, and once. Returns
-    /// whether it was accepted; one this wallet does not hold either, or from a `sender` that
-    /// is no address of the wallet's network, is not accepted and never passed on again. The
-    /// former stays in the buffer while the host keeps one.
+    /// Applies a notice another install of this wallet received over `method` from `sender`,
+    /// the address the method reported, and passed on from its [`Event::NoticeUnmatched`]. It
+    /// is taken under exactly the rules of one received here: only from the recorded
+    /// counterparty of its slate, `posted` only with the kernel excess the payment implies, and
+    /// once. Returns whether it was accepted; one this wallet does not hold either, or from a
+    /// `sender` that names no peer key of the method on the wallet's network, is not accepted
+    /// and never passed on again. The former stays in the buffer while the host keeps one.
     ///
     /// Fails with [`crate::WalletError::Locked`] and as the store does.
     pub async fn notice_apply_forwarded(
         &self,
+        method: &Arc<dyn Method>,
         sender: &str,
         notice: Notice,
     ) -> Result<bool, crate::WalletError> {
-        let network = relay_network(self.config().network);
-        let Some(key) = key_of(sender, network) else {
+        let Ok(key) = method.peer_key(self.config().network, sender) else {
             return Ok(false);
         };
-        let (effect, _) = self.apply_epicbox_notice(notice, key).await?;
+        let (effect, _) = self.apply_peer_notice(method, notice, key).await?;
         if matches!(effect, Effect::Unheld) {
             debug!(slate_id = %notice.slate_id, "passed-on notice for a slate not held dropped");
             return Ok(false);
@@ -644,17 +700,18 @@ where
         }
     }
 
-    async fn apply_epicbox_notice(
+    async fn apply_peer_notice(
         &self,
+        method: &Arc<dyn Method>,
         notice: Notice,
         key: String,
     ) -> Result<(Effect, bool), crate::WalletError> {
-        let network = relay_network(self.config().network);
-        let from = NoticeFrom::Epicbox(key);
+        let methods = self.notice_methods(Some(method));
+        let from = NoticeFrom::Peer(key);
         let codecs = stored_codecs(self.config().network);
         let limits = EarlyLimits::of(&self.config().policy);
         self.inbox_write(move |repos, now| {
-            apply_or_keep(repos, &codecs, network, notice, &from, limits, now)
+            apply_or_keep(repos, &codecs, &methods, notice, &from, limits, now)
         })
         .await
     }
@@ -664,19 +721,39 @@ where
     /// transaction that applies them; the caller runs this after storing the slate and before
     /// acknowledging it, so a delivery that repeats finds them there or their effect stored.
     /// Returns what a contact's notice asks to cancel, for
-    /// [`apply_contact_notice`](Self::apply_contact_notice)'s caller to end the same way.
+    /// [`apply_contact_notice`](Self::apply_contact_notice)'s caller to end the same way. A
+    /// peer's notice is matched against the payment of the method its stored name finds in
+    /// [`crate::ports::Ports::methods`].
     pub async fn apply_early_notices(&self, slate_id: SlateId) -> Result<Vec<TxId>, Hold> {
+        self.early_notices(None, slate_id).await
+    }
+
+    /// [`Self::apply_early_notices`] for a slate that arrived over `method`, whose peers'
+    /// notices are matched only against payments made over it.
+    pub(crate) async fn apply_early_notices_over(
+        &self,
+        method: &Arc<dyn Method>,
+        slate_id: SlateId,
+    ) -> Result<Vec<TxId>, Hold> {
+        self.early_notices(Some(method), slate_id).await
+    }
+
+    async fn early_notices(
+        &self,
+        via: Option<&Arc<dyn Method>>,
+        slate_id: SlateId,
+    ) -> Result<Vec<TxId>, Hold> {
         let Some(limits) = EarlyLimits::of(&self.config().policy) else {
             return Ok(Vec::new());
         };
-        let network = relay_network(self.config().network);
+        let methods = self.notice_methods(via);
         let codecs = stored_codecs(self.config().network);
         let effects = self
             .inbox_write(move |repos, now| {
                 let mut effects = Vec::new();
                 for (notice, from) in early_notice::take(repos, limits, slate_id, now)? {
                     let contact = matches!(from, NoticeFrom::Contact(_));
-                    let effect = apply_notice(repos, &codecs, network, notice, from, now)?;
+                    let effect = apply_notice(repos, &codecs, &methods, notice, from, now)?;
                     effects.push((effect, contact));
                 }
                 Ok(effects)
@@ -757,17 +834,19 @@ where
     /// that the key it came from does not, for now.
     pub(crate) async fn record_paying_peer(
         &self,
+        method: &Arc<dyn Method>,
         tx_id: TxId,
         reply_to: &Destination,
         marked: bool,
         features: Option<u32>,
     ) {
-        let network = relay_network(self.config().network);
-        let from = key_of(reply_to.as_str(), network);
+        let methods = self.notice_methods(Some(method));
+        let from = methods.key_of(&**method, reply_to.as_str());
+        let method = Arc::clone(method);
         let recorded = self
             .inbox_write(move |repos, now| {
                 let invoiced = if marked {
-                    counterparty_key(repos, tx_id, network)?
+                    methods.counterparty_key(repos, &*method, tx_id)?
                 } else {
                     None
                 };
@@ -789,15 +868,15 @@ where
     }
 
     /// Records what an S1 showed about its sender: only a LEPIC wallet writes the marker, and
-    /// the Epicbox signature binds the S1 to the key it came from.
+    /// the method binds the S1 to the key it came from.
     pub(crate) async fn record_sending_peer(
         &self,
+        method: &dyn Method,
         reply_to: &Destination,
         marked: bool,
         features: Option<u32>,
     ) {
-        let network = relay_network(self.config().network);
-        let Some(from) = key_of(reply_to.as_str(), network) else {
+        let Ok(from) = method.peer_key(self.config().network, reply_to.as_str()) else {
             return;
         };
         let recorded = self
@@ -814,18 +893,22 @@ where
     /// about the send is decided.
     pub(crate) async fn record_receiving_peer(
         &self,
+        method: &Arc<dyn Method>,
         tx_id: TxId,
         reply_to: &Destination,
         marked: bool,
         features: Option<u32>,
     ) {
-        let network = relay_network(self.config().network);
-        let Some(from) = key_of(reply_to.as_str(), network) else {
+        let methods = self.notice_methods(Some(method));
+        let Some(from) = methods.key_of(&**method, reply_to.as_str()) else {
             return;
         };
+        let method = Arc::clone(method);
         let recorded = self
             .inbox_write(move |repos, now| {
-                if counterparty_key(repos, tx_id, network)?.as_deref() == Some(from.as_str()) {
+                if methods.counterparty_key(repos, &*method, tx_id)?.as_deref()
+                    == Some(from.as_str())
+                {
                     record_slate(repos, &from, now, marked, features)?;
                     let mut marks = repos.tx_marks(tx_id)?;
                     if marks.answer_marked != marked {
@@ -841,34 +924,34 @@ where
         }
     }
 
-    /// Tells the receiver of `tx_id`, a send over Epicbox whose S2 this wallet just finalized
-    /// and pushed in a listen or drain, that it was posted with the kernel of `finalized`, when
-    /// that S2 came `marked`. Nothing for another transport or a slate without a kernel. Only
-    /// the inbox calls it, so nothing goes to the relay outside a listen or drain the host
-    /// started.
+    /// Tells the receiver of `tx_id`, a send whose S2 this wallet just finalized and pushed in
+    /// a listen or drain, that it was posted with the kernel of `finalized`, when that S2 came
+    /// `marked`. Nothing for a send whose stored method [`crate::ports::Ports::methods`] does
+    /// not know, or a slate without a kernel. Only the inbox calls it, so nothing goes out
+    /// outside a listen or drain the host started.
     pub(crate) async fn notify_pushed(&self, tx_id: TxId, finalized: &Slate, marked: bool) {
         let Some(kernel) = finalized.kernel() else {
             return;
         };
-        let Some(notices) = self.ports().notices.as_ref().map(|notices| notices.id()) else {
+        let Some(lookup) = self.ports().methods.clone() else {
             return;
         };
-        let over_epicbox = async {
+        let transport = async {
             let session = self.session()?;
             self.blocking(move |_, _| {
                 Ok(session
                     .store
                     .read(|repos| repos.transaction(tx_id))?
-                    .is_some_and(|entry| entry.transport.as_deref() == Some(notices.as_str())))
+                    .and_then(|entry| entry.transport))
             })
             .await
         };
-        match over_epicbox.await {
-            Ok(true) => {
-                self.notify_posted(tx_id, finalized.id(), kernel.excess, marked)
+        match transport.await {
+            Ok(Some(name)) if lookup.method_named(&name).is_some() => {
+                self.posted_notice(None, tx_id, finalized.id(), kernel.excess, marked)
                     .await;
             }
-            Ok(false) => {}
+            Ok(_) => {}
             Err(error) => {
                 warn!(tx_id = %tx_id, error = %ErrorChain(&error), "notice not sent");
             }
@@ -919,12 +1002,12 @@ where
         contact_id: ContactId,
     ) -> Result<ContactNotice, Hold> {
         let from = NoticeFrom::Contact(contact_id);
-        let network = relay_network(self.config().network);
+        let methods = self.notice_methods(None);
         let codecs = stored_codecs(self.config().network);
         let limits = EarlyLimits::of(&self.config().policy);
         let (effect, buffered) = self
             .inbox_write(move |repos, now| {
-                apply_or_keep(repos, &codecs, network, notice, &from, limits, now)
+                apply_or_keep(repos, &codecs, &methods, notice, &from, limits, now)
             })
             .await?;
         let slate_id = notice.slate_id;
@@ -976,9 +1059,9 @@ where
         Ok(ContactNotice { cancel, buffered })
     }
 
-    /// Tells the payer that the paid invoice `tx_id` was pushed with `excess`. Over Epicbox
-    /// only when the payment came `answer_marked`; a paired contact is told in its mailbox
-    /// either way.
+    /// Tells the payer that the paid invoice `tx_id` was pushed with `excess`. Over the method
+    /// the invoice stored, found in [`crate::ports::Ports::methods`], only when the payment came
+    /// `answer_marked`; a paired contact is told in its mailbox either way.
     pub async fn notify_posted(
         &self,
         tx_id: TxId,
@@ -986,8 +1069,35 @@ where
         excess: lepic_crypto::Commitment,
         answer_marked: bool,
     ) {
-        let to = match self.counterparty_of(tx_id).await {
-            Ok(Some(to)) => to,
+        self.posted_notice(None, tx_id, slate_id, excess, answer_marked)
+            .await;
+    }
+
+    /// [`Self::notify_posted`] for an invoice whose payment arrived over `method`.
+    pub(crate) async fn notify_posted_over(
+        &self,
+        method: &Arc<dyn Method>,
+        tx_id: TxId,
+        slate_id: SlateId,
+        excess: lepic_crypto::Commitment,
+        answer_marked: bool,
+    ) {
+        self.posted_notice(Some(method), tx_id, slate_id, excess, answer_marked)
+            .await;
+    }
+
+    async fn posted_notice(
+        &self,
+        via: Option<&Arc<dyn Method>>,
+        tx_id: TxId,
+        slate_id: SlateId,
+        excess: lepic_crypto::Commitment,
+        answer_marked: bool,
+    ) {
+        let (to, method) = match self.counterparty_of(tx_id).await {
+            Ok(Some((to, transport))) => {
+                (to, self.notice_methods(via).method_of(transport.as_deref()))
+            }
             Ok(None) => return,
             Err(error) => {
                 warn!(tx_id = %tx_id, error = %ErrorChain(&error), "notice not sent");
@@ -998,29 +1108,32 @@ where
             slate_id,
             kind: NoticeKind::Posted { excess },
         };
-        let _ = self.send_notice(&to, notice, answer_marked).await;
+        let _ = self.send_notice(method, &to, notice, answer_marked).await;
     }
 
     /// Tells the payer that the cancelled invoice `tx_id` is withdrawn, when it was one issued
-    /// over Epicbox, and records that it was told. Over Epicbox only when its payer answered with
-    /// LEPIC's marker: a payment that came `payment_marked`, or a `declined` this wallet took.
-    /// The invoice itself is this wallet's own slate and shows nothing about the payer. Fails
-    /// with why such a notice was not delivered.
+    /// over a method that sends notices, `via` or else one of [`crate::ports::Ports::methods`],
+    /// and records that it was told. Over the method only when its payer answered with LEPIC's
+    /// marker: a payment that came `payment_marked`, or a `declined` this wallet took. The
+    /// invoice itself is this wallet's own slate and shows nothing about the payer. Fails with
+    /// why such a notice was not delivered.
     pub(crate) async fn notify_withdrawn(
         &self,
+        via: Option<&Arc<dyn Method>>,
         tx_id: TxId,
         payment_marked: bool,
     ) -> Result<(), Hold> {
+        let methods = self.notice_methods(via);
         let target = async {
             let session = self.session()?;
             self.blocking(move |_, _| {
                 Ok(session
                     .store
-                    .read(|repos| withdrawal_target(repos, tx_id))?)
+                    .read(|repos| withdrawal_target(repos, &methods, tx_id))?)
             })
             .await
         };
-        let (slate_id, to, declined) = match target.await {
+        let (slate_id, to, method, declined) = match target.await {
             Ok(Some(target)) => target,
             Ok(None) => return Ok(()),
             Err(error) => {
@@ -1032,7 +1145,7 @@ where
             slate_id,
             kind: NoticeKind::Withdrawn,
         };
-        self.send_notice(&to, notice, payment_marked || declined)
+        self.send_notice(method, &to, notice, payment_marked || declined)
             .await?;
         let recorded = self
             .inbox_write(move |repos, _| {
@@ -1047,23 +1160,25 @@ where
         Ok(())
     }
 
-    /// Answers a marked `payment` of the cancelled invoice `tx_id` with a `withdrawn` to the
-    /// address the invoice was issued to, when the payer was never told: the cancel tells a
-    /// payer over Epicbox nothing until it answered with the marker, and the notice it sends
-    /// fails while this wallet is offline. A due answer records the key the invoice went
+    /// Answers a marked `payment` of the cancelled invoice `tx_id`, which arrived over `method`,
+    /// with a `withdrawn` to the address the invoice was issued to, when the payer was never
+    /// told: the cancel tells a payer over a method nothing until it answered with the marker,
+    /// and the notice it sends fails while this wallet is offline. A due answer records the key the invoice went
     /// to as running LEPIC, and not the sender's, which a verified payment does not prove.
     /// Fails with why that answer was due and not delivered.
     pub(crate) async fn answer_withdrawn_payment(
         &self,
+        method: &Arc<dyn Method>,
         tx_id: TxId,
         payment: &Slate,
     ) -> Result<(), Hold> {
-        let network = relay_network(self.config().network);
+        let methods = self.notice_methods(Some(method));
         let codecs = stored_codecs(self.config().network);
         let payment = payment.clone();
+        let over = Arc::clone(method);
         let due = self.inbox_write(move |repos, now| {
             let due = withdrawn_answer_due(repos, &codecs, tx_id, &payment)?;
-            if due && let Some(invoiced) = counterparty_key(repos, tx_id, network)? {
+            if due && let Some(invoiced) = methods.counterparty_key(repos, &*over, tx_id)? {
                 record_marked(repos, &invoiced, now, None)?;
             }
             Ok(due)
@@ -1076,27 +1191,38 @@ where
                 return Err(error.into());
             }
         }
-        self.notify_withdrawn(tx_id, true).await
+        self.notify_withdrawn(Some(method), tx_id, true).await
     }
 
     /// Tells the receiver of the cancelled send `tx_id` that it is cancelled, when it is an
-    /// ordinary payment sent over Epicbox or through a paired contact whose receiver was not
-    /// told before, and records that it was told. With `answered`, only when this wallet
-    /// finalized the receiver's answer: the cancel and release of a send call it so, and a late
-    /// answer to a cancelled send without. Over Epicbox only a receiver whose latest answer came
-    /// marked, and that is LEPIC lately, is told. Fails with why such a notice was not
-    /// delivered; a cancel never fails on it.
+    /// ordinary payment sent over a method of [`crate::ports::Ports::methods`] that sends
+    /// notices or through a paired contact, whose receiver was not told before, and records
+    /// that it was told. With `answered`, only when this wallet finalized the receiver's
+    /// answer: the cancel and release of a send call it so, and a late answer to a cancelled
+    /// send without. Over a method only a receiver whose latest answer came marked, and that
+    /// is LEPIC lately, is told. Fails with why such a notice was not delivered; a cancel
+    /// never fails on it.
     pub async fn notify_cancelled(&self, tx_id: TxId, answered: bool) -> Result<(), Hold> {
+        self.cancelled_notice(None, tx_id, answered).await
+    }
+
+    async fn cancelled_notice(
+        &self,
+        via: Option<&Arc<dyn Method>>,
+        tx_id: TxId,
+        answered: bool,
+    ) -> Result<(), Hold> {
+        let methods = self.notice_methods(via);
         let target = async {
             let session = self.session()?;
             self.blocking(move |_, _| {
                 Ok(session
                     .store
-                    .read(|repos| cancellation_target(repos, tx_id, answered))?)
+                    .read(|repos| cancellation_target(repos, &methods, tx_id, answered))?)
             })
             .await
         };
-        let (slate_id, to, answer_marked) = match target.await {
+        let (slate_id, to, method, answer_marked) = match target.await {
             Ok(Some(target)) => target,
             Ok(None) => return Ok(()),
             Err(error) => {
@@ -1108,7 +1234,7 @@ where
             slate_id,
             kind: NoticeKind::Cancelled,
         };
-        self.send_notice(&to, notice, answer_marked).await?;
+        self.send_notice(method, &to, notice, answer_marked).await?;
         let recorded = self
             .inbox_write(move |repos, _| {
                 let mut marks = repos.tx_marks(tx_id)?;
@@ -1122,17 +1248,22 @@ where
         Ok(())
     }
 
-    /// Answers a marked late S2 of the cancelled send `tx_id`, from the key the send went to,
-    /// with a `cancelled`: the receiver answered after the cancel, or its answer reached this
-    /// wallet only after it. The caller recorded the answer first. Once per send. Fails with
-    /// why that answer was due and not delivered.
-    pub(crate) async fn answer_cancelled_send(&self, tx_id: TxId) -> Result<(), Hold> {
-        self.notify_cancelled(tx_id, false).await
+    /// Answers a marked late S2 of the cancelled send `tx_id`, which arrived over `method` from
+    /// the key the send went to, with a `cancelled`: the receiver answered after the cancel, or
+    /// its answer reached this wallet only after it. The caller recorded the answer first. Once
+    /// per send. Fails with why that answer was due and not delivered.
+    pub(crate) async fn answer_cancelled_send(
+        &self,
+        method: &Arc<dyn Method>,
+        tx_id: TxId,
+    ) -> Result<(), Hold> {
+        self.cancelled_notice(Some(method), tx_id, false).await
     }
 
-    /// Tells the issuer of the parked invoice `slate_id` that it was declined, from the payments
-    /// address. Over Epicbox only when the parked I1, kept as it arrived, carried the marker.
-    pub(crate) async fn notify_declined(&self, slate_id: SlateId) {
+    /// Tells the issuer of the parked invoice `slate_id` that it was declined, over `method`
+    /// from the payments address. Only when the parked I1, kept as it arrived, carried the
+    /// marker as `method` reads it.
+    pub(crate) async fn notify_declined(&self, method: &Arc<dyn Method>, slate_id: SlateId) {
         let to = async {
             let session = self.session()?;
             self.blocking(move |_, _| {
@@ -1144,10 +1275,12 @@ where
         };
         let (to, marked) = match to.await {
             Ok(Some(parked)) => {
-                let marked = carries_lepic_marker(&lepic_slate::codec::WireSlate::binary(
-                    lepic_slate::codec::MediaType::JSON,
-                    parked.bytes,
-                ));
+                let marked = method
+                    .sender_facts(&lepic_slate::codec::WireSlate::binary(
+                        lepic_slate::codec::MediaType::JSON,
+                        parked.bytes,
+                    ))
+                    .marked;
                 (Destination::new(parked.sender_address), marked)
             }
             Ok(None) => return,
@@ -1160,29 +1293,36 @@ where
             slate_id,
             kind: NoticeKind::Declined,
         };
-        let _ = self.send_notice(&to, notice, marked).await;
+        let _ = self
+            .send_notice(Some(Arc::clone(method)), &to, notice, marked)
+            .await;
     }
 
+    /// The recorded counterparty of `tx_id`, with the method name the transaction stored.
     async fn counterparty_of(
         &self,
         tx_id: TxId,
-    ) -> Result<Option<Destination>, crate::error::WalletError> {
+    ) -> Result<Option<(Destination, Option<String>)>, crate::error::WalletError> {
         let session = self.session()?;
         self.blocking(move |_, _| {
-            Ok(session
-                .store
-                .read(|repos| repos.counterparty(tx_id))?
-                .map(Destination::new))
+            Ok(session.store.read(|repos| {
+                let Some(to) = repos.counterparty(tx_id)? else {
+                    return Ok::<_, StoreError>(None);
+                };
+                let transport = repos.transaction(tx_id)?.and_then(|entry| entry.transport);
+                Ok(Some((Destination::new(to), transport)))
+            })?)
         })
         .await
     }
 
     /// Tells `to`, the sender of the S1 `slate_id` this wallet refused as nobody asked for it
-    /// (ADR 0045), that it was declined, when the S1 came `marked` from a key lately shown to
-    /// run LEPIC. Nothing goes for a slate id this wallet holds anything of, which the S1's
-    /// sender could have chosen to reach someone else.
+    /// (ADR 0045), over `method`, the one it came over, that it was declined, when the S1 came
+    /// `marked` from a key lately shown to run LEPIC. Nothing goes for a slate id this wallet
+    /// holds anything of, which the S1's sender could have chosen to reach someone else.
     pub(crate) async fn decline_unsolicited(
         &self,
+        method: &Arc<dyn Method>,
         to: &Destination,
         slate_id: SlateId,
         marked: bool,
@@ -1203,16 +1343,18 @@ where
             slate_id,
             kind: NoticeKind::Declined,
         };
-        self.send_notice(to, notice, marked).await
+        self.send_notice(Some(Arc::clone(method)), to, notice, marked)
+            .await
     }
 
-    /// Sends `notice` to `to` over [`crate::ports::Ports::notices`], when the exchange's own
-    /// incoming slate came `exchange_marked` and the key is LEPIC lately. A
-    /// paired contact's notice goes to its mailbox instead, which only LEPIC reads. A notice
-    /// that was not sent is logged here, and the reason is returned for the one caller that
-    /// holds a message on it.
+    /// Sends `notice` to `to` over `method`, the method of the exchange, when the exchange's
+    /// own incoming slate came `exchange_marked` and the key is LEPIC lately. A paired
+    /// contact's notice goes to its mailbox instead, which only LEPIC reads. A notice that was
+    /// not sent is logged here, and the reason is returned for the callers that hold a message
+    /// on it: [`Hold::Withheld`] without a method or over one that sends no notices.
     async fn send_notice(
         &self,
+        method: Option<Arc<dyn Method>>,
         to: &Destination,
         notice: Notice,
         exchange_marked: bool,
@@ -1238,12 +1380,15 @@ where
                     Hold::Withheld
                 });
         }
-        let Some(method) = self.ports().notices.as_ref() else {
+        let Some(method) = method else {
             warn!(slate_id = %slate_id, "notice not sent");
-            return Err(Hold::NoOutbound {
-                transport: TRANSPORT_ID,
-            });
+            return Err(Hold::Withheld);
         };
+        let lengths = method.notice_lengths();
+        if lengths.is_empty() {
+            debug!(slate_id = %slate_id, transport = %method.id(), "notice withheld, the method sends none");
+            return Err(Hold::Withheld);
+        }
         let Ok(key) = method.peer_key(self.config().network, to.as_str()) else {
             debug!(slate_id = %slate_id, "notice not sent to a destination that is no address");
             return Err(Hold::Reply(TransportError::UnknownDestination {
@@ -1279,8 +1424,11 @@ where
                 transport: method.id(),
             });
         };
-        let length = crate::notice::notice_length(&mut **self.ports().rng.lock());
-        match outbound.deliver(to, &notice.encode_to(length)).await {
+        let length = crate::notice::notice_length(lengths, &mut **self.ports().rng.lock());
+        match outbound
+            .deliver(to, &notice.encode_to(lengths, length))
+            .await
+        {
             Ok(()) => {
                 info!(slate_id = %slate_id, "notice sent");
                 Ok(())

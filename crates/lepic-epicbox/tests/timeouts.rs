@@ -16,7 +16,6 @@ use client_support::{
 };
 use lepic_crypto::PublicKey;
 use lepic_epicbox::mock_relay::{MockRelay, Unanswered};
-use lepic_epicbox::transport::EpicboxTransport;
 use lepic_epicbox::{
     Admission, Awaiting, ClientError, ClientSettings, ConnectionState, EpicboxClient, Identity,
     Network,
@@ -67,11 +66,9 @@ fn payments_client(relay: &MockRelay) -> EpicboxClient {
     client_with(relay, BOB, limits())
 }
 
-/// The invoice client as the engine builds it: through the transport, beside the attached
-/// payments identity, admitting only Alice.
+/// The invoice client as the engine builds it: a client of a second identity on the same relay,
+/// admitting only Alice.
 fn invoice_client(relay: &MockRelay) -> EpicboxClient {
-    let transport = EpicboxTransport::new(limits(), Network::Mainnet, relay.connector());
-    transport.attach(identity(BOB));
     let alice = *address(ALICE).public_key();
     let prefilter = move |sender: &PublicKey| {
         if *sender == alice {
@@ -80,8 +77,7 @@ fn invoice_client(relay: &MockRelay) -> EpicboxClient {
             Admission::Drop
         }
     };
-    transport
-        .client_for(identity(BOB_SECOND))
+    EpicboxClient::new(limits(), identity(BOB_SECOND), relay.connector())
         .with_prefilter(Arc::new(prefilter))
 }
 

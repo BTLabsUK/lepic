@@ -37,15 +37,15 @@ use std::time::Duration;
 
 use futures_util::future::BoxFuture;
 use jiff::Timestamp;
-use lepic_epicbox::transport::EpicboxTransport;
 use lepic_epicbox::{MailboxError, RelayEndpoint};
+use lepic_methods::epicbox::Epicbox;
 use lepic_node::NodeApi;
 use lepic_store::{AccountIndex, ContactId, ContactState, PairingId, SealMode, StoreError};
 use lepic_wallet::Wallet;
 use lepic_wallet::error::WalletError;
 use lepic_wallet::extension::ContactNotices;
-use lepic_wallet::notice::Notice;
 use lepic_wallet::method::Method;
+use lepic_wallet::notice::Notice;
 use lepic_wallet::ports::{SecretVault, StoreOpener};
 use thiserror::Error;
 
@@ -176,7 +176,7 @@ pub enum RelayMode {
 /// may be reached at all.
 #[derive(Clone)]
 pub struct ContactRelays {
-    pub epicbox: EpicboxTransport,
+    pub epicbox: Epicbox,
     /// The meeting relays, which the caller names with [`ContactRelays::with_meeting`]: the
     /// only relays pairing words are posted to and looked for on. None until named.
     pub meeting: Vec<RelayEndpoint>,
@@ -186,7 +186,7 @@ pub struct ContactRelays {
 impl ContactRelays {
     /// The relays for `epicbox`, with no meeting relays: enough for every call but pairing
     /// words.
-    pub fn new(epicbox: EpicboxTransport, mode: RelayMode) -> Self {
+    pub fn new(epicbox: Epicbox, mode: RelayMode) -> Self {
         Self {
             epicbox,
             meeting: Vec::new(),

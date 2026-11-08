@@ -23,13 +23,13 @@ use helpers::HOUR;
 use lepic_contact::{
     ContactCard, Content, MessageType, Network as ContactNetwork, Purpose, SigningKey, armor, seal,
 };
-use lepic_epicbox::marker::v3::MarkedV3JsonCodec;
 use lepic_node::Propagation;
 use lepic_primitives::amount::Amount;
 use lepic_slate::codec::legacy::v3_json::V3JsonCodec;
 use lepic_slate::codec::{Codec, EncodeContext, MediaType, WireSlate};
 use lepic_slate::stage::Stage;
 use lepic_store::{SealMode, SlateStage, TxId};
+use lepic_transport::marker::v3::MarkedV3JsonCodec;
 use lepic_transport::transport::Location;
 use lepic_wallet::ReceiveRequest;
 use lepic_wallet::selection::SelectionStrategy;
@@ -393,7 +393,7 @@ fn a_file_s1_carries_the_reply_key_and_its_answer_comes_back_sealed() {
     let world = World::new();
     let (tx_id, file) = world.payer_sends_file();
     assert!(
-        lepic_epicbox::marker::v3::lepic_marker_reply_key(&file).is_some(),
+        lepic_transport::marker::v3::lepic_marker_reply_key(&file).is_some(),
         "{}",
         file.as_text().unwrap()
     );

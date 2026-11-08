@@ -9,7 +9,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use jiff::Timestamp;
-use lepic_epicbox::transport::EpicboxTransport;
 use lepic_epicbox::tunnel::OnionRoutes;
 use lepic_epicbox::{
     ClientSettings, Domain, EpicboxAddress, Network as RelayNetwork, RelayEndpoint, Security,
@@ -17,6 +16,7 @@ use lepic_epicbox::{
 };
 use lepic_keychain::vault::SecretName;
 use lepic_keychain::{SecretStore as _, Seed, Vault};
+use lepic_methods::epicbox::Epicbox;
 use lepic_methods::registry::Methods;
 use lepic_node::{NodeApi as _, Propagation, webpki_tls_config};
 use lepic_primitives::amount::{Amount, Fee, Height};
@@ -32,7 +32,7 @@ use lepic_wallet::legacy_history::{
     TxOrigin as EngineTxOrigin,
 };
 use lepic_wallet::lifecycle::PhraseCheck;
-use lepic_wallet::method::Method;
+use lepic_wallet::method::{Method, MethodLookup};
 use lepic_wallet::peer_compat::PeerKind;
 use lepic_wallet::refresh::{BalanceCategory, OutputDetails, RefreshOutcome};
 use lepic_wallet::scan::{
@@ -201,7 +201,7 @@ pub(crate) struct Session {
     vault: VaultBytes,
     epicbox: Option<EpicboxSlot>,
     /// The methods the engine sends, receives and finalizes through, by transport id.
-    methods: Methods,
+    methods: Arc<Methods>,
     /// The file method, which every session has.
     file: Arc<dyn Method>,
     listener: Mutex<Option<ListenHandle>>,
@@ -390,13 +390,13 @@ fn epicbox_transport(
     network: Network,
     relay_tor: &Arc<RelayTor>,
     onion_routes: &Arc<OnionRoutes>,
-) -> Result<Option<EpicboxTransport>, WalletError> {
+) -> Result<Option<Epicbox>, WalletError> {
     if config.epicbox_domain.is_empty() {
         return Ok(None);
     }
     let endpoint = relay_endpoint(config)?;
     if config.offline {
-        return Ok(Some(EpicboxTransport::new(
+        return Ok(Some(Epicbox::new(
             ClientSettings::new(endpoint, tuning.relay),
             relay_network(network),
             Arc::new(OfflineRelay),
@@ -404,7 +404,7 @@ fn epicbox_transport(
     }
     #[cfg(feature = "mock")]
     if let Some(relay) = &runtime.relay {
-        return Ok(Some(EpicboxTransport::new(
+        return Ok(Some(Epicbox::new(
             ClientSettings::new(endpoint, tuning.relay),
             relay_network(network),
             Arc::clone(relay),
@@ -426,7 +426,7 @@ fn epicbox_transport(
         let _ = (relay_tor, onion_routes);
         Arc::new(lepic_epicbox::TcpConnector::new(tls))
     };
-    Ok(Some(EpicboxTransport::new(
+    Ok(Some(Epicbox::new(
         ClientSettings::new(endpoint, tuning.relay),
         relay_network(network),
         connector,
@@ -462,10 +462,8 @@ impl lepic_epicbox::Connector for OfflineRelay {
 
 /// The transaction methods a session registers.
 struct SessionTransports {
-    methods: Methods,
+    methods: Arc<Methods>,
     file: Arc<dyn Method>,
-    /// The Epicbox method, when the wallet has a relay; it carries the engine's notices.
-    epicbox: Option<Arc<dyn Method>>,
     http: lepic_foreign::HttpTransport,
     #[cfg(feature = "tor")]
     tor: lepic_tor::TorTransport,
@@ -483,10 +481,9 @@ fn session_transports(
     methods
         .register(Arc::clone(&file))
         .map_err(|error| invalid(error.to_string()))?;
-    let epicbox = epicbox.map(|epicbox| Arc::new(epicbox.clone()) as Arc<dyn Method>);
-    if let Some(epicbox) = &epicbox {
+    if let Some(epicbox) = epicbox {
         methods
-            .register(Arc::clone(epicbox))
+            .register(Arc::new(epicbox.clone()))
             .map_err(|error| invalid(error.to_string()))?;
     }
     let http = http::http_transport(tuning, send_tor)?;
@@ -502,9 +499,8 @@ fn session_transports(
             .map_err(|error| invalid(error.to_string()))?;
     }
     Ok(SessionTransports {
-        methods,
+        methods: Arc::new(methods),
         file,
-        epicbox,
         http,
         #[cfg(feature = "tor")]
         tor,
@@ -519,7 +515,7 @@ fn engine(
     data_dir: &Path,
     node: Node,
     claim: &Arc<ClaimHolder>,
-    notices: Option<Arc<dyn Method>>,
+    methods: Option<Arc<dyn MethodLookup>>,
     policy: &Policy,
     vault: &VaultBytes,
 ) -> Result<EngineWallet, WalletError> {
@@ -542,7 +538,7 @@ fn engine(
         clock: Arc::new(SystemClock),
         rng: SharedRng::new(os_rng()?),
         runtime: runtime.boundary.handle.clone(),
-        notices,
+        methods,
     };
     let engine = Wallet::new(engine_config, ports)?;
     lepic_wallet_contacts::install(&engine);
@@ -603,7 +599,7 @@ impl Session {
             &data_dir,
             node,
             &claim,
-            transports.epicbox,
+            Some(Arc::clone(&transports.methods) as Arc<dyn MethodLookup>),
             &policy,
             &vault,
         )?;
@@ -1514,7 +1510,7 @@ impl Session {
     /// a cancel of an issued invoice sends leaves from the address the invoice came from.
     fn attach_for_notices(&self) -> Result<(), WalletError> {
         if let Some(epicbox) = &self.epicbox {
-            self.engine.epicbox_attach(&epicbox.current())?;
+            epicbox.current().attach_wallet(&self.engine)?;
         }
         Ok(())
     }
@@ -1524,7 +1520,7 @@ impl Session {
     }
 
     /// The transport of the relay in use.
-    pub(crate) fn epicbox(&self) -> Result<EpicboxTransport, WalletError> {
+    pub(crate) fn epicbox(&self) -> Result<Epicbox, WalletError> {
         self.epicbox
             .as_ref()
             .map(EpicboxSlot::current)
@@ -1553,7 +1549,7 @@ impl Session {
     }
 
     pub(crate) fn peer_compat(&self, address: &str) -> Result<PeerCompat, WalletError> {
-        let facts = self.engine.peer_compat(address)?;
+        let facts = self.engine.peer_compat(self.epicbox_method()?, address)?;
         let stored = facts.stored.unwrap_or_default();
         Ok(PeerCompat {
             last_marked_at_ms: stored.last_marked_at.map(Timestamp::as_millisecond),
@@ -1573,7 +1569,9 @@ impl Session {
         bit: u32,
         worked: bool,
     ) -> Result<(), WalletError> {
-        Ok(self.engine.peer_feature_result(address, bit, worked)?)
+        Ok(self
+            .engine
+            .peer_feature_result(self.epicbox_method()?, address, bit, worked)?)
     }
 
     pub(crate) fn forget_peers(&self, older_than_days: u32) -> Result<u32, WalletError> {
@@ -1597,11 +1595,14 @@ impl Session {
         else {
             return Err(invalid("not a notice"));
         };
-        Ok(self.engine.notice_apply_forwarded(sender, notice).await?)
+        Ok(self
+            .engine
+            .notice_apply_forwarded(self.epicbox_method()?, sender, notice)
+            .await?)
     }
 
     pub(crate) fn epicbox_address(&self) -> Result<String, WalletError> {
-        Ok(self.engine.epicbox_attach(&self.epicbox()?)?.to_string())
+        Ok(self.epicbox()?.attach_wallet(&self.engine)?.to_string())
     }
 
     pub(crate) fn epicbox_address_at(
@@ -1611,8 +1612,8 @@ impl Session {
     ) -> Result<String, WalletError> {
         let listing = listing(service_key, generation)?;
         Ok(self
-            .engine
-            .epicbox_address_at(&listing, &self.epicbox()?)?
+            .epicbox()?
+            .address_at(&self.engine, &listing)?
             .to_string())
     }
 
@@ -1623,7 +1624,7 @@ impl Session {
     ) -> Result<InboxReport, WalletError> {
         let listing = listing(service_key, generation)?;
         let epicbox = self.epicbox()?;
-        let summary = self.engine.drain_epicbox_at(&listing, &epicbox).await?;
+        let summary = epicbox.drain_at(&self.engine, &listing).await?;
         Ok(inbox_report(&summary))
     }
 
@@ -1640,10 +1641,11 @@ impl Session {
         }
         let listing = listing(service_key, generation)?;
         let domain = service_domain(domain)?;
-        Ok(self
-            .engine
-            .sign_with_address_key_at(&listing, &domain, message)?
-            .to_der_hex())
+        // Signing needs no relay, so a wallet opened without one signs too.
+        let key = self.engine.listing_secret(&listing)?;
+        let signature = lepic_epicbox::sign_listing_message(&domain, message, &key)
+            .map_err(|error| lepic_wallet::WalletError::Keychain(error.into()))?;
+        Ok(signature.to_der_hex())
     }
 
     /// Never logs the transcript or the signature.
@@ -1680,7 +1682,7 @@ impl Session {
         let method = self.epicbox_method()?;
         relay_address(&address, self.network)
             .ok_or_else(|| invalid("not an epicbox address with a relay on this network"))?;
-        self.engine.epicbox_attach(&epicbox)?;
+        epicbox.attach_wallet(&self.engine)?;
         let sent = self
             .engine
             .send(
@@ -1704,7 +1706,7 @@ impl Session {
                 details.transaction.entry.transport.as_deref() == Some(TRANSPORT_ID.as_str())
             })
             .ok_or_else(|| invalid("transaction is not a send over epicbox"))?;
-        self.engine.epicbox_attach(&epicbox)?;
+        epicbox.attach_wallet(&self.engine)?;
         Ok(self
             .engine
             .resend(method, TxId(tx_id), Delivery::Deliver { to })
@@ -1718,7 +1720,7 @@ impl Session {
         if self.listener_running() {
             return Ok(InboxReport::default());
         }
-        let summary = self.engine.epicbox_drain(&epicbox).await?;
+        let summary = epicbox.drain(&self.engine).await?;
         Ok(inbox_report(&summary))
     }
 
@@ -1785,7 +1787,7 @@ impl Session {
         }
         let epicbox = self.epicbox()?;
         let mut events = self.engine.subscribe();
-        let listen = self.engine.epicbox_listen(&epicbox, handle);
+        let listen = epicbox.listen(&self.engine, handle);
         tokio::pin!(listen);
         let result = loop {
             tokio::select! {
@@ -2194,7 +2196,11 @@ fn invoice_event(event: &Event) -> Option<WalletEvent> {
             slate_id: Some(unmatched.notice.slate_id.to_string()),
             sender: Some(unmatched.sender.clone()),
             notice_kind: Some(notice_kind(unmatched.notice.kind).to_owned()),
-            notice: unmatched.notice.encode().as_text().map(str::to_owned),
+            notice: unmatched
+                .notice
+                .encode_to(&lepic_methods::epicbox::NOTICE_LENGTHS, 0)
+                .as_text()
+                .map(str::to_owned),
             ..WalletEvent::of(WalletEventKind::NoticeUnmatched)
         },
         Event::ReceiveSuperseded(superseded) => WalletEvent {
@@ -2979,7 +2985,8 @@ mod tests {
                 "esWpjSHdScqVnFSkbM8mPEpzAGBWWSFg4Pu3sKHnqCsKgjzU4YD6@relay.example.org",
                 lepic_epicbox::Network::Mainnet,
             )
-            .unwrap(),
+            .unwrap()
+            .to_string(),
         });
         let event = wallet_event(&bounced).unwrap();
         assert_eq!(event.kind, WalletEventKind::InvoiceBounced);

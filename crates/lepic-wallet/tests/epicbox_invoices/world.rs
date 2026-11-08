@@ -21,14 +21,13 @@ use std::time::Duration;
 use jiff::Timestamp;
 use lepic_crypto::{PublicKey, SecretKey};
 use lepic_epicbox::Connector;
-use lepic_epicbox::marker::v3::carries_lepic_marker;
 use lepic_epicbox::mock_relay::MockRelay;
-use lepic_epicbox::transport::EpicboxTransport;
 use lepic_epicbox::{
     Backoff, ClientSettings, Domain, EpicboxAddress, EpicboxClient, Identity,
     Network as RelayNetwork, Nonce, RelayEndpoint, Salt, Security, SignedMessage, TRANSPORT_ID,
 };
 use lepic_keychain::{Identifier, Keychain, Seed, SwitchCommitment};
+use lepic_methods::epicbox::Epicbox;
 use lepic_node::mock::{ChainState, MockNode};
 use lepic_node::{NodeClient, NodeVersion, Tip};
 use lepic_primitives::amount::{Amount, Height};
@@ -45,6 +44,7 @@ use lepic_store::{
     PendingInvoiceStatus, Repositories, StoreError, StoreKeys, WalletStore,
 };
 use lepic_transport::error::{FormatError, TransportError};
+use lepic_transport::marker::v3::carries_lepic_marker;
 use lepic_transport::method::{Carries, EncodeContext, Encoded, Method, SenderFacts, Sending};
 use lepic_transport::policy::FormatPolicy;
 use lepic_transport::transport::{
@@ -63,7 +63,7 @@ use rand::SeedableRng;
 use rand::rngs::StdRng;
 use uuid::Uuid;
 
-use crate::support::{TestVault, complete_restore_scan, fixed_time, password};
+use crate::support::{TestVault, complete_restore_scan, fixed_time, password, registry};
 
 pub const ISSUER_MNEMONIC: &str = "legal winner thank year wave sausage worth useful legal \
     winner thank year wave sausage worth useful legal winner thank year wave sausage worth title";
@@ -179,7 +179,7 @@ impl StoreOpener for CountingStores {
 /// The Epicbox transport as the wallet's registry holds it, recording where each delivery went,
 /// and failing every delivery while a test asks.
 struct RecordingEpicbox {
-    inner: EpicboxTransport,
+    inner: Epicbox,
     delivered_to: Arc<Mutex<Vec<String>>>,
     failing: Arc<AtomicBool>,
 }
@@ -296,7 +296,7 @@ fn context_key(seed: &Seed) -> StoreKeys {
 
 pub struct Party {
     pub wallet: PartyWallet,
-    pub epicbox: EpicboxTransport,
+    pub epicbox: Epicbox,
     /// `epicbox` as the engine's method, recording where each delivery went.
     pub method: Arc<dyn Method>,
     /// The payments address, index 0, attached to `epicbox`.
@@ -358,7 +358,7 @@ impl Party {
         relay: &MockRelay,
         runtime: &tokio::runtime::Runtime,
     ) -> Self {
-        let epicbox = EpicboxTransport::new(settings(), RelayNetwork::Floonet, relay.connector());
+        let epicbox = Epicbox::new(settings(), RelayNetwork::Floonet, relay.connector());
         let delivered_to = Arc::default();
         let deliveries_failing = Arc::default();
         let method: Arc<dyn Method> = Arc::new(RecordingEpicbox {
@@ -376,7 +376,7 @@ impl Party {
             clock: Arc::new(clock.clone()),
             rng: SharedRng::new(StdRng::seed_from_u64(seed_rng)),
             runtime: runtime.handle().clone(),
-            notices: Some(Arc::clone(&method)),
+            methods: Some(registry([Arc::clone(&method)])),
         };
         let config = WalletConfig {
             name: WalletName::new(name).unwrap(),
@@ -395,7 +395,7 @@ impl Party {
             .block_on(wallet.restore(password(name), mnemonic))
             .unwrap();
         complete_restore_scan(runtime, &wallet);
-        let address = wallet.epicbox_attach(&epicbox).unwrap();
+        let address = epicbox.attach_wallet(&wallet).unwrap();
         Self {
             wallet,
             epicbox,
@@ -706,7 +706,7 @@ impl World {
     pub fn issue(&self, message: Option<&str>) -> IssuedInvoice {
         if self.relay.pending(&self.payer.address) > 0 {
             let summary = self
-                .block_on(self.payer.wallet.epicbox_drain(&self.payer.epicbox))
+                .block_on(self.payer.epicbox.drain(&self.payer.wallet))
                 .unwrap();
             let mut carried = self.carried.lock().unwrap_or_else(PoisonError::into_inner);
             *carried = add(*carried, summary);

@@ -18,8 +18,8 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::config::WalletPolicy;
-use crate::epicbox_notice::NoticeFrom;
 use crate::notice::{Notice, NoticeKind};
+use crate::notices::NoticeFrom;
 
 const EARLY_PREFIX: &str = "notice.early.";
 
@@ -77,14 +77,14 @@ enum Sender {
 impl Sender {
     fn of(from: &NoticeFrom) -> Self {
         match from {
-            NoticeFrom::Epicbox(key) => Self::Epicbox(key.clone()),
+            NoticeFrom::Peer(key) => Self::Epicbox(key.clone()),
             NoticeFrom::Contact(id) => Self::Contact(id.0),
         }
     }
 
     fn from(self) -> NoticeFrom {
         match self {
-            Self::Epicbox(key) => NoticeFrom::Epicbox(key),
+            Self::Epicbox(key) => NoticeFrom::Peer(key),
             Self::Contact(id) => NoticeFrom::Contact(ContactId(id)),
         }
     }
@@ -106,7 +106,7 @@ fn slate_prefix(slate_id: Uuid) -> String {
 fn key_for(slate_id: Uuid, from: &NoticeFrom) -> String {
     let prefix = slate_prefix(slate_id);
     match from {
-        NoticeFrom::Epicbox(key) => format!("{prefix}epicbox:{key}"),
+        NoticeFrom::Peer(key) => format!("{prefix}epicbox:{key}"),
         NoticeFrom::Contact(id) => format!("{prefix}contact:{id}"),
     }
 }
@@ -231,7 +231,7 @@ mod tests {
     }
 
     fn from(key: &str) -> NoticeFrom {
-        NoticeFrom::Epicbox(key.to_owned())
+        NoticeFrom::Peer(key.to_owned())
     }
 
     fn keep_one(store: &MemoryStore, notice: Notice, sender: &NoticeFrom, second: i64) -> bool {

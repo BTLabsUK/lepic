@@ -43,20 +43,16 @@ fn name_service() -> Listing {
 
 impl World {
     fn listing_address(&self, party: &Party, listing: &Listing) -> EpicboxAddress {
-        party
-            .wallet
-            .epicbox_address_at(listing, &party.epicbox)
-            .unwrap()
+        party.epicbox.address_at(&party.wallet, listing).unwrap()
     }
 
     fn drain_listing(&self, party: &Party, listing: &Listing) -> InboxSummary {
-        self.block_on(party.wallet.drain_epicbox_at(listing, &party.epicbox))
+        self.block_on(party.epicbox.drain_at(&party.wallet, listing))
             .unwrap()
     }
 
     fn drain_payments(&self, party: &Party) -> InboxSummary {
-        self.block_on(party.wallet.epicbox_drain(&party.epicbox))
-            .unwrap()
+        self.block_on(party.epicbox.drain(&party.wallet)).unwrap()
     }
 
     fn pay(&self, to: &EpicboxAddress) -> SentSlate {

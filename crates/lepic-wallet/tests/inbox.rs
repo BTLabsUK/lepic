@@ -20,8 +20,8 @@ mod world;
 use std::time::Duration;
 
 use lepic_crypto::PublicKey;
-use lepic_epicbox::transport::EpicboxTransport;
 use lepic_epicbox::{Network as RelayNetwork, TRANSPORT_ID};
+use lepic_methods::epicbox::Epicbox;
 use lepic_node::mock::MockFailure;
 use lepic_slate::codec::{MediaType, WireSlate};
 use lepic_store::{AccountIndex, InboxEntry, InboxStatus, TxDirection, TxState, WalletStore};
@@ -43,10 +43,7 @@ fn two_wallets_transact_through_the_relay_across_a_relay_restart() {
     let handle = ListenHandle::new();
 
     let (listened, received) = world.block_on(async {
-        let listen = world
-            .sender
-            .wallet
-            .epicbox_listen(&world.sender_epicbox, &handle);
+        let listen = world.sender_epicbox.listen(&world.sender.wallet, &handle);
         let script = async {
             let mut events = world.sender.wallet.subscribe();
             transport_reaches(&mut events, TransportState::Connected).await;
@@ -58,8 +55,8 @@ fn two_wallets_transact_through_the_relay_across_a_relay_restart() {
             transport_reaches(&mut events, TransportState::Connected).await;
 
             let received = world
-                .receiver_wallet
-                .epicbox_drain(&world.receiver_epicbox)
+                .receiver_epicbox
+                .drain(&world.receiver_wallet)
                 .await
                 .unwrap();
             // The listen acknowledges S2 only after posting and recording it; a stop before
@@ -90,7 +87,7 @@ fn two_wallets_transact_through_the_relay_across_a_relay_restart() {
     assert_eq!(world.relay.pending(&world.receiver_address), 1);
     assert_eq!(
         world
-            .block_on(world.receiver_wallet.epicbox_drain(&world.receiver_epicbox))
+            .block_on(world.receiver_epicbox.drain(&world.receiver_wallet))
             .unwrap(),
         InboxSummary {
             notices: 1,
@@ -120,8 +117,8 @@ fn each_side_records_the_others_epicbox_address() {
     world.block_on(async {
         world.send().await;
         world
-            .receiver_wallet
-            .epicbox_drain(&world.receiver_epicbox)
+            .receiver_epicbox
+            .drain(&world.receiver_wallet)
             .await
             .unwrap();
     });
@@ -152,8 +149,8 @@ fn a_send_and_its_receive_are_payments() {
     world.block_on(async {
         world.send().await;
         world
-            .receiver_wallet
-            .epicbox_drain(&world.receiver_epicbox)
+            .receiver_epicbox
+            .drain(&world.receiver_wallet)
             .await
             .unwrap();
     });
@@ -201,7 +198,7 @@ fn a_crash_between_storing_s2_and_acknowledging_gives_exactly_one_s2() {
     assert_eq!(world.relay.pending(&world.sender_address), 0);
 
     let (restarted, epicbox) = world.restart_receiver();
-    let summary = world.block_on(restarted.epicbox_drain(&epicbox)).unwrap();
+    let summary = world.block_on(epicbox.drain(&restarted)).unwrap();
 
     assert_eq!(
         summary,
@@ -214,7 +211,7 @@ fn a_crash_between_storing_s2_and_acknowledging_gives_exactly_one_s2() {
     assert_eq!(world.relay.pending(&world.sender_address), 1);
     assert_eq!(world.receiver.transactions(), 1);
     let finalized = world
-        .block_on(world.sender.wallet.epicbox_drain(&world.sender_epicbox))
+        .block_on(world.sender_epicbox.drain(&world.sender.wallet))
         .unwrap();
     assert_eq!(finalized.finalized, 1);
     assert_eq!(world.sender_state(), TxState::Posted);
@@ -274,7 +271,7 @@ fn a_crash_after_recording_processed_and_before_acknowledging_sends_no_second_s2
     reply_then_crash(&world, true);
 
     let (restarted, epicbox) = world.restart_receiver();
-    let summary = world.block_on(restarted.epicbox_drain(&epicbox)).unwrap();
+    let summary = world.block_on(epicbox.drain(&restarted)).unwrap();
 
     assert_eq!(summary.repeated, 1);
     assert_eq!(world.relay.pending(&world.receiver_address), 0);
@@ -291,7 +288,7 @@ fn a_settled_copy_of_an_s1_emits_no_receipt_event() {
 
     let (restarted, epicbox) = world.restart_receiver();
     let mut events = restarted.subscribe();
-    let summary = world.block_on(restarted.epicbox_drain(&epicbox)).unwrap();
+    let summary = world.block_on(epicbox.drain(&restarted)).unwrap();
 
     assert_eq!(summary.repeated, 1);
     let receipts: Vec<Event> = std::iter::from_fn(|| events.try_recv().ok())
@@ -309,7 +306,7 @@ fn a_crash_right_after_replying_sends_the_same_s2_again_and_the_sender_posts_onc
     reply_then_crash(&world, false);
 
     let (restarted, epicbox) = world.restart_receiver();
-    let summary = world.block_on(restarted.epicbox_drain(&epicbox)).unwrap();
+    let summary = world.block_on(epicbox.drain(&restarted)).unwrap();
 
     assert_eq!(summary.repeated, 1);
     assert_eq!(world.relay.pending(&world.receiver_address), 0);
@@ -317,7 +314,7 @@ fn a_crash_right_after_replying_sends_the_same_s2_again_and_the_sender_posts_onc
     assert_eq!(world.receiver.transactions(), 1);
 
     let sender = world
-        .block_on(world.sender.wallet.epicbox_drain(&world.sender_epicbox))
+        .block_on(world.sender_epicbox.drain(&world.sender.wallet))
         .unwrap();
     assert_eq!(
         sender,
@@ -340,7 +337,7 @@ fn messages_that_cannot_be_used_are_recorded_and_acknowledged_and_the_next_one_i
     world.block_on(world.send());
 
     let summary = world
-        .block_on(world.receiver_wallet.epicbox_drain(&world.receiver_epicbox))
+        .block_on(world.receiver_epicbox.drain(&world.receiver_wallet))
         .unwrap();
 
     assert_eq!(
@@ -389,7 +386,7 @@ fn an_answer_over_epicbox_to_an_s1_exported_as_a_file_is_not_finalized() {
     let posted = world.post_to_sender(9, answer.reply.as_text().unwrap());
 
     let summary = world
-        .block_on(world.sender.wallet.epicbox_drain(&world.sender_epicbox))
+        .block_on(world.sender_epicbox.drain(&world.sender.wallet))
         .unwrap();
 
     assert_eq!(
@@ -427,7 +424,7 @@ fn an_answer_from_another_key_than_the_receivers_is_not_finalized() {
     world.post_to_sender(9, answer.reply.as_text().unwrap());
 
     let refused = world
-        .block_on(world.sender.wallet.epicbox_drain(&world.sender_epicbox))
+        .block_on(world.sender_epicbox.drain(&world.sender.wallet))
         .unwrap();
     assert_eq!(
         refused,
@@ -439,10 +436,10 @@ fn an_answer_from_another_key_than_the_receivers_is_not_finalized() {
     assert_eq!(world.sender_state(), TxState::Sent);
 
     world
-        .block_on(world.receiver_wallet.epicbox_drain(&world.receiver_epicbox))
+        .block_on(world.receiver_epicbox.drain(&world.receiver_wallet))
         .unwrap();
     let finalized = world
-        .block_on(world.sender.wallet.epicbox_drain(&world.sender_epicbox))
+        .block_on(world.sender_epicbox.drain(&world.sender.wallet))
         .unwrap();
     assert_eq!(finalized.finalized, 1);
     assert_eq!(world.sender_state(), TxState::Posted);
@@ -471,13 +468,13 @@ fn a_changed_s1_under_a_received_slate_id_is_rejected() {
         _ => serde_json::Value::from(1),
     };
     let first = world
-        .block_on(world.receiver_wallet.epicbox_drain(&world.receiver_epicbox))
+        .block_on(world.receiver_epicbox.drain(&world.receiver_wallet))
         .unwrap();
     assert_eq!(first.received, 1, "{first:?}");
     let msg_id = world.post_to_receiver(7, 7, &changed.to_string());
 
     let summary = world
-        .block_on(world.receiver_wallet.epicbox_drain(&world.receiver_epicbox))
+        .block_on(world.receiver_epicbox.drain(&world.receiver_wallet))
         .unwrap();
 
     assert_eq!(
@@ -507,7 +504,7 @@ fn an_s1_delivered_twice_is_announced_as_received_then_as_answered_again() {
     let mut events = world.receiver_wallet.subscribe();
 
     let summary = world
-        .block_on(world.receiver_wallet.epicbox_drain(&world.receiver_epicbox))
+        .block_on(world.receiver_epicbox.drain(&world.receiver_wallet))
         .unwrap();
 
     assert_eq!(
@@ -553,7 +550,7 @@ fn an_s1_redelivered_after_its_receive_was_cancelled_is_rejected() {
     world.block_on(world.receiver_wallet.cancel(tx_id)).unwrap();
 
     let summary = world
-        .block_on(world.receiver_wallet.epicbox_drain(&world.receiver_epicbox))
+        .block_on(world.receiver_epicbox.drain(&world.receiver_wallet))
         .unwrap();
 
     assert_eq!(
@@ -598,7 +595,7 @@ fn an_s1_expired_by_the_tip_alone_stays_on_the_relay_while_no_refresh_confirms_t
     });
 
     let held = world
-        .block_on(world.receiver_wallet.epicbox_drain(&world.receiver_epicbox))
+        .block_on(world.receiver_epicbox.drain(&world.receiver_wallet))
         .unwrap();
 
     assert_eq!(
@@ -616,7 +613,7 @@ fn an_s1_expired_by_the_tip_alone_stays_on_the_relay_while_no_refresh_confirms_t
 
     world.block_on(world.receiver_wallet.refresh()).unwrap();
     let rejected = world
-        .block_on(world.receiver_wallet.epicbox_drain(&world.receiver_epicbox))
+        .block_on(world.receiver_epicbox.drain(&world.receiver_wallet))
         .unwrap();
 
     assert_eq!(rejected.rejected, 1);
@@ -635,7 +632,7 @@ fn a_transient_failure_leaves_the_message_on_the_relay_for_the_next_drain() {
         .fail_next("get_tip", MockFailure::Unreachable);
 
     let held = world
-        .block_on(world.receiver_wallet.epicbox_drain(&world.receiver_epicbox))
+        .block_on(world.receiver_epicbox.drain(&world.receiver_wallet))
         .unwrap();
 
     assert_eq!(
@@ -649,7 +646,7 @@ fn a_transient_failure_leaves_the_message_on_the_relay_for_the_next_drain() {
     assert_eq!(world.receiver.transactions(), 0);
 
     let retried = world
-        .block_on(world.receiver_wallet.epicbox_drain(&world.receiver_epicbox))
+        .block_on(world.receiver_epicbox.drain(&world.receiver_wallet))
         .unwrap();
     assert_eq!(retried.received, 1);
     assert_eq!(world.relay.pending(&world.receiver_address), 0);
@@ -668,8 +665,8 @@ fn a_listener_retries_a_held_message_until_it_settles() {
 
     let summary = world.block_on(async {
         let listen = world
-            .receiver_wallet
-            .epicbox_listen(&world.receiver_epicbox, &handle);
+            .receiver_epicbox
+            .listen(&world.receiver_wallet, &handle);
         let script = async {
             world.until_acknowledged(&world.receiver_address).await;
             handle.stop();
@@ -701,8 +698,8 @@ fn the_receiver_sees_the_senders_message_after_a_listener_receive() {
 
     world.block_on(async {
         let listen = world
-            .receiver_wallet
-            .epicbox_listen(&world.receiver_epicbox, &handle);
+            .receiver_epicbox
+            .listen(&world.receiver_wallet, &handle);
         let script = async {
             world.until_acknowledged(&world.receiver_address).await;
             handle.stop();
@@ -733,8 +730,8 @@ fn stopping_a_listener_returns_promptly_and_reports_the_transport_stopped() {
 
     world.block_on(async {
         let listen = world
-            .receiver_wallet
-            .epicbox_listen(&world.receiver_epicbox, &handle);
+            .receiver_epicbox
+            .listen(&world.receiver_wallet, &handle);
         let script = async {
             let mut events = world.receiver_wallet.subscribe();
             transport_reaches(&mut events, TransportState::Connected).await;
@@ -760,8 +757,8 @@ fn finishing_an_idle_listener_returns_promptly_and_reports_the_transport_stopped
 
     world.block_on(async {
         let listen = world
-            .receiver_wallet
-            .epicbox_listen(&world.receiver_epicbox, &handle);
+            .receiver_epicbox
+            .listen(&world.receiver_wallet, &handle);
         let script = async {
             let mut events = world.receiver_wallet.subscribe();
             transport_reaches(&mut events, TransportState::Connected).await;
@@ -789,22 +786,19 @@ fn a_drain_beside_a_listener_reports_its_connection_as_its_own() {
 
     world.block_on(async {
         let listen = world
-            .receiver_wallet
-            .epicbox_listen(&world.receiver_epicbox, &handle);
+            .receiver_epicbox
+            .listen(&world.receiver_wallet, &handle);
         let script = async {
             let mut events = world.receiver_wallet.subscribe();
             transport_reaches(&mut events, TransportState::Connected).await;
             world.relay.set_refusing(true);
-            let refused = world
-                .receiver_wallet
-                .epicbox_drain(&world.receiver_epicbox)
-                .await;
+            let refused = world.receiver_epicbox.drain(&world.receiver_wallet).await;
             assert!(
                 matches!(refused, Err(InboxError::Subscription(_))),
                 "{refused:?}"
             );
             world.relay.set_refusing(false);
-            within(world.receiver_wallet.epicbox_drain(&world.receiver_epicbox))
+            within(world.receiver_epicbox.drain(&world.receiver_wallet))
                 .await
                 .unwrap();
             handle.stop();
@@ -860,13 +854,11 @@ fn a_locked_wallet_neither_attaches_nor_drains() {
     let world = World::new();
     world.receiver_wallet.lock();
     assert!(matches!(
-        world
-            .receiver_wallet
-            .epicbox_attach(&world.receiver_epicbox),
+        world.receiver_epicbox.attach_wallet(&world.receiver_wallet),
         Err(InboxError::Wallet(WalletError::Locked))
     ));
     assert!(matches!(
-        world.block_on(world.receiver_wallet.epicbox_drain(&world.receiver_epicbox)),
+        world.block_on(world.receiver_epicbox.drain(&world.receiver_wallet)),
         Err(InboxError::Wallet(WalletError::Locked))
     ));
 }
@@ -874,9 +866,9 @@ fn a_locked_wallet_neither_attaches_nor_drains() {
 #[test]
 fn a_transport_for_the_other_network_is_refused() {
     let world = World::new();
-    let mainnet = EpicboxTransport::new(settings(), RelayNetwork::Mainnet, world.relay.connector());
+    let mainnet = Epicbox::new(settings(), RelayNetwork::Mainnet, world.relay.connector());
     assert!(matches!(
-        world.receiver_wallet.epicbox_attach(&mainnet),
+        mainnet.attach_wallet(&world.receiver_wallet),
         Err(InboxError::NetworkMismatch)
     ));
 }
@@ -911,7 +903,7 @@ mod policy {
     //! The Epicbox format policy against the G-03 Epicbox payloads: what upstream's Epicbox
     //! sender and receiver put on the wire.
 
-    use lepic_epicbox::transport::EpicboxPolicy;
+    use lepic_methods::epicbox::EpicboxPolicy;
     use lepic_slate::codec::legacy::v2_json::LEGACY_V2_JSON;
     use lepic_slate::codec::legacy::v3_json::LEGACY_V3_JSON;
     use lepic_slate::codec::{EncodeContext, MediaType, WireSlate};
@@ -1045,14 +1037,14 @@ fn a_pair_request_the_store_keeps_refusing_is_acknowledged_after_three_tries() {
             .receiver_wallet
             .set_pair_requests(std::sync::Arc::new(FailingPairRequests(tries.clone())))
     );
-    let request = lepic_wallet::notice::pair_request_to("epiccash://pair/1/x", 512);
+    let request = lepic_wallet::notice::pair_request_to("epiccash://pair/1/x", &[512], 512);
     world.post_to_receiver(7, 7, &request);
     let handle = ListenHandle::new();
 
     world.block_on(async {
         let listen = world
-            .receiver_wallet
-            .epicbox_listen(&world.receiver_epicbox, &handle);
+            .receiver_epicbox
+            .listen(&world.receiver_wallet, &handle);
         let script = async {
             world.until_acknowledged(&world.receiver_address).await;
             handle.stop();

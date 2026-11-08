@@ -4,7 +4,6 @@
 //! behind misses the oldest ones and is told how many it missed.
 
 use lepic_crypto::Commitment;
-use lepic_epicbox::EpicboxAddress;
 use lepic_primitives::amount::{Amount, Height};
 pub use lepic_slate::model::SlateId;
 use lepic_slate::stage::Stage;
@@ -471,8 +470,9 @@ pub struct BouncedInvoice {
     /// The issued invoice.
     pub tx_id: TxId,
     pub slate_id: SlateId,
-    /// The address the invoice was issued to.
-    pub peer: EpicboxAddress,
+    /// The address the invoice came back from, as the method reported it, with the key of the
+    /// one it was issued to.
+    pub peer: String,
 }
 
 impl From<StateChange> for Event {

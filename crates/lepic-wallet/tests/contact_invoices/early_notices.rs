@@ -46,7 +46,7 @@ fn post_notice(
     kind: NoticeKind,
 ) {
     let notice = Notice { slate_id, kind };
-    let wire = notice.encode();
+    let wire = notice.encode_to(&lepic_methods::epicbox::NOTICE_LENGTHS, 0);
     post_signed(
         world,
         from,

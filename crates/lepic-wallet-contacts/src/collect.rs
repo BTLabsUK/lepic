@@ -32,13 +32,13 @@ use super::{
     UPDATES_PER_HOUR,
 };
 use crate::ContactBook;
+use lepic_methods::epicbox::relay_network;
 use lepic_primitives::error_chain::ErrorChain;
 use lepic_wallet::WalletPolicy;
 use lepic_wallet::event::{
     ContactChange, ContactEvent, ContactUpdate, Event, FailedPairing, RelayMoveRequest,
     UnreachableRelay,
 };
-use lepic_wallet::inbox::relay_network;
 use lepic_wallet::ports::{SecretVault, StoreOpener};
 
 /// What started a collecting cycle (RFC 0002 8.4).

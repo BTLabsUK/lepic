@@ -15,8 +15,8 @@ use lepic_primitives::params::Network;
 use lepic_store::AccountIndex;
 
 use super::ContactError;
+use lepic_methods::epicbox::relay_network;
 use lepic_wallet::account::parent_key_id;
-use lepic_wallet::inbox::relay_network;
 
 /// The envelope version this wallet reads, which its cards announce.
 const MAX_ENVELOPE_VERSION: u8 = 1;

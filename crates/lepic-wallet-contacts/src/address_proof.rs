@@ -17,9 +17,9 @@ use lepic_contact::{ContactCard, MailboxAddress, Network as ContactNetwork};
 use lepic_crypto::{PublicKey, SecretKey};
 use lepic_epicbox::EpicboxAddress;
 use lepic_keychain::Keychain;
+use lepic_methods::epicbox::relay_network;
 use lepic_primitives::params::Network;
 use lepic_wallet::account::parent_key_id;
-use lepic_wallet::inbox::relay_network;
 use sha2::{Digest, Sha256};
 use zeroize::Zeroizing;
 

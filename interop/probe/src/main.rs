@@ -25,11 +25,11 @@ use std::time::Duration;
 use anyhow::{Context, Result, bail};
 use futures_util::{SinkExt, StreamExt};
 use lepic_crypto::{PublicKey, SecretKey};
-use lepic_epicbox::transport::EpicboxPolicy;
 use lepic_epicbox::{
     ClientFrame, Domain, EpicboxAddress, Network, Nonce, ReceivedMessage, RelayFrame,
     RelayMessageId, SignedMessage, SlateFrame, WalletMode,
 };
+use lepic_methods::epicbox::EpicboxPolicy;
 use lepic_slate::codec::legacy::v2_json::V2JsonCodec;
 use lepic_slate::codec::legacy::v3_json::V3JsonCodec;
 use lepic_slate::codec::{MediaType, WireSlate};

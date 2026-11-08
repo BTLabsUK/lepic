@@ -116,7 +116,7 @@ impl Party {
             clock: Arc::new(FixedClock(fixed_time())),
             rng: SharedRng::new(RepeatingRng(1)),
             runtime: runtime.handle().clone(),
-            notices: None,
+            methods: None,
         };
         let config = WalletConfig {
             name: WalletName::new("invoice").unwrap(),

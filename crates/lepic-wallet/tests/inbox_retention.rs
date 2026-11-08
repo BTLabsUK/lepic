@@ -55,7 +55,7 @@ fn a_drain_prunes_inbox_entries_older_than_the_relay_retention() {
     store_expired_and_recent_entries(&world);
 
     world
-        .block_on(world.receiver_wallet.epicbox_drain(&world.receiver_epicbox))
+        .block_on(world.receiver_epicbox.drain(&world.receiver_wallet))
         .unwrap();
 
     assert_eq!(world.receiver.inbox("expired"), None);
@@ -71,8 +71,8 @@ fn a_long_listen_prunes_inbox_entries_as_messages_settle() {
 
     let summary = world.block_on(async {
         let listen = world
-            .receiver_wallet
-            .epicbox_listen(&world.receiver_epicbox, &handle);
+            .receiver_epicbox
+            .listen(&world.receiver_wallet, &handle);
         let script = async {
             let mut events = world.receiver_wallet.subscribe();
             transport_reaches(&mut events, TransportState::Connected).await;

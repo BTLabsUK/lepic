@@ -18,6 +18,7 @@ lepic-contact.workspace = true
 lepic-crypto.workspace = true
 lepic-epicbox.workspace = true
 lepic-keychain.workspace = true
+lepic-methods = { workspace = true, features = ["epicbox"] }
 lepic-node.workspace = true
 lepic-primitives.workspace = true
 lepic-slate.workspace = true

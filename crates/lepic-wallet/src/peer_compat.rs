@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-//! What the software behind each Epicbox key showed it is, learned only from messages the user's
+//! What the software behind each peer key showed it is, learned only from messages the user's
 //! own actions caused, and the rules derived from it (ADR 0016).
 //!
 //! The store keeps dates and feature bits per key; nothing here is stored that can be derived.
@@ -9,16 +9,17 @@
 //! a non-LEPIC listener never acknowledges a notice, and the relay drops its whole queue after a
 //! few unacknowledged rounds.
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use jiff::{SignedDuration, Timestamp};
-use lepic_epicbox::EpicboxAddress;
 use lepic_node::NodeApi;
 use lepic_store::{PeerCompat, Repositories, StoreError, WalletStore};
+use lepic_transport::method::Method;
 use tracing::instrument;
 
 use crate::error::WalletError;
-use crate::inbox::{InboxError, relay_network};
+use crate::inbox::InboxError;
 use crate::ports::{SecretVault, StoreOpener};
 use crate::wallet::Wallet;
 
@@ -182,17 +183,21 @@ where
     S: StoreOpener + 'static,
     V: SecretVault + 'static,
 {
-    /// What this wallet learned about the software at `address` from its own messages over
-    /// Epicbox, and what follows from it now. Matched on the key only. Reads only the store.
+    /// What this wallet learned about the software at `address` of `method` from its own
+    /// messages, and what follows from it now. Matched on the key under `method` only. Reads
+    /// only the store.
     ///
-    /// Fails with [`InboxError::Address`] for an address that does not parse or is on the other
-    /// network, and with [`WalletError::Locked`].
+    /// Fails with [`InboxError::Address`] for an address `method` names no key with on the
+    /// wallet's network, and with [`WalletError::Locked`].
     #[instrument(skip_all, fields(wallet = %self.config().name))]
-    pub fn peer_compat(&self, address: &str) -> Result<PeerFacts, InboxError> {
-        let network = relay_network(self.config().network);
-        let key = EpicboxAddress::parse_key(address, network)
-            .map(|key| EpicboxAddress::key_text_of(&key, network))
-            .map_err(InboxError::Address)?;
+    pub fn peer_compat(
+        &self,
+        method: &Arc<dyn Method>,
+        address: &str,
+    ) -> Result<PeerFacts, InboxError> {
+        let key = method
+            .peer_key(self.config().network, address)
+            .map_err(|error| InboxError::Address(Box::new(error)))?;
         let now = self.ports().clock.now();
         let session = self.session()?;
         Ok(session
@@ -200,28 +205,28 @@ where
             .read(|repos| Ok::<_, WalletError>(facts(repos, &key, now)?))?)
     }
 
-    /// Records what the host app learned of one of its own features with the key of `address`:
-    /// that it worked, or that it failed. Only the host bits (device forwarding and the name
+    /// Records what the host app learned of one of its own features with the key of `address`
+    /// under `method`: that it worked, or that it failed. Only the host bits (device forwarding and the name
     /// service) are taken; a bit the key never claimed does not start working. Sends nothing.
     ///
-    /// Fails with [`InboxError::Address`] for an address that does not parse or is on the other
-    /// network, with [`InboxError::NotHostFeature`] for any other bit than one host bit, and with
+    /// Fails with [`InboxError::Address`] for an address `method` names no key with on the
+    /// wallet's network, with [`InboxError::NotHostFeature`] for any other bit than one host bit, and with
     /// [`WalletError::Locked`].
     #[instrument(skip_all, fields(wallet = %self.config().name))]
     pub fn peer_feature_result(
         &self,
+        method: &Arc<dyn Method>,
         address: &str,
         bit: u32,
         worked: bool,
     ) -> Result<(), InboxError> {
-        use lepic_epicbox::marker::features::HOST_FEATURES;
+        use lepic_transport::marker::features::HOST_FEATURES;
         if !bit.is_power_of_two() || bit & HOST_FEATURES == 0 {
             return Err(InboxError::NotHostFeature);
         }
-        let network = relay_network(self.config().network);
-        let key = EpicboxAddress::parse_key(address, network)
-            .map(|key| EpicboxAddress::key_text_of(&key, network))
-            .map_err(InboxError::Address)?;
+        let key = method
+            .peer_key(self.config().network, address)
+            .map_err(|error| InboxError::Address(Box::new(error)))?;
         let session = self.session()?;
         Ok(session
             .store

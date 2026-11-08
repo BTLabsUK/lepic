@@ -60,9 +60,7 @@ fn send(world: &World) -> SentSlate {
 }
 
 fn drain(world: &World, party: &Party) -> InboxSummary {
-    world
-        .block_on(party.wallet.epicbox_drain(&party.epicbox))
-        .unwrap()
+    world.block_on(party.epicbox.drain(&party.wallet)).unwrap()
 }
 
 /// Puts every unspent output of `party` on the mock chain, so the node holds the inputs of its
@@ -199,7 +197,7 @@ fn a_copy_of_an_answer_the_sending_install_settled_is_acknowledged_there_as_repe
     let mut twin_events = twin.wallet.subscribe();
 
     let (listened, settled) = world.block_on(async {
-        let listen = twin.wallet.epicbox_listen(&twin.epicbox, &handle);
+        let listen = twin.epicbox.listen(&twin.wallet, &handle);
         let script = async {
             // The twin holds the S2 in hand, and the relay hands it to the sending install too.
             world
@@ -209,8 +207,8 @@ fn a_copy_of_an_answer_the_sending_install_settled_is_acknowledged_there_as_repe
                 .await;
             let first = world
                 .payer
-                .wallet
-                .epicbox_drain(&world.payer.epicbox)
+                .epicbox
+                .drain(&world.payer.wallet)
                 .await
                 .unwrap();
             assert_eq!(first.finalized, 1, "{first:?}");
@@ -229,8 +227,8 @@ fn a_copy_of_an_answer_the_sending_install_settled_is_acknowledged_there_as_repe
                 .await;
             let second = world
                 .payer
-                .wallet
-                .epicbox_drain(&world.payer.epicbox)
+                .epicbox
+                .drain(&world.payer.wallet)
                 .await
                 .unwrap();
             handle.stop();

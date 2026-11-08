@@ -416,9 +416,8 @@ fn listing_signatures_are_the_vectors() {
     assert_eq!(cases.len(), 5);
     for case in cases {
         let domain = lepic_epicbox::ServiceDomain::parse(case["domain"].as_str().unwrap()).unwrap();
-        let signature = wallet
-            .sign_with_address_key_at(&listing, &domain, &message)
-            .unwrap();
+        let secret = wallet.listing_secret(&listing).unwrap();
+        let signature = lepic_epicbox::sign_listing_message(&domain, &message, &secret).unwrap();
         assert_eq!(
             signature.to_der_hex(),
             case["signature_der"].as_str().unwrap(),

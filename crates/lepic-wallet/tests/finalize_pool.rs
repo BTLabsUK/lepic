@@ -115,7 +115,7 @@ impl Posting {
             ),
             stores: shared.stores,
             secrets: shared.secrets,
-            notices: shared.notices,
+            methods: shared.methods,
             clock: shared.clock,
             rng: shared.rng,
             runtime: shared.runtime,

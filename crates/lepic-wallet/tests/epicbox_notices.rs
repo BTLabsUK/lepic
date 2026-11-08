@@ -72,14 +72,14 @@ impl World {
     fn drain_payer_invoices(&self) -> InboxSummary {
         let parked = self.deliver_invoices();
         let mut summary = self
-            .block_on(self.payer.wallet.epicbox_drain(&self.payer.epicbox))
+            .block_on(self.payer.epicbox.drain(&self.payer.wallet))
             .unwrap();
         summary.parked = u32::try_from(parked).unwrap();
         world::add(self.take_carried(), summary)
     }
 
     fn drain_issuer(&self) -> InboxSummary {
-        self.block_on(self.issuer.wallet.epicbox_drain(&self.issuer.epicbox))
+        self.block_on(self.issuer.epicbox.drain(&self.issuer.wallet))
             .unwrap()
     }
 
@@ -104,10 +104,7 @@ impl World {
     fn listen_issuer_until_empty(&self) -> InboxSummary {
         let handle = ListenHandle::new();
         self.block_on(async {
-            let listen = self
-                .issuer
-                .wallet
-                .epicbox_listen(&self.issuer.epicbox, &handle);
+            let listen = self.issuer.epicbox.listen(&self.issuer.wallet, &handle);
             let script = async {
                 self.within(
                     self.relay
@@ -624,7 +621,12 @@ fn the_issuer_hears_a_decline_from_the_invoiced_address() {
     let mut issuer_events = world.issuer.wallet.subscribe();
 
     world
-        .block_on(world.payer.wallet.decline_invoice(issued.slate_id))
+        .block_on(
+            world
+                .payer
+                .wallet
+                .decline_invoice(&world.payer.method, issued.slate_id),
+        )
         .unwrap();
     let summary = world.drain_issuer();
 
@@ -889,7 +891,12 @@ fn no_notice_is_posted_to_a_peer_without_proof() {
     assert_eq!(world.drain_payer_invoices().parked, 1);
     let before = posts();
     world
-        .block_on(world.payer.wallet.decline_invoice(unanswered.slate_id))
+        .block_on(
+            world
+                .payer
+                .wallet
+                .decline_invoice(&world.payer.method, unanswered.slate_id),
+        )
         .unwrap();
     assert_eq!(posts(), before);
     assert!(world.drain_peer(&silent).is_empty());
@@ -921,7 +928,7 @@ fn a_posted_notice_with_another_excess_is_dropped() {
             slate_id: issued.slate_id,
             kind: NoticeKind::Posted { excess },
         }
-        .encode()
+        .encode_to(&lepic_methods::epicbox::NOTICE_LENGTHS, 0)
         .as_text()
         .unwrap()
         .to_owned()

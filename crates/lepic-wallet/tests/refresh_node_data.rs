@@ -192,7 +192,7 @@ fn scripted(sender: &Sender, script: Script) -> ScriptedWallet {
             )),
             rng: SharedRng::new(StdRng::seed_from_u64(43)),
             runtime: sender.harness.runtime.handle().clone(),
-            notices: None,
+            methods: None,
         },
     )
     .unwrap();
@@ -850,7 +850,7 @@ fn a_kernel_height_above_the_tip_changes_nothing_through_the_node_client() {
             clock: Arc::new(FixedClock(fixed_time())),
             rng: SharedRng::new(StdRng::seed_from_u64(44)),
             runtime: sender.harness.runtime.handle().clone(),
-            notices: None,
+            methods: None,
         },
     )
     .unwrap();

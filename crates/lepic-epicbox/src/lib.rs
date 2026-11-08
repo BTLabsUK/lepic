@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Epicbox addresses, message crypto, protocol frames and relay transport.
+//! Epicbox addresses, message crypto, protocol frames and the relay client.
 
 mod address;
 mod address_signature;
@@ -9,17 +9,12 @@ mod crypto;
 mod frame;
 mod json;
 mod mailbox;
-/// The LEPIC marker, which lives next to the codecs it extends.
-pub mod marker {
-    pub use lepic_transport::marker::*;
-}
 #[cfg(feature = "mock-relay")]
 pub mod mock_relay;
 mod prefilter;
 mod session;
 #[cfg(any(test, feature = "mock-relay"))]
 pub mod testing;
-pub mod transport;
 pub mod tunnel;
 
 pub use address::{

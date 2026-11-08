@@ -524,7 +524,7 @@ pub fn profile_flag(args: &GlobalArgs) -> Result<Option<u16>, SettingsError> {
 /// The host bits a `host_features` value names. Each name is one bit of
 /// `features::HOST_FEATURES`; an unknown name refuses the whole value. Empty names none.
 fn parse_host_features(text: &str) -> Option<u32> {
-    use lepic_epicbox::marker::features;
+    use lepic_transport::marker::features;
     let mut bits = 0;
     for name in text
         .split(',')
@@ -808,7 +808,7 @@ mod tests {
 
     #[test]
     fn host_features_are_host_bits_by_name() {
-        use lepic_epicbox::marker::features;
+        use lepic_transport::marker::features;
         assert_eq!(parse_host_features(""), Some(0));
         assert_eq!(
             parse_host_features("name-service"),
@@ -836,7 +836,7 @@ mod tests {
             resolve(&[("LEPIC_HOST_FEATURES", "name-service")])
                 .unwrap()
                 .host_features,
-            lepic_epicbox::marker::features::NAME_SERVICE
+            lepic_transport::marker::features::NAME_SERVICE
         );
         assert!(matches!(
             resolve(&[("LEPIC_HOST_FEATURES", "everything")]),

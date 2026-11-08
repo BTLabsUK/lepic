@@ -25,14 +25,14 @@ mod world;
 use std::time::Duration;
 
 use lepic_crypto::Commitment;
-use lepic_epicbox::marker::features::LEPIC_FEATURES;
-use lepic_epicbox::marker::v3::{carries_lepic_marker, lepic_marker_features};
 use lepic_epicbox::{EpicboxAddress, EpicboxClient};
 use lepic_node::mock::MockFailure;
 use lepic_primitives::amount::Amount;
 use lepic_slate::codec::{MediaType, WireSlate};
 use lepic_slate::model::SlateId;
 use lepic_store::{PeerCompat, SlateStage, TxDirection, TxId, TxState, WalletStore};
+use lepic_transport::marker::features::LEPIC_FEATURES;
+use lepic_transport::marker::v3::{carries_lepic_marker, lepic_marker_features};
 use lepic_transport::transport::{Destination, Inbound};
 use lepic_wallet::event::PostedPayment;
 use lepic_wallet::inbox::InboxSummary;
@@ -55,7 +55,7 @@ const STRANGER: u8 = 9;
 fn marker() -> String {
     format!(
         ",\"lepic\":{{\"version\":1,\"f\":{}}}",
-        lepic_epicbox::marker::features::LEPIC_FEATURES
+        lepic_transport::marker::features::LEPIC_FEATURES
     )
 }
 
@@ -74,7 +74,7 @@ fn posted_text(slate_id: SlateId, excess: Commitment) -> String {
         slate_id,
         kind: NoticeKind::Posted { excess },
     }
-    .encode();
+    .encode_to(&lepic_methods::epicbox::NOTICE_LENGTHS, 0);
     wire.as_text().unwrap().to_owned()
 }
 
@@ -107,8 +107,7 @@ impl World {
     }
 
     fn drain(&self, party: &Party) -> InboxSummary {
-        self.block_on(party.wallet.epicbox_drain(&party.epicbox))
-            .unwrap()
+        self.block_on(party.epicbox.drain(&party.wallet)).unwrap()
     }
 
     fn send_to(&self, to: &EpicboxAddress) -> SentSlate {
@@ -560,7 +559,10 @@ fn a_key_proven_sixty_days_ago_gets_no_notice_for_an_unmarked_exchange() {
     let facts = world
         .sender()
         .wallet
-        .peer_compat(&World::address_of(SENDER).to_string())
+        .peer_compat(
+            &world.sender().method,
+            &World::address_of(SENDER).to_string(),
+        )
         .unwrap();
     assert_eq!(facts.kind, PeerKind::Lepic);
     assert!(!facts.notices);
@@ -760,7 +762,11 @@ fn forget_peers_drops_keys_older_than_the_limit() {
     assert_eq!(forgotten, 1);
     assert_eq!(world.sender().peer_compat(&old.key_text()), None);
     assert!(world.sender().peer_compat(&recent.key_text()).is_some());
-    let facts = world.sender().wallet.peer_compat(&old.to_string()).unwrap();
+    let facts = world
+        .sender()
+        .wallet
+        .peer_compat(&world.sender().method, &old.to_string())
+        .unwrap();
     assert_eq!(facts.kind, PeerKind::Unknown);
     assert!(!facts.notices);
 }

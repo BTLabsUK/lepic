@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Invoices over Epicbox, the payer's side and the housekeeping of both sides.
+//! Invoices over a method, the payer's side and the housekeeping of both sides.
 //!
 //! A parked invoice waits in the store for the user to pay or decline it; nothing in the inbox
 //! ever pays. Paying a parked invoice is a host call, which delivers the I2 to the address the
@@ -14,8 +14,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use jiff::Timestamp;
-use lepic_crypto::{Commitment, PublicKey};
-use lepic_epicbox::{EpicboxAddress, Network as RelayNetwork, TRANSPORT_ID};
+use lepic_crypto::Commitment;
 use lepic_node::NodeApi;
 use lepic_primitives::amount::{Amount, Height};
 use lepic_primitives::params::Network;
@@ -37,7 +36,7 @@ use crate::cancel::pool_holds;
 use crate::codecs;
 use crate::error::WalletError;
 use crate::event::{BouncedInvoice, Event, ExpiredInvoice};
-use crate::inbox::{Hold, InboxError, relay_network};
+use crate::inbox::{Hold, InboxError};
 use crate::invoice::{InvoiceError, PaidInvoice, PayRequest, payer_release_height};
 use crate::peer_compat::PeerKind;
 use crate::ports::{SecretVault, StoreOpener};
@@ -101,8 +100,8 @@ impl Default for InvoiceExpiry {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IncomingInvoice {
     pub slate_id: SlateId,
-    /// The address of the sender, where the payment goes.
-    pub sender: EpicboxAddress,
+    /// The address of the sender, as stored, where the payment goes.
+    pub sender: String,
     pub amount: Amount,
     /// The issuer's message, when its signature verifies, made safe to display by
     /// [`display_message`].
@@ -157,31 +156,32 @@ fn slate_id(uuid: Uuid) -> SlateId {
     SlateId::from_bytes(uuid.into_bytes())
 }
 
-/// The key of `address`, as the store keys peers.
-fn peer_key(address: &EpicboxAddress) -> String {
-    address.key_text()
-}
+/// The name an Epicbox payment stores as its transport: the id of the Epicbox method.
+const EPICBOX: &str = "epicbox";
 
-/// The issued invoice and the address it went to, when `slate` is an I1 this wallet issued and
-/// still holds, sent back unchanged from that address.
+/// The issued invoice, when `slate` is an I1 this wallet issued and still holds, sent back
+/// unchanged from `from`, an address with the key under `method` of the one it went to.
 fn returned_invoice(
     repos: &dyn Repositories,
     codecs: &CodecRegistry,
+    method: &dyn Method,
+    network: Network,
     slate: &Slate,
-    from: &PublicKey,
-    network: RelayNetwork,
+    from: &Destination,
+    from_key: &str,
 ) -> Result<Option<BouncedInvoice>, StoreError> {
     let slate_uuid = uuid(slate.id());
     let Some(issued) = repos.transaction_by_slate(slate_uuid, TxDirection::Incoming)? else {
         return Ok(None);
     };
-    let Some(went_to) = repos
-        .counterparty(issued.id)?
-        .and_then(|address| EpicboxAddress::parse(&address, network).ok())
-        .filter(|address| address.public_key() == from)
-    else {
+    let went_to_sender = repos.counterparty(issued.id)?.is_some_and(|address| {
+        method
+            .peer_key(network, &address)
+            .is_ok_and(|key| key == from_key)
+    });
+    if !went_to_sender {
         return Ok(None);
-    };
+    }
     let Some(stored) = repos.slate(slate_uuid, SlateStage::Invoice1)? else {
         return Ok(None);
     };
@@ -191,7 +191,7 @@ fn returned_invoice(
     Ok(unchanged.then(|| BouncedInvoice {
         tx_id: issued.id,
         slate_id: slate.id(),
-        peer: went_to,
+        peer: from.as_str().to_owned(),
     }))
 }
 
@@ -201,18 +201,21 @@ where
     S: StoreOpener + 'static,
     V: SecretVault + 'static,
 {
-    /// What this wallet learned about the peer at `address` from its own messages: whether it
-    /// runs LEPIC or another wallet, as [`Wallet::peer_compat`] derives it. Matched on the key
-    /// only. Reads only the store.
+    /// What this wallet learned about the peer at `address` of `method` from its own messages:
+    /// whether it runs LEPIC or another wallet, as [`Wallet::peer_compat`] derives it. Matched
+    /// on the key under `method` only. Reads only the store.
     ///
-    /// Fails with [`InboxError::Address`] for an address that does not parse or is on the other
-    /// network, and with [`WalletError::Locked`].
+    /// Fails with [`InboxError::Address`] for an address `method` names no key with on the
+    /// wallet's network, and with [`WalletError::Locked`].
     #[instrument(skip_all, fields(wallet = %self.config().name))]
-    pub fn peer_capability(&self, address: &str) -> Result<PeerInvoiceSupport, InboxError> {
-        let network = relay_network(self.config().network);
-        let key = EpicboxAddress::parse_key(address, network)
-            .map(|key| EpicboxAddress::key_text_of(&key, network))
-            .map_err(InboxError::Address)?;
+    pub fn peer_capability(
+        &self,
+        method: &Arc<dyn Method>,
+        address: &str,
+    ) -> Result<PeerInvoiceSupport, InboxError> {
+        let key = method
+            .peer_key(self.config().network, address)
+            .map_err(|error| InboxError::Address(Box::new(error)))?;
         let now = self.ports().clock.now();
         let session = self.session()?;
         let facts = session
@@ -250,10 +253,9 @@ where
             .into_iter()
             .filter(|invoice| invoice.status == PendingInvoiceStatus::Parked)
             .filter_map(|invoice| {
-                let sender =
-                    EpicboxAddress::parse(&invoice.sender_address, relay_network(network)).ok()?;
+                let sender = invoice.sender_address;
                 let wire = WireSlate::binary(MediaType::JSON, invoice.bytes);
-                let Ok(slate) = epicbox_decode(&codecs, &wire) else {
+                let Ok(slate) = codecs.decode(&wire) else {
                     warn!(slate_id = %invoice.slate_id, "parked invoice unreadable");
                     return None;
                 };
@@ -273,8 +275,7 @@ where
     }
 
     /// Pays the parked invoice `slate_id`, as [`Wallet::pay_invoice`] pays an I1, and delivers
-    /// the I2 over Epicbox to the sender's stored address, and to the address the invoice came
-    /// from when it names that key under another relay; either delivery is enough. The payment
+    /// the I2 over `method` to the sender's stored address. The payment
     /// carries [`DEFAULT_PAYMENT_TTL_BLOCKS`] when `request.ttl_blocks` is `None`. The invoice
     /// is marked paid in the same store transaction that stores the payment.
     ///
@@ -319,7 +320,7 @@ where
         }
         let codecs = stored_codecs(network);
         let wire = WireSlate::binary(MediaType::JSON, parked.bytes);
-        let i1 = epicbox_decode(&codecs, &wire).map_err(InvoiceError::Decode)?;
+        let i1 = codecs.decode(&wire).map_err(InvoiceError::Decode)?;
         let from = method.sender_facts(&wire);
         let to = Destination::new(parked.sender_address);
         request.ttl_blocks = request.ttl_blocks.or(Some(DEFAULT_PAYMENT_TTL_BLOCKS));
@@ -342,16 +343,21 @@ where
     }
 
     /// Declines the parked invoice `slate_id`: it is kept as declined and never paid. When its
-    /// sender proved that it runs LEPIC, it is sent a `declined` notice from the payments
-    /// address; the notice is advisory, so a failure to send it is logged and not returned.
+    /// sender proved that it runs LEPIC, it is sent a `declined` notice over `method` from the
+    /// payments address; the notice is advisory, so a failure to send it is logged and not
+    /// returned.
     /// Fails with [`InvoiceError::NotParked`] when no invoice with the slate id waits to be
     /// paid, or when it came from a paired contact: decline those with
     /// `contact_decline_invoice`.
     #[instrument(skip_all, fields(wallet = %self.config().name, slate_id = %slate_id))]
-    pub async fn decline_invoice(&self, slate_id: SlateId) -> Result<(), InvoiceError> {
+    pub async fn decline_invoice(
+        &self,
+        method: &Arc<dyn Method>,
+        slate_id: SlateId,
+    ) -> Result<(), InvoiceError> {
         self.decline_parked(slate_id)?;
         info!("invoice declined");
-        self.notify_declined(slate_id).await;
+        self.notify_declined(method, slate_id).await;
         Ok(())
     }
 
@@ -444,53 +450,57 @@ where
         Ok(sweep)
     }
 
-    /// The issued invoice, when an I1 that arrived from `reply_to` is one this wallet issued to
-    /// that address, sent back unchanged: what a stock `epic-wallet` listener does with an
-    /// invoice.
+    /// The issued invoice, when an I1 that arrived over `method` from `reply_to` is one this
+    /// wallet issued to the key of that address, sent back unchanged: what a stock
+    /// `epic-wallet` listener does with an invoice.
     pub(crate) async fn bounced_invoice(
         &self,
+        method: &Arc<dyn Method>,
         slate: &Slate,
         reply_to: &Destination,
     ) -> Result<Option<BouncedInvoice>, Hold> {
-        let network = relay_network(self.config().network);
-        let Ok(from) = EpicboxAddress::parse(reply_to.as_str(), network) else {
+        let network = self.config().network;
+        let Ok(from_key) = method.peer_key(network, reply_to.as_str()) else {
             return Ok(None);
         };
-        let codecs = stored_codecs(self.config().network);
+        let codecs = stored_codecs(network);
         let session = self.session()?;
         let slate = slate.clone();
+        let method = Arc::clone(method);
+        let from = reply_to.clone();
         Ok(self
             .blocking(move |_, _| {
                 Ok(session.store.read(|repos| {
-                    returned_invoice(repos, &codecs, &slate, from.public_key(), network)
+                    returned_invoice(repos, &codecs, &*method, network, &slate, &from, &from_key)
                 })?)
             })
             .await?)
     }
 
-    /// Records the bounced invoice as an unmarked answer from its peer, so nothing but slates
-    /// goes to it until a marked message comes, and tells the host which invoice came back.
-    pub(crate) async fn record_bounce(&self, bounced: BouncedInvoice) -> Result<(), Hold> {
-        let key = peer_key(&bounced.peer);
-        self.inbox_write(move |repos, now| crate::peer_compat::record_unmarked(repos, &key, now))
+    /// Records the bounced invoice as an unmarked answer from its peer's key under `method`, so
+    /// nothing but slates goes to it until a marked message comes, and tells the host which
+    /// invoice came back.
+    pub(crate) async fn record_bounce(
+        &self,
+        method: &Arc<dyn Method>,
+        bounced: BouncedInvoice,
+    ) -> Result<(), Hold> {
+        if let Ok(key) = method.peer_key(self.config().network, &bounced.peer) {
+            self.inbox_write(move |repos, now| {
+                crate::peer_compat::record_unmarked(repos, &key, now)
+            })
             .await?;
+        }
         info!(tx_id = %bounced.tx_id, slate_id = %bounced.slate_id, "invoice returned unpaid");
         self.emit(Event::InvoiceBounced(bounced));
         Ok(())
     }
 }
 
-/// The legacy codecs at the network's base fee, which read every slate this wallet stores.
+/// The legacy codecs at the network's base fee, which read every slate this wallet stores. They
+/// detect the V3 shape before the V2 shape, as the Epicbox policy does.
 pub(crate) fn stored_codecs(network: Network) -> CodecRegistry {
     codecs::legacy(network.params().default_base_fee())
-}
-
-fn epicbox_decode(
-    codecs: &CodecRegistry,
-    wire: &WireSlate,
-) -> Result<Slate, lepic_slate::error::DecodeError> {
-    use lepic_transport::policy::FormatPolicy;
-    lepic_epicbox::transport::EpicboxPolicy.decode(codecs, wire)
 }
 
 /// The issuer's message of an I1, when its signature verifies, for display.
@@ -533,7 +543,7 @@ fn issued_unpaid_before(
                 continue;
             };
             let issued_here = matches!(entry.transport.as_deref(), Some(transport)
-                if transport == TRANSPORT_ID.as_str() || transport == FILE.as_str());
+                if transport == EPICBOX || transport == FILE.as_str());
             if (!issued_here && crate::contact_link::slate_contact(repos, slate_uuid)?.is_none())
                 || entry.created_at > cutoff
                 || repos.slate(slate_uuid, SlateStage::Invoice1)?.is_none()
@@ -587,7 +597,7 @@ pub(crate) fn epicbox_invoice_payment(
     else {
         return Ok(None);
     };
-    if (entry.transport.as_deref() != Some(TRANSPORT_ID.as_str())
+    if (entry.transport.as_deref() != Some(EPICBOX)
         && crate::contact_link::slate_contact(repos, slate_uuid)?.is_none())
         || repos.slate(slate_uuid, SlateStage::Invoice2)?.is_none()
     {
@@ -602,6 +612,11 @@ mod tests {
     #![allow(clippy::unwrap_used)]
 
     use super::*;
+
+    #[test]
+    fn the_stored_epicbox_name_is_the_id_of_the_epicbox_method() {
+        assert_eq!(EPICBOX, lepic_methods::epicbox::TRANSPORT_ID.as_str());
+    }
 
     #[test]
     fn display_removes_control_and_bidirectional_characters() {

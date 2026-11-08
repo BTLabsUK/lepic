@@ -12,14 +12,15 @@ use std::time::Duration;
 use crate::send_support::{ACCOUNT, Sender, context_key};
 use crate::support::{
     Harness, TestStore, TestStores, TestVault, TestWallet, complete_restore_scan, password,
+    registry,
 };
 use lepic_crypto::{PublicKey, SecretKey};
 use lepic_epicbox::mock_relay::MockRelay;
-use lepic_epicbox::transport::EpicboxTransport;
 use lepic_epicbox::{
     Backoff, ClientSettings, Domain, EpicboxAddress, Network as RelayNetwork, Nonce, RelayEndpoint,
     Salt, Security, SignedMessage, TRANSPORT_ID,
 };
+use lepic_methods::epicbox::Epicbox;
 use lepic_primitives::amount::Amount;
 use lepic_primitives::params::Network;
 use lepic_store::{AccountIndex, InboxEntry, StoreError, TxState, WalletStore};
@@ -135,7 +136,7 @@ impl Receiver {
         &self,
         relay: &MockRelay,
         runtime: tokio::runtime::Handle,
-    ) -> (TestWallet, EpicboxTransport) {
+    ) -> (TestWallet, Epicbox) {
         self.wallet_with(relay, runtime, settings())
     }
 
@@ -145,12 +146,12 @@ impl Receiver {
         relay: &MockRelay,
         runtime: tokio::runtime::Handle,
         settings: ClientSettings,
-    ) -> (TestWallet, EpicboxTransport) {
-        let epicbox = EpicboxTransport::new(settings, RelayNetwork::Floonet, relay.connector());
+    ) -> (TestWallet, Epicbox) {
+        let epicbox = Epicbox::new(settings, RelayNetwork::Floonet, relay.connector());
         let config = self.harness.config(Network::Floonet);
         let ports: Ports<_, TestStores, TestVault> = Ports {
             runtime,
-            notices: Some(Arc::new(epicbox.clone())),
+            methods: Some(registry([Arc::new(epicbox.clone()) as Arc<dyn Method>])),
             ..self.harness.ports(self.vault.clone())
         };
         (Wallet::new(config, ports).unwrap(), epicbox)
@@ -174,13 +175,13 @@ pub struct World {
     pub runtime: tokio::runtime::Runtime,
     pub relay: MockRelay,
     pub sender: Sender,
-    pub sender_epicbox: EpicboxTransport,
+    pub sender_epicbox: Epicbox,
     /// `sender_epicbox` as the engine's method.
     pub sender_method: Arc<dyn Method>,
     pub sender_address: EpicboxAddress,
     pub receiver: Receiver,
     pub receiver_wallet: TestWallet,
-    pub receiver_epicbox: EpicboxTransport,
+    pub receiver_epicbox: Epicbox,
     /// `receiver_epicbox` as the engine's method.
     pub receiver_method: Arc<dyn Method>,
     pub receiver_address: EpicboxAddress,
@@ -198,10 +199,9 @@ impl World {
             .build()
             .unwrap();
         let relay = MockRelay::new(RelayNetwork::Floonet);
-        let sender_epicbox =
-            EpicboxTransport::new(settings(), RelayNetwork::Floonet, relay.connector());
+        let sender_epicbox = Epicbox::new(settings(), RelayNetwork::Floonet, relay.connector());
         let sender = Sender::with_notices(Arc::new(sender_epicbox.clone()));
-        let sender_address = sender.wallet.epicbox_attach(&sender_epicbox).unwrap();
+        let sender_address = sender_epicbox.attach_wallet(&sender.wallet).unwrap();
         let receiver = Receiver::new();
         let (receiver_wallet, receiver_epicbox) =
             receiver.wallet_with(&relay, runtime.handle().clone(), receiver_settings);
@@ -209,7 +209,7 @@ impl World {
             .block_on(receiver_wallet.restore(password(RECEIVER_PASSWORD), RECEIVER_MNEMONIC))
             .unwrap();
         complete_restore_scan(&runtime, &receiver_wallet);
-        let receiver_address = receiver_wallet.epicbox_attach(&receiver_epicbox).unwrap();
+        let receiver_address = receiver_epicbox.attach_wallet(&receiver_wallet).unwrap();
         Self {
             runtime,
             relay,
@@ -254,7 +254,7 @@ impl World {
     }
 
     /// The receiver after an app restart: a new handle on the same database and secrets.
-    pub fn restart_receiver(&self) -> (TestWallet, EpicboxTransport) {
+    pub fn restart_receiver(&self) -> (TestWallet, Epicbox) {
         let (wallet, epicbox) = self
             .receiver
             .wallet(&self.relay, self.runtime.handle().clone());

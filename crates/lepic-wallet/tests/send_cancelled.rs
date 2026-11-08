@@ -23,13 +23,13 @@ mod world;
 
 use std::time::Duration;
 
-use lepic_epicbox::marker::v3::carries_lepic_marker;
 use lepic_epicbox::{EpicboxAddress, EpicboxClient};
 use lepic_node::mock::MockFailure;
 use lepic_primitives::amount::Amount;
 use lepic_slate::codec::{MediaType, WireSlate};
 use lepic_slate::model::SlateId;
 use lepic_store::{PeerCompat, SlateStage, TxDirection, TxId, TxState, WalletStore};
+use lepic_transport::marker::v3::carries_lepic_marker;
 use lepic_transport::transport::{Destination, Inbound};
 use lepic_wallet::event::CancelledPayment;
 use lepic_wallet::inbox::InboxSummary;
@@ -52,7 +52,7 @@ const STRANGER: u8 = 9;
 fn marker() -> String {
     format!(
         ",\"lepic\":{{\"version\":1,\"f\":{}}}",
-        lepic_epicbox::marker::features::LEPIC_FEATURES
+        lepic_transport::marker::features::LEPIC_FEATURES
     )
 }
 
@@ -71,7 +71,7 @@ fn cancelled_text(slate_id: SlateId) -> String {
         slate_id,
         kind: NoticeKind::Cancelled,
     }
-    .encode();
+    .encode_to(&lepic_methods::epicbox::NOTICE_LENGTHS, 0);
     wire.as_text().unwrap().to_owned()
 }
 
@@ -110,8 +110,7 @@ impl World {
     }
 
     fn drain(&self, party: &Party) -> InboxSummary {
-        self.block_on(party.wallet.epicbox_drain(&party.epicbox))
-            .unwrap()
+        self.block_on(party.epicbox.drain(&party.wallet)).unwrap()
     }
 
     fn send_to(&self, to: &EpicboxAddress) -> SentSlate {
@@ -725,12 +724,11 @@ fn a_passed_on_cancelled_for_a_slate_not_here_yet_is_kept() {
     };
     let sender = World::address_of(PEER).to_string();
     let accepted = world
-        .block_on(
-            world
-                .receiver()
-                .wallet
-                .notice_apply_forwarded(&sender, notice),
-        )
+        .block_on(world.receiver().wallet.notice_apply_forwarded(
+            &world.receiver().method,
+            &sender,
+            notice,
+        ))
         .unwrap();
     assert!(!accepted);
     assert_eq!(early_rows(&world), 1);

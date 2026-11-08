@@ -10,18 +10,42 @@ publish.workspace = true
 [features]
 default = ["file"]
 file = []
-epicbox = ["dep:lepic-epicbox"]
+epicbox = [
+    "dep:jiff",
+    "dep:lepic-crypto",
+    "dep:lepic-epicbox",
+    "dep:lepic-node",
+    "dep:lepic-primitives",
+    "dep:lepic-slate",
+    "dep:lepic-wallet",
+    "dep:tokio",
+    "dep:tracing",
+]
 http = ["dep:lepic-foreign"]
 tor = ["http", "dep:lepic-tor"]
 loopback = ["lepic-transport/loopback"]
 mock-relay = ["epicbox", "lepic-epicbox/mock-relay"]
 
 [dependencies]
+jiff = { workspace = true, optional = true }
+lepic-crypto = { workspace = true, optional = true }
 lepic-epicbox = { workspace = true, optional = true }
 lepic-foreign = { workspace = true, optional = true }
+lepic-node = { workspace = true, optional = true }
+lepic-primitives = { workspace = true, optional = true }
+lepic-slate = { workspace = true, optional = true }
 lepic-tor = { workspace = true, optional = true }
 lepic-transport.workspace = true
+lepic-wallet = { workspace = true, optional = true, default-features = false }
 thiserror.workspace = true
+tokio = { workspace = true, optional = true, features = ["macros", "time"] }
+tracing = { workspace = true, optional = true, features = ["std", "attributes"] }
+
+[dev-dependencies]
+lepic-crypto.workspace = true
+lepic-epicbox = { workspace = true, features = ["mock-relay"] }
+serde_json = { workspace = true, features = ["std"] }
+tokio = { workspace = true, features = ["macros", "rt"] }
 
 [lints]
 workspace = true

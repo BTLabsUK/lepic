@@ -29,9 +29,9 @@ use super::keys::{CardDetails, contact_keys, contact_network, enc_secret, our_ca
 use super::pairing::{peer_card, same_keys};
 use super::{ContactError, ContactRelays, LockedRng, new_id, pairing_id_of};
 use crate::ContactBook;
+use lepic_methods::epicbox::relay_network;
 use lepic_wallet::account::parent_key_id;
 use lepic_wallet::event::{ContactEvent, Event};
-use lepic_wallet::inbox::relay_network;
 use lepic_wallet::ports::{SecretVault, StoreOpener};
 
 /// A check is started and answered only within this long of the new pairing, and an open check

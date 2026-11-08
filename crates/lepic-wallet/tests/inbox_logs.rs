@@ -23,7 +23,7 @@ fn a_drain_never_logs_keys_or_slates() {
 
     let (summary, captured) = capture(|| {
         world
-            .block_on(world.receiver_wallet.epicbox_drain(&world.receiver_epicbox))
+            .block_on(world.receiver_epicbox.drain(&world.receiver_wallet))
             .unwrap()
     });
     assert_eq!(summary.received, 1);
@@ -58,6 +58,6 @@ fn a_drain_never_logs_keys_or_slates() {
         .iter()
         .find(|record| record.message == "slate received" && record.spans.contains(&"receive"))
         .unwrap_or_else(|| panic!("no \"slate received\": {:?}", captured.records));
-    assert!(record.spans.contains(&"epicbox_drain"), "{record}");
+    assert!(record.spans.contains(&"drain"), "{record}");
     assert_eq!(record.field("transport"), Some("epicbox"), "{record}");
 }

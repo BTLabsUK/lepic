@@ -9,7 +9,6 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use jiff::Timestamp;
-use lepic_epicbox::transport::EpicboxTransport;
 use lepic_epicbox::{ClientSettings, EpicboxAddress, Network as RelayNetwork, TRANSPORT_ID};
 use lepic_foreign::{
     BlockFees, CoinbaseAccess, CoinbaseAnswer, Exposure, ForeignClient, ForeignUrl, ListenSettings,
@@ -17,6 +16,7 @@ use lepic_foreign::{
 };
 use lepic_keychain::Identifier;
 use lepic_keychain::vault::MAX_WALLET_SEED_FILE_LEN;
+use lepic_methods::epicbox::Epicbox;
 use lepic_methods::registry::Methods;
 use lepic_node::{NodeApi, NodeClient, Propagation, RpcTransport};
 use lepic_primitives::amount::{Fee, Height};
@@ -40,7 +40,7 @@ use lepic_wallet::finalize::{FinalizeError, Posted};
 use lepic_wallet::inbox::{InboxSummary, ListenHandle};
 use lepic_wallet::invoice::{InvoiceError, InvoiceRequest, PayRequest};
 use lepic_wallet::legacy_history::{ImportWorkDir, LegacyImportStatus, TxOrigin};
-use lepic_wallet::method::Method;
+use lepic_wallet::method::{Method, MethodLookup};
 use lepic_wallet::refresh::{BalanceCategory, OutputDetails, RefreshError, RefreshOutcome};
 use lepic_wallet::scan::{ScanCancel, ScanOptions, ScanStart, ScanSummary};
 use lepic_wallet::selection::SelectionStrategy;
@@ -109,9 +109,9 @@ impl Clock for SystemClock {
 struct Opened<N: NodeApi + 'static> {
     wallet: CliWallet<N>,
     /// Every method below, looked up by id.
-    methods: Methods,
+    methods: Arc<Methods>,
     file: Arc<dyn Method>,
-    epicbox: Arc<EpicboxTransport>,
+    epicbox: Arc<Epicbox>,
     /// Holds the answers of HTTP sends until they are finalized.
     http: Arc<lepic_foreign::HttpTransport>,
     /// Holds the answers of Tor sends until they are finalized.
@@ -137,6 +137,11 @@ impl<N: NodeApi + 'static> Opened<N> {
             .stores
             .opened()
             .ok_or(CliError::Wallet(WalletError::Locked))
+    }
+
+    /// The Epicbox method, as the engine's calls that name a method take it.
+    fn epicbox_method(&self) -> Arc<dyn Method> {
+        Arc::clone(&self.epicbox) as Arc<dyn Method>
     }
 
     /// The method a send or resend over `transport` goes through.
@@ -324,7 +329,7 @@ impl<H: Host> Run<'_, H> {
             WalletCommand::Password => self.change_password().await,
             WalletCommand::Address => {
                 let opened = self.open().await?;
-                let address = opened.wallet.epicbox_attach(&opened.epicbox)?;
+                let address = opened.epicbox.attach_wallet(&opened.wallet)?;
                 Ok(Report::Address(AddressReport {
                     address: address.to_string(),
                 }))
@@ -347,7 +352,7 @@ impl<H: Host> Run<'_, H> {
             TxCommand::Cancel(args) => {
                 let opened = self.open().await?;
                 // Cancelling an invoice issued over Epicbox tells its payer it is withdrawn.
-                opened.wallet.epicbox_attach(&opened.epicbox)?;
+                opened.epicbox.attach_wallet(&opened.wallet)?;
                 let tx_id = TxId(args.tx_id);
                 opened.wallet.cancel(tx_id).await?;
                 Ok(Report::Cancel(TxStateReport {
@@ -403,24 +408,21 @@ impl<H: Host> Run<'_, H> {
                 generation,
             }) => {
                 let listing = listing_of(&service_key, generation)?;
-                let summary = opened
-                    .wallet
-                    .drain_epicbox_at(&listing, &opened.epicbox)
-                    .await?;
+                let summary = opened.epicbox.drain_at(&opened.wallet, &listing).await?;
                 (summary, None)
             }
             EpicboxCommand::Drain(ListingArgs { listing: None, .. }) => {
                 let events = opened.wallet.subscribe();
                 // A sweep that cancels an invoice sends its `withdrawn` notice from the
                 // payments address.
-                opened.wallet.epicbox_attach(&opened.epicbox)?;
+                opened.epicbox.attach_wallet(&opened.wallet)?;
                 let expired = sweep(&opened.wallet, expiry).await;
-                let summary = opened.wallet.epicbox_drain(&opened.epicbox).await?;
+                let summary = opened.epicbox.drain(&opened.wallet).await?;
                 self.show_invoice_events(events);
                 (summary, expired)
             }
             EpicboxCommand::Listen => {
-                opened.wallet.epicbox_attach(&opened.epicbox)?;
+                opened.epicbox.attach_wallet(&opened.wallet)?;
                 let handle = ListenHandle::new();
                 let swept = std::sync::Mutex::new(Some(InvoiceSweep::default()));
                 let summary = self
@@ -440,9 +442,7 @@ impl<H: Host> Run<'_, H> {
                 generation,
             }) => {
                 let listing = listing_of(&service_key, generation)?;
-                let address = opened
-                    .wallet
-                    .epicbox_address_at(&listing, &opened.epicbox)?;
+                let address = opened.epicbox.address_at(&opened.wallet, &listing)?;
                 return Ok(Report::EpicboxStatus(EpicboxStatusReport {
                     relay: self.settings.relay.url(),
                     address: address.to_string(),
@@ -450,7 +450,7 @@ impl<H: Host> Run<'_, H> {
                 }));
             }
             EpicboxCommand::Status(ListingArgs { listing: None, .. }) => {
-                let address = opened.wallet.epicbox_attach(&opened.epicbox)?;
+                let address = opened.epicbox.attach_wallet(&opened.wallet)?;
                 let pending = opened
                     .store()?
                     .read(|repos| repos.outbox(OutboxStatus::Pending))?
@@ -462,12 +462,17 @@ impl<H: Host> Run<'_, H> {
                 }));
             }
             EpicboxCommand::Peer(args) => {
-                let capability = match opened.wallet.peer_capability(&args.address)? {
+                let capability = match opened
+                    .wallet
+                    .peer_capability(&opened.epicbox_method(), &args.address)?
+                {
                     PeerInvoiceSupport::Unknown => "unknown",
                     PeerInvoiceSupport::Lepic => "lepic",
                     PeerInvoiceSupport::NoInvoices => "no_invoices",
                 };
-                let facts = opened.wallet.peer_compat(&args.address)?;
+                let facts = opened
+                    .wallet
+                    .peer_compat(&opened.epicbox_method(), &args.address)?;
                 let stored = facts.stored.unwrap_or_default();
                 return Ok(Report::Peer(PeerReport {
                     address: args.address,
@@ -747,7 +752,7 @@ impl<H: Host> Run<'_, H> {
         }
         let transport = payee.transport();
         if transport == TRANSPORT_ID {
-            opened.wallet.epicbox_attach(&opened.epicbox)?;
+            opened.epicbox.attach_wallet(&opened.wallet)?;
         }
         let request = SendRequest {
             minimum_confirmations: spend.minimum_confirmations,
@@ -827,7 +832,7 @@ impl<H: Host> Run<'_, H> {
             self.delivery(args.destination, args.plain_http.allow_plain_http)?;
         let opened = self.open().await?;
         if transport == TRANSPORT_ID {
-            opened.wallet.epicbox_attach(&opened.epicbox)?;
+            opened.epicbox.attach_wallet(&opened.wallet)?;
         }
         let tx_id = TxId(args.tx.tx_id);
         let tor = self.tor_for(transport, &args.tor, &opened).await?;
@@ -1206,8 +1211,11 @@ impl<H: Host> Run<'_, H> {
                 let slate_id = SlateId::parse(&args.slate_id).map_err(|_| CliError::SlateId)?;
                 let opened = self.open().await?;
                 // The declined notice goes out from the payments address.
-                opened.wallet.epicbox_attach(&opened.epicbox)?;
-                opened.wallet.decline_invoice(slate_id).await?;
+                opened.epicbox.attach_wallet(&opened.wallet)?;
+                opened
+                    .wallet
+                    .decline_invoice(&opened.epicbox_method(), slate_id)
+                    .await?;
                 Ok(Report::InvoiceDecline(InvoiceDeclineReport {
                     slate_id: slate_id.to_string(),
                     state: "declined".to_owned(),
@@ -1231,7 +1239,7 @@ impl<H: Host> Run<'_, H> {
         let opened = self.open().await?;
         let account = opened.wallet.account(&args.account.account)?;
         if transport == TRANSPORT_ID {
-            opened.wallet.epicbox_attach(&opened.epicbox)?;
+            opened.epicbox.attach_wallet(&opened.wallet)?;
         }
         let method = opened
             .methods
@@ -1281,7 +1289,7 @@ impl<H: Host> Run<'_, H> {
             .find(|invoice| invoice.slate_id == slate_id)
             .map(|invoice| invoice.sender.to_string())
             .ok_or(InvoiceError::NotParked { slate_id })?;
-        opened.wallet.epicbox_attach(&opened.epicbox)?;
+        opened.epicbox.attach_wallet(&opened.wallet)?;
         let request = spend.pay_request(account.index, amount, args.message.message);
         let epicbox: Arc<dyn Method> = opened.epicbox.clone();
         let paid = opened
@@ -1422,7 +1430,7 @@ impl<H: Host> Run<'_, H> {
             tls,
         )));
         let relay = ClientSettings::new(self.settings.relay.clone(), self.settings.tuning.relay);
-        let epicbox = Arc::new(EpicboxTransport::new(
+        let epicbox = Arc::new(Epicbox::new(
             relay,
             relay_network(self.settings.network),
             self.host.relay_connector(self.settings)?,
@@ -1440,6 +1448,7 @@ impl<H: Host> Run<'_, H> {
         ] {
             methods.register(method)?;
         }
+        let methods = Arc::new(methods);
         let rng = StdRng::try_from_rng(&mut SysRng).map_err(|error| CliError::Io {
             what: "seed the random number generator",
             source: std::io::Error::other(error),
@@ -1451,7 +1460,7 @@ impl<H: Host> Run<'_, H> {
             clock: Arc::new(SystemClock),
             rng: SharedRng::new(rng),
             runtime: tokio::runtime::Handle::current(),
-            notices: Some(Arc::clone(&epicbox) as Arc<dyn Method>),
+            methods: Some(Arc::clone(&methods) as Arc<dyn MethodLookup>),
         };
         let config = WalletConfig {
             name: WalletName::new(WALLET_NAME).map_err(WalletError::from)?,
@@ -2278,7 +2287,7 @@ async fn listen_and_sweep<N: NodeApi + 'static>(
     expiry: InvoiceExpiry,
     swept: &std::sync::Mutex<Option<InvoiceSweep>>,
 ) -> Result<InboxSummary, lepic_wallet::inbox::InboxError> {
-    let listen = opened.wallet.epicbox_listen(&opened.epicbox, handle);
+    let listen = opened.epicbox.listen(&opened.wallet, handle);
     tokio::pin!(listen);
     let mut ticks = tokio::time::interval(SWEEP_INTERVAL);
     ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
@@ -2315,7 +2324,7 @@ fn parked_slate_id(text: &str) -> Option<SlateId> {
 fn parked_invoice_report(invoice: IncomingInvoice) -> ParkedInvoiceReport {
     ParkedInvoiceReport {
         slate_id: invoice.slate_id.to_string(),
-        sender: invoice.sender.to_string(),
+        sender: invoice.sender,
         amount: format_amount(invoice.amount),
         message: invoice.message,
         received_at: invoice.received_at.to_string(),
@@ -2587,7 +2596,7 @@ mod tests {
         let bounced = Event::InvoiceBounced(lepic_wallet::event::BouncedInvoice {
             tx_id: TxId(5),
             slate_id: lepic_wallet::event::SlateId::from_bytes([7; 16]),
-            peer,
+            peer: peer.to_string(),
         });
         assert_eq!(
             receipt_line(&bounced).as_deref(),

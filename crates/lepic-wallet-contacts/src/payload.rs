@@ -11,9 +11,9 @@ use crate::hex;
 use jiff::Timestamp;
 use lepic_contact::{Content, MessageType, Reference};
 use lepic_epicbox::Handled;
-use lepic_epicbox::marker::features::APP_PAYLOADS;
 use lepic_node::NodeApi;
 use lepic_store::{ContactId, ContactRecord, Repositories, SlateStage, StoreError, WalletStore};
+use lepic_transport::marker::features::APP_PAYLOADS;
 use serde::{Deserialize, Serialize};
 use tracing::{debug, info, instrument, warn};
 use uuid::Uuid;
@@ -887,7 +887,7 @@ mod tests {
 
     #[test]
     fn only_a_peer_whose_features_are_known_can_lack_app_payloads() {
-        use lepic_epicbox::marker::features::{LEPIC_FEATURES, MARKER, STATUS_NOTICES};
+        use lepic_transport::marker::features::{LEPIC_FEATURES, MARKER, STATUS_NOTICES};
         assert!(!lacks_app_payloads(0));
         assert!(!lacks_app_payloads(LEPIC_FEATURES));
         assert!(lacks_app_payloads(MARKER | STATUS_NOTICES));

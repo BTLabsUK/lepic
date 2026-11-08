@@ -18,7 +18,7 @@ use futures_util::future::BoxFuture;
 use jiff::Timestamp;
 use lepic_contact::{ContactKind, Invite, PairingClass};
 use lepic_epicbox::EpicboxAddress;
-use lepic_epicbox::marker::features::PAIR_REQUESTS;
+use lepic_methods::epicbox::{NOTICE_LENGTHS, relay_network};
 use lepic_node::NodeApi;
 use lepic_primitives::error_chain::ErrorChain;
 use lepic_slate::codec::{MediaType, WireSlate};
@@ -26,11 +26,12 @@ use lepic_store::{
     ContactId, ContactRecord, INVITE_ID_LEN, PAYMENTS_KEY_LEN, PairRequest, PairingRole,
     Repositories, StoreError, WalletStore,
 };
+use lepic_transport::marker::features::PAIR_REQUESTS;
+use lepic_transport::method::Method;
 use lepic_transport::transport::{Destination, Transport as _};
 use lepic_wallet::Wallet;
 use lepic_wallet::event::{Event, PairRequestNews};
 use lepic_wallet::extension::PairRequests;
-use lepic_wallet::inbox::relay_network;
 use lepic_wallet::notice::{notice_length, pair_request_to};
 use lepic_wallet::ports::{SecretVault, StoreOpener};
 use tracing::{debug, info, instrument, warn};
@@ -349,9 +350,10 @@ where
         super::relay::check_online(relays)?;
         let network = self.wallet.config().network;
         let key = address_key(to_address, network)?;
+        let method: Arc<dyn Method> = Arc::new(relays.epicbox.clone());
         let facts = self
             .wallet
-            .peer_compat(to_address)
+            .peer_compat(&method, to_address)
             .map_err(|_| ContactError::RelayAddress)?;
         let claims = facts
             .stored
@@ -382,8 +384,11 @@ where
                 },
             )
             .await?;
-        let length = notice_length(&mut LockedRng(&mut **self.wallet.ports().rng.lock()));
-        let text = pair_request_to(&offer.link, length);
+        let length = notice_length(
+            &NOTICE_LENGTHS,
+            &mut LockedRng(&mut **self.wallet.ports().rng.lock()),
+        );
+        let text = pair_request_to(&offer.link, &NOTICE_LENGTHS, length);
         let posted = match relays.epicbox.outbound() {
             Some(outbound) => outbound
                 .deliver(

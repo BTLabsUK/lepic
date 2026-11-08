@@ -104,10 +104,10 @@ fn every_vector_has_a_replay() {
 /// listener decodes as the plain S1.
 #[test]
 fn marked_s1_with_features_is_written_as_the_vector() {
-    use lepic_epicbox::marker::v2::MarkedV2JsonCodec;
-    use lepic_epicbox::marker::v3::lepic_marker_features;
     use lepic_slate::codec::legacy::v2_json::V2JsonCodec;
     use lepic_slate::codec::{Codec, EncodeContext, MediaType, WireSlate};
+    use lepic_transport::marker::v2::MarkedV2JsonCodec;
+    use lepic_transport::marker::v3::lepic_marker_features;
     let codec = V2JsonCodec::new(
         lepic_primitives::params::Network::Floonet
             .params()

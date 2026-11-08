@@ -12,7 +12,6 @@ use lepic_contact::{
     Capabilities, ContactCard, Content, EncPublicKey, EncSecretKey, Hint, HintKey, HintRule,
     MessageType, Purpose, SealedEnvelope, armor, dearmor, seal,
 };
-use lepic_epicbox::marker::v3::lepic_marker_reply_key;
 use lepic_node::{NodeApi, Propagation};
 use lepic_slate::codec::{MediaType, WireSlate};
 use lepic_slate::stage::Stage;
@@ -20,6 +19,7 @@ use lepic_store::{
     ContactId, ContactRecord, ContactState, Repositories, SealMode, SlateStage, StoreError,
     TxDirection, TxId, TxState, WalletStore,
 };
+use lepic_transport::marker::v3::lepic_marker_reply_key;
 use lepic_transport::transport::Location;
 use tracing::{info, instrument, warn};
 use uuid::Uuid;

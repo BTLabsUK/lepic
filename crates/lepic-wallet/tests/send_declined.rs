@@ -69,9 +69,7 @@ fn send_to(world: &World, to: &EpicboxAddress) -> SentSlate {
 }
 
 fn drain(world: &World, party: &Party) {
-    world
-        .block_on(party.wallet.epicbox_drain(&party.epicbox))
-        .unwrap();
+    world.block_on(party.epicbox.drain(&party.wallet)).unwrap();
 }
 
 /// Takes the one message waiting for the peer key `byte`.
@@ -207,7 +205,7 @@ fn a_receiver_that_refuses_payments_still_takes_none_from_a_stock_wallet() {
     let unmarked = s1.replace(
         &format!(
             ",\"lepic\":{{\"version\":1,\"f\":{}}}",
-            lepic_epicbox::marker::features::LEPIC_FEATURES
+            lepic_transport::marker::features::LEPIC_FEATURES
         ),
         "",
     );

@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
-//! The Epicbox method as a transport (ADR 0003): its format policy, and the relay client as its
-//! outbound side.
+//! The Epicbox method (ADR 0003): its format policy, and the relay client as its outbound
+//! side.
 //!
-//! The transport exists before the wallet is unlocked, because the transport registry is built
-//! first, while the client needs the wallet's address key. The engine attaches an [`Identity`]
-//! once it has one and detaches it again; clones of a transport share what is attached.
+//! The transport exists before the wallet is unlocked, because the method registry is built
+//! first, while the client needs the wallet's address key. [`Epicbox::attach_wallet`] attaches
+//! the wallet's [`Identity`] once it is unlocked and [`Epicbox::detach`] drops it again; clones
+//! of a transport share what is attached.
 
 use std::sync::{Arc, PoisonError, RwLock};
 
@@ -29,10 +30,16 @@ use lepic_transport::method::{Carries, Encoded, Method, SenderFacts, Sending};
 use lepic_transport::policy::{Encoding, FormatPolicy, encode_with};
 use lepic_transport::transport::{BoxFuture, Destination, Outbound, Transport, TransportId};
 
-use crate::address::{EpicboxAddress, Network};
-use crate::client::{ClientSettings, EpicboxClient, Identity, TRANSPORT_ID};
-use crate::session::Connector;
-use crate::{ClientError, RelayErrorKind};
+use lepic_epicbox::{
+    ClientError, ClientSettings, Connector, EpicboxAddress, EpicboxClient, Identity, Network,
+    RelayErrorKind,
+};
+pub use lepic_epicbox::{RELAY_RETENTION, TRANSPORT_ID};
+
+mod inbox;
+mod listing;
+
+pub use inbox::relay_network;
 
 /// The lengths a notice over Epicbox is padded to, one drawn at random for each: the JSON
 /// length of the first slate of a payment this wallet sends over Epicbox, with one, two and
@@ -42,6 +49,9 @@ pub const NOTICE_LENGTHS: [usize; 3] = [
     S1_ONE_INPUT + S1_INPUT,
     S1_ONE_INPUT + 2 * S1_INPUT,
 ];
+
+// The engine drops a notice longer than this, so the longest padding must fit.
+const _: () = assert!(NOTICE_LENGTHS[2] <= lepic_wallet::notice::MAX_NOTICE_LEN);
 
 /// A V2 first slate with one plain input and one change output, as `epic-wallet` writes it
 /// (the `send_file_plain_input_s1_v2` vector), plus `,"lepic":{"version":1,"f":15}`.
@@ -100,6 +110,7 @@ impl FormatPolicy for EpicboxPolicy {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 #[non_exhaustive]
 pub enum EpicboxTransportError {
+    /// A delivery was asked for before an identity was attached.
     #[error("no epicbox identity is attached")]
     NoIdentity,
 }
@@ -114,11 +125,12 @@ impl From<EpicboxTransportError> for TransportError {
 }
 
 /// The Epicbox method: [`EpicboxPolicy`], and delivery through the client of the attached
-/// identity. Receiving is not an [`lepic_transport::transport::Inbound`] capability here: the
-/// engine starts a listen or drain subscription from [`EpicboxTransport::client`], which also
-/// hands out the messages that could not be opened.
+/// identity. Receiving is not an [`lepic_transport::transport::Inbound`] capability here:
+/// [`Epicbox::drain`] and [`Epicbox::listen`] start a subscription from the attached client,
+/// which also hands out the messages that could not be opened, and hand each message to the
+/// engine.
 #[derive(Clone)]
-pub struct EpicboxTransport {
+pub struct Epicbox {
     inner: Arc<Inner>,
 }
 
@@ -130,7 +142,7 @@ struct Inner {
     client: RwLock<Option<EpicboxClient>>,
 }
 
-impl EpicboxTransport {
+impl Epicbox {
     /// A transport for addresses on `network` that talks to the relay in `settings`, with no
     /// identity attached.
     pub fn new(settings: ClientSettings, network: Network, connector: Arc<dyn Connector>) -> Self {
@@ -145,15 +157,17 @@ impl EpicboxTransport {
         }
     }
 
+    /// The client settings of the relay this transport talks to.
     pub fn settings(&self) -> &ClientSettings {
         &self.inner.settings
     }
 
+    /// The relay network the addresses of this transport are read on.
     pub fn network(&self) -> Network {
         self.inner.network
     }
 
-    /// The connector this transport dials its relay with, so a [`crate::MailboxClient`] for
+    /// The connector this transport dials its relay with, so a [`lepic_epicbox::MailboxClient`] for
     /// another relay takes the same way, through tor when relay traffic goes through it.
     pub fn connector(&self) -> Arc<dyn Connector> {
         Arc::clone(&self.inner.connector)
@@ -199,9 +213,9 @@ impl EpicboxTransport {
     }
 }
 
-impl std::fmt::Debug for EpicboxTransport {
+impl std::fmt::Debug for Epicbox {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("EpicboxTransport")
+        f.debug_struct("Epicbox")
             .field("relay", self.inner.settings.endpoint.domain())
             .field("network", &self.inner.network)
             .field("attached", &self.client().is_some())
@@ -209,7 +223,7 @@ impl std::fmt::Debug for EpicboxTransport {
     }
 }
 
-impl Transport for EpicboxTransport {
+impl Transport for Epicbox {
     fn id(&self) -> TransportId {
         TRANSPORT_ID
     }
@@ -223,7 +237,7 @@ impl Transport for EpicboxTransport {
     }
 }
 
-impl Method for EpicboxTransport {
+impl Method for Epicbox {
     fn carries(&self) -> Carries {
         Carries::default()
     }
@@ -356,7 +370,7 @@ impl Method for EpicboxTransport {
     }
 }
 
-impl Outbound for EpicboxTransport {
+impl Outbound for Epicbox {
     fn deliver<'a>(
         &'a self,
         to: &'a Destination,
@@ -377,10 +391,10 @@ mod tests {
     use lepic_crypto::{PublicKey, SecretKey};
     use lepic_slate::codec::MediaType;
 
+    use lepic_epicbox::mock_relay::MockRelay;
+    use lepic_epicbox::{Domain, RelayEndpoint, Security};
+
     use super::*;
-    use crate::address::{Domain, EpicboxAddress};
-    use crate::mock_relay::MockRelay;
-    use crate::session::{RelayEndpoint, Security};
 
     #[test]
     fn marked_registries_hold_both_shapes_in_detection_order() {
@@ -393,14 +407,29 @@ mod tests {
         assert_eq!(ids, [LEGACY_V3_JSON, LEGACY_V2_JSON]);
     }
 
-    fn transport() -> EpicboxTransport {
-        let settings = crate::testing::client_settings(RelayEndpoint::new(
+    #[test]
+    fn the_notice_lengths_are_those_of_a_first_slate_with_one_to_three_inputs() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../testdata/vectors/slates/send_file_plain_input_s1_v2.json");
+        let vector: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+        let json = vector["expected"]["json"].as_str().unwrap();
+        let marker = r#","lepic":{"version":1,"f":15}"#;
+        assert_eq!(NOTICE_LENGTHS[0], json.len() + marker.len());
+        let slate: serde_json::Value = serde_json::from_str(json).unwrap();
+        let input = &slate["tx"]["body"]["inputs"][0];
+        assert_eq!(input["features"], "Plain");
+        assert_eq!(serde_json::to_string(input).unwrap().len() + 1, S1_INPUT);
+    }
+
+    fn transport() -> Epicbox {
+        let settings = lepic_epicbox::testing::client_settings(RelayEndpoint::new(
             Domain::parse("relay.test").unwrap(),
             None,
             Security::Plain,
         ));
         let relay = MockRelay::new(Network::Mainnet);
-        EpicboxTransport::new(settings, Network::Mainnet, relay.connector())
+        Epicbox::new(settings, Network::Mainnet, relay.connector())
     }
 
     fn identity() -> Identity {

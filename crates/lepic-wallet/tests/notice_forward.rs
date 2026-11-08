@@ -54,9 +54,7 @@ fn events(receiver: &mut Receiver<Event>) -> Vec<Event> {
 }
 
 fn drain(world: &World, party: &Party) {
-    world
-        .block_on(party.wallet.epicbox_drain(&party.epicbox))
-        .unwrap();
+    world.block_on(party.epicbox.drain(&party.wallet)).unwrap();
 }
 
 /// Takes the one message waiting for the peer key `byte`.
@@ -122,7 +120,7 @@ fn forward(world: &World, party: &Party, from: &EpicboxAddress, notice: Notice) 
         .block_on(
             party
                 .wallet
-                .notice_apply_forwarded(&from.to_string(), notice),
+                .notice_apply_forwarded(&party.method, &from.to_string(), notice),
         )
         .unwrap()
 }
@@ -137,7 +135,10 @@ fn an_install_without_the_slate_raises_the_notice_for_its_host_to_pass_on() {
     world.post(
         SENDER,
         &world.issuer.address,
-        notice.encode().as_text().unwrap(),
+        notice
+            .encode_to(&lepic_methods::epicbox::NOTICE_LENGTHS, 0)
+            .as_text()
+            .unwrap(),
         1,
     );
     drain(&world, &twin);
@@ -200,12 +201,11 @@ fn a_passed_on_notice_with_another_excess_or_sender_is_refused() {
     ));
     assert!(
         !world
-            .block_on(
-                world
-                    .issuer
-                    .wallet
-                    .notice_apply_forwarded("not an address", notice)
-            )
+            .block_on(world.issuer.wallet.notice_apply_forwarded(
+                &world.issuer.method,
+                "not an address",
+                notice
+            ))
             .unwrap()
     );
 
@@ -237,7 +237,10 @@ fn a_notice_held_here_from_the_wrong_sender_is_not_passed_on() {
     world.post(
         STRANGER,
         &world.issuer.address,
-        notice.encode().as_text().unwrap(),
+        notice
+            .encode_to(&lepic_methods::epicbox::NOTICE_LENGTHS, 0)
+            .as_text()
+            .unwrap(),
         1,
     );
     drain(&world, &world.issuer);

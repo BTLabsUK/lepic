@@ -21,8 +21,8 @@ mod world;
 use std::time::Duration;
 
 use helpers::{accept, events, invite_request, relays};
-use lepic_epicbox::marker::features::{LEPIC_FEATURES, PAIR_REQUESTS};
 use lepic_store::{AccountIndex, ContactState, PeerCompat, WalletStore};
+use lepic_transport::marker::features::{LEPIC_FEATURES, PAIR_REQUESTS};
 use lepic_wallet::event::{ContactChange, ContactUpdate};
 use lepic_wallet::{Clock, Event};
 use lepic_wallet_contacts::{
@@ -56,9 +56,7 @@ fn proven(party: &Party, peer: &Party) {
 }
 
 fn drain(world: &World, party: &Party) {
-    world
-        .block_on(party.wallet.epicbox_drain(&party.epicbox))
-        .unwrap();
+    world.block_on(party.epicbox.drain(&party.wallet)).unwrap();
 }
 
 fn status(world: &World, party: &Party, id: lepic_store::ContactId) -> PairingStatus {

@@ -31,7 +31,7 @@ use uuid::Uuid;
 
 use crate::support::{
     Harness, LOOPBACK, TestStore, TestStores, TestVault, TestWallet, complete_restore_scan,
-    password,
+    password, registry,
 };
 
 pub const SENDER_MNEMONIC: &str = "abandon abandon abandon abandon abandon abandon abandon \
@@ -118,7 +118,7 @@ impl Sender {
         if let Some(clock) = clock {
             ports.clock = clock;
         }
-        ports.notices = notices;
+        ports.methods = notices.map(|method| registry([method]));
         let wallet = Wallet::new(config, ports).unwrap();
         harness
             .block_on(wallet.restore(password("sender"), SENDER_MNEMONIC))

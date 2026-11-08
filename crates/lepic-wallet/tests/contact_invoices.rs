@@ -441,7 +441,7 @@ fn the_outbox_retries_reaches_the_home_relay_from_another_relay_and_gets_stuck()
         lepic_epicbox::Security::Plain,
     );
     let elsewhere = ContactRelays {
-        epicbox: lepic_epicbox::transport::EpicboxTransport::new(
+        epicbox: lepic_methods::epicbox::Epicbox::new(
             settings,
             RelayNetwork::Floonet,
             world.relay.connector(),
@@ -1021,7 +1021,12 @@ fn a_contact_notice_counts_only_for_slates_exchanged_with_that_contact() {
         on_mallory,
         &Content::new(
             MessageType::Notice,
-            notice.encode().as_text().unwrap().as_bytes().to_vec(),
+            notice
+                .encode_to(&lepic_methods::epicbox::NOTICE_LENGTHS, 0)
+                .as_text()
+                .unwrap()
+                .as_bytes()
+                .to_vec(),
         ),
     );
     world.collect(&world.payer);
@@ -1264,7 +1269,7 @@ fn address_invoice_calls_never_act_on_a_contact_invoice() {
         Err(lepic_wallet::invoice::InvoiceError::NotParked { .. })
     ));
     assert!(matches!(
-        world.block_on(wallet.decline_invoice(unpaid.slate_id)),
+        world.block_on(wallet.decline_invoice(&world.payer.method, unpaid.slate_id)),
         Err(lepic_wallet::invoice::InvoiceError::NotParked { .. })
     ));
     assert_eq!(
@@ -1495,7 +1500,12 @@ fn a_contact_cannot_take_over_another_payment_by_its_slate_id() {
         on_mallory,
         &Content::new(
             MessageType::Notice,
-            notice.encode().as_text().unwrap().as_bytes().to_vec(),
+            notice
+                .encode_to(&lepic_methods::epicbox::NOTICE_LENGTHS, 0)
+                .as_text()
+                .unwrap()
+                .as_bytes()
+                .to_vec(),
         ),
     );
     world.collect(&world.payer);
@@ -1900,7 +1910,12 @@ fn a_cancelled_notice_from_another_contact_is_ignored() {
         on_mallory,
         &Content::new(
             MessageType::Notice,
-            notice.encode().as_text().unwrap().as_bytes().to_vec(),
+            notice
+                .encode_to(&lepic_methods::epicbox::NOTICE_LENGTHS, 0)
+                .as_text()
+                .unwrap()
+                .as_bytes()
+                .to_vec(),
         ),
     );
     assert_eq!(world.collect(&world.issuer).messages, 1);

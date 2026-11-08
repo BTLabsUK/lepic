@@ -26,8 +26,8 @@ use lepic_contact::{
     ContactCard, ContactKind, EncSecretKey, Invite, InviteFields, Network as ContactNetwork,
     PairingLink, SealedEnvelope, open_reply, pairing_envelope_from_link, seal_reply,
 };
-use lepic_epicbox::transport::EpicboxTransport;
 use lepic_epicbox::{Domain, Network as RelayNetwork, RelayEndpoint, Security};
+use lepic_methods::epicbox::Epicbox;
 use lepic_store::{AccountIndex, ContactId, ContactState, WalletStore};
 use lepic_wallet::Event;
 use lepic_wallet::event::{ContactChange, ContactEvent, ContactUpdate, FailedPairing};
@@ -625,7 +625,7 @@ fn a_pairing_works_when_the_invitee_uses_another_relay() {
         Security::Plain,
     );
     let elsewhere = ContactRelays {
-        epicbox: EpicboxTransport::new(settings, RelayNetwork::Floonet, world.relay.connector()),
+        epicbox: Epicbox::new(settings, RelayNetwork::Floonet, world.relay.connector()),
         meeting: vec![world.issuer.epicbox.settings().endpoint.clone()],
         mode: RelayMode::Online,
     };
@@ -2974,7 +2974,11 @@ fn an_unsigned_unpaired_notice_is_dropped() {
         issuer_card.hint_rule(),
         &lepic_contact::Content::new(
             lepic_contact::MessageType::Notice,
-            lepic_wallet::notice::unpaired_notice().into_bytes(),
+            lepic_wallet::notice::unpaired_notice_to(
+                &lepic_methods::epicbox::NOTICE_LENGTHS,
+                lepic_methods::epicbox::NOTICE_LENGTHS[0],
+            )
+            .into_bytes(),
         ),
         None,
         &mut rand::rngs::StdRng::seed_from_u64(7),
@@ -3275,12 +3279,12 @@ fn verified_contacts_pass_payloads_both_ways() {
     let works = world
         .payer
         .wallet
-        .peer_compat(&anna_key)
+        .peer_compat(&world.payer.method, &anna_key)
         .unwrap()
         .stored
         .unwrap()
         .works;
-    assert_ne!(works & lepic_epicbox::marker::features::APP_PAYLOADS, 0);
+    assert_ne!(works & lepic_transport::marker::features::APP_PAYLOADS, 0);
 
     let to_anna = post_payload(&world, &world.payer, ben_side, b"back");
     world.collect(&world.issuer);

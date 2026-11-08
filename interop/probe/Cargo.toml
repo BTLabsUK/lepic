@@ -17,6 +17,7 @@ futures-util = { version = "0.3.34", default-features = false, features = ["sink
 getrandom = { version = "0.4.3", default-features = false, features = ["std"] }
 lepic-crypto = { path = "../../crates/lepic-crypto" }
 lepic-epicbox = { path = "../../crates/lepic-epicbox" }
+lepic-methods = { path = "../../crates/lepic-methods", features = ["epicbox"] }
 lepic-primitives = { path = "../../crates/lepic-primitives" }
 lepic-slate = { path = "../../crates/lepic-slate" }
 lepic-transport = { path = "../../crates/lepic-transport" }

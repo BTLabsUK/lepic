@@ -1,6 +1,6 @@
 [package]
 name = "lepic-epicbox"
-description = "Epicbox addresses, message crypto, protocol frames and relay transport."
+description = "Epicbox addresses, message crypto, protocol frames and the relay client."
 version.workspace = true
 edition.workspace = true
 license.workspace = true

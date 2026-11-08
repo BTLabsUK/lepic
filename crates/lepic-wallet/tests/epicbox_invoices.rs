@@ -19,13 +19,13 @@ mod world;
 use std::time::Duration;
 
 use lepic_epicbox::EpicboxClient;
-use lepic_epicbox::marker::v3::carries_lepic_marker;
 use lepic_node::Propagation;
 use lepic_primitives::amount::{Amount, Height};
 use lepic_slate::codec::legacy::v3_json::V3JsonCodec;
 use lepic_slate::codec::{Codec, EncodeContext};
 use lepic_slate::stage::Stage;
 use lepic_store::{OutputStatus, PendingInvoiceStatus, SlateStage, TxDirection, TxState};
+use lepic_transport::marker::v3::carries_lepic_marker;
 use lepic_transport::transport::{Destination, Inbound};
 use lepic_wallet::Event;
 use lepic_wallet::details::TxFlow;
@@ -78,7 +78,7 @@ fn a_parked_invoice_waits_for_the_user_and_pays_nothing() {
     assert_eq!(pending[0].slate_id, issued.slate_id);
     assert_eq!(pending[0].amount.value(), AMOUNT);
     assert_eq!(pending[0].message.as_deref(), Some("order 17"));
-    assert_eq!(pending[0].sender, world.issuer.address);
+    assert_eq!(pending[0].sender, world.issuer.address.to_string());
     assert_eq!(
         pending[0].expires_at,
         pending[0].received_at.checked_add(DAY).unwrap()
@@ -158,7 +158,7 @@ fn a_paid_invoice_is_finalized_and_posted_by_the_issuer() {
     assert_eq!(world.relay.pending(&world.issuer.address), 1);
 
     let summary = world
-        .block_on(world.issuer.wallet.epicbox_drain(&world.issuer.epicbox))
+        .block_on(world.issuer.epicbox.drain(&world.issuer.wallet))
         .unwrap();
 
     assert_eq!(
@@ -207,7 +207,7 @@ fn an_issued_and_a_paid_invoice_are_invoices_on_both_sides() {
         (TxDirection::Outgoing, TxFlow::Invoice)
     );
     world
-        .block_on(world.issuer.wallet.epicbox_drain(&world.issuer.epicbox))
+        .block_on(world.issuer.epicbox.drain(&world.issuer.wallet))
         .unwrap();
     assert_eq!(
         flow(&world.issuer.wallet, issued.tx_id),
@@ -219,7 +219,13 @@ fn an_issued_and_a_paid_invoice_are_invoices_on_both_sides() {
 fn a_payer_is_known_to_run_lepic_after_its_marked_payment() {
     let world = World::new();
     let payer = world.payer.address.to_string();
-    let capability = || world.issuer.wallet.peer_capability(&payer).unwrap();
+    let capability = || {
+        world
+            .issuer
+            .wallet
+            .peer_capability(&world.issuer.method, &payer)
+            .unwrap()
+    };
     assert_eq!(capability(), PeerInvoiceSupport::Unknown);
     let issued = world.issue(None);
     world
@@ -232,12 +238,15 @@ fn a_payer_is_known_to_run_lepic_after_its_marked_payment() {
     assert_eq!(capability(), PeerInvoiceSupport::Unknown);
 
     world
-        .block_on(world.issuer.wallet.epicbox_drain(&world.issuer.epicbox))
+        .block_on(world.issuer.epicbox.drain(&world.issuer.wallet))
         .unwrap();
 
     assert_eq!(capability(), PeerInvoiceSupport::Lepic);
     assert!(matches!(
-        world.issuer.wallet.peer_capability("not an address"),
+        world
+            .issuer
+            .wallet
+            .peer_capability(&world.issuer.method, "not an address"),
         Err(InboxError::Address(_))
     ));
 }
@@ -295,13 +304,13 @@ fn an_invoice_sent_back_unchanged_marks_the_peer_as_not_paying_invoices() {
         world
             .issuer
             .wallet
-            .peer_capability(&stock.address().to_string())
+            .peer_capability(&world.issuer.method, &stock.address().to_string())
             .unwrap()
     };
     assert_eq!(capability(), PeerInvoiceSupport::Unknown);
 
     let summary = world
-        .block_on(world.issuer.wallet.epicbox_drain(&world.issuer.epicbox))
+        .block_on(world.issuer.epicbox.drain(&world.issuer.wallet))
         .unwrap();
 
     assert_eq!(
@@ -316,7 +325,7 @@ fn an_invoice_sent_back_unchanged_marks_the_peer_as_not_paying_invoices() {
         vec![BouncedInvoice {
             tx_id: issued.tx_id,
             slate_id: issued.slate_id,
-            peer: stock.address().clone(),
+            peer: stock.address().to_string(),
         }]
     );
     assert_eq!(world.relay.pending(&world.issuer.address), 0);
@@ -327,7 +336,7 @@ fn an_invoice_sent_back_unchanged_marks_the_peer_as_not_paying_invoices() {
         world
             .issuer
             .wallet
-            .peer_capability(&stock.address().to_string())
+            .peer_capability(&world.issuer.method, &stock.address().to_string())
             .unwrap(),
         PeerInvoiceSupport::NoInvoices
     );
@@ -349,10 +358,7 @@ fn a_listener_names_the_invoice_a_peer_sent_back() {
     let handle = ListenHandle::new();
 
     let summary = world.block_on(async {
-        let listen = world
-            .issuer
-            .wallet
-            .epicbox_listen(&world.issuer.epicbox, &handle);
+        let listen = world.issuer.epicbox.listen(&world.issuer.wallet, &handle);
         let script = async {
             world
                 .within(
@@ -372,7 +378,7 @@ fn a_listener_names_the_invoice_a_peer_sent_back() {
         vec![BouncedInvoice {
             tx_id: issued.tx_id,
             slate_id: issued.slate_id,
-            peer: stock.address().clone(),
+            peer: stock.address().to_string(),
         }]
     );
 }
@@ -399,7 +405,7 @@ fn an_i1_from_another_key_is_not_taken_for_a_bounce() {
     world.post(8, &world.issuer.address, &i1, 1);
 
     let summary = world
-        .block_on(world.issuer.wallet.epicbox_drain(&world.issuer.epicbox))
+        .block_on(world.issuer.epicbox.drain(&world.issuer.wallet))
         .unwrap();
 
     assert_eq!(
@@ -482,7 +488,7 @@ fn expiry_deletes_parked_invoices_cancels_issued_ones_and_refuses_late_payments(
     assert_eq!(expired(&mut issuer_events), 2);
 
     let summary = world
-        .block_on(world.issuer.wallet.epicbox_drain(&world.issuer.epicbox))
+        .block_on(world.issuer.epicbox.drain(&world.issuer.wallet))
         .unwrap();
 
     assert_eq!(
@@ -602,7 +608,7 @@ fn a_stored_payment_is_delivered_again_after_a_failed_delivery() {
         ))
         .unwrap();
     let summary = world
-        .block_on(world.issuer.wallet.epicbox_drain(&world.issuer.epicbox))
+        .block_on(world.issuer.epicbox.drain(&world.issuer.wallet))
         .unwrap();
 
     assert_eq!(summary.finalized, 1);
@@ -615,7 +621,12 @@ fn a_declined_invoice_cannot_be_paid() {
     let issued = world.issue(None);
 
     world
-        .block_on(world.payer.wallet.decline_invoice(issued.slate_id))
+        .block_on(
+            world
+                .payer
+                .wallet
+                .decline_invoice(&world.payer.method, issued.slate_id),
+        )
         .unwrap();
 
     assert_eq!(
@@ -634,7 +645,12 @@ fn a_declined_invoice_cannot_be_paid() {
         "{error:?}"
     );
     assert!(matches!(
-        world.block_on(world.payer.wallet.decline_invoice(issued.slate_id)),
+        world.block_on(
+            world
+                .payer
+                .wallet
+                .decline_invoice(&world.payer.method, issued.slate_id)
+        ),
         Err(InvoiceError::NotParked { .. })
     ));
 }
@@ -645,7 +661,7 @@ fn the_payments_address_parks_no_invoice() {
     world.issue_to(&world.payer.address, None);
 
     let summary = world
-        .block_on(world.payer.wallet.epicbox_drain(&world.payer.epicbox))
+        .block_on(world.payer.epicbox.drain(&world.payer.wallet))
         .unwrap();
 
     assert_eq!(

@@ -27,9 +27,7 @@ use world::{ACCOUNT, AMOUNT, Party, World};
 const POST: &str = "PostSlate";
 
 fn drain(world: &World, party: &Party) {
-    world
-        .block_on(party.wallet.epicbox_drain(&party.epicbox))
-        .unwrap();
+    world.block_on(party.epicbox.drain(&party.wallet)).unwrap();
 }
 
 #[test]

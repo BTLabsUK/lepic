@@ -405,15 +405,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "bs58"
-version = "0.5.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bf88ba1141d185c399bee5288d850d63b8369520c1eafc32a0430b5b6c287bf4"
-dependencies = [
- "tinyvec",
-]
-
-[[package]]
 name = "bumpalo"
 version = "3.19.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2368,30 +2359,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "lepic-epicbox"
-version = "0.3.1"
-dependencies = [
- "bs58",
- "chacha20poly1305 0.11.0",
- "futures-util",
- "getrandom 0.4.3",
- "lepic-crypto",
- "lepic-primitives",
- "lepic-slate",
- "lepic-transport",
- "pbkdf2 0.13.0",
- "serde",
- "serde_json",
- "sha2 0.11.0",
- "thiserror 2.0.21",
- "tokio",
- "tokio-rustls",
- "tokio-tungstenite",
- "tracing",
- "zeroize",
-]
-
-[[package]]
 name = "lepic-keychain"
 version = "0.3.1"
 dependencies = [
@@ -2502,7 +2469,6 @@ dependencies = [
  "jiff",
  "lepic-contact",
  "lepic-crypto",
- "lepic-epicbox",
  "lepic-keychain",
  "lepic-node",
  "lepic-primitives",
@@ -4646,18 +4612,6 @@ checksum = "c9cc2678c2cdd569ef8215e2afd7954ada2ae20b4fdd2c5fe6139a3b02d105db"
 dependencies = [
  "rustls",
  "tokio",
-]
-
-[[package]]
-name = "tokio-tungstenite"
-version = "0.30.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "17a073bfed563fa236697a068031408a93cd9522e08abf9933ead3e73411bd71"
-dependencies = [
- "futures-util",
- "log",
- "tokio",
- "tungstenite",
 ]
 
 [[package]]

@@ -38,9 +38,7 @@ fn a_send_with_its_notice_logs_no_peer_key_above_debug() {
             ))
             .unwrap();
         for party in [&world.issuer, &world.payer, &world.issuer] {
-            world
-                .block_on(party.wallet.epicbox_drain(&party.epicbox))
-                .unwrap();
+            world.block_on(party.epicbox.drain(&party.wallet)).unwrap();
         }
         world
             .issuer
