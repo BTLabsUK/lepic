@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 
 use http_body_util::combinators::BoxBody;
 use http_body_util::{BodyExt as _, Empty, Full};
-use hyper::body::{Bytes, Incoming};
+use hyper::body::Bytes;
 use hyper::header::{self, HeaderValue};
 use hyper::{Method, Request, Response, StatusCode};
 use hyper_util::rt::TokioIo;
@@ -29,10 +29,12 @@ const API_PREFIX: &str = "/api";
 
 type Body = BoxBody<Bytes, hyper::Error>;
 
-/// The console: its own listen address and the socket of the serve it is a client of.
+/// The console: its own listen address, the socket of the serve it is a client of, and the
+/// token the browser must present.
 pub(crate) struct Console {
     listen: String,
     socket: PathBuf,
+    token: String,
 }
 
 /// Why serve did not answer.
@@ -54,8 +56,16 @@ impl std::fmt::Display for Unreachable {
 }
 
 impl Console {
-    pub(crate) fn new(listen: String, socket: PathBuf) -> Self {
-        Self { listen, socket }
+    pub(crate) fn new(listen: String, socket: PathBuf, token: String) -> Self {
+        Self {
+            listen,
+            socket,
+            token,
+        }
+    }
+
+    pub(crate) fn token(&self) -> &str {
+        &self.token
     }
 
     pub(crate) fn socket(&self) -> &Path {
@@ -63,17 +73,11 @@ impl Console {
     }
 
     /// Answers one request, with the security headers on every response.
-    pub(crate) async fn answer(&self, request: Request<Incoming>) -> Response<Body> {
-        let mut response = match policy::admit(&self.listen, request.method(), request.headers()) {
-            Err(Refusal::WrongHost) => text(
-                StatusCode::MISDIRECTED_REQUEST,
-                "this console answers requests to its own address only",
-            ),
-            Err(Refusal::ForeignOrigin) => text(
-                StatusCode::FORBIDDEN,
-                "a write needs the console's own origin",
-            ),
-            Ok(()) => self.route(&request).await,
+    pub(crate) async fn answer<B>(&self, request: Request<B>) -> Response<Body> {
+        let mut response = if let Some(redirect) = self.accept_link(&request) {
+            redirect
+        } else {
+            self.admitted(&request).await
         };
         let headers = response.headers_mut();
         headers.insert(
@@ -92,7 +96,61 @@ impl Console {
         response
     }
 
-    async fn route(&self, request: &Request<Incoming>) -> Response<Body> {
+    /// The redirect that hands the browser its cookie, for `GET /` with the launch token in the
+    /// query and the console's own `Host`.
+    fn accept_link<B>(&self, request: &Request<B>) -> Option<Response<Body>> {
+        if request.method() != Method::GET
+            || request.uri().path() != "/"
+            || !policy::host_is_own(&self.listen, request.headers())
+        {
+            return None;
+        }
+        let offered = policy::query_token(request.uri().query())?;
+        if !policy::same_token(offered, &self.token) {
+            return None;
+        }
+        let mut response = with_body(
+            StatusCode::SEE_OTHER,
+            "text/plain; charset=utf-8",
+            String::new(),
+        );
+        let headers = response.headers_mut();
+        headers.insert(header::LOCATION, HeaderValue::from_static("/"));
+        let cookie = format!(
+            "{}={}; HttpOnly; SameSite=Strict; Path=/",
+            policy::COOKIE_NAME,
+            self.token
+        );
+        if let Ok(value) = HeaderValue::from_str(&cookie) {
+            headers.insert(header::SET_COOKIE, value);
+        }
+        Some(response)
+    }
+
+    async fn admitted<B>(&self, request: &Request<B>) -> Response<Body> {
+        match policy::admit(
+            &self.listen,
+            &self.token,
+            request.method(),
+            request.headers(),
+        ) {
+            Err(Refusal::WrongHost) => text(
+                StatusCode::MISDIRECTED_REQUEST,
+                "this console answers requests to its own address only",
+            ),
+            Err(Refusal::NoToken) => text(
+                StatusCode::UNAUTHORIZED,
+                "open the console with the link lepic-console printed",
+            ),
+            Err(Refusal::ForeignOrigin) => text(
+                StatusCode::FORBIDDEN,
+                "a write needs the console's own origin",
+            ),
+            Ok(()) => self.route(request).await,
+        }
+    }
+
+    async fn route<B>(&self, request: &Request<B>) -> Response<Body> {
         let path = request.uri().path();
         if let Some(api_path) = path.strip_prefix(API_PREFIX) {
             return self

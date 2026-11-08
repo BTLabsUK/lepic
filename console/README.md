@@ -17,7 +17,14 @@ cd console
 cargo run --locked -- --network floonet
 ```
 
-Open <http://127.0.0.1:7421/>. Flags:
+At launch the console draws a token and prints one line:
+
+```
+lepic-console on http://127.0.0.1:7421/?token=<64 hex digits> for <socket>
+```
+
+Open that link. The console answers it with a redirect to `/` and a cookie, and the page
+works in that browser from then on. A new launch draws a new token. Flags:
 
 - `--socket PATH`: the socket serve answers on. Without it the console uses the socket in
   the default data dir of `--network` (`mainnet` unless given).
@@ -25,9 +32,12 @@ Open <http://127.0.0.1:7421/>. Flags:
 
 ## What it answers
 
+- Requests that carry the cookie `lepic-console` with the launch token: the page, its assets
+  and `/api` alike. The cookie is set when the browser opens the printed link (`HttpOnly`,
+  `SameSite=Strict`). A request without it, or with another value, gets 401.
 - Requests whose `Host` header is exactly its own listen address. Anything else is refused
   with 421, so a page on another host name cannot reach it through DNS tricks.
-- Reads from any page on this machine; writes (anything but GET) only with an `Origin`
+- Reads with the cookie; writes (anything but GET) only with an `Origin`
   header equal to the console's own origin. Other origins and an absent origin get 403.
 - A fixed list of API routes under `/api`: the status, wallet, address, outputs,
   transactions, transaction detail, node, event stream and OpenAPI document reads, and the
