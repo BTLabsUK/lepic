@@ -157,6 +157,7 @@ holds none either. As in BT Wallet, they live in two files:
   |---|---|
   | `[node] servers` | the nodes known; the first is the mainnet node unless `node_url` names another |
   | `[epicbox] servers` | the Epicbox servers known, each `host` or `host:port` over TLS, at most 16; the first is the relay unless `epicbox_relay` names another, and pairing words go to the first `pairing_servers` of them |
+  | `[api] owner_tls` | the address `ip:port` `lepic serve --owner-tls` listens on; no default, and `--owner-tls` refuses to start without it |
 
   `[online]` and every other key and section are ignored.
 
@@ -1018,7 +1019,8 @@ decimals. An error is RFC 9457 problem details (`application/problem+json`): `ty
 of the table below, plus `tx_id` when the error is about a stored transaction. The kind sets the
 status: `usage` 400, `wrong_password` 403, `not_found` 404, `wallet_state` 409, `rejected` and
 `insufficient_funds` 422, `internal` and `config` 500, `node`, `transport` and `incomplete` 502,
-`interrupted` 503. An unknown route is 404, a wrong method 405 with `Allow`, bad JSON or an unknown
+`interrupted` 503. A route answered on the socket only is 403 `usage` over TLS (see below). An
+unknown route is 404, a wrong method 405 with `Allow`, bad JSON or an unknown
 field 400, and a body over the limit 413.
 
 In `GET /v1/events` each event's `event` field is its `kind` and its `data` line the event as
@@ -1036,12 +1038,60 @@ as for any `lepic` command; SIGKILL ends `serve` at once. It then locks the wall
 socket and releases the lock. Its report names the socket, the number of requests served and what
 the listener received.
 
+### Owner calls over TLS
+
+`lepic serve --owner-tls` also answers the API over TLS 1.3 on TCP, for a client on another
+machine. Both sides present a certificate. The address comes from `settings.toml`, and has no
+default; without it `--owner-tls` exits with a `config` error before it opens the wallet:
+
+```
+[api]
+owner_tls = "192.0.2.10:3420"
+```
+
+At each start `serve` writes its certificate to `api-tls.pem` in the data directory. It is
+self-signed, issued to `lepic-wallet`, never expires, and its key comes from the recovery phrase,
+so a restored wallet serves the same certificate. A client trusts that file and checks the name
+`lepic-wallet` in place of a host name.
+
+A client presents an Ed25519 certificate. Its dates and issuer are not checked: `serve` accepts it
+when the SHA-256 of its public key info is listed in `api-clients` in the data directory.
+
+```
+openssl genpkey -algorithm ed25519 -out client.key
+openssl req -new -x509 -key client.key -subj /CN=laptop -days 36500 -out client.pem
+lepic api client add laptop client.pem
+curl --cacert api-tls.pem --cert client.pem --key client.key \
+  --resolve lepic-wallet:3420:192.0.2.10 https://lepic-wallet:3420/v1/wallet
+```
+
+`lepic api client list` shows the listed clients and `lepic api client remove <name>` takes one
+off. They need no wallet and edit `api-clients`, one `<name> <sha256 hex>` per line, where `#`
+starts a comment; a name is 1 to 64 letters, digits, `.`, `-` and `_`, and a name or key is
+listed once. `add` refuses a file that is not a PEM certificate with an Ed25519 key. `serve`
+reads the file at each connection and resumes no TLS session, so a change applies from the
+client's next connection without a restart. A missing file accepts no client; a malformed one
+accepts none and logs a warning. The JSON reports are `{"name", "fingerprint"}` for `add` and
+`remove`, and `{"clients": [...]}` of those for `list`.
+
+The routes, the `[api]` bounds and the connection cap are those of the socket, shared by both
+listeners. A handshake that fails or does not end within the header time counts as refused.
+`PUT /v1/wallet/password` is answered on the socket only: over TLS it is a 403 problem with code
+`usage`. `GET /v1/status` then holds the listener's address and the fingerprint of its
+certificate, the value `lepic api client add` lists for `api-tls.pem`:
+
+```
+{"owner_tls": {"address": "192.0.2.10:3420", "fingerprint": "<sha256 hex>"}}
+```
+
 ## Data and logs
 
 The data directory, `~/.lepic/<network>` unless `data_dir` says otherwise, holds:
 
 - `wallet.vault`, the seed, encrypted with your password through Argon2;
 - `wallet.sqlite3`, outputs and transaction history, with private transaction data encrypted;
+- `api-tls.pem` and `api-clients`, the certificate of `serve --owner-tls` and the clients it
+  accepts;
 - `tor/`, the files of the wallet's tor, once `tor listen` or a send over Tor ran: its state and
   the cookie that authenticates to it, never the onion key;
 - `.lepic.lock`, which keeps two `lepic` commands, or `lepic` and a mobile app, from opening the
