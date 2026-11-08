@@ -407,6 +407,15 @@ fn listing_signatures_are_the_vectors() {
     let wallet = restored(&harness, vector["inputs"]["seed"].as_str().unwrap());
     let listing = listing_of(&vector["inputs"]);
     let message = hex_bytes(vector["inputs"]["message"].as_str().unwrap());
+    let epicbox = lepic_methods::epicbox::Epicbox::new(
+        lepic_epicbox::testing::client_settings(lepic_epicbox::RelayEndpoint::new(
+            lepic_epicbox::Domain::parse("relay.test").unwrap(),
+            None,
+            lepic_epicbox::Security::Plain,
+        )),
+        lepic_epicbox::Network::Mainnet,
+        lepic_epicbox::mock_relay::MockRelay::new(lepic_epicbox::Network::Mainnet).connector(),
+    );
     let key = wallet.address_key_at(&listing).unwrap();
     assert_eq!(
         key.to_bytes().as_slice(),
@@ -416,8 +425,9 @@ fn listing_signatures_are_the_vectors() {
     assert_eq!(cases.len(), 5);
     for case in cases {
         let domain = lepic_epicbox::ServiceDomain::parse(case["domain"].as_str().unwrap()).unwrap();
-        let secret = wallet.listing_secret(&listing).unwrap();
-        let signature = lepic_epicbox::sign_listing_message(&domain, &message, &secret).unwrap();
+        let signature = epicbox
+            .sign_with_address_key_at(&wallet, &listing, &domain, &message)
+            .unwrap();
         assert_eq!(
             signature.to_der_hex(),
             case["signature_der"].as_str().unwrap(),
