@@ -66,7 +66,7 @@ pub struct Tuning {
 /// The bounds of the wallet API, on serve's socket and its owner TLS listener alike.
 #[derive(Debug, Clone, Copy)]
 pub struct ApiLimits {
-    /// Connections served at once; more are closed unanswered.
+    /// Connections served at once on each listener; more are closed unanswered.
     pub max_connections: usize,
     pub header_timeout: Duration,
     pub body_timeout: Duration,

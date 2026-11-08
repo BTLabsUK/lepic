@@ -251,7 +251,8 @@ async fn maintain<N: NodeApi + 'static>(
 
 /// Listens, maintains the wallet and answers the API until `stop` turns true and the listener
 /// and the connections have ended. The stop closes each connection once its answer is out, and
-/// a failed listener sets it.
+/// a failed listener sets it. The socket and the owner TLS listener each have their own cap on
+/// connections, so connections from the network cannot use up the socket's.
 async fn serving<H: Host>(
     service: &Service<'_, H>,
     api: &Api<'_>,
@@ -270,13 +271,14 @@ async fn serving<H: Host>(
     );
     tokio::pin!(listener, maintenance);
     let tls = service.owner_tls;
-    let mut connections = FuturesUnordered::<LocalBoxFuture<'_, ()>>::new();
+    let mut sockets = FuturesUnordered::<LocalBoxFuture<'_, ()>>::new();
+    let mut tls_connections = FuturesUnordered::<LocalBoxFuture<'_, ()>>::new();
     let mut events = Some(opened.wallet.subscribe());
     let mut stopped = stop.subscribe();
     let mut ended = None;
     loop {
         match ended {
-            Some(result) if connections.is_empty() => return result,
+            Some(result) if sockets.is_empty() && tls_connections.is_empty() => return result,
             _ => {}
         }
         let stopping = *stop.borrow();
@@ -299,21 +301,22 @@ async fn serving<H: Host>(
             accepted = listening.accept(), if !stopping => match accepted {
                 Ok(stream)
                     if listening.is_this_user(&stream)
-                        && connections.len() < api.limits().max_connections =>
+                        && sockets.len() < api.limits().max_connections =>
                 {
-                    connections.push(api.connection(stream, Listener::Socket).boxed_local());
+                    sockets.push(api.connection(stream, Listener::Socket).boxed_local());
                 }
                 Ok(_) => api.refuse(),
                 Err(error) => tracing::warn!(error = %error, "accepting a connection failed"),
             },
             accepted = accept_tls(tls), if !stopping => match accepted {
-                Ok((tls, stream)) if connections.len() < api.limits().max_connections => {
-                    connections.push(api.tls_connection(tls, stream).boxed_local());
+                Ok((tls, stream)) if tls_connections.len() < api.limits().max_connections => {
+                    tls_connections.push(api.tls_connection(tls, stream).boxed_local());
                 }
                 Ok(_) => api.refuse(),
                 Err(error) => tracing::warn!(error = %error, "accepting a tls connection failed"),
             },
-            Some(()) = connections.next(), if !connections.is_empty() => {}
+            Some(()) = sockets.next(), if !sockets.is_empty() => {}
+            Some(()) = tls_connections.next(), if !tls_connections.is_empty() => {}
         }
     }
 }

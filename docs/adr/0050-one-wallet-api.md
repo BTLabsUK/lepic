@@ -109,6 +109,8 @@ client sets its own timeout. Connections are polled with `FuturesUnordered`; the
 no longer sleeps in the main loop. The runtime stays single-threaded: every wallet call waits on
 one SQLite connection.
 
+Changed 2026-11-08: the TLS listener has its own cap of the same size, so connections from the network cannot use up the socket's.
+
 ### What else serve answers
 
 - `GET /v1/status`: uptime, requests served, in flight and refused, the state of each listener
