@@ -92,6 +92,15 @@ impl Problem {
             "the route is answered on the socket only",
         )
     }
+
+    /// A TLS client removed from `api-clients` since its connection opened.
+    pub(crate) fn no_longer_listed() -> Self {
+        Self::new(
+            StatusCode::FORBIDDEN,
+            ErrorKind::Usage,
+            "this client is no longer listed",
+        )
+    }
 }
 
 impl From<CliError> for Problem {

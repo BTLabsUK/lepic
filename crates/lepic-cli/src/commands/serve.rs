@@ -303,7 +303,7 @@ async fn serving<H: Host>(
                     if listening.is_this_user(&stream)
                         && sockets.len() < api.limits().max_connections =>
                 {
-                    sockets.push(api.connection(stream, Listener::Socket).boxed_local());
+                    sockets.push(api.connection(stream, Listener::Socket, None).boxed_local());
                 }
                 Ok(_) => api.refuse(),
                 Err(error) => tracing::warn!(error = %error, "accepting a connection failed"),
@@ -391,6 +391,7 @@ impl<H: Host> Run<'_, H> {
             &service,
             self.host.api_limits(self.settings.tuning.api),
             stop.subscribe(),
+            self.settings.data_dir.clone(),
         );
         let result = self
             .until_interrupted(

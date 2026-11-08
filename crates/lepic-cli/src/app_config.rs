@@ -71,6 +71,9 @@ pub struct ApiLimits {
     pub header_timeout: Duration,
     pub body_timeout: Duration,
     pub max_body: usize,
+    /// How long a connection to the owner TLS listener lasts. At the limit it closes once its
+    /// answer is out, and an event stream on it ends.
+    pub tls_max_age: Duration,
 }
 
 impl Tuning {
@@ -170,6 +173,7 @@ struct ApiTable {
     header_timeout_s: NonZeroU32,
     body_timeout_s: NonZeroU32,
     max_body_kib: NonZeroU32,
+    tls_max_connection_age_s: NonZeroU32,
 }
 
 #[derive(Deserialize)]
@@ -322,6 +326,7 @@ fn tuning(
             header_timeout: seconds(api.header_timeout_s),
             body_timeout: seconds(api.body_timeout_s),
             max_body: count(api.max_body_kib).saturating_mul(1024),
+            tls_max_age: seconds(api.tls_max_connection_age_s),
         },
         send: lepic_methods::http::ClientSettings {
             connect_timeout: seconds(http.send_connect_timeout_s),
@@ -384,6 +389,7 @@ mod tests {
         assert_eq!(tuning.listen.receives_per_minute, 30);
         assert_eq!(tuning.api.max_connections, 32);
         assert_eq!(tuning.api.max_body, 8192 * 1024);
+        assert_eq!(tuning.api.tls_max_age, Duration::from_secs(600));
         assert_eq!(tuning.tor_connect, Duration::from_secs(75));
         assert_eq!(tuning.tor_timings().publish, Duration::from_secs(180));
     }

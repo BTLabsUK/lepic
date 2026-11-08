@@ -319,17 +319,18 @@ pub(crate) async fn status(api: &Api<'_>, _request: Request) -> Answer {
 ///
 /// A server-sent event stream: each event's `event` field is its `kind` and its `data` line
 /// is the event as JSON. A client that falls behind gets a `lagged` event saying how many it
-/// missed, and the stream goes on.
+/// missed, and the stream goes on. A stream over the owner TLS listener ends at the
+/// connection age limit, and the client opens it again.
 #[utoipa::path(
     get,
     path = "/v1/events",
     tag = "service",
     responses((status = 200, content_type = "text/event-stream", body = EventReport)),
 )]
-pub(crate) async fn events(api: &Api<'_>, _request: Request) -> Answer {
+pub(crate) async fn events(api: &Api<'_>, request: Request) -> Answer {
     let stream = events::stream(
         api.owner.events(),
-        api.stop.clone(),
+        request.closing,
         InFlight::new(&api.in_flight),
     );
     let mut response = Response::new(stream);

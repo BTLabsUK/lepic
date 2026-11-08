@@ -85,6 +85,9 @@ header_timeout_s = 10
 body_timeout_s = 15
 # The largest request body the API reads.
 max_body_kib = 8192
+# How long a connection to the owner TLS listener lasts; a client then opens a new one. An event
+# stream of a client removed from api-clients ends here at the latest.
+tls_max_connection_age_s = 600
 
 [tor]
 # Tor bootstrapping with a cached consensus.

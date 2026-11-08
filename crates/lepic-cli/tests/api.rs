@@ -65,6 +65,7 @@ fn limits(max_connections: usize, header_timeout: Duration) -> ApiLimits {
         header_timeout,
         body_timeout: PATIENCE,
         max_body: 1024,
+        tls_max_age: PATIENCE,
     }
 }
 

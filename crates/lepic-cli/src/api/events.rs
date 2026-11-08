@@ -314,15 +314,16 @@ pub(crate) fn epicbox_state(event: &Event) -> Option<&'static str> {
     }
 }
 
-/// The stream: one SSE event per engine event, until the engine or serve stops. A stream that
-/// falls behind gets a `lagged` event and goes on with the oldest event it still holds.
+/// The stream: one SSE event per engine event, until the engine stops or `closing` turns true.
+/// A stream that falls behind gets a `lagged` event and goes on with the oldest event it still
+/// holds.
 pub(crate) fn stream(
     events: broadcast::Receiver<Event>,
-    stop: watch::Receiver<bool>,
+    closing: watch::Receiver<bool>,
     guard: InFlight,
 ) -> Body {
-    let state = (events, stop, guard);
-    let frames = stream::unfold(state, |(mut events, mut stop, guard)| async move {
+    let state = (events, closing, guard);
+    let frames = stream::unfold(state, |(mut events, mut closing, guard)| async move {
         let report = tokio::select! {
             event = events.recv() => match event {
                 Ok(event) => EventReport::from(&event),
@@ -332,10 +333,10 @@ pub(crate) fn stream(
                 },
                 Err(broadcast::error::RecvError::Closed) => return None,
             },
-            _ = stop.wait_for(|stopped| *stopped) => return None,
+            _ = closing.wait_for(|closing| *closing) => return None,
         };
         let frame = Frame::data(sse(&report));
-        Some((Ok::<_, Infallible>(frame), (events, stop, guard)))
+        Some((Ok::<_, Infallible>(frame), (events, closing, guard)))
     });
     StreamBody::new(frames).boxed_unsync()
 }

@@ -92,7 +92,19 @@ impl Api<'_> {
     pub(crate) async fn tls_connection(&self, tls: &OwnerTls, stream: TcpStream) {
         let handshake = tls.acceptor.accept(stream);
         match tokio::time::timeout(self.limits().header_timeout, handshake).await {
-            Ok(Ok(stream)) => self.connection(stream, Listener::Tls).await,
+            Ok(Ok(stream)) => {
+                // The verifier took only an Ed25519 certificate, so a client has a key here.
+                let client = stream
+                    .get_ref()
+                    .1
+                    .peer_certificates()
+                    .and_then(<[_]>::first)
+                    .and_then(Fingerprint::of_ed25519);
+                match client {
+                    Some(client) => self.connection(stream, Listener::Tls, Some(client)).await,
+                    None => self.refuse(),
+                }
+            }
             Ok(Err(error)) => {
                 tracing::debug!(error = %error, "owner tls handshake failed");
                 self.refuse();

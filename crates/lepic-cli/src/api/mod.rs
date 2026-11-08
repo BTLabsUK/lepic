@@ -16,6 +16,7 @@ mod tls;
 use std::cell::Cell;
 use std::convert::Infallible;
 use std::future::Future;
+use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -41,6 +42,7 @@ pub(crate) use tls::OwnerTls;
 
 use openapi::Problems;
 
+use crate::api_clients::{Clients, Fingerprint};
 use crate::app_config::ApiLimits;
 use crate::cli::Command;
 use crate::exit::CliError;
@@ -182,6 +184,9 @@ pub(crate) struct Request {
     params: Vec<(String, String)>,
     query: Option<String>,
     body: Bytes,
+    /// Turns true when its connection is closing: serve stops, or a TLS connection reached its
+    /// age limit.
+    closing: watch::Receiver<bool>,
 }
 
 impl Request {
@@ -374,6 +379,8 @@ pub(crate) struct Api<'o> {
     limits: ApiLimits,
     /// Turns true when serve stops: connections close once their answer is out.
     stop: watch::Receiver<bool>,
+    /// The wallet's data directory, where `api-clients` lists the TLS clients.
+    data_dir: PathBuf,
     router: Router,
     /// The OpenAPI document, rendered once.
     document: Bytes,
@@ -387,11 +394,13 @@ impl<'o> Api<'o> {
         owner: &'o dyn Owner,
         limits: ApiLimits,
         stop: watch::Receiver<bool>,
+        data_dir: PathBuf,
     ) -> Self {
         Self {
             owner,
             limits,
             stop,
+            data_dir,
             router: Router::new(&openapi::document()),
             document: openapi::rendered(),
             served: Cell::new(0),
@@ -417,13 +426,21 @@ impl<'o> Api<'o> {
         self.refused.set(self.refused.get().saturating_add(1));
     }
 
-    /// Answers the requests on `stream` until the client closes it or serve stops.
-    pub(crate) async fn connection<S>(&self, stream: S, listener: Listener)
-    where
+    /// Answers the requests on `stream` until the client closes it or serve stops, and on the
+    /// TLS listener until the connection's age limit. `client` is the TLS client's key, checked
+    /// against `api-clients` again on each request; the socket has none.
+    pub(crate) async fn connection<S>(
+        &self,
+        stream: S,
+        listener: Listener,
+        client: Option<Fingerprint>,
+    ) where
         S: AsyncRead + AsyncWrite + Unpin,
     {
-        let service = service_fn(|request| async move {
-            Ok::<_, Infallible>(self.answer(request, listener).await)
+        let (closing, closed) = watch::channel(false);
+        let service = service_fn(move |request| {
+            let closed = closed.clone();
+            async move { Ok::<_, Infallible>(self.answer(request, listener, client, closed).await) }
         });
         let connection = http1::Builder::new()
             .timer(TokioTimer::new())
@@ -431,11 +448,24 @@ impl<'o> Api<'o> {
             .serve_connection(TokioIo::new(stream), service);
         tokio::pin!(connection);
         let mut stop = self.stop.clone();
-        let result = tokio::select! {
-            result = connection.as_mut() => result,
+        let aged = async {
+            match listener {
+                Listener::Tls => tokio::time::sleep(self.limits.tls_max_age).await,
+                Listener::Socket => std::future::pending().await,
+            }
+        };
+        let ended = tokio::select! {
+            result = connection.as_mut() => Some(result),
             // Not the guard `wait_for` returns: held through the drain, it would block serve's
             // own stop.
-            _ = async { stop.wait_for(|stopped| *stopped).await.map(drop) } => {
+            _ = async { stop.wait_for(|stopped| *stopped).await.map(drop) } => None,
+            () = aged => None,
+        };
+        let result = match ended {
+            Some(result) => result,
+            None => {
+                // Ends an event stream, whose answer has no end of its own.
+                closing.send_replace(true);
                 connection.as_mut().graceful_shutdown();
                 connection.await
             }
@@ -449,21 +479,47 @@ impl<'o> Api<'o> {
         &self,
         request: hyper::Request<Incoming>,
         listener: Listener,
+        client: Option<Fingerprint>,
+        closing: watch::Receiver<bool>,
     ) -> Response<Body> {
         let guard = InFlight::new(&self.in_flight);
-        let response = self
-            .route(request, listener)
-            .await
-            .unwrap_or_else(|error| problem(&error));
+        let response = match client {
+            Some(client) if !self.lists(client) => {
+                let mut response = problem(&Problem::no_longer_listed());
+                response
+                    .headers_mut()
+                    .insert(header::CONNECTION, HeaderValue::from_static("close"));
+                response
+            }
+            _ => self
+                .route(request, listener, closing)
+                .await
+                .unwrap_or_else(|error| problem(&error)),
+        };
         drop(guard);
         self.served.set(self.served.get().saturating_add(1));
         response
+    }
+
+    /// Whether `api-clients` still lists the TLS client `client`. An unreadable file lists none.
+    fn lists(&self, client: Fingerprint) -> bool {
+        match Clients::read(&self.data_dir) {
+            Ok(clients) => clients.lists(client),
+            Err(error) => {
+                tracing::warn!(
+                    error = %lepic_telemetry::ErrorChain(&error),
+                    "api-clients is unreadable, so every client is refused"
+                );
+                false
+            }
+        }
     }
 
     async fn route(
         &self,
         request: hyper::Request<Incoming>,
         listener: Listener,
+        closing: watch::Receiver<bool>,
     ) -> Result<Response<Body>, Problem> {
         let (handler, params) =
             self.router
@@ -476,6 +532,7 @@ impl<'o> Api<'o> {
                 params,
                 query,
                 body,
+                closing,
             },
         )
         .await
@@ -643,6 +700,7 @@ mod tests {
             params: Vec::new(),
             query: Some("account=my+savings%21".to_owned()),
             body: Bytes::new(),
+            closing: watch::channel(false).1,
         };
         let fields: std::collections::BTreeMap<String, String> = request.query().unwrap();
         assert_eq!(fields["account"], "my savings!");
