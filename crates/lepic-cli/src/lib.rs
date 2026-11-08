@@ -10,6 +10,7 @@
 pub mod amount;
 #[cfg(unix)]
 mod api;
+mod api_clients;
 pub mod app_config;
 pub mod cli;
 mod commands;

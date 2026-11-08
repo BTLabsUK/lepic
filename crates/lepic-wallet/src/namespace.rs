@@ -27,6 +27,10 @@ pub const DEVICE_LINK_KEY_LABEL: &[u8] = b"lepic-wallet device link key v1";
 /// payment-proof key, so the Epicbox and payment-proof addresses do not give the onion.
 pub const ONION_KEY_LABEL: &[u8] = b"lepic-wallet onion key v1";
 
+/// The Ed25519 seed of the certificate key of `serve`'s owner TLS listener (ADR 0050): no
+/// context. A restore from the phrase gives the same key, so clients keep their pin.
+pub const API_TLS_KEY_LABEL: &[u8] = b"lepic-wallet api tls v1";
+
 /// What device-link signatures are made over: this tag, then the transcript.
 pub const DEVICE_LINK_TAG: &[u8] = b"lepic/device-link/v1";
 
@@ -139,6 +143,11 @@ pub(crate) fn device_link_key(seed: &Seed) -> Result<SigningKey, WalletError> {
 /// The seed of the onion key of the wallet of `seed`.
 pub(crate) fn onion_seed(seed: &Seed) -> Result<Zeroizing<[u8; 32]>, WalletError> {
     namespace_hash(seed, ONION_KEY_LABEL, &[])
+}
+
+/// The seed of the owner TLS certificate key of the wallet of `seed`.
+pub(crate) fn api_tls_seed(seed: &Seed) -> Result<Zeroizing<[u8; 32]>, WalletError> {
+    namespace_hash(seed, API_TLS_KEY_LABEL, &[])
 }
 
 fn device_link_message(transcript: &[u8]) -> Vec<u8> {
@@ -267,5 +276,14 @@ mod tests {
         let expected: [u8; 32] = mac.finalize_fixed().into();
         assert_eq!(*onion_seed(&seed(1)).unwrap(), expected);
         assert_ne!(*onion_seed(&seed(2)).unwrap(), expected);
+    }
+
+    #[test]
+    fn the_api_tls_seed_is_the_keyed_hash_of_its_label() {
+        let mut mac = <Blake2bMac<U32> as KeyInit>::new_from_slice(&[1; 32]).unwrap();
+        mac.update(b"lepic-wallet api tls v1");
+        let expected: [u8; 32] = mac.finalize_fixed().into();
+        assert_eq!(*api_tls_seed(&seed(1)).unwrap(), expected);
+        assert_ne!(*api_tls_seed(&seed(2)).unwrap(), expected);
     }
 }

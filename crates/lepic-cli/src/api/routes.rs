@@ -370,13 +370,15 @@ pub(crate) async fn wallet_address(api: &Api<'_>, _request: Request) -> Answer {
 
 /// Change the wallet's password
 ///
-/// Re-encrypts the vault under the new password.
+/// Re-encrypts the vault under the new password. Answered on the socket only: the TLS listener
+/// refuses it with a 403 `usage` problem.
 #[utoipa::path(
     put,
     path = "/v1/wallet/password",
     tag = "wallet",
     request_body = PasswordBody,
     responses((status = 200, body = PasswordReport)),
+    extensions(("x-socket-only" = json!(true))),
 )]
 pub(crate) async fn change_password(api: &Api<'_>, request: Request) -> Answer {
     let body: PasswordBody = request.json()?;

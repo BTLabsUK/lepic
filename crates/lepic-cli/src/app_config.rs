@@ -63,7 +63,7 @@ pub struct Tuning {
     tor_request: Duration,
 }
 
-/// The bounds of the wallet API on serve's socket.
+/// The bounds of the wallet API, on serve's socket and its owner TLS listener alike.
 #[derive(Debug, Clone, Copy)]
 pub struct ApiLimits {
     /// Connections served at once; more are closed unanswered.

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 //! `lepic serve`: holds one unlocked wallet, does what `epicbox listen` does, and answers the
-//! wallet API on a local socket.
+//! wallet API on a local socket, and with `--owner-tls` over TLS too.
 
 use std::cell::{Cell, RefCell};
 use std::convert::Infallible;
@@ -11,16 +11,19 @@ use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
-use futures_util::StreamExt as _;
+use futures_util::future::LocalBoxFuture;
 use futures_util::stream::FuturesUnordered;
+use futures_util::{FutureExt as _, StreamExt as _};
 use jiff::Timestamp;
 use lepic_epicbox::RelayEndpoint;
 use lepic_foreign::CoinbaseAccess;
 use lepic_node::NodeApi;
 use lepic_primitives::amount::Height;
+use lepic_wallet::ApiTlsKey;
 use lepic_wallet::event::Event;
 use lepic_wallet::inbox::{InboxError, InboxSummary, ListenHandle};
 use lepic_wallet_contacts::CollectTrigger;
+use tokio::net::TcpStream;
 use tokio::sync::{broadcast, watch};
 use tokio::time::MissedTickBehavior;
 
@@ -30,13 +33,13 @@ use super::{
 };
 use crate::Console;
 use crate::amount::format_amount;
-use crate::api::{Api, Call, Owner, epicbox_state};
+use crate::api::{Api, Call, Listener, Owner, OwnerTls, epicbox_state};
 use crate::cli::{Command, ServeArgs};
 use crate::exit::CliError;
 use crate::host::{Host, HostNode};
 use crate::output::{
-    ContactBackupReport, MaintenanceReport, Report, RequestsReport, ServeHttpStatus, ServeReport,
-    ServeStatusReport, SlateReceiveReport,
+    ContactBackupReport, MaintenanceReport, OwnerTlsStatus, Report, RequestsReport,
+    ServeHttpStatus, ServeReport, ServeStatusReport, SlateReceiveReport,
 };
 use crate::secret::{SecretError, SecretInput};
 use crate::service::{self, Listening};
@@ -89,6 +92,8 @@ struct Service<'a, H: Host> {
     maintenance: RefCell<Maintenance>,
     /// The HTTP listener, when serve runs with `--http`.
     http: Option<&'a HttpListener>,
+    /// The owner TLS listener, when serve runs with `--owner-tls`.
+    owner_tls: Option<&'a OwnerTls>,
     started: Instant,
     socket: String,
     /// The Epicbox listener's latest state.
@@ -192,6 +197,10 @@ impl<H: Host> Owner for Service<'_, H> {
                     CoinbaseAccess::Remote => "remote",
                 },
             }),
+            owner_tls: self.owner_tls.map(|tls| OwnerTlsStatus {
+                address: tls.address.to_string(),
+                fingerprint: tls.fingerprint.to_string(),
+            }),
         }))
     }
 }
@@ -260,7 +269,8 @@ async fn serving<H: Host>(
         &service.maintenance,
     );
     tokio::pin!(listener, maintenance);
-    let mut connections = FuturesUnordered::new();
+    let tls = service.owner_tls;
+    let mut connections = FuturesUnordered::<LocalBoxFuture<'_, ()>>::new();
     let mut events = Some(opened.wallet.subscribe());
     let mut stopped = stop.subscribe();
     let mut ended = None;
@@ -291,14 +301,34 @@ async fn serving<H: Host>(
                     if listening.is_this_user(&stream)
                         && connections.len() < api.limits().max_connections =>
                 {
-                    connections.push(api.connection(stream));
+                    connections.push(api.connection(stream, Listener::Socket).boxed_local());
                 }
                 Ok(_) => api.refuse(),
                 Err(error) => tracing::warn!(error = %error, "accepting a connection failed"),
             },
+            accepted = accept_tls(tls), if !stopping => match accepted {
+                Ok((tls, stream)) if connections.len() < api.limits().max_connections => {
+                    connections.push(api.tls_connection(tls, stream).boxed_local());
+                }
+                Ok(_) => api.refuse(),
+                Err(error) => tracing::warn!(error = %error, "accepting a tls connection failed"),
+            },
             Some(()) = connections.next(), if !connections.is_empty() => {}
         }
     }
+}
+
+async fn accept_tls(tls: Option<&OwnerTls>) -> std::io::Result<(&OwnerTls, TcpStream)> {
+    match tls {
+        Some(tls) => tls.accept().await.map(|stream| (tls, stream)),
+        None => std::future::pending().await,
+    }
+}
+
+/// The key of the owner TLS certificate. Chosen here alone, so a serve that holds other wallets,
+/// or none, changes one function.
+fn owner_tls_key<N: NodeApi + 'static>(opened: &Opened<N>) -> Result<ApiTlsKey, CliError> {
+    Ok(opened.wallet.api_tls_key()?)
 }
 
 async fn recv(
@@ -316,11 +346,26 @@ impl<H: Host> Run<'_, H> {
             .socket
             .unwrap_or_else(|| service::default_socket(&self.settings.data_dir));
         service::check_socket_path(&path)?;
+        let owner_tls_address = args
+            .owner_tls
+            .then(|| {
+                self.settings
+                    .servers
+                    .owner_tls
+                    .ok_or(CliError::OwnerTlsNotConfigured)
+            })
+            .transpose()?;
         let opened = self.open().await?;
         let http = if args.http {
             Some(HttpListener::start(&opened, self.settings, &args.listen).await?)
         } else {
             None
+        };
+        let owner_tls = match owner_tls_address {
+            Some(address) => Some(
+                OwnerTls::bind(address, &owner_tls_key(&opened)?, &self.settings.data_dir).await?,
+            ),
+            None => None,
         };
         let listening = service::bind(&path)?;
         opened.wallet.epicbox_attach(&opened.epicbox)?;
@@ -334,6 +379,7 @@ impl<H: Host> Run<'_, H> {
             interrupt: stop.subscribe(),
             maintenance: RefCell::default(),
             http: http.as_ref(),
+            owner_tls: owner_tls.as_ref(),
             started: Instant::now(),
             socket: path.display().to_string(),
             epicbox: Cell::new(None),
@@ -360,6 +406,7 @@ impl<H: Host> Run<'_, H> {
             Some(http) => Some(http.shutdown().await),
             None => None,
         };
+        drop(owner_tls);
         drop(listening);
         opened.wallet.lock();
         let summary = result?;

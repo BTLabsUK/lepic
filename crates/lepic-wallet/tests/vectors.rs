@@ -221,6 +221,37 @@ fn the_onion_key_is_the_namespace_key_of_the_vectors() {
     }
 }
 
+/// `testdata/vectors/keys/api_tls_key_*.json`: the owner TLS certificate key of a wallet
+/// restored from the vector's seed is the generator's LEPIC-namespace key.
+#[test]
+fn the_api_tls_key_is_the_namespace_key_of_the_vectors() {
+    for name in ["api_tls_key_seed32", "api_tls_key_seed16"] {
+        let vector = keys_vector(name);
+        let harness = support::Harness::new();
+        let wallet = restored(&harness, vector["inputs"]["seed"].as_str().unwrap());
+        let expected = &vector["expected"];
+
+        let key = wallet.api_tls_key().unwrap();
+
+        assert!(
+            key.expose_pkcs8()
+                .ends_with(&hex_bytes(expected["ed25519_seed"].as_str().unwrap())),
+            "{name}"
+        );
+        assert_eq!(
+            key.public_key().as_slice(),
+            hex_bytes(expected["public_key"].as_str().unwrap()),
+            "{name}"
+        );
+        assert_ne!(
+            key.public_key(),
+            wallet.onion_key().unwrap().public_key(),
+            "{name}"
+        );
+        assert_eq!(format!("{key:?}"), "ApiTlsKey([redacted])");
+    }
+}
+
 /// `testdata/vectors/store_key/*.json`: the store key derived from the vector's phrase is the
 /// key the vector's database key opens with, and its check file is accepted for that key and
 /// refused for another seed's.

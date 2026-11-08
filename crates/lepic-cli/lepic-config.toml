@@ -77,7 +77,7 @@ send_connect_timeout_s = 10
 send_request_timeout_s = 60
 
 [api]
-# Connections the wallet API on serve's socket serves at once.
+# Connections the wallet API serves at once, on its socket and TLS listener together.
 max_connections = 32
 # The API's limit for a request line and headers, and for an idle connection.
 header_timeout_s = 10

@@ -120,6 +120,7 @@ used again and never reused.
 | `lepic-wallet store check v1` ‖ salt(16) | BLAKE2b-128 keyed by the store key | The `.check` file that proves the store key before the database opens (0032) | `lepic-wallet` | 26.10.25 | live | `store_key/store_key_seed_*` |
 | `lepic-wallet listing key v1` ‖ service_key(33) ‖ gen(u32 BE) ‖ ctr | secp256k1 (counter until valid) | Address, ECDH and signing key of one name-service listing (exception above) | `lepic-wallet::namespace` | 26.10.25 | live | `keys/listing_keys_seed32`, `keys/listing_keys_seed16` |
 | `lepic-wallet onion key v1` | Ed25519 | The wallet's onion and the key that signs payment proofs asked for over it (0044). The 32 bytes are the Ed25519 seed; the context is empty | `lepic-wallet::namespace` | unreleased | live | `keys/onion_key_seed32`, `keys/onion_key_seed16` |
+| `lepic-wallet api tls v1` | Ed25519 | The certificate key of `serve`'s owner TLS listener (0050). The 32 bytes are the Ed25519 seed; the context is empty | `lepic-wallet::namespace` | unreleased | live | `keys/api_tls_key_seed32`, `keys/api_tls_key_seed16` |
 | `lepic-wallet device link key v1` | Ed25519 | Signs the hello of a linked device; both devices on one phrase hold it, so a valid signature proves the same phrase. The 32 bytes are the Ed25519 seed; the context is empty | `lepic-wallet::namespace` | 26.10.25 | live | `keys/device_link_key_seed32`, `keys/device_link_key_seed16` |
 
 #### HKDF and codes

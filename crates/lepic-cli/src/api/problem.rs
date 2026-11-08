@@ -84,6 +84,14 @@ impl Problem {
             "the request body did not arrive in time",
         )
     }
+
+    pub(crate) fn socket_only() -> Self {
+        Self::new(
+            StatusCode::FORBIDDEN,
+            ErrorKind::Usage,
+            "the route is answered on the socket only",
+        )
+    }
 }
 
 impl From<CliError> for Problem {

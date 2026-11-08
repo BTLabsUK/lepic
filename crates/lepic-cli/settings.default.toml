@@ -2,9 +2,9 @@
 #
 # The layout is the Epic Cash wallet app's user settings.toml. The CLI writes this file to
 # ~/.lepic/settings.toml once, when it finds none, and never changes it after that. It reads
-# [node] servers and [epicbox] servers and ignores every other key and section, so a copy of
-# the app's file works here too. Timeouts, ports and the servers' onions are not user settings:
-# they are in the CLI's built-in configuration (docs/cli.md).
+# [node] servers, [epicbox] servers and [api] owner_tls and ignores every other key and
+# section, so a copy of the app's file works here too. Timeouts, ports and the servers' onions
+# are not user settings: they are in the CLI's built-in configuration (docs/cli.md).
 
 # The layout version of this file.
 version = 1
@@ -19,6 +19,12 @@ servers = ["http://127.0.0.1:3413"]
 # one in use unless epicbox_relay in config.toml (or LEPIC_EPICBOX_RELAY) names another.
 # Pairing words go to the first few of them. At most 16.
 servers = ["epicbox.epiccash.com", "epicbox.stackwallet.com", "epicbox.epicnet.us", "epicbox.btlabs.uk"]
+
+[api]
+# The address "ip:port" `lepic serve --owner-tls` listens on for owner calls over mutual TLS,
+# from the clients in api-clients in the data directory (docs/cli.md). It has no default:
+# --owner-tls refuses to start until it is set.
+# owner_tls = "ip:port"
 
 [online]
 # The app's online services. The CLI uses none of them.

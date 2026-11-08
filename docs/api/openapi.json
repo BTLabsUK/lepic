@@ -1802,7 +1802,7 @@
           "wallet"
         ],
         "summary": "Change the wallet's password",
-        "description": "Re-encrypts the vault under the new password.",
+        "description": "Re-encrypts the vault under the new password. Answered on the socket only: the TLS listener\nrefuses it with a 403 `usage` problem.",
         "operationId": "change_password",
         "requestBody": {
           "content": {
@@ -1834,7 +1834,8 @@
               }
             }
           }
-        }
+        },
+        "x-socket-only": true
       }
     },
     "/v1/wallet/scan": {
@@ -3547,6 +3548,24 @@
           }
         }
       },
+      "OwnerTlsStatus": {
+        "type": "object",
+        "description": "The owner TLS listener of a running `serve --owner-tls`.",
+        "required": [
+          "address",
+          "fingerprint"
+        ],
+        "properties": {
+          "address": {
+            "type": "string",
+            "description": "The address it listens on, `ip:port`."
+          },
+          "fingerprint": {
+            "type": "string",
+            "description": "The SHA-256 of the certificate's public key info, in hex, which clients pin."
+          }
+        }
+      },
       "PasswordBody": {
         "type": "object",
         "description": "The vault's password, and the one it is re-encrypted under.",
@@ -4033,7 +4052,7 @@
           "refused": {
             "type": "integer",
             "format": "int64",
-            "description": "Connections closed unanswered: over the connection cap, or from another user.",
+            "description": "Connections closed unanswered: over the connection cap, from another user, or with a\nfailed TLS handshake.",
             "minimum": 0
           },
           "served": {
@@ -4312,6 +4331,17 @@
             "format": "int64",
             "description": "The highest node tip the wallet confirmed; `null` before the first.",
             "minimum": 0
+          },
+          "owner_tls": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/OwnerTlsStatus",
+                "description": "The owner TLS listener; absent without `--owner-tls`."
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "refresh": {
             "$ref": "#/components/schemas/MaintenanceReport"

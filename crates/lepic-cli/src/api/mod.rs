@@ -1,15 +1,17 @@
 // SPDX-License-Identifier: Apache-2.0
-//! The wallet API `lepic serve` answers on its socket: HTTP/1.1 with JSON bodies, described by
-//! one OpenAPI document (ADR 0050). A handler turns a request into the arguments of a CLI
-//! command and answers with that command's JSON report.
+//! The wallet API `lepic serve` answers on its socket, and with `--owner-tls` on a TLS listener
+//! too: HTTP/1.1 with JSON bodies, described by one OpenAPI document (ADR 0050). A handler turns
+//! a request into the arguments of a CLI command and answers with that command's JSON report.
 //!
 //! Adding a route: write its handler in `routes`, with `#[utoipa::path]` and a doc comment, and
-//! name it in [`api!`]. The router and the document are both built from that list.
+//! name it in [`api!`]. The router and the document are both built from that list. A route whose
+//! operation has the [`SOCKET_ONLY`] extension is refused on the TLS listener.
 
 mod events;
 mod openapi;
 mod problem;
 mod routes;
+mod tls;
 
 use std::cell::Cell;
 use std::convert::Infallible;
@@ -29,12 +31,13 @@ use hyper_util::rt::{TokioIo, TokioTimer};
 use lepic_wallet::event::Event;
 use lepic_wallet::slate::WireSlate;
 use serde::de::DeserializeOwned;
-use tokio::net::UnixStream;
+use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::{broadcast, watch};
 use zeroize::Zeroizing;
 
 pub(crate) use events::epicbox_state;
 pub(crate) use problem::Problem;
+pub(crate) use tls::OwnerTls;
 
 use openapi::Problems;
 
@@ -123,6 +126,16 @@ api!(
     payloads,
     payload_ack,
 );
+
+/// The operation extension that keeps a route off the TLS listener.
+const SOCKET_ONLY: &str = "x-socket-only";
+
+/// Where a connection came in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Listener {
+    Socket,
+    Tls,
+}
 
 type Body = UnsyncBoxBody<Bytes, Infallible>;
 type Answer<'a> = Pin<Box<dyn Future<Output = Result<Response<Body>, Problem>> + 'a>>;
@@ -233,9 +246,15 @@ enum Segment {
     Param(String),
 }
 
+struct Operation {
+    method: Method,
+    handler: Handler,
+    socket_only: bool,
+}
+
 struct Route {
     segments: Vec<Segment>,
-    methods: Vec<(Method, Handler)>,
+    operations: Vec<Operation>,
 }
 
 impl Route {
@@ -261,14 +280,25 @@ struct Router(Vec<Route>);
 
 impl Router {
     fn new(document: &utoipa::openapi::OpenApi) -> Self {
-        let handler = |operation: &Option<utoipa::openapi::path::Operation>| {
-            let id = operation.as_ref()?.operation_id.as_deref()?;
-            HANDLERS
+        let operation = |method, operation: &Option<utoipa::openapi::path::Operation>| {
+            let operation = operation.as_ref()?;
+            let id = operation.operation_id.as_deref()?;
+            let handler = HANDLERS
                 .iter()
-                .find_map(|(name, handler)| (*name == id).then_some(*handler))
+                .find_map(|(name, handler)| (*name == id).then_some(*handler))?;
+            let socket_only = operation
+                .extensions
+                .as_ref()
+                .and_then(|extensions| extensions.get(SOCKET_ONLY))
+                .is_some_and(|value| *value == serde_json::Value::Bool(true));
+            Some(Operation {
+                method,
+                handler,
+                socket_only,
+            })
         };
         let routes = document.paths.paths.iter().filter_map(|(path, item)| {
-            let methods: Vec<_> = [
+            let operations: Vec<_> = [
                 (Method::GET, &item.get),
                 (Method::PUT, &item.put),
                 (Method::POST, &item.post),
@@ -276,7 +306,7 @@ impl Router {
                 (Method::PATCH, &item.patch),
             ]
             .into_iter()
-            .filter_map(|(method, operation)| Some((method, handler(operation)?)))
+            .filter_map(|(method, item)| operation(method, item))
             .collect();
             let segments = path
                 .trim_start_matches('/')
@@ -286,7 +316,10 @@ impl Router {
                     None => Segment::Literal(segment.to_owned()),
                 })
                 .collect();
-            (!methods.is_empty()).then_some(Route { segments, methods })
+            (!operations.is_empty()).then_some(Route {
+                segments,
+                operations,
+            })
         });
         Self(routes.collect())
     }
@@ -295,19 +328,23 @@ impl Router {
         &self,
         method: &Method,
         path: &str,
+        listener: Listener,
     ) -> Result<(Handler, Vec<(String, String)>), Problem> {
         let (route, params) = self
             .0
             .iter()
             .find_map(|route| Some((route, route.matches(path)?)))
             .ok_or_else(Problem::not_found)?;
-        match route.methods.iter().find(|(known, _)| known == method) {
-            Some((_, handler)) => Ok((*handler, params)),
+        match route.operations.iter().find(|known| known.method == method) {
+            Some(operation) if operation.socket_only && listener == Listener::Tls => {
+                Err(Problem::socket_only())
+            }
+            Some(operation) => Ok((operation.handler, params)),
             None => {
                 let allow: Vec<_> = route
-                    .methods
+                    .operations
                     .iter()
-                    .map(|(known, _)| known.as_str())
+                    .map(|known| known.method.as_str())
                     .collect();
                 Err(Problem::method_not_allowed(allow.join(", ")))
             }
@@ -381,9 +418,13 @@ impl<'o> Api<'o> {
     }
 
     /// Answers the requests on `stream` until the client closes it or serve stops.
-    pub(crate) async fn connection(&self, stream: UnixStream) {
-        let service =
-            service_fn(|request| async move { Ok::<_, Infallible>(self.answer(request).await) });
+    pub(crate) async fn connection<S>(&self, stream: S, listener: Listener)
+    where
+        S: AsyncRead + AsyncWrite + Unpin,
+    {
+        let service = service_fn(|request| async move {
+            Ok::<_, Infallible>(self.answer(request, listener).await)
+        });
         let connection = http1::Builder::new()
             .timer(TokioTimer::new())
             .header_read_timeout(self.limits.header_timeout)
@@ -404,10 +445,14 @@ impl<'o> Api<'o> {
         }
     }
 
-    async fn answer(&self, request: hyper::Request<Incoming>) -> Response<Body> {
+    async fn answer(
+        &self,
+        request: hyper::Request<Incoming>,
+        listener: Listener,
+    ) -> Response<Body> {
         let guard = InFlight::new(&self.in_flight);
         let response = self
-            .route(request)
+            .route(request, listener)
             .await
             .unwrap_or_else(|error| problem(&error));
         drop(guard);
@@ -415,8 +460,14 @@ impl<'o> Api<'o> {
         response
     }
 
-    async fn route(&self, request: hyper::Request<Incoming>) -> Result<Response<Body>, Problem> {
-        let (handler, params) = self.router.find(request.method(), request.uri().path())?;
+    async fn route(
+        &self,
+        request: hyper::Request<Incoming>,
+        listener: Listener,
+    ) -> Result<Response<Body>, Problem> {
+        let (handler, params) =
+            self.router
+                .find(request.method(), request.uri().path(), listener)?;
         let query = request.uri().query().map(str::to_owned);
         let body = self.body(request).await?;
         handler(
@@ -513,12 +564,12 @@ mod tests {
             .keys()
             .filter(|path| {
                 router
-                    .find(&Method::GET, path)
+                    .find(&Method::GET, path, Listener::Socket)
                     .is_err_and(|p| p.status() == StatusCode::NOT_FOUND)
             })
             .filter(|path| {
                 router
-                    .find(&Method::POST, path)
+                    .find(&Method::POST, path, Listener::Socket)
                     .is_err_and(|p| p.status() == StatusCode::NOT_FOUND)
             })
             .collect();
@@ -528,29 +579,62 @@ mod tests {
     #[test]
     fn a_path_parameter_is_matched_and_a_wrong_method_names_the_allowed_ones() {
         let router = Router::new(&openapi::document());
-        let (_, params) = router.find(&Method::GET, "/v1/transactions/7").unwrap();
+        let (_, params) = router
+            .find(&Method::GET, "/v1/transactions/7", Listener::Socket)
+            .unwrap();
         assert_eq!(params, [("tx_id".to_owned(), "7".to_owned())]);
         let refused = router
-            .find(&Method::DELETE, "/v1/transactions")
+            .find(&Method::DELETE, "/v1/transactions", Listener::Socket)
             .err()
             .unwrap();
         assert_eq!(refused.status(), StatusCode::METHOD_NOT_ALLOWED);
         assert_eq!(refused.allow.as_deref(), Some("GET, POST"));
-        assert!(router.find(&Method::GET, "/v1/transactions/").is_err());
-        assert!(router.find(&Method::GET, "/v1/nothing").is_err());
+        assert!(
+            router
+                .find(&Method::GET, "/v1/transactions/", Listener::Socket)
+                .is_err()
+        );
+        assert!(
+            router
+                .find(&Method::GET, "/v1/nothing", Listener::Socket)
+                .is_err()
+        );
     }
 
     #[test]
     fn a_literal_contact_route_wins_over_the_id_route() {
         let router = Router::new(&openapi::document());
         let (_, params) = router
-            .find(&Method::GET, "/v1/contacts/quarantine")
+            .find(&Method::GET, "/v1/contacts/quarantine", Listener::Socket)
             .unwrap();
         assert!(params.is_empty());
-        let (_, params) = router.find(&Method::DELETE, "/v1/contacts/ab12").unwrap();
+        let (_, params) = router
+            .find(&Method::DELETE, "/v1/contacts/ab12", Listener::Socket)
+            .unwrap();
         assert_eq!(params, [("id".to_owned(), "ab12".to_owned())]);
-        let (_, params) = router.find(&Method::PATCH, "/v1/contacts/ab12").unwrap();
+        let (_, params) = router
+            .find(&Method::PATCH, "/v1/contacts/ab12", Listener::Socket)
+            .unwrap();
         assert_eq!(params, [("id".to_owned(), "ab12".to_owned())]);
+    }
+
+    #[test]
+    fn the_tls_listener_refuses_only_the_password_route() {
+        let router = Router::new(&openapi::document());
+        let path = "/v1/wallet/password";
+        let refused = router
+            .find(&Method::PUT, path, Listener::Tls)
+            .err()
+            .unwrap();
+        assert_eq!(refused.status(), StatusCode::FORBIDDEN);
+        assert!(router.find(&Method::PUT, path, Listener::Socket).is_ok());
+        let socket_only = router
+            .0
+            .iter()
+            .flat_map(|route| &route.operations)
+            .filter(|operation| operation.socket_only)
+            .count();
+        assert_eq!(socket_only, 1);
     }
 
     #[test]

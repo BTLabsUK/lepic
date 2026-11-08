@@ -34,11 +34,18 @@ lepic-transport.workspace = true
 lepic-wallet.workspace = true
 lepic-wallet-contacts.workspace = true
 rand = { workspace = true, features = ["std", "std_rng", "sys_rng"] }
+# Moves to [workspace.dependencies] at merge.
+rcgen = { version = "0.14.10", default-features = false, features = ["ring", "pem", "zeroize"] }
+rustls = { workspace = true, features = ["std"] }
 secrecy.workspace = true
 serde = { workspace = true, features = ["derive", "std"] }
 serde_json = { workspace = true, features = ["std"] }
+sha2.workspace = true
 thiserror = { workspace = true, features = ["std"] }
+# Moves to [workspace.dependencies] at merge.
+time = { version = "0.3.55", default-features = false }
 tokio = { workspace = true, features = ["rt", "time", "net", "signal", "macros", "sync"] }
+tokio-rustls.workspace = true
 toml = { workspace = true, features = ["std", "parse", "serde"] }
 tracing = { workspace = true, features = ["std"] }
 # Moves to [workspace.dependencies] at merge.
