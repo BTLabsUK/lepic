@@ -1287,7 +1287,7 @@ impl<H: Host> Run<'_, H> {
             .pending_invoices(self.settings.invoice_expiry)?
             .into_iter()
             .find(|invoice| invoice.slate_id == slate_id)
-            .map(|invoice| invoice.sender.to_string())
+            .map(|invoice| invoice.sender.clone())
             .ok_or(InvoiceError::NotParked { slate_id })?;
         opened.epicbox.attach_wallet(&opened.wallet)?;
         let request = spend.pay_request(account.index, amount, args.message.message);

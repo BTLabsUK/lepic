@@ -55,7 +55,9 @@ impl Methods {
 
 impl MethodLookup for Methods {
     fn method_named(&self, name: &str) -> Option<Arc<dyn Method>> {
-        self.iter().find(|method| method.id().as_str() == name).cloned()
+        self.iter()
+            .find(|method| method.id().as_str() == name)
+            .cloned()
     }
 }
 
