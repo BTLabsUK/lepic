@@ -87,22 +87,13 @@ pub fn hint(error: &CliError, settings: Option<&Settings>) -> Option<String> {
         CliError::DataDirInUse => {
             return Some(
                 "another lepic command, such as `lepic epicbox listen`, is using this wallet; \
-                 stop it or wait for it to end. If it is `lepic serve`, run this command with \
-                 --service; to take payments over HTTP next to it, start `lepic serve --http`"
-                    .to_owned(),
-            );
-        }
-        CliError::ServiceUnavailable { .. } => {
-            return Some(
-                "start `lepic serve` for this data directory, or give the socket it listens on \
-                 as --service=SOCKET"
+                 stop it or wait for it to end. If it is `lepic serve`, call its API on the socket; \
+                 to take payments over HTTP next to it, start `lepic serve --http`"
                     .to_owned(),
             );
         }
         CliError::SocketPathTooLong { .. } => {
-            return Some(
-                "give a shorter path: --socket for serve, --service=SOCKET for a client".to_owned(),
-            );
+            return Some("give a shorter path with --socket".to_owned());
         }
         CliError::SocketPathTaken { .. } => {
             return Some("remove the file or give another path with --socket".to_owned());

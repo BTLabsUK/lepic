@@ -8,6 +8,8 @@
 //! comes in through [`Host`] and [`Console`], so the CLI keeps no global state.
 
 pub mod amount;
+#[cfg(unix)]
+mod api;
 pub mod app_config;
 pub mod cli;
 mod commands;
@@ -78,12 +80,6 @@ pub fn run<H: Host>(
         Ok(settings) => settings,
         Err(error) => return report_error(console, format, &error.into(), None),
     };
-    if let Some(socket) = &cli.global.service {
-        let socket = socket
-            .clone()
-            .unwrap_or_else(|| service::default_socket(&settings.data_dir));
-        return forward(console, &settings, &cli.global, &args, &socket);
-    }
     let text = match execute(host, cli, &settings, console) {
         Ok(text) => text,
         Err(error) => return report_error(console, settings.output, &error, Some(&settings)),
@@ -119,29 +115,6 @@ fn usage_text(error: &clap::Error) -> (String, u8) {
         ErrorKind::Usage.exit_code()
     };
     (error.render().to_string(), code)
-}
-
-/// Runs the command on the `lepic serve` process at `socket` and prints what it answers. The
-/// output format this process resolved goes along, so its environment and config file apply.
-fn forward(
-    console: &mut Console,
-    settings: &Settings,
-    global: &cli::GlobalArgs,
-    args: &[OsString],
-    socket: &std::path::Path,
-) -> u8 {
-    let sent = service::request_args(args, global.output.is_none().then_some(settings.output));
-    let reply = sent.and_then(|sent| service::call(socket, sent));
-    match reply {
-        Ok(reply) => {
-            let _ = console.stdout.write_all(reply.stdout.as_bytes());
-            let _ = console.stdout.flush();
-            let _ = console.stderr.write_all(reply.stderr.as_bytes());
-            let _ = console.stderr.flush();
-            reply.code
-        }
-        Err(error) => report_error(console, settings.output, &error, Some(settings)),
-    }
 }
 
 /// Blinds the secp256k1 context before anything uses it. Nothing in the process does crypto

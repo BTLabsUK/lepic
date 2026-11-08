@@ -291,7 +291,6 @@ fn global_options_are_exactly_the_planned_eleven() {
             "output",
             "profile",
             "profile-bits",
-            "service",
             "settings"
         ]
     );

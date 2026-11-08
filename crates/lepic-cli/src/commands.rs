@@ -47,8 +47,8 @@ use lepic_wallet::send::{Delivery, SendRequest};
 use lepic_wallet::slate::WireSlate;
 use lepic_wallet::state::state_name;
 use lepic_wallet::{
-    Clock, Event, Password, Ports, ProofKey, ReceiveRequest, SharedRng, Wallet, WalletConfig,
-    WalletError, WalletName, WordCount,
+    Clock, Event, Password, Ports, ProofKey, ReceiveRequest, Received, SharedRng, Wallet,
+    WalletConfig, WalletError, WalletName, WordCount,
 };
 use rand::Rng as _;
 use rand::SeedableRng as _;
@@ -61,9 +61,9 @@ use crate::amount::{format_amount, format_fee, format_units, parse_amount};
 use crate::cli::{
     Command, DestinationArgs, EpicboxCommand, FinalizeArgs, HttpCommand, HttpListenArgs,
     ImportHistoryArgs, ImportSeedArgs, InitArgs, InvoiceCommand, IssueArgs, ListingArgs,
-    NodeCommand, PayArgs, PostArgs, ReceiveArgs, ResendArgs, RestoreArgs, ScanArgs,
-    SelectionArg, SendArgs, SendDestinationArgs, SpendArgs, TorAddressArgs, TorBinaryArgs,
-    TorCommand, TorListenArgs, TxCommand, WalletCommand, WalletScanArgs, WordsArg,
+    NodeCommand, PayArgs, PostArgs, ReceiveArgs, ResendArgs, RestoreArgs, ScanArgs, SelectionArg,
+    SendArgs, SendDestinationArgs, SpendArgs, TorAddressArgs, TorBinaryArgs, TorCommand,
+    TorListenArgs, TxCommand, WalletCommand, WalletScanArgs, WordsArg,
 };
 use crate::exit::{CliError, ErrorKind};
 use crate::host::{Host, HostNode};
@@ -1132,18 +1132,8 @@ impl<H: Host> Run<'_, H> {
             .import(&Location::File(args.slate.file.clone()))
             .await
             .map_err(slate_file(&args.slate.file))?;
-        let received = opened
-            .wallet
-            .receive(
-                FILE,
-                &wire,
-                ReceiveRequest {
-                    account: Some(args.account.account),
-                    message: args.message.message,
-                    ..ReceiveRequest::default()
-                },
-            )
-            .await?;
+        let received =
+            receive_slate(&opened, &wire, args.account.account, args.message.message).await?;
         let reply = args
             .reply
             .reply_file
@@ -1167,26 +1157,7 @@ impl<H: Host> Run<'_, H> {
             .import(&Location::File(args.slate.file.clone()))
             .await
             .map_err(slate_file(&args.slate.file))?;
-        let propagation = propagation(args.fluff.fluff);
-        // Which flow the file answers is known only once it is decoded, which the engine does.
-        let finalized = match opened.wallet.finalize(FILE, &wire, propagation).await {
-            Err(error @ FinalizeError::WrongStage { .. }) => {
-                match opened
-                    .wallet
-                    .finalize_invoice(FILE, &wire, propagation)
-                    .await
-                {
-                    Err(InvoiceError::WrongStage { .. }) => return Err(error.into()),
-                    other => other?,
-                }
-            }
-            other => other?,
-        };
-        Ok(Report::Finalize(FinalizeReport {
-            tx_id: finalized.tx_id.0,
-            slate_id: finalized.slate.id().to_string(),
-            state: "posted".to_owned(),
-        }))
+        finalize_slate(&opened, &wire, args.fluff.fluff).await
     }
 
     async fn invoice(&mut self, command: InvoiceCommand) -> Result<Report, CliError> {
@@ -1327,8 +1298,7 @@ impl<H: Host> Run<'_, H> {
         }))
     }
 
-    /// Re-encrypts the vault under a new password. Only the vault file changes: the database key
-    /// comes from the seed (ADR 0032).
+    /// Re-encrypts the vault under a new password.
     async fn change_password(&mut self) -> Result<Report, CliError> {
         let vault = self.settings.data_dir.join(VAULT_FILE);
         if !vault.exists() {
@@ -1343,7 +1313,11 @@ impl<H: Host> Run<'_, H> {
                 false,
             )
             .await?;
-        let file = self.console.env.get(NEW_PASSWORD_FILE_ENV).map(PathBuf::from);
+        let file = self
+            .console
+            .env
+            .get(NEW_PASSWORD_FILE_ENV)
+            .map(PathBuf::from);
         let new = self
             .console
             .secrets
@@ -1351,10 +1325,7 @@ impl<H: Host> Run<'_, H> {
             .await?;
         check_private_dir(&self.settings.data_dir)?;
         let _lock = lock_data_dir(&self.settings.data_dir).await?;
-        FileVault::new(&self.settings.data_dir, self.host.vault_kdf())
-            .rekey(&password_from(current), &password_from(new))
-            .map_err(WalletError::from)?;
-        Ok(Report::Password(PasswordReport { changed: true }))
+        rekey(self.host, &self.settings.data_dir, current, new)
     }
 
     async fn new_password(&mut self) -> Result<Password, CliError> {
@@ -1599,7 +1570,7 @@ fn is_direct(transport: lepic_transport::transport::TransportId) -> bool {
 }
 
 /// Whether the address the user gave names an onion, valid or not.
-fn is_onion(address: &str) -> bool {
+pub(crate) fn is_onion(address: &str) -> bool {
     lepic_tor::parse_onion(address).is_ok() || address.to_ascii_lowercase().contains(".onion")
 }
 
@@ -2031,6 +2002,63 @@ const fn category_name(category: BalanceCategory) -> &'static str {
         BalanceCategory::Locked => "locked",
         BalanceCategory::UnpaidInvoice => "unpaid_invoice",
     }
+}
+
+/// Receives `wire`, a slate as a file holds it, into `account`.
+async fn receive_slate<N: NodeApi + 'static>(
+    opened: &Opened<N>,
+    wire: &WireSlate,
+    account: String,
+    message: Option<String>,
+) -> Result<Received, CliError> {
+    let request = ReceiveRequest {
+        account: Some(account),
+        message,
+        ..ReceiveRequest::default()
+    };
+    Ok(opened.wallet.receive(FILE, wire, request).await?)
+}
+
+/// Finalizes `wire`, a reply slate as a file holds it, to a send or to an invoice, and posts it.
+async fn finalize_slate<N: NodeApi + 'static>(
+    opened: &Opened<N>,
+    wire: &WireSlate,
+    fluff: bool,
+) -> Result<Report, CliError> {
+    let propagation = propagation(fluff);
+    // Which flow the slate answers is known only once it is decoded, which the engine does.
+    let finalized = match opened.wallet.finalize(FILE, wire, propagation).await {
+        Err(error @ FinalizeError::WrongStage { .. }) => {
+            match opened
+                .wallet
+                .finalize_invoice(FILE, wire, propagation)
+                .await
+            {
+                Err(InvoiceError::WrongStage { .. }) => return Err(error.into()),
+                other => other?,
+            }
+        }
+        other => other?,
+    };
+    Ok(Report::Finalize(FinalizeReport {
+        tx_id: finalized.tx_id.0,
+        slate_id: finalized.slate.id().to_string(),
+        state: "posted".to_owned(),
+    }))
+}
+
+/// Re-encrypts the vault in `data_dir` under `new`. Only the vault file changes: the database key
+/// comes from the seed (ADR 0032). The caller holds the data directory lock.
+fn rekey<H: Host>(
+    host: &H,
+    data_dir: &Path,
+    current: Zeroizing<String>,
+    new: Zeroizing<String>,
+) -> Result<Report, CliError> {
+    FileVault::new(data_dir, host.vault_kdf())
+        .rekey(&password_from(current), &password_from(new))
+        .map_err(WalletError::from)?;
+    Ok(Report::Password(PasswordReport { changed: true }))
 }
 
 fn password_from(mut secret: Zeroizing<String>) -> Password {

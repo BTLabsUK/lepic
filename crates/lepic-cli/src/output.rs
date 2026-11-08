@@ -7,6 +7,7 @@ use std::fmt::Write as _;
 use std::io::Write as _;
 
 use serde::{Serialize, Serializer};
+use utoipa::ToSchema;
 use zeroize::Zeroizing;
 
 use crate::amount::{AmountError, format_units, parse_amount};
@@ -29,6 +30,7 @@ pub enum Report {
     Send(SendReport),
     Resend(ResendReport),
     Receive(ReceiveReport),
+    SlateReceive(SlateReceiveReport),
     Finalize(FinalizeReport),
     Post(PostReport),
     Cancel(TxStateReport),
@@ -134,7 +136,7 @@ pub struct WalletScanReport {
     pub delete_unconfirmed: bool,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct InfoReport {
     pub network: String,
     /// The chain tip the balances were computed at.
@@ -150,7 +152,7 @@ pub struct InfoReport {
     pub accounts: Vec<AccountReport>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct AccountReport {
     pub index: u32,
     pub label: String,
@@ -162,18 +164,18 @@ pub struct AccountReport {
     pub locked: Option<String>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct AddressReport {
     pub address: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct OutputsReport {
     pub account: String,
     pub outputs: Vec<OutputReport>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct OutputReport {
     /// Hex commitment.
     pub commitment: String,
@@ -189,12 +191,12 @@ pub struct OutputReport {
     pub tx_id: Option<u32>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct PasswordReport {
     pub changed: bool,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct SendReport {
     pub tx_id: u32,
     pub slate_id: String,
@@ -233,7 +235,19 @@ pub struct ReceiveReport {
     pub repeated: bool,
 }
 
-#[derive(Debug, Serialize)]
+/// A slate received through the API: the reply travels in the answer, not in a file.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct SlateReceiveReport {
+    pub tx_id: u32,
+    pub slate_id: String,
+    pub amount: String,
+    /// The reply slate to give the sender, V3 slate JSON.
+    pub slate: String,
+    /// The slate was received before; `slate` is the reply stored then.
+    pub repeated: bool,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
 pub struct FinalizeReport {
     pub tx_id: u32,
     pub slate_id: String,
@@ -257,13 +271,13 @@ pub struct TxStateReport {
     pub state: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct TxListReport {
     pub account: String,
     pub transactions: Vec<TxReport>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct TxReport {
     pub tx_id: u32,
     pub direction: String,
@@ -322,7 +336,7 @@ pub struct TxReport {
 }
 
 /// A listing: the service key in hex and the generation.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct ListingReport {
     pub service_key: String,
     pub generation: u32,
@@ -342,7 +356,7 @@ pub struct ImportHistoryReport {
 }
 
 /// What the old wallet recorded of an imported transaction.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct ImportedReport {
     pub source_id: u32,
     pub kind: &'static str,
@@ -351,7 +365,7 @@ pub struct ImportedReport {
     pub check: &'static str,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct MessageReport {
     /// `sender` or `receiver` of the money.
     pub role: String,
@@ -746,8 +760,8 @@ pub struct ContactPayloadAckReport {
 #[derive(Debug, Serialize)]
 pub struct ServeReport {
     pub socket: String,
-    /// Requests answered, whatever their exit code.
-    pub requests: u32,
+    /// API requests answered, problems included.
+    pub requests: u64,
     /// What the Epicbox listener received.
     pub inbox: InboxReport,
     /// What the HTTP listener answered; absent without `--http`.
@@ -755,9 +769,21 @@ pub struct ServeReport {
     pub http: Option<HttpListenReport>,
 }
 
-/// How the maintenance of a running `serve` went: `serve status`.
-#[derive(Debug, Serialize)]
+/// A running `serve`: facts only, which a monitor compares with its own thresholds.
+#[derive(Debug, Serialize, ToSchema)]
 pub struct ServeStatusReport {
+    /// The socket the API answers on.
+    pub socket: String,
+    /// Seconds since serve started.
+    pub uptime_s: u64,
+    pub requests: RequestsReport,
+    /// The Epicbox listener's connection: `connecting`, `connected`, `disconnected` or
+    /// `stopped`; `null` before its first report.
+    pub epicbox: Option<&'static str>,
+    /// The node's tip at the wallet's last refresh that applied; `null` before the first.
+    pub height: Option<u64>,
+    /// The highest node tip the wallet confirmed; `null` before the first.
+    pub node_tip: Option<u64>,
     pub refresh: MaintenanceReport,
     pub collect: MaintenanceReport,
     /// The HTTP listener; absent without `--http`.
@@ -765,8 +791,19 @@ pub struct ServeStatusReport {
     pub http: Option<ServeHttpStatus>,
 }
 
+/// The API's requests since serve started.
+#[derive(Debug, Clone, Copy, Default, Serialize, ToSchema)]
+pub struct RequestsReport {
+    /// Requests answered, problems included.
+    pub served: u64,
+    /// Requests being answered now; an event stream counts while it is open.
+    pub in_flight: u64,
+    /// Connections closed unanswered: over the connection cap, or from another user.
+    pub refused: u64,
+}
+
 /// The HTTP listener of a running `serve --http`, with its counts so far.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct ServeHttpStatus {
     #[serde(flatten)]
     pub listener: HttpListenReport,
@@ -775,7 +812,7 @@ pub struct ServeHttpStatus {
 }
 
 /// One maintenance task of `serve`, since it started.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct MaintenanceReport {
     /// Failures since the last success.
     pub consecutive_failures: u32,
@@ -786,7 +823,7 @@ pub struct MaintenanceReport {
 }
 
 /// What `http listen`, or the HTTP listener of `serve`, did before it was stopped.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct HttpListenReport {
     pub port: u16,
     /// `local` or `internet`.
@@ -836,7 +873,7 @@ pub struct EpicboxStatusReport {
     pub pending_deliveries: usize,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct NodeStatusReport {
     pub node: String,
     pub node_version: String,
@@ -1136,6 +1173,7 @@ fn write_human(out: &mut Vec<u8>, report: &Report) -> std::io::Result<()> {
         Report::Send(_)
         | Report::Resend(_)
         | Report::Receive(_)
+        | Report::SlateReceive(_)
         | Report::Finalize(_)
         | Report::Post(_)
         | Report::Cancel(_)
@@ -1578,23 +1616,6 @@ fn write_http_counts(out: &mut Vec<u8>, r: &HttpListenReport) -> std::io::Result
     )
 }
 
-fn write_maintenance(
-    out: &mut Vec<u8>,
-    name: &str,
-    task: &MaintenanceReport,
-) -> std::io::Result<()> {
-    let success = task.last_success.as_deref().unwrap_or("never");
-    write!(
-        out,
-        "{name}  {} failures in a row, last success {success}",
-        task.consecutive_failures
-    )?;
-    match &task.last_error {
-        Some(error) => writeln!(out, ", last error: {error}"),
-        None => writeln!(out),
-    }
-}
-
 /// An inbox, listener, Tor or Epicbox report. Writes nothing for any other.
 fn write_transport_human(out: &mut Vec<u8>, report: &Report) -> std::io::Result<()> {
     match report {
@@ -1605,14 +1626,6 @@ fn write_transport_human(out: &mut Vec<u8>, report: &Report) -> std::io::Result<
                 write_http_counts(out, http)?;
             }
             write_inbox(out, &r.inbox)
-        }
-        Report::ServeStatus(r) => {
-            write_maintenance(out, "Refresh", &r.refresh)?;
-            write_maintenance(out, "Collect", &r.collect)?;
-            match &r.http {
-                Some(http) => write_http_counts(out, &http.listener),
-                None => Ok(()),
-            }
         }
         Report::HttpListen(r) => write_http_counts(out, r),
         Report::TorAddress(r) => writeln!(out, "{}", r.onion),

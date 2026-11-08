@@ -56,10 +56,21 @@ pub struct Tuning {
     /// The port `listen` takes unless `--port` names another.
     pub listen_port: u16,
     pub listen: ListenLimits,
+    pub api: ApiLimits,
     pub send: lepic_foreign::ClientSettings,
     tor_network: TorNetworkTimings,
     pub tor_connect: Duration,
     tor_request: Duration,
+}
+
+/// The bounds of the wallet API on serve's socket.
+#[derive(Debug, Clone, Copy)]
+pub struct ApiLimits {
+    /// Connections served at once; more are closed unanswered.
+    pub max_connections: usize,
+    pub header_timeout: Duration,
+    pub body_timeout: Duration,
+    pub max_body: usize,
 }
 
 impl Tuning {
@@ -97,6 +108,7 @@ struct File {
     floonet: FloonetTable,
     epicbox: EpicboxTable,
     http: HttpTable,
+    api: ApiTable,
     tor: TorTable,
 }
 
@@ -149,6 +161,15 @@ struct HttpTable {
     receives_per_minute: NonZeroU32,
     send_connect_timeout_s: NonZeroU32,
     send_request_timeout_s: NonZeroU32,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ApiTable {
+    max_connections: NonZeroU32,
+    header_timeout_s: NonZeroU32,
+    body_timeout_s: NonZeroU32,
+    max_body_kib: NonZeroU32,
 }
 
 #[derive(Deserialize)]
@@ -209,10 +230,11 @@ impl AppConfig {
             floonet,
             epicbox,
             http,
+            api,
             tor,
             ..
         } = file;
-        let tuning = tuning(&node, &epicbox, &http, &tor).map_err(invalid)?;
+        let tuning = tuning(&node, &epicbox, &http, &api, &tor).map_err(invalid)?;
         if tor.onions.len() > MAX_ONION_ROUTES {
             return Err(invalid("tor.onions"));
         }
@@ -240,11 +262,12 @@ impl AppConfig {
     }
 }
 
-/// The tuning of the four tables, or the key whose minimum is above its maximum.
+/// The tuning of the five tables, or the key whose minimum is above its maximum.
 fn tuning(
     node: &NodeTable,
     epicbox: &EpicboxTable,
     http: &HttpTable,
+    api: &ApiTable,
     tor: &TorTable,
 ) -> Result<Tuning, &'static str> {
     let retry = RetryPolicy {
@@ -293,6 +316,12 @@ fn tuning(
             answer_timeout: seconds(http.answer_timeout_s),
             requests_per_minute: http.requests_per_minute.get(),
             receives_per_minute: http.receives_per_minute.get(),
+        },
+        api: ApiLimits {
+            max_connections: count(api.max_connections),
+            header_timeout: seconds(api.header_timeout_s),
+            body_timeout: seconds(api.body_timeout_s),
+            max_body: count(api.max_body_kib).saturating_mul(1024),
         },
         send: lepic_foreign::ClientSettings {
             connect_timeout: seconds(http.send_connect_timeout_s),
@@ -353,6 +382,8 @@ mod tests {
         assert_eq!(tuning.relay.ping_interval, Duration::from_secs(25));
         assert_eq!(tuning.call_policy.retry.max_attempts, 3);
         assert_eq!(tuning.listen.receives_per_minute, 30);
+        assert_eq!(tuning.api.max_connections, 32);
+        assert_eq!(tuning.api.max_body, 8192 * 1024);
         assert_eq!(tuning.tor_connect, Duration::from_secs(75));
         assert_eq!(tuning.tor_timings().publish, Duration::from_secs(180));
     }

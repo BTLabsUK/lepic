@@ -9,6 +9,12 @@ Conventional Commit messages at release time.
 
 ### Changed
 
+- `lepic serve` answers the wallet API, HTTP/1.1 on its socket (ADR 0050): status, events as
+  server-sent events, wallet info, address, outputs and password, node status, transactions,
+  Epicbox sends, and slate receive and finalize. Bodies are the commands' JSON reports, errors
+  RFC 9457 problem details. `docs/api/openapi.json` describes it, with the payment endpoint.
+  `lepic --service`, its line protocol and the `service_unavailable` error kind are removed;
+  `GET /v1/status` replaces `lepic --service serve status`.
 - The wallet's onion has a key of its own, the namespace key `lepic-wallet onion key v1`, and is
   no longer the payment-proof address in onion form (ADR 0044). Updated installs show a new
   onion; a restore from the phrase gives the same one. Epicbox and payment-proof addresses do
