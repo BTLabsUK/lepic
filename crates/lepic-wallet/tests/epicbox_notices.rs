@@ -23,13 +23,15 @@ use lepic_slate::codec::legacy::v3_json::V3JsonCodec;
 use lepic_slate::codec::{Codec, EncodeContext};
 use lepic_slate::model::SlateId;
 use lepic_store::{PendingInvoiceStatus, TxDirection, TxState};
+use lepic_transport::method::Method;
 use lepic_transport::transport::Inbound;
 use lepic_wallet::Event;
 use lepic_wallet::event::{DeclinedInvoice, PostedInvoice, WithdrawnInvoice};
-use lepic_wallet::inbox::{InboxSummary, ListenHandle};
+use lepic_wallet::inbox::{Arrival, Handled, InboxSummary, ListenHandle};
 use lepic_wallet::invoice::{IssuedInvoice, PaidInvoice};
 use lepic_wallet::notice::{MAX_NOTICE_LEN, Notice, NoticeKind, Payload, classify_text};
 use lepic_wallet::peer_compat::PeerKind;
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::broadcast::Receiver;
 
@@ -126,6 +128,31 @@ impl World {
                 return Ok(false);
             };
             Ok(repos.tx_marks(stored.id)?.withdrawn_answered)
+        })
+    }
+
+    /// Hands each message waiting for the issuer to its wallet as arrived over `method`, and
+    /// acknowledges it. Returns how each settled.
+    fn issuer_arrivals_over(&self, method: &Arc<dyn Method>) -> Vec<Handled> {
+        let client = self.issuer.client();
+        self.block_on(async {
+            let subscription = client.drain().unwrap();
+            let mut handled = Vec::new();
+            while let Some(envelope) = self.within(subscription.next_envelope()).await.unwrap() {
+                let arrival = Arrival {
+                    msg_id: None,
+                    envelope: &envelope,
+                    attempt: 1,
+                    listing: None,
+                };
+                handled.push(self.issuer.wallet.arrived(method, arrival).await.unwrap());
+                subscription
+                    .acknowledge(envelope.ack_token())
+                    .await
+                    .unwrap();
+            }
+            subscription.stop().await.unwrap();
+            handled
         })
     }
 
@@ -1012,4 +1039,56 @@ fn an_unmarked_payment_proves_nothing_and_gets_no_notice() {
     assert_eq!(world.issuer_capability(&key), Some(PeerKind::Epic));
     assert_eq!(world.relay.received("PostSlate"), before);
     assert!(world.drain_peer(&peer).is_empty());
+}
+
+/// The issuer finalizes a payment that arrived over one instance of its Epicbox method: the
+/// `posted` goes out over the instance its ports hold, and the arrival's sends nothing, as an
+/// I2 has no reply.
+#[test]
+fn a_notice_goes_over_the_method_the_ports_hold_not_the_one_the_payment_arrived_over() {
+    let world = World::new();
+    world.settle_one_invoice();
+    world.payer.fund(10, world::FUNDING);
+    let issued = world.issue(None);
+    world.drain_payer_invoices();
+    world.pay(&issued);
+    let arrival = world.issuer.recorder();
+    let before = world.issuer.delivered_to().len();
+
+    let handled = world.issuer_arrivals_over(&arrival.method);
+
+    assert_eq!(handled, vec![Handled::Finalized]);
+    assert_eq!(
+        world.issuer.delivered_to()[before..],
+        [world.payer.address.to_string()]
+    );
+    assert!(arrival.delivered_to().is_empty());
+    assert_eq!(world.drain_payer_invoices().notices, 1);
+}
+
+/// The issuer, with `methods` in its ports, finalizes a payment of its invoice: the payment
+/// completes and no `posted` goes out, since the stored `epicbox` names no method of its ports.
+fn a_payment_completes_without_a_notice(methods: PortsMethods) {
+    let world = World::with_issuer_methods(methods);
+    let issued = world.issue(None);
+    world.drain_payer_invoices();
+    world.pay(&issued);
+    let before = world.issuer.delivered_to().len();
+
+    let summary = world.drain_issuer();
+
+    assert_eq!((summary.finalized, summary.notices), (1, 0));
+    assert_eq!(world.node.pushed_transactions().len(), 1);
+    assert_eq!(world.issuer.delivered_to().len(), before);
+    assert_eq!(world.drain_payer_invoices().notices, 0);
+}
+
+#[test]
+fn without_methods_in_the_ports_a_payment_completes_without_a_notice() {
+    a_payment_completes_without_a_notice(PortsMethods::Absent);
+}
+
+#[test]
+fn a_stored_method_the_ports_do_not_hold_sends_no_notice_and_the_payment_completes() {
+    a_payment_completes_without_a_notice(PortsMethods::Empty);
 }
