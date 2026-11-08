@@ -82,6 +82,10 @@ workspace and the epic-wallet interop scenarios pass unchanged, and the binding'
   Every caller of those changes, in this repository only.
 - The risk is in moving the order of effects and the marker handling. The adversarial race tests,
   the lifecycle tests and the vectors are the guard; no step changes behaviour.
+- Notices carry no method. The engine resolves the method of each payment from the transport id
+  stored with its transaction, through a lookup of methods the consumer hands it in the wallet's
+  ports; with no lookup, no notice is sent. The padding lengths of a notice are the method's, and
+  a notice that arrives is handed to one engine entry, whichever method carried it.
 
 ## Alternatives considered
 

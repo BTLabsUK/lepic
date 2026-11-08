@@ -20,12 +20,12 @@ between crates are fixed below and checked by `cargo xtask deps-check`.
 | `lepic-node` | Node JSON-RPC client for the foreign API, with strict response validation and bounded sizes. | network |
 | `lepic-store` | SQLite storage behind repository traits, migrations, encryption of private transaction context, the database file encrypted at rest (ADR 0032). | disk |
 | `lepic-transport` | Transport traits, the method port, shared legacy codecs, format policy, the file transport. | disk |
-| `lepic-epicbox` | Epicbox addresses, message crypto, protocol frames, relay client and its transport. | network |
+| `lepic-epicbox` | Epicbox addresses, message crypto, protocol frames, the relay client; no LEPIC trait. | network |
 | `lepic-foreign` | The wallet foreign API over HTTP (ADR 0017): JSON-RPC messages, the client and the `http` transport, the listener. | network |
 | `lepic-tor` | Tor on desktop and Android (ADR 0018): onion v3 addresses and the wallet's onion key, a tor child process per wallet driven over its control port, SOCKS5, the `tor` transport. | network, child process |
 | `lepic-wallet` | The engine: accounts, output selection, send, receive, finalize, cancel, scan, refresh, transaction state machine, events. | through ports |
 | `lepic-wallet-contacts` | Contacts on the engine (RFC 0002): pairing, contact mailboxes, sealed slates, contact invoices, key checks and app payloads. Drives `lepic-wallet` through its public calls and the hooks of `lepic_wallet::extension`. | through ports |
-| `lepic-methods` | Transaction methods: the registry of methods and one module per method, each behind a feature. Re-exports the port of `lepic-transport` and the wire crates' transports. | through ports |
+| `lepic-methods` | Transaction methods: the registry of methods and one module per method, each behind a feature. The `epicbox` module is the Epicbox method: its inbox loop, notices, listing addresses and invoices over the relay. Re-exports the port of `lepic-transport` and the wire crates' transports. | through ports |
 | `lepic-telemetry` | Tracing subscribers for CLI and mobile, redaction helpers. | stderr, files |
 | `lepic-cli` | The `lepic` binary. | all |
 | `lepic-ffi` | LEPIC's FFI API, built with flutter_rust_bridge (ADR 0007). The Flutter binding is a separate repository (ADR 0023). | all |
@@ -67,7 +67,7 @@ lepic-transport   -> lepic-slate, lepic-primitives, lepic-crypto
 lepic-epicbox     -> lepic-transport, lepic-slate, lepic-crypto, lepic-primitives
 lepic-foreign     -> lepic-transport, lepic-slate
 lepic-tor         -> lepic-foreign, lepic-transport, lepic-slate
-lepic-wallet      -> all crates above
+lepic-wallet      -> lepic-contact, lepic-store, lepic-node, lepic-transport, lepic-slate, lepic-keychain, lepic-crypto, lepic-primitives
 lepic-methods     -> lepic-wallet, lepic-transport, lepic-epicbox, lepic-foreign, lepic-tor, lepic-node, lepic-slate, lepic-crypto, lepic-primitives
 lepic-wallet-contacts -> all crates above
 lepic-telemetry   -> (external only)
@@ -77,7 +77,9 @@ lepic-ffi         -> lepic-wallet, lepic-wallet-contacts, lepic-methods, lepic-t
 
 The block applies to normal and build dependencies. Any crate may take `lepic-telemetry` as a
 dev-dependency for its log-capture test helpers, and `lepic-wallet` takes `lepic-wallet-contacts`
-as one, so the contact tests run on the engine's own test harness (ADR 0029). Any other edge is a design change and needs an ADR.
+as one, so the contact tests run on the engine's own test harness (ADR 0029). `lepic-wallet` also
+takes `lepic-methods` and `lepic-epicbox` as dev-dependencies, so its tests drive the engine through
+the Epicbox method on a mock relay (ADR 0051). Any other edge is a design change and needs an ADR.
 `lepic-ffi`'s edge to `lepic-tor` is optional, behind its default `tor` feature (ADR 0026).
 Pure crates (`crypto`, `primitives`, `keychain`, `slate`, `contact`) may not depend on Tokio or the filesystem,
 read a clock, or create their own randomness.
