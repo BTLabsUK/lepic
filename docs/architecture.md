@@ -19,13 +19,13 @@ between crates are fixed below and checked by `cargo xtask deps-check`.
 | `lepic-contact` | Contact pairing formats (RFC 0002): the sealed envelope (HPKE to a contact's X25519 key, signed with its Ed25519 key) and its armor, contact cards, invites, pairing replies and confirms, the SAS. | none |
 | `lepic-node` | Node JSON-RPC client for the foreign API, with strict response validation and bounded sizes. | network |
 | `lepic-store` | SQLite storage behind repository traits, migrations, encryption of private transaction context, the database file encrypted at rest (ADR 0032). | disk |
-| `lepic-transport` | Transport traits, the method port, shared legacy codecs, format policy, the file transport. | disk |
-| `lepic-epicbox` | Epicbox addresses, message crypto, protocol frames, the relay client; no LEPIC trait. | network |
-| `lepic-foreign` | The wallet foreign API over HTTP (ADR 0017): JSON-RPC messages, the client, the listener. The `http` method lives in `lepic-methods`. | network |
-| `lepic-tor` | Tor on desktop and Android (ADR 0018): onion v3 addresses and the wallet's onion key, a tor child process per wallet driven over its control port, SOCKS5. The `tor` method lives in `lepic-methods`. | network, child process |
-| `lepic-wallet` | The engine: accounts, output selection, send, receive, finalize, cancel, scan, refresh, transaction state machine, events. | through ports |
+| `lepic-transport` | Transport traits, the method port and the registry's lookup, the LEPIC marker, shared legacy codecs, format policy, the file transport. | disk |
+| `lepic-epicbox` | Epicbox addresses, message crypto, protocol frames, the relay client. Protocol only: the `epicbox` method lives in `lepic-methods`. | network |
+| `lepic-foreign` | The wallet foreign API over HTTP (ADR 0017): JSON-RPC messages, the client, the listener. Protocol only: it implements no LEPIC trait, and the `http` method and the receiver live in `lepic-methods`, which re-exports its API. | network |
+| `lepic-tor` | Tor on desktop and Android (ADR 0018): onion v3 addresses and the wallet's onion key, a tor child process per wallet driven over its control port, SOCKS5. Protocol only: the `tor` method lives in `lepic-methods`; `OnionClientSettings` stays here. | network, child process |
+| `lepic-wallet` | The engine: accounts, output selection, send, receive, finalize, cancel, scan, refresh, transaction state machine, events. It knows no method: a transaction stores an opaque transport id, which the engine resolves through the consumer's registry (`Ports.methods`); with none it sends no notice. | through ports |
 | `lepic-wallet-contacts` | Contacts on the engine (RFC 0002): pairing, contact mailboxes, sealed slates, contact invoices, key checks and app payloads. Drives `lepic-wallet` through its public calls and the hooks of `lepic_wallet::extension`. | through ports |
-| `lepic-methods` | Transaction methods: the registry of methods and one module per method, each behind a feature. The `epicbox` module is the Epicbox method, usable without the engine (`epicbox`); its inbox loop, notices, listing addresses and invoices over the relay need the engine (`epicbox-wallet`). The `http` and `tor` modules are the HTTP and Tor methods, and the one receiver of a foreign-API listener; they re-export what their wire crates offer. Re-exports the port of `lepic-transport`. | through ports |
+| `lepic-methods` | Transaction methods: the registry of methods and one module per method, each behind a feature. The `epicbox` module is the Epicbox method, usable without the engine (`epicbox`); its inbox loop, notices, listing addresses and invoices over the relay need the engine (`epicbox-wallet`). The `http` and `tor` modules are the HTTP and Tor methods, and the one receiver of a foreign-API listener; they re-export what their wire crates offer. The `file` method stays in `lepic-transport`. Re-exports the port of `lepic-transport`. | through ports |
 | `lepic-telemetry` | Tracing subscribers for CLI and mobile, redaction helpers. | stderr, files |
 | `lepic-cli` | The `lepic` binary. | all |
 | `lepic-ffi` | LEPIC's FFI API, built with flutter_rust_bridge (ADR 0007). The Flutter binding is a separate repository (ADR 0023). | all |
@@ -41,8 +41,8 @@ Outside the product workspace, with their own `Cargo.lock`:
 ### Feature code kept out of the money core
 
 Contact pairing and its key schedule (RFC 0002) live in `lepic-wallet-contacts` (ADR 0029), the
-LEPIC marker of slates sent between LEPIC wallets in `lepic-epicbox` (`marker`), next to the
-transport that uses it. What the pure crates keep of LEPIC's own features is the least the
+LEPIC marker of slates sent between LEPIC wallets in `lepic-transport` (`marker`), which the
+methods that use it share. What the pure crates keep of LEPIC's own features is the least the
 features need from the wallet's keychain:
 
 - `lepic-keychain` `contact_identity`: the plain key at `m/<a>/2/0` that the contact key
