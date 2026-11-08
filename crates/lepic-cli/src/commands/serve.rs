@@ -149,11 +149,19 @@ impl<H: Host> Service<'_, H> {
             }
             Call::Finalize { wire, fluff } => finalize_slate(&self.held, &wire, fluff).await,
             // Serve holds the data directory lock, so the vault cannot change under the rekey.
+            // Argon2id would hold the runtime thread, and every connection with it.
             Call::Password { current, new } => {
                 if new.is_empty() {
                     return Err(SecretError::EmptyNew.into());
                 }
-                rekey(self.host, &self.settings.data_dir, current, new)
+                let kdf = self.host.vault_kdf();
+                let data_dir = self.settings.data_dir.clone();
+                tokio::task::spawn_blocking(move || rekey(kdf, &data_dir, current, new))
+                    .await
+                    .map_err(|error| CliError::Io {
+                        what: "change the password",
+                        source: std::io::Error::other(error),
+                    })?
             }
             Call::ContactExport => Ok(Report::ContactBackup(ContactBackupReport {
                 backup: contact::export_document(&self.held).await?,

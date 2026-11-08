@@ -10,6 +10,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use jiff::Timestamp;
 use lepic_epicbox::{ClientSettings, EpicboxAddress, Network as RelayNetwork, TRANSPORT_ID};
+use lepic_keychain::KdfParams;
 use lepic_keychain::vault::MAX_WALLET_SEED_FILE_LEN;
 use lepic_methods::epicbox::Epicbox;
 use lepic_methods::http::{
@@ -1375,7 +1376,7 @@ impl<H: Host> Run<'_, H> {
             .await?;
         check_private_dir(&self.settings.data_dir)?;
         let _lock = lock_data_dir(&self.settings.data_dir).await?;
-        rekey(self.host, &self.settings.data_dir, current, new)
+        rekey(self.host.vault_kdf(), &self.settings.data_dir, current, new)
     }
 
     async fn new_password(&mut self) -> Result<Password, CliError> {
@@ -2067,14 +2068,15 @@ async fn finalize_slate<N: NodeApi + 'static>(
 }
 
 /// Re-encrypts the vault in `data_dir` under `new`. Only the vault file changes: the database key
-/// comes from the seed (ADR 0032). The caller holds the data directory lock.
-fn rekey<H: Host>(
-    host: &H,
+/// comes from the seed (ADR 0032). The caller holds the data directory lock. It runs Argon2id
+/// twice, so serve calls it off its runtime thread.
+fn rekey(
+    kdf: KdfParams,
     data_dir: &Path,
     current: Zeroizing<String>,
     new: Zeroizing<String>,
 ) -> Result<Report, CliError> {
-    FileVault::new(data_dir, host.vault_kdf())
+    FileVault::new(data_dir, kdf)
         .rekey(&password_from(current), &password_from(new))
         .map_err(WalletError::from)?;
     Ok(Report::Password(PasswordReport { changed: true }))
