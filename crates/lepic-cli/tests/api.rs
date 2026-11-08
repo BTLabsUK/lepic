@@ -304,3 +304,198 @@ fn the_event_stream_yields_the_wallets_events() {
         }
     });
 }
+
+/// A funded, restored wallet served with its mock node and relay.
+fn funded() -> (TestHost, Instance) {
+    let host = TestHost::new();
+    host.fund(SENDER_MNEMONIC, 0, FUNDING, 1);
+    let wallet = Instance::new("serving password");
+    wallet.restore(&host, SENDER_MNEMONIC);
+    (host, wallet)
+}
+
+const NO_CONTACT: &str = "00000000000000000000000000000000";
+
+#[test]
+fn transaction_routes_refuse_what_the_cli_refuses() {
+    let (host, wallet) = funded();
+
+    serving(host, &wallet, |socket, _| {
+        for action in ["cancel", "release"] {
+            let path = format!("/v1/transactions/99/{action}");
+            problem(&http(socket, "POST", &path, None), 404, "not_found");
+            let path = format!("/v1/transactions/first/{action}");
+            problem(&http(socket, "POST", &path, None), 400, "usage");
+        }
+        let post = "/v1/transactions/99/post";
+        problem(&http(socket, "POST", post, Some("{}")), 404, "not_found");
+        problem(&http(socket, "POST", post, Some("{")), 400, "usage");
+        let fluff = http(socket, "POST", post, Some(r#"{"fluff":1}"#));
+        problem(&fluff, 400, "usage");
+
+        let both = r#"{"start_height":1,"reset_chain":true}"#;
+        problem(
+            &http(socket, "POST", "/v1/wallet/scan", Some(both)),
+            400,
+            "usage",
+        );
+        let scan = http(socket, "POST", "/v1/wallet/scan", Some("{}")).ok();
+        assert!(scan.is_object(), "{scan}");
+    });
+}
+
+#[test]
+fn epicbox_routes_answer_the_status_and_a_peer() {
+    let (host, wallet) = funded();
+    let status = wallet.run(&host, &["epicbox", "status"]).ok().json();
+
+    serving(host, &wallet, |socket, _| {
+        let answer = http(socket, "GET", "/v1/epicbox", None).ok();
+        assert_eq!(keys(&answer), keys(&status), "{answer}");
+        problem(
+            &http(socket, "GET", "/v1/epicbox/peers/nobody", None),
+            400,
+            "usage",
+        );
+    });
+}
+
+#[test]
+fn profile_routes_show_set_and_prove_the_domain() {
+    let (host, wallet) = funded();
+    let profile = wallet.run(&host, &["profile", "show"]).ok().json();
+
+    serving(host, &wallet, |socket, _| {
+        assert_eq!(http(socket, "GET", "/v1/profile", None).ok(), profile);
+        let domain = http(socket, "GET", "/v1/profile/domain", None).ok();
+        assert!(domain["domain_key"].is_string(), "{domain}");
+
+        for body in ["{}", r#"{"names":"automated","bits":"1"}"#] {
+            let both = http(socket, "PATCH", "/v1/profile", Some(body));
+            problem(&both, 400, "usage");
+        }
+        let set = http(socket, "PATCH", "/v1/profile", Some(r#"{"bits":"1"}"#)).ok();
+        assert_eq!(set["profile"], 1, "{set}");
+
+        let file = http(socket, "POST", "/v1/profile/domain/file", Some("{}")).ok();
+        assert!(
+            file["document"]
+                .as_str()
+                .unwrap()
+                .contains(domain["domain_key"].as_str().unwrap()),
+            "{file}"
+        );
+        let attach = http(socket, "POST", "/v1/profile/domain/attach", None);
+        problem(&attach, 400, "usage");
+    });
+}
+
+#[test]
+fn contact_routes_pair_back_up_and_refuse_bad_input() {
+    let (host, wallet) = funded();
+
+    serving(host, &wallet, |socket, _| {
+        let list = http(socket, "GET", "/v1/contacts", None).ok();
+        assert_eq!(list["contacts"], serde_json::json!([]), "{list}");
+        let quarantine = http(socket, "GET", "/v1/contacts/quarantine", None).ok();
+        assert_eq!(
+            quarantine["messages"],
+            serde_json::json!([]),
+            "{quarantine}"
+        );
+        let invoices = http(socket, "GET", "/v1/contact-invoices", None).ok();
+        assert_eq!(invoices["invoices"], serde_json::json!([]), "{invoices}");
+
+        let invite = http(
+            socket,
+            "POST",
+            "/v1/contacts/invites",
+            Some(r#"{"expiry":"1h"}"#),
+        )
+        .ok();
+        assert!(invite["link"].is_string(), "{invite}");
+        assert!(invite["contact_id"].is_string(), "{invite}");
+
+        let update = format!("/v1/contacts/{NO_CONTACT}");
+        problem(
+            &http(socket, "PATCH", &update, Some(r#"{"label":"Shop"}"#)),
+            404,
+            "not_found",
+        );
+        problem(&http(socket, "PATCH", &update, Some("{}")), 400, "usage");
+
+        let backup = http(socket, "POST", "/v1/contacts/export", None).ok();
+        let body = serde_json::json!({ "backup": backup["backup"] }).to_string();
+        let import = http(socket, "POST", "/v1/contacts/import", Some(&body));
+        assert_eq!(import.status, 200, "{import:?}");
+
+        let removed = http(socket, "DELETE", &update, None).ok();
+        assert_eq!(removed["removed"], false, "{removed}");
+
+        problem(
+            &http(socket, "DELETE", "/v1/contacts/ab12", None),
+            400,
+            "usage",
+        );
+        let sas = format!("/v1/contacts/{NO_CONTACT}/sas");
+        problem(
+            &http(socket, "POST", &sas, Some(r#"{"result":"maybe"}"#)),
+            400,
+            "usage",
+        );
+        let enter = r#"{"input":["a","b","c","d","e","f"]}"#;
+        problem(
+            &http(socket, "POST", "/v1/contacts/enter", Some(enter)),
+            400,
+            "usage",
+        );
+        let home = r#"{"host":"relay.example:443","drain_days":366}"#;
+        problem(
+            &http(socket, "POST", "/v1/contacts/move-home", Some(home)),
+            400,
+            "usage",
+        );
+        let extra = http(
+            socket,
+            "POST",
+            "/v1/contacts/preview",
+            Some(r#"{"link":"x","path":"y"}"#),
+        );
+        problem(&extra, 400, "usage");
+    });
+}
+
+#[test]
+fn payload_routes_list_and_refuse_bad_input() {
+    let (host, wallet) = funded();
+
+    serving(host, &wallet, |socket, _| {
+        let list = http(socket, "GET", "/v1/payloads", None).ok();
+        assert_eq!(list["payloads"], serde_json::json!([]), "{list}");
+        let ack = http(
+            socket,
+            "POST",
+            &format!("/v1/payloads/{NO_CONTACT}/ack"),
+            None,
+        );
+        assert_eq!(ack.status, 200, "{ack:?}");
+        assert_eq!(ack.json()["acknowledged"], 0, "{ack:?}");
+
+        let post = format!("/v1/contacts/{NO_CONTACT}/payloads");
+        problem(
+            &http(socket, "POST", &post, Some(r#"{"payload":"zz"}"#)),
+            400,
+            "usage",
+        );
+        problem(
+            &http(
+                socket,
+                "POST",
+                "/v1/contacts/ab12/payloads",
+                Some(r#"{"payload":"00"}"#),
+            ),
+            400,
+            "usage",
+        );
+    });
+}
