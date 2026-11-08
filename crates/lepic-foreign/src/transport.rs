@@ -17,6 +17,7 @@ use lepic_slate::model::Slate;
 use lepic_slate::registry::CodecRegistry;
 use lepic_slate::validate::check_size;
 use lepic_transport::error::TransportError;
+use lepic_transport::method::{Carries, Method};
 use lepic_transport::policy::{Encoding, FormatPolicy};
 use lepic_transport::transport::{
     BoxFuture, Destination, Inbound, Outbound, Transport, TransportId,
@@ -164,6 +165,12 @@ impl Outbound for HttpTransport {
                     source: Box::new(error),
                 })
         })
+    }
+}
+
+impl Method for HttpTransport {
+    fn carries(&self) -> Carries {
+        Carries::default()
     }
 }
 

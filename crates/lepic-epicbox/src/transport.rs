@@ -8,19 +8,29 @@
 
 use std::sync::{Arc, PoisonError, RwLock};
 
+use lepic_primitives::params::Network as WalletNetwork;
 use lepic_slate::codec::legacy::v2_json::LEGACY_V2_JSON;
+use lepic_slate::codec::legacy::v2_json::V2JsonCodec;
 use lepic_slate::codec::legacy::v3_json::LEGACY_V3_JSON;
+use lepic_slate::codec::legacy::v3_json::V3JsonCodec;
 use lepic_slate::codec::{CodecId, EncodeContext, WireSlate};
 use lepic_slate::error::DecodeError;
 use lepic_slate::model::Slate;
 use lepic_slate::registry::CodecRegistry;
+use lepic_slate::stage::Stage;
 use lepic_slate::validate::check_size;
-use lepic_transport::error::TransportError;
-use lepic_transport::policy::{Encoding, FormatPolicy};
+use lepic_transport::codecs;
+use lepic_transport::error::{FormatError, TransportError};
+use lepic_transport::method::{Carries, Encoded, Method, SenderFacts, Sending};
+use lepic_transport::policy::{Encoding, FormatPolicy, encode_with};
 use lepic_transport::transport::{BoxFuture, Destination, Outbound, Transport, TransportId};
 
-use crate::address::Network;
+use crate::address::{EpicboxAddress, Network};
 use crate::client::{ClientSettings, EpicboxClient, Identity, TRANSPORT_ID};
+use crate::marker::v2::MarkedV2JsonCodec;
+use crate::marker::v3::{
+    MarkedV3JsonCodec, carries_lepic_marker, lepic_marker_features, lepic_marker_reply_key,
+};
 use crate::session::Connector;
 
 /// The Epicbox policy of ADR 0003, as `epic-wallet` `v4.0.2` speaks it: the V3 and V2 shapes are
@@ -196,6 +206,107 @@ impl Transport for EpicboxTransport {
     }
 }
 
+impl Method for EpicboxTransport {
+    fn carries(&self) -> Carries {
+        Carries::default()
+    }
+
+    fn sender_facts(&self, wire: &WireSlate) -> SenderFacts {
+        SenderFacts {
+            marked: carries_lepic_marker(wire),
+            features: lepic_marker_features(wire),
+            reply_key: lepic_marker_reply_key(wire),
+        }
+    }
+
+    fn encode_new(
+        &self,
+        slate: &Slate,
+        context: &EncodeContext,
+        sending: &Sending,
+    ) -> Result<Encoded, FormatError> {
+        let base_fee = sending.network.params().default_base_fee();
+        let (encoding, codecs) = match slate.stage() {
+            // The marker rides the V2 shape of a new S1, so a reply that keeps it proves the
+            // receiver runs LEPIC, and a stock receiver drops it.
+            Stage::S1 => (
+                self.policy().for_new_slate(slate, context),
+                codecs::legacy_with(
+                    Box::new(V3JsonCodec::new(base_fee)),
+                    Box::new(
+                        MarkedV2JsonCodec::new(V2JsonCodec::new(base_fee))
+                            .with_features(sending.features),
+                    ),
+                ),
+            ),
+            // An I1 goes out as V3, which upstream's untagged parse reads first, because the
+            // payer's TTL on I2 has no field in V2.
+            Stage::I1 => (
+                Encoding {
+                    codec: LEGACY_V3_JSON,
+                    legacy_header: None,
+                },
+                codecs::legacy_with(
+                    Box::new(
+                        MarkedV3JsonCodec::new(V3JsonCodec::new(base_fee))
+                            .with_features(sending.features),
+                    ),
+                    Box::new(V2JsonCodec::new(base_fee)),
+                ),
+            ),
+            _ => (
+                self.policy().for_new_slate(slate, context),
+                codecs::legacy(base_fee),
+            ),
+        };
+        let wire = encode_with(&codecs, encoding, slate, context)?;
+        Ok(Encoded {
+            wire,
+            codec: encoding.codec,
+        })
+    }
+
+    fn encode_reply(
+        &self,
+        slate: &Slate,
+        context: &EncodeContext,
+        sending: &Sending,
+        from: &SenderFacts,
+    ) -> Result<Encoded, FormatError> {
+        let base_fee = sending.network.params().default_base_fee();
+        let encoding = self.policy().for_reply(slate, context);
+        // Only a sender that marked its slate gets a marked reply, so a stock sender never sees
+        // the key.
+        let codecs = if from.marked {
+            codecs::legacy_with(
+                Box::new(
+                    MarkedV3JsonCodec::new(V3JsonCodec::new(base_fee))
+                        .with_features(sending.features),
+                ),
+                Box::new(
+                    MarkedV2JsonCodec::new(V2JsonCodec::new(base_fee))
+                        .with_features(sending.features),
+                ),
+            )
+        } else {
+            codecs::legacy(base_fee)
+        };
+        let wire = encode_with(&codecs, encoding, slate, context)?;
+        Ok(Encoded {
+            wire,
+            codec: encoding.codec,
+        })
+    }
+
+    fn peer_key(&self, _network: WalletNetwork, address: &str) -> Option<String> {
+        // The addresses are read on the relay network the transport was built for, so the
+        // wallet network the engine passes is not used.
+        EpicboxAddress::parse_key(address, self.network())
+            .ok()
+            .map(|key| EpicboxAddress::key_text_of(&key, self.network()))
+    }
+}
+
 impl Outbound for EpicboxTransport {
     fn deliver<'a>(
         &'a self,
@@ -221,6 +332,17 @@ mod tests {
     use crate::address::{Domain, EpicboxAddress};
     use crate::mock_relay::MockRelay;
     use crate::session::{RelayEndpoint, Security};
+
+    #[test]
+    fn marked_registries_hold_both_shapes_in_detection_order() {
+        let fee = lepic_primitives::amount::Fee::new(1_000_000);
+        let marked = codecs::legacy_with(
+            Box::new(MarkedV3JsonCodec::new(V3JsonCodec::new(fee))),
+            Box::new(MarkedV2JsonCodec::new(V2JsonCodec::new(fee))),
+        );
+        let ids: Vec<_> = marked.ids().collect();
+        assert_eq!(ids, [LEGACY_V3_JSON, LEGACY_V2_JSON]);
+    }
 
     fn transport() -> EpicboxTransport {
         let settings = crate::testing::client_settings(RelayEndpoint::new(

@@ -384,6 +384,12 @@ impl Outbound for TorTransport {
     }
 }
 
+impl lepic_transport::method::Method for TorTransport {
+    fn carries(&self) -> lepic_transport::method::Carries {
+        lepic_transport::method::Carries::default()
+    }
+}
+
 impl Transport for TorTransport {
     fn id(&self) -> TransportId {
         TRANSPORT_ID
