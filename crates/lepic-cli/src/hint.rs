@@ -58,7 +58,7 @@ pub fn hint(error: &CliError, settings: Option<&Settings>) -> Option<String> {
             );
         }
         CliError::Tor(failure) => return tor_hint(failure.kind).map(str::to_owned),
-        CliError::HttpUrl(lepic_foreign::UrlError::PlainHttpNotAllowed) => {
+        CliError::HttpUrl(lepic_methods::http::UrlError::PlainHttpNotAllowed) => {
             return Some(
                 "use https, or add --allow-plain-http to send this slate unencrypted".to_owned(),
             );
@@ -188,8 +188,8 @@ fn undelivered_send_hint(
         && !matches!(
             source,
             TransportError::Backend { transport, .. }
-                if *transport == lepic_foreign::TRANSPORT_ID
-                    || *transport == lepic_tor::TRANSPORT_ID
+                if *transport == lepic_methods::http::TRANSPORT_ID
+                    || *transport == lepic_methods::tor::TRANSPORT_ID
         )
         && settings.relay.port() != DEFAULT_PORT
     {
@@ -290,8 +290,8 @@ fn selection_error(error: &CliError) -> Option<&SelectionError> {
     }
 }
 
-fn tor_hint(kind: lepic_tor::FailureKind) -> Option<&'static str> {
-    use lepic_tor::FailureKind as K;
+fn tor_hint(kind: lepic_methods::tor::FailureKind) -> Option<&'static str> {
+    use lepic_methods::tor::FailureKind as K;
     match kind {
         K::Missing => Some("no tor binary at the --tor-binary path"),
         K::Network => Some(

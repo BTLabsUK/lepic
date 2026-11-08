@@ -10,22 +10,21 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use jiff::Timestamp;
 use lepic_epicbox::{ClientSettings, EpicboxAddress, Network as RelayNetwork, TRANSPORT_ID};
-use lepic_foreign::{
-    BlockFees, CoinbaseAccess, CoinbaseAnswer, Exposure, ForeignClient, ForeignUrl, ListenSettings,
-    PlainHttp, ReceiveHandler, Refusal, webpki_tls_config,
-};
-use lepic_keychain::Identifier;
 use lepic_keychain::vault::MAX_WALLET_SEED_FILE_LEN;
 use lepic_methods::epicbox::Epicbox;
+use lepic_methods::http::{
+    CoinbaseAccess, Counts, Exposure, ForeignClient, ForeignUrl, Host as ReceiveHost, Http,
+    ListenSettings, PlainHttp, Receiver, Refusal, refuse, webpki_tls_config,
+};
 use lepic_methods::registry::Methods;
+use lepic_methods::tor::{SocksProxy, Tor, TorProcess, TorSettings, TorState};
 use lepic_node::{NodeApi, NodeClient, Propagation, RpcTransport};
-use lepic_primitives::amount::{Fee, Height};
+use lepic_primitives::amount::Height;
 use lepic_primitives::params::Network;
 use lepic_store::{
     ChainCheck, ContactId, ImportedKind, OutboxStatus, OutputStatus, Repositories, SlateStage,
     StoredTransaction, TxDirection, TxId, WalletStore,
 };
-use lepic_tor::{SocksProxy, TorProcess, TorSettings, TorState};
 use lepic_transport::error::TransportError;
 use lepic_transport::file::{FILE, FileTransport, response_path};
 use lepic_transport::transport::{BoxFuture, Destination, Exchange as _, Location, TransportId};
@@ -66,7 +65,7 @@ use crate::cli::{
     SelectionArg, SendArgs, SendDestinationArgs, SpendArgs, TorAddressArgs, TorBinaryArgs,
     TorCommand, TorListenArgs, TxCommand, WalletCommand, WalletScanArgs, WordsArg,
 };
-use crate::exit::{CliError, ErrorKind};
+use crate::exit::CliError;
 use crate::host::{Host, HostNode};
 use crate::output::{
     AccountReport, AddressReport, EpicboxStatusReport, ExpiredReport, FinalizeReport,
@@ -113,9 +112,9 @@ struct Opened<N: NodeApi + 'static> {
     file: Arc<dyn Method>,
     epicbox: Arc<Epicbox>,
     /// Holds the answers of HTTP sends until they are finalized.
-    http: Arc<lepic_foreign::HttpTransport>,
+    http: Arc<Http>,
     /// Holds the answers of Tor sends until they are finalized.
-    tor: Arc<lepic_tor::TorTransport>,
+    tor: Arc<Tor>,
     /// Taken by a send over Tor for as long as its tor is attached to [`Self::tor`], which only
     /// one send at a time can use.
     tor_gate: Arc<tokio::sync::Mutex<()>>,
@@ -764,7 +763,7 @@ impl<H: Host> Run<'_, H> {
             slate_id: Some(slate_id.map_or_else(drawn_slate_id, Ok)?),
             ..SendRequest::new(account.index, amount)
         };
-        if transport == lepic_tor::TRANSPORT_ID {
+        if transport == lepic_methods::tor::TRANSPORT_ID {
             // The checks the send makes before it stores anything, before tor takes its time
             // to connect for a send that cannot be made.
             opened
@@ -841,7 +840,7 @@ impl<H: Host> Run<'_, H> {
                 .wallet
                 .resend(opened.send_method(transport)?, tx_id, delivery)
                 .await?;
-            if !is_direct(transport) {
+            if !lepic_methods::http::is_direct(transport) {
                 return Ok("sent");
             }
             let details = opened.wallet.transaction_details(tx_id).await?;
@@ -902,7 +901,7 @@ impl<H: Host> Run<'_, H> {
         binary: &TorBinaryArgs,
         opened: &Opened<N>,
     ) -> Result<Option<SendTor>, CliError> {
-        if transport != lepic_tor::TRANSPORT_ID {
+        if transport != lepic_methods::tor::TRANSPORT_ID {
             return Ok(None);
         }
         let gate = Arc::clone(&opened.tor_gate).lock_owned().await;
@@ -965,7 +964,7 @@ impl<H: Host> Run<'_, H> {
             opened.wallet.onion_key()?
         };
         Ok(Report::TorAddress(TorAddressReport {
-            onion: lepic_tor::onion_address(key.public_key()),
+            onion: lepic_methods::tor::onion_address(key.public_key()),
         }))
     }
 
@@ -977,7 +976,7 @@ impl<H: Host> Run<'_, H> {
         }
         let opened = self.open().await?;
         let key = opened.wallet.onion_key()?;
-        let onion = lepic_tor::onion_address(key.public_key());
+        let onion = lepic_methods::tor::onion_address(key.public_key());
         let previous_key = if args.previous_onion {
             Some(opened.wallet.previous_onion_key()?)
         } else {
@@ -985,26 +984,31 @@ impl<H: Host> Run<'_, H> {
         };
         let previous_onion = previous_key
             .as_ref()
-            .map(|key| lepic_tor::onion_address(key.public_key()));
-        let counts = Arc::new(HttpCounts::default());
+            .map(|key| lepic_methods::tor::onion_address(key.public_key()));
+        let counts = Arc::new(Counts::default());
+        let host = Arc::new(CliHost {
+            opened: Arc::clone(&opened),
+            counts: Arc::clone(&counts),
+        });
         let receiver = |proof_key| {
-            Arc::new(HttpReceiver {
-                opened: Arc::clone(&opened),
-                counts: Arc::clone(&counts),
-                method: Arc::clone(&opened.tor) as Arc<dyn Method>,
+            Arc::new(Receiver::new(
+                Arc::clone(&host),
+                Arc::clone(&opened.tor) as Arc<dyn Method>,
                 proof_key,
-            })
+            ))
         };
-        let settings = lepic_tor::listen_settings(self.settings.tuning.listen);
-        let handle = lepic_foreign::listen(settings, receiver(ProofKey::Onion)).await?;
+        let settings = lepic_methods::tor::listen_settings(self.settings.tuning.listen);
+        let handle = lepic_methods::http::listen(settings, receiver(ProofKey::Onion)).await?;
         let previous_handle = match previous_key {
-            Some(_) => match lepic_foreign::listen(settings, receiver(ProofKey::Payments)).await {
-                Ok(handle) => Some(handle),
-                Err(error) => {
-                    handle.shutdown().await;
-                    return Err(error.into());
+            Some(_) => {
+                match lepic_methods::http::listen(settings, receiver(ProofKey::Payments)).await {
+                    Ok(handle) => Some(handle),
+                    Err(error) => {
+                        handle.shutdown().await;
+                        return Err(error.into());
+                    }
                 }
-            },
+            }
             None => None,
         };
         let tor = self.start_tor(&args.tor)?;
@@ -1016,7 +1020,7 @@ impl<H: Host> Run<'_, H> {
             tor.publish_onion(key.expose_seed(), handle.local_addr().port())
                 .await?;
             if let (Some(key), Some(previous)) = (&previous_key, &previous_handle) {
-                let target = lepic_tor::OnionTarget::Port(previous.local_addr().port());
+                let target = lepic_methods::tor::OnionTarget::Port(previous.local_addr().port());
                 tor.add_onion_to(key.expose_seed(), target).await?;
             }
             Ok::<_, CliError>(())
@@ -1039,7 +1043,7 @@ impl<H: Host> Run<'_, H> {
                 let work = async {
                     tokio::select! {
                         () = stop.notified() => Ok(()),
-                        failure = tor_ended(&tor) => Err(CliError::Tor(failure)),
+                        failure = lepic_methods::tor::ended(&tor) => Err(CliError::Tor(failure)),
                     }
                 };
                 self.until_interrupted(opened.wallet.subscribe(), work, || {
@@ -1097,9 +1101,10 @@ impl<H: Host> Run<'_, H> {
     ) -> Result<(TransportId, Delivery, String), CliError> {
         match (destination.to, destination.to_file) {
             (Some(address), _) if is_onion(&address) => {
-                let onion = lepic_tor::parse_onion(&address).map_err(CliError::OnionAddress)?;
+                let onion =
+                    lepic_methods::tor::parse_onion(&address).map_err(CliError::OnionAddress)?;
                 Ok((
-                    lepic_tor::TRANSPORT_ID,
+                    lepic_methods::tor::TRANSPORT_ID,
                     Delivery::Deliver {
                         to: Destination::new(onion.host()),
                     },
@@ -1114,7 +1119,7 @@ impl<H: Host> Run<'_, H> {
                 };
                 let url = ForeignUrl::parse(&address, plain).map_err(CliError::HttpUrl)?;
                 Ok((
-                    lepic_foreign::TRANSPORT_ID,
+                    lepic_methods::http::TRANSPORT_ID,
                     Delivery::Deliver {
                         to: Destination::new(url.as_uri()),
                     },
@@ -1425,7 +1430,7 @@ impl<H: Host> Run<'_, H> {
             what: "set up tls for http",
             source: std::io::Error::other(error),
         })?;
-        let http = Arc::new(lepic_foreign::HttpTransport::new(ForeignClient::new(
+        let http = Arc::new(Http::new(ForeignClient::new(
             self.settings.tuning.send,
             tls,
         )));
@@ -1435,7 +1440,7 @@ impl<H: Host> Run<'_, H> {
             relay_network(self.settings.network),
             self.host.relay_connector(self.settings)?,
         ));
-        let tor = Arc::new(lepic_tor::TorTransport::new(lepic_tor::OnionClient::new(
+        let tor = Arc::new(Tor::new(lepic_methods::tor::OnionClient::new(
             self.settings.tuning.onion_client(),
         )));
         let file: Arc<dyn Method> = Arc::new(FileTransport::new());
@@ -1615,14 +1620,10 @@ fn repeated_send(
     }))
 }
 
-/// Whether a send over `transport` gets its answer in the same exchange.
-fn is_direct(transport: lepic_transport::transport::TransportId) -> bool {
-    transport == lepic_foreign::TRANSPORT_ID || transport == lepic_tor::TRANSPORT_ID
-}
-
 /// Whether the address the user gave names an onion, valid or not.
 pub(crate) fn is_onion(address: &str) -> bool {
-    lepic_tor::parse_onion(address).is_ok() || address.to_ascii_lowercase().contains(".onion")
+    lepic_methods::tor::parse_onion(address).is_ok()
+        || address.to_ascii_lowercase().contains(".onion")
 }
 
 /// Finalizes the answer a direct transport kept for the send and posts it. Returns the state
@@ -1634,9 +1635,9 @@ async fn finalize_direct_reply<N: NodeApi + 'static>(
     slate_id: &str,
     fluff: bool,
 ) -> Result<&'static str, CliError> {
-    let reply = if transport == lepic_foreign::TRANSPORT_ID {
+    let reply = if transport == lepic_methods::http::TRANSPORT_ID {
         opened.http.take_reply(slate_id)
-    } else if transport == lepic_tor::TRANSPORT_ID {
+    } else if transport == lepic_methods::tor::TRANSPORT_ID {
         opened.tor.take_reply(slate_id)
     } else {
         return Ok("sent");
@@ -1663,18 +1664,10 @@ async fn stop_tor<N: NodeApi + 'static>(opened: &Opened<N>, tor: Option<SendTor>
     }
 }
 
-/// What `http listen` answered.
-#[derive(Default)]
-struct HttpCounts {
-    received: std::sync::atomic::AtomicU32,
-    repeated: std::sync::atomic::AtomicU32,
-    refused: std::sync::atomic::AtomicU32,
-}
-
 /// The HTTP payment listener of `http listen` and `serve --http`.
 struct HttpListener {
-    handle: lepic_foreign::ListenerHandle,
-    counts: Arc<HttpCounts>,
+    handle: lepic_methods::http::ListenerHandle,
+    counts: Arc<Counts>,
     port: u16,
     exposure: Exposure,
     coinbase: CoinbaseAccess,
@@ -1692,20 +1685,23 @@ impl HttpListener {
         } else {
             Exposure::LocalOnly
         };
-        let counts = Arc::new(HttpCounts::default());
-        let receiver = Arc::new(HttpReceiver {
+        let counts = Arc::new(Counts::default());
+        let host = Arc::new(CliHost {
             opened: Arc::clone(opened),
             counts: Arc::clone(&counts),
-            method: Arc::clone(&opened.http) as Arc<dyn Method>,
-            proof_key: ProofKey::Payments,
         });
+        let receiver = Arc::new(Receiver::new(
+            host,
+            Arc::clone(&opened.http) as Arc<dyn Method>,
+            ProofKey::Payments,
+        ));
         let port = args.port.unwrap_or(settings.tuning.listen_port);
         let coinbase = match (args.coinbase, args.coinbase_remote) {
             (_, true) => CoinbaseAccess::Remote,
             (true, false) => CoinbaseAccess::LocalOnly,
             (false, false) => CoinbaseAccess::Off,
         };
-        let handle = lepic_foreign::listen(
+        let handle = lepic_methods::http::listen(
             ListenSettings::new(exposure, port, settings.tuning.listen).with_coinbase(coinbase),
             receiver,
         )
@@ -1731,109 +1727,73 @@ impl HttpListener {
     }
 }
 
-fn counted(port: u16, exposure: Exposure, counts: &HttpCounts) -> HttpListenReport {
+fn counted(port: u16, exposure: Exposure, counts: &Counts) -> HttpListenReport {
     HttpListenReport {
         port,
         exposure: exposure.as_str(),
-        received: counts.received.load(Ordering::Relaxed),
-        repeated: counts.repeated.load(Ordering::Relaxed),
-        refused: counts.refused.load(Ordering::Relaxed),
+        received: counts.received(),
+        repeated: counts.repeated(),
+        refused: counts.refused(),
     }
 }
 
-/// The wallet behind `http listen` and `tor listen`, receiving over `method` and
-/// signing payment proofs with `proof_key`, the key of the address the listener serves.
-/// Receipts reach the user as the wallet's events.
-struct HttpReceiver<N: NodeApi + 'static> {
+/// The wallet behind `http listen` and `tor listen`. Receipts reach the user as the wallet's
+/// events.
+struct CliHost<N: NodeApi + 'static> {
     opened: Arc<Opened<N>>,
-    counts: Arc<HttpCounts>,
-    method: Arc<dyn Method>,
-    proof_key: ProofKey,
+    counts: Arc<Counts>,
 }
 
-impl<N: NodeApi + 'static> ReceiveHandler for HttpReceiver<N> {
-    fn receive(&self, slate: WireSlate) -> BoxFuture<'_, Result<WireSlate, Refusal>> {
+impl<N: NodeApi + 'static> ReceiveHost for CliHost<N> {
+    fn receive(
+        &self,
+        method: &Arc<dyn Method>,
+        wire: &WireSlate,
+        request: ReceiveRequest,
+    ) -> BoxFuture<'_, Result<Received, Refusal>> {
+        let method = Arc::clone(method);
+        let wire = wire.clone();
         Box::pin(async move {
             let received = self
                 .opened
                 .wallet
-                .receive_unsolicited(
-                    &self.method,
-                    &slate,
-                    ReceiveRequest {
-                        proof_key: self.proof_key,
-                        ..ReceiveRequest::default()
-                    },
-                )
+                .receive_unsolicited(&method, &wire, request)
                 .await;
-            match received {
-                Ok(received) => {
-                    let count = if received.repeated {
-                        &self.counts.repeated
-                    } else {
-                        &self.counts.received
-                    };
-                    count.fetch_add(1, Ordering::Relaxed);
-                    Ok(received.reply)
-                }
-                Err(error) => {
-                    self.counts.refused.fetch_add(1, Ordering::Relaxed);
-                    let error = CliError::from(error);
-                    tracing::debug!(
-                        transport = %self.method.id(),
-                        error = %lepic_telemetry::ErrorChain(&error),
-                        "payment refused"
-                    );
-                    // The sender may try again when nothing about the slate was wrong.
-                    Err(match error.kind() {
-                        ErrorKind::WalletState | ErrorKind::Node | ErrorKind::Internal => {
-                            Refusal::Unavailable
-                        }
-                        _ => Refusal::Rejected,
-                    })
-                }
-            }
+            received.map_err(|error| {
+                let refusal = refuse(&error);
+                let error = CliError::from(error);
+                tracing::debug!(
+                    transport = %method.id(),
+                    error = %lepic_telemetry::ErrorChain(&error),
+                    "payment refused"
+                );
+                refusal
+            })
         })
     }
 
-    fn refused(&self, _refusal: Refusal) {
-        self.counts.refused.fetch_add(1, Ordering::Relaxed);
-    }
-
-    fn build_coinbase(&self, fees: BlockFees) -> BoxFuture<'_, Result<CoinbaseAnswer, Refusal>> {
+    fn build_coinbase(&self, request: CoinbaseRequest) -> BoxFuture<'_, Result<Coinbase, Refusal>> {
         Box::pin(async move {
-            let request = CoinbaseRequest {
-                fees: Fee::new(fees.fees),
-                height: Height::new(fees.height),
-                // A key that is no identifier is one the wallet never gave out: a new key is
-                // taken, as upstream does for a key it does not find.
-                key_id: fees
-                    .key_id
-                    .and_then(|bytes| Identifier::from_bytes(&bytes).ok()),
-            };
-            match self.opened.wallet.build_coinbase(request).await {
-                Ok(coinbase) => Ok(coinbase_answer(&coinbase)),
-                Err(error) => {
+            self.opened
+                .wallet
+                .build_coinbase(request)
+                .await
+                .map_err(|error| {
                     tracing::warn!(
-                        transport = %self.method.id(),
                         error = %lepic_telemetry::ErrorChain(&error),
                         "coinbase refused"
                     );
-                    Err(Refusal::Unavailable)
-                }
-            }
+                    Refusal::Unavailable
+                })
         })
     }
-}
 
-/// The node's view of a coinbase the wallet built.
-fn coinbase_answer(coinbase: &Coinbase) -> CoinbaseAnswer {
-    CoinbaseAnswer {
-        commit: *coinbase.output.commitment.as_bytes(),
-        proof: coinbase.output.proof.as_bytes().to_vec(),
-        excess: *coinbase.kernel.excess.as_bytes(),
-        excess_sig: coinbase.kernel.excess_sig.to_compact(),
-        key_id: coinbase.key_id.to_bytes(),
+    fn received(&self, received: &Received) {
+        self.counts.count_received(received);
+    }
+
+    fn refused(&self, _refusal: Refusal) {
+        self.counts.count_refused();
     }
 }
 
@@ -2474,23 +2434,6 @@ const fn stage_name(stage: SlateStage) -> &'static str {
         SlateStage::Invoice1 => "I1",
         SlateStage::Invoice2 => "I2",
         SlateStage::Invoice3 => "I3",
-    }
-}
-
-/// Waits until `tor` fails or stops on its own.
-async fn tor_ended(tor: &TorProcess) -> lepic_tor::TorFailure {
-    let mut states = tor.subscribe();
-    loop {
-        if let TorState::Failed(failure) = &*states.borrow_and_update() {
-            return failure.clone();
-        }
-        if states.changed().await.is_err() {
-            break;
-        }
-    }
-    match tor.wait_bootstrapped().await {
-        Err(failure) => failure,
-        Ok(_) => std::future::pending().await,
     }
 }
 

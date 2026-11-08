@@ -4,35 +4,41 @@
 //!
 //! As over HTTP, the receiver answers `receive_tx` with its S2 in the same exchange. The
 //! outbound side keeps that answer, keyed by the id of the slate it answers, until the caller
-//! takes it with [`TorTransport::take_reply`] to finalize it. There is no inbound side:
+//! takes it with [`Tor::take_reply`] to finalize it. There is no inbound side:
 //! payments to this wallet reach the listener behind the onion.
 
 use std::collections::VecDeque;
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex, PoisonError, RwLock};
-use std::time::Duration;
 
 use http_body_util::{BodyExt, Full, LengthLimitError, Limited};
 use hyper::body::Bytes;
 use hyper::header::{CONTENT_LENGTH, CONTENT_TYPE, HOST};
-use hyper::{Method, Request, StatusCode};
+use hyper::{Method as HttpMethod, Request, StatusCode};
 use hyper_util::rt::TokioIo;
-use lepic_foreign::HttpPolicy;
 use lepic_foreign::error::RpcError;
 use lepic_foreign::rpc::{self, VersionInfo};
 use lepic_slate::codec::WireSlate;
 use lepic_transport::error::TransportError;
+use lepic_transport::method::{Carries, Method};
 use lepic_transport::policy::FormatPolicy;
 use lepic_transport::transport::{
     BoxFuture, Destination, Inbound, Outbound, Transport, TransportId,
 };
-use serde::Deserialize;
 use thiserror::Error;
 use tracing::debug;
 
-use crate::onion::{OnionAddress, OnionError};
-use crate::process::SocksProxy;
-use crate::socks::{self, SendFailure, SocksCredentials, SocksError};
+use lepic_tor::socks::{self, SocksCredentials};
+
+use crate::http::{HttpPolicy, slate_id_of};
+
+pub use lepic_tor::{
+    ControlError, FailureKind, FixedSocks, MAX_STREAMS_PER_CIRCUIT, ONION_NAME_LEN, ONION_SOCKET,
+    OnionAddress, OnionClientSettings, OnionError, OnionTarget, PREVIOUS_ONION_SOCKET, RelayTor,
+    RelayTorError, SendFailure, SocksError, SocksProxy, StreamGroup, TorFailure, TorNetworkTimings,
+    TorProcess, TorSettings, TorState, TorTimings, expanded_secret, listen_settings, onion_address,
+    onion_socket_path, parse_onion, previous_onion_socket_path, public_key_of_seed,
+};
 
 /// The transport id of the Tor method, stored with its transactions.
 pub const TRANSPORT_ID: TransportId = TransportId::new("tor");
@@ -40,18 +46,6 @@ pub const TRANSPORT_ID: TransportId = TransportId::new("tor");
 const ENDPOINT: &str = "/v2/foreign";
 const ONION_PORT: u16 = 80;
 const MAX_HELD_REPLIES: usize = 64;
-const MAX_SLATE_ID_LEN: usize = 64;
-
-/// Limits of a send over Tor.
-#[derive(Debug, Clone, Copy)]
-pub struct OnionClientSettings {
-    /// Reaching the onion through tor; a `check_version` that times out is tried once more on a
-    /// new circuit.
-    pub connect_timeout: Duration,
-    /// From sending a request to the last byte of its answer.
-    pub request_timeout: Duration,
-    pub max_response_bytes: usize,
-}
 
 /// Why a slate could not be sent over Tor.
 #[derive(Debug, Error)]
@@ -106,6 +100,7 @@ pub struct OnionClient {
 }
 
 impl OnionClient {
+    /// A client with the limits in `settings`.
     pub const fn new(settings: OnionClientSettings) -> Self {
         Self { settings }
     }
@@ -195,7 +190,7 @@ where
     });
     let result = async {
         let request = Request::builder()
-            .method(Method::POST)
+            .method(HttpMethod::POST)
             .uri(ENDPOINT)
             .header(HOST, host)
             .header(CONTENT_TYPE, "application/json")
@@ -244,15 +239,15 @@ type SharedProxy = Arc<RwLock<Option<Arc<dyn SocksProxy>>>>;
 
 /// The Tor method. Clones share the attached tor and the held answers.
 #[derive(Clone)]
-pub struct TorTransport {
+pub struct Tor {
     client: OnionClient,
     proxy: SharedProxy,
     held: Arc<Mutex<VecDeque<Held>>>,
 }
 
-impl std::fmt::Debug for TorTransport {
+impl std::fmt::Debug for Tor {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("TorTransport")
+        f.debug_struct("Tor")
             .field("attached", &self.is_attached())
             .finish_non_exhaustive()
     }
@@ -264,7 +259,7 @@ struct Held {
     wire: WireSlate,
 }
 
-impl TorTransport {
+impl Tor {
     /// A transport with no tor attached: sends fail with [`TorSendError::NotRunning`].
     pub fn new(client: OnionClient) -> Self {
         Self {
@@ -274,15 +269,17 @@ impl TorTransport {
         }
     }
 
-    /// Sends go through `proxy` from now on, usually the wallet's [`crate::TorProcess`].
+    /// Sends go through `proxy` from now on, usually the wallet's [`TorProcess`].
     pub fn attach(&self, proxy: Arc<dyn SocksProxy>) {
         *self.proxy.write().unwrap_or_else(PoisonError::into_inner) = Some(proxy);
     }
 
+    /// Sends fail with [`TorSendError::NotRunning`] until a tor is attached again.
     pub fn detach(&self) {
         *self.proxy.write().unwrap_or_else(PoisonError::into_inner) = None;
     }
 
+    /// Whether a tor is attached.
     pub fn is_attached(&self) -> bool {
         self.proxy
             .read()
@@ -355,19 +352,7 @@ impl TorTransport {
     }
 }
 
-#[derive(Deserialize)]
-struct IdOnly {
-    id: String,
-}
-
-/// The `id` both legacy shapes carry at the top, read without decoding the slate.
-fn slate_id_of(wire: &WireSlate) -> Option<String> {
-    let text = wire.as_text()?;
-    let IdOnly { id } = serde_json::from_str(text).ok()?;
-    (id.len() <= MAX_SLATE_ID_LEN).then_some(id)
-}
-
-impl Outbound for TorTransport {
+impl Outbound for Tor {
     fn deliver<'a>(
         &'a self,
         to: &'a Destination,
@@ -384,9 +369,9 @@ impl Outbound for TorTransport {
     }
 }
 
-impl lepic_transport::method::Method for TorTransport {
-    fn carries(&self) -> lepic_transport::method::Carries {
-        lepic_transport::method::Carries::default()
+impl Method for Tor {
+    fn carries(&self) -> Carries {
+        Carries::default()
     }
 
     fn notice_lengths(&self) -> &'static [usize] {
@@ -394,7 +379,7 @@ impl lepic_transport::method::Method for TorTransport {
     }
 }
 
-impl Transport for TorTransport {
+impl Transport for Tor {
     fn id(&self) -> TransportId {
         TRANSPORT_ID
     }
@@ -410,6 +395,23 @@ impl Transport for TorTransport {
 
     fn inbound(&self) -> Option<&dyn Inbound> {
         None
+    }
+}
+
+/// Waits until `tor` fails or stops on its own.
+pub async fn ended(tor: &TorProcess) -> TorFailure {
+    let mut states = tor.subscribe();
+    loop {
+        if let TorState::Failed(failure) = &*states.borrow_and_update() {
+            return failure.clone();
+        }
+        if states.changed().await.is_err() {
+            break;
+        }
+    }
+    match tor.wait_bootstrapped().await {
+        Err(failure) => failure,
+        Ok(_) => std::future::pending().await,
     }
 }
 
@@ -447,19 +449,5 @@ mod tests {
         );
         assert_eq!(TorSendError::NoCommonVersion.class(), SendFailure::TooOld);
         assert_eq!(TorSendError::Timeout.class(), SendFailure::Broken);
-    }
-
-    #[test]
-    fn reads_the_slate_id_without_decoding() {
-        let wire = |text: &str| WireSlate::text(lepic_slate::codec::MediaType::JSON, text.into());
-        assert_eq!(
-            slate_id_of(&wire(r#"{"id":"abc","x":1}"#)).as_deref(),
-            Some("abc")
-        );
-        assert_eq!(
-            slate_id_of(&wire(&format!(r#"{{"id":"{}"}}"#, "a".repeat(65)))),
-            None
-        );
-        assert_eq!(slate_id_of(&wire("[]")), None);
     }
 }

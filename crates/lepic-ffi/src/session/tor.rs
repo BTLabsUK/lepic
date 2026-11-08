@@ -9,12 +9,12 @@ use std::sync::{Arc, Weak};
 
 use lepic_epicbox::RelayStream;
 use lepic_epicbox::tunnel::Tunnel;
-use lepic_foreign::ListenerHandle;
-use lepic_store::TxId;
-use lepic_tor::{
-    FailureKind, OnionAddress, OnionTarget, RelayTor, SendFailure, SocksProxy, TRANSPORT_ID,
-    TorProcess, TorSendError, TorSettings, TorState, TorTransport,
+use lepic_methods::http::ListenerHandle;
+use lepic_methods::tor::{
+    FailureKind, OnionAddress, OnionTarget, RelayTor, SendFailure, SocksProxy, TRANSPORT_ID, Tor,
+    TorProcess, TorSendError, TorSettings, TorState,
 };
+use lepic_store::TxId;
 use lepic_transport::transport::{BoxFuture, Destination};
 use lepic_wallet::send::{Delivery, SendError};
 use lepic_wallet::{OnionKey, ProofKey};
@@ -77,7 +77,7 @@ pub(super) fn checked_onion_routes(
         .map(|route| {
             let domain = lepic_epicbox::Domain::parse(&route.host)
                 .map_err(|_| invalid("onion route host is not a host name"))?;
-            let onion = lepic_tor::parse_onion(&route.onion)
+            let onion = lepic_methods::tor::parse_onion(&route.onion)
                 .map_err(|_| invalid("onion route onion is not an onion v3 address"))?;
             if route.port == 0 || route.onion_port == 0 {
                 return Err(invalid("onion route port is 0"));
@@ -173,8 +173,8 @@ impl Tunnel for RelayTunnel {
     }
 }
 
-pub(super) fn tor_transport(tuning: &Tuning) -> TorTransport {
-    TorTransport::new(lepic_tor::OnionClient::new(tuning.onion_client()))
+pub(super) fn tor_transport(tuning: &Tuning) -> Tor {
+    Tor::new(lepic_methods::tor::OnionClient::new(tuning.onion_client()))
 }
 
 const fn failure_kind(kind: FailureKind) -> TorFailureKind {
@@ -276,7 +276,7 @@ fn listener_report(report: &TorReport) -> HttpReport {
 }
 
 fn onion(text: &str) -> Result<OnionAddress, WalletError> {
-    lepic_tor::parse_onion(text)
+    lepic_methods::tor::parse_onion(text)
         .map_err(|error| WalletError::new(WalletErrorKind::OnionAddressInvalid, error.to_string()))
 }
 
@@ -313,13 +313,13 @@ fn send_error(error: SendError) -> WalletError {
 impl Session {
     pub(crate) fn onion_address(&self) -> Result<String, WalletError> {
         let key = self.engine.onion_key()?;
-        Ok(lepic_tor::onion_address(key.public_key()))
+        Ok(lepic_methods::tor::onion_address(key.public_key()))
     }
 
     /// The onion LEPIC 0.3.1 and earlier published, the payment-proof address in onion form.
     pub(crate) fn previous_onion_address(&self) -> Result<String, WalletError> {
         let key = self.engine.previous_onion_key()?;
-        Ok(lepic_tor::onion_address(key.public_key()))
+        Ok(lepic_methods::tor::onion_address(key.public_key()))
     }
 
     /// How tor runs for this session.
@@ -465,17 +465,18 @@ impl Session {
         publish_onion: bool,
         publish_previous: bool,
         report: &TorReport,
-    ) -> Result<(Option<ListenerHandle>, Option<ListenerHandle>), lepic_foreign::ListenError> {
+    ) -> Result<(Option<ListenerHandle>, Option<ListenerHandle>), lepic_methods::http::ListenError>
+    {
         if !publish_onion {
             return Ok((None, None));
         }
         let tor_dir = self.data_dir.join(TOR_DIR);
-        let socket = lepic_tor::onion_socket_path(&tor_dir);
+        let socket = lepic_methods::tor::onion_socket_path(&tor_dir);
         let listener = self.onion_listener(socket, ProofKey::Onion, report).await?;
         if !publish_previous {
             return Ok((Some(listener), None));
         }
-        let socket = lepic_tor::previous_onion_socket_path(&tor_dir);
+        let socket = lepic_methods::tor::previous_onion_socket_path(&tor_dir);
         match self
             .onion_listener(socket, ProofKey::Payments, report)
             .await
@@ -495,22 +496,22 @@ impl Session {
         socket: Option<PathBuf>,
         proof_key: ProofKey,
         report: &TorReport,
-    ) -> Result<ListenerHandle, lepic_foreign::ListenError> {
+    ) -> Result<ListenerHandle, lepic_methods::http::ListenError> {
         let receiver = self.http_receiver(listener_report(report), TRANSPORT_ID, proof_key);
-        let settings = lepic_tor::listen_settings(self.tuning.listen);
+        let settings = lepic_methods::tor::listen_settings(self.tuning.listen);
         // A socket in tor's folder where the platform and the path allow (not Windows): no
         // other program or app reaches it, where any can reach a loopback port.
         #[cfg(unix)]
         if let Some(path) = socket {
             if let Some(dir) = path.parent() {
                 std::fs::create_dir_all(dir)
-                    .map_err(|source| lepic_foreign::ListenError::Bind { port: 0, source })?;
+                    .map_err(|source| lepic_methods::http::ListenError::Bind { port: 0, source })?;
             }
-            return lepic_foreign::listen_unix(&path, settings, receiver).await;
+            return lepic_methods::http::listen_unix(&path, settings, receiver).await;
         }
         #[cfg(not(unix))]
         drop(socket);
-        lepic_foreign::listen(settings, receiver).await
+        lepic_methods::http::listen(settings, receiver).await
     }
 
     /// Stops tor, then its listener. `Stopped` is reported once both are down; until then the
@@ -866,13 +867,15 @@ impl Session {
     /// Takes the relay connection through the SOCKS proxy at `socks`, as a running tor would.
     #[cfg(test)]
     pub(crate) fn attach_relay_socks(&self, socks: std::net::SocketAddr) {
-        self.relay_tor.attach_socks(lepic_tor::FixedSocks(socks));
+        self.relay_tor
+            .attach_socks(lepic_methods::tor::FixedSocks(socks));
     }
 
     /// Takes node requests through the SOCKS proxy at `socks`, as a running tor would.
     #[cfg(test)]
     pub(crate) fn attach_node_socks(&self, socks: std::net::SocketAddr) {
-        self.node_tor.attach_socks(lepic_tor::FixedSocks(socks));
+        self.node_tor
+            .attach_socks(lepic_methods::tor::FixedSocks(socks));
     }
 
     #[cfg(all(test, unix))]
@@ -891,7 +894,7 @@ impl Session {
     }
 
     #[cfg(all(test, unix))]
-    pub(crate) fn set_tor_timings(&self, timings: lepic_tor::TorTimings) {
+    pub(crate) fn set_tor_timings(&self, timings: lepic_methods::tor::TorTimings) {
         *lock(&self.tor_timings) = Some(timings);
     }
 
@@ -1078,7 +1081,7 @@ mod tests {
             kinds(state_events(&mut reported, &TorState::Publishing)),
             [TorEventKind::Bootstrapped, TorEventKind::Publishing]
         );
-        let failure = lepic_tor::TorFailure {
+        let failure = lepic_methods::tor::TorFailure {
             kind: FailureKind::Stopped,
             detail: String::new(),
         };

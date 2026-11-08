@@ -159,15 +159,15 @@ const RELAY_TOR_DIR: &str = "tor-epicbox";
 /// The tor the settings name. While there is one, the relay is never reached directly, nor the
 /// node when `node_over_tor` is set.
 fn cli_tor(settings: &Settings) -> Option<Arc<CliTor>> {
-    let relay = lepic_tor::RelayTor::new(true, settings.tuning.tor_connect);
+    let relay = lepic_methods::tor::RelayTor::new(true, settings.tuning.tor_connect);
     let start = match &settings.relay_tor {
         RelayTor::Off => return None,
         RelayTor::Socks(address) => {
-            relay.attach_socks(lepic_tor::FixedSocks(*address));
+            relay.attach_socks(lepic_methods::tor::FixedSocks(*address));
             None
         }
         RelayTor::Binary { binary, lib_dir } => {
-            let mut tor = lepic_tor::TorSettings::new(
+            let mut tor = lepic_methods::tor::TorSettings::new(
                 binary.clone(),
                 settings.data_dir.join(RELAY_TOR_DIR),
                 settings.tuning.tor_timings(),
@@ -185,8 +185,8 @@ fn cli_tor(settings: &Settings) -> Option<Arc<CliTor>> {
 
 /// Tor for the relay and node connections, started on the first connection when the CLI runs it.
 struct CliTor {
-    relay: lepic_tor::RelayTor,
-    start: std::sync::Mutex<Option<lepic_tor::TorSettings>>,
+    relay: lepic_methods::tor::RelayTor,
+    start: std::sync::Mutex<Option<lepic_methods::tor::TorSettings>>,
 }
 
 impl CliTor {
@@ -198,7 +198,7 @@ impl CliTor {
             .take();
         if let Some(start) = start {
             self.relay
-                .attach(Arc::new(lepic_tor::TorProcess::start(start)));
+                .attach(Arc::new(lepic_methods::tor::TorProcess::start(start)));
         }
         self.relay
             .open(host, port)
@@ -230,7 +230,7 @@ impl Tunnel for RelayTunnel {
     }
 
     fn is_onion(&self, host: &str) -> bool {
-        lepic_tor::RelayTor::is_onion(host)
+        lepic_methods::tor::RelayTor::is_onion(host)
     }
 }
 

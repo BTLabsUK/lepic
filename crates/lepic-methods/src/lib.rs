@@ -15,16 +15,8 @@ pub mod file {
 #[cfg(feature = "epicbox")]
 pub mod epicbox;
 
-/// The HTTP method.
 #[cfg(feature = "http")]
-pub mod http {
-    pub use lepic_foreign::{HttpPolicy, HttpTransport, TRANSPORT_ID};
-}
+pub mod http;
 
-/// The Tor method.
 #[cfg(feature = "tor")]
-pub mod tor {
-    pub use lepic_tor::{
-        OnionClient, OnionClientSettings, TRANSPORT_ID, TorSendError, TorTransport,
-    };
-}
+pub mod tor;

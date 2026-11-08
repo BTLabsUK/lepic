@@ -160,7 +160,7 @@ fn onion_of(mnemonic: &str) -> String {
     .unwrap();
     let parent = lepic_keychain::Identifier::new(2, [0, 0, 0, 0]).unwrap();
     let key = keychain.payment_proof_key(&parent, 0).unwrap();
-    lepic_tor::onion_address(&key.public_key())
+    lepic_methods::tor::onion_address(&key.public_key())
 }
 
 #[test]

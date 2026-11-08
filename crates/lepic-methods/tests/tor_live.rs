@@ -4,7 +4,7 @@
 //!
 //! ```text
 //! LEPIC_LIVE_TESTS=1 LEPIC_TOR_BINARY=/path/to/tor LEPIC_TOR_LIB_DIR=/path/to/libs \
-//!     cargo test -p lepic-tor --test live -- --ignored --nocapture
+//!     cargo test -p lepic-methods --features tor --test tor_live -- --ignored --nocapture
 //! ```
 //!
 //! `LEPIC_LIVE_ONION_UNIX=1` puts the first test's listener on a Unix socket in tor's folder, as
@@ -17,13 +17,12 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use lepic_foreign::{Exposure, ListenSettings, ReceiveHandler, Refusal, listen};
+use lepic_methods::http::{Exposure, ListenSettings, ReceiveHandler, Refusal, listen};
+use lepic_methods::tor::{
+    OnionClient, OnionTarget, SendFailure, SocksError, Tor, TorProcess, TorSendError, TorSettings,
+};
 use lepic_slate::codec::{MediaType, WireSlate};
 use lepic_tor::socks::{SocksCredentials, SocksReply};
-use lepic_tor::{
-    OnionClient, OnionTarget, SendFailure, SocksError, TorProcess, TorSendError, TorSettings,
-    TorTransport,
-};
 use lepic_transport::transport::BoxFuture;
 
 const S1: &str = r#"{"id":"0436430c-2b02-624c-2032-570501212b00","amount":"60000000000"}"#;
@@ -87,7 +86,7 @@ async fn publishes_an_onion_and_reaches_it_over_tor() {
         started.elapsed().as_secs_f64()
     );
 
-    // As TorTransport does: the first circuit to a fresh onion may need a second try.
+    // As Tor does: the first circuit to a fresh onion may need a second try.
     let mut client_settings = lepic_tor::testing::onion_client_settings();
     if let Ok(seconds) = std::env::var("LEPIC_TOR_CONNECT_SECS") {
         client_settings.connect_timeout = Duration::from_secs(seconds.parse().unwrap());
@@ -121,7 +120,7 @@ async fn publishes_an_onion_and_reaches_it_over_tor() {
     );
     assert!(version.v2 && version.v3);
 
-    let transport = TorTransport::new(client);
+    let transport = Tor::new(client);
     let tor = Arc::new(tor);
     transport.attach(tor.clone());
     let sent = Instant::now();
@@ -146,7 +145,7 @@ async fn publishes_an_onion_and_reaches_it_over_tor() {
     listener.shutdown().await;
 }
 
-/// `check_version` at `onion` through `tor`, with more tries than [`TorTransport`] makes.
+/// `check_version` at `onion` through `tor`, with more tries than [`Tor`] makes.
 #[cfg(unix)]
 async fn reach(tor: &TorProcess, onion: &lepic_tor::OnionAddress) -> f64 {
     let client = OnionClient::new(lepic_tor::testing::onion_client_settings());

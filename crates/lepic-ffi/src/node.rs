@@ -23,7 +23,7 @@ use crate::tuning::Tuning;
 #[cfg(not(feature = "tor"))]
 pub(crate) use crate::no_tor::{RelayTor, RelayTorError, StreamGroup};
 #[cfg(feature = "tor")]
-pub(crate) use lepic_tor::{RelayTor, RelayTorError, StreamGroup};
+pub(crate) use lepic_methods::tor::{RelayTor, RelayTorError, StreamGroup};
 
 pub(crate) type Node = NodeClient<SwitchableBackend>;
 
@@ -413,8 +413,8 @@ pub(crate) fn node_error(error: &NodeError) -> WalletError {
 mod tests {
     use std::net::{Ipv4Addr, SocketAddr};
 
+    use lepic_methods::tor::FixedSocks;
     use lepic_node::NodeApi as _;
-    use lepic_tor::FixedSocks;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
 
@@ -428,7 +428,7 @@ mod tests {
     const MAPPED_NODE: &str = "mappednode.example";
 
     fn node_onion() -> String {
-        lepic_tor::OnionAddress::from_public_key(&[5; 32]).host()
+        lepic_methods::tor::OnionAddress::from_public_key(&[5; 32]).host()
     }
 
     fn dialer(tor: &Arc<RelayTor>) -> TorNodeDialer {

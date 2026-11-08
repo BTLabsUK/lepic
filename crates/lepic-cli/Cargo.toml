@@ -23,14 +23,12 @@ hyper = { workspace = true, features = ["server", "http1"] }
 hyper-util = { workspace = true, features = ["server", "http1", "tokio"] }
 jiff = { workspace = true, features = ["std"] }
 lepic-epicbox.workspace = true
-lepic-foreign.workspace = true
 lepic-keychain.workspace = true
 lepic-methods = { workspace = true, features = ["epicbox", "http", "tor"] }
 lepic-node.workspace = true
 lepic-primitives.workspace = true
 lepic-store.workspace = true
 lepic-telemetry.workspace = true
-lepic-tor.workspace = true
 lepic-transport.workspace = true
 lepic-wallet.workspace = true
 lepic-wallet-contacts.workspace = true

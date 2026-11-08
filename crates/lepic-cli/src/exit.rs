@@ -188,19 +188,19 @@ pub enum CliError {
     #[error("another lepic process is using the data directory")]
     DataDirInUse,
     #[error("http address rejected")]
-    HttpUrl(#[source] lepic_foreign::UrlError),
+    HttpUrl(#[source] lepic_methods::http::UrlError),
     #[error("invoices go over epicbox or through a slate file, not over http")]
     InvoiceOverHttp,
     #[error("the http listener could not start")]
-    HttpListen(#[from] lepic_foreign::ListenError),
+    HttpListen(#[from] lepic_methods::http::ListenError),
     #[error("the answer of transaction {tx_id} was not kept")]
     HttpReplyLost { tx_id: u32 },
     #[error("onion address rejected")]
-    OnionAddress(#[source] lepic_tor::OnionError),
+    OnionAddress(#[source] lepic_methods::tor::OnionError),
     #[error("give --tor-binary to use tor")]
     TorBinaryNeeded,
     #[error("tor is not working")]
-    Tor(#[from] lepic_tor::TorFailure),
+    Tor(#[from] lepic_methods::tor::TorFailure),
     #[error("contact failed")]
     Contact(#[from] ContactError),
     #[error("a pairing's sas is not in the sas table")]
@@ -297,7 +297,7 @@ impl CliError {
             | Self::ApiClientListed { .. }
             | Self::TorBinaryNeeded => ErrorKind::Usage,
             Self::Contact(error) => contact_kind(error),
-            Self::Tor(failure) if failure.kind == lepic_tor::FailureKind::Missing => {
+            Self::Tor(failure) if failure.kind == lepic_methods::tor::FailureKind::Missing => {
                 ErrorKind::Config
             }
             Self::Tor(_) => ErrorKind::Transport,

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-//! The Tor transport against a fake SOCKS5 server on loopback that forwards to an in-process
+//! The Tor method against a fake SOCKS5 server on loopback that forwards to an in-process
 //! foreign API listener, so a whole S1 → S2 exchange runs offline.
 
 // Helpers outside #[test] functions unwrap and index too; a failure there is a test failure.
@@ -14,12 +14,13 @@ use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use lepic_foreign::{Exposure, ListenSettings, ReceiveHandler, Refusal, RpcError, listen};
-use lepic_slate::codec::{MediaType, WireSlate};
-use lepic_tor::{
+use lepic_methods::http::{Exposure, ListenSettings, ReceiveHandler, Refusal, RpcError, listen};
+use lepic_methods::tor::{
     FixedSocks, OnionAddress, OnionClient, OnionClientSettings, OnionError, SendFailure,
-    SocksError, SocksReply, TorSendError, TorTransport,
+    SocksError, Tor, TorSendError,
 };
+use lepic_slate::codec::{MediaType, WireSlate};
+use lepic_tor::SocksReply;
 use lepic_transport::transport::{BoxFuture, Destination, Outbound, Transport};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
@@ -142,8 +143,8 @@ async fn serve_socks(mut stream: TcpStream, behaviour: Behaviour, seen: Arc<Mute
     }
 }
 
-fn transport_through(socks: SocketAddr, settings: OnionClientSettings) -> TorTransport {
-    let transport = TorTransport::new(OnionClient::new(settings));
+fn transport_through(socks: SocketAddr, settings: OnionClientSettings) -> Tor {
+    let transport = Tor::new(OnionClient::new(settings));
     transport.attach(Arc::new(FixedSocks(socks)));
     transport
 }
@@ -249,8 +250,7 @@ async fn a_connect_that_never_answers_times_out_after_one_retry() {
 
 #[tokio::test]
 async fn refuses_to_send_without_tor() {
-    let transport =
-        TorTransport::new(OnionClient::new(lepic_tor::testing::onion_client_settings()));
+    let transport = Tor::new(OnionClient::new(lepic_tor::testing::onion_client_settings()));
     let error = transport
         .send(&onion().to_string(), &s1())
         .await
@@ -409,7 +409,6 @@ async fn a_slate_without_an_id_is_not_sent() {
 
 #[test]
 fn the_transport_hands_nothing_out_inbound() {
-    let transport =
-        TorTransport::new(OnionClient::new(lepic_tor::testing::onion_client_settings()));
+    let transport = Tor::new(OnionClient::new(lepic_tor::testing::onion_client_settings()));
     assert!(Transport::inbound(&transport).is_none());
 }

@@ -212,12 +212,12 @@ pub(crate) struct Session {
     /// Held for reading by every wallet call and for writing by a server switch.
     pub(crate) servers: tokio::sync::RwLock<()>,
     /// Holds the answers of HTTP sends until they are finalized.
-    http: lepic_foreign::HttpTransport,
+    http: lepic_methods::http::Http,
     http_listener: Mutex<http::HttpListener>,
     http_starts: AtomicU64,
     /// Holds the answers of Tor sends until they are finalized.
     #[cfg(feature = "tor")]
-    tor: lepic_tor::TorTransport,
+    tor: lepic_methods::tor::Tor,
     #[cfg(feature = "tor")]
     tor_slot: Mutex<tor::TorSlot>,
     #[cfg(feature = "tor")]
@@ -245,7 +245,7 @@ pub(crate) struct Session {
     /// The policy of the config the session was opened with, with its defaults filled in.
     pub(crate) policy: Policy,
     #[cfg(all(test, feature = "tor"))]
-    tor_timings: Mutex<Option<lepic_tor::TorTimings>>,
+    tor_timings: Mutex<Option<lepic_methods::tor::TorTimings>>,
     /// Makes the next listen fail before it subscribes.
     #[cfg(test)]
     pub(crate) fail_next_listen: std::sync::atomic::AtomicBool,
@@ -464,9 +464,9 @@ impl lepic_epicbox::Connector for OfflineRelay {
 struct SessionTransports {
     methods: Arc<Methods>,
     file: Arc<dyn Method>,
-    http: lepic_foreign::HttpTransport,
+    http: lepic_methods::http::Http,
     #[cfg(feature = "tor")]
-    tor: lepic_tor::TorTransport,
+    tor: lepic_methods::tor::Tor,
 }
 
 /// Registers the file transport, `epicbox` when the wallet has one, the HTTP transport and,
@@ -2471,7 +2471,7 @@ fn through_socks(tor: &RelayTor, address: &str) -> Result<(), WalletError> {
     if !socks.ip().is_loopback() {
         return Err(invalid("the SOCKS address is not a loopback address"));
     }
-    tor.attach_socks(lepic_tor::FixedSocks(socks));
+    tor.attach_socks(lepic_methods::tor::FixedSocks(socks));
     Ok(())
 }
 

@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Tor on desktop and Android (ADR 0018): the wallet's onion service and sending to onion
-//! addresses, over a `tor` binary the host bundles and runs as a child process per open wallet.
+//! Tor on desktop and Android (ADR 0018), the wire side: the wallet's onion service and the
+//! onion client, over a `tor` binary the host bundles and runs as a child process per open wallet.
 
+pub mod client;
 pub mod control;
 pub mod listen;
 pub mod onion;
@@ -10,8 +11,8 @@ pub mod relay;
 pub mod socks;
 #[cfg(any(test, feature = "testing"))]
 pub mod testing;
-pub mod transport;
 
+pub use client::OnionClientSettings;
 pub use control::{ControlError, MAX_STREAMS_PER_CIRCUIT};
 pub use listen::{
     ONION_SOCKET, OnionTarget, PREVIOUS_ONION_SOCKET, listen_settings, onion_socket_path,
@@ -27,4 +28,3 @@ pub use process::{
 };
 pub use relay::{RelayTor, RelayTorError, StreamGroup};
 pub use socks::{SendFailure, SocksError, SocksReply};
-pub use transport::{OnionClient, OnionClientSettings, TRANSPORT_ID, TorSendError, TorTransport};

@@ -10,12 +10,11 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use lepic_foreign::{
     BlockFees, ClientError, CoinbaseAccess, CoinbaseAnswer, Exposure, ForeignClient, ForeignUrl,
-    HttpTransport, ListenError, ListenSettings, PlainHttp, ReceiveHandler, Refusal, RpcError,
-    listen, webpki_tls_config,
+    ListenError, ListenSettings, PlainHttp, ReceiveHandler, Refusal, RpcError, listen,
+    webpki_tls_config,
 };
 use lepic_slate::codec::{MediaType, WireSlate};
-use lepic_transport::error::TransportError;
-use lepic_transport::transport::{BoxFuture, Destination, Outbound, Transport};
+use lepic_transport::transport::BoxFuture;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 
@@ -166,73 +165,6 @@ async fn a_dialer_opens_every_connection_for_the_host_of_the_url() {
         Some(&("wallet.invalid".to_owned(), 3415))
     );
     listener.shutdown().await;
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn transport_holds_the_answer_for_its_slate() {
-    let listener = listen(
-        ListenSettings::new(
-            Exposure::LocalOnly,
-            0,
-            lepic_foreign::testing::listen_limits(),
-        ),
-        handler(None),
-    )
-    .await
-    .unwrap();
-    let transport = HttpTransport::new(client());
-    let to = Destination::new(url(listener.local_addr().port()).as_uri());
-    transport.deliver(&to, &s1()).await.unwrap();
-    assert_eq!(transport.take_reply("other"), None);
-    let reply = transport
-        .take_reply("0436430C-2B02-624C-2032-570501212B00")
-        .unwrap();
-    assert_eq!(reply.as_text(), Some(S2));
-    assert_eq!(
-        transport.take_reply("0436430c-2b02-624c-2032-570501212b00"),
-        None
-    );
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn transport_refuses_an_answer_for_another_slate() {
-    let other = S2.replace("212b00", "212b01");
-    let listener = listen(
-        ListenSettings::new(
-            Exposure::LocalOnly,
-            0,
-            lepic_foreign::testing::listen_limits(),
-        ),
-        answering(None, other),
-    )
-    .await
-    .unwrap();
-    let transport = HttpTransport::new(client());
-    let to = Destination::new(url(listener.local_addr().port()).as_uri());
-
-    let error = transport.deliver(&to, &s1()).await.unwrap_err();
-
-    let TransportError::Backend { source, .. } = error else {
-        panic!("{error:?}");
-    };
-    assert!(matches!(
-        source.downcast_ref::<ClientError>(),
-        Some(ClientError::Rpc(RpcError::Malformed))
-    ));
-    assert_eq!(
-        transport.take_reply("0436430c-2b02-624c-2032-570501212b01"),
-        None
-    );
-    assert_eq!(
-        transport.take_reply("0436430c-2b02-624c-2032-570501212b00"),
-        None
-    );
-}
-
-#[test]
-fn transport_hands_nothing_out_inbound() {
-    let transport = HttpTransport::new(client());
-    assert!(Transport::inbound(&transport).is_none());
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

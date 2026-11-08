@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use lepic_epicbox::tunnel::TunnelTimings;
 use lepic_epicbox::{Backoff, ClientTimings};
-use lepic_foreign::ListenLimits;
+use lepic_methods::http::ListenLimits;
 use lepic_node::{CallPolicy, HttpSettings, MAX_RESPONSE_BYTES, RetryPolicy};
 
 use crate::api::error::{WalletError, WalletErrorKind};
@@ -23,7 +23,7 @@ pub(crate) struct Tuning {
     #[cfg_attr(not(feature = "tor"), allow(dead_code))]
     pub(crate) tunnel: TunnelTimings,
     pub(crate) listen: ListenLimits,
-    pub(crate) send: lepic_foreign::ClientSettings,
+    pub(crate) send: lepic_methods::http::ClientSettings,
     tor: TorTimes,
 }
 
@@ -151,7 +151,7 @@ impl Tuning {
                     "http.receives_per_minute",
                 )?,
             },
-            send: lepic_foreign::ClientSettings {
+            send: lepic_methods::http::ClientSettings {
                 connect_timeout: seconds(
                     http.send_connect_timeout_s,
                     "http.send_connect_timeout_s",
@@ -160,7 +160,7 @@ impl Tuning {
                     http.send_request_timeout_s,
                     "http.send_request_timeout_s",
                 )?,
-                max_response_bytes: lepic_foreign::rpc::MAX_BODY_LEN,
+                max_response_bytes: lepic_methods::http::MAX_BODY_LEN,
             },
             tor: TorTimes {
                 bootstrap: seconds(tor.bootstrap_timeout_s, "tor.bootstrap_timeout_s")?,
@@ -194,8 +194,8 @@ impl Tuning {
     }
 
     #[cfg(feature = "tor")]
-    pub(crate) const fn tor_timings(&self) -> lepic_tor::TorTimings {
-        lepic_tor::TorTimings::new(lepic_tor::TorNetworkTimings {
+    pub(crate) const fn tor_timings(&self) -> lepic_methods::tor::TorTimings {
+        lepic_methods::tor::TorTimings::new(lepic_methods::tor::TorNetworkTimings {
             stall: self.tor.stall,
             bootstrap: self.tor.bootstrap,
             cold_stall: self.tor.cold_stall,
@@ -205,11 +205,11 @@ impl Tuning {
     }
 
     #[cfg(feature = "tor")]
-    pub(crate) const fn onion_client(&self) -> lepic_tor::OnionClientSettings {
-        lepic_tor::OnionClientSettings {
+    pub(crate) const fn onion_client(&self) -> lepic_methods::tor::OnionClientSettings {
+        lepic_methods::tor::OnionClientSettings {
             connect_timeout: self.tor.connect,
             request_timeout: self.tor.request,
-            max_response_bytes: lepic_foreign::rpc::MAX_BODY_LEN,
+            max_response_bytes: lepic_methods::http::MAX_BODY_LEN,
         }
     }
 }

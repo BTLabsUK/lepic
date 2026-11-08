@@ -4,7 +4,7 @@
 
 use std::sync::{Arc, Mutex};
 
-use lepic_foreign::{ForeignClient, ForeignUrl, PlainHttp, webpki_tls_config};
+use lepic_methods::http::{ForeignClient, ForeignUrl, PlainHttp, webpki_tls_config};
 use lepic_wallet::slate::{MediaType, WireSlate};
 use zeroize::Zeroizing;
 
@@ -447,7 +447,7 @@ async fn the_listener_caps_open_receipts_and_still_answers_a_payment_received_be
     let events = Events::default();
     let receiver = pair.bob.http_receiver(
         events.report(),
-        lepic_foreign::TRANSPORT_ID,
+        lepic_methods::http::TRANSPORT_ID,
         lepic_wallet::ProofKey::Payments,
     );
     let slate = pair.alice.create_send_slate(EPIC, 1, None).await.unwrap();
@@ -474,7 +474,7 @@ async fn the_listener_caps_open_receipts_and_still_answers_a_payment_received_be
         .receive(numbered(&slate.json, &slate_id, cap))
         .await;
 
-    assert_eq!(at_cap, Err(lepic_foreign::Refusal::Unavailable));
+    assert_eq!(at_cap, Err(lepic_methods::http::Refusal::Unavailable));
     let oldest = pair.bob.transaction(receipts[0]).await.unwrap();
     assert_eq!(oldest.status, TxStatus::Received);
     let again = receiver
@@ -490,7 +490,7 @@ async fn the_listener_caps_open_receipts_and_still_answers_a_payment_received_be
         .receive(numbered(&slate.json, &slate_id, cap + 1))
         .await;
 
-    assert_eq!(refused, Err(lepic_foreign::Refusal::Unavailable));
+    assert_eq!(refused, Err(lepic_methods::http::Refusal::Unavailable));
     let last = events.last();
     assert_eq!(last.kind, HttpListenerEventKind::Refused);
     assert_eq!(

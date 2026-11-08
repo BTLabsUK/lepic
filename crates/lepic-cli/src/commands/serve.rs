@@ -16,7 +16,7 @@ use futures_util::stream::FuturesUnordered;
 use futures_util::{FutureExt as _, StreamExt as _};
 use jiff::Timestamp;
 use lepic_epicbox::RelayEndpoint;
-use lepic_foreign::CoinbaseAccess;
+use lepic_methods::http::CoinbaseAccess;
 use lepic_node::NodeApi;
 use lepic_primitives::amount::Height;
 use lepic_wallet::ApiTlsKey;

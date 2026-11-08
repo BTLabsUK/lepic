@@ -4,7 +4,7 @@
 //!
 //! Over HTTP the receiver answers `receive_tx` with its S2 in the same exchange. The outbound
 //! side keeps that answer, keyed by the id of the slate it answers, until the caller takes it
-//! with [`HttpTransport::take_reply`] to finalize it.
+//! with [`Http::take_reply`] to finalize it.
 
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex, PoisonError};
@@ -25,9 +25,18 @@ use lepic_transport::transport::{
 use serde::Deserialize;
 use tracing::debug;
 
-use crate::client::ForeignClient;
-use crate::error::{ClientError, RpcError};
-use crate::url::{ForeignUrl, PlainHttp};
+mod receiver;
+
+#[cfg(unix)]
+pub use lepic_foreign::listen_unix;
+pub use lepic_foreign::rpc::MAX_BODY_LEN;
+pub use lepic_foreign::{
+    BlockFees, ClientError, ClientSettings, CoinbaseAccess, CoinbaseAnswer, DEFAULT_LISTEN_PORT,
+    Exposure, ForeignClient, ForeignDialFuture, ForeignDialer, ForeignStream, ForeignUrl,
+    ListenError, ListenLimits, ListenSettings, ListenerHandle, PlainHttp, ReceiveHandler, Refusal,
+    RpcError, Scheme, UrlError, listen, webpki_tls_config,
+};
+pub use receiver::{Counts, Host, Receiver, coinbase_answer, coinbase_request, refuse};
 
 /// The transport id of the HTTP method, stored with its transactions.
 pub const TRANSPORT_ID: TransportId = TransportId::new("http");
@@ -35,6 +44,15 @@ pub const TRANSPORT_ID: TransportId = TransportId::new("http");
 // Answers waiting to be finalized. Each send takes its own at once, so more than a handful
 // means callers stopped taking them; the oldest is dropped and its sender can send again.
 const MAX_HELD_REPLIES: usize = 64;
+
+/// Whether a send over `transport` gets its answer in the same exchange.
+pub fn is_direct(transport: TransportId) -> bool {
+    #[cfg(feature = "tor")]
+    if transport == crate::tor::TRANSPORT_ID {
+        return true;
+    }
+    transport == TRANSPORT_ID
+}
 
 /// The policy `epic-wallet` `v4.1.0` speaks over HTTP: V3 and V2 accepted, detected by shape
 /// with V3 tried first; a new slate in the V2 shape every listener since 3.0 takes; a reply in
@@ -81,7 +99,7 @@ impl FormatPolicy for HttpPolicy {
 
 /// The HTTP method. Clones share the client and the held answers.
 #[derive(Debug, Clone)]
-pub struct HttpTransport {
+pub struct Http {
     client: ForeignClient,
     held: Arc<Mutex<VecDeque<Held>>>,
 }
@@ -92,7 +110,8 @@ struct Held {
     wire: WireSlate,
 }
 
-impl HttpTransport {
+impl Http {
+    /// The HTTP method sending through `client`, with no answers held.
     pub fn new(client: ForeignClient) -> Self {
         Self {
             client,
@@ -145,13 +164,13 @@ struct IdOnly {
 }
 
 /// The `id` both legacy shapes carry at the top, read without decoding the slate.
-fn slate_id_of(wire: &WireSlate) -> Option<String> {
+pub(crate) fn slate_id_of(wire: &WireSlate) -> Option<String> {
     let text = wire.as_text()?;
     let IdOnly { id } = serde_json::from_str(text).ok()?;
     (id.len() <= 64).then_some(id)
 }
 
-impl Outbound for HttpTransport {
+impl Outbound for Http {
     fn deliver<'a>(
         &'a self,
         to: &'a Destination,
@@ -168,7 +187,7 @@ impl Outbound for HttpTransport {
     }
 }
 
-impl Method for HttpTransport {
+impl Method for Http {
     fn carries(&self) -> Carries {
         Carries::default()
     }
@@ -178,7 +197,7 @@ impl Method for HttpTransport {
     }
 }
 
-impl Transport for HttpTransport {
+impl Transport for Http {
     fn id(&self) -> TransportId {
         TRANSPORT_ID
     }
@@ -193,5 +212,26 @@ impl Transport for HttpTransport {
 
     fn inbound(&self) -> Option<&dyn Inbound> {
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use lepic_slate::codec::MediaType;
+
+    use super::*;
+
+    #[test]
+    fn reads_the_slate_id_without_decoding() {
+        let wire = |text: &str| WireSlate::text(MediaType::JSON, text.into());
+        assert_eq!(
+            slate_id_of(&wire(r#"{"id":"abc","x":1}"#)).as_deref(),
+            Some("abc")
+        );
+        assert_eq!(
+            slate_id_of(&wire(&format!(r#"{{"id":"{}"}}"#, "a".repeat(65)))),
+            None
+        );
+        assert_eq!(slate_id_of(&wire("[]")), None);
     }
 }

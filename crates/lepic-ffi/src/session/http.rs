@@ -7,20 +7,19 @@ use std::sync::atomic::Ordering;
 use std::sync::{Arc, Weak};
 use std::time::Duration;
 
-use lepic_foreign::{
-    BlockFees, CoinbaseAccess, CoinbaseAnswer, Exposure, ForeignClient, ForeignDialFuture,
-    ForeignDialer, ForeignStream, ForeignUrl, HttpTransport, ListenError, ListenSettings,
-    ListenerHandle, PlainHttp, ReceiveHandler, Refusal, TRANSPORT_ID, UrlError, webpki_tls_config,
+use lepic_methods::http::{
+    CoinbaseAccess, Exposure, ForeignClient, ForeignDialFuture, ForeignDialer, ForeignStream,
+    ForeignUrl, Host, Http, ListenError, ListenSettings, ListenerHandle, PlainHttp, ReceiveHandler,
+    Receiver, Refusal, TRANSPORT_ID, UrlError, listen, refuse, webpki_tls_config,
 };
-use lepic_keychain::Identifier;
 use lepic_node::{Propagation, is_loopback_host};
-use lepic_primitives::amount::{Fee, Height};
 use lepic_store::TxId;
+use lepic_transport::method::Method;
 use lepic_transport::transport::{BoxFuture, Destination, TransportId};
 use lepic_wallet::coinbase::{Coinbase, CoinbaseRequest};
 use lepic_wallet::send::{Delivery, SendError};
 use lepic_wallet::slate::WireSlate;
-use lepic_wallet::{FinalizeError, ProofKey, ReceiveError, ReceiveRequest};
+use lepic_wallet::{FinalizeError, ProofKey, ReceiveError, ReceiveRequest, Received};
 use tokio::net::TcpStream;
 use tracing::{debug, warn};
 
@@ -50,17 +49,14 @@ pub(super) enum HttpListener {
     },
 }
 
-pub(super) fn http_transport(
-    tuning: &Tuning,
-    tor: &Arc<RelayTor>,
-) -> Result<HttpTransport, WalletError> {
+pub(super) fn http_transport(tuning: &Tuning, tor: &Arc<RelayTor>) -> Result<Http, WalletError> {
     let tls = webpki_tls_config()
         .map_err(|error| WalletError::new(WalletErrorKind::Other, error.to_string()))?;
     let dialer = Arc::new(SendDialer {
         tor: Arc::clone(tor),
         connect_timeout: tuning.send.connect_timeout,
     });
-    Ok(HttpTransport::new(ForeignClient::with_dialer(
+    Ok(Http::new(ForeignClient::with_dialer(
         tuning.send,
         tls,
         dialer,
@@ -141,22 +137,6 @@ const fn http_exposure(exposure: Exposure) -> HttpExposure {
     match exposure {
         Exposure::LocalOnly => HttpExposure::LocalOnly,
         Exposure::Internet => HttpExposure::Internet,
-    }
-}
-
-/// Whether the sender may try again: the wallet could not take the payment now, but nothing
-/// about the slate was wrong.
-const fn refusal(kind: WalletErrorKind) -> Refusal {
-    match kind {
-        WalletErrorKind::Locked
-        | WalletErrorKind::NodeUnreachable
-        | WalletErrorKind::RestoreScanRequired
-        | WalletErrorKind::WalletBusy
-        | WalletErrorKind::Io
-        | WalletErrorKind::DamagedDatabase
-        | WalletErrorKind::Panic
-        | WalletErrorKind::Cancelled => Refusal::Unavailable,
-        _ => Refusal::Rejected,
     }
 }
 
@@ -325,7 +305,7 @@ impl Session {
         let receiver = self.http_receiver(Arc::clone(&report), TRANSPORT_ID, ProofKey::Payments);
         let settings = ListenSettings::new(self::exposure(exposure), port, self.tuning.listen)
             .with_coinbase(self::coinbase_access(coinbase));
-        let listening = lepic_foreign::listen(settings, receiver).await;
+        let listening = listen(settings, receiver).await;
         let handle = match listening {
             Ok(handle) => handle,
             Err(error) => {
@@ -373,7 +353,6 @@ impl Session {
         Ok(())
     }
 
-    /// What the HTTP listener hands each payment to.
     /// The wallet behind a listener of the foreign API, recording receipts as `transport`'s:
     /// HTTP's, or Tor's for the listener behind the onion. Each has its own open receipts.
     pub(crate) fn http_receiver(
@@ -382,12 +361,16 @@ impl Session {
         transport: TransportId,
         proof_key: ProofKey,
     ) -> Arc<dyn ReceiveHandler> {
-        Arc::new(HttpReceiver {
+        let host = Arc::new(SessionHost {
             session: Arc::downgrade(self),
             report,
             transport,
-            proof_key,
-        })
+        });
+        let method = self
+            .method(transport)
+            .cloned()
+            .unwrap_or_else(|| Arc::new(self.http.clone()));
+        Arc::new(Receiver::new(host, method, proof_key))
     }
 
     /// Stops the HTTP listener. `Stopped` is reported once its port is free.
@@ -416,17 +399,22 @@ impl Session {
 }
 
 /// The wallet behind the HTTP listener. It holds the session weakly, so a running listener
-/// never keeps a dropped wallet open. Payment proofs are signed with `proof_key`, the key of
-/// the address the listener serves.
-struct HttpReceiver {
+/// never keeps a dropped wallet open. The method is looked up by `transport` on every receipt,
+/// so a receipt always goes over the method the session holds under that id.
+struct SessionHost {
     session: Weak<Session>,
     report: HttpReport,
     transport: TransportId,
-    proof_key: ProofKey,
 }
 
-impl ReceiveHandler for HttpReceiver {
-    fn receive(&self, slate: WireSlate) -> BoxFuture<'_, Result<WireSlate, Refusal>> {
+impl Host for SessionHost {
+    fn receive(
+        &self,
+        _method: &Arc<dyn Method>,
+        wire: &WireSlate,
+        request: ReceiveRequest,
+    ) -> BoxFuture<'_, Result<Received, Refusal>> {
+        let wire = wire.clone();
         Box::pin(async move {
             let Some(session) = self.session.upgrade() else {
                 return Err(Refusal::Unavailable);
@@ -434,77 +422,48 @@ impl ReceiveHandler for HttpReceiver {
             let boundary = session.runtime().boundary.clone();
             let transport = self.transport;
             let Some(method) = session.method(transport).cloned() else {
-                let error = WalletError::from(ReceiveError::UnknownTransport { transport });
-                let refusal = refusal(error.kind);
+                let error = ReceiveError::UnknownTransport { transport };
                 debug!(transport = %transport, error = %error, "payment refused");
-                self.refused(refusal);
-                return Err(refusal);
-            };
-            let request = ReceiveRequest {
-                proof_key: self.proof_key,
-                ..ReceiveRequest::default()
+                return Err(refuse(&error));
             };
             let received = boundary
                 .run("http_receive", async move {
-                    match session
+                    Ok(session
                         .engine
-                        .receive_unsolicited(&method, &slate, request)
-                        .await
-                    {
-                        Err(ReceiveError::OpenReceipts(cause)) => Ok(Err(cause)),
-                        received => Ok(Ok(received?)),
-                    }
+                        .receive_unsolicited(&method, &wire, request)
+                        .await)
                 })
                 .await;
             match received {
-                Ok(Err(cause)) => {
+                Ok(Ok(received)) => Ok(received),
+                Ok(Err(ReceiveError::OpenReceipts(cause))) => {
                     debug!(
-                        transport = %self.transport,
+                        transport = %transport,
                         error = cause.as_ref().map(tracing::field::display),
                         "payment refused at the open receipt cap"
                     );
-                    self.refused(Refusal::Unavailable);
                     Err(Refusal::Unavailable)
                 }
-                Ok(Ok(received)) => {
-                    (self.report)(HttpListenerEvent {
-                        tx_id: Some(received.tx_id.0),
-                        amount: Some(received.slate.amount().value()),
-                        repeated: received.repeated,
-                        ..HttpListenerEvent::of(HttpListenerEventKind::Received)
-                    });
-                    Ok(received.reply)
+                Ok(Err(error)) => {
+                    debug!(
+                        transport = %transport,
+                        error = %lepic_telemetry::ErrorChain(&error),
+                        "payment refused"
+                    );
+                    Err(refuse(&error))
                 }
                 Err(error) => {
-                    let refusal = refusal(error.kind);
-                    debug!(transport = %self.transport, error = %error, "payment refused");
-                    self.refused(refusal);
-                    Err(refusal)
+                    debug!(transport = %transport, error = %error, "payment refused");
+                    Err(Refusal::Unavailable)
                 }
             }
         })
     }
 
-    fn refused(&self, refusal: Refusal) {
-        (self.report)(HttpListenerEvent {
-            refusal: Some(http_refusal(refusal)),
-            ..HttpListenerEvent::of(HttpListenerEventKind::Refused)
-        });
-    }
-
-    fn build_coinbase(&self, fees: BlockFees) -> BoxFuture<'_, Result<CoinbaseAnswer, Refusal>> {
+    fn build_coinbase(&self, request: CoinbaseRequest) -> BoxFuture<'_, Result<Coinbase, Refusal>> {
         Box::pin(async move {
             let Some(session) = self.session.upgrade() else {
                 return Err(Refusal::Unavailable);
-            };
-            let request = CoinbaseRequest {
-                fees: Fee::new(fees.fees),
-                height: Height::new(fees.height),
-                // A key that is no identifier is one the wallet never gave out: a new key is
-                // taken, as upstream does for a key it does not find.
-                key_id: fees
-                    .key_id
-                    .and_then(|bytes| Identifier::from_bytes(&bytes).ok()),
             };
             let boundary = session.runtime().boundary.clone();
             let built = boundary
@@ -513,7 +472,7 @@ impl ReceiveHandler for HttpReceiver {
                 })
                 .await;
             match built {
-                Ok(Ok(coinbase)) => Ok(coinbase_answer(&coinbase)),
+                Ok(Ok(coinbase)) => Ok(coinbase),
                 Ok(Err(error)) => {
                     warn!(
                         error = %lepic_telemetry::ErrorChain(&error),
@@ -528,6 +487,22 @@ impl ReceiveHandler for HttpReceiver {
             }
         })
     }
+
+    fn received(&self, received: &Received) {
+        (self.report)(HttpListenerEvent {
+            tx_id: Some(received.tx_id.0),
+            amount: Some(received.slate.amount().value()),
+            repeated: received.repeated,
+            ..HttpListenerEvent::of(HttpListenerEventKind::Received)
+        });
+    }
+
+    fn refused(&self, refusal: Refusal) {
+        (self.report)(HttpListenerEvent {
+            refusal: Some(http_refusal(refusal)),
+            ..HttpListenerEvent::of(HttpListenerEventKind::Refused)
+        });
+    }
 }
 
 fn coinbase_access(coinbase: HttpCoinbase) -> CoinbaseAccess {
@@ -538,23 +513,12 @@ fn coinbase_access(coinbase: HttpCoinbase) -> CoinbaseAccess {
     }
 }
 
-/// The node's view of a coinbase the wallet built.
-fn coinbase_answer(coinbase: &Coinbase) -> CoinbaseAnswer {
-    CoinbaseAnswer {
-        commit: *coinbase.output.commitment.as_bytes(),
-        proof: coinbase.output.proof.as_bytes().to_vec(),
-        excess: *coinbase.kernel.excess.as_bytes(),
-        excess_sig: coinbase.kernel.excess_sig.to_compact(),
-        key_id: coinbase.key_id.to_bytes(),
-    }
-}
-
 #[cfg(test)]
 #[cfg(feature = "tor")]
 mod tests {
     use std::net::{Ipv4Addr, SocketAddr};
 
-    use lepic_tor::FixedSocks;
+    use lepic_methods::tor::FixedSocks;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
 

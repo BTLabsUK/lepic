@@ -10,9 +10,9 @@ use std::time::Duration;
 
 use lepic_epicbox::tunnel::{OnionRoute, TunnelTimings};
 use lepic_epicbox::{Backoff, ClientTimings, Domain};
-use lepic_foreign::ListenLimits;
+use lepic_methods::http::ListenLimits;
+use lepic_methods::tor::{OnionClientSettings, TorNetworkTimings, TorTimings};
 use lepic_node::{CallPolicy, HttpSettings, MAX_RESPONSE_BYTES, RetryPolicy};
-use lepic_tor::{OnionClientSettings, TorNetworkTimings, TorTimings};
 use lepic_wallet::NodeEndpoint;
 use secrecy::SecretString;
 use serde::Deserialize;
@@ -57,7 +57,7 @@ pub struct Tuning {
     pub listen_port: u16,
     pub listen: ListenLimits,
     pub api: ApiLimits,
-    pub send: lepic_foreign::ClientSettings,
+    pub send: lepic_methods::http::ClientSettings,
     tor_network: TorNetworkTimings,
     pub tor_connect: Duration,
     tor_request: Duration,
@@ -93,7 +93,7 @@ impl Tuning {
         OnionClientSettings {
             connect_timeout: self.tor_connect,
             request_timeout: self.tor_request,
-            max_response_bytes: lepic_foreign::rpc::MAX_BODY_LEN,
+            max_response_bytes: lepic_methods::http::MAX_BODY_LEN,
         }
     }
 }
@@ -323,10 +323,10 @@ fn tuning(
             body_timeout: seconds(api.body_timeout_s),
             max_body: count(api.max_body_kib).saturating_mul(1024),
         },
-        send: lepic_foreign::ClientSettings {
+        send: lepic_methods::http::ClientSettings {
             connect_timeout: seconds(http.send_connect_timeout_s),
             request_timeout: seconds(http.send_request_timeout_s),
-            max_response_bytes: lepic_foreign::rpc::MAX_BODY_LEN,
+            max_response_bytes: lepic_methods::http::MAX_BODY_LEN,
         },
         tor_network: TorNetworkTimings {
             stall: seconds(tor.stall_timeout_s),
@@ -343,7 +343,7 @@ fn tuning(
 /// A route to a host name and an onion v3 host on ports that are not 0.
 fn onion_route(route: &OnionTable) -> Option<OnionRoute> {
     let domain = Domain::parse(&route.host).ok()?;
-    let onion = lepic_tor::parse_onion(&route.onion).ok()?;
+    let onion = lepic_methods::tor::parse_onion(&route.onion).ok()?;
     (route.port != 0 && route.onion_port != 0).then(|| OnionRoute {
         domain,
         port: route.port,

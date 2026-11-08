@@ -561,7 +561,7 @@ async fn recording_socks() -> (std::net::SocketAddr, Arc<Mutex<Vec<(String, u16)
 /// Routes `host:443` to a made-up onion, as the app's settings would, and returns the onion.
 #[cfg(feature = "tor")]
 fn route_to_onion(session: &Session, host: &str, seed: u8) -> String {
-    let onion = lepic_tor::OnionAddress::from_public_key(&[seed; 32]).host();
+    let onion = lepic_methods::tor::OnionAddress::from_public_key(&[seed; 32]).host();
     session
         .set_onion_routes(vec![crate::api::tor::OnionRoute {
             host: host.to_owned(),

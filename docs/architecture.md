@@ -21,11 +21,11 @@ between crates are fixed below and checked by `cargo xtask deps-check`.
 | `lepic-store` | SQLite storage behind repository traits, migrations, encryption of private transaction context, the database file encrypted at rest (ADR 0032). | disk |
 | `lepic-transport` | Transport traits, the method port, shared legacy codecs, format policy, the file transport. | disk |
 | `lepic-epicbox` | Epicbox addresses, message crypto, protocol frames, the relay client; no LEPIC trait. | network |
-| `lepic-foreign` | The wallet foreign API over HTTP (ADR 0017): JSON-RPC messages, the client and the `http` transport, the listener. | network |
-| `lepic-tor` | Tor on desktop and Android (ADR 0018): onion v3 addresses and the wallet's onion key, a tor child process per wallet driven over its control port, SOCKS5, the `tor` transport. | network, child process |
+| `lepic-foreign` | The wallet foreign API over HTTP (ADR 0017): JSON-RPC messages, the client, the listener. The `http` method lives in `lepic-methods`. | network |
+| `lepic-tor` | Tor on desktop and Android (ADR 0018): onion v3 addresses and the wallet's onion key, a tor child process per wallet driven over its control port, SOCKS5. The `tor` method lives in `lepic-methods`. | network, child process |
 | `lepic-wallet` | The engine: accounts, output selection, send, receive, finalize, cancel, scan, refresh, transaction state machine, events. | through ports |
 | `lepic-wallet-contacts` | Contacts on the engine (RFC 0002): pairing, contact mailboxes, sealed slates, contact invoices, key checks and app payloads. Drives `lepic-wallet` through its public calls and the hooks of `lepic_wallet::extension`. | through ports |
-| `lepic-methods` | Transaction methods: the registry of methods and one module per method, each behind a feature. The `epicbox` module is the Epicbox method: its inbox loop, notices, listing addresses and invoices over the relay. Re-exports the port of `lepic-transport` and the wire crates' transports. | through ports |
+| `lepic-methods` | Transaction methods: the registry of methods and one module per method, each behind a feature. The `epicbox` module is the Epicbox method: its inbox loop, notices, listing addresses and invoices over the relay. The `http` and `tor` modules are the HTTP and Tor methods, and the one receiver of a foreign-API listener; they re-export what their wire crates offer. Re-exports the port of `lepic-transport`. | through ports |
 | `lepic-telemetry` | Tracing subscribers for CLI and mobile, redaction helpers. | stderr, files |
 | `lepic-cli` | The `lepic` binary. | all |
 | `lepic-ffi` | LEPIC's FFI API, built with flutter_rust_bridge (ADR 0007). The Flutter binding is a separate repository (ADR 0023). | all |
@@ -66,13 +66,13 @@ lepic-store       -> lepic-primitives
 lepic-transport   -> lepic-slate, lepic-primitives, lepic-crypto
 lepic-epicbox     -> lepic-transport, lepic-slate, lepic-crypto, lepic-primitives
 lepic-foreign     -> lepic-transport, lepic-slate
-lepic-tor         -> lepic-foreign, lepic-transport, lepic-slate
+lepic-tor         -> lepic-foreign
 lepic-wallet      -> lepic-contact, lepic-store, lepic-node, lepic-transport, lepic-slate, lepic-keychain, lepic-crypto, lepic-primitives
-lepic-methods     -> lepic-wallet, lepic-transport, lepic-epicbox, lepic-foreign, lepic-tor, lepic-node, lepic-slate, lepic-crypto, lepic-primitives
+lepic-methods     -> lepic-wallet, lepic-transport, lepic-epicbox, lepic-foreign, lepic-tor, lepic-node, lepic-slate, lepic-keychain, lepic-crypto, lepic-primitives
 lepic-wallet-contacts -> all crates above
 lepic-telemetry   -> (external only)
-lepic-cli         -> lepic-wallet, lepic-wallet-contacts, lepic-methods, lepic-telemetry, lepic-epicbox, lepic-foreign, lepic-tor, lepic-transport, lepic-node, lepic-store, lepic-keychain, lepic-primitives
-lepic-ffi         -> lepic-wallet, lepic-wallet-contacts, lepic-methods, lepic-telemetry, lepic-epicbox, lepic-foreign, lepic-tor, lepic-transport, lepic-node, lepic-store, lepic-keychain, lepic-primitives
+lepic-cli         -> lepic-wallet, lepic-wallet-contacts, lepic-methods, lepic-telemetry, lepic-epicbox, lepic-transport, lepic-node, lepic-store, lepic-keychain, lepic-primitives
+lepic-ffi         -> lepic-wallet, lepic-wallet-contacts, lepic-methods, lepic-telemetry, lepic-epicbox, lepic-tor, lepic-transport, lepic-node, lepic-store, lepic-keychain, lepic-primitives
 ```
 
 The block applies to normal and build dependencies. Any crate may take `lepic-telemetry` as a

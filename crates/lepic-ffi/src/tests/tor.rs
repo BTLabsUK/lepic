@@ -11,8 +11,8 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use hmac::{Hmac, KeyInit, Mac};
+use lepic_methods::tor::OnionTarget;
 use lepic_primitives::amount::Height;
-use lepic_tor::OnionTarget;
 use sha2::Sha256;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{TcpListener, TcpStream};
@@ -46,8 +46,8 @@ fn fake_tor() -> String {
         .into_owned()
 }
 
-fn quick() -> lepic_tor::TorTimings {
-    lepic_tor::TorTimings {
+fn quick() -> lepic_methods::tor::TorTimings {
+    lepic_methods::tor::TorTimings {
         control_file: Duration::from_secs(10),
         command: Duration::from_secs(5),
         stall: Duration::from_secs(10),
@@ -727,7 +727,7 @@ async fn onion_routes_are_replaced_only_when_every_one_is_valid() {
         "LEPIC knows no onion of its own"
     );
 
-    let onion = lepic_tor::OnionAddress::from_public_key(&[3; 32]).host();
+    let onion = lepic_methods::tor::OnionAddress::from_public_key(&[3; 32]).host();
     bob.set_onion_routes(vec![onion_route("relay.example", &onion, 443)])
         .unwrap();
     for bad in [
@@ -774,7 +774,7 @@ async fn the_onion_routes_of_the_config_are_there_from_the_open_and_checked() {
 
     let chain = crate::api::testing::MockChain::new(1).unwrap();
     let runtime = chain.runtime(LogLevel::Warn).unwrap();
-    let onion = lepic_tor::OnionAddress::from_public_key(&[3; 32]).host();
+    let onion = lepic_methods::tor::OnionAddress::from_public_key(&[3; 32]).host();
     let open = |routes| {
         let runtime = Arc::clone(&runtime.inner);
         async move {
@@ -900,7 +900,7 @@ async fn the_onion_answers_more_senders_at_once_than_one_address_may_hold() {
     let target = network.listener(&bob_onion).unwrap();
     // Tor connects every sender alike: these stand for other senders mid-request.
     let mut held = Vec::new();
-    for _ in 0..=lepic_tor::MAX_STREAMS_PER_CIRCUIT {
+    for _ in 0..=lepic_methods::tor::MAX_STREAMS_PER_CIRCUIT {
         let mut stream = connect(&target).await.unwrap();
         stream
             .write_all(b"POST /v2/foreign HTTP/1.1\r\n")
@@ -1029,7 +1029,7 @@ async fn the_previous_onion_is_the_payment_proof_address_in_onion_form_and_the_o
     let public_key: [u8; 32] = unhex(case["payment_proof_public_key"].as_str().unwrap())
         .try_into()
         .unwrap();
-    assert_eq!(previous, lepic_tor::onion_address(&public_key));
+    assert_eq!(previous, lepic_methods::tor::onion_address(&public_key));
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../testdata/vectors/keys/onion_key_seed32.json");
     let vector: serde_json::Value =
@@ -1066,13 +1066,13 @@ async fn the_previous_onion_is_published_behind_its_own_listener_and_takes_payme
     assert_eq!(
         network.listener(&onion),
         Some(OnionTarget::Unix(
-            lepic_tor::onion_socket_path(&tor_dir).unwrap()
+            lepic_methods::tor::onion_socket_path(&tor_dir).unwrap()
         ))
     );
     assert_eq!(
         network.listener(&previous),
         Some(OnionTarget::Unix(
-            lepic_tor::previous_onion_socket_path(&tor_dir).unwrap()
+            lepic_methods::tor::previous_onion_socket_path(&tor_dir).unwrap()
         ))
     );
     assert_eq!(pair.bob.tor_status().onion, Some(onion.clone()));
