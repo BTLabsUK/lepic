@@ -19,6 +19,7 @@ use lepic_epicbox::RelayEndpoint;
 use lepic_methods::http::CoinbaseAccess;
 use lepic_node::NodeApi;
 use lepic_primitives::amount::Height;
+use lepic_transport::method::Method;
 use lepic_wallet::ApiTlsKey;
 use lepic_wallet::event::Event;
 use lepic_wallet::inbox::{InboxError, InboxSummary, ListenHandle};
@@ -38,8 +39,9 @@ use crate::cli::{Command, ServeArgs};
 use crate::exit::CliError;
 use crate::host::{Host, HostNode};
 use crate::output::{
-    ContactBackupReport, MaintenanceReport, OwnerTlsStatus, Report, RequestsReport,
-    ServeHttpStatus, ServeReport, ServeStatusReport, SlateReceiveReport,
+    CarriesReport, ContactBackupReport, MaintenanceReport, MethodReport, MethodsReport,
+    OwnerTlsStatus, Report, RequestsReport, ServeHttpStatus, ServeReport, ServeStatusReport,
+    SlateReceiveReport,
 };
 use crate::secret::{SecretError, SecretInput};
 use crate::service::{self, Listening};
@@ -169,10 +171,32 @@ impl<H: Host> Service<'_, H> {
             Call::ContactImport { document } => Ok(Report::ContactImport(
                 contact::import_document(&self.held, document).await?,
             )),
+            Call::Methods => Ok(Report::Methods(MethodsReport {
+                methods: self
+                    .held
+                    .methods
+                    .iter()
+                    .map(|method| method_report(method.as_ref()))
+                    .collect(),
+            })),
             Call::DomainFile { relays } => {
                 profile::domain_document(&self.held, self.settings, &relays)
             }
         }
+    }
+}
+
+/// What `method` can do, from its capabilities; nothing here connects anywhere.
+fn method_report(method: &dyn Method) -> MethodReport {
+    MethodReport {
+        id: method.id().to_string(),
+        delivers: method.outbound().is_some(),
+        listens: method.inbound().is_some(),
+        exchanges: method.exchange().is_some(),
+        notices: !method.notice_lengths().is_empty(),
+        carries: CarriesReport {
+            reply_key: method.carries().reply_key,
+        },
     }
 }
 

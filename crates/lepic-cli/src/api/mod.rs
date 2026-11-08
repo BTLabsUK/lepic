@@ -84,6 +84,7 @@ macro_rules! api {
 api!(
     openapi_document,
     status,
+    methods,
     events,
     wallet_info,
     wallet_address,
@@ -169,6 +170,8 @@ pub(crate) enum Call {
     ContactImport {
         document: String,
     },
+    /// The methods the registry holds, read when asked.
+    Methods,
     /// `profile domain file`, answering the file's text instead of writing it.
     DomainFile {
         relays: Vec<String>,

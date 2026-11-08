@@ -1021,6 +1021,37 @@
         }
       }
     },
+    "/v1/methods": {
+      "get": {
+        "tags": [
+          "service"
+        ],
+        "summary": "The methods serve offers",
+        "description": "Each registered method, in registry order, and what it can do: deliver a slate, listen for\nslates, exchange a slate with the caller, send notices, and what its slates may carry. A\nsend names one of these ids in its `method` field.",
+        "operationId": "methods",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MethodsReport"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error, as RFC 9457 problem details",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/node": {
       "get": {
         "tags": [
@@ -1517,8 +1548,8 @@
         "tags": [
           "transactions"
         ],
-        "summary": "Send over Epicbox",
-        "description": "With a `slate_id`, a repeated request is safe: it reports the first send.",
+        "summary": "Send a slate",
+        "description": "The slate goes to the address or URL in `to` over the method named in `method`, Epicbox\nwhen absent. The API sends over `epicbox` and `http`. With a `slate_id`, a repeated request is safe: it reports the first send.",
         "operationId": "send",
         "requestBody": {
           "content": {
@@ -2090,6 +2121,19 @@
           }
         },
         "additionalProperties": false
+      },
+      "CarriesReport": {
+        "type": "object",
+        "description": "What a slate over a method may carry.",
+        "required": [
+          "reply_key"
+        ],
+        "properties": {
+          "reply_key": {
+            "type": "boolean",
+            "description": "A LEPIC receiver may be given a key to seal its answer to."
+          }
+        }
       },
       "CheckVersion": {
         "type": "string",
@@ -3402,6 +3446,60 @@
           }
         }
       },
+      "MethodReport": {
+        "type": "object",
+        "description": "One method and what it can do.",
+        "required": [
+          "id",
+          "delivers",
+          "listens",
+          "exchanges",
+          "notices",
+          "carries"
+        ],
+        "properties": {
+          "carries": {
+            "$ref": "#/components/schemas/CarriesReport",
+            "description": "What a slate over it may carry."
+          },
+          "delivers": {
+            "type": "boolean",
+            "description": "Whether it delivers a slate to a destination."
+          },
+          "exchanges": {
+            "type": "boolean",
+            "description": "Whether it hands a slate to the caller and takes the answer back (files)."
+          },
+          "id": {
+            "type": "string",
+            "description": "The method's id, as a send names it and as transactions store it."
+          },
+          "listens": {
+            "type": "boolean",
+            "description": "Whether it receives slates on its own (a listener or an inbox)."
+          },
+          "notices": {
+            "type": "boolean",
+            "description": "Whether it sends LEPIC notices to counterparties."
+          }
+        }
+      },
+      "MethodsReport": {
+        "type": "object",
+        "description": "The methods serve offers.",
+        "required": [
+          "methods"
+        ],
+        "properties": {
+          "methods": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MethodReport"
+            },
+            "description": "The registered methods, in registry order."
+          }
+        }
+      },
       "MoveBody": {
         "type": "object",
         "description": "The relay a contact asked for.",
@@ -4158,7 +4256,7 @@
       },
       "SendBody": {
         "type": "object",
-        "description": "An Epicbox send.",
+        "description": "A send over one of the registered methods.",
         "required": [
           "amount",
           "to"
@@ -4190,6 +4288,13 @@
             ],
             "description": "A message to the receiver, signed with the slate."
           },
+          "method": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The method the slate goes over: one of `GET /v1/methods`. Epicbox when absent."
+          },
           "min_confirmations": {
             "type": [
               "integer",
@@ -4208,7 +4313,7 @@
           },
           "to": {
             "type": "string",
-            "description": "The Epicbox address the slate goes to."
+            "description": "The address or URL the slate goes to; the method decides which it is."
           }
         },
         "additionalProperties": false

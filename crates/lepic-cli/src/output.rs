@@ -44,6 +44,7 @@ pub enum Report {
     Inbox(InboxReport),
     Serve(ServeReport),
     ServeStatus(ServeStatusReport),
+    Methods(MethodsReport),
     EpicboxStatus(EpicboxStatusReport),
     Peer(PeerReport),
     HttpListen(HttpListenReport),
@@ -836,6 +837,37 @@ pub struct OwnerTlsStatus {
     pub fingerprint: String,
 }
 
+/// The methods serve offers.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct MethodsReport {
+    /// The registered methods, in registry order.
+    pub methods: Vec<MethodReport>,
+}
+
+/// One method and what it can do.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct MethodReport {
+    /// The method's id, as a send names it and as transactions store it.
+    pub id: String,
+    /// Whether it delivers a slate to a destination.
+    pub delivers: bool,
+    /// Whether it receives slates on its own (a listener or an inbox).
+    pub listens: bool,
+    /// Whether it hands a slate to the caller and takes the answer back (files).
+    pub exchanges: bool,
+    /// Whether it sends LEPIC notices to counterparties.
+    pub notices: bool,
+    /// What a slate over it may carry.
+    pub carries: CarriesReport,
+}
+
+/// What a slate over a method may carry.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct CarriesReport {
+    /// A LEPIC receiver may be given a key to seal its answer to.
+    pub reply_key: bool,
+}
+
 /// The API's requests since serve started.
 #[derive(Debug, Clone, Copy, Default, Serialize, ToSchema)]
 pub struct RequestsReport {
@@ -1234,6 +1266,7 @@ fn write_human(out: &mut Vec<u8>, report: &Report) -> std::io::Result<()> {
         Report::Inbox(_)
         | Report::Serve(_)
         | Report::ServeStatus(_)
+        | Report::Methods(_)
         | Report::HttpListen(_)
         | Report::TorAddress(_)
         | Report::TorListen(_)
@@ -1672,6 +1705,23 @@ fn write_http_counts(out: &mut Vec<u8>, r: &HttpListenReport) -> std::io::Result
 }
 
 /// An inbox, listener, Tor or Epicbox report. Writes nothing for any other.
+fn write_methods(out: &mut Vec<u8>, report: &MethodsReport) -> std::io::Result<()> {
+    let yes = |flag: bool| if flag { "yes" } else { "no" };
+    writeln!(out, "Method   Delivers  Listens  Exchanges  Notices")?;
+    for method in &report.methods {
+        writeln!(
+            out,
+            "{:<8} {:<9} {:<8} {:<10} {}",
+            method.id,
+            yes(method.delivers),
+            yes(method.listens),
+            yes(method.exchanges),
+            yes(method.notices)
+        )?;
+    }
+    Ok(())
+}
+
 fn write_transport_human(out: &mut Vec<u8>, report: &Report) -> std::io::Result<()> {
     match report {
         Report::Inbox(r) => write_inbox(out, r),
@@ -1695,6 +1745,7 @@ fn write_transport_human(out: &mut Vec<u8>, report: &Report) -> std::io::Result<
                 r.received, r.repeated, r.refused
             )
         }
+        Report::Methods(r) => write_methods(out, r),
         Report::EpicboxStatus(r) => {
             writeln!(out, "Relay    {}", r.relay)?;
             writeln!(out, "Address  {}", r.address)?;

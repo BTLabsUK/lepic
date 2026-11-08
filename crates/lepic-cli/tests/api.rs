@@ -346,6 +346,53 @@ fn transaction_routes_refuse_what_the_cli_refuses() {
 }
 
 #[test]
+fn methods_are_listed_and_a_send_names_one() {
+    let (host, wallet) = funded();
+
+    serving(host, &wallet, |socket, _| {
+        let listed = http(socket, "GET", "/v1/methods", None).ok();
+        let methods = listed["methods"].as_array().unwrap();
+        let ids: Vec<&str> = methods.iter().map(|m| m["id"].as_str().unwrap()).collect();
+        assert!(
+            ids.contains(&"epicbox") && ids.contains(&"http"),
+            "{listed}"
+        );
+        let epicbox = methods.iter().find(|m| m["id"] == "epicbox").unwrap();
+        assert_eq!(epicbox["delivers"], true, "{listed}");
+        assert_eq!(epicbox["notices"], true, "{listed}");
+        let file = methods.iter().find(|m| m["id"] == "file").unwrap();
+        assert_eq!(file["exchanges"], true, "{listed}");
+        assert_eq!(file["carries"]["reply_key"], true, "{listed}");
+        assert_eq!(ids, ["file", "epicbox", "http", "tor"], "{listed}");
+
+        let send = |body: &str| http(socket, "POST", "/v1/transactions", Some(body));
+        let unknown = send(r#"{"amount":"1","to":"x","method":"nope"}"#);
+        let detail = problem(&unknown, 400, "usage")["detail"].to_string();
+        assert!(detail.contains("unknown method nope"), "{detail}");
+        for id in &ids {
+            assert!(detail.contains(id), "{detail}");
+        }
+        let detail = detail.replace("\"", "");
+        assert!(
+            detail.ends_with(&format!("serve offers: {}", ids.join(", "))),
+            "{detail}"
+        );
+        for id in ["tor", "file"] {
+            if ids.contains(&id) {
+                let parked = send(&format!(r#"{{"amount":"1","to":"x","method":"{id}"}}"#));
+                let detail = problem(&parked, 400, "usage")["detail"].to_string();
+                assert!(detail.contains("does not send over"), "{detail}");
+            }
+        }
+        let http_to_address = send(r#"{"amount":"1","to":"x","method":"http"}"#);
+        problem(&http_to_address, 400, "usage");
+        let absent = send(r#"{"amount":"1","to":"http://a.b"}"#);
+        let detail = problem(&absent, 400, "usage")["detail"].to_string();
+        assert!(detail.contains("Epicbox only"), "{detail}");
+    });
+}
+
+#[test]
 fn epicbox_routes_answer_the_status_and_a_peer() {
     let (host, wallet) = funded();
     let status = wallet.run(&host, &["epicbox", "status"]).ok().json();

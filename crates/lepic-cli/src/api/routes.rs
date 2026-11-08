@@ -30,10 +30,11 @@ use crate::output::{
     ContactKeyCheckReport, ContactLinkReport, ContactListReport, ContactMoveHomeReport,
     ContactPayloadAckReport, ContactPayloadListReport, ContactPayloadPostReport,
     ContactPreviewReport, ContactQuarantineReport, ContactRemoveReport, ContactReport,
-    EpicboxStatusReport, FinalizeReport, InfoReport, NodeStatusReport, OutputsReport,
-    PasswordReport, PeerReport, PostReport, ProfileDomainAttachReport, ProfileDomainDocumentReport,
-    ProfileDomainShowReport, ProfileSetReport, ProfileShowReport, SendReport, ServeStatusReport,
-    SlateReceiveReport, TxListReport, TxReport, TxStateReport, WalletScanReport,
+    EpicboxStatusReport, FinalizeReport, InfoReport, MethodsReport, NodeStatusReport,
+    OutputsReport, PasswordReport, PeerReport, PostReport, ProfileDomainAttachReport,
+    ProfileDomainDocumentReport, ProfileDomainShowReport, ProfileSetReport, ProfileShowReport,
+    Report, SendReport, ServeStatusReport, SlateReceiveReport, TxListReport, TxReport,
+    TxStateReport, WalletScanReport,
 };
 
 type Answer = Result<Response<Body>, Problem>;
@@ -45,14 +46,16 @@ pub(crate) struct AccountQuery {
     account: Option<String>,
 }
 
-/// An Epicbox send.
+/// A send over one of the registered methods.
 #[derive(Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct SendBody {
     /// EPIC, as a decimal string, for example `"1.5"`.
     amount: String,
-    /// The Epicbox address the slate goes to.
+    /// The address or URL the slate goes to; the method decides which it is.
     to: String,
+    /// The method the slate goes over: one of `GET /v1/methods`. Epicbox when absent.
+    method: Option<String>,
     /// A random version-4 UUID the caller stores before sending. A send made again under it
     /// sends nothing and reports the first send with `repeated: true`. Required on the owner
     /// TLS listener.
@@ -316,6 +319,21 @@ pub(crate) async fn status(api: &Api<'_>, _request: Request) -> Answer {
     Ok(report(&api.owner.status(api.requests())?))
 }
 
+/// The methods serve offers
+///
+/// Each registered method, in registry order, and what it can do: deliver a slate, listen for
+/// slates, exchange a slate with the caller, send notices, and what its slates may carry. A
+/// send names one of these ids in its `method` field.
+#[utoipa::path(
+    get,
+    path = "/v1/methods",
+    tag = "service",
+    responses((status = 200, body = MethodsReport)),
+)]
+pub(crate) async fn methods(api: &Api<'_>, _request: Request) -> Answer {
+    api.run(Call::Methods).await
+}
+
 /// The wallet's events
 ///
 /// A server-sent event stream: each event's `event` field is its `kind` and its `data` line
@@ -454,9 +472,10 @@ pub(crate) async fn transaction(api: &Api<'_>, request: Request) -> Answer {
         .await
 }
 
-/// Send over Epicbox
+/// Send a slate
 ///
-/// With a `slate_id`, a repeated request is safe: it reports the first send.
+/// The slate goes to the address or URL in `to` over the method named in `method`, Epicbox
+/// when absent. The API sends over `epicbox` and `http`. With a `slate_id`, a repeated request is safe: it reports the first send.
 #[utoipa::path(
     post,
     path = "/v1/transactions",
@@ -466,13 +485,18 @@ pub(crate) async fn transaction(api: &Api<'_>, request: Request) -> Answer {
 )]
 pub(crate) async fn send(api: &Api<'_>, request: Request) -> Answer {
     let body: SendBody = request.json()?;
-    if is_onion(&body.to) || body.to.contains("://") {
-        return Err(Problem::usage("the API sends over Epicbox only"));
-    }
     if request.listener == Listener::Tls && body.slate_id.is_none() {
         return Err(Problem::usage(
             "a send over the owner TLS listener needs a slate_id, so a repeated request is safe",
         ));
+    }
+    match body.method.as_deref() {
+        None => {
+            if is_onion(&body.to) || body.to.contains("://") {
+                return Err(Problem::usage("the API sends over Epicbox only"));
+            }
+        }
+        Some(id) => send_method(api, id, &body.to).await?,
     }
     let args = SendArgs {
         amount: body.amount,
@@ -508,6 +532,36 @@ pub(crate) async fn send(api: &Api<'_>, request: Request) -> Answer {
     };
     api.run(Call::Command(Command::Tx(TxCommand::Send(args))))
         .await
+}
+
+/// Checks that `id` names a registered method the API sends over, and that `to` is a
+/// destination it delivers to.
+async fn send_method(api: &Api<'_>, id: &str, to: &str) -> Result<(), Problem> {
+    let Report::Methods(offered) = api.owner.call(Call::Methods).await? else {
+        return Err(Problem::usage("serve did not list its methods"));
+    };
+    if !offered.methods.iter().any(|method| method.id == id) {
+        let ids: Vec<&str> = offered
+            .methods
+            .iter()
+            .map(|method| method.id.as_str())
+            .collect();
+        return Err(Problem::usage(format!(
+            "unknown method {id}; serve offers: {}",
+            ids.join(", ")
+        )));
+    }
+    match id {
+        "epicbox" if is_onion(to) || to.contains("://") => Err(Problem::usage(
+            "an Epicbox send goes to an Epicbox address, not an onion or a URL",
+        )),
+        "epicbox" => Ok(()),
+        "http" if to.contains("://") => Ok(()),
+        "http" => Err(Problem::usage("an HTTP send goes to a URL")),
+        other => Err(Problem::usage(format!(
+            "the API does not send over {other} today"
+        ))),
+    }
 }
 
 /// Receive a slate
