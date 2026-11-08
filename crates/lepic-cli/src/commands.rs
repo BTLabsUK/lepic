@@ -736,19 +736,18 @@ impl<H: Host> Run<'_, H> {
             .transpose()?;
         let opened = self.open().await?;
         let account = opened.wallet.account(&args.account.account)?;
-        if let Some(slate_id) = slate_id
-            && let Some(first) = opened.wallet.sent_with_slate(slate_id).await?
-        {
-            let first_contact = contact::contact_of(&opened, first.transaction.id).await?;
-            return repeated_send(
-                &first,
-                first_contact,
+        let repeat = |destination| {
+            repeat_of(
+                &opened,
                 slate_id,
                 account.index,
                 amount,
                 &payee,
                 destination,
-            );
+            )
+        };
+        if let Some(report) = repeat(destination.clone()).await? {
+            return Ok(report);
         }
         let transport = payee.transport();
         if transport == TRANSPORT_ID {
@@ -805,36 +804,14 @@ impl<H: Host> Run<'_, H> {
         };
         stop_tor(&opened, tor).await;
         let Some(sending) = sending else {
-            let stored = match sent_slate {
-                Some(slate_id) => opened.wallet.sent_with_slate(slate_id).await?,
-                None => None,
-            };
-            return Err(
-                stored.map_or(CliError::Interrupted, |stored| CliError::SendInterrupted {
-                    tx_id: stored.transaction.id.0,
-                }),
-            );
+            return Err(interrupted_send(&opened, sent_slate).await?);
         };
         let sending = match (sending, slate_id) {
             // A send under the same id that ran at the same time stored its transaction first.
             (
                 Err(error @ CliError::Send(SendError::SlateIdTaken { sent: Some(_), .. })),
-                Some(slate_id),
-            ) => {
-                let Some(first) = opened.wallet.sent_with_slate(slate_id).await? else {
-                    return Err(error);
-                };
-                let first_contact = contact::contact_of(&opened, first.transaction.id).await?;
-                return repeated_send(
-                    &first,
-                    first_contact,
-                    slate_id,
-                    account.index,
-                    amount,
-                    &payee,
-                    destination,
-                );
-            }
+                Some(_),
+            ) => return repeat(destination).await?.ok_or(error),
             (sending, _) => sending,
         };
         let (sent, state) = sending?;
@@ -1602,6 +1579,50 @@ impl Payee {
 /// send with another account, amount, transport or destination is refused, since the caller
 /// asked for a payment that was not made. A file export records no destination to compare; a
 /// send to a contact compares the contact.
+/// The error of a send stopped by an interrupt, naming the transaction it stored if any.
+async fn interrupted_send<N: lepic_node::NodeApi + 'static>(
+    opened: &Opened<N>,
+    slate_id: Option<SlateId>,
+) -> Result<CliError, CliError> {
+    let stored = match slate_id {
+        Some(slate_id) => opened.wallet.sent_with_slate(slate_id).await?,
+        None => None,
+    };
+    Ok(
+        stored.map_or(CliError::Interrupted, |stored| CliError::SendInterrupted {
+            tx_id: stored.transaction.id.0,
+        }),
+    )
+}
+
+/// The report of the send made earlier under `slate_id`, if there was one.
+async fn repeat_of<N: lepic_node::NodeApi + 'static>(
+    opened: &Opened<N>,
+    slate_id: Option<SlateId>,
+    account: lepic_store::AccountIndex,
+    amount: lepic_primitives::amount::Amount,
+    payee: &Payee,
+    destination: String,
+) -> Result<Option<Report>, CliError> {
+    let Some(slate_id) = slate_id else {
+        return Ok(None);
+    };
+    let Some(first) = opened.wallet.sent_with_slate(slate_id).await? else {
+        return Ok(None);
+    };
+    let first_contact = contact::contact_of(opened, first.transaction.id).await?;
+    repeated_send(
+        &first,
+        first_contact,
+        slate_id,
+        account,
+        amount,
+        payee,
+        destination,
+    )
+    .map(Some)
+}
+
 fn repeated_send(
     first: &TransactionDetails,
     first_contact: Option<ContactId>,

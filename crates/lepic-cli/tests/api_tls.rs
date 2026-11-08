@@ -259,13 +259,21 @@ fn limits(max_connections: usize, header_timeout: Duration, tls_max_age: Duratio
     }
 }
 
-/// Checks that serve ended the handshake with `alert`.
+/// Checks that serve ended the handshake with `alert`. In TLS 1.3 the client may still be
+/// writing its request when serve closes, so the write can fail before the alert is read.
 fn refused(result: std::io::Result<Reply>, alert: AlertDescription) {
     let error = result.unwrap_err();
     let tls = error
         .get_ref()
         .and_then(|inner| inner.downcast_ref::<rustls::Error>());
-    assert_eq!(tls, Some(&rustls::Error::AlertReceived(alert)), "{error}");
+    let closed = matches!(
+        error.kind(),
+        std::io::ErrorKind::BrokenPipe | std::io::ErrorKind::ConnectionReset
+    );
+    assert!(
+        tls == Some(&rustls::Error::AlertReceived(alert)) || (tls.is_none() && closed),
+        "{error}"
+    );
 }
 
 fn funded_wallet(host: &TestHost) -> Instance {
