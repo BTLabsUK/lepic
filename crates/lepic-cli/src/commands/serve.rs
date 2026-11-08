@@ -249,6 +249,10 @@ async fn maintain<N: NodeApi + 'static>(
     }
 }
 
+/// How long a listener stops accepting after an accept failed, as when serve is out of file
+/// descriptors, so a failure that repeats does not spin.
+const ACCEPT_PAUSE: Duration = Duration::from_millis(100);
+
 /// Listens, maintains the wallet and answers the API until `stop` turns true and the listener
 /// and the connections have ended. The stop closes each connection once its answer is out, and
 /// a failed listener sets it. The socket and the owner TLS listener each have their own cap on
@@ -276,6 +280,9 @@ async fn serving<H: Host>(
     let mut events = Some(opened.wallet.subscribe());
     let mut stopped = stop.subscribe();
     let mut ended = None;
+    // Until when each listener's accept waits, after a failed accept.
+    let mut socket_pause = None;
+    let mut tls_pause = None;
     loop {
         match ended {
             Some(result) if sockets.is_empty() && tls_connections.is_empty() => return result,
@@ -298,7 +305,7 @@ async fn serving<H: Host>(
                 Err(broadcast::error::RecvError::Lagged(_)) => {}
                 Err(broadcast::error::RecvError::Closed) => events = None,
             },
-            accepted = listening.accept(), if !stopping => match accepted {
+            accepted = after(socket_pause, listening.accept()), if !stopping => match accepted {
                 Ok(stream)
                     if listening.is_this_user(&stream)
                         && sockets.len() < api.limits().max_connections =>
@@ -306,19 +313,33 @@ async fn serving<H: Host>(
                     sockets.push(api.connection(stream, Listener::Socket, None).boxed_local());
                 }
                 Ok(_) => api.refuse(),
-                Err(error) => tracing::warn!(error = %error, "accepting a connection failed"),
+                Err(error) => {
+                    tracing::warn!(error = %error, "accepting a connection failed");
+                    socket_pause = tokio::time::Instant::now().checked_add(ACCEPT_PAUSE);
+                }
             },
-            accepted = accept_tls(tls), if !stopping => match accepted {
+            accepted = after(tls_pause, accept_tls(tls)), if !stopping => match accepted {
                 Ok((tls, stream)) if tls_connections.len() < api.limits().max_connections => {
                     tls_connections.push(api.tls_connection(tls, stream).boxed_local());
                 }
                 Ok(_) => api.refuse(),
-                Err(error) => tracing::warn!(error = %error, "accepting a tls connection failed"),
+                Err(error) => {
+                    tracing::warn!(error = %error, "accepting a tls connection failed");
+                    tls_pause = tokio::time::Instant::now().checked_add(ACCEPT_PAUSE);
+                }
             },
             Some(()) = sockets.next(), if !sockets.is_empty() => {}
             Some(()) = tls_connections.next(), if !tls_connections.is_empty() => {}
         }
     }
+}
+
+/// `accept`, once `pause` has passed: the pause holds this one arm of serve's loop.
+async fn after<T>(pause: Option<tokio::time::Instant>, accept: impl Future<Output = T>) -> T {
+    if let Some(pause) = pause {
+        tokio::time::sleep_until(pause).await;
+    }
+    accept.await
 }
 
 async fn accept_tls(tls: Option<&OwnerTls>) -> std::io::Result<(&OwnerTls, TcpStream)> {
