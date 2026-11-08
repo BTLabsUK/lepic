@@ -763,15 +763,20 @@ lepic_heard_payer() {
         jq -r --arg id "${SERVICE_SIDE}" '.contacts[] | select(.contact_id == $id) | .last_heard // "never"'
 }
 
-# The payer's `serve status` shows a collect and a refresh that succeeded, none failing since.
+# The payer's serve status, from its API on the socket.
+payer_serve_status() {
+    curl -sf --unix-socket "$1" http://lepic/v1/status
+}
+
+# The payer's serve status shows a collect and a refresh that succeeded, none failing since.
 payer_serve_healthy() {
-    payer --service="$1" serve status | jq -e '
+    payer_serve_status "$1" | jq -e '
         [.collect, .refresh] | all(.consecutive_failures == 0 and .last_success != null)' >/dev/null
 }
 
 # The service checks its paired payer while the payer runs `lepic serve`: the serve's first
 # collect takes the check and answers with the payer's card, and the service hears the payer
-# again. `serve status` shows the collect and the refresh succeeding, and serve stops cleanly on
+# again. `GET /v1/status` shows the collect and the refresh succeeding, and serve stops cleanly on
 # Ctrl-C.
 step_contact_check_answered_by_serve() {
     [[ -n "${SERVICE_SIDE}" ]] || fail "no pairing from the earlier step" || return 1
@@ -797,7 +802,7 @@ step_contact_check_answered_by_serve() {
     local now
     now="$(lepic_heard_payer)"
     wait_until "the payer's serve healthy" 30 payer_serve_healthy "${socket}" ||
-        { stop_serve; fail "serve status: $(payer --service="${socket}" serve status)"; } || return 1
+        { stop_serve; fail "serve status: $(payer_serve_status "${socket}")"; } || return 1
     stop_serve || fail "serve exited non-zero on Ctrl-C" || return 1
     [[ ! -e "${socket}" ]] || fail "serve left its socket behind" || return 1
     DETAIL="check answered by the payer's serve, service last heard the payer ${heard} then ${now}; serve status collect and refresh ok; serve stopped on Ctrl-C"
