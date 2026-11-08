@@ -9,6 +9,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use lepic_slate::codec::WireSlate;
 
 use crate::error::TransportError;
+use crate::method::{Carries, Method};
 use crate::policy::FormatPolicy;
 use crate::transport::{
     AckToken, BoxFuture, Destination, Envelope, Inbound, Outbound, Transport, TransportId,
@@ -79,6 +80,12 @@ impl std::fmt::Debug for LoopbackTransport {
             .field("id", &self.id)
             .field("address", &self.address)
             .finish_non_exhaustive()
+    }
+}
+
+impl Method for LoopbackTransport {
+    fn carries(&self) -> Carries {
+        Carries::default()
     }
 }
 

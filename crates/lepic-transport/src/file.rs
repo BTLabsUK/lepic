@@ -23,6 +23,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 mod probe;
 
 use crate::error::{FileError, FileOperation, TransportError};
+use crate::method::{Carries, Method};
 use crate::policy::{Encoding, FormatPolicy};
 use crate::transport::{BoxFuture, Exchange, Location, Transport, TransportId};
 
@@ -136,6 +137,12 @@ impl Transport for FileTransport {
 
     fn exchange(&self) -> Option<&dyn Exchange> {
         Some(self)
+    }
+}
+
+impl Method for FileTransport {
+    fn carries(&self) -> Carries {
+        Carries { reply_key: true }
     }
 }
 

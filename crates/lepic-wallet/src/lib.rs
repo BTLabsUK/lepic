@@ -14,7 +14,7 @@ mod api_tls_key;
 mod app_data;
 mod cancel;
 pub mod chain;
-mod codecs;
+pub(crate) use lepic_transport::codecs;
 pub mod coinbase;
 pub mod config;
 pub mod contact_link;
