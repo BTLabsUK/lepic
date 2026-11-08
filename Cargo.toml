@@ -24,6 +24,7 @@ lepic-foreign = { path = "crates/lepic-foreign" }
 lepic-tor = { path = "crates/lepic-tor" }
 lepic-wallet = { path = "crates/lepic-wallet" }
 lepic-wallet-contacts = { path = "crates/lepic-wallet-contacts" }
+lepic-methods = { path = "crates/lepic-methods" }
 lepic-telemetry = { path = "crates/lepic-telemetry" }
 
 # Every external crate is set once here with default features off; crates

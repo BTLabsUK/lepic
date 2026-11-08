@@ -19,12 +19,13 @@ between crates are fixed below and checked by `cargo xtask deps-check`.
 | `lepic-contact` | Contact pairing formats (RFC 0002): the sealed envelope (HPKE to a contact's X25519 key, signed with its Ed25519 key) and its armor, contact cards, invites, pairing replies and confirms, the SAS. | none |
 | `lepic-node` | Node JSON-RPC client for the foreign API, with strict response validation and bounded sizes. | network |
 | `lepic-store` | SQLite storage behind repository traits, migrations, encryption of private transaction context, the database file encrypted at rest (ADR 0032). | disk |
-| `lepic-transport` | Transport traits, transport registry, format policy, the file transport. | disk |
+| `lepic-transport` | Transport traits, the method port, shared legacy codecs, transport registry, format policy, the file transport. | disk |
 | `lepic-epicbox` | Epicbox addresses, message crypto, protocol frames, relay client and its transport. | network |
 | `lepic-foreign` | The wallet foreign API over HTTP (ADR 0017): JSON-RPC messages, the client and the `http` transport, the listener. | network |
 | `lepic-tor` | Tor on desktop and Android (ADR 0018): onion v3 addresses and the wallet's onion key, a tor child process per wallet driven over its control port, SOCKS5, the `tor` transport. | network, child process |
 | `lepic-wallet` | The engine: accounts, output selection, send, receive, finalize, cancel, scan, refresh, transaction state machine, events. | through ports |
 | `lepic-wallet-contacts` | Contacts on the engine (RFC 0002): pairing, contact mailboxes, sealed slates, contact invoices, key checks and app payloads. Drives `lepic-wallet` through its public calls and the hooks of `lepic_wallet::extension`. | through ports |
+| `lepic-methods` | Transaction methods: the registry of methods and one module per method, each behind a feature. Re-exports the port of `lepic-transport` and the wire crates' transports. | through ports |
 | `lepic-telemetry` | Tracing subscribers for CLI and mobile, redaction helpers. | stderr, files |
 | `lepic-cli` | The `lepic` binary. | all |
 | `lepic-ffi` | LEPIC's FFI API, built with flutter_rust_bridge (ADR 0007). The Flutter binding is a separate repository (ADR 0023). | all |
@@ -68,9 +69,10 @@ lepic-foreign     -> lepic-transport, lepic-slate
 lepic-tor         -> lepic-foreign, lepic-transport, lepic-slate
 lepic-wallet      -> all crates above
 lepic-wallet-contacts -> all crates above
+lepic-methods     -> lepic-wallet, lepic-transport, lepic-epicbox, lepic-foreign, lepic-tor, lepic-slate, lepic-primitives
 lepic-telemetry   -> (external only)
-lepic-cli         -> lepic-wallet, lepic-wallet-contacts, lepic-telemetry, lepic-epicbox, lepic-foreign, lepic-tor, lepic-transport, lepic-node, lepic-store, lepic-keychain, lepic-primitives
-lepic-ffi         -> lepic-wallet, lepic-wallet-contacts, lepic-telemetry, lepic-epicbox, lepic-foreign, lepic-tor, lepic-transport, lepic-node, lepic-store, lepic-keychain, lepic-primitives
+lepic-cli         -> lepic-wallet, lepic-wallet-contacts, lepic-methods, lepic-telemetry, lepic-epicbox, lepic-foreign, lepic-tor, lepic-transport, lepic-node, lepic-store, lepic-keychain, lepic-primitives
+lepic-ffi         -> lepic-wallet, lepic-wallet-contacts, lepic-methods, lepic-telemetry, lepic-epicbox, lepic-foreign, lepic-tor, lepic-transport, lepic-node, lepic-store, lepic-keychain, lepic-primitives
 ```
 
 The block applies to normal and build dependencies. Any crate may take `lepic-telemetry` as a
@@ -88,7 +90,7 @@ The engine depends on traits, not implementations:
 |---|---|
 | `NodeApi` | `lepic-node`, and a mock node in tests |
 | `StoreOpener` (opens the `WalletStore` after unlock, keyed from the seed) | `lepic_wallet::SqliteStores` over `lepic-store`, the CLI's `CliStores`, in-memory stores in tests |
-| `Transport` (outbound and inbound) | `lepic-transport::file`, `lepic-epicbox`, `lepic-foreign`, `lepic-tor`, and a loopback in tests |
+| `Method` (the slate's method: codecs, marker, peer key, delivery) | `lepic-transport::file`, `lepic-methods`, and a loopback in tests |
 | `SecretVault` (`exists`, `create`, `unlock` with a password, yielding a `lepic_keychain::SecretStore`) | the CLI's `FileVault` over a `lepic-keychain` vault file on desktop, `lepic-ffi`'s `AppVault` over the platform keystore on mobile, a fast vault in tests |
 | `Clock`, `Rng` | real implementations in `lepic-cli` and `lepic-ffi`, fixed ones in tests |
 

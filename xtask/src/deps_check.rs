@@ -14,7 +14,10 @@ const EDGES_HEADING: &str = "## Allowed dependency edges";
 const DEV_DEPENDENCY_ANYWHERE: &str = "lepic-telemetry";
 /// Dev-dependency edges `docs/architecture.md` allows besides its block: the engine's tests
 /// drive the contacts crate through the engine's own test harness (ADR 0029).
-const DEV_ONLY_EDGES: &[(&str, &str)] = &[("lepic-wallet", "lepic-wallet-contacts")];
+const DEV_ONLY_EDGES: &[(&str, &str)] = &[
+    ("lepic-wallet", "lepic-wallet-contacts"),
+    ("lepic-wallet", "lepic-methods"),
+];
 /// Members that are repository tooling rather than product crates. They may depend on no member.
 const TOOLING_MEMBERS: &[&str] = &["xtask"];
 

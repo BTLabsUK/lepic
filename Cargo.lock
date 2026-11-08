@@ -1335,6 +1335,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "lepic-methods"
+version = "0.3.1"
+dependencies = [
+ "lepic-epicbox",
+ "lepic-foreign",
+ "lepic-primitives",
+ "lepic-slate",
+ "lepic-tor",
+ "lepic-transport",
+ "thiserror",
+]
+
+[[package]]
 name = "lepic-node"
 version = "0.3.1"
 dependencies = [

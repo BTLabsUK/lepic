@@ -1,0 +1,29 @@
+[package]
+name = "lepic-methods"
+description = "Transaction methods: the registry and one module per method"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[features]
+default = ["file"]
+file = []
+epicbox = ["dep:lepic-epicbox"]
+http = ["dep:lepic-foreign"]
+tor = ["http", "dep:lepic-tor"]
+loopback = ["lepic-transport/loopback"]
+mock-relay = ["epicbox", "lepic-epicbox/mock-relay"]
+
+[dependencies]
+lepic-epicbox = { workspace = true, optional = true }
+lepic-foreign = { workspace = true, optional = true }
+lepic-primitives.workspace = true
+lepic-slate.workspace = true
+lepic-tor = { workspace = true, optional = true }
+lepic-transport.workspace = true
+thiserror.workspace = true
+
+[lints]
+workspace = true
