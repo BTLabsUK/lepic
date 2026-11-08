@@ -20,7 +20,7 @@ mod world;
 use std::time::Duration;
 
 use lepic_crypto::PublicKey;
-use lepic_epicbox::{Network as RelayNetwork, TRANSPORT_ID};
+use lepic_epicbox::{Network as RelayNetwork, RELAY_RETENTION, TRANSPORT_ID};
 use lepic_methods::epicbox::Epicbox;
 use lepic_node::mock::MockFailure;
 use lepic_slate::codec::{MediaType, WireSlate};
@@ -28,7 +28,7 @@ use lepic_store::{AccountIndex, InboxEntry, InboxStatus, TxDirection, TxState, W
 use lepic_transport::transport::{Destination, Inbound, Location, Transport};
 use lepic_wallet::details::{SlateMessage, TxFlow};
 use lepic_wallet::event::{Connection, TransportState, TransportStatus};
-use lepic_wallet::inbox::{InboxError, InboxSummary, ListenHandle};
+use lepic_wallet::inbox::{Handled, InboxError, InboxSummary, ListenHandle};
 use lepic_wallet::send::{Delivery, SendRequest};
 use lepic_wallet::slate::Role;
 use lepic_wallet::{Event, ReceiveRequest, WalletError};
@@ -1054,4 +1054,36 @@ fn a_pair_request_the_store_keeps_refusing_is_acknowledged_after_three_tries() {
 
     assert_eq!(tries.load(std::sync::atomic::Ordering::SeqCst), 3);
     assert_eq!(world.relay.pending(&world.receiver_address), 0);
+}
+
+#[test]
+fn an_acknowledgement_recorded_before_the_settlement_gives_way_to_it() {
+    let world = World::new();
+    let wallet = &world.receiver_wallet;
+
+    world.block_on(wallet.arrival_acknowledged("early", Handled::Received));
+    let acknowledged = world.receiver.inbox("early").unwrap();
+    assert_eq!(acknowledged.status, InboxStatus::Acknowledged);
+    world
+        .block_on(wallet.arrival_settled("early", Handled::Received, None, RELAY_RETENTION))
+        .unwrap();
+
+    let settled = world.receiver.inbox("early").unwrap();
+    assert_eq!(settled.status, InboxStatus::Processed);
+    assert_eq!(settled.received_at, acknowledged.received_at);
+}
+
+#[test]
+fn a_settlement_of_an_id_never_seen_records_it() {
+    let world = World::new();
+    let wallet = &world.receiver_wallet;
+    assert_eq!(world.receiver.inbox("unseen"), None);
+
+    world
+        .block_on(wallet.arrival_settled("unseen", Handled::Rejected, None, RELAY_RETENTION))
+        .unwrap();
+
+    let entry = world.receiver.inbox("unseen").unwrap();
+    assert_eq!(entry.status, InboxStatus::Rejected);
+    assert_eq!(entry.received_at, entry.updated_at);
 }
