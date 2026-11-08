@@ -26,6 +26,7 @@ mod node;
 mod offline;
 mod outputs;
 mod password;
+mod peer;
 mod resend;
 mod scan;
 mod selection;

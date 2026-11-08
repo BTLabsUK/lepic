@@ -631,7 +631,7 @@ where
         let Ok(key) = method.peer_key(self.config().network, from.as_str()) else {
             return Ok(Handled::Dropped);
         };
-        let (effect, kept) = self.apply_peer_notice(method, notice, key).await?;
+        let (effect, kept) = self.apply_peer_notice(Some(method), notice, key).await?;
         let slate_id = notice.slate_id;
         if matches!(effect, Effect::Unheld) {
             debug!(slate_id = %slate_id, "notice for a slate held elsewhere passed on");
@@ -670,7 +670,30 @@ where
         let Ok(key) = method.peer_key(self.config().network, sender) else {
             return Ok(false);
         };
-        let (effect, _) = self.apply_peer_notice(method, notice, key).await?;
+        self.apply_forwarded(Some(method), key, notice).await
+    }
+
+    /// [`Self::notice_apply_forwarded`] of a notice from the peer stored under `key`, as a
+    /// method's [`Method::peer_key`] gives it. The notice is matched against the payment of the
+    /// method its stored name finds in [`crate::ports::Ports::methods`], since the method
+    /// instance of the install that received it is not this wallet's.
+    ///
+    /// Fails with [`crate::WalletError::Locked`] and as the store does.
+    pub async fn notice_apply_forwarded_by_key(
+        &self,
+        key: String,
+        notice: Notice,
+    ) -> Result<bool, crate::WalletError> {
+        self.apply_forwarded(None, key, notice).await
+    }
+
+    async fn apply_forwarded(
+        &self,
+        via: Option<&Arc<dyn Method>>,
+        key: String,
+        notice: Notice,
+    ) -> Result<bool, crate::WalletError> {
+        let (effect, _) = self.apply_peer_notice(via, notice, key).await?;
         if matches!(effect, Effect::Unheld) {
             debug!(slate_id = %notice.slate_id, "passed-on notice for a slate not held dropped");
             return Ok(false);
@@ -702,11 +725,11 @@ where
 
     async fn apply_peer_notice(
         &self,
-        method: &Arc<dyn Method>,
+        via: Option<&Arc<dyn Method>>,
         notice: Notice,
         key: String,
     ) -> Result<(Effect, bool), crate::WalletError> {
-        let methods = self.notice_methods(Some(method));
+        let methods = self.notice_methods(via);
         let from = NoticeFrom::Peer(key);
         let codecs = stored_codecs(self.config().network);
         let limits = EarlyLimits::of(&self.config().policy);

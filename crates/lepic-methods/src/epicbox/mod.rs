@@ -350,12 +350,7 @@ impl Method for Epicbox {
     fn peer_key(&self, _network: WalletNetwork, address: &str) -> Result<String, TransportError> {
         // The addresses are read on the relay network the transport was built for, so the
         // wallet network the engine passes is not used.
-        EpicboxAddress::parse_key(address, self.network())
-            .map(|key| EpicboxAddress::key_text_of(&key, self.network()))
-            .map_err(|error| TransportError::InvalidDestination {
-                transport: TRANSPORT_ID,
-                source: Box::new(error),
-            })
+        key_on(self.network(), address)
     }
 
     fn delivery_is_permanent(&self, error: &TransportError) -> bool {
@@ -386,6 +381,22 @@ impl Outbound for Epicbox {
             client.deliver(to, wire).await
         })
     }
+}
+
+/// The key under which the engine stores what it knows of `address`, an Epicbox address of the
+/// relay network of the wallet's `network`, as [`Method::peer_key`] of the Epicbox method gives
+/// it. Fails with [`TransportError::InvalidDestination`] for an address that does not parse.
+pub fn peer_key(network: WalletNetwork, address: &str) -> Result<String, TransportError> {
+    key_on(relay_network(network), address)
+}
+
+fn key_on(network: Network, address: &str) -> Result<String, TransportError> {
+    EpicboxAddress::parse_key(address, network)
+        .map(|key| EpicboxAddress::key_text_of(&key, network))
+        .map_err(|error| TransportError::InvalidDestination {
+            transport: TRANSPORT_ID,
+            source: Box::new(error),
+        })
 }
 
 #[cfg(test)]

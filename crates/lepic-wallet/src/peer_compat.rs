@@ -177,6 +177,16 @@ pub fn record_works(
     Ok(())
 }
 
+/// Fails with [`InboxError::NotHostFeature`] unless `bit` is one host bit (device forwarding or
+/// the name service).
+fn check_host_feature(bit: u32) -> Result<(), InboxError> {
+    use lepic_transport::marker::features::HOST_FEATURES;
+    if !bit.is_power_of_two() || bit & HOST_FEATURES == 0 {
+        return Err(InboxError::NotHostFeature);
+    }
+    Ok(())
+}
+
 impl<N, S, V> Wallet<N, S, V>
 where
     N: NodeApi + 'static,
@@ -198,11 +208,18 @@ where
         let key = method
             .peer_key(self.config().network, address)
             .map_err(|error| InboxError::Address(Box::new(error)))?;
+        self.peer_compat_by_key(&key)
+    }
+
+    /// [`Self::peer_compat`] of the peer stored under `key`, as a method's
+    /// [`Method::peer_key`] gives it. Reads only the store. Fails with [`WalletError::Locked`].
+    #[instrument(skip_all, fields(wallet = %self.config().name))]
+    pub fn peer_compat_by_key(&self, key: &str) -> Result<PeerFacts, InboxError> {
         let now = self.ports().clock.now();
         let session = self.session()?;
         Ok(session
             .store
-            .read(|repos| Ok::<_, WalletError>(facts(repos, &key, now)?))?)
+            .read(|repos| Ok::<_, WalletError>(facts(repos, key, now)?))?)
     }
 
     /// Records what the host app learned of one of its own features with the key of `address`
@@ -220,17 +237,30 @@ where
         bit: u32,
         worked: bool,
     ) -> Result<(), InboxError> {
-        use lepic_transport::marker::features::HOST_FEATURES;
-        if !bit.is_power_of_two() || bit & HOST_FEATURES == 0 {
-            return Err(InboxError::NotHostFeature);
-        }
+        check_host_feature(bit)?;
         let key = method
             .peer_key(self.config().network, address)
             .map_err(|error| InboxError::Address(Box::new(error)))?;
+        self.peer_feature_result_by_key(&key, bit, worked)
+    }
+
+    /// [`Self::peer_feature_result`] for the peer stored under `key`, as a method's
+    /// [`Method::peer_key`] gives it.
+    ///
+    /// Fails with [`InboxError::NotHostFeature`] for any other bit than one host bit, and with
+    /// [`WalletError::Locked`].
+    #[instrument(skip_all, fields(wallet = %self.config().name))]
+    pub fn peer_feature_result_by_key(
+        &self,
+        key: &str,
+        bit: u32,
+        worked: bool,
+    ) -> Result<(), InboxError> {
+        check_host_feature(bit)?;
         let session = self.session()?;
         Ok(session
             .store
-            .write(|repos| Ok::<_, WalletError>(record_works(repos, &key, bit, worked)?))?)
+            .write(|repos| Ok::<_, WalletError>(record_works(repos, key, bit, worked)?))?)
     }
 
     /// Deletes what is known of every key not heard from for `older_than`, and returns how many

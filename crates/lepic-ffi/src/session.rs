@@ -1549,7 +1549,7 @@ impl Session {
     }
 
     pub(crate) fn peer_compat(&self, address: &str) -> Result<PeerCompat, WalletError> {
-        let facts = self.engine.peer_compat(self.epicbox_method()?, address)?;
+        let facts = self.engine.peer_compat_by_key(&self.peer_key(address)?)?;
         let stored = facts.stored.unwrap_or_default();
         Ok(PeerCompat {
             last_marked_at_ms: stored.last_marked_at.map(Timestamp::as_millisecond),
@@ -1571,7 +1571,14 @@ impl Session {
     ) -> Result<(), WalletError> {
         Ok(self
             .engine
-            .peer_feature_result(self.epicbox_method()?, address, bit, worked)?)
+            .peer_feature_result_by_key(&self.peer_key(address)?, bit, worked)?)
+    }
+
+    /// The key the engine stores what it knows of `address` under, an Epicbox address of this
+    /// wallet's network, whether a relay is configured or not.
+    fn peer_key(&self, address: &str) -> Result<String, WalletError> {
+        lepic_methods::epicbox::peer_key(self.network, address)
+            .map_err(|error| lepic_wallet::inbox::InboxError::Address(Box::new(error)).into())
     }
 
     pub(crate) fn forget_peers(&self, older_than_days: u32) -> Result<u32, WalletError> {
@@ -1587,9 +1594,9 @@ impl Session {
         sender: &str,
         notice: &str,
     ) -> Result<bool, WalletError> {
-        if relay_address(sender, self.network).is_none() {
+        let Ok(key) = lepic_methods::epicbox::peer_key(self.network, sender) else {
             return Err(invalid("sender is not an Epicbox address of this network"));
-        }
+        };
         let lepic_wallet::notice::Payload::Notice(notice) =
             lepic_wallet::notice::classify_text(notice)
         else {
@@ -1597,7 +1604,7 @@ impl Session {
         };
         Ok(self
             .engine
-            .notice_apply_forwarded(self.epicbox_method()?, sender, notice)
+            .notice_apply_forwarded_by_key(key, notice)
             .await?)
     }
 
