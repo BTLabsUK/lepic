@@ -5,10 +5,11 @@
 //! configuration ([`crate::app_config`]), or from a flag, variable or config key that
 //! overrides it.
 //!
-//! Only `[node] servers` and `[epicbox] servers` are read. Every other key and section is
-//! ignored, so the app's file, which has many more, works unchanged.
+//! Only `[node] servers`, `[epicbox] servers` and `[api] owner_tls` are read. Every other key and
+//! section is ignored, so the app's file, which has many more, works unchanged.
 
 use std::io::Read as _;
+use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 
 use lepic_epicbox::tunnel::OnionRoute;
@@ -40,6 +41,8 @@ pub struct Servers {
     pub meeting_relays: Vec<RelayEndpoint>,
     /// The hosts known to be TLS onion services.
     pub onion_routes: Vec<OnionRoute>,
+    /// Where `serve --owner-tls` listens: `[api] owner_tls`, `None` when it is not set.
+    pub owner_tls: Option<SocketAddr>,
 }
 
 #[derive(Deserialize)]
@@ -48,6 +51,13 @@ struct File {
     node: ServerList,
     #[serde(default)]
     epicbox: ServerList,
+    #[serde(default)]
+    api: ApiTable,
+}
+
+#[derive(Default, Deserialize)]
+struct ApiTable {
+    owner_tls: Option<String>,
 }
 
 #[derive(Default, Deserialize)]
@@ -127,12 +137,17 @@ pub fn parse(path: &Path, text: &str, config: &AppConfig) -> Result<Servers, Set
         lepic_wallet_contacts::meeting_relays(&file.epicbox.servers)
             .map_err(|_| invalid("epicbox.servers"))?
     };
+    let owner_tls = match &file.api.owner_tls {
+        Some(address) => Some(address.parse().map_err(|_| invalid("api.owner_tls"))?),
+        None => None,
+    };
     Ok(Servers {
         default_epicbox_domain: config.address_default.clone(),
         node,
         epicbox: relays.first().cloned(),
         meeting_relays: relays.into_iter().take(config.pairing_servers).collect(),
         onion_routes: config.onion_routes.clone(),
+        owner_tls,
     })
 }
 
@@ -173,6 +188,7 @@ mod tests {
         );
         assert_eq!(servers.meeting_relays.len(), 3);
         assert_eq!(servers.onion_routes.len(), 2);
+        assert_eq!(servers.owner_tls, None);
         assert_eq!(
             servers.default_epicbox_domain.as_str(),
             "epicbox.epiccash.com"
@@ -231,6 +247,7 @@ website = "https://site.example.invalid"
                 "epicbox.servers",
             ),
             ("[epicbox]\nservers = [\"bad host!\"]\n", "epicbox.servers"),
+            ("[api]\nowner_tls = \"no address\"\n", "api.owner_tls"),
         ];
         for (text, key) in cases {
             assert!(

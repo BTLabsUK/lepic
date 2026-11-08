@@ -109,7 +109,7 @@ pub const SETTINGS: &[(&str, &str, &str)] = &[
     (
         "settings_file",
         "LEPIC_SETTINGS",
-        "settings.toml with the servers: [node] servers, [epicbox] servers",
+        "settings.toml with the servers: [node] servers, [epicbox] servers, [api] owner_tls",
     ),
 ];
 
