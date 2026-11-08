@@ -1,6 +1,6 @@
 # 0051 Transaction methods in one crate, outside the engine
 
-Status: proposed
+Status: accepted
 Date: 2026-11-08
 
 ## Context
@@ -86,6 +86,25 @@ workspace and the epic-wallet interop scenarios pass unchanged, and the binding'
   stored with its transaction, through a lookup of methods the consumer hands it in the wallet's
   ports; with no lookup, no notice is sent. The padding lengths of a notice are the method's, and
   a notice that arrives is handed to one engine entry, whichever method carried it.
+
+## Deviations
+
+What shipped differently from the steps as written (2026-11-08):
+
+- The engine keeps one port, `Wallet::arrived(&Arc<dyn Method>, Arrival)`, and the other inbox entries, because the method decides proof key, TTL and slate shape before inputs lock. Engine entries take `&Arc<dyn Method>`, not `&dyn Method`: they encode inside `spawn_blocking`.
+- `Ports.methods: Option<Arc<dyn MethodLookup>>`: notices, the sender's posted report and forwarded notices resolve the stored transport id through the consumer's registry. With no registry the engine sends no notice and reads no report.
+- `Method::peer_key` returns `Result<String, TransportError>` (default `UnknownDestination`). `notice_lengths()` is required; an empty slice means the method sends no notices and the engine withholds. `IncomingInvoice.sender` and `BouncedInvoice.peer` are `String`s.
+- Notices are method-agnostic: `Notice::encode()` is gone in favour of `encode_to(lengths, 0)`, `pair_request_to` and `unpaired_notice_to` take the method's lengths, and one engine entry takes a notice whichever method carried it.
+- The engine still holds the stored-id literal `epicbox` in `epicbox_invoice.rs` to match an invoice's expiry and bounce against the method it was issued over. Notices and peer facts stay in the engine (decided 2026-11-08): the engine computes them, the consumer's registry delivers them.
+- `Method::delivery_is_permanent` is a provided method (default false); the engine keeps `UnsupportedLocation`, `UnknownDestination` and `InvalidDestination` permanent itself. `arrival_settled` and `prune_arrivals` take the retention as a parameter.
+- One refusal mapping, `lepic_methods::http::refuse`. Refusal classes that changed per consumer. CLI: `ReceiveError::Slate` Unavailable to Rejected (intended); `Wallet(UnknownTransaction)` Rejected to Unavailable. FFI, Rejected to Unavailable: `ReceiveError::{Output, Signing, Excess, Codecs, Encode, OpenReceipts}` and `Wallet(WalletError::{UnknownTransaction, MinimumConfirmationsOutOfRange, WalletExists, NoWallet, NetworkMismatch, ForeignDatabase, Store(WrongKey), SecretVault, SecretStore, AppData})` plus any `WalletError` variant not in the FFI's old Unavailable list.
+- The shared receiver reports `refused` on every error, so the FFI emits one Refused event (Unavailable) on the path where the session was already dropped.
+- The FFI keeps its own `OpenReceipts` arm (same class as `refuse`) and its per-receive method lookup by transport id, ignoring the `method` argument.
+- The whole foreign API stays in `lepic-foreign`, re-exported from `lepic_methods::http`. `OnionClientSettings` stays in `lepic-tor`. New edge `lepic-methods -> lepic-keychain`; `lepic-methods` also depends on `lepic-node` and `lepic-crypto`. The FFI keeps `lepic-tor`.
+- `lepic-methods` has two features: `epicbox` (the method and transport, no engine) and `epicbox-wallet` (the inbox loop, listing and drain). The FFI keeps its `EpicboxSlot`, since replacing the relay in place would change `settings()` for callers outside the move; tests check that the slot's `peer_key`, `delivery_is_permanent`, `encode_new` and `sender_facts` equal `Epicbox`'s.
+- The FFI's peer functions derive the key with `lepic_methods::epicbox::peer_key` and call the engine's key-based entry points, so they work without a relay. `BouncedInvoice` carries `peer_key`.
+- `lepic-wallet` keeps `lepic-epicbox` as a dev-dependency for its mock relay, so "its tests no longer need a relay" is not yet true. The `lepic_epicbox::marker` shim was deleted; the marker lives in `lepic-transport`.
+- The API sends over `epicbox` and `http` only. `tor` (no tor binary setting in serve) and `file` (no body to hand the slate to) are parked and answer a usage problem. A send over the owner TLS listener needs a `slate_id`; the TLS listener has its own connection cap and a connection age limit (ADR 0050 carries the dated notes).
 
 ## Alternatives considered
 

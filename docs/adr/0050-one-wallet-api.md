@@ -82,6 +82,8 @@ The connection proves who calls; no password, token or key travels in a request.
   client listed may call every owner route except those marked `x-socket-only` in the
   document, which answer 403: the password change. An SSH tunnel to the socket remains the
   alternative that needs no LEPIC configuration.
+  Decided 2026-11-08: multi-wallet management is dropped for now; serve holds one wallet, so
+  the key's source is fixed.
 - Payments: `serve --http [--internet] [--coinbase]` adds the payment listener on the wallet serve
   holds, answering `/v2/foreign` only, plain HTTP as other wallets send it, with its own limits.
 - Windows has no `serve` today. Its local transport will be a named pipe with an owner-only ACL;
@@ -91,6 +93,8 @@ The connection proves who calls; no password, token or key travels in a request.
 - Seed export has no route: an owner connection that leaks should cost what is in the wallet,
   not the seed. Whether `serve` may create or restore a wallet while it holds none, on the socket
   only, is open.
+  Decided 2026-11-08: multi-wallet management is dropped for now; serve holds one wallet; creating
+  or restoring a wallet over the API is parked with it.
 
 ### Transaction methods
 
@@ -99,6 +103,9 @@ decides what the slate may carry (payment proof, TTL) and how it is encoded and 
 `GET /v1/methods` lists the methods the build and settings offer and what each carries. ADR 0051
 places the methods in one crate outside the engine; the API contract does not depend on that
 layout.
+
+Decided 2026-11-08: multi-wallet management is dropped for now; serve holds one wallet; creating or
+restoring a wallet over the API is parked with it.
 
 ### Bounds
 
