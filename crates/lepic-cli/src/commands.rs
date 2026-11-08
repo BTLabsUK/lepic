@@ -781,10 +781,12 @@ impl<H: Host> Run<'_, H> {
         let purpose = args.purpose.map(contact::purpose);
         let data_dir = &self.settings.data_dir;
         let sending = async {
-            let sent = match payee {
-                Payee::Delivery(_, delivery) => opened.send(transport, request, delivery).await?,
+            let sent = match &payee {
+                Payee::Delivery(_, delivery) => {
+                    opened.send(transport, request, delivery.clone()).await?
+                }
                 Payee::Contact(id) => {
-                    contact::send_to_contact(&opened, id, request, purpose, data_dir).await?
+                    contact::send_to_contact(&opened, *id, request, purpose, data_dir).await?
                 }
             };
             let state = finalize_direct_reply(
@@ -812,6 +814,28 @@ impl<H: Host> Run<'_, H> {
                     tx_id: stored.transaction.id.0,
                 }),
             );
+        };
+        let sending = match (sending, slate_id) {
+            // A send under the same id that ran at the same time stored its transaction first.
+            (
+                Err(error @ CliError::Send(SendError::SlateIdTaken { sent: Some(_), .. })),
+                Some(slate_id),
+            ) => {
+                let Some(first) = opened.wallet.sent_with_slate(slate_id).await? else {
+                    return Err(error);
+                };
+                let first_contact = contact::contact_of(&opened, first.transaction.id).await?;
+                return repeated_send(
+                    &first,
+                    first_contact,
+                    slate_id,
+                    account.index,
+                    amount,
+                    &payee,
+                    destination,
+                );
+            }
+            (sending, _) => sending,
         };
         let (sent, state) = sending?;
         Ok(Report::Send(SendReport {
