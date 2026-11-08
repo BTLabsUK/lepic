@@ -13,12 +13,10 @@ use std::sync::{Arc, Mutex, PoisonError};
 
 use lepic_epicbox::{
     Backoff, ClientError, ConnectionState, EpicboxAddress, EpicboxClient, Identity,
-    Network as RelayNetwork, RELAY_RETENTION, Rejection, RelayMessageId, Subscription,
-    TRANSPORT_ID,
+    RELAY_RETENTION, Rejection, RelayMessageId, Subscription, TRANSPORT_ID,
 };
 use lepic_node::NodeApi;
 use lepic_primitives::error_chain::ErrorChain;
-use lepic_primitives::params::Network;
 use lepic_transport::method::Method;
 use lepic_transport::transport::{AckToken, Envelope, Inbound};
 use lepic_wallet::event::{
@@ -33,13 +31,10 @@ use tracing::{debug, info, instrument, warn};
 
 use super::Epicbox;
 
-/// The relay network of addresses for a wallet on `network`.
-pub fn relay_network(network: Network) -> RelayNetwork {
-    match network {
-        Network::Mainnet => RelayNetwork::Mainnet,
-        Network::Floonet => RelayNetwork::Floonet,
-    }
-}
+use super::{NOTICE_LENGTHS, relay_network};
+
+// The engine drops a notice longer than this, so the longest padding must fit.
+const _: () = assert!(NOTICE_LENGTHS[2] <= lepic_wallet::notice::MAX_NOTICE_LEN);
 
 /// The relay client's reconnect backoff also paces the retries of a held message.
 fn backoff(epicbox: &Epicbox) -> Backoff {

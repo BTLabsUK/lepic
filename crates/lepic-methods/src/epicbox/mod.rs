@@ -36,10 +36,18 @@ use lepic_epicbox::{
 };
 pub use lepic_epicbox::{RELAY_RETENTION, TRANSPORT_ID};
 
+#[cfg(feature = "epicbox-wallet")]
 mod inbox;
+#[cfg(feature = "epicbox-wallet")]
 mod listing;
 
-pub use inbox::relay_network;
+/// The relay network of addresses for a wallet on `network`.
+pub fn relay_network(network: WalletNetwork) -> Network {
+    match network {
+        WalletNetwork::Mainnet => Network::Mainnet,
+        WalletNetwork::Floonet => Network::Floonet,
+    }
+}
 
 /// The lengths a notice over Epicbox is padded to, one drawn at random for each: the JSON
 /// length of the first slate of a payment this wallet sends over Epicbox, with one, two and
@@ -49,9 +57,6 @@ pub const NOTICE_LENGTHS: [usize; 3] = [
     S1_ONE_INPUT + S1_INPUT,
     S1_ONE_INPUT + 2 * S1_INPUT,
 ];
-
-// The engine drops a notice longer than this, so the longest padding must fit.
-const _: () = assert!(NOTICE_LENGTHS[2] <= lepic_wallet::notice::MAX_NOTICE_LEN);
 
 /// A V2 first slate with one plain input and one change output, as `epic-wallet` writes it
 /// (the `send_file_plain_input_s1_v2` vector), plus `,"lepic":{"version":1,"f":15}`.

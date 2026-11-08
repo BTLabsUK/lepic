@@ -11,12 +11,15 @@ publish.workspace = true
 default = ["file"]
 file = []
 epicbox = [
-    "dep:jiff",
-    "dep:lepic-crypto",
     "dep:lepic-epicbox",
-    "dep:lepic-node",
     "dep:lepic-primitives",
     "dep:lepic-slate",
+]
+epicbox-wallet = [
+    "epicbox",
+    "dep:jiff",
+    "dep:lepic-crypto",
+    "dep:lepic-node",
     "dep:lepic-wallet",
     "dep:tokio",
     "dep:tracing",

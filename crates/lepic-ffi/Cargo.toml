@@ -28,7 +28,7 @@ getrandom = { workspace = true, features = ["std", "sys_rng"] }
 jiff = { workspace = true, features = ["std"] }
 lepic-epicbox.workspace = true
 lepic-keychain.workspace = true
-lepic-methods = { workspace = true, features = ["epicbox", "http"] }
+lepic-methods = { workspace = true, features = ["epicbox-wallet", "http"] }
 lepic-node.workspace = true
 lepic-primitives.workspace = true
 lepic-store.workspace = true

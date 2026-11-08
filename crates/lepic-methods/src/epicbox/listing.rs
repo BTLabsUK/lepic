@@ -15,7 +15,8 @@ use lepic_wallet::{SecretVault, StoreOpener, Wallet, WalletError};
 use tracing::instrument;
 
 use super::Epicbox;
-use super::inbox::{PruneSchedule, Run, relay_network};
+use super::inbox::{PruneSchedule, Run};
+use super::relay_network;
 
 impl Epicbox {
     /// The Epicbox address of `wallet`'s `listing` on this method's relay. Needs no relay.
