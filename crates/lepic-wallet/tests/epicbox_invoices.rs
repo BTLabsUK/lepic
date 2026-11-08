@@ -326,6 +326,7 @@ fn an_invoice_sent_back_unchanged_marks_the_peer_as_not_paying_invoices() {
             tx_id: issued.tx_id,
             slate_id: issued.slate_id,
             peer: stock.address().to_string(),
+            peer_key: Some(stock.address().key_text()),
         }]
     );
     assert_eq!(world.relay.pending(&world.issuer.address), 0);
@@ -379,6 +380,7 @@ fn a_listener_names_the_invoice_a_peer_sent_back() {
             tx_id: issued.tx_id,
             slate_id: issued.slate_id,
             peer: stock.address().to_string(),
+            peer_key: Some(stock.address().key_text()),
         }]
     );
 }

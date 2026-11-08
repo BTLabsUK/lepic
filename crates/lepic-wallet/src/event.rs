@@ -471,8 +471,12 @@ pub struct BouncedInvoice {
     pub tx_id: TxId,
     pub slate_id: SlateId,
     /// The address the invoice came back from, as the method reported it, with the key of the
-    /// one it was issued to.
+    /// one it was issued to. Its domain is as reported: only the key is what the signature
+    /// proves.
     pub peer: String,
+    /// The key `peer` names under the method it came over, the part of it the signature proves;
+    /// `None` when the method reads no key from it.
+    pub peer_key: Option<String>,
 }
 
 impl From<StateChange> for Event {

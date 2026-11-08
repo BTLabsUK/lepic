@@ -2994,6 +2994,7 @@ mod tests {
             )
             .unwrap()
             .to_string(),
+            peer_key: None,
         });
         let event = wallet_event(&bounced).unwrap();
         assert_eq!(event.kind, WalletEventKind::InvoiceBounced);

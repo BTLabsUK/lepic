@@ -192,7 +192,15 @@ fn returned_invoice(
         tx_id: issued.id,
         slate_id: slate.id(),
         peer: from.as_str().to_owned(),
+        peer_key: None,
     }))
+}
+
+/// `bounced` with the key its peer names under `method`, or none when the method reads no key
+/// from it.
+fn keyed(method: &dyn Method, network: Network, mut bounced: BouncedInvoice) -> BouncedInvoice {
+    bounced.peer_key = method.peer_key(network, &bounced.peer).ok();
+    bounced
 }
 
 impl<N, S, V> Wallet<N, S, V>
@@ -479,13 +487,14 @@ where
 
     /// Records the bounced invoice as an unmarked answer from its peer's key under `method`, so
     /// nothing but slates goes to it until a marked message comes, and tells the host which
-    /// invoice came back.
+    /// invoice came back, with that key.
     pub(crate) async fn record_bounce(
         &self,
         method: &Arc<dyn Method>,
         bounced: BouncedInvoice,
     ) -> Result<(), Hold> {
-        if let Ok(key) = method.peer_key(self.config().network, &bounced.peer) {
+        let bounced = keyed(&**method, self.config().network, bounced);
+        if let Some(key) = bounced.peer_key.clone() {
             self.inbox_write(move |repos, now| {
                 crate::peer_compat::record_unmarked(repos, &key, now)
             })
@@ -612,6 +621,43 @@ mod tests {
     #![allow(clippy::unwrap_used)]
 
     use super::*;
+
+    #[test]
+    fn a_bounced_invoice_is_keyed_by_its_peer_only_when_the_method_reads_a_key() {
+        use lepic_crypto::{PublicKey, SecretKey};
+        use lepic_epicbox::mock_relay::MockRelay;
+        use lepic_epicbox::{
+            Domain, EpicboxAddress, Network as RelayNetwork, RelayEndpoint, Security,
+        };
+        use lepic_methods::epicbox::Epicbox;
+
+        let domain = Domain::parse("relay.test").unwrap();
+        let settings = lepic_epicbox::testing::client_settings(RelayEndpoint::new(
+            domain.clone(),
+            None,
+            Security::Plain,
+        ));
+        let relay = MockRelay::new(RelayNetwork::Floonet);
+        let method = Epicbox::new(settings, RelayNetwork::Floonet, relay.connector());
+        let key = PublicKey::from_secret_key(&SecretKey::from_array([1; 32]).unwrap()).unwrap();
+        let address = EpicboxAddress::new(key, RelayNetwork::Floonet, domain, None).to_string();
+        let bounced = |peer: &str| BouncedInvoice {
+            tx_id: TxId(1),
+            slate_id: SlateId::from_bytes([7; 16]),
+            peer: peer.to_owned(),
+            peer_key: None,
+        };
+
+        let parsed = keyed(&method, Network::Floonet, bounced(&address));
+        assert_eq!(
+            parsed.peer_key,
+            Some(lepic_methods::epicbox::peer_key(Network::Floonet, &address).unwrap())
+        );
+        assert_eq!(parsed.peer, address);
+        let unparsed = keyed(&method, Network::Floonet, bounced("not an address"));
+        assert_eq!(unparsed.peer_key, None);
+        assert_eq!(unparsed.peer, "not an address");
+    }
 
     #[test]
     fn the_stored_epicbox_name_is_the_id_of_the_epicbox_method() {

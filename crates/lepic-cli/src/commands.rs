@@ -1933,7 +1933,9 @@ fn receipt_line(event: &Event) -> Option<String> {
         Event::InvoiceBounced(bounced) => Some(format!(
             "invoice {} sent back unpaid by {}, which does not pay invoices; `lepic tx cancel {}` \
              withdraws it",
-            bounced.slate_id, bounced.peer, bounced.tx_id.0
+            bounced.slate_id,
+            bounced.peer_key.as_deref().unwrap_or(&bounced.peer),
+            bounced.tx_id.0
         )),
         _ => None,
     }
@@ -2587,6 +2589,7 @@ mod tests {
             tx_id: TxId(5),
             slate_id: lepic_wallet::event::SlateId::from_bytes([7; 16]),
             peer: peer.to_string(),
+            peer_key: None,
         });
         assert_eq!(
             receipt_line(&bounced).as_deref(),
