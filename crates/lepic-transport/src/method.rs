@@ -3,6 +3,8 @@
 //! how it encodes and decodes them, and how it tells peers apart. The engine calls a
 //! [`Method`] and never names one.
 
+use std::sync::Arc;
+
 use lepic_primitives::params::Network;
 /// What an encoder is told about the slate it encodes; a [`Method`] implementation takes it.
 pub use lepic_slate::codec::EncodeContext;
@@ -11,20 +13,29 @@ use lepic_slate::error::DecodeError;
 use lepic_slate::model::Slate;
 
 use crate::codecs;
-use crate::error::FormatError;
+use crate::error::{FormatError, TransportError};
 use crate::policy::encode_with;
-use crate::transport::{Destination, Transport};
+use crate::transport::{Destination, Transport, TransportId};
 
 /// What a slate this method carries may hold beyond the slate itself, decided before the
 /// engine locks inputs.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct Carries {
     /// A LEPIC receiver may be given a key to seal its answer to (RFC 0002 5).
     pub reply_key: bool,
 }
 
+impl Carries {
+    /// What a method's slates carry, from each fact.
+    pub const fn new(reply_key: bool) -> Self {
+        Self { reply_key }
+    }
+}
+
 /// What the engine knows when it encodes a slate it built.
 #[derive(Debug, Clone, Copy)]
+#[non_exhaustive]
 pub struct Sending {
     /// The wallet's network.
     pub network: Network,
@@ -34,8 +45,20 @@ pub struct Sending {
     pub reply_key: Option<[u8; 32]>,
 }
 
+impl Sending {
+    /// What the engine knows when it encodes, from each fact.
+    pub const fn new(network: Network, features: u32, reply_key: Option<[u8; 32]>) -> Self {
+        Self {
+            network,
+            features,
+            reply_key,
+        }
+    }
+}
+
 /// What a received wire says about the wallet that sent it.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct SenderFacts {
     /// The wire carries the LEPIC marker: the sender runs LEPIC.
     pub marked: bool,
@@ -43,6 +66,17 @@ pub struct SenderFacts {
     pub features: Option<u32>,
     /// The key the sender asks to be answered under.
     pub reply_key: Option<[u8; 32]>,
+}
+
+impl SenderFacts {
+    /// What a wire says about its sender, from each fact.
+    pub const fn new(marked: bool, features: Option<u32>, reply_key: Option<[u8; 32]>) -> Self {
+        Self {
+            marked,
+            features,
+            reply_key,
+        }
+    }
 }
 
 /// A slate as it goes out, with the codec the engine records next to it.
@@ -104,15 +138,46 @@ pub trait Method: Transport {
         })
     }
 
-    /// The key an address of this method names, as peers are told apart. `None` when the
-    /// method has no notion of a peer key.
-    fn peer_key(&self, _network: Network, _address: &str) -> Option<String> {
-        None
+    /// The lengths a notice sent over this method is padded to, one drawn per notice so its
+    /// size does not tell it from a payment. Empty when the method sends no notices: the
+    /// engine then withholds them.
+    fn notice_lengths(&self) -> &'static [usize];
+
+    /// The key an address of this method names, as peers are told apart. Fails with
+    /// [`TransportError::UnknownDestination`] when the method has no notion of a peer key, and
+    /// with [`TransportError::InvalidDestination`] for an address it cannot read.
+    fn peer_key(&self, _network: Network, _address: &str) -> Result<String, TransportError> {
+        Err(TransportError::UnknownDestination {
+            transport: self.id(),
+        })
     }
 
     /// Whether `to` and `allowed` name the same peer. A method with no peer key never matches.
     fn same_payee(&self, network: Network, to: &Destination, allowed: &str) -> bool {
-        let key = self.peer_key(network, to.as_str());
-        key.is_some() && key == self.peer_key(network, allowed)
+        match (
+            self.peer_key(network, to.as_str()),
+            self.peer_key(network, allowed),
+        ) {
+            (Ok(to), Ok(allowed)) => to == allowed,
+            _ => false,
+        }
+    }
+
+    /// Whether a [`TransportError::Backend`] failure of this method's delivery would meet the
+    /// same reply again, so holding the message for another try gains nothing. The engine
+    /// decides the other variants itself.
+    fn delivery_is_permanent(&self, _error: &TransportError) -> bool {
+        false
+    }
+}
+
+/// The methods a consumer offers, as the engine finds the one a stored payment went over.
+pub trait MethodLookup: Send + Sync {
+    /// The method whose id reads `name`, as a payment stores it.
+    fn method_named(&self, name: &str) -> Option<Arc<dyn Method>>;
+
+    /// The method registered under `id`.
+    fn method(&self, id: &TransportId) -> Option<Arc<dyn Method>> {
+        self.method_named(id.as_str())
     }
 }

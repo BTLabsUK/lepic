@@ -172,6 +172,10 @@ impl Method for HttpTransport {
     fn carries(&self) -> Carries {
         Carries::default()
     }
+
+    fn notice_lengths(&self) -> &'static [usize] {
+        &[]
+    }
 }
 
 impl Transport for HttpTransport {

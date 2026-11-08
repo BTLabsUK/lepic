@@ -32,6 +32,23 @@ use lepic_transport::transport::{BoxFuture, Destination, Outbound, Transport, Tr
 use crate::address::{EpicboxAddress, Network};
 use crate::client::{ClientSettings, EpicboxClient, Identity, TRANSPORT_ID};
 use crate::session::Connector;
+use crate::{ClientError, RelayErrorKind};
+
+/// The lengths a notice over Epicbox is padded to, one drawn at random for each: the JSON
+/// length of the first slate of a payment this wallet sends over Epicbox, with one, two and
+/// three inputs and one change output, carrying the LEPIC marker with its features.
+pub const NOTICE_LENGTHS: [usize; 3] = [
+    S1_ONE_INPUT,
+    S1_ONE_INPUT + S1_INPUT,
+    S1_ONE_INPUT + 2 * S1_INPUT,
+];
+
+/// A V2 first slate with one plain input and one change output, as `epic-wallet` writes it
+/// (the `send_file_plain_input_s1_v2` vector), plus `,"lepic":{"version":1,"f":15}`.
+const S1_ONE_INPUT: usize = 2423 + 29;
+
+/// What one more plain input adds to it: `,{"features":"Plain","commit":"<66 hex>"}`.
+const S1_INPUT: usize = 99;
 
 /// The Epicbox policy of ADR 0003, as `epic-wallet` `v4.0.2` speaks it: the V3 and V2 shapes are
 /// accepted, detected by shape with V3 tried first and the header ignored; a new slate goes out
@@ -212,11 +229,11 @@ impl Method for EpicboxTransport {
     }
 
     fn sender_facts(&self, wire: &WireSlate) -> SenderFacts {
-        SenderFacts {
-            marked: carries_lepic_marker(wire),
-            features: lepic_marker_features(wire),
-            reply_key: lepic_marker_reply_key(wire),
-        }
+        SenderFacts::new(
+            carries_lepic_marker(wire),
+            lepic_marker_features(wire),
+            lepic_marker_reply_key(wire),
+        )
     }
 
     fn encode_new(
@@ -307,12 +324,35 @@ impl Method for EpicboxTransport {
         })
     }
 
-    fn peer_key(&self, _network: WalletNetwork, address: &str) -> Option<String> {
+    fn notice_lengths(&self) -> &'static [usize] {
+        &NOTICE_LENGTHS
+    }
+
+    fn peer_key(&self, _network: WalletNetwork, address: &str) -> Result<String, TransportError> {
         // The addresses are read on the relay network the transport was built for, so the
         // wallet network the engine passes is not used.
         EpicboxAddress::parse_key(address, self.network())
-            .ok()
             .map(|key| EpicboxAddress::key_text_of(&key, self.network()))
+            .map_err(|error| TransportError::InvalidDestination {
+                transport: TRANSPORT_ID,
+                source: Box::new(error),
+            })
+    }
+
+    fn delivery_is_permanent(&self, error: &TransportError) -> bool {
+        let TransportError::Backend { source, .. } = error else {
+            return false;
+        };
+        source
+            .downcast_ref::<ClientError>()
+            .is_some_and(|error| match error {
+                ClientError::Relay { kind } => *kind == RelayErrorKind::InvalidRequest,
+                ClientError::Destination(_)
+                | ClientError::Message(_)
+                | ClientError::Frame(_)
+                | ClientError::BinarySlate => true,
+                _ => false,
+            })
     }
 }
 

@@ -617,6 +617,10 @@ impl Method for Observer {
     fn carries(&self) -> Carries {
         Carries::default()
     }
+
+    fn notice_lengths(&self) -> &'static [usize] {
+        &[]
+    }
 }
 
 impl Outbound for Observer {

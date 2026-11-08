@@ -518,8 +518,8 @@ fn check_answerer(
     };
     let expected = repos
         .counterparty(tx_id)?
-        .and_then(|address| method.peer_key(network, &address));
-    match (expected, method.peer_key(network, from.as_str())) {
+        .and_then(|address| method.peer_key(network, &address).ok());
+    match (expected, method.peer_key(network, from.as_str()).ok()) {
         (Some(expected), Some(from)) if expected == from => Ok(()),
         _ => Err(FinalizeError::UnexpectedAnswerer { tx_id }),
     }

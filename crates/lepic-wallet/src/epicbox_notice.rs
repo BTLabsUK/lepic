@@ -1244,7 +1244,7 @@ where
                 transport: TRANSPORT_ID,
             });
         };
-        let Some(key) = method.peer_key(self.config().network, to.as_str()) else {
+        let Ok(key) = method.peer_key(self.config().network, to.as_str()) else {
             debug!(slate_id = %slate_id, "notice not sent to a destination that is no address");
             return Err(Hold::Reply(TransportError::UnknownDestination {
                 transport: method.id(),

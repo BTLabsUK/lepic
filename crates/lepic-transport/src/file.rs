@@ -9,6 +9,7 @@
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
+use lepic_primitives::params::Network;
 pub use lepic_slate::codec::MAX_WIRE_SLATE_LEN;
 use lepic_slate::codec::legacy::v2_json::{LEGACY_V2_JSON, V2JsonCodec};
 use lepic_slate::codec::legacy::v3_json::{LEGACY_V3_JSON, V3JsonCodec};
@@ -144,7 +145,16 @@ impl Transport for FileTransport {
 
 impl Method for FileTransport {
     fn carries(&self) -> Carries {
-        Carries { reply_key: true }
+        Carries::new(true)
+    }
+
+    fn notice_lengths(&self) -> &'static [usize] {
+        &[]
+    }
+
+    /// A slate file names no peer: whoever holds it may answer it.
+    fn peer_key(&self, _network: Network, _address: &str) -> Result<String, TransportError> {
+        Err(TransportError::UnknownDestination { transport: FILE })
     }
 
     fn encode_new(

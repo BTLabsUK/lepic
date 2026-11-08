@@ -549,11 +549,7 @@ fn encode_for_delivery(
         .and_then(|keys| {
             keys.reply_public_key(env.keychain, env.network, account, *slate.id().as_bytes())
         });
-    let sending = Sending {
-        network: env.network,
-        features: env.features,
-        reply_key,
-    };
+    let sending = Sending::new(env.network, env.features, reply_key);
     Ok(env.method.encode_new(slate, context, &sending)?.wire)
 }
 
@@ -1334,11 +1330,7 @@ mod tests {
             lepic_epicbox::Network::Floonet,
             relay.connector(),
         );
-        let sending = Sending {
-            network: Network::Floonet,
-            features: 0x21,
-            reply_key: None,
-        };
+        let sending = Sending::new(Network::Floonet, 0x21, None);
         let encode =
             |method: &dyn Method| method.encode_new(&slate, &context, &sending).unwrap().wire;
         let marked = encode(&epicbox);

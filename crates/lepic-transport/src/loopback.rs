@@ -87,6 +87,10 @@ impl Method for LoopbackTransport {
     fn carries(&self) -> Carries {
         Carries::default()
     }
+
+    fn notice_lengths(&self) -> &'static [usize] {
+        &[]
+    }
 }
 
 impl Transport for LoopbackTransport {

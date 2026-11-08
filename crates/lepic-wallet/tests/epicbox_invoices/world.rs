@@ -230,7 +230,11 @@ impl Method for RecordingEpicbox {
         self.inner.encode_reply(slate, context, sending, from)
     }
 
-    fn peer_key(&self, network: Network, address: &str) -> Option<String> {
+    fn notice_lengths(&self) -> &'static [usize] {
+        self.inner.notice_lengths()
+    }
+
+    fn peer_key(&self, network: Network, address: &str) -> Result<String, TransportError> {
         self.inner.peer_key(network, address)
     }
 

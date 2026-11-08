@@ -364,11 +364,7 @@ fn store_reply<N, S: StoreOpener, V>(
     request: &ReceiveRequest,
 ) -> Result<Answer, ReceiveError> {
     let transport = proposal.transport;
-    let sending = Sending {
-        network: proposal.network,
-        features: proposal.features,
-        reply_key: None,
-    };
+    let sending = Sending::new(proposal.network, proposal.features, None);
     let now = ports.clock.now();
     session.store.write(|repos| {
         if let Some(received) =

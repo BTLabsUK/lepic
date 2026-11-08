@@ -588,11 +588,7 @@ fn issue_stored(
                 *slate.id().as_bytes(),
             )
         });
-    let sending = Sending {
-        network: env.network,
-        features: env.features,
-        reply_key,
-    };
+    let sending = Sending::new(env.network, env.features, reply_key);
     let wire = method
         .encode_new(&slate, &context, &sending)
         .map_err(InvoiceError::Encode)?
@@ -710,11 +706,7 @@ fn pay_stored(
     };
     let slate = build_i2(env.keychain, i1, &plan, randomness)?;
     let context = encode_context(env.network, &slate);
-    let sending = Sending {
-        network: env.network,
-        features: env.features,
-        reply_key: None,
-    };
+    let sending = Sending::new(env.network, env.features, None);
     let Encoded { wire: reply, codec } = method
         .encode_reply(&slate, &context, &sending, from)
         .map_err(InvoiceError::Encode)?;

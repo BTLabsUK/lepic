@@ -14,6 +14,13 @@ pub enum TransportError {
     UnsupportedLocation { transport: TransportId },
     #[error("transport {transport} does not know the destination")]
     UnknownDestination { transport: TransportId },
+    /// An address the transport cannot read, with why.
+    #[error("transport {transport} cannot read the destination")]
+    InvalidDestination {
+        transport: TransportId,
+        #[source]
+        source: Box<dyn std::error::Error + Send + Sync>,
+    },
     #[error("transport {transport} has no unacknowledged envelope with this token")]
     UnknownAcknowledgement { transport: TransportId },
     #[error("slate file failed")]

@@ -118,8 +118,16 @@ impl Method for EpicboxSlot {
         self.current().encode_reply(slate, context, sending, from)
     }
 
-    fn peer_key(&self, network: Network, address: &str) -> Option<String> {
+    fn notice_lengths(&self) -> &'static [usize] {
+        self.current().notice_lengths()
+    }
+
+    fn peer_key(&self, network: Network, address: &str) -> Result<String, TransportError> {
         self.current().peer_key(network, address)
+    }
+
+    fn delivery_is_permanent(&self, error: &TransportError) -> bool {
+        self.current().delivery_is_permanent(error)
     }
 
     fn same_payee(&self, network: Network, to: &Destination, allowed: &str) -> bool {

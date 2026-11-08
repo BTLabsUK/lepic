@@ -388,6 +388,10 @@ impl lepic_transport::method::Method for TorTransport {
     fn carries(&self) -> lepic_transport::method::Carries {
         lepic_transport::method::Carries::default()
     }
+
+    fn notice_lengths(&self) -> &'static [usize] {
+        &[]
+    }
 }
 
 impl Transport for TorTransport {

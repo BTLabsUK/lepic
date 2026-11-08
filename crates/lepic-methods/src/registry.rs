@@ -4,7 +4,7 @@
 
 use std::sync::Arc;
 
-use lepic_transport::method::Method;
+use lepic_transport::method::{Method, MethodLookup};
 use lepic_transport::transport::TransportId;
 use thiserror::Error;
 
@@ -50,6 +50,12 @@ impl Methods {
     /// The registered methods, in registration order.
     pub fn iter(&self) -> impl Iterator<Item = &Arc<dyn Method>> {
         self.methods.iter()
+    }
+}
+
+impl MethodLookup for Methods {
+    fn method_named(&self, name: &str) -> Option<Arc<dyn Method>> {
+        self.iter().find(|method| method.id().as_str() == name).cloned()
     }
 }
 
