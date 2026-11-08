@@ -22,6 +22,7 @@ lepic-epicbox = { path = "../crates/lepic-epicbox" }
 lepic-ffi = { path = "../crates/lepic-ffi" }
 lepic-foreign = { path = "../crates/lepic-foreign" }
 lepic-keychain = { path = "../crates/lepic-keychain" }
+lepic-methods = { path = "../crates/lepic-methods", features = ["epicbox"] }
 lepic-node = { path = "../crates/lepic-node" }
 lepic-primitives = { path = "../crates/lepic-primitives" }
 lepic-slate = { path = "../crates/lepic-slate" }

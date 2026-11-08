@@ -1103,6 +1103,7 @@ dependencies = [
  "lepic-ffi",
  "lepic-foreign",
  "lepic-keychain",
+ "lepic-methods",
  "lepic-node",
  "lepic-primitives",
  "lepic-slate",

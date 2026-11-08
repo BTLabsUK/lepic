@@ -19,7 +19,7 @@ fuzz_target!(|data: &[u8]| {
                 text.len() <= MAX_NOTICE_LEN,
                 "a notice longer than the bound was accepted"
             );
-            let written = notice.encode();
+            let written = notice.encode_to(&lepic_methods::epicbox::NOTICE_LENGTHS, 0);
             let again = written.as_text().map(classify_text);
             assert_eq!(
                 again,
