@@ -16,6 +16,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
+use lepic_cli::app_config::ApiLimits;
 use lepic_cli::exit::CliError;
 use lepic_cli::host::Interrupt;
 use lepic_cli::secret::SecretInput;
@@ -55,6 +56,8 @@ pub struct TestHost {
     pub relay: MockRelay,
     /// The simulated Ctrl-C comes once this holds; never when `None`.
     pub interrupt_when: Option<Arc<dyn Fn() -> bool + Send + Sync>>,
+    /// The bounds of serve's API; the configured ones when `None`.
+    pub api_limits: Option<ApiLimits>,
 }
 
 impl TestHost {
@@ -72,6 +75,7 @@ impl TestHost {
             )),
             relay: MockRelay::new(RelayNetwork::Floonet),
             interrupt_when: None,
+            api_limits: None,
         }
     }
 
@@ -82,6 +86,7 @@ impl TestHost {
             node: self.node.clone(),
             relay: self.relay.clone(),
             interrupt_when: None,
+            api_limits: self.api_limits,
         }
     }
 
@@ -144,6 +149,10 @@ impl Host for TestHost {
 
     fn maintenance_interval(&self) -> Duration {
         MAINTENANCE
+    }
+
+    fn api_limits(&self, configured: ApiLimits) -> ApiLimits {
+        self.api_limits.unwrap_or(configured)
     }
 }
 
@@ -358,4 +367,78 @@ pub fn keys(value: &Value) -> Vec<&str> {
         .collect();
     keys.sort_unstable();
     keys
+}
+
+/// A response from serve's API.
+#[derive(Debug)]
+pub struct Reply {
+    pub status: u16,
+    /// Header names in lower case.
+    pub headers: Vec<(String, String)>,
+    pub body: String,
+}
+
+impl Reply {
+    pub fn json(&self) -> Value {
+        serde_json::from_str(&self.body)
+            .unwrap_or_else(|error| panic!("not JSON ({error}): {self:?}"))
+    }
+
+    pub fn header(&self, name: &str) -> Option<&str> {
+        self.headers
+            .iter()
+            .find(|(key, _)| key == name)
+            .map(|(_, value)| value.as_str())
+    }
+
+    /// The body of a 200, as JSON.
+    pub fn ok(&self) -> Value {
+        assert_eq!(self.status, 200, "{self:?}");
+        self.json()
+    }
+}
+
+/// One HTTP/1.1 request to serve's API on `socket`; the connection closes after the answer.
+pub fn http(socket: &Path, method: &str, path: &str, body: Option<&str>) -> Reply {
+    use std::io::Read as _;
+    let mut stream = std::os::unix::net::UnixStream::connect(socket).unwrap();
+    stream.set_read_timeout(Some(PATIENCE)).unwrap();
+    let body = body.unwrap_or("");
+    write!(
+        stream,
+        "{method} {path} HTTP/1.1\r\nHost: lepic\r\nContent-Type: application/json\r\n\
+         Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    )
+    .unwrap();
+    let mut answer = String::new();
+    stream.read_to_string(&mut answer).unwrap();
+    parse_reply(&answer)
+}
+
+/// A response read whole, with a `Content-Length` body.
+pub fn parse_reply(answer: &str) -> Reply {
+    let (head, body) = answer
+        .split_once("\r\n\r\n")
+        .unwrap_or_else(|| panic!("no header end: {answer:?}"));
+    let mut lines = head.split("\r\n");
+    let status = lines
+        .next()
+        .unwrap()
+        .split(' ')
+        .nth(1)
+        .unwrap()
+        .parse()
+        .unwrap();
+    let headers = lines
+        .map(|line| {
+            let (name, value) = line.split_once(':').unwrap();
+            (name.to_ascii_lowercase(), value.trim().to_owned())
+        })
+        .collect();
+    Reply {
+        status,
+        headers,
+        body: body.to_owned(),
+    }
 }

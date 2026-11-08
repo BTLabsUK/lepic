@@ -18,7 +18,9 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use serde_json::Value;
-use support::{FUNDING, Instance, SENDER_MNEMONIC, TestHost, text, wait_for_socket, wait_until};
+use support::{
+    FUNDING, Instance, SENDER_MNEMONIC, TestHost, http, text, wait_for_socket, wait_until,
+};
 
 /// The relay the mover moves to. The settings file offers it, so the CLI knows its endpoint.
 const NEW_HOME: &str = "relay2.test";
@@ -136,7 +138,6 @@ fn a_contact_check_is_answered_by_a_serving_wallet() {
     let client = host.without_interrupt();
     let dir = tempfile::tempdir().unwrap();
     let socket = dir.path().join("s.sock");
-    let service = format!("--service={}", socket.display());
     let socket_arg = socket.to_str().unwrap();
 
     let served = std::thread::scope(|scope| {
@@ -154,10 +155,7 @@ fn a_contact_check_is_answered_by_a_serving_wallet() {
             let now = &listed(&buyer, &client, &shop_id)["last_heard"];
             now.is_string() && *now != heard
         });
-        let status = shop
-            .run(&client, &[&service, "serve", "status"])
-            .ok()
-            .json();
+        let status = http(&socket, "GET", "/v1/status", None).ok();
         assert_eq!(status["collect"]["consecutive_failures"], 0, "{status}");
         stop.store(true, Ordering::SeqCst);
         server.join().unwrap()
@@ -260,9 +258,11 @@ fn a_contact_follows_a_moved_home_and_one_that_missed_the_move_goes_unanswered()
     assert_eq!(after["state"], "paired", "{after}");
 }
 
-fn payloads(instance: &Instance, host: &TestHost, service: &[&str]) -> Vec<Value> {
-    let args = [service, &["contact", "payload", "list"]].concat();
-    let list = instance.run(host, &args).ok().json();
+fn payloads(instance: &Instance, host: &TestHost) -> Vec<Value> {
+    let list = instance
+        .run(host, &["contact", "payload", "list"])
+        .ok()
+        .json();
     list["payloads"].as_array().unwrap().clone()
 }
 
@@ -313,7 +313,7 @@ fn a_payload_posted_to_a_contact_is_listed_until_acknowledged() {
     let by_file = text(&by_file, "payload_id").to_owned();
 
     collect(&buyer, &host);
-    let kept = payloads(&buyer, &host, &[]);
+    let kept = payloads(&buyer, &host);
     assert_eq!(kept.len(), 2, "{kept:?}");
     let entry = |id: &str| kept.iter().find(|kept| kept["id"] == id).unwrap().clone();
     assert_eq!(entry(&by_hex)["payload"], "00ff10");
@@ -328,75 +328,5 @@ fn a_payload_posted_to_a_contact_is_listed_until_acknowledged() {
         .ok()
         .json();
     assert_eq!(acked["acknowledged"], 2, "{acked}");
-    assert!(payloads(&buyer, &host, &[]).is_empty());
-}
-
-/// Through `lepic --service`, a serving wallet's own collect takes the payload; list and ack
-/// answer from serve.
-#[test]
-fn payload_commands_run_through_lepic_serve() {
-    let mut host = TestHost::new();
-    let shop = Instance::new("shop password");
-    shop.run(&host, &["wallet", "init"]).ok();
-    let buyer = Instance::new("buyer password");
-    buyer.run(&host, &["wallet", "init"]).ok();
-    let (buyer_at_shop, shop_at_buyer) = pair(&host, &shop, &buyer);
-
-    let stop = Arc::new(AtomicBool::new(false));
-    let signal = Arc::clone(&stop);
-    host.interrupt_when = Some(Arc::new(move || signal.load(Ordering::SeqCst)));
-    let client = host.without_interrupt();
-    let dir = tempfile::tempdir().unwrap();
-    let shop_socket = dir.path().join("shop.sock");
-    let buyer_socket = dir.path().join("buyer.sock");
-    let shop_service = format!("--service={}", shop_socket.display());
-    let buyer_service = format!("--service={}", buyer_socket.display());
-
-    let (shop_served, buyer_served) = std::thread::scope(|scope| {
-        let shop_server =
-            scope.spawn(|| shop.run(&host, &["serve", "--socket", shop_socket.to_str().unwrap()]));
-        let buyer_server = scope.spawn(|| {
-            buyer.run(
-                &host,
-                &["serve", "--socket", buyer_socket.to_str().unwrap()],
-            )
-        });
-        wait_for_socket(&shop_socket);
-        wait_for_socket(&buyer_socket);
-        let posted = shop
-            .run(
-                &client,
-                &[
-                    &shop_service,
-                    "contact",
-                    "payload",
-                    "post",
-                    &buyer_at_shop,
-                    "--hex",
-                    "c0ffee",
-                ],
-            )
-            .ok()
-            .json();
-        let id = text(&posted, "payload_id").to_owned();
-        let mut kept = Vec::new();
-        wait_until("the serving buyer keeps the payload", || {
-            kept = payloads(&buyer, &client, &[&buyer_service]);
-            !kept.is_empty()
-        });
-        assert_eq!(kept.len(), 1, "{kept:?}");
-        assert_eq!(kept[0]["id"], id.as_str());
-        assert_eq!(kept[0]["contact_id"], shop_at_buyer.as_str());
-        assert_eq!(kept[0]["payload"], "c0ffee");
-        let acked = buyer
-            .run(&client, &[&buyer_service, "contact", "payload", "ack", &id])
-            .ok()
-            .json();
-        assert_eq!(acked["acknowledged"], 1, "{acked}");
-        assert!(payloads(&buyer, &client, &[&buyer_service]).is_empty());
-        stop.store(true, Ordering::SeqCst);
-        (shop_server.join().unwrap(), buyer_server.join().unwrap())
-    });
-    shop_served.ok();
-    buyer_served.ok();
+    assert!(payloads(&buyer, &host).is_empty());
 }

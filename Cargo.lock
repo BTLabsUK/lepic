@@ -985,6 +985,8 @@ checksum = "cc4e190f5d26ca7051642629da2c52fc03bde85a03197c99408dcd291734c855"
 dependencies = [
  "equivalent",
  "hashbrown",
+ "serde",
+ "serde_core",
 ]
 
 [[package]]
@@ -1082,6 +1084,10 @@ name = "lepic-cli"
 version = "0.3.1"
 dependencies = [
  "clap",
+ "futures-util",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
  "jiff",
  "lepic-epicbox",
  "lepic-foreign",
@@ -1095,6 +1101,7 @@ dependencies = [
  "lepic-wallet",
  "lepic-wallet-contacts",
  "rand 0.10.3",
+ "rustix",
  "secrecy",
  "serde",
  "serde_json",
@@ -1103,6 +1110,7 @@ dependencies = [
  "tokio",
  "toml",
  "tracing",
+ "utoipa",
  "zeroize",
 ]
 
@@ -2398,6 +2406,29 @@ dependencies = [
  "crc",
  "minicbor",
  "rand_xoshiro",
+]
+
+[[package]]
+name = "utoipa"
+version = "6.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8765fe27aeff71012a3f90fa474cf1df863a7d0dd81ed25de4e63fff2544994f"
+dependencies = [
+ "indexmap",
+ "serde",
+ "serde_json",
+ "utoipa-gen",
+]
+
+[[package]]
+name = "utoipa-gen"
+version = "6.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6fa77c92cdc2442ce7b570a069dcb62263c07a870de839faa4f10235828f3c85"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 3.0.9",
 ]
 
 [[package]]

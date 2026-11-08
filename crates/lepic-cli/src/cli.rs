@@ -92,16 +92,6 @@ pub struct GlobalArgs {
     /// Domain to claim to paired contacts, like example.com [env: LEPIC_DOMAIN] [default: none]
     #[arg(long, global = true, value_name = "DOMAIN")]
     pub domain: Option<String>,
-    /// Run the command on the `lepic serve` process listening at SOCKET [default: lepic.sock in
-    /// the data directory]
-    #[arg(
-        long,
-        global = true,
-        value_name = "SOCKET",
-        num_args = 0..=1,
-        require_equals = true
-    )]
-    pub service: Option<Option<PathBuf>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -151,7 +141,7 @@ pub enum Command {
     /// Show or change what this wallet tells its paired contacts about the host
     #[command(subcommand)]
     Profile(ProfileCommand),
-    /// Hold the wallet open and answer commands sent with --service
+    /// Hold the wallet open and answer the wallet API on a local socket
     #[command(after_help = SERVE_HELP)]
     Serve(ServeArgs),
 }
@@ -159,20 +149,17 @@ pub enum Command {
 const SERVE_HELP: &str = "\
 Opens the wallet once, as other commands do, and holds the data directory until it stops. It
 listens on Epicbox, expires unpaid invoices, collects contact mailboxes and refreshes the wallet
-while it runs, and answers other lepic commands on a local socket: run them with `lepic
---service=SOCKET <command>`, or `lepic --service <command>` for the default socket. Only the
-user that runs it can use the socket. Ctrl-C or SIGTERM stops it.";
+while it runs, and answers the wallet API, HTTP with JSON bodies, on a local socket: for example
+`curl --unix-socket SOCKET http://lepic/v1/status`. GET /v1/openapi.json describes every route.
+Only the user that runs it can use the socket. Ctrl-C or SIGTERM stops it.";
 
 #[derive(Debug, Args)]
 #[command(
-    args_conflicts_with_subcommands = true,
     mut_arg("port", |arg| arg.requires("http")),
     mut_arg("internet", |arg| arg.requires("http")),
     mut_arg("coinbase", |arg| arg.requires("http"))
 )]
 pub struct ServeArgs {
-    #[command(subcommand)]
-    pub command: Option<ServeCommand>,
     /// Unix socket to listen on [default: lepic.sock in the data directory]
     #[arg(long, value_name = "SOCKET")]
     pub socket: Option<PathBuf>,
@@ -181,16 +168,6 @@ pub struct ServeArgs {
     pub http: bool,
     #[command(flatten)]
     pub listen: HttpListenArgs,
-}
-
-#[derive(Debug, Subcommand)]
-pub enum ServeCommand {
-    /// Show how the running serve's refreshes and contact collects went
-    #[command(after_help = "\
-Answers only through a running serve: `lepic --service serve status`. For the wallet refresh and
-the contact collect it shows the failures since the last success, the last error and when the
-task last succeeded. serve only reports them; it keeps retrying every minute.")]
-    Status,
 }
 
 #[derive(Debug, Subcommand)]
@@ -395,6 +372,8 @@ pub struct SendSlateIdArg {
     pub slate_id: Option<String>,
 }
 
+pub const DEFAULT_CHANGE_OUTPUTS: usize = 1;
+
 /// How a payment chooses and spends its inputs.
 #[derive(Debug, Args)]
 pub struct SpendArgs {
@@ -406,7 +385,7 @@ pub struct SpendArgs {
     )]
     pub min_confirmations: u64,
     /// Outputs the change is split into
-    #[arg(long, value_name = "COUNT", default_value_t = 1)]
+    #[arg(long, value_name = "COUNT", default_value_t = DEFAULT_CHANGE_OUTPUTS)]
     pub change_outputs: usize,
     /// How inputs are chosen
     #[arg(long, value_name = "STRATEGY", default_value = "smallest")]
@@ -477,7 +456,12 @@ pub enum SelectionArg {
 #[derive(Debug, Args)]
 pub struct AccountArg {
     /// Account label
-    #[arg(short = 'a', long, value_name = "LABEL", default_value = "default")]
+    #[arg(
+        short = 'a',
+        long,
+        value_name = "LABEL",
+        default_value = lepic_wallet::DEFAULT_ACCOUNT_LABEL
+    )]
     pub account: String,
 }
 

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
-//! `lepic serve` holds the wallet and answers `lepic --service` commands on a socket, in one
-//! process with a mock node and a mock relay.
+//! `lepic serve` holds the wallet and answers its API on a socket, in one process with a mock
+//! node and a mock relay.
 
 // Tests may unwrap, index and use plain arithmetic (docs/rules.md).
 #![cfg(unix)]
@@ -12,28 +12,17 @@
 
 mod support;
 
-use std::io::{BufRead as _, BufReader, Write as _};
-use std::os::unix::net::UnixStream;
-use std::path::Path;
+use std::io::Write as _;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use lepic_epicbox::mock_relay::Unanswered;
 use lepic_node::RejectionKind;
 use lepic_node::mock::MockFailure;
-use support::{FUNDING, Instance, Outcome, SENDER_MNEMONIC, TestHost, keys, wait_for_socket};
-
-/// The reply to one raw request line.
-fn raw_request(socket: &Path, line: &str) -> serde_json::Value {
-    let mut stream = UnixStream::connect(socket).unwrap();
-    stream.write_all(line.as_bytes()).unwrap();
-    let mut reply = String::new();
-    BufReader::new(stream).read_line(&mut reply).unwrap();
-    serde_json::from_str(&reply).unwrap()
-}
+use support::{FUNDING, Instance, Outcome, SENDER_MNEMONIC, TestHost, http, keys, wait_for_socket};
 
 #[test]
-fn serve_answers_commands_and_stops_on_interrupt() {
+fn serve_answers_the_api_and_stops_on_interrupt() {
     let mut host = TestHost::new();
     host.fund(SENDER_MNEMONIC, 0, FUNDING, 1);
     let wallet = Instance::new("serving password");
@@ -46,57 +35,16 @@ fn serve_answers_commands_and_stops_on_interrupt() {
     host.interrupt_when = Some(Arc::new(move || signal.load(Ordering::SeqCst)));
     let dir = tempfile::tempdir().unwrap();
     let socket = dir.path().join("s.sock");
-    let service = format!("--service={}", socket.display());
     let socket_arg = socket.to_str().unwrap();
 
     let served: Outcome = std::thread::scope(|scope| {
         let server = scope.spawn(|| wallet.run(&host, &["serve", "--socket", socket_arg]));
         wait_for_socket(&socket);
 
-        let through = wallet.run(&host, &[&service, "wallet", "info"]).ok().json();
-        assert_eq!(through, info);
-        let through = wallet.run(&host, &[&service, "tx", "list"]).ok().json();
-        assert_eq!(through, listed);
-
-        let mut human_env = wallet.env();
-        human_env.retain(|(key, _)| key != "LEPIC_OUTPUT");
-        let human = wallet.run_with(&host, &[&service, "wallet", "info"], human_env, "");
-        assert_eq!(human.code, 0, "{human:?}");
-        assert!(serde_json::from_str::<serde_json::Value>(&human.stdout).is_err());
-
-        for refused in [
-            vec!["wallet", "init"],
-            vec!["serve"],
-            vec!["epicbox", "listen"],
-        ] {
-            let mut args = vec![service.as_str()];
-            args.extend(refused);
-            let outcome = wallet.run(&host, &args);
-            assert_eq!(outcome.code, 2, "{outcome:?}");
-            assert_eq!(outcome.json()["error"]["kind"], "usage", "{outcome:?}");
-        }
-
-        // The client's own location options say where it found the socket; serve ignores them.
-        let data_dir = wallet.data_dir().display().to_string();
-        let located = wallet.run(
-            &host,
-            &[
-                "--data-dir",
-                &data_dir,
-                "--network",
-                "floonet",
-                &service,
-                "tx",
-                "list",
-            ],
-        );
-        assert_eq!(located.ok().json(), listed);
-        let other = wallet.run(&host, &["--network", "mainnet", &service, "tx", "list"]);
-        assert_eq!(other.code, 2, "{other:?}");
-        assert_eq!(other.json()["error"]["kind"], "usage", "{other:?}");
-
-        let garbled = raw_request(&socket, "not json\n");
-        assert_eq!(garbled["code"], 2, "{garbled}");
+        assert_eq!(http(&socket, "GET", "/v1/wallet", None).ok(), info);
+        assert_eq!(http(&socket, "GET", "/v1/transactions", None).ok(), listed);
+        let garbled = http(&socket, "POST", "/v1/transactions", Some("not json"));
+        assert_eq!(garbled.status, 400, "{garbled:?}");
 
         stop.store(true, Ordering::SeqCst);
         server.join().unwrap()
@@ -104,38 +52,11 @@ fn serve_answers_commands_and_stops_on_interrupt() {
 
     let report = served.ok().json();
     assert_eq!(keys(&report), ["inbox", "requests", "socket"]);
-    assert_eq!(report["requests"], 9, "{report}");
+    assert_eq!(report["requests"], 3, "{report}");
     assert!(!socket.exists());
     // The lock is released: a one-shot command opens the wallet again.
     host.interrupt_when = None;
     assert_eq!(wallet.run(&host, &["wallet", "info"]).ok().json(), info);
-}
-
-#[test]
-fn a_service_nobody_listens_at_is_exit_5() {
-    let host = TestHost::new();
-    let wallet = Instance::new("quiet password");
-    let dir = tempfile::tempdir().unwrap();
-    let socket = dir.path().join("none.sock");
-    let service = format!("--service={}", socket.display());
-
-    let missing = wallet.run(&host, &[&service, "wallet", "info"]);
-    assert_eq!(missing.code, 5, "{missing:?}");
-    assert_eq!(missing.json()["error"]["kind"], "service_unavailable");
-
-    // A socket file nobody serves refuses the connection.
-    drop(std::os::unix::net::UnixListener::bind(&socket).unwrap());
-    let stale = wallet.run(&host, &[&service, "wallet", "info"]);
-    assert_eq!(stale.code, 5, "{stale:?}");
-
-    let mut human = wallet.env();
-    human.retain(|(key, _)| key != "LEPIC_OUTPUT");
-    let default_socket = wallet.run_with(&host, &["--service", "wallet", "info"], human, "");
-    assert_eq!(default_socket.code, 5, "{default_socket:?}");
-    assert!(
-        default_socket.stderr.contains("hint: "),
-        "{default_socket:?}"
-    );
 }
 
 #[test]
@@ -180,14 +101,13 @@ fn serve_answers_a_request_in_flight_before_it_stops() {
     let client = host.without_interrupt();
     let dir = tempfile::tempdir().unwrap();
     let socket = dir.path().join("s.sock");
-    let service = format!("--service={}", socket.display());
     let socket_arg = socket.to_str().unwrap();
+    let send = format!(r#"{{"amount":"1","to":"{address}"}}"#);
 
     let (sent, served) = std::thread::scope(|scope| {
         let server = scope.spawn(|| wallet.run(&host, &["serve", "--socket", socket_arg]));
         wait_for_socket(&socket);
-        let sending =
-            scope.spawn(|| wallet.run(&client, &[&service, "tx", "send", "1", "--to", &address]));
+        let sending = scope.spawn(|| http(&socket, "POST", "/v1/transactions", Some(&send)));
         support::wait_until("the send posted", || {
             client.relay.received("PostSlate") >= 1
         });
@@ -195,15 +115,17 @@ fn serve_answers_a_request_in_flight_before_it_stops() {
         (sending.join().unwrap(), server.join().unwrap())
     });
 
-    assert_eq!(sent.code, 12, "{sent:?}");
-    let tx_id = sent.json()["error"]["tx_id"].as_u64().unwrap().to_string();
+    assert_eq!(sent.status, 503, "{sent:?}");
+    let problem = sent.json();
+    assert_eq!(problem["code"], "interrupted", "{problem}");
+    let tx_id = problem["tx_id"].as_u64().unwrap().to_string();
     let report = served.ok().json();
     assert_eq!(report["requests"], 1, "{report}");
     let shown = wallet.run(&client, &["tx", "show", &tx_id]).ok().json();
     assert_eq!(shown["state"], "sent", "{shown}");
 }
 
-/// `serve status` counts refreshes that fail in a row with the latest error, and starts again
+/// `GET /v1/status` counts refreshes that fail in a row with the latest error, and starts again
 /// from zero at the next success while keeping that error.
 #[test]
 fn serve_status_reports_refreshes_failing_in_a_row() {
@@ -217,14 +139,8 @@ fn serve_status_reports_refreshes_failing_in_a_row() {
     let client = host.without_interrupt();
     let dir = tempfile::tempdir().unwrap();
     let socket = dir.path().join("s.sock");
-    let service = format!("--service={}", socket.display());
     let socket_arg = socket.to_str().unwrap();
-    let status = || {
-        wallet
-            .run(&client, &[&service, "serve", "status"])
-            .ok()
-            .json()
-    };
+    let status = || http(&socket, "GET", "/v1/status", None).ok();
 
     let served = std::thread::scope(|scope| {
         let server = scope.spawn(|| wallet.run(&host, &["serve", "--socket", socket_arg]));
@@ -253,7 +169,7 @@ fn serve_status_reports_refreshes_failing_in_a_row() {
     served.ok();
 }
 
-/// `serve --http` answers the foreign API on a port the system picked, `serve status` shows the
+/// `serve --http` answers the foreign API on a port the system picked, `GET /v1/status` shows the
 /// listener, and serve's report ends with its counts.
 #[test]
 fn serve_with_http_answers_the_foreign_api() {
@@ -264,10 +180,8 @@ fn serve_with_http_answers_the_foreign_api() {
     let stop = Arc::new(AtomicBool::new(false));
     let signal = Arc::clone(&stop);
     host.interrupt_when = Some(Arc::new(move || signal.load(Ordering::SeqCst)));
-    let client = host.without_interrupt();
     let dir = tempfile::tempdir().unwrap();
     let socket = dir.path().join("s.sock");
-    let service = format!("--service={}", socket.display());
     let socket_arg = socket.to_str().unwrap();
 
     let served = std::thread::scope(|scope| {
@@ -278,15 +192,12 @@ fn serve_with_http_answers_the_foreign_api() {
             )
         });
         wait_for_socket(&socket);
-        let status = wallet
-            .run(&client, &[&service, "serve", "status"])
-            .ok()
-            .json();
-        let http = &status["http"];
-        assert_eq!(http["exposure"], "local", "{status}");
-        assert_eq!(http["coinbase"], "off", "{status}");
-        assert_eq!(http["received"], 0, "{status}");
-        let port = http["port"].as_u64().unwrap();
+        let status = http(&socket, "GET", "/v1/status", None).ok();
+        let listener = &status["http"];
+        assert_eq!(listener["exposure"], "local", "{status}");
+        assert_eq!(listener["coinbase"], "off", "{status}");
+        assert_eq!(listener["received"], 0, "{status}");
+        let port = listener["port"].as_u64().unwrap();
         assert_ne!(port, 0, "{status}");
 
         let body = r#"{"jsonrpc":"2.0","id":1,"method":"check_version","params":[]}"#;

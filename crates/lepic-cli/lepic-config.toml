@@ -76,6 +76,16 @@ send_connect_timeout_s = 10
 # From sending to another wallet's listener to the last byte of its answer.
 send_request_timeout_s = 60
 
+[api]
+# Connections the wallet API on serve's socket serves at once.
+max_connections = 32
+# The API's limit for a request line and headers, and for an idle connection.
+header_timeout_s = 10
+# The API's limit for a body, once the headers are in.
+body_timeout_s = 15
+# The largest request body the API reads.
+max_body_kib = 8192
+
 [tor]
 # Tor bootstrapping with a cached consensus.
 bootstrap_timeout_s = 120

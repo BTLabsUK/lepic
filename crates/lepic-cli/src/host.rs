@@ -17,6 +17,7 @@ use lepic_node::{
 use secrecy::SecretString;
 use zeroize::Zeroizing;
 
+use crate::app_config::ApiLimits;
 use crate::exit::CliError;
 use crate::settings::{RelayTor, Settings};
 
@@ -51,6 +52,11 @@ pub trait Host {
     /// app's foreground tick does. Tests shorten it.
     fn maintenance_interval(&self) -> Duration {
         Duration::from_secs(60)
+    }
+
+    /// The bounds of serve's API, from the configured ones. Tests tighten them.
+    fn api_limits(&self, configured: ApiLimits) -> ApiLimits {
+        configured
     }
 }
 
