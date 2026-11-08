@@ -80,9 +80,9 @@ The connection proves who calls; no password, token or key travels in a request.
   that is a separate change.
 - Addresses and ports come from `settings.toml`; nothing is listened on that the operator did not
   name.
-- Commands that create or reveal secrets (`wallet init`, `restore`, `import-seed`, seed export)
-  have no route: serve already holds an open wallet, and an owner connection that leaks should
-  cost what is in the wallet, not the seed.
+- Seed export has no route: an owner connection that leaks should cost what is in the wallet,
+  not the seed. Whether `serve` may create or restore a wallet while it holds none, on the socket
+  only, is open.
 
 ### Transaction methods
 
