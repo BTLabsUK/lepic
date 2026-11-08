@@ -56,6 +56,7 @@ record that supersedes the old one; accepted records are not rewritten.
 | [0048](0048-block-rewards-for-this-computer.md) | Block rewards are for this computer unless the host opens them | accepted |
 | [0049](0049-keeping-messages-that-cannot-be-taken-yet.md) | Keeping messages that cannot be taken yet | accepted |
 | [0050](0050-one-wallet-api.md) | One wallet API, served by `lepic serve` | proposed |
+| [0051](0051-transaction-methods-in-one-crate.md) | Transaction methods in one crate, outside the engine | proposed |
 
 Template:
 
