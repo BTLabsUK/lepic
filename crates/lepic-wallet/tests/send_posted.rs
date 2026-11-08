@@ -43,7 +43,7 @@ use lepic_wallet::send::{Delivery, SendRequest, SentSlate};
 use lepic_wallet::{Clock, Event};
 use tokio::sync::broadcast::Receiver;
 use uuid::Uuid;
-use world::{ACCOUNT, AMOUNT, Party, World};
+use world::{ACCOUNT, AMOUNT, Party, PortsMethods, World};
 
 /// The peer key that stands for the sender, forwarding the payer's slates.
 const SENDER: u8 = 7;
@@ -738,6 +738,45 @@ fn a_report_dated_ahead_of_the_clock_is_not_shown() {
         })
         .unwrap();
 
+    assert_eq!(world.report_shown(receipt.tx_id), None);
+}
+
+#[test]
+fn a_report_is_shown_for_a_payment_over_a_method_of_the_ports_that_sends_notices() {
+    let world = World::new();
+    let (receipt, notice) = world.posted_through_sender();
+    world.post(SENDER, &world.receiver().address, &notice, 1);
+
+    world.drain(world.receiver());
+
+    assert!(world.report_shown(receipt.tx_id).is_some());
+}
+
+#[test]
+fn a_report_stored_for_a_payment_over_a_method_without_notices_is_not_shown() {
+    let world = World::new();
+    let (receipt, notice) = world.posted_through_sender();
+    world.post(SENDER, &world.receiver().address, &notice, 1);
+    world.drain(world.receiver());
+    assert!(world.report_shown(receipt.tx_id).is_some());
+
+    world.set_receiver_transaction(receipt.tx_id, |entry| {
+        entry.transport = Some("file".to_owned());
+    });
+
+    assert!(world.reported(receipt.sent.slate_id));
+    assert_eq!(world.report_shown(receipt.tx_id), None);
+}
+
+#[test]
+fn a_report_is_not_shown_by_a_wallet_without_methods_in_its_ports() {
+    let world = World::with_issuer_methods(PortsMethods::Absent);
+    let (receipt, notice) = world.posted_through_sender();
+    world.post(SENDER, &world.receiver().address, &notice, 1);
+
+    world.drain(world.receiver());
+
+    assert!(world.reported(receipt.sent.slate_id));
     assert_eq!(world.report_shown(receipt.tx_id), None);
 }
 

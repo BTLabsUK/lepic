@@ -13,6 +13,7 @@ use lepic_store::{
     AccountIndex, ChainCheck, ImportedKind, OutboxStatus, Repositories, SlateStage, StoreError,
     StoredTransaction, TxDirection, TxId, TxState, WalletStore,
 };
+use lepic_transport::method::MethodLookup;
 use lepic_transport::transport::Destination;
 use tracing::instrument;
 use uuid::Uuid;
@@ -154,22 +155,31 @@ pub struct SlateMessage {
 }
 
 /// The sender's report that it posted a received payment, while the payment waits for it.
-/// Reports come only from a method that carries notices, so another payment finds none. Reads
-/// a setting only for a payment that waits.
+/// Reports come only from a method that carries notices: one is read only for a payment whose
+/// stored transport `sends_notices` names. Reads a setting only for a payment that waits.
 fn sender_report(
     repos: &dyn Repositories,
     transaction: &StoredTransaction,
     now: Timestamp,
+    sends_notices: &dyn Fn(&str) -> bool,
 ) -> Result<Option<Timestamp>, StoreError> {
     let entry = &transaction.entry;
     if entry.slate_id.is_some()
         && entry.direction == TxDirection::Incoming
         && entry.state == TxState::Received
+        && entry.transport.as_deref().is_some_and(sends_notices)
     {
         posted_report(repos, transaction.id, now)
     } else {
         Ok(None)
     }
+}
+
+/// Whether `transport` names a method of `methods` that sends notices.
+fn sends_notices(methods: Option<&dyn MethodLookup>, transport: &str) -> bool {
+    methods
+        .and_then(|methods| methods.method_named(transport))
+        .is_some_and(|method| !method.notice_lengths().is_empty())
 }
 
 /// When the receiver of a send this wallet made declined it unanswered. Read only for an
@@ -230,13 +240,23 @@ where
         let codecs = codecs::legacy(self.config().network.params().default_base_fee());
         self.blocking(move |ports, _| {
             let now = ports.clock.now();
+            let sends_notices =
+                |transport: &str| sends_notices(ports.methods.as_deref(), transport);
             session.store.read(|repos| {
                 let entry = repos
                     .transaction(tx_id)?
                     .ok_or(WalletError::UnknownTransaction(tx_id))?;
                 let stored = StoredTransaction { id: tx_id, entry };
                 let mut outbox = PendingOutbox::default();
-                details(repos, &codecs, &session.slates, &mut outbox, stored, now)
+                details(
+                    repos,
+                    &codecs,
+                    &session.slates,
+                    &mut outbox,
+                    stored,
+                    now,
+                    &sends_notices,
+                )
             })
         })
         .await
@@ -255,12 +275,23 @@ where
         let uuid = Uuid::from_bytes(*slate_id.as_bytes());
         self.blocking(move |ports, _| {
             let now = ports.clock.now();
+            let sends_notices =
+                |transport: &str| sends_notices(ports.methods.as_deref(), transport);
             session.store.read(|repos| {
                 let Some(stored) = repos.transaction_by_slate(uuid, TxDirection::Outgoing)? else {
                     return Ok(None);
                 };
                 let mut outbox = PendingOutbox::default();
-                details(repos, &codecs, &session.slates, &mut outbox, stored, now).map(Some)
+                details(
+                    repos,
+                    &codecs,
+                    &session.slates,
+                    &mut outbox,
+                    stored,
+                    now,
+                    &sends_notices,
+                )
+                .map(Some)
             })
         })
         .await
@@ -278,6 +309,8 @@ where
         let codecs = codecs::legacy(self.config().network.params().default_base_fee());
         self.blocking(move |ports, _| {
             let now = ports.clock.now();
+            let sends_notices =
+                |transport: &str| sends_notices(ports.methods.as_deref(), transport);
             session.store.read(|repos| {
                 if repos.account(account)?.is_none() {
                     return Err(AccountError::UnknownAccount(account).into());
@@ -289,7 +322,15 @@ where
                     .into_iter()
                     .rev()
                     .map(|stored| {
-                        details(repos, &codecs, &session.slates, &mut outbox, stored, now)
+                        details(
+                            repos,
+                            &codecs,
+                            &session.slates,
+                            &mut outbox,
+                            stored,
+                            now,
+                            &sends_notices,
+                        )
                     })
                     .collect()
             })
@@ -307,6 +348,7 @@ fn details(
     outbox: &mut PendingOutbox,
     transaction: StoredTransaction,
     now: Timestamp,
+    sends_notices: &dyn Fn(&str) -> bool,
 ) -> Result<TransactionDetails, WalletError> {
     let tx_id = transaction.id;
     let stages = match transaction.entry.slate_id {
@@ -366,7 +408,7 @@ fn details(
     let undelivered = undelivered(repos, outbox, &transaction)?;
     let output_commits = output_commits(repos, stages, &transaction, flow)?;
     let spent_commits = spent_commits(repos, stages, &transaction, flow)?;
-    let sender_reported_posted_at = sender_report(repos, &transaction, now)?;
+    let sender_reported_posted_at = sender_report(repos, &transaction, now, sends_notices)?;
     let sender_reported_cancelled_at = sender_cancel_report(repos, &transaction)?;
     let receiver_declined_at = receiver_decline(repos, &transaction)?;
     let unverified =
