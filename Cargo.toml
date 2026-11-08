@@ -1,6 +1,6 @@
 [workspace]
 members = ["crates/*", "xtask"]
-exclude = ["conformance", "fuzz", "interop", "third_party"]
+exclude = ["conformance", "console", "fuzz", "interop", "third_party"]
 resolver = "3"
 
 [workspace.package]

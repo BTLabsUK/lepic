@@ -1,0 +1,149 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark light">
+<meta name="theme-color" content="#13171c">
+<title>LEPIC console</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="/console.css">
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="top">
+  <div class="brand">
+    <span class="mark" aria-hidden="true"></span>
+    <h1>LEPIC console</h1>
+    <span id="network" class="tag" hidden></span>
+  </div>
+  <p id="link" class="link" role="status">Connecting to lepic serve…</p>
+  <button id="theme" type="button" class="ghost" aria-pressed="false">Use light theme</button>
+</header>
+
+<div class="shell">
+  <nav class="rail" aria-label="Sections">
+    <div role="tablist" aria-orientation="vertical">
+      <button role="tab" type="button" id="tab-overview" aria-controls="panel-overview" aria-selected="true" tabindex="0">Overview</button>
+      <button role="tab" type="button" id="tab-transactions" aria-controls="panel-transactions" aria-selected="false" tabindex="-1">Transactions</button>
+      <button role="tab" type="button" id="tab-outputs" aria-controls="panel-outputs" aria-selected="false" tabindex="-1">Outputs</button>
+      <button role="tab" type="button" id="tab-events" aria-controls="panel-events" aria-selected="false" tabindex="-1">Events</button>
+      <button role="tab" type="button" id="tab-api" aria-controls="panel-api" aria-selected="false" tabindex="-1">API reference</button>
+    </div>
+  </nav>
+
+  <main id="main" tabindex="-1">
+    <div id="unreachable" class="notice" role="alert" hidden>
+      <div>
+        <strong>lepic serve is not answering.</strong>
+        <span id="unreachable-detail"></span>
+      </div>
+      <button id="retry" type="button">Retry now</button>
+    </div>
+
+    <section role="tabpanel" id="panel-overview" aria-labelledby="tab-overview">
+      <div class="sync" id="sync" aria-live="polite">
+        <p class="sync-word" id="sync-word">Waiting for the first status…</p>
+        <div class="track" aria-hidden="true">
+          <span class="fill" id="sync-fill"></span>
+          <span class="pin wallet" id="sync-wallet-pin"></span>
+          <span class="pin node" id="sync-node-pin"></span>
+        </div>
+        <div class="legend">
+          <span><i class="dot wallet"></i>Wallet height <b class="num" id="sync-wallet">–</b></span>
+          <span><i class="dot node"></i>Node tip <b class="num" id="sync-node">–</b></span>
+        </div>
+      </div>
+
+      <div class="grid">
+        <section class="facts" aria-labelledby="h-serve">
+          <h2 id="h-serve">serve</h2>
+          <dl id="serve-facts" class="kv"></dl>
+        </section>
+
+        <section class="facts" aria-labelledby="h-requests">
+          <h2 id="h-requests">Requests</h2>
+          <dl id="request-facts" class="kv kv-figures"></dl>
+        </section>
+
+        <section class="facts" aria-labelledby="h-listeners">
+          <h2 id="h-listeners">Listeners</h2>
+          <dl id="listener-facts" class="kv"></dl>
+        </section>
+
+        <section class="facts" aria-labelledby="h-maint">
+          <h2 id="h-maint">Refresh and collect</h2>
+          <dl id="maintenance-facts" class="kv"></dl>
+        </section>
+
+        <section class="facts wide" aria-labelledby="h-balances">
+          <h2 id="h-balances">Balances</h2>
+          <div id="balances" class="scroll"></div>
+        </section>
+
+        <section class="facts half" aria-labelledby="h-address">
+          <h2 id="h-address">Address</h2>
+          <div class="address-row">
+            <code id="address" class="address" translate="no">–</code>
+            <button id="copy-address" type="button" class="ghost" hidden>Copy</button>
+          </div>
+          <p id="copy-note" class="muted small" role="status"></p>
+        </section>
+
+        <section class="facts half" aria-labelledby="h-node">
+          <h2 id="h-node">Node</h2>
+          <dl id="node-facts" class="kv"></dl>
+        </section>
+      </div>
+    </section>
+
+    <section role="tabpanel" id="panel-transactions" aria-labelledby="tab-transactions" hidden>
+      <div class="panel-head">
+        <h2>Transactions</h2>
+        <p class="muted" id="tx-summary"></p>
+      </div>
+      <div id="transactions" class="scroll"></div>
+    </section>
+
+    <section role="tabpanel" id="panel-outputs" aria-labelledby="tab-outputs" hidden>
+      <div class="panel-head">
+        <h2>Outputs</h2>
+        <p class="muted" id="outputs-summary"></p>
+      </div>
+      <div id="outputs" class="scroll"></div>
+    </section>
+
+    <section role="tabpanel" id="panel-events" aria-labelledby="tab-events" hidden>
+      <div class="panel-head">
+        <h2>Events</h2>
+        <p class="muted" id="events-state" role="status">Opening the event stream…</p>
+        <button id="events-clear" type="button" class="ghost">Clear</button>
+      </div>
+      <ol id="events" class="feed" aria-live="polite" aria-relevant="additions"></ol>
+      <p id="events-empty" class="empty">No events yet. Every engine event serve emits appears here as it happens.</p>
+    </section>
+
+    <section role="tabpanel" id="panel-api" aria-labelledby="tab-api" hidden>
+      <p id="api-note" class="muted small">The document serve publishes, rendered in this page. Requests from the reference are not sent.</p>
+      <div id="api-doc"></div>
+    </section>
+  </main>
+</div>
+
+<dialog id="tx-dialog" aria-labelledby="tx-dialog-title">
+  <form method="dialog" class="dialog-head">
+    <h2 id="tx-dialog-title">Transaction</h2>
+    <button type="submit" class="ghost" aria-label="Close">Close</button>
+  </form>
+  <div id="tx-dialog-body" class="dialog-body"></div>
+  <div id="tx-dialog-actions" class="dialog-actions" hidden>
+    <p id="tx-cancel-note" class="muted small" role="status"></p>
+    <button id="tx-cancel" type="button" class="danger">Cancel this transaction</button>
+    <button id="tx-cancel-confirm" type="button" class="danger" hidden>Yes, cancel it</button>
+  </div>
+</dialog>
+
+<script src="/console.js"></script>
+</body>
+</html>

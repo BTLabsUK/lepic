@@ -1,6 +1,7 @@
 # Build output
 /target/
 /conformance/target/
+/console/target/
 /fuzz/target/
 /fuzz/corpus/
 /fuzz/artifacts/

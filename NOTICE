@@ -25,3 +25,8 @@ domain under CC0, and of the libsecp256k1-zkp C library it builds
 (https://github.com/mimblewimble/secp256k1-zkp), Copyright (c) 2013 Pieter
 Wuille, licensed under the MIT License; its LICENSE, COPYING and PATCHES.md
 files give the terms and the one change made.
+
+console/ui/vendor/scalar.js is the standalone browser bundle of
+@scalar/api-reference (https://github.com/scalar/scalar), Copyright (c)
+2023-present Scalar, licensed under the MIT License; console/ui/vendor/LICENSE-scalar
+gives the terms and console/ui/vendor/README.md the version.
