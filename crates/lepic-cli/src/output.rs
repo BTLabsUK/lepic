@@ -67,11 +67,13 @@ pub enum Report {
     ProfileSet(ProfileSetReport),
     ProfileDomainShow(ProfileDomainShowReport),
     ProfileDomainFile(ProfileDomainFileReport),
+    ProfileDomainDocument(ProfileDomainDocumentReport),
     ProfileDomainAttach(ProfileDomainAttachReport),
     ContactSlate(ContactSlateReport),
     ContactInvoiceIssue(ContactInvoiceIssueReport),
     ContactInvoices(ContactInvoiceListReport),
     ContactExport(ContactExportReport),
+    ContactBackup(ContactBackupReport),
     ContactImport(ContactImportReport),
     ContactPayloadPost(ContactPayloadPostReport),
     ContactPayloadList(ContactPayloadListReport),
@@ -115,7 +117,7 @@ pub struct ScanReport {
 }
 
 /// What `wallet scan` did: every field of the engine's scan summary.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct WalletScanReport {
     pub start_height: u64,
     pub end_height: u64,
@@ -254,7 +256,7 @@ pub struct FinalizeReport {
     pub state: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct PostReport {
     pub tx_id: u32,
     pub state: String,
@@ -265,7 +267,7 @@ pub struct PostReport {
     pub height: Option<u64>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct TxStateReport {
     pub tx_id: u32,
     pub state: String,
@@ -444,7 +446,7 @@ pub struct InboxReport {
     pub expired: Option<ExpiredReport>,
 }
 
-#[derive(Debug, Default, Serialize)]
+#[derive(Debug, Default, Serialize, ToSchema)]
 pub struct ExpiredReport {
     /// Slate ids of parked invoices deleted unpaid.
     pub deleted: Vec<String>,
@@ -455,7 +457,7 @@ pub struct ExpiredReport {
     pub cancellable: Vec<u32>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct ContactInviteReport {
     pub contact_id: String,
     pub link: String,
@@ -465,7 +467,7 @@ pub struct ContactInviteReport {
     pub words: Vec<String>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct ContactPreviewReport {
     /// What the inviter calls itself, unverified.
     pub claimed_name: String,
@@ -475,7 +477,7 @@ pub struct ContactPreviewReport {
     pub service: bool,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct ContactAcceptReport {
     pub contact_id: String,
     /// The reply as a link, to send by hand when `posted` is false.
@@ -483,7 +485,7 @@ pub struct ContactAcceptReport {
     pub posted: bool,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct ContactLinkReport {
     /// `confirm` (send `link` back by hand), `paired`, `ignored`, or `invite` (pairing words
     /// found the invite `link`, to answer).
@@ -494,7 +496,7 @@ pub struct ContactLinkReport {
     pub link: Option<String>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct ContactCollectReport {
     pub mailboxes: usize,
     pub capped: usize,
@@ -513,7 +515,7 @@ pub struct ContactCollectReport {
     pub unreachable: Vec<String>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct ContactFailureReport {
     pub contact_id: String,
     /// `expired`, `changed-on-the-way`, `refused-already-used`, `refused-expired` or
@@ -521,13 +523,13 @@ pub struct ContactFailureReport {
     pub reason: &'static str,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct ContactCardReport {
     pub contact_id: String,
     pub link: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct ContactReport {
     pub contact_id: String,
     pub label: String,
@@ -561,12 +563,12 @@ pub struct ContactReport {
     pub last_heard: Option<String>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct ContactListReport {
     pub contacts: Vec<ContactReport>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct ContactRemoveReport {
     pub contact_id: String,
     pub removed: bool,
@@ -595,13 +597,13 @@ pub struct ContactSlateReport {
     pub text: Option<String>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct ContactCheckReport {
     pub contact_id: String,
 }
 
 /// `lepic profile show`.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct ProfileShowReport {
     /// The profile this wallet tells paired contacts: the flag, `LEPIC_PROFILE`, the config file.
     pub profile: u16,
@@ -612,7 +614,7 @@ pub struct ProfileShowReport {
 }
 
 /// `lepic profile set`.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct ProfileSetReport {
     pub profile: u16,
     pub names: Vec<&'static str>,
@@ -624,7 +626,7 @@ pub struct ProfileSetReport {
 }
 
 /// `lepic profile domain show`.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct ProfileDomainShowReport {
     /// The domain the settings give; none when unset.
     pub domain: Option<String>,
@@ -634,7 +636,7 @@ pub struct ProfileDomainShowReport {
 }
 
 /// `lepic profile domain file`.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct ProfileDomainFileReport {
     pub path: String,
     pub bytes: usize,
@@ -642,15 +644,23 @@ pub struct ProfileDomainFileReport {
     pub url: Option<String>,
 }
 
+/// The text of the domain file, for the wallet API; the command writes it to a file.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct ProfileDomainDocumentReport {
+    pub document: String,
+    /// Where the file must be served; none when no domain is configured.
+    pub url: Option<String>,
+}
+
 /// `lepic profile domain attach`.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct ProfileDomainAttachReport {
     pub domain: String,
     /// How many contact updates were queued.
     pub queued: u32,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct ContactMoveHomeReport {
     /// The home relay moved to, `domain:port`.
     pub home_relay: String,
@@ -661,7 +671,7 @@ pub struct ContactMoveHomeReport {
     pub drain_until: Option<String>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct ContactKeyCheckReport {
     /// The new pairing the check went over.
     pub contact_id: String,
@@ -678,7 +688,7 @@ pub struct ContactInvoiceIssueReport {
     pub amount: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct ContactInvoiceReport {
     pub slate_id: String,
     pub contact_id: String,
@@ -694,24 +704,30 @@ pub struct ContactInvoiceReport {
     pub same_amount: Vec<String>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct ContactInvoiceListReport {
     pub invoices: Vec<ContactInvoiceReport>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct ContactExportReport {
     pub file: String,
 }
 
-#[derive(Debug, Serialize)]
+/// The contact backup document, for the wallet API; the command writes it to a file.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct ContactBackupReport {
+    pub backup: String,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
 pub struct ContactImportReport {
     pub imported: usize,
     pub skipped_existing: usize,
     pub skipped_conflict: usize,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct ContactPayloadPostReport {
     pub contact_id: String,
     /// The id the other wallet keeps the payload under, 32 lowercase hex digits.
@@ -721,12 +737,12 @@ pub struct ContactPayloadPostReport {
     pub peer_lacks_app_payloads: bool,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct ContactQuarantineReport {
     pub messages: Vec<QuarantinedMessageReport>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct QuarantinedMessageReport {
     pub id: String,
     pub contact_id: String,
@@ -736,12 +752,12 @@ pub struct QuarantinedMessageReport {
     pub size: u64,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct ContactPayloadListReport {
     pub payloads: Vec<ContactPayloadReport>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct ContactPayloadReport {
     pub id: String,
     pub contact_id: String,
@@ -750,7 +766,7 @@ pub struct ContactPayloadReport {
     pub payload: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct ContactPayloadAckReport {
     /// How many kept payloads were forgotten.
     pub acknowledged: usize,
@@ -853,7 +869,7 @@ pub struct TorListenReport {
     pub refused: u32,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct PeerReport {
     pub address: String,
     /// `unknown`, `lepic` or `no_invoices`.
@@ -866,7 +882,7 @@ pub struct PeerReport {
     pub notices: bool,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct EpicboxStatusReport {
     pub relay: String,
     pub address: String,
@@ -1198,6 +1214,7 @@ fn write_human(out: &mut Vec<u8>, report: &Report) -> std::io::Result<()> {
         | Report::ContactLink(_)
         | Report::ContactCollect(_)
         | Report::ContactCard(_) => write_pairing_human(out, report),
+        Report::ContactBackup(r) => writeln!(out, "{}", r.backup),
         Report::Contact(_)
         | Report::ContactList(_)
         | Report::ContactRemove(_)
@@ -1209,6 +1226,7 @@ fn write_human(out: &mut Vec<u8>, report: &Report) -> std::io::Result<()> {
         | Report::ProfileSet(_)
         | Report::ProfileDomainShow(_)
         | Report::ProfileDomainFile(_)
+        | Report::ProfileDomainDocument(_)
         | Report::ProfileDomainAttach(_)
         | Report::ContactInvoiceIssue(_)
         | Report::ContactInvoices(_)
@@ -1803,6 +1821,7 @@ fn write_profile(out: &mut Vec<u8>, report: &Report) -> std::io::Result<()> {
                 r.network, r.domain_key
             )
         }
+        Report::ProfileDomainDocument(r) => writeln!(out, "{}", r.document),
         Report::ProfileDomainFile(r) => {
             writeln!(out, "Wrote {} ({} bytes).", r.path, r.bytes)?;
             match &r.url {
@@ -1864,6 +1883,7 @@ fn write_contact_human(out: &mut Vec<u8>, report: &Report) -> std::io::Result<()
         | Report::ProfileSet(_)
         | Report::ProfileDomainShow(_)
         | Report::ProfileDomainFile(_)
+        | Report::ProfileDomainDocument(_)
         | Report::ProfileDomainAttach(_) => write_profile(out, report),
         Report::ContactMoveHome(r) => write_move_home(out, r),
         Report::ContactKeyCheck(r) => writeln!(
@@ -1878,41 +1898,7 @@ fn write_contact_human(out: &mut Vec<u8>, report: &Report) -> std::io::Result<()
             printable(&r.contact_name),
             r.amount
         ),
-        Report::ContactInvoices(r) => {
-            if r.invoices.is_empty() {
-                return writeln!(out, "No invoices from contacts wait.");
-            }
-            for invoice in &r.invoices {
-                writeln!(
-                    out,
-                    "{}  {} EPIC from {}{}{}{}",
-                    invoice.slate_id,
-                    invoice.amount,
-                    printable(&invoice.contact_name),
-                    if invoice.verified {
-                        " (verified)"
-                    } else {
-                        " (not verified)"
-                    },
-                    invoice
-                        .purpose
-                        .map(|purpose| format!(", {purpose}"))
-                        .unwrap_or_default(),
-                    invoice
-                        .reference
-                        .as_deref()
-                        .map(|reference| format!(", reference {}", printable(reference)))
-                        .unwrap_or_default()
-                )?;
-                if !invoice.same_amount.is_empty() {
-                    writeln!(
-                        out,
-                        "    another request for the same amount came within ten minutes"
-                    )?;
-                }
-            }
-            Ok(())
-        }
+        Report::ContactInvoices(r) => write_contact_invoices(out, r),
         Report::ContactExport(r) => writeln!(out, "Pairing records written to {}.", r.file),
         Report::ContactImport(r) => writeln!(
             out,
@@ -1941,6 +1927,42 @@ fn write_contact_human(out: &mut Vec<u8>, report: &Report) -> std::io::Result<()
         Report::ContactQuarantine(r) => write_contact_quarantine(out, r),
         _ => Ok(()),
     }
+}
+
+fn write_contact_invoices(out: &mut Vec<u8>, r: &ContactInvoiceListReport) -> std::io::Result<()> {
+    if r.invoices.is_empty() {
+        return writeln!(out, "No invoices from contacts wait.");
+    }
+    for invoice in &r.invoices {
+        writeln!(
+            out,
+            "{}  {} EPIC from {}{}{}{}",
+            invoice.slate_id,
+            invoice.amount,
+            printable(&invoice.contact_name),
+            if invoice.verified {
+                " (verified)"
+            } else {
+                " (not verified)"
+            },
+            invoice
+                .purpose
+                .map(|purpose| format!(", {purpose}"))
+                .unwrap_or_default(),
+            invoice
+                .reference
+                .as_deref()
+                .map(|reference| format!(", reference {}", printable(reference)))
+                .unwrap_or_default()
+        )?;
+        if !invoice.same_amount.is_empty() {
+            writeln!(
+                out,
+                "    another request for the same amount came within ten minutes"
+            )?;
+        }
+    }
+    Ok(())
 }
 
 fn write_contact_quarantine(out: &mut Vec<u8>, r: &ContactQuarantineReport) -> std::io::Result<()> {
@@ -2622,6 +2644,13 @@ mod tests {
                 vec!["bytes", "path", "url"],
             ),
             (
+                Report::ProfileDomainDocument(ProfileDomainDocumentReport {
+                    document: text("d"),
+                    url: None,
+                }),
+                vec!["document", "url"],
+            ),
+            (
                 Report::ProfileDomainAttach(ProfileDomainAttachReport {
                     domain: text("d"),
                     queued: 1,
@@ -2681,6 +2710,10 @@ mod tests {
             (
                 Report::ContactExport(ContactExportReport { file: text("f") }),
                 vec!["file"],
+            ),
+            (
+                Report::ContactBackup(ContactBackupReport { backup: text("b") }),
+                vec!["backup"],
             ),
             (
                 Report::ContactImport(ContactImportReport {

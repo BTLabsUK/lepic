@@ -900,13 +900,36 @@ async fn quarantine<N: lepic_node::NodeApi + 'static>(
     }))
 }
 
+/// The contact backup document.
+pub(super) async fn export_document<N: lepic_node::NodeApi + 'static>(
+    opened: &Opened<N>,
+) -> Result<String, CliError> {
+    Ok(opened.wallet.contact_book().contacts_export().await?)
+}
+
+/// Restores the pairing records of a contact backup document.
+pub(super) async fn import_document<N: lepic_node::NodeApi + 'static>(
+    opened: &Opened<N>,
+    document: String,
+) -> Result<ContactImportReport, CliError> {
+    let summary = opened
+        .wallet
+        .contact_book()
+        .contacts_import(document)
+        .await?;
+    Ok(ContactImportReport {
+        imported: summary.imported,
+        skipped_existing: summary.skipped_existing,
+        skipped_conflict: summary.skipped_conflict,
+    })
+}
+
 /// `lepic contact export`: writes the contact backup.
 async fn export<N: lepic_node::NodeApi + 'static>(
     opened: &Opened<N>,
     args: ContactExportArgs,
 ) -> Result<Report, CliError> {
-    let wallet = &opened.wallet;
-    let document = wallet.contact_book().contacts_export().await?;
+    let document = export_document(opened).await?;
     lepic_store::file::write_owner_only_atomic(&args.file, document.as_bytes())
         .map_err(CliError::io("write the contact backup"))?;
     Ok(Report::ContactExport(ContactExportReport {
@@ -919,15 +942,11 @@ async fn import<N: lepic_node::NodeApi + 'static>(
     opened: &Opened<N>,
     args: ContactImportArgs,
 ) -> Result<Report, CliError> {
-    let wallet = &opened.wallet;
     let document =
         std::fs::read_to_string(&args.file).map_err(CliError::io("read the contact backup"))?;
-    let summary = wallet.contact_book().contacts_import(document).await?;
-    Ok(Report::ContactImport(ContactImportReport {
-        imported: summary.imported,
-        skipped_existing: summary.skipped_existing,
-        skipped_conflict: summary.skipped_conflict,
-    }))
+    Ok(Report::ContactImport(
+        import_document(opened, document).await?,
+    ))
 }
 
 /// What `--kind` prints: the flag stays accepted for old scripts and changes nothing (ADR 0041).
