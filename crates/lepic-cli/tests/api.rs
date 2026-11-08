@@ -500,3 +500,122 @@ fn payload_routes_list_and_refuse_bad_input() {
         );
     });
 }
+
+/// A wallet created from new entropy, and its Epicbox address.
+fn receiver(host: &TestHost) -> (Instance, String) {
+    let receiver = Instance::new("receiver password");
+    receiver.run(host, &["wallet", "init"]).ok();
+    let address = receiver.run(host, &["wallet", "address"]).ok().json();
+    let address = support::text(&address, "address").to_owned();
+    (receiver, address)
+}
+
+#[test]
+fn sends_under_one_slate_id_make_one_transaction() {
+    let (host, wallet) = funded();
+    let (receiver, address) = receiver(&host);
+    let slate_id = "3f0c9a52-7d1e-4b6a-8c2f-5e9d0b1a7c46";
+    let body = format!(r#"{{"amount":"1","to":"{address}","slate_id":"{slate_id}"}}"#);
+
+    serving(host, &wallet, |socket, client| {
+        let send = || http(socket, "POST", "/v1/transactions", Some(&body)).ok();
+        let concurrent: Vec<Value> = std::thread::scope(|scope| {
+            let first = scope.spawn(send);
+            let second = scope.spawn(send);
+            vec![first.join().unwrap(), second.join().unwrap()]
+        });
+        assert_eq!(
+            concurrent[0]["tx_id"], concurrent[1]["tx_id"],
+            "{concurrent:?}"
+        );
+        let fresh: Vec<&Value> = concurrent
+            .iter()
+            .filter(|sent| sent["repeated"] == false)
+            .collect();
+        assert_eq!(fresh.len(), 1, "{concurrent:?}");
+        let sent = fresh[0].clone();
+        assert_eq!(sent["slate_id"], slate_id, "{sent}");
+        assert_eq!(sent["delivered"], true, "{sent}");
+
+        let again = send();
+        assert_eq!(again["repeated"], true, "{again}");
+        assert_eq!(again["tx_id"], sent["tx_id"], "{again}");
+        assert_eq!(again["amount"], sent["amount"], "{again}");
+
+        let list = http(socket, "GET", "/v1/transactions", None).ok();
+        let matching = list["transactions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|tx| tx["slate_id"] == slate_id)
+            .count();
+        assert_eq!(matching, 1, "{list}");
+        let drained = receiver.run(client, &["epicbox", "drain"]).ok().json();
+        assert_eq!(drained["received"], 1, "{drained}");
+    });
+}
+
+#[test]
+fn a_received_slate_is_answered_and_the_sender_finalizes_the_reply() {
+    let host = TestHost::new();
+    host.fund(SENDER_MNEMONIC, 0, FUNDING, 1);
+    let payer = Instance::new("payer password");
+    payer.restore(&host, SENDER_MNEMONIC);
+    let wallet = Instance::new("serving password");
+    wallet.run(&host, &["wallet", "init"]).ok();
+    let slate = payer.path("payment.slate");
+    let sent = payer
+        .run(
+            &host,
+            &["tx", "send", "1.5", "--to-file", slate.to_str().unwrap()],
+        )
+        .ok()
+        .json();
+    let body = serde_json::json!({ "slate": std::fs::read_to_string(&slate).unwrap() });
+
+    serving(host, &wallet, |socket, client| {
+        let received = http(
+            socket,
+            "POST",
+            "/v1/slates/receive",
+            Some(&body.to_string()),
+        )
+        .ok();
+        assert_eq!(received["slate_id"], sent["slate_id"], "{received}");
+        assert_eq!(received["amount"], "1.50000000", "{received}");
+        assert_eq!(received["repeated"], false, "{received}");
+        let reply = payer.path("payment.slate.response");
+        std::fs::write(&reply, support::text(&received, "slate")).unwrap();
+
+        let finalized = payer
+            .run(client, &["tx", "finalize", reply.to_str().unwrap()])
+            .ok()
+            .json();
+        assert_eq!(finalized["tx_id"], sent["tx_id"], "{finalized}");
+        assert_eq!(finalized["state"], "posted", "{finalized}");
+        assert_eq!(client.node.pushed_transactions().len(), 1);
+    });
+}
+
+#[test]
+fn the_password_route_re_encrypts_the_vault() {
+    let host = TestHost::new();
+    let wallet = Instance::new("serving password");
+    wallet.run(&host, &["wallet", "init"]).ok();
+
+    serving(host, &wallet, |socket, _| {
+        let body = r#"{"current_password":"serving password","new_password":"changed password"}"#;
+        let changed = http(socket, "PUT", "/v1/wallet/password", Some(body)).ok();
+        assert_eq!(changed, serde_json::json!({ "changed": true }));
+    });
+
+    let host = TestHost::new();
+    let old = wallet.run(&host, &["wallet", "address"]);
+    assert_eq!(old.code, 4, "{old:?}");
+    assert_eq!(old.json()["error"]["kind"], "wrong_password", "{old:?}");
+    let mut env = wallet.env();
+    env.retain(|(key, _)| key != "LEPIC_PASSWORD");
+    env.push(("LEPIC_PASSWORD".to_owned(), "changed password".to_owned()));
+    let address = wallet.run_with(&host, &["wallet", "address"], env, "");
+    assert_eq!(address.code, 0, "{address:?}");
+}

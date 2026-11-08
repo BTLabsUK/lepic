@@ -269,4 +269,23 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         assert_eq!(Clients::read(dir.path()).unwrap().clients().count(), 0);
     }
+
+    #[test]
+    fn the_fingerprint_of_a_vector_key_is_its_spki_sha256() {
+        let vectors = [
+            include_str!("../../../testdata/vectors/keys/api_tls_key_seed16.json"),
+            include_str!("../../../testdata/vectors/keys/api_tls_key_seed32.json"),
+        ];
+        for vector in vectors {
+            let vector: serde_json::Value = serde_json::from_str(vector).unwrap();
+            let expected = &vector["expected"];
+            let key = Fingerprint::parse(expected["public_key"].as_str().unwrap()).unwrap();
+            assert_eq!(
+                Fingerprint::of_ed25519_key(&key.0).to_string(),
+                expected["spki_sha256"].as_str().unwrap(),
+                "{}",
+                vector["name"]
+            );
+        }
+    }
 }

@@ -139,3 +139,47 @@ fn an_empty_new_password_is_refused() {
     );
     wallet.run(&host, &["wallet", "info"]).ok();
 }
+
+#[cfg(unix)]
+#[test]
+fn the_new_password_can_come_from_an_owner_only_file() {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let host = TestHost::new();
+    let wallet = Instance::new("old password");
+    wallet.run(&host, &["wallet", "init"]).ok();
+    let file = wallet.path("new-password");
+    let change = |path: &std::path::Path| {
+        let env = with_env(&wallet, "LEPIC_NEW_PASSWORD_FILE", path.to_str().unwrap());
+        wallet.run_with(&host, &["wallet", "password"], env, "")
+    };
+
+    let absent = change(&file);
+    assert_eq!(
+        (absent.code, error_kind(&absent).as_str()),
+        (3, "config"),
+        "{absent:?}"
+    );
+
+    std::fs::write(&file, "file password\n").unwrap();
+    std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o644)).unwrap();
+    let open = change(&file);
+    assert_eq!(
+        (open.code, error_kind(&open).as_str()),
+        (3, "config"),
+        "{open:?}"
+    );
+    wallet.run(&host, &["wallet", "address"]).ok();
+
+    std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o600)).unwrap();
+    let changed = change(&file);
+    assert_eq!(changed.json(), serde_json::json!({ "changed": true }));
+    assert!(!changed.stdout.contains("file password"), "{changed:?}");
+    assert!(!changed.stderr.contains("file password"), "{changed:?}");
+    let mut env = wallet.env();
+    env.retain(|(key, _)| key != "LEPIC_PASSWORD");
+    env.push(("LEPIC_PASSWORD".to_owned(), "file password".to_owned()));
+    wallet.run_with(&host, &["wallet", "address"], env, "").ok();
+    let old = wallet.run(&host, &["wallet", "address"]);
+    assert_eq!(old.code, 4, "{old:?}");
+}

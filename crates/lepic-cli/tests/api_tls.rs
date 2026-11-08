@@ -8,18 +8,22 @@
 
 mod support;
 
-use std::io::{Read as _, Write as _};
+use std::io::{BufRead as _, BufReader, Read as _, Write as _};
 use std::net::{SocketAddr, TcpStream};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::{Duration, Instant};
 
-use rcgen::{CertificateParams, KeyPair, PKCS_ED25519};
+use lepic_cli::app_config::ApiLimits;
+use rcgen::{CertificateParams, KeyPair, PKCS_ECDSA_P256_SHA256, PKCS_ED25519, SignatureAlgorithm};
 use rustls::pki_types::pem::PemObject as _;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer, ServerName};
 use rustls::{AlertDescription, ClientConfig, ClientConnection, RootCertStore, StreamOwned};
 use serde_json::Value;
-use support::{FUNDING, Instance, PATIENCE, Reply, SENDER_MNEMONIC, TestHost, http, parse_reply};
+use support::{
+    FUNDING, Instance, PATIENCE, Reply, SENDER_MNEMONIC, TestHost, http, parse_reply, wait_until,
+};
 
 /// The shipped settings with the TLS listener on a free local port.
 fn settings_with_owner_tls(wallet: &Instance) -> PathBuf {
@@ -108,7 +112,15 @@ struct ClientKey {
 }
 
 fn client_key(wallet: &Instance, name: &str) -> ClientKey {
-    let key = KeyPair::generate_for(&PKCS_ED25519).unwrap();
+    client_key_of(wallet, name, &PKCS_ED25519)
+}
+
+fn client_key_of(
+    wallet: &Instance,
+    name: &str,
+    algorithm: &'static SignatureAlgorithm,
+) -> ClientKey {
+    let key = KeyPair::generate_for(algorithm).unwrap();
     let certificate = CertificateParams::new(vec![name.to_owned()])
         .unwrap()
         .self_signed(&key)
@@ -131,15 +143,8 @@ impl Serving<'_> {
         self.wallet.run(self.host, &args).ok().json()
     }
 
-    /// One request over TLS as `client`, or with no client certificate; the connection
-    /// closes after the answer.
-    fn request(
-        &self,
-        client: Option<&ClientKey>,
-        method: &str,
-        path: &str,
-        body: &str,
-    ) -> std::io::Result<Reply> {
+    /// A TLS connection as `client`, or with no client certificate.
+    fn connect(&self, client: Option<&ClientKey>) -> std::io::Result<Tls> {
         let mut roots = RootCertStore::empty();
         roots.add(self.certificate.clone()).unwrap();
         let provider = Arc::new(rustls::crypto::ring::default_provider());
@@ -160,9 +165,21 @@ impl Serving<'_> {
         let connection = ClientConnection::new(Arc::new(config), name).unwrap();
         let tcp = TcpStream::connect(self.address)?;
         tcp.set_read_timeout(Some(PATIENCE))?;
-        let mut stream = StreamOwned::new(connection, tcp);
+        Ok(BufReader::new(StreamOwned::new(connection, tcp)))
+    }
+
+    /// One request over TLS as `client`, or with no client certificate; the connection
+    /// closes after the answer.
+    fn request(
+        &self,
+        client: Option<&ClientKey>,
+        method: &str,
+        path: &str,
+        body: &str,
+    ) -> std::io::Result<Reply> {
+        let mut stream = self.connect(client)?;
         write!(
-            stream,
+            stream.get_mut(),
             "{method} {path} HTTP/1.1\r\nHost: lepic\r\nContent-Type: application/json\r\n\
              Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
             body.len()
@@ -174,6 +191,71 @@ impl Serving<'_> {
 
     fn get(&self, client: Option<&ClientKey>, path: &str) -> std::io::Result<Reply> {
         self.request(client, "GET", path, "")
+    }
+
+    fn status(&self) -> Value {
+        http(self.socket, "GET", "/v1/status", None).ok()
+    }
+}
+
+type Tls = BufReader<StreamOwned<ClientConnection, TcpStream>>;
+
+/// A GET on `stream`, which stays open for the next request.
+fn keep_alive_get(stream: &mut Tls, path: &str) -> std::io::Result<Reply> {
+    write!(
+        stream.get_mut(),
+        "GET {path} HTTP/1.1\r\nHost: lepic\r\n\r\n"
+    )?;
+    let mut head = String::new();
+    loop {
+        let mut line = String::new();
+        if stream.read_line(&mut line)? == 0 {
+            return Err(std::io::ErrorKind::UnexpectedEof.into());
+        }
+        head.push_str(&line);
+        if line == "\r\n" {
+            break;
+        }
+    }
+    let length = head
+        .lines()
+        .find_map(|line| {
+            let (name, value) = line.split_once(':')?;
+            name.eq_ignore_ascii_case("content-length")
+                .then(|| value.trim().parse::<usize>().unwrap())
+        })
+        .unwrap();
+    let mut body = vec![0; length];
+    stream.read_exact(&mut body)?;
+    Ok(parse_reply(&format!(
+        "{head}{}",
+        String::from_utf8(body).unwrap()
+    )))
+}
+
+/// Checks that serve closed `stream`: a read ends, cleanly or with the TCP connection's end,
+/// before [`PATIENCE`].
+fn closed(stream: &mut Tls) {
+    let mut rest = Vec::new();
+    match stream.read_to_end(&mut rest) {
+        Ok(_) => assert!(rest.is_empty(), "{rest:?}"),
+        Err(error) => assert!(
+            !matches!(
+                error.kind(),
+                std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+            ),
+            "{error}"
+        ),
+    }
+}
+
+fn limits(max_connections: usize, header_timeout: Duration, tls_max_age: Duration) -> ApiLimits {
+    ApiLimits {
+        max_connections,
+        header_timeout,
+        body_timeout: PATIENCE,
+        max_body: 64 * 1024,
+        tls_max_age,
     }
 }
 
@@ -262,7 +344,7 @@ fn the_password_route_is_refused_over_tls() {
 
     serving(host, &wallet, |serve| {
         serve.client(&["add", "laptop", laptop.pem.to_str().unwrap()]);
-        let body = r#"{"current":"tls password","new":"other password"}"#;
+        let body = r#"{"current_password":"tls password","new_password":"other password"}"#;
         let reply = serve
             .request(Some(&laptop), "PUT", "/v1/wallet/password", body)
             .unwrap();
@@ -270,7 +352,149 @@ fn the_password_route_is_refused_over_tls() {
         assert_eq!(reply.json()["code"], "usage", "{reply:?}");
     });
     // The password is unchanged.
-    wallet.run(&TestHost::new(), &["wallet", "address"]).ok();
+    let host = TestHost::new();
+    wallet.run(&host, &["wallet", "address"]).ok();
+    let mut env = wallet.env();
+    env.retain(|(key, _)| key != "LEPIC_PASSWORD");
+    env.push(("LEPIC_PASSWORD".to_owned(), "other password".to_owned()));
+    let other = wallet.run_with(&host, &["wallet", "address"], env, "");
+    assert_eq!(other.code, 4, "{other:?}");
+}
+
+#[test]
+fn a_removed_client_is_refused_on_its_open_connection() {
+    let host = TestHost::new();
+    let wallet = funded_wallet(&host);
+    let laptop = client_key(&wallet, "laptop");
+
+    serving(host, &wallet, |serve| {
+        serve.client(&["add", "laptop", laptop.pem.to_str().unwrap()]);
+        let mut stream = serve.connect(Some(&laptop)).unwrap();
+        assert_eq!(
+            keep_alive_get(&mut stream, "/v1/wallet").unwrap().status,
+            200
+        );
+
+        serve.client(&["remove", "laptop"]);
+        let reply = keep_alive_get(&mut stream, "/v1/wallet").unwrap();
+        assert_eq!(reply.status, 403, "{reply:?}");
+        assert_eq!(reply.json()["code"], "usage", "{reply:?}");
+        assert_eq!(
+            reply.json()["detail"],
+            "this client is no longer listed",
+            "{reply:?}"
+        );
+        assert_eq!(reply.header("connection"), Some("close"), "{reply:?}");
+        closed(&mut stream);
+    });
+}
+
+#[test]
+fn the_tls_listener_has_its_own_connection_cap() {
+    let deadline = Duration::from_secs(2);
+    let mut host = TestHost::new();
+    host.api_limits = Some(limits(2, deadline, PATIENCE));
+    let wallet = funded_wallet(&host);
+    let laptop = client_key(&wallet, "laptop");
+
+    serving(host, &wallet, |serve| {
+        serve.client(&["add", "laptop", laptop.pem.to_str().unwrap()]);
+        let started = Instant::now();
+        let mut idle: Vec<TcpStream> = (0..2)
+            .map(|_| TcpStream::connect(serve.address).unwrap())
+            .collect();
+        // Both TLS slots are taken, so a third connection is closed unanswered; the socket
+        // still answers.
+        assert!(serve.get(Some(&laptop), "/v1/status").is_err());
+        let status = serve.status();
+        assert!(started.elapsed() < deadline, "{:?}", started.elapsed());
+        assert_eq!(status["requests"]["refused"], 1, "{status}");
+
+        for stream in &mut idle {
+            stream.set_read_timeout(Some(PATIENCE)).unwrap();
+            let mut rest = Vec::new();
+            let _ = stream.read_to_end(&mut rest);
+        }
+        assert!(started.elapsed() >= deadline, "{:?}", started.elapsed());
+        wait_until("both idle connections count as refused", || {
+            serve.status()["requests"]["refused"] == 3
+        });
+        assert_eq!(serve.get(Some(&laptop), "/v1/status").unwrap().status, 200);
+    });
+}
+
+#[test]
+fn a_tls_connection_closes_at_its_age_limit() {
+    let age = Duration::from_secs(1);
+    let mut host = TestHost::new();
+    host.api_limits = Some(limits(4, PATIENCE, age));
+    let wallet = funded_wallet(&host);
+    let laptop = client_key(&wallet, "laptop");
+
+    serving(host, &wallet, |serve| {
+        serve.client(&["add", "laptop", laptop.pem.to_str().unwrap()]);
+        let started = Instant::now();
+        let mut stream = serve.connect(Some(&laptop)).unwrap();
+        assert_eq!(
+            keep_alive_get(&mut stream, "/v1/status").unwrap().status,
+            200
+        );
+        closed(&mut stream);
+        assert!(started.elapsed() >= age, "{:?}", started.elapsed());
+        assert_eq!(serve.get(Some(&laptop), "/v1/status").unwrap().status, 200);
+    });
+}
+
+#[test]
+fn a_client_key_that_is_not_ed25519_is_refused_at_the_handshake() {
+    let host = TestHost::new();
+    let wallet = funded_wallet(&host);
+    let laptop = client_key_of(&wallet, "laptop", &PKCS_ECDSA_P256_SHA256);
+
+    serving(host, &wallet, |serve| {
+        refused(
+            serve.get(Some(&laptop), "/v1/wallet"),
+            AlertDescription::CertificateRequired,
+        );
+    });
+}
+
+#[test]
+fn a_send_over_tls_needs_a_slate_id() {
+    let host = TestHost::new();
+    let wallet = funded_wallet(&host);
+    let laptop = client_key(&wallet, "laptop");
+    let receiver = Instance::new("receiver password");
+    receiver.run(&host, &["wallet", "init"]).ok();
+    let address = receiver.run(&host, &["wallet", "address"]).ok().json();
+    let address = support::text(&address, "address").to_owned();
+
+    serving(host, &wallet, |serve| {
+        serve.client(&["add", "laptop", laptop.pem.to_str().unwrap()]);
+        let send = |body: &str| {
+            serve
+                .request(Some(&laptop), "POST", "/v1/transactions", body)
+                .unwrap()
+        };
+        let without = send(&format!(r#"{{"amount":"1","to":"{address}"}}"#));
+        assert_eq!(without.status, 400, "{without:?}");
+        assert_eq!(without.json()["code"], "usage", "{without:?}");
+        assert!(
+            without.json()["detail"]
+                .as_str()
+                .unwrap()
+                .contains("slate_id"),
+            "{without:?}"
+        );
+
+        let slate_id = "6b2d4f8a-1c3e-4a5b-9d7f-0e2c4a6b8d1f";
+        let with = send(&format!(
+            r#"{{"amount":"1","to":"{address}","slate_id":"{slate_id}"}}"#
+        ))
+        .ok();
+        assert_eq!(with["slate_id"], slate_id, "{with}");
+        assert_eq!(with["delivered"], true, "{with}");
+    });
 }
 
 #[test]
