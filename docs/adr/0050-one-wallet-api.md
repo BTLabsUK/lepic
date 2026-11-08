@@ -65,15 +65,23 @@ The connection proves who calls; no password, token or key travels in a request.
   credential, as for the Docker socket and Core Lightning's `lightning-rpc`. There are no
   certificates, tokens or cookie files to manage. A loopback TCP port would be reachable by every
   local user and by any web page through DNS rebinding; a socket is reachable by neither.
-- Remote, opt-in only: `serve --owner-tls` adds a TCP listener with mutual TLS 1.3. The wallet's
-  certificate key is an Ed25519 key derived as ADR 0033 lays out, under its own label
-  (`lepic-wallet api tls v1`), so a restored wallet keeps its identity and clients keep their
-  pin. The certificate is self-signed and carries the "no expiry" date of RFC 5280, so it never
-  needs renewing. Clients authenticate with their own Ed25519 certificate; the wallet accepts the
+- Remote, opt-in only: `serve --owner-tls` adds a TCP listener with mutual TLS 1.3 on the
+  address `[api] owner_tls` in `settings.toml` names. The wallet's certificate key is an Ed25519
+  key derived as ADR 0033 lays out, under its own label (`lepic-wallet api tls v1`), so a
+  restored wallet keeps its identity and clients keep their pin. Where the key comes from once
+  serve can hold several wallets, or none, is open with the process model; one function in
+  `serve` chooses it. The certificate is self-signed, issued to the name `lepic-wallet`, and
+  carries the "no expiry" date of RFC 5280, so it never needs renewing. serve writes it to
+  `api-tls.pem` in the data directory at each start; a client pins it (`curl --cacert
+  api-tls.pem` with that name, or `--pinnedpubkey`), and `GET /v1/status` reports its
+  fingerprint. Clients authenticate with their own Ed25519 certificate; the wallet accepts the
   keys listed in `api-clients` in the data directory, one name and SHA-256 key fingerprint per
   line, as `authorized_keys` does for SSH. `lepic api client add|list|remove` edits the file;
-  `serve` rereads it when it changes. Every client listed may call every owner route. An SSH
-  tunnel to the socket remains the alternative that needs no LEPIC configuration.
+  `serve` reads it at every handshake, so a removed client is refused from its next
+  connection. Session resumption is off, since a resumed session would skip that check. Every
+  client listed may call every owner route except those marked `x-socket-only` in the
+  document, which answer 403: the password change. An SSH tunnel to the socket remains the
+  alternative that needs no LEPIC configuration.
 - Payments: `serve --http [--internet] [--coinbase]` adds the payment listener on the wallet serve
   holds, answering `/v2/foreign` only, plain HTTP as other wallets send it, with its own limits.
 - Windows has no `serve` today. Its local transport will be a named pipe with an owner-only ACL;
@@ -94,9 +102,9 @@ layout.
 
 ### Bounds
 
-Each listener has a cap on connections in flight (extra ones are closed), a deadline for the
-request head and body, and a body size limit, set in `settings.toml` tuning as the HTTP listener's
-are. Owner work has no deadline: a scan or a send over a slow relay takes what it takes, and the
+The socket and the TLS listener share one cap on connections in flight (extra ones are closed),
+a deadline for the request head and body, and a body size limit, set in the `[api]` tuning as the
+HTTP listener's are. A TLS handshake has the head's deadline, and a failed one counts as refused. Owner work has no deadline: a scan or a send over a slow relay takes what it takes, and the
 client sets its own timeout. Connections are polled with `FuturesUnordered`; the accept back-off
 no longer sleeps in the main loop. The runtime stays single-threaded: every wallet call waits on
 one SQLite connection.
