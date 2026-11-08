@@ -59,11 +59,11 @@ use zeroize::Zeroizing;
 use crate::Console;
 use crate::amount::{format_amount, format_fee, format_units, parse_amount};
 use crate::cli::{
-    Command, DestinationArgs, EpicboxCommand, FinalizeArgs, HttpCommand, HttpListenArgs,
-    ImportHistoryArgs, ImportSeedArgs, InitArgs, InvoiceCommand, IssueArgs, ListingArgs,
-    NodeCommand, PayArgs, PostArgs, ReceiveArgs, ResendArgs, RestoreArgs, ScanArgs, SelectionArg,
-    SendArgs, SendDestinationArgs, SpendArgs, TorAddressArgs, TorBinaryArgs, TorCommand,
-    TorListenArgs, TxCommand, WalletCommand, WalletScanArgs, WordsArg,
+    ApiCommand, Command, DestinationArgs, EpicboxCommand, FinalizeArgs, HttpCommand,
+    HttpListenArgs, ImportHistoryArgs, ImportSeedArgs, InitArgs, InvoiceCommand, IssueArgs,
+    ListingArgs, NodeCommand, PayArgs, PostArgs, ReceiveArgs, ResendArgs, RestoreArgs, ScanArgs,
+    SelectionArg, SendArgs, SendDestinationArgs, SpendArgs, TorAddressArgs, TorBinaryArgs,
+    TorCommand, TorListenArgs, TxCommand, WalletCommand, WalletScanArgs, WordsArg,
 };
 use crate::exit::{CliError, ErrorKind};
 use crate::host::{Host, HostNode};
@@ -82,6 +82,7 @@ use crate::settings::{OutputFormat, Settings};
 use crate::stores::{CliStores, SharedStore};
 use crate::vault::{FileVault, VAULT_FILE};
 
+mod api_client;
 mod contact;
 mod profile;
 #[cfg(unix)]
@@ -201,6 +202,7 @@ impl<H: Host> Run<'_, H> {
             Command::Contact(args) => self.contact(args).await,
             Command::Profile(command) => self.profile(command).await,
             Command::Serve(args) => self.serve(args).await,
+            Command::Api(ApiCommand::Client(command)) => self.api_client(command),
         }
     }
 

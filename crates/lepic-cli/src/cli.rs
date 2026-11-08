@@ -146,6 +146,9 @@ pub enum Command {
     /// Hold the wallet open and answer the wallet API on a local socket
     #[command(after_help = SERVE_HELP)]
     Serve(ServeArgs),
+    /// Choose who may use the wallet API from another machine
+    #[command(subcommand)]
+    Api(ApiCommand),
 }
 
 const SERVE_HELP: &str = "\
@@ -153,7 +156,12 @@ Opens the wallet once, as other commands do, and holds the data directory until 
 listens on Epicbox, expires unpaid invoices, collects contact mailboxes and refreshes the wallet
 while it runs, and answers the wallet API, HTTP with JSON bodies, on a local socket: for example
 `curl --unix-socket SOCKET http://lepic/v1/status`. GET /v1/openapi.json describes every route.
-Only the user that runs it can use the socket. Ctrl-C or SIGTERM stops it.";
+Only the user that runs it can use the socket. Ctrl-C or SIGTERM stops it.
+
+With --owner-tls it also answers the owner routes over TLS on the address `[api] owner_tls` sets
+in settings.toml, to the clients `lepic api client add` lists. It writes its certificate to
+api-tls.pem in the data directory; clients trust that file, issued to `lepic-wallet`, and present
+their own certificate. Changing the password stays on the socket.";
 
 #[derive(Debug, Args)]
 #[command(
@@ -168,8 +176,45 @@ pub struct ServeArgs {
     /// Also answer payments sent over HTTP, as `lepic http listen` does
     #[arg(long)]
     pub http: bool,
+    /// Also answer the owner routes over TLS to the listed clients
+    #[arg(long)]
+    pub owner_tls: bool,
     #[command(flatten)]
     pub listen: HttpListenArgs,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum ApiCommand {
+    /// List, add and remove the clients `serve --owner-tls` accepts
+    #[command(subcommand)]
+    Client(ApiClientCommand),
+}
+
+#[derive(Debug, Subcommand)]
+pub enum ApiClientCommand {
+    /// Accept a client by the key of its certificate
+    #[command(after_help = "\
+Lists the SHA-256 of the certificate's public key in api-clients in the data directory. The key \
+must be Ed25519. A running serve reads the file at each connection.")]
+    Add(ApiClientAddArgs),
+    /// List the accepted clients
+    List,
+    /// Stop accepting a client, from its next connection
+    Remove(ApiClientNameArg),
+}
+
+#[derive(Debug, Args)]
+pub struct ApiClientAddArgs {
+    /// Name to list the client under: letters, digits, `.`, `-` and `_`
+    pub name: String,
+    /// The client's certificate, PEM
+    pub certificate: PathBuf,
+}
+
+#[derive(Debug, Args)]
+pub struct ApiClientNameArg {
+    /// Name the client is listed under
+    pub name: String,
 }
 
 #[derive(Debug, Subcommand)]

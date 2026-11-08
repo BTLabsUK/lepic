@@ -79,6 +79,9 @@ pub enum Report {
     ContactPayloadList(ContactPayloadListReport),
     ContactPayloadAck(ContactPayloadAckReport),
     ContactQuarantine(ContactQuarantineReport),
+    ApiClientAdd(ApiClientReport),
+    ApiClientList(ApiClientListReport),
+    ApiClientRemove(ApiClientReport),
 }
 
 #[derive(Serialize)]
@@ -772,6 +775,20 @@ pub struct ContactPayloadAckReport {
     pub acknowledged: usize,
 }
 
+/// A client of the owner TLS listener.
+#[derive(Debug, Serialize)]
+pub struct ApiClientReport {
+    pub name: String,
+    /// The SHA-256 of the client certificate's public key info, in hex.
+    pub fingerprint: String,
+}
+
+/// The clients the owner TLS listener accepts, in file order.
+#[derive(Debug, Serialize)]
+pub struct ApiClientListReport {
+    pub clients: Vec<ApiClientReport>,
+}
+
 /// What `serve` did before it was stopped.
 #[derive(Debug, Serialize)]
 pub struct ServeReport {
@@ -805,6 +822,18 @@ pub struct ServeStatusReport {
     /// The HTTP listener; absent without `--http`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub http: Option<ServeHttpStatus>,
+    /// The owner TLS listener; absent without `--owner-tls`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub owner_tls: Option<OwnerTlsStatus>,
+}
+
+/// The owner TLS listener of a running `serve --owner-tls`.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct OwnerTlsStatus {
+    /// The address it listens on, `ip:port`.
+    pub address: String,
+    /// The SHA-256 of the certificate's public key info, in hex, which clients pin.
+    pub fingerprint: String,
 }
 
 /// The API's requests since serve started.
@@ -814,7 +843,8 @@ pub struct RequestsReport {
     pub served: u64,
     /// Requests being answered now; an event stream counts while it is open.
     pub in_flight: u64,
-    /// Connections closed unanswered: over the connection cap, or from another user.
+    /// Connections closed unanswered: over the connection cap, from another user, or with a
+    /// failed TLS handshake.
     pub refused: u64,
 }
 
@@ -1236,6 +1266,13 @@ fn write_human(out: &mut Vec<u8>, report: &Report) -> std::io::Result<()> {
         | Report::ContactPayloadList(_)
         | Report::ContactPayloadAck(_)
         | Report::ContactQuarantine(_) => write_contact_human(out, report),
+        Report::ApiClientAdd(r) => writeln!(out, "Client {} added: {}", r.name, r.fingerprint),
+        Report::ApiClientRemove(r) => writeln!(out, "Client {} removed.", r.name),
+        Report::ApiClientList(r) if r.clients.is_empty() => writeln!(out, "No clients."),
+        Report::ApiClientList(r) => r
+            .clients
+            .iter()
+            .try_for_each(|client| writeln!(out, "{}  {}", client.name, client.fingerprint)),
     }
 }
 
@@ -2734,6 +2771,17 @@ mod tests {
             (
                 Report::ContactQuarantine(ContactQuarantineReport { messages: vec![] }),
                 vec!["messages"],
+            ),
+            (
+                Report::ApiClientAdd(ApiClientReport {
+                    name: text("n"),
+                    fingerprint: text("f"),
+                }),
+                vec!["fingerprint", "name"],
+            ),
+            (
+                Report::ApiClientList(ApiClientListReport { clients: vec![] }),
+                vec!["clients"],
             ),
             (
                 Report::ContactPayloadList(ContactPayloadListReport { payloads: vec![] }),

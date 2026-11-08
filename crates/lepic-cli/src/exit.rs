@@ -223,6 +223,33 @@ pub enum CliError {
     SocketPathTaken { path: std::path::PathBuf },
     #[error("lepic serve needs unix sockets, which this system does not offer")]
     ServiceUnsupported,
+    #[error("serve --owner-tls needs an address: set `[api] owner_tls` in settings.toml")]
+    OwnerTlsNotConfigured,
+    #[error("the owner TLS listener could not start on {address}")]
+    OwnerTlsListen {
+        address: std::net::SocketAddr,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("the owner TLS certificate could not be made")]
+    OwnerTlsCertificate(#[source] rcgen::Error),
+    #[error("the owner TLS configuration was refused")]
+    OwnerTlsConfig(#[source] rustls::Error),
+    #[error("a client name is 1 to 64 letters, digits, '.', '-' or '_'")]
+    ApiClientName,
+    #[error("{} is not a PEM certificate with an Ed25519 key", path.display())]
+    ApiClientCertificate { path: std::path::PathBuf },
+    #[error("client {name} is listed with this name or key already")]
+    ApiClientListed { name: String },
+    #[error("no client is named {name}")]
+    ApiClientNotFound { name: String },
+    #[error("{} line {line} is not `<name> <sha256 hex>`", path.display())]
+    ApiClientsInvalid {
+        path: std::path::PathBuf,
+        line: usize,
+    },
+    #[error("{} is over 64 KiB", path.display())]
+    ApiClientsTooLarge { path: std::path::PathBuf },
 }
 
 impl CliError {
@@ -235,6 +262,9 @@ impl CliError {
             Self::Settings(_)
             | Self::Telemetry(_)
             | Self::SharedDataDir
+            | Self::OwnerTlsNotConfigured
+            | Self::ApiClientsInvalid { .. }
+            | Self::ApiClientsTooLarge { .. }
             | Self::Secret(
                 SecretError::PasswordFileOpen { .. }
                 | SecretError::PasswordFileEmpty { .. }
@@ -262,13 +292,17 @@ impl CliError {
             | Self::SocketPathTooLong { .. }
             | Self::SocketPathTaken { .. }
             | Self::ServiceUnsupported
+            | Self::ApiClientName
+            | Self::ApiClientCertificate { .. }
+            | Self::ApiClientListed { .. }
             | Self::TorBinaryNeeded => ErrorKind::Usage,
             Self::Contact(error) => contact_kind(error),
             Self::Tor(failure) if failure.kind == lepic_tor::FailureKind::Missing => {
                 ErrorKind::Config
             }
             Self::Tor(_) => ErrorKind::Transport,
-            Self::HttpListen(_) => ErrorKind::Transport,
+            Self::HttpListen(_) | Self::OwnerTlsListen { .. } => ErrorKind::Transport,
+            Self::ApiClientNotFound { .. } => ErrorKind::NotFound,
             Self::HttpReplyLost { .. } => ErrorKind::Incomplete,
             Self::Wallet(error) => wallet_kind(error),
             Self::DataDirInUse => ErrorKind::WalletState,
@@ -294,6 +328,8 @@ impl CliError {
             | Self::Store(_)
             | Self::Registry(_)
             | Self::SasTable
+            | Self::OwnerTlsCertificate(_)
+            | Self::OwnerTlsConfig(_)
             | Self::Io { .. } => ErrorKind::Internal,
         }
     }
@@ -689,6 +725,13 @@ mod tests {
             (CliError::PayloadId, ErrorKind::Usage),
             (CliError::PayloadHex, ErrorKind::Usage),
             (CliError::DomainNotConfigured, ErrorKind::Usage),
+            (CliError::OwnerTlsNotConfigured, ErrorKind::Config),
+            (
+                CliError::ApiClientNotFound {
+                    name: "laptop".to_owned(),
+                },
+                ErrorKind::NotFound,
+            ),
             (CliError::NotRandomSlateId, ErrorKind::Usage),
             (CliError::SlateIdReused { tx_id: 1 }, ErrorKind::Rejected),
             (CliError::NoSendWithSlate, ErrorKind::NotFound),
