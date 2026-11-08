@@ -331,7 +331,6 @@ function renderProblemInto(container, what, error) {
 
 // Transactions and outputs
 
-let canCancel = false;
 
 function stateChip(text) {
   return el("span", { class: "state", text: text || "–" });
@@ -432,7 +431,7 @@ async function openTransaction(id) {
     if (openTxId !== id) return;
     const pairs = Object.entries(tx).map(([k, v]) => [words(k), detailValue(k, v)]);
     replace($("tx-dialog-body"), el("dl", { class: "kv" }, kv(pairs)));
-    $("tx-dialog-actions").hidden = !canCancel;
+    $("tx-dialog-actions").hidden = false;
   } catch (error) {
     if (openTxId !== id) return;
     replace($("tx-dialog-body"), el("p", { class: "empty", text: `Could not load the transaction: ${error.message}` }));
@@ -595,24 +594,13 @@ async function refreshDetails() {
   }));
 }
 
-async function refreshDocument() {
-  try {
-    const document_ = await api("/v1/openapi.json");
-    const paths = document_.paths || {};
-    canCancel = Object.entries(paths).some(([path, item]) =>
-      /^\/v1\/transactions\/\{[^}]+\}\/cancel$/.test(path) && item && item.post);
-  } catch {
-    canCancel = false;
-  }
-}
-
 function scheduleDetails() {
   clearTimeout(detailsTimer);
   detailsTimer = setTimeout(refreshDetails, AFTER_EVENT_MS);
 }
 
 async function refreshAll() {
-  await Promise.all([refreshStatus(), refreshDetails(), refreshDocument()]);
+  await Promise.all([refreshStatus(), refreshDetails()]);
 }
 
 setInterval(refreshStatus, STATUS_EVERY_MS);

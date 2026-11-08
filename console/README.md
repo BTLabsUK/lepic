@@ -31,8 +31,7 @@ Open <http://127.0.0.1:7421/>. Flags:
   header equal to the console's own origin. Other origins and an absent origin get 403.
 - A fixed list of API routes under `/api`: the status, wallet, address, outputs,
   transactions, transaction detail, node, event stream and OpenAPI document reads, and the
-  cancel of one transaction. Cancel is forwarded only when serve's own document lists the
-  route. Nothing else is proxied.
+  cancel of one transaction. Nothing else is proxied.
 - Every response carries a Content-Security-Policy that allows scripts, styles and
   connections from the console itself only, with no frames and no forms. There are no CORS
   headers and nothing is loaded from the internet.

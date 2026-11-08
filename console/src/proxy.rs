@@ -11,7 +11,7 @@ use hyper::{Method, Request, Response, StatusCode};
 use hyper_util::rt::TokioIo;
 use tokio::net::UnixStream;
 
-use crate::policy::{self, Allowed, Refusal};
+use crate::policy::{self, Refusal};
 
 const INDEX: &str = include_str!("../ui/index.html");
 const STYLE: &str = include_str!("../ui/console.css");
@@ -112,42 +112,16 @@ impl Console {
     }
 
     async fn api(&self, method: &Method, path: &str, query: Option<&str>) -> Response<Body> {
-        let forwarded = match policy::allowed(method, path) {
-            None => {
-                return problem(
-                    StatusCode::NOT_FOUND,
-                    "not_found",
-                    "the console does not proxy this route",
-                );
-            }
-            Some(Allowed::Read) => self.forward(method, path, query).await,
-            Some(Allowed::Cancel) => match self.serve_lists_cancel().await {
-                Ok(true) => self.forward(method, path, query).await,
-                Ok(false) => {
-                    return problem(
-                        StatusCode::NOT_FOUND,
-                        "not_found",
-                        "this serve has no cancel route",
-                    );
-                }
-                Err(error) => Err(error),
-            },
-        };
-        forwarded.unwrap_or_else(|error| self.unreachable(&error))
-    }
-
-    /// Reads serve's document and looks for the cancel route, each time it is asked for, so
-    /// a serve upgraded in place is seen without restarting the console.
-    async fn serve_lists_cancel(&self) -> Result<bool, Unreachable> {
-        let response = self.forward(&Method::GET, "/v1/openapi.json", None).await?;
-        let body = response
-            .into_body()
-            .collect()
+        if !policy::allowed(method, path) {
+            return problem(
+                StatusCode::NOT_FOUND,
+                "not_found",
+                "the console does not proxy this route",
+            );
+        }
+        self.forward(method, path, query)
             .await
-            .map_err(Unreachable::Http)?
-            .to_bytes();
-        let document: serde_json::Value = serde_json::from_slice(&body).unwrap_or_default();
-        Ok(policy::lists_cancel(&document))
+            .unwrap_or_else(|error| self.unreachable(&error))
     }
 
     /// Sends the request to serve on a fresh connection and streams its answer back, so an

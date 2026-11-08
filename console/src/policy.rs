@@ -4,7 +4,6 @@
 
 use hyper::Method;
 use hyper::header::{self, HeaderMap};
-use serde_json::Value;
 
 /// Why a request is refused before it is routed.
 #[derive(Debug, PartialEq, Eq)]
@@ -33,15 +32,6 @@ pub(crate) fn admit(listen: &str, method: &Method, headers: &HeaderMap) -> Resul
     }
 }
 
-/// An API route the page may call.
-#[derive(Debug, PartialEq, Eq)]
-pub(crate) enum Allowed {
-    /// Forwarded as it is.
-    Read,
-    /// The cancel of one transaction: forwarded when serve's document lists the route.
-    Cancel,
-}
-
 const READS: &[&str] = &[
     "/v1/status",
     "/v1/wallet",
@@ -53,16 +43,15 @@ const READS: &[&str] = &[
     "/v1/openapi.json",
 ];
 
-/// The route `method` and `path` (without its query) name, when the page may call it.
-pub(crate) fn allowed(method: &Method, path: &str) -> Option<Allowed> {
+/// Whether the page may call the route `method` and `path` (without its query) name.
+pub(crate) fn allowed(method: &Method, path: &str) -> bool {
     let under_transaction = path
         .strip_prefix("/v1/transactions/")
         .map(|rest| rest.split('/').collect::<Vec<_>>());
     match (method.as_str(), under_transaction.as_deref()) {
-        ("GET", None) if READS.contains(&path) => Some(Allowed::Read),
-        ("GET", Some([id])) if is_tx_id(id) => Some(Allowed::Read),
-        ("POST", Some([id, "cancel"])) if is_tx_id(id) => Some(Allowed::Cancel),
-        _ => None,
+        ("GET", None) => READS.contains(&path),
+        ("GET", Some([id])) | ("POST", Some([id, "cancel"])) => is_tx_id(id),
+        _ => false,
     }
 }
 
@@ -70,30 +59,9 @@ fn is_tx_id(text: &str) -> bool {
     !text.is_empty() && text.bytes().all(|byte| byte.is_ascii_digit())
 }
 
-/// Whether serve's OpenAPI document lists a POST under `/v1/transactions/{...}/cancel`.
-pub(crate) fn lists_cancel(document: &Value) -> bool {
-    let paths = document.get("paths").and_then(Value::as_object);
-    paths.is_some_and(|paths| {
-        paths
-            .iter()
-            .any(|(path, item)| is_cancel_template(path) && item.get("post").is_some())
-    })
-}
-
-fn is_cancel_template(path: &str) -> bool {
-    let segments = path
-        .strip_prefix("/v1/transactions/")
-        .map(|rest| rest.split('/').collect::<Vec<_>>());
-    matches!(
-        segments.as_deref(),
-        Some([param, "cancel"]) if param.starts_with('{') && param.ends_with('}')
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use hyper::header::HeaderValue;
-    use serde_json::json;
 
     use super::*;
 
@@ -170,12 +138,9 @@ mod tests {
     #[test]
     fn only_the_listed_reads_pass() {
         for path in READS {
-            assert_eq!(allowed(&Method::GET, path), Some(Allowed::Read), "{path}");
+            assert!(allowed(&Method::GET, path), "{path}");
         }
-        assert_eq!(
-            allowed(&Method::GET, "/v1/transactions/12"),
-            Some(Allowed::Read)
-        );
+        assert!(allowed(&Method::GET, "/v1/transactions/12"));
         for path in [
             "/v1/methods",
             "/v1/wallet/password",
@@ -189,16 +154,13 @@ mod tests {
             "/V1/status",
             "/",
         ] {
-            assert_eq!(allowed(&Method::GET, path), None, "{path}");
+            assert!(!allowed(&Method::GET, path), "{path}");
         }
     }
 
     #[test]
     fn the_only_write_is_cancel() {
-        assert_eq!(
-            allowed(&Method::POST, "/v1/transactions/7/cancel"),
-            Some(Allowed::Cancel)
-        );
+        assert!(allowed(&Method::POST, "/v1/transactions/7/cancel"));
         for (method, path) in [
             (Method::POST, "/v1/transactions"),
             (Method::POST, "/v1/transactions/7"),
@@ -209,21 +171,7 @@ mod tests {
             (Method::PUT, "/v1/wallet/password"),
             (Method::POST, "/v1/status"),
         ] {
-            assert_eq!(allowed(&method, path), None, "{method} {path}");
+            assert!(!allowed(&method, path), "{method} {path}");
         }
-    }
-
-    #[test]
-    fn cancel_is_found_in_the_document_by_its_shape() {
-        let with = json!({"paths": {"/v1/transactions/{tx_id}/cancel": {"post": {}}}});
-        assert!(lists_cancel(&with));
-        let other_name = json!({"paths": {"/v1/transactions/{id}/cancel": {"post": {}}}});
-        assert!(lists_cancel(&other_name));
-        let get_only = json!({"paths": {"/v1/transactions/{tx_id}/cancel": {"get": {}}}});
-        assert!(!lists_cancel(&get_only));
-        let without = json!({"paths": {"/v1/transactions/{tx_id}": {"get": {}}}});
-        assert!(!lists_cancel(&without));
-        assert!(!lists_cancel(&json!({})));
-        assert!(!lists_cancel(&json!(null)));
     }
 }
