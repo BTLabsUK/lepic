@@ -273,3 +273,143 @@ fn with_body(status: StatusCode, content_type: &'static str, body: String) -> Re
         .insert(header::CONTENT_TYPE, HeaderValue::from_static(content_type));
     response
 }
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::indexing_slicing)]
+mod tests {
+    use std::sync::{Arc, Mutex};
+
+    use hyper::server::conn::http1;
+    use hyper::service::service_fn;
+    use tokio::net::UnixListener;
+
+    use super::*;
+
+    const LISTEN: &str = "127.0.0.1:7421";
+    const TOKEN: &str = "0123456789abcdef";
+    const COOKIE: &str = "lepic-console=0123456789abcdef";
+    const SERVE_BODY: &str = r#"{"state":"running"}"#;
+
+    /// A directory under the temp dir that is removed when the test ends.
+    struct Scratch(PathBuf);
+
+    impl Drop for Scratch {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(self.0.join("serve.sock"));
+            let _ = std::fs::remove_dir(&self.0);
+        }
+    }
+
+    /// Serves a fixed JSON body on a Unix socket and records the path of every request.
+    async fn stand_in(name: &str) -> (Console, Arc<Mutex<Vec<String>>>, Scratch) {
+        let dir = std::env::temp_dir().join(format!("lepic-console-{name}-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let scratch = Scratch(dir.clone());
+        let socket = dir.join("serve.sock");
+        let listener = UnixListener::bind(&socket).unwrap();
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let recorded = Arc::clone(&seen);
+        tokio::spawn(async move {
+            while let Ok((stream, _)) = listener.accept().await {
+                let recorded = Arc::clone(&recorded);
+                tokio::spawn(async move {
+                    let service = service_fn(move |request: Request<hyper::body::Incoming>| {
+                        let recorded = Arc::clone(&recorded);
+                        async move {
+                            let path = request
+                                .uri()
+                                .path_and_query()
+                                .map(ToString::to_string)
+                                .unwrap_or_default();
+                            recorded.lock().unwrap().push(path);
+                            let mut response = Response::new(Full::new(Bytes::from(SERVE_BODY)));
+                            response.headers_mut().insert(
+                                header::CONTENT_TYPE,
+                                HeaderValue::from_static("application/json"),
+                            );
+                            Ok::<_, hyper::Error>(response)
+                        }
+                    });
+                    let _ = http1::Builder::new()
+                        .serve_connection(TokioIo::new(stream), service)
+                        .await;
+                });
+            }
+        });
+        let console = Console::new(LISTEN.to_owned(), socket, TOKEN.to_owned());
+        (console, seen, scratch)
+    }
+
+    fn get(uri: &str, cookie: Option<&str>) -> Request<Empty<Bytes>> {
+        let mut builder = Request::builder().method(Method::GET).uri(uri);
+        builder = builder.header(header::HOST, LISTEN);
+        if let Some(cookie) = cookie {
+            builder = builder.header(header::COOKIE, cookie);
+        }
+        builder.body(Empty::new()).unwrap()
+    }
+
+    async fn body_of(response: Response<Body>) -> String {
+        let bytes = response.into_body().collect().await.unwrap().to_bytes();
+        String::from_utf8(bytes.to_vec()).unwrap()
+    }
+
+    #[tokio::test]
+    async fn an_allowed_route_is_forwarded_to_serve() {
+        let (console, seen, _scratch) = stand_in("forward").await;
+        let response = console
+            .answer(get("/api/v1/status?verbose=1", Some(COOKIE)))
+            .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(body_of(response).await, SERVE_BODY);
+        assert_eq!(*seen.lock().unwrap(), ["/v1/status?verbose=1"]);
+    }
+
+    #[tokio::test]
+    async fn a_route_off_the_list_is_not_forwarded() {
+        let (console, seen, _scratch) = stand_in("unlisted").await;
+        let response = console.answer(get("/api/v1/nothing", Some(COOKIE))).await;
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        assert!(seen.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_request_without_the_cookie_is_not_forwarded() {
+        let (console, seen, _scratch) = stand_in("nocookie").await;
+        let api = console.answer(get("/api/v1/status", None)).await;
+        assert_eq!(api.status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(
+            body_of(api).await,
+            "open the console with the link lepic-console printed"
+        );
+        let page = console.answer(get("/", None)).await;
+        assert_eq!(page.status(), StatusCode::UNAUTHORIZED);
+        let wrong = console
+            .answer(get("/api/v1/status", Some("lepic-console=nope")))
+            .await;
+        assert_eq!(wrong.status(), StatusCode::UNAUTHORIZED);
+        assert!(seen.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn the_printed_link_sets_the_cookie() {
+        let (console, _seen, _scratch) = stand_in("link").await;
+        let response = console.answer(get(&format!("/?token={TOKEN}"), None)).await;
+        assert_eq!(response.status(), StatusCode::SEE_OTHER);
+        assert_eq!(response.headers()[header::LOCATION], "/");
+        assert_eq!(
+            response.headers()[header::SET_COOKIE],
+            "lepic-console=0123456789abcdef; HttpOnly; SameSite=Strict; Path=/"
+        );
+        let page = console.answer(get("/", Some(COOKIE))).await;
+        assert_eq!(page.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn a_wrong_token_in_the_link_gets_no_cookie() {
+        let (console, _seen, _scratch) = stand_in("wrong").await;
+        let response = console.answer(get("/?token=0123456789abcdee", None)).await;
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        assert!(response.headers().get(header::SET_COOKIE).is_none());
+    }
+}
