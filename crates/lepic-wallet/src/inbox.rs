@@ -872,7 +872,8 @@ where
             ) if marked => match self.answer_withdrawn_payment(method, tx_id, payment).await {
                 Ok(()) => Err(Refusal::Invoice(error).into()),
                 Err(hold)
-                    if reply_is_permanent(&**method, &hold)
+                    if matches!(hold, Hold::Withheld)
+                        || reply_is_permanent(&**method, &hold)
                         || self.hold_exhausted(msg_id, attempt).await? =>
                 {
                     warn!(tx_id = %tx_id, error = %ErrorChain(&hold), "withdrawn notice undelivered");

@@ -34,7 +34,7 @@ use std::time::Duration;
 use tokio::sync::broadcast::Receiver;
 
 use uuid::Uuid;
-use world::{World, pay_request};
+use world::{PortsMethods, World, pay_request};
 
 /// Tries of a held message in one listen, as the inbox bounds them.
 const MAX_HOLD_ATTEMPTS: usize = 3;
@@ -397,6 +397,34 @@ fn a_withdrawn_answer_the_relay_refuses_settles_the_payment_at_once() {
         }
     );
     assert!(!world.withdrawn_answered(issued.slate_id));
+}
+
+/// The issuer's ports hold an Epicbox method that sends no notices, so its answer to the payment
+/// of an invoice it withdrew offline is withheld: the payment is refused for good at once, as
+/// the cancelled branch of an ordinary payment's completion refuses it, and is not held.
+#[test]
+fn a_withheld_answer_to_a_payment_of_a_withdrawn_invoice_settles_the_payment_at_once() {
+    let world = World::with_issuer_methods(PortsMethods::Silent);
+    world.settle_one_invoice();
+    world.payer.fund(10, world::FUNDING);
+    let issued = world.issue(None);
+    world.drain_payer_invoices();
+    world.pay(&issued);
+    world.relay.set_refusing(true);
+    world
+        .block_on(world.issuer.wallet.cancel(issued.tx_id))
+        .unwrap();
+    world.relay.set_refusing(false);
+
+    let summary = world.drain_issuer();
+
+    assert_eq!(
+        (summary.finalized, summary.rejected, summary.held),
+        (0, 1, 0)
+    );
+    assert_eq!(world.relay.pending(&world.issuer.address), 0);
+    assert!(!world.withdrawn_answered(issued.slate_id));
+    assert_eq!(world.drain_payer_invoices().notices, 0);
 }
 
 /// The payer pays an invoice that the issuer then withdraws while it cannot reach the relay, and

@@ -177,11 +177,42 @@ impl StoreOpener for CountingStores {
 }
 
 /// The Epicbox transport as the wallet's registry holds it, recording where each delivery went,
-/// and failing every delivery while a test asks.
+/// and failing every delivery while a test asks. Without `notices` it sends none.
 struct RecordingEpicbox {
     inner: Epicbox,
     delivered_to: Arc<Mutex<Vec<String>>>,
     failing: Arc<AtomicBool>,
+    notices: bool,
+}
+
+/// What a party's ports hold as [`Ports::methods`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PortsMethods {
+    /// A registry of the party's recording Epicbox method.
+    Recording,
+    /// A registry of a method with the Epicbox id that sends no notices.
+    Silent,
+    /// A registry with no method in it.
+    Empty,
+    /// No registry.
+    Absent,
+}
+
+/// A second recording instance of a party's Epicbox method, with the same id as the one its
+/// ports hold, for a test to hand the engine as the method a message arrived over.
+pub struct Recorder {
+    pub method: Arc<dyn Method>,
+    delivered_to: Arc<Mutex<Vec<String>>>,
+}
+
+impl Recorder {
+    /// The destinations the engine handed this instance, oldest first.
+    pub fn delivered_to(&self) -> Vec<String> {
+        self.delivered_to
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
 }
 
 impl Transport for RecordingEpicbox {
@@ -231,7 +262,11 @@ impl Method for RecordingEpicbox {
     }
 
     fn notice_lengths(&self) -> &'static [usize] {
-        self.inner.notice_lengths()
+        if self.notices {
+            self.inner.notice_lengths()
+        } else {
+            &[]
+        }
     }
 
     fn peer_key(&self, network: Network, address: &str) -> Result<String, TransportError> {
@@ -338,14 +373,15 @@ impl Party {
             profile,
             None,
             WalletPolicy::default(),
+            PortsMethods::Recording,
             node,
             relay,
             runtime,
         )
     }
 
-    /// As [`Self::with_profile`], the wallet claiming `domain` in the cards it sends and
-    /// configured with `policy`.
+    /// As [`Self::with_profile`], the wallet claiming `domain` in the cards it sends,
+    /// configured with `policy` and with `methods` in its ports.
     #[allow(clippy::too_many_arguments)]
     fn with_domain(
         mnemonic: &str,
@@ -354,6 +390,7 @@ impl Party {
         profile: u16,
         domain: Option<&str>,
         policy: WalletPolicy,
+        methods: PortsMethods,
         node: &MockNode,
         relay: &MockRelay,
         runtime: &tokio::runtime::Runtime,
@@ -365,7 +402,19 @@ impl Party {
             inner: epicbox.clone(),
             delivered_to: Arc::clone(&delivered_to),
             failing: Arc::clone(&deliveries_failing),
+            notices: true,
         });
+        let methods = match methods {
+            PortsMethods::Recording => Some(registry([Arc::clone(&method)])),
+            PortsMethods::Silent => Some(registry([Arc::new(RecordingEpicbox {
+                inner: epicbox.clone(),
+                delivered_to: Arc::clone(&delivered_to),
+                failing: Arc::clone(&deliveries_failing),
+                notices: false,
+            }) as Arc<dyn Method>])),
+            PortsMethods::Empty => Some(registry([])),
+            PortsMethods::Absent => None,
+        };
         let stores = CountingStores::default();
         let clock = TestClock(Arc::new(Mutex::new(fixed_time())));
         let data_dir = PathBuf::from(format!("/{name}"));
@@ -376,7 +425,7 @@ impl Party {
             clock: Arc::new(clock.clone()),
             rng: SharedRng::new(StdRng::seed_from_u64(seed_rng)),
             runtime: runtime.handle().clone(),
-            methods: Some(registry([Arc::clone(&method)])),
+            methods,
         };
         let config = WalletConfig {
             name: WalletName::new(name).unwrap(),
@@ -456,6 +505,21 @@ impl Party {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .clone()
+    }
+
+    /// A second recording instance of the wallet's Epicbox method, apart from the one its ports
+    /// hold.
+    pub fn recorder(&self) -> Recorder {
+        let delivered_to = Arc::default();
+        Recorder {
+            method: Arc::new(RecordingEpicbox {
+                inner: self.epicbox.clone(),
+                delivered_to: Arc::clone(&delivered_to),
+                failing: Arc::default(),
+                notices: true,
+            }),
+            delivered_to,
+        }
     }
 
     /// Makes every delivery through the registered transport fail as an unreachable relay
@@ -581,17 +645,30 @@ impl World {
             (payer, None),
             WalletPolicy::default(),
             WalletPolicy::default(),
+            PortsMethods::Recording,
         )
     }
 
     /// As [`Self::new`], the issuer's wallet configured with `policy`.
     pub fn with_issuer_policy(policy: WalletPolicy) -> Self {
-        Self::with_parties((0, None), (0, None), policy, WalletPolicy::default())
+        Self::with_parties(
+            (0, None),
+            (0, None),
+            policy,
+            WalletPolicy::default(),
+            PortsMethods::Recording,
+        )
     }
 
     /// As [`Self::new`], the payer's wallet configured with `policy`.
     pub fn with_payer_policy(policy: WalletPolicy) -> Self {
-        Self::with_parties((0, None), (0, None), WalletPolicy::default(), policy)
+        Self::with_parties(
+            (0, None),
+            (0, None),
+            WalletPolicy::default(),
+            policy,
+            PortsMethods::Recording,
+        )
     }
 
     /// As [`Self::new`], the issuer's wallet claiming the domain `issuer` and the payer's the
@@ -602,6 +679,18 @@ impl World {
             (0, payer),
             WalletPolicy::default(),
             WalletPolicy::default(),
+            PortsMethods::Recording,
+        )
+    }
+
+    /// As [`Self::new`], the issuer's ports holding `methods`.
+    pub fn with_issuer_methods(methods: PortsMethods) -> Self {
+        Self::with_parties(
+            (0, None),
+            (0, None),
+            WalletPolicy::default(),
+            WalletPolicy::default(),
+            methods,
         )
     }
 
@@ -610,6 +699,7 @@ impl World {
         payer: (u16, Option<&str>),
         issuer_policy: WalletPolicy,
         payer_policy: WalletPolicy,
+        issuer_methods: PortsMethods,
     ) -> Self {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -633,6 +723,7 @@ impl World {
             issuer.0,
             issuer.1,
             issuer_policy,
+            issuer_methods,
             &node,
             &relay,
             &runtime,
@@ -644,6 +735,7 @@ impl World {
             payer.0,
             payer.1,
             payer_policy,
+            PortsMethods::Recording,
             &node,
             &relay,
             &runtime,
