@@ -1,0 +1,19 @@
+{
+  "schema": 1,
+  "area": "keys",
+  "name": "api_tls_key_seed16",
+  "generator": "conformance/vectors/keys",
+  "upstream": {
+    "repo": "https://github.com/EpicCash/epic-wallet",
+    "commit": "845b3fcf4df12ed0139929c62157015447a9d063"
+  },
+  "inputs": {
+    "seed": "a55ac33c9669f00f123456789abcdef0",
+    "label": "lepic-wallet api tls v1"
+  },
+  "expected": {
+    "ed25519_seed": "ec9f93ad28ead0c76af62fb42f4d9cbe1fab6c423375b703b68e1a2f6944eda5",
+    "public_key": "a89032620e6fbe62228aed1f8b9cbc84b81cf58974d819908cb71eb95e092bd8",
+    "spki_sha256": "3f735af464dc7d7820b7eeae957dda59e8abf48b85d67434ca5b3a3934068b6b"
+  }
+}

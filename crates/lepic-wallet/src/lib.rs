@@ -10,6 +10,7 @@
 //! `docs/logging.md`. Secrets never appear in spans, events or errors.
 
 pub mod account;
+mod api_tls_key;
 mod app_data;
 mod cancel;
 pub mod chain;
@@ -54,6 +55,7 @@ mod twin_answer;
 mod wallet;
 
 pub use account::{Account, AccountError, AccountLabel, DEFAULT_ACCOUNT_LABEL};
+pub use api_tls_key::ApiTlsKey;
 pub use config::{ConfigError, NodeEndpoint, WalletConfig, WalletName, WalletPolicy};
 pub use epicbox_notice::ContactNotice;
 pub use error::WalletError;

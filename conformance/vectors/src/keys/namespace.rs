@@ -12,6 +12,8 @@
 //!   "lepic/device-link/v1" || transcript;
 //! - onion key: Ed25519 from BLAKE2b(key = seed, "lepic-wallet onion key v1"), its onion v3
 //!   address written by the wallet's own onion address code;
+//! - owner TLS key: Ed25519 from BLAKE2b(key = seed, "lepic-wallet api tls v1"), and the SHA-256
+//!   of its RFC 8410 SubjectPublicKeyInfo, the fingerprint clients pin;
 //! - listing signature: ECDSA by the listing key over SHA-256(SHA-256(tag) || SHA-256(tag) ||
 //!   len(domain) (u8) || domain || message), tag "lepic/listing-signature/v1";
 //! - address proof: K = HKDF-SHA256(salt "lepic/addr-proof/1", ikm = x(ECDH), info = "mac" ||
@@ -33,6 +35,11 @@ const LISTING_KEY_LABEL: &[u8] = b"lepic-wallet listing key v1";
 const DEVICE_LINK_KEY_LABEL: &[u8] = b"lepic-wallet device link key v1";
 const DEVICE_LINK_TAG: &[u8] = b"lepic/device-link/v1";
 const ONION_KEY_LABEL: &[u8] = b"lepic-wallet onion key v1";
+const API_TLS_KEY_LABEL: &[u8] = b"lepic-wallet api tls v1";
+/// SubjectPublicKeyInfo of an Ed25519 key (RFC 8410), before the 32-byte public key.
+const ED25519_SPKI_PREFIX: [u8; 12] = [
+    0x30, 0x2a, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x03, 0x21, 0x00,
+];
 const LISTING_TAG: &[u8] = b"lepic/listing-signature/v1";
 const ADDRESS_PROOF_SALT: &[u8] = b"lepic/addr-proof/1";
 
@@ -330,6 +337,35 @@ fn onion_keys(pins: &KeysPins<'_>) -> Result<Vec<Rendered>, Error> {
 }
 
 #[derive(Serialize)]
+struct ApiTlsExpected {
+    ed25519_seed: String,
+    public_key: String,
+    spki_sha256: String,
+}
+
+fn api_tls_keys(pins: &KeysPins<'_>) -> Result<Vec<Rendered>, Error> {
+    let mut vectors = Vec::new();
+    for seed in &SEEDS {
+        let ed_seed = keyed(seed.entropy, &[API_TLS_KEY_LABEL]);
+        let pair = signature::Ed25519KeyPair::from_seed_unchecked(&ed_seed)
+            .map_err(|_| Error::reference("api tls key")(Inconsistent("key rejected")))?;
+        let public = signature::KeyPair::public_key(&pair).as_ref().to_vec();
+        let inputs = OnionInputs {
+            seed: hex(seed.entropy),
+            label: "lepic-wallet api tls v1",
+        };
+        let expected = ApiTlsExpected {
+            ed25519_seed: hex(ed_seed),
+            spki_sha256: hex(sha256(&[&ED25519_SPKI_PREFIX, &public])),
+            public_key: hex(public),
+        };
+        let name = format!("api_tls_key_{}", seed.name);
+        vectors.push(render(AREA, &name, &pins.wallet, inputs, expected)?);
+    }
+    Ok(vectors)
+}
+
+#[derive(Serialize)]
 struct ProofInputs {
     salt: &'static str,
     prover_address_secret: String,
@@ -488,6 +524,7 @@ pub(super) fn generate(pins: &KeysPins<'_>) -> Result<Vec<Rendered>, Error> {
     vectors.extend(listing_signatures(pins)?);
     vectors.extend(device_link_keys(pins)?);
     vectors.extend(onion_keys(pins)?);
+    vectors.extend(api_tls_keys(pins)?);
     vectors.extend(address_proofs(pins)?);
     Ok(vectors)
 }
