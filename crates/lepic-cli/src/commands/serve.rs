@@ -26,7 +26,7 @@ use tokio::time::MissedTickBehavior;
 
 use super::{
     HttpListener, InvoiceSweep, Opened, Run, abort_on, contact, finalize_slate, finish_listen,
-    inbox_report, listen_and_sweep, receive_slate, rekey,
+    inbox_report, listen_and_sweep, profile, receive_slate, rekey,
 };
 use crate::Console;
 use crate::amount::format_amount;
@@ -35,8 +35,8 @@ use crate::cli::{Command, ServeArgs};
 use crate::exit::CliError;
 use crate::host::{Host, HostNode};
 use crate::output::{
-    MaintenanceReport, Report, RequestsReport, ServeHttpStatus, ServeReport, ServeStatusReport,
-    SlateReceiveReport,
+    ContactBackupReport, MaintenanceReport, Report, RequestsReport, ServeHttpStatus, ServeReport,
+    ServeStatusReport, SlateReceiveReport,
 };
 use crate::secret::{SecretError, SecretInput};
 use crate::service::{self, Listening};
@@ -149,6 +149,15 @@ impl<H: Host> Service<'_, H> {
                     return Err(SecretError::EmptyNew.into());
                 }
                 rekey(self.host, &self.settings.data_dir, current, new)
+            }
+            Call::ContactExport => Ok(Report::ContactBackup(ContactBackupReport {
+                backup: contact::export_document(&self.held).await?,
+            })),
+            Call::ContactImport { document } => Ok(Report::ContactImport(
+                contact::import_document(&self.held, document).await?,
+            )),
+            Call::DomainFile { relays } => {
+                profile::domain_document(&self.held, self.settings, &relays)
             }
         }
     }

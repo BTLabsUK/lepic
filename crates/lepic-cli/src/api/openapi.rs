@@ -37,7 +37,13 @@ impl Modify for Problems {
             .iter_mut()
             .filter(|(path, _)| path.starts_with("/v1/"));
         for (_, item) in owner {
-            let operations = [&mut item.get, &mut item.put, &mut item.post];
+            let operations = [
+                &mut item.get,
+                &mut item.put,
+                &mut item.post,
+                &mut item.delete,
+                &mut item.patch,
+            ];
             for operation in operations.into_iter().flatten() {
                 operation
                     .responses

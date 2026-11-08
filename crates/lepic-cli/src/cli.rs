@@ -5,6 +5,8 @@
 use std::path::PathBuf;
 
 use clap::{Args, Parser, Subcommand, ValueEnum};
+use serde::Deserialize;
+use utoipa::ToSchema;
 
 use crate::exit::EXIT_CODES_HELP;
 
@@ -935,13 +937,17 @@ pub struct ContactPayloadAckArgs {
     pub ids: Vec<String>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, ValueEnum, Deserialize, ToSchema)]
 pub enum InviteExpiryArg {
     #[value(name = "1h")]
+    #[serde(rename = "1h")]
     Hour,
+    #[default]
     #[value(name = "24h")]
+    #[serde(rename = "24h")]
     Day,
     #[value(name = "7d")]
+    #[serde(rename = "7d")]
     Week,
 }
 
@@ -952,14 +958,16 @@ pub enum ContactKindArg {
     Exchange,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum, Deserialize, ToSchema)]
+#[serde(rename_all = "kebab-case")]
 pub enum SasArg {
     Match,
     Mismatch,
     Skip,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum, Deserialize, ToSchema)]
+#[serde(rename_all = "kebab-case")]
 pub enum KeysArg {
     /// Keep the old pairing; the new one is deleted
     KeepOld,
@@ -982,10 +990,16 @@ pub enum PurposeArg {
     Request,
 }
 
+/// The name a wallet gives itself in its card and its invites.
+pub const DEFAULT_CONTACT_NAME: &str = "LEPIC";
+
+/// The most days `contact move-home` keeps reading the old mailboxes.
+pub const MAX_DRAIN_DAYS: i64 = 365;
+
 #[derive(Debug, Args)]
 pub struct ContactNameArg {
     /// The name this wallet gives itself in its card
-    #[arg(long, value_name = "NAME", default_value = "LEPIC")]
+    #[arg(long, value_name = "NAME", default_value = DEFAULT_CONTACT_NAME)]
     pub name: String,
 }
 
@@ -994,7 +1008,7 @@ pub struct ContactInviteArgs {
     #[command(flatten)]
     pub name: ContactNameArg,
     /// How long the invite may be answered
-    #[arg(long, value_enum, default_value_t = InviteExpiryArg::Day)]
+    #[arg(long, value_enum, default_value_t)]
     pub expiry: InviteExpiryArg,
     /// Deprecated and ignored: new pairings write person
     #[arg(long, value_enum, hide = true)]
@@ -1148,7 +1162,7 @@ pub struct ContactMoveHomeArgs {
         long = "drain-days",
         value_name = "N",
         default_value_t = 0,
-        value_parser = clap::value_parser!(u16).range(0..=365)
+        value_parser = clap::value_parser!(u16).range(0..=MAX_DRAIN_DAYS)
     )]
     pub drain_days: u16,
 }

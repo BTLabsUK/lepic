@@ -87,6 +87,41 @@ api!(
     send,
     receive,
     finalize,
+    transaction_cancel,
+    transaction_release,
+    transaction_post,
+    wallet_scan,
+    epicbox_status,
+    epicbox_peer,
+    profile_show,
+    profile_set,
+    profile_domain,
+    profile_domain_file,
+    profile_domain_attach,
+    contacts,
+    contact_remove,
+    contact_update,
+    contact_invite,
+    contact_request,
+    contact_preview,
+    contact_accept,
+    contact_enter,
+    contact_collect,
+    contact_sas,
+    contact_check,
+    contact_key_check,
+    contact_keys,
+    contact_move,
+    contact_move_home,
+    contact_card,
+    contact_scan_card,
+    contact_quarantine,
+    contact_invoices,
+    contact_export,
+    contact_import,
+    payload_post,
+    payloads,
+    payload_ack,
 );
 
 type Body = UnsyncBoxBody<Bytes, Infallible>;
@@ -109,6 +144,16 @@ pub(crate) enum Call {
     Password {
         current: Zeroizing<String>,
         new: Zeroizing<String>,
+    },
+    /// `contact export`, answering the backup document instead of writing a file.
+    ContactExport,
+    /// `contact import`, from the backup document instead of a file.
+    ContactImport {
+        document: String,
+    },
+    /// `profile domain file`, answering the file's text instead of writing it.
+    DomainFile {
+        relays: Vec<String>,
     },
 }
 
@@ -493,6 +538,19 @@ mod tests {
         assert_eq!(refused.allow.as_deref(), Some("GET, POST"));
         assert!(router.find(&Method::GET, "/v1/transactions/").is_err());
         assert!(router.find(&Method::GET, "/v1/nothing").is_err());
+    }
+
+    #[test]
+    fn a_literal_contact_route_wins_over_the_id_route() {
+        let router = Router::new(&openapi::document());
+        let (_, params) = router
+            .find(&Method::GET, "/v1/contacts/quarantine")
+            .unwrap();
+        assert!(params.is_empty());
+        let (_, params) = router.find(&Method::DELETE, "/v1/contacts/ab12").unwrap();
+        assert_eq!(params, [("id".to_owned(), "ab12".to_owned())]);
+        let (_, params) = router.find(&Method::PATCH, "/v1/contacts/ab12").unwrap();
+        assert_eq!(params, [("id".to_owned(), "ab12".to_owned())]);
     }
 
     #[test]

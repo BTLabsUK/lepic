@@ -5,16 +5,16 @@ use lepic_wallet_contacts::{
     ContactRelays, DOMAIN_FILE_MAX, DomainFile, RelayMode, WalletContacts as _,
 };
 
-use super::Run;
+use super::{Opened, Run};
 use crate::cli::{DomainCommand, DomainFileArgs, ProfileCommand, ProfileSetArgs};
 use crate::exit::CliError;
 use crate::host::Host;
 use crate::output::{
-    ProfileDomainAttachReport, ProfileDomainFileReport, ProfileDomainShowReport, ProfileSetReport,
-    ProfileShowReport, Report,
+    ProfileDomainAttachReport, ProfileDomainDocumentReport, ProfileDomainFileReport,
+    ProfileDomainShowReport, ProfileSetReport, ProfileShowReport, Report,
 };
 use crate::profile::{describe, parse_bits, parse_names};
-use crate::settings::{Origin, SettingsError};
+use crate::settings::{Origin, Settings, SettingsError};
 
 impl<H: Host> Run<'_, H> {
     pub(super) async fn profile(&mut self, command: ProfileCommand) -> Result<Report, CliError> {
@@ -103,26 +103,53 @@ fn key_hex(key: &lepic_wallet_contacts::VerifyingKey) -> String {
     })
 }
 
+/// The well-known file of this wallet's domain, as a report holding its text.
+pub(super) fn domain_document<N: lepic_node::NodeApi + 'static>(
+    opened: &Opened<N>,
+    settings: &Settings,
+    relays: &[String],
+) -> Result<Report, CliError> {
+    let key = opened.wallet.contact_book().own_domain_key()?;
+    let document = domain_file_text(settings.network, &key, relays)?;
+    Ok(Report::ProfileDomainDocument(ProfileDomainDocumentReport {
+        document,
+        url: domain_url(settings.domain.as_deref()),
+    }))
+}
+
+fn domain_file_text(
+    network: lepic_primitives::params::Network,
+    key: &lepic_wallet_contacts::VerifyingKey,
+    relays: &[String],
+) -> Result<String, CliError> {
+    use lepic_wallet_contacts::ContactNetwork;
+    let network = match network {
+        lepic_primitives::params::Network::Mainnet => ContactNetwork::Mainnet,
+        lepic_primitives::params::Network::Floonet => ContactNetwork::Floonet,
+    };
+    let text = DomainFile::render(network, std::slice::from_ref(key), relays);
+    if text.len() > DOMAIN_FILE_MAX {
+        return Err(CliError::DomainFileTooLarge);
+    }
+    Ok(text)
+}
+
+fn domain_url(domain: Option<&str>) -> Option<String> {
+    domain.map(|domain| format!("https://{domain}/.well-known/epic-wallet.json"))
+}
+
 fn write_file(
     args: &DomainFileArgs,
     network: lepic_primitives::params::Network,
     key: &lepic_wallet_contacts::VerifyingKey,
     domain: Option<&str>,
 ) -> Result<Report, CliError> {
-    use lepic_wallet_contacts::ContactNetwork;
     use std::io::Write as _;
     let path = args
         .path
         .clone()
         .unwrap_or_else(|| std::path::PathBuf::from("epic-wallet.json"));
-    let network = match network {
-        lepic_primitives::params::Network::Mainnet => ContactNetwork::Mainnet,
-        lepic_primitives::params::Network::Floonet => ContactNetwork::Floonet,
-    };
-    let text = DomainFile::render(network, std::slice::from_ref(key), &args.relay);
-    if text.len() > DOMAIN_FILE_MAX {
-        return Err(CliError::DomainFileTooLarge);
-    }
+    let text = domain_file_text(network, key, &args.relay)?;
     let mut options = std::fs::OpenOptions::new();
     options.write(true);
     if args.force {
@@ -145,7 +172,7 @@ fn write_file(
     Ok(Report::ProfileDomainFile(ProfileDomainFileReport {
         path: path.display().to_string(),
         bytes: text.len(),
-        url: domain.map(|domain| format!("https://{domain}/.well-known/epic-wallet.json")),
+        url: domain_url(domain),
     }))
 }
 

@@ -9,6 +9,987 @@
     "version": "1.0.0"
   },
   "paths": {
+    "/v1/contact-invoices": {
+      "get": {
+        "tags": [
+          "contacts"
+        ],
+        "summary": "The invoices parked from contacts",
+        "description": "Read only: paying or declining one is not part of this API.",
+        "operationId": "contact_invoices",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ContactInvoiceListReport"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error, as RFC 9457 problem details",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/contacts": {
+      "get": {
+        "tags": [
+          "contacts"
+        ],
+        "summary": "The paired contacts",
+        "operationId": "contacts",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ContactListReport"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error, as RFC 9457 problem details",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/contacts/accept": {
+      "post": {
+        "tags": [
+          "contacts"
+        ],
+        "summary": "Answer an invite",
+        "description": "The reply goes to the inviter's relay unless `by_hand`.",
+        "operationId": "contact_accept",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AcceptBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ContactAcceptReport"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error, as RFC 9457 problem details",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/contacts/card": {
+      "post": {
+        "tags": [
+          "contacts"
+        ],
+        "summary": "Show a card to pair in person",
+        "description": "Makes a pairing; the other phone scans the card.",
+        "operationId": "contact_card",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CardBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ContactCardReport"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error, as RFC 9457 problem details",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/contacts/cards/scan": {
+      "post": {
+        "tags": [
+          "contacts"
+        ],
+        "summary": "Pair in person with the card the other phone shows",
+        "operationId": "contact_scan_card",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ScanCardBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ContactReport"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error, as RFC 9457 problem details",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/contacts/collect": {
+      "post": {
+        "tags": [
+          "contacts"
+        ],
+        "summary": "Fetch pairing and contact messages from the home relays once, and send what waits",
+        "operationId": "contact_collect",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ContactCollectReport"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error, as RFC 9457 problem details",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/contacts/enter": {
+      "post": {
+        "tags": [
+          "contacts"
+        ],
+        "summary": "Take a pair-reply or pair-confirm link sent by hand, or find an invite by its pairing words",
+        "operationId": "contact_enter",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EnterBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ContactLinkReport"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error, as RFC 9457 problem details",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/contacts/export": {
+      "post": {
+        "tags": [
+          "contacts"
+        ],
+        "summary": "The pairing records, as a backup document",
+        "operationId": "contact_export",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ContactBackupReport"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error, as RFC 9457 problem details",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/contacts/import": {
+      "post": {
+        "tags": [
+          "contacts"
+        ],
+        "summary": "Restore pairing records from a backup document",
+        "operationId": "contact_import",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ImportBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ContactImportReport"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error, as RFC 9457 problem details",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/contacts/invites": {
+      "post": {
+        "tags": [
+          "contacts"
+        ],
+        "summary": "Make an invite to pair",
+        "description": "The invite is a link to share; the collect route takes the answer.",
+        "operationId": "contact_invite",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InviteBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ContactInviteReport"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error, as RFC 9457 problem details",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/contacts/move-home": {
+      "post": {
+        "tags": [
+          "contacts"
+        ],
+        "summary": "Move this wallet's home relay for every paired contact",
+        "description": "Each contact is told once. The old mailboxes are read for `drain_days`.",
+        "operationId": "contact_move_home",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MoveHomeBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ContactMoveHomeReport"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error, as RFC 9457 problem details",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/contacts/preview": {
+      "post": {
+        "tags": [
+          "contacts"
+        ],
+        "summary": "Show what an invite link says, before answering it",
+        "operationId": "contact_preview",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LinkBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ContactPreviewReport"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error, as RFC 9457 problem details",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/contacts/quarantine": {
+      "get": {
+        "tags": [
+          "contacts"
+        ],
+        "summary": "The contact messages kept in quarantine",
+        "operationId": "contact_quarantine",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ContactQuarantineReport"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error, as RFC 9457 problem details",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/contacts/requests": {
+      "post": {
+        "tags": [
+          "contacts"
+        ],
+        "summary": "Ask a wallet to pair, at its payments address",
+        "description": "Sent only to a key that ran LEPIC lately. The collect route takes the answer.",
+        "operationId": "contact_request",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RequestBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ContactInviteReport"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error, as RFC 9457 problem details",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/contacts/{id}": {
+      "delete": {
+        "tags": [
+          "contacts"
+        ],
+        "summary": "Remove a pairing",
+        "description": "The contact is not told.",
+        "operationId": "contact_remove",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The contact's id, as the list shows it",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ContactRemoveReport"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error, as RFC 9457 problem details",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "contacts"
+        ],
+        "summary": "Change a contact's label or whether it may send invoices",
+        "description": "The label is set first. The response is the contact as it is after the last change.",
+        "operationId": "contact_update",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The contact's id, as the list shows it",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ContactUpdateBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ContactReport"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error, as RFC 9457 problem details",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/contacts/{id}/check": {
+      "post": {
+        "tags": [
+          "contacts"
+        ],
+        "summary": "Ask a paired contact to answer with its current card",
+        "description": "The collect route takes the answer.",
+        "operationId": "contact_check",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The contact's id, as the list shows it",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ContactCheckReport"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error, as RFC 9457 problem details",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/contacts/{id}/key-check": {
+      "post": {
+        "tags": [
+          "contacts"
+        ],
+        "summary": "Ask whether a new pairing's contact still holds the keys of an older pairing",
+        "description": "The path names the new pairing. The collect route takes the answer.",
+        "operationId": "contact_key_check",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The new pairing's id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/KeyCheckBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ContactKeyCheckReport"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error, as RFC 9457 problem details",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/contacts/{id}/keys": {
+      "post": {
+        "tags": [
+          "contacts"
+        ],
+        "summary": "Keep the old keys or use the new ones for a pairing in keys-changed",
+        "description": "Keeping the old keys deletes the new pairing and answers the removal instead of the contact.",
+        "operationId": "contact_keys",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The new pairing's id, in keys-changed",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/KeysBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ContactReport"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error, as RFC 9457 problem details",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/contacts/{id}/move": {
+      "post": {
+        "tags": [
+          "contacts"
+        ],
+        "summary": "Move to the relay a contact asked for",
+        "operationId": "contact_move",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The contact's id, as the list shows it",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MoveBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ContactReport"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error, as RFC 9457 problem details",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/contacts/{id}/payloads": {
+      "post": {
+        "tags": [
+          "payloads"
+        ],
+        "summary": "Send bytes to a paired contact through its mailbox",
+        "description": "LEPIC never reads the bytes. The response holds the payload's id.",
+        "operationId": "payload_post",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The contact's id, as the list shows it",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PayloadBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ContactPayloadPostReport"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error, as RFC 9457 problem details",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/contacts/{id}/sas": {
+      "post": {
+        "tags": [
+          "contacts"
+        ],
+        "summary": "Record the check of the four SAS words against the other screen",
+        "description": "A mismatch ends the pairing and answers the removal instead of the contact.",
+        "operationId": "contact_sas",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The contact's id, as the list shows it",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SasBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ContactReport"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error, as RFC 9457 problem details",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/epicbox": {
+      "get": {
+        "tags": [
+          "epicbox"
+        ],
+        "summary": "The relay, the address and the deliveries still pending",
+        "operationId": "epicbox_status",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EpicboxStatusReport"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error, as RFC 9457 problem details",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/epicbox/peers/{address}": {
+      "get": {
+        "tags": [
+          "epicbox"
+        ],
+        "summary": "Whether a peer is known to pay invoices",
+        "description": "What this wallet learned from the peer's own messages over Epicbox. Nothing is sent.",
+        "operationId": "epicbox_peer",
+        "parameters": [
+          {
+            "name": "address",
+            "in": "path",
+            "description": "The peer's full Epicbox address",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PeerReport"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error, as RFC 9457 problem details",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/events": {
       "get": {
         "tags": [
@@ -121,6 +1102,248 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/OutputsReport"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error, as RFC 9457 problem details",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/payloads": {
+      "get": {
+        "tags": [
+          "payloads"
+        ],
+        "summary": "The payloads that arrived and are not acknowledged, oldest first",
+        "operationId": "payloads",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ContactPayloadListReport"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error, as RFC 9457 problem details",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/payloads/{id}/ack": {
+      "post": {
+        "tags": [
+          "payloads"
+        ],
+        "summary": "Forget a payload once its bytes are kept elsewhere",
+        "operationId": "payload_ack",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The payload's id, as the list shows it",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ContactPayloadAckReport"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error, as RFC 9457 problem details",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/profile": {
+      "get": {
+        "tags": [
+          "profile"
+        ],
+        "summary": "The profile this wallet tells its contacts",
+        "operationId": "profile_show",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProfileShowReport"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error, as RFC 9457 problem details",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "profile"
+        ],
+        "summary": "Tell every paired contact a new profile",
+        "description": "Exactly one of `names` and `bits`. The `profile` setting keeps its value; set it too, or\nlater updates tell the configured one again.",
+        "operationId": "profile_set",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProfileBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProfileSetReport"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error, as RFC 9457 problem details",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/profile/domain": {
+      "get": {
+        "tags": [
+          "profile"
+        ],
+        "summary": "The proof of this wallet's domain",
+        "operationId": "profile_domain",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProfileDomainShowReport"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error, as RFC 9457 problem details",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/profile/domain/attach": {
+      "post": {
+        "tags": [
+          "profile"
+        ],
+        "summary": "Tell every paired contact the domain",
+        "description": "Needs the `domain` setting.",
+        "operationId": "profile_domain_attach",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProfileDomainAttachReport"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error, as RFC 9457 problem details",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/profile/domain/file": {
+      "post": {
+        "tags": [
+          "profile"
+        ],
+        "summary": "The well-known file that proves the domain",
+        "description": "The file's text is in the response; the caller serves it at the `url` it names.",
+        "operationId": "profile_domain_file",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DomainFileBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProfileDomainDocumentReport"
                 }
               }
             }
@@ -373,6 +1596,146 @@
         }
       }
     },
+    "/v1/transactions/{tx_id}/cancel": {
+      "post": {
+        "tags": [
+          "transactions"
+        ],
+        "summary": "Cancel a transaction that is not posted",
+        "operationId": "transaction_cancel",
+        "parameters": [
+          {
+            "name": "tx_id",
+            "in": "path",
+            "description": "Local transaction id, as the list shows it",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TxStateReport"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error, as RFC 9457 problem details",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/transactions/{tx_id}/post": {
+      "post": {
+        "tags": [
+          "transactions"
+        ],
+        "summary": "Post a finalized transaction again",
+        "operationId": "transaction_post",
+        "parameters": [
+          {
+            "name": "tx_id",
+            "in": "path",
+            "description": "Local transaction id, as the list shows it",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PostBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PostReport"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error, as RFC 9457 problem details",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/transactions/{tx_id}/release": {
+      "post": {
+        "tags": [
+          "transactions"
+        ],
+        "summary": "Release the inputs of a send the network never took",
+        "description": "Refused until a refresh a day of blocks after the finalize still finds the transaction\nnowhere on chain.",
+        "operationId": "transaction_release",
+        "parameters": [
+          {
+            "name": "tx_id",
+            "in": "path",
+            "description": "Local transaction id, as the list shows it",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TxStateReport"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error, as RFC 9457 problem details",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/wallet": {
       "get": {
         "tags": [
@@ -474,6 +1837,47 @@
         }
       }
     },
+    "/v1/wallet/scan": {
+      "post": {
+        "tags": [
+          "wallet"
+        ],
+        "summary": "Scan the chain for the wallet's outputs",
+        "description": "Brings the wallet in line with the chain; a long scan holds the request open.",
+        "operationId": "wallet_scan",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ScanBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WalletScanReport"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error, as RFC 9457 problem details",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v2/foreign": {
       "post": {
         "tags": [
@@ -511,6 +1915,31 @@
   },
   "components": {
     "schemas": {
+      "AcceptBody": {
+        "type": "object",
+        "description": "An invite answered.",
+        "required": [
+          "link"
+        ],
+        "properties": {
+          "by_hand": {
+            "type": "boolean",
+            "description": "Answer with a reply link to send by hand instead of posting it."
+          },
+          "link": {
+            "type": "string",
+            "description": "The invite's `epiccash://` link."
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The name this wallet gives itself in the reply; `LEPIC` when absent."
+          }
+        },
+        "additionalProperties": false
+      },
       "AccountReport": {
         "type": "object",
         "required": [
@@ -647,6 +2076,20 @@
           }
         }
       },
+      "CardBody": {
+        "type": "object",
+        "description": "The name a card carries.",
+        "properties": {
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The name this wallet gives itself; `LEPIC` when absent."
+          }
+        },
+        "additionalProperties": false
+      },
       "CheckVersion": {
         "type": "string",
         "enum": [
@@ -751,6 +2194,685 @@
           "proof": {
             "type": "string",
             "description": "Hex."
+          }
+        }
+      },
+      "ContactAcceptReport": {
+        "type": "object",
+        "required": [
+          "contact_id",
+          "reply_link",
+          "posted"
+        ],
+        "properties": {
+          "contact_id": {
+            "type": "string"
+          },
+          "posted": {
+            "type": "boolean"
+          },
+          "reply_link": {
+            "type": "string",
+            "description": "The reply as a link, to send by hand when `posted` is false."
+          }
+        }
+      },
+      "ContactBackupReport": {
+        "type": "object",
+        "description": "The contact backup document, for the wallet API; the command writes it to a file.",
+        "required": [
+          "backup"
+        ],
+        "properties": {
+          "backup": {
+            "type": "string"
+          }
+        }
+      },
+      "ContactCardReport": {
+        "type": "object",
+        "required": [
+          "contact_id",
+          "link"
+        ],
+        "properties": {
+          "contact_id": {
+            "type": "string"
+          },
+          "link": {
+            "type": "string"
+          }
+        }
+      },
+      "ContactCheckReport": {
+        "type": "object",
+        "required": [
+          "contact_id"
+        ],
+        "properties": {
+          "contact_id": {
+            "type": "string"
+          }
+        }
+      },
+      "ContactCollectReport": {
+        "type": "object",
+        "required": [
+          "mailboxes",
+          "capped",
+          "kept",
+          "refused",
+          "timed_out",
+          "not_reached",
+          "quarantined",
+          "quarantine_dropped",
+          "buffered",
+          "messages",
+          "paired",
+          "delivered",
+          "failed",
+          "unreachable"
+        ],
+        "properties": {
+          "buffered": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "capped": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "delivered": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "failed": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ContactFailureReport"
+            },
+            "description": "Pairings in progress that ended with nothing stored."
+          },
+          "kept": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "mailboxes": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "messages": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "not_reached": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "paired": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "quarantine_dropped": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "quarantined": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "refused": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "timed_out": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "unreachable": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "ContactFailureReport": {
+        "type": "object",
+        "required": [
+          "contact_id",
+          "reason"
+        ],
+        "properties": {
+          "contact_id": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string",
+            "description": "`expired`, `changed-on-the-way`, `refused-already-used`, `refused-expired` or\n`refused-cancelled`."
+          }
+        }
+      },
+      "ContactImportReport": {
+        "type": "object",
+        "required": [
+          "imported",
+          "skipped_existing",
+          "skipped_conflict"
+        ],
+        "properties": {
+          "imported": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "skipped_conflict": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "skipped_existing": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      },
+      "ContactInviteReport": {
+        "type": "object",
+        "required": [
+          "contact_id",
+          "link",
+          "expires_at"
+        ],
+        "properties": {
+          "contact_id": {
+            "type": "string"
+          },
+          "expires_at": {
+            "type": "string"
+          },
+          "link": {
+            "type": "string"
+          },
+          "words": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The five pairing words as `emoji name`, when they were offered."
+          }
+        }
+      },
+      "ContactInvoiceListReport": {
+        "type": "object",
+        "required": [
+          "invoices"
+        ],
+        "properties": {
+          "invoices": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ContactInvoiceReport"
+            }
+          }
+        }
+      },
+      "ContactInvoiceReport": {
+        "type": "object",
+        "required": [
+          "slate_id",
+          "contact_id",
+          "contact_name",
+          "verified",
+          "amount",
+          "received_at",
+          "same_amount"
+        ],
+        "properties": {
+          "amount": {
+            "type": "string"
+          },
+          "contact_id": {
+            "type": "string"
+          },
+          "contact_name": {
+            "type": "string",
+            "description": "The user's label for the contact, else what it calls itself, in quotes."
+          },
+          "purpose": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "received_at": {
+            "type": "string"
+          },
+          "reference": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "same_amount": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Other requests from the same contact for the same amount within ten minutes."
+          },
+          "slate_id": {
+            "type": "string"
+          },
+          "verified": {
+            "type": "boolean",
+            "description": "Whether the contact's SAS was checked."
+          }
+        }
+      },
+      "ContactKeyCheckReport": {
+        "type": "object",
+        "required": [
+          "contact_id",
+          "old_contact_id"
+        ],
+        "properties": {
+          "contact_id": {
+            "type": "string",
+            "description": "The new pairing the check went over."
+          },
+          "old_contact_id": {
+            "type": "string"
+          }
+        }
+      },
+      "ContactLinkReport": {
+        "type": "object",
+        "required": [
+          "outcome"
+        ],
+        "properties": {
+          "contact_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "link": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "outcome": {
+            "type": "string",
+            "description": "`confirm` (send `link` back by hand), `paired`, `ignored`, or `invite` (pairing words\nfound the invite `link`, to answer)."
+          }
+        }
+      },
+      "ContactListReport": {
+        "type": "object",
+        "required": [
+          "contacts"
+        ],
+        "properties": {
+          "contacts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ContactReport"
+            }
+          }
+        }
+      },
+      "ContactMoveHomeReport": {
+        "type": "object",
+        "required": [
+          "home_relay",
+          "moved"
+        ],
+        "properties": {
+          "drain_until": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When the old mailboxes stop being read, RFC 3339; absent without a drain."
+          },
+          "home_relay": {
+            "type": "string",
+            "description": "The home relay moved to, `domain:port`."
+          },
+          "moved": {
+            "type": "integer",
+            "format": "int32",
+            "description": "How many contacts were told.",
+            "minimum": 0
+          }
+        }
+      },
+      "ContactPayloadAckReport": {
+        "type": "object",
+        "required": [
+          "acknowledged"
+        ],
+        "properties": {
+          "acknowledged": {
+            "type": "integer",
+            "description": "How many kept payloads were forgotten.",
+            "minimum": 0
+          }
+        }
+      },
+      "ContactPayloadListReport": {
+        "type": "object",
+        "required": [
+          "payloads"
+        ],
+        "properties": {
+          "payloads": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ContactPayloadReport"
+            }
+          }
+        }
+      },
+      "ContactPayloadPostReport": {
+        "type": "object",
+        "required": [
+          "contact_id",
+          "payload_id",
+          "peer_lacks_app_payloads"
+        ],
+        "properties": {
+          "contact_id": {
+            "type": "string"
+          },
+          "payload_id": {
+            "type": "string",
+            "description": "The id the other wallet keeps the payload under, 32 lowercase hex digits."
+          },
+          "peer_lacks_app_payloads": {
+            "type": "boolean",
+            "description": "The other wallet's recorded features are known and do not claim app payloads; the\npayload was queued all the same."
+          }
+        }
+      },
+      "ContactPayloadReport": {
+        "type": "object",
+        "required": [
+          "id",
+          "contact_id",
+          "received_at",
+          "payload"
+        ],
+        "properties": {
+          "contact_id": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "payload": {
+            "type": "string",
+            "description": "The bytes as lowercase hex."
+          },
+          "received_at": {
+            "type": "string"
+          }
+        }
+      },
+      "ContactPreviewReport": {
+        "type": "object",
+        "required": [
+          "claimed_name",
+          "kind",
+          "expires_at",
+          "home_relay",
+          "service"
+        ],
+        "properties": {
+          "claimed_name": {
+            "type": "string",
+            "description": "What the inviter calls itself, unverified."
+          },
+          "expires_at": {
+            "type": "string"
+          },
+          "home_relay": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "service": {
+            "type": "boolean"
+          }
+        }
+      },
+      "ContactQuarantineReport": {
+        "type": "object",
+        "required": [
+          "messages"
+        ],
+        "properties": {
+          "messages": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/QuarantinedMessageReport"
+            }
+          }
+        }
+      },
+      "ContactRemoveReport": {
+        "type": "object",
+        "required": [
+          "contact_id",
+          "removed"
+        ],
+        "properties": {
+          "contact_id": {
+            "type": "string"
+          },
+          "removed": {
+            "type": "boolean"
+          }
+        }
+      },
+      "ContactReport": {
+        "type": "object",
+        "required": [
+          "contact_id",
+          "label",
+          "state",
+          "sas",
+          "sas_indexes",
+          "status",
+          "peer_features",
+          "peer_profile",
+          "allow_invoices",
+          "seal",
+          "lapsed"
+        ],
+        "properties": {
+          "allow_invoices": {
+            "type": "boolean"
+          },
+          "claimed_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "contact_id": {
+            "type": "string"
+          },
+          "ended_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "ended_reason": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`mismatch`, `peer-mismatch`, `unpaired` or `never-finished`, once the pairing ended."
+          },
+          "home_relay": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "kind": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "label": {
+            "type": "string"
+          },
+          "lapsed": {
+            "type": "boolean"
+          },
+          "last_heard": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When an envelope from the contact was last opened, if ever."
+          },
+          "peer_features": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The feature bits the contact claimed; 0 when none.",
+            "minimum": 0
+          },
+          "peer_heard_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When the contact was first heard in this pairing."
+          },
+          "peer_profile": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The profile the contact told (ADR 0041), the upper half of its feature word; 0 when none.",
+            "minimum": 0
+          },
+          "peer_verified_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When the contact's match verdict was accepted."
+          },
+          "requested_relay": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The relay host the contact asked to move to, until `contact move` applies it."
+          },
+          "sas": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The SAS entries as `emoji name`, four of them."
+          },
+          "sas_indexes": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            },
+            "description": "The four SAS table indexes, in the order of `sas`; empty without a SAS."
+          },
+          "seal": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "description": "`waiting`, `paired`, `verified`, `keys-changed` or `ended`."
+          }
+        }
+      },
+      "ContactUpdateBody": {
+        "type": "object",
+        "description": "A change to a contact; at least one field.",
+        "properties": {
+          "allow_invoices": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Whether the contact may send invoices; it has to be verified."
+          },
+          "label": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Your name for the contact."
+          }
+        },
+        "additionalProperties": false
+      },
+      "DomainFileBody": {
+        "type": "object",
+        "description": "The relays a domain file names.",
+        "properties": {
+          "relays": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Relays as `host:port`."
+          }
+        },
+        "additionalProperties": false
+      },
+      "EnterBody": {
+        "type": "object",
+        "description": "A link or the five pairing words of an invite.",
+        "required": [
+          "input"
+        ],
+        "properties": {
+          "input": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "One link, or the five pairing words."
+          }
+        },
+        "additionalProperties": false
+      },
+      "EpicboxStatusReport": {
+        "type": "object",
+        "required": [
+          "relay",
+          "address",
+          "pending_deliveries"
+        ],
+        "properties": {
+          "address": {
+            "type": "string"
+          },
+          "pending_deliveries": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "relay": {
+            "type": "string"
           }
         }
       },
@@ -1032,6 +3154,20 @@
           }
         }
       },
+      "ImportBody": {
+        "type": "object",
+        "description": "Pairing records from a contact backup.",
+        "required": [
+          "backup"
+        ],
+        "properties": {
+          "backup": {
+            "type": "string",
+            "description": "The document the export route answered."
+          }
+        },
+        "additionalProperties": false
+      },
       "ImportedReport": {
         "type": "object",
         "description": "What the old wallet recorded of an imported transaction.",
@@ -1110,12 +3246,97 @@
           }
         }
       },
+      "InviteBody": {
+        "type": "object",
+        "description": "An invite to pair.",
+        "properties": {
+          "expiry": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/InviteExpiryArg",
+                "description": "How long the invite may be answered; one day when absent."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The name this wallet gives itself in the invite; `LEPIC` when absent."
+          },
+          "pairing_words": {
+            "type": "boolean",
+            "description": "Also offer five pairing words that find the invite."
+          }
+        },
+        "additionalProperties": false
+      },
+      "InviteExpiryArg": {
+        "type": "string",
+        "enum": [
+          "1h",
+          "24h",
+          "7d"
+        ]
+      },
       "JsonRpc": {
         "type": "string",
         "description": "Always `\"2.0\"`.",
         "enum": [
           "2.0"
         ]
+      },
+      "KeyCheckBody": {
+        "type": "object",
+        "description": "The older pairing with the same contact.",
+        "required": [
+          "old"
+        ],
+        "properties": {
+          "old": {
+            "type": "string",
+            "description": "The older pairing's id."
+          }
+        },
+        "additionalProperties": false
+      },
+      "KeysArg": {
+        "type": "string",
+        "enum": [
+          "keep-old",
+          "use-new"
+        ]
+      },
+      "KeysBody": {
+        "type": "object",
+        "description": "What to do with a pairing in keys-changed.",
+        "required": [
+          "choice"
+        ],
+        "properties": {
+          "choice": {
+            "$ref": "#/components/schemas/KeysArg"
+          }
+        },
+        "additionalProperties": false
+      },
+      "LinkBody": {
+        "type": "object",
+        "description": "A pairing link.",
+        "required": [
+          "link"
+        ],
+        "properties": {
+          "link": {
+            "type": "string",
+            "description": "The `epiccash://` link."
+          }
+        },
+        "additionalProperties": false
       },
       "ListingReport": {
         "type": "object",
@@ -1179,6 +3400,43 @@
             "type": "string"
           }
         }
+      },
+      "MoveBody": {
+        "type": "object",
+        "description": "The relay a contact asked for.",
+        "required": [
+          "host"
+        ],
+        "properties": {
+          "host": {
+            "type": "string",
+            "description": "The relay host, as the contact shows it."
+          }
+        },
+        "additionalProperties": false
+      },
+      "MoveHomeBody": {
+        "type": "object",
+        "description": "The relay this wallet moves home to.",
+        "required": [
+          "host"
+        ],
+        "properties": {
+          "drain_days": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Days to keep reading the old mailboxes, up to `MAX_DRAIN_DAYS`; 0 when absent.",
+            "minimum": 0
+          },
+          "host": {
+            "type": "string",
+            "description": "The relay, `domain[:port]`."
+          }
+        },
+        "additionalProperties": false
       },
       "NodeStatusReport": {
         "type": "object",
@@ -1319,6 +3577,97 @@
           }
         }
       },
+      "PayloadBody": {
+        "type": "object",
+        "description": "Bytes for a contact.",
+        "required": [
+          "payload"
+        ],
+        "properties": {
+          "payload": {
+            "type": "string",
+            "description": "The payload as hex digits."
+          }
+        },
+        "additionalProperties": false
+      },
+      "PeerReport": {
+        "type": "object",
+        "required": [
+          "address",
+          "capability",
+          "notices"
+        ],
+        "properties": {
+          "address": {
+            "type": "string"
+          },
+          "capability": {
+            "type": "string",
+            "description": "`unknown`, `lepic` or `no_invoices`."
+          },
+          "last_marked_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When its last message with the LEPIC marker came, RFC 3339."
+          },
+          "last_unmarked_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When its last slate without the marker, or an invoice it sent back, came, RFC 3339."
+          },
+          "notices": {
+            "type": "boolean",
+            "description": "Whether it is told of the end of an exchange that came marked."
+          }
+        }
+      },
+      "PostBody": {
+        "type": "object",
+        "description": "Whether a posted transaction goes out at once.",
+        "properties": {
+          "fluff": {
+            "type": "boolean",
+            "description": "Broadcast to all peers at once instead of through the stem phase."
+          }
+        },
+        "additionalProperties": false
+      },
+      "PostReport": {
+        "type": "object",
+        "required": [
+          "tx_id",
+          "state",
+          "already_on_chain"
+        ],
+        "properties": {
+          "already_on_chain": {
+            "type": "boolean",
+            "description": "The node refused the push because its chain already holds the kernel."
+          },
+          "height": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "The block holding the kernel, when `already_on_chain`.",
+            "minimum": 0
+          },
+          "state": {
+            "type": "string"
+          },
+          "tx_id": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          }
+        }
+      },
       "Problem": {
         "type": "object",
         "description": "An error, as RFC 9457 problem details (`application/problem+json`).",
@@ -1372,6 +3721,195 @@
           "type": {
             "type": "string",
             "description": "Always `about:blank`: `code` says what went wrong."
+          }
+        }
+      },
+      "ProfileBody": {
+        "type": "object",
+        "description": "The profile this wallet tells its contacts: exactly one of the two fields.",
+        "properties": {
+          "bits": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The profile as a number 0 to 65535 or 0x hex."
+          },
+          "names": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Bit names, `no-payments` and `automated`; empty clears the profile."
+          }
+        },
+        "additionalProperties": false
+      },
+      "ProfileDomainAttachReport": {
+        "type": "object",
+        "description": "`lepic profile domain attach`.",
+        "required": [
+          "domain",
+          "queued"
+        ],
+        "properties": {
+          "domain": {
+            "type": "string"
+          },
+          "queued": {
+            "type": "integer",
+            "format": "int32",
+            "description": "How many contact updates were queued.",
+            "minimum": 0
+          }
+        }
+      },
+      "ProfileDomainDocumentReport": {
+        "type": "object",
+        "description": "The text of the domain file, for the wallet API; the command writes it to a file.",
+        "required": [
+          "document"
+        ],
+        "properties": {
+          "document": {
+            "type": "string"
+          },
+          "url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Where the file must be served; none when no domain is configured."
+          }
+        }
+      },
+      "ProfileDomainShowReport": {
+        "type": "object",
+        "description": "`lepic profile domain show`.",
+        "required": [
+          "network",
+          "domain_key"
+        ],
+        "properties": {
+          "domain": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The domain the settings give; none when unset."
+          },
+          "domain_key": {
+            "type": "string",
+            "description": "This wallet's domain key on the network, 64 hex digits."
+          },
+          "network": {
+            "type": "string"
+          }
+        }
+      },
+      "ProfileSetReport": {
+        "type": "object",
+        "description": "`lepic profile set`.",
+        "required": [
+          "profile",
+          "names",
+          "unnamed",
+          "queued",
+          "configured"
+        ],
+        "properties": {
+          "configured": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The profile the settings give, which later updates tell again when it differs.",
+            "minimum": 0
+          },
+          "names": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "profile": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "queued": {
+            "type": "integer",
+            "format": "int32",
+            "description": "How many contact updates were queued.",
+            "minimum": 0
+          },
+          "unnamed": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          }
+        }
+      },
+      "ProfileShowReport": {
+        "type": "object",
+        "description": "`lepic profile show`.",
+        "required": [
+          "profile",
+          "names",
+          "unnamed"
+        ],
+        "properties": {
+          "names": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The names of the bits set."
+          },
+          "profile": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The profile this wallet tells paired contacts: the flag, `LEPIC_PROFILE`, the config file.",
+            "minimum": 0
+          },
+          "unnamed": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The bits set that have no name, as a number.",
+            "minimum": 0
+          }
+        }
+      },
+      "QuarantinedMessageReport": {
+        "type": "object",
+        "required": [
+          "id",
+          "contact_id",
+          "reason",
+          "first_seen",
+          "attempts",
+          "size"
+        ],
+        "properties": {
+          "attempts": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "contact_id": {
+            "type": "string"
+          },
+          "first_seen": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "size": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
           }
         }
       },
@@ -1456,6 +3994,27 @@
         "type": "object",
         "description": "`receive_tx`: the reply slate object, in the version it was sent in."
       },
+      "RequestBody": {
+        "type": "object",
+        "description": "A pairing request to a wallet's payments address.",
+        "required": [
+          "address"
+        ],
+        "properties": {
+          "address": {
+            "type": "string",
+            "description": "The wallet's Epicbox address."
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The name this wallet gives itself; `LEPIC` when absent."
+          }
+        },
+        "additionalProperties": false
+      },
       "RequestsReport": {
         "type": "object",
         "description": "The API's requests since serve started.",
@@ -1513,6 +4072,70 @@
           }
         ],
         "description": "The request's id, echoed in the answer."
+      },
+      "SasArg": {
+        "type": "string",
+        "enum": [
+          "match",
+          "mismatch",
+          "skip"
+        ]
+      },
+      "SasBody": {
+        "type": "object",
+        "description": "The verdict on the four SAS words.",
+        "required": [
+          "result"
+        ],
+        "properties": {
+          "result": {
+            "$ref": "#/components/schemas/SasArg"
+          }
+        },
+        "additionalProperties": false
+      },
+      "ScanBody": {
+        "type": "object",
+        "description": "How far a wallet scan reaches.",
+        "properties": {
+          "delete_unconfirmed": {
+            "type": "boolean",
+            "description": "Also unlock locked outputs found on chain and delete unconfirmed outputs not found,\ncancelling their transactions."
+          },
+          "reset_chain": {
+            "type": "boolean",
+            "description": "Forget the chain heights the wallet stored and scan from genesis."
+          },
+          "start_height": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Start at this height; 0 scans the whole chain. Not with `reset_chain`.",
+            "minimum": 0
+          }
+        },
+        "additionalProperties": false
+      },
+      "ScanCardBody": {
+        "type": "object",
+        "description": "The other phone's card.",
+        "required": [
+          "contact",
+          "link"
+        ],
+        "properties": {
+          "contact": {
+            "type": "string",
+            "description": "The id the card route answered on this wallet."
+          },
+          "link": {
+            "type": "string",
+            "description": "The other phone's `epiccash://contact/` link."
+          }
+        },
+        "additionalProperties": false
       },
       "SendBody": {
         "type": "object",
@@ -1922,6 +4545,23 @@
           }
         }
       },
+      "TxStateReport": {
+        "type": "object",
+        "required": [
+          "tx_id",
+          "state"
+        ],
+        "properties": {
+          "state": {
+            "type": "string"
+          },
+          "tx_id": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          }
+        }
+      },
       "VersionAnswer": {
         "type": "object",
         "description": "`check_version`.",
@@ -1941,6 +4581,66 @@
               "type": "string"
             },
             "description": "For example `[\"V3\", \"V2\"]`."
+          }
+        }
+      },
+      "WalletScanReport": {
+        "type": "object",
+        "description": "What `wallet scan` did: every field of the engine's scan summary.",
+        "required": [
+          "start_height",
+          "end_height",
+          "resumed",
+          "found",
+          "restored",
+          "revived",
+          "unlocked",
+          "deleted"
+        ],
+        "properties": {
+          "deleted": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Unconfirmed outputs deleted; only `--delete-unconfirmed` deletes any.",
+            "minimum": 0
+          },
+          "end_height": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "found": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Outputs of this wallet found on chain, stored before or not.",
+            "minimum": 0
+          },
+          "restored": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Outputs found that were not stored, now stored with a transaction each.",
+            "minimum": 0
+          },
+          "resumed": {
+            "type": "boolean",
+            "description": "The scan continued one that was interrupted instead of starting over."
+          },
+          "revived": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Outputs stored as spent that were found unspent.",
+            "minimum": 0
+          },
+          "start_height": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "unlocked": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Locked outputs unlocked; only `--delete-unconfirmed` unlocks any.",
+            "minimum": 0
           }
         }
       }
