@@ -4,7 +4,9 @@
 //! [`Method`] and never names one.
 
 use lepic_primitives::params::Network;
-use lepic_slate::codec::{CodecId, EncodeContext, WireSlate};
+/// What an encoder is told about the slate it encodes; a [`Method`] implementation takes it.
+pub use lepic_slate::codec::EncodeContext;
+use lepic_slate::codec::{CodecId, WireSlate};
 use lepic_slate::error::DecodeError;
 use lepic_slate::model::Slate;
 

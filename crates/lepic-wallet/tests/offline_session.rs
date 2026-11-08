@@ -37,7 +37,7 @@ use lepic_wallet::selection::SelectionStrategy;
 use lepic_wallet::send::{Delivery, SendError, SendRequest};
 use receive_harness::Receiver;
 use send_support::{ACCOUNT, PEER, Sender, TIP};
-use support::{LOOPBACK, TestWallet, password};
+use support::{TestWallet, password};
 
 const AMOUNT: u64 = 100_000_000;
 const RECEIVER_MNEMONIC: &str = "legal winner thank year wave sausage worth useful legal winner \
@@ -100,9 +100,9 @@ fn send(sender: &Sender, wallet: &TestWallet, peer: &LoopbackTransport) -> (TxId
     let sent = sender
         .harness
         .block_on(wallet.send(
+            &sender.harness.method(),
             request(),
             Delivery::Deliver {
-                transport: LOOPBACK,
                 to: Destination::new(PEER.to_owned()),
             },
         ))
@@ -140,7 +140,7 @@ fn cold_payment() -> Cold {
         .reply;
     let finalized = sender
         .harness
-        .block_on(wallet.finalize(LOOPBACK, &s2, Propagation::Fluff))
+        .block_on(wallet.finalize(&sender.harness.method(), &s2, Propagation::Fluff))
         .unwrap();
 
     assert!(!finalized.pushed);
@@ -218,9 +218,9 @@ fn an_offline_session_without_a_confirmed_tip_refuses_to_send() {
     let error = sender
         .harness
         .block_on(wallet.send(
+            &sender.harness.method(),
             request(),
             Delivery::Deliver {
-                transport: LOOPBACK,
                 to: Destination::new(PEER.to_owned()),
             },
         ))
@@ -249,7 +249,7 @@ fn an_online_session_asks_the_node_and_posts_as_before() {
         .reply;
     let finalized = sender
         .harness
-        .block_on(wallet.finalize(LOOPBACK, &s2, Propagation::Fluff))
+        .block_on(wallet.finalize(&sender.harness.method(), &s2, Propagation::Fluff))
         .unwrap();
 
     assert!(finalized.pushed);

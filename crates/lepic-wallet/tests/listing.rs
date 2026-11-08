@@ -19,7 +19,7 @@ mod support;
 mod world;
 
 use lepic_crypto::{PublicKey, SecretKey};
-use lepic_epicbox::{EpicboxAddress, TRANSPORT_ID};
+use lepic_epicbox::EpicboxAddress;
 use lepic_keychain::Identifier;
 use lepic_primitives::amount::Amount;
 use lepic_slate::model::{ProofAddress, SlateId};
@@ -61,13 +61,13 @@ impl World {
 
     fn pay(&self, to: &EpicboxAddress) -> SentSlate {
         self.block_on(self.payer.wallet.send(
+            &self.payer.method,
             SendRequest {
                 minimum_confirmations: 1,
                 strategy: SelectionStrategy::Smallest,
                 ..SendRequest::new(ACCOUNT, Amount::new(AMOUNT))
             },
             Delivery::Deliver {
-                transport: TRANSPORT_ID,
                 to: Destination::new(to.to_string()),
             },
         ))
@@ -126,6 +126,7 @@ fn s1_with_proof(world: &World, proof: ProofAddress) -> (SentSlate, String) {
     let path = dir.path().join("s1.tx");
     let sent = world
         .block_on(world.payer.wallet.send(
+            &crate::support::file(),
             SendRequest {
                 minimum_confirmations: 1,
                 strategy: SelectionStrategy::Smallest,
@@ -133,7 +134,6 @@ fn s1_with_proof(world: &World, proof: ProofAddress) -> (SentSlate, String) {
                 ..SendRequest::new(ACCOUNT, Amount::new(AMOUNT))
             },
             Delivery::Export {
-                transport: lepic_transport::file::FILE,
                 to: lepic_transport::transport::Location::File(path.clone()),
             },
         ))

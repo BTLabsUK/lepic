@@ -36,7 +36,7 @@ use lepic_wallet::selection::SelectionStrategy;
 use lepic_wallet::send::{Delivery, SendRequest};
 use send_support::{ACCOUNT, FUNDING, PEER, Sender, TIP, legacy_codecs};
 use support::both_stores;
-use support::{LOOPBACK, fixed_time};
+use support::fixed_time;
 use uuid::Uuid;
 
 const AMOUNT: u64 = 100_000_000;
@@ -61,7 +61,6 @@ fn request(ttl_blocks: Option<u64>) -> SendRequest {
 
 fn to_peer() -> Delivery {
     Delivery::Deliver {
-        transport: LOOPBACK,
         to: Destination::new(PEER.to_owned()),
     }
 }
@@ -128,7 +127,11 @@ fn expires_an_unposted_send_at_its_ttl_cutoff_and_releases_its_inputs() {
     let (sender, funding) = funded();
     let sent = sender
         .harness
-        .block_on(sender.wallet.send(request(Some(TTL_BLOCKS)), to_peer()))
+        .block_on(sender.wallet.send(
+            &sender.harness.method(),
+            request(Some(TTL_BLOCKS)),
+            to_peer(),
+        ))
         .unwrap();
     let change = change(&sender, &funding);
     let slate_id = Uuid::from_bytes(*sent.slate_id.as_bytes());
@@ -173,6 +176,7 @@ fn expires_an_unanswered_send_at_its_local_cutoff_as_at_a_ttl() {
     let sent = sender
         .harness
         .block_on(sender.wallet.send(
+            &sender.harness.method(),
             SendRequest {
                 local_ttl_blocks: Some(TTL_BLOCKS),
                 ..request(None)
@@ -267,7 +271,11 @@ fn never_expires_a_send_without_a_ttl_or_one_already_posted() {
     let (sender, funding) = funded();
     let without_ttl = sender
         .harness
-        .block_on(sender.wallet.send(request(None), to_peer()))
+        .block_on(
+            sender
+                .wallet
+                .send(&sender.harness.method(), request(None), to_peer()),
+        )
         .unwrap();
     sender.fund(9, FUNDING);
     let funding_9 = sender
@@ -280,7 +288,11 @@ fn never_expires_a_send_without_a_ttl_or_one_already_posted() {
     });
     let posted = sender
         .harness
-        .block_on(sender.wallet.send(request(Some(TTL_BLOCKS)), to_peer()))
+        .block_on(sender.wallet.send(
+            &sender.harness.method(),
+            request(Some(TTL_BLOCKS)),
+            to_peer(),
+        ))
         .unwrap();
     sender
         .store
@@ -312,7 +324,11 @@ fn confirms_a_send_once_its_change_is_on_chain_and_reports_the_balance() {
     let (sender, funding) = funded();
     let sent = sender
         .harness
-        .block_on(sender.wallet.send(request(None), to_peer()))
+        .block_on(
+            sender
+                .wallet
+                .send(&sender.harness.method(), request(None), to_peer()),
+        )
         .unwrap();
     let change = change(&sender, &funding);
     sender.harness.node.update_chain(|chain| {
@@ -468,7 +484,11 @@ fn keeps_a_cancelled_send_cancelled_when_its_change_appears_on_chain() {
     let (sender, funding) = funded();
     let sent = sender
         .harness
-        .block_on(sender.wallet.send(request(None), to_peer()))
+        .block_on(
+            sender
+                .wallet
+                .send(&sender.harness.method(), request(None), to_peer()),
+        )
         .unwrap();
     let change = change(&sender, &funding);
     // Cancel deletes the change, so the state is set directly: an ended transaction whose
@@ -678,7 +698,11 @@ fn details_of_a_send_confirmed_by_its_change_show_the_change_height() {
     let (sender, funding) = funded();
     let sent = sender
         .harness
-        .block_on(sender.wallet.send(request(None), to_peer()))
+        .block_on(
+            sender
+                .wallet
+                .send(&sender.harness.method(), request(None), to_peer()),
+        )
         .unwrap();
     let change = change(&sender, &funding);
     let unconfirmed = details(&sender, sent.tx_id);
@@ -707,7 +731,11 @@ fn a_reorganisation_that_moves_the_confirming_change_moves_the_confirmation_heig
     let (sender, funding) = funded();
     let sent = sender
         .harness
-        .block_on(sender.wallet.send(request(None), to_peer()))
+        .block_on(
+            sender
+                .wallet
+                .send(&sender.harness.method(), request(None), to_peer()),
+        )
         .unwrap();
     let change = change(&sender, &funding);
     sender.harness.node.update_chain(|chain| {

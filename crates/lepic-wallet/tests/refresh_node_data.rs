@@ -46,7 +46,7 @@ use lepic_wallet::{Ports, SharedRng, Wallet, WalletError};
 use rand::SeedableRng;
 use rand::rngs::StdRng;
 use send_support::{ACCOUNT, PEER, Sender, TIP, legacy_codecs};
-use support::{FixedClock, LOOPBACK, TestStores, TestVault, fixed_time, password};
+use support::{FixedClock, TestStores, TestVault, fixed_time, password};
 use uuid::Uuid;
 
 const AMOUNT: u64 = 100_000_000;
@@ -186,13 +186,13 @@ fn scripted(sender: &Sender, script: Script) -> ScriptedWallet {
             },
             stores: ports.stores.clone(),
             secrets: ports.secrets.clone(),
-            transports: sender.harness.transports(),
             clock: Arc::new(FixedClock(
                 jiff::Timestamp::from_second(fixed_time().as_second() + script.clock_ahead)
                     .unwrap(),
             )),
             rng: SharedRng::new(StdRng::seed_from_u64(43)),
             runtime: sender.harness.runtime.handle().clone(),
+            notices: None,
         },
     )
     .unwrap();
@@ -238,12 +238,15 @@ fn send_with_ttl(sender: &Sender) -> TxId {
         ..SendRequest::new(ACCOUNT, Amount::new(AMOUNT))
     };
     let delivery = Delivery::Deliver {
-        transport: LOOPBACK,
         to: Destination::new(PEER.to_owned()),
     };
     sender
         .harness
-        .block_on(sender.wallet.send(request, delivery))
+        .block_on(
+            sender
+                .wallet
+                .send(&sender.harness.method(), request, delivery),
+        )
         .unwrap()
         .tx_id
 }
@@ -844,10 +847,10 @@ fn a_kernel_height_above_the_tip_changes_nothing_through_the_node_client() {
             node: client,
             stores: ports.stores.clone(),
             secrets: ports.secrets.clone(),
-            transports: sender.harness.transports(),
             clock: Arc::new(FixedClock(fixed_time())),
             rng: SharedRng::new(StdRng::seed_from_u64(44)),
             runtime: sender.harness.runtime.handle().clone(),
+            notices: None,
         },
     )
     .unwrap();
@@ -1038,11 +1041,12 @@ fn send_refuses_a_tip_above_the_plausible_height() {
         ..SendRequest::new(ACCOUNT, Amount::new(AMOUNT))
     };
     let delivery = Delivery::Deliver {
-        transport: LOOPBACK,
         to: Destination::new(PEER.to_owned()),
     };
 
-    let result = sender.harness.block_on(wallet.send(request, delivery));
+    let result = sender
+        .harness
+        .block_on(wallet.send(&sender.harness.method(), request, delivery));
 
     assert!(
         matches!(
@@ -1107,7 +1111,7 @@ fn receive_refuses_a_tip_above_the_plausible_height() {
     ));
 
     let result = sender.harness.block_on(wallet.receive(
-        LOOPBACK,
+        &sender.harness.method(),
         &s1,
         lepic_wallet::ReceiveRequest::default(),
     ));
@@ -1127,9 +1131,10 @@ fn finalize_refuses_a_tip_above_the_plausible_height() {
         "../../../testdata/vectors/slates/send_file_plain_s2_v3.json"
     ));
 
-    let result = sender
-        .harness
-        .block_on(wallet.finalize(LOOPBACK, &s2, Propagation::Stem));
+    let result =
+        sender
+            .harness
+            .block_on(wallet.finalize(&sender.harness.method(), &s2, Propagation::Stem));
 
     match result {
         Err(lepic_wallet::FinalizeError::Wallet(error)) => assert_implausible_wallet_error(&error),
@@ -1149,13 +1154,13 @@ fn invoice_issue_refuses_a_tip_above_the_plausible_height() {
         ttl_blocks: None,
     };
     let delivery = Delivery::Deliver {
-        transport: LOOPBACK,
         to: Destination::new(PEER.to_owned()),
     };
 
-    let result = sender
-        .harness
-        .block_on(wallet.issue_invoice(request, delivery));
+    let result =
+        sender
+            .harness
+            .block_on(wallet.issue_invoice(&sender.harness.method(), request, delivery));
 
     match result {
         Err(InvoiceError::Wallet(error)) => assert_implausible_wallet_error(&error),
@@ -1173,7 +1178,7 @@ fn invoice_pay_refuses_a_tip_above_the_plausible_height() {
     ));
 
     let result = sender.harness.block_on(wallet.pay_invoice(
-        LOOPBACK,
+        &sender.harness.method(),
         &i1,
         PayRequest::new(ACCOUNT, amount),
     ));
@@ -1193,9 +1198,11 @@ fn invoice_finalize_refuses_a_tip_above_the_plausible_height() {
         "../../../testdata/vectors/slates/invoice_file_header_7_i2_v3.json"
     ));
 
-    let result = sender
-        .harness
-        .block_on(wallet.finalize_invoice(LOOPBACK, &i2, Propagation::Stem));
+    let result = sender.harness.block_on(wallet.finalize_invoice(
+        &sender.harness.method(),
+        &i2,
+        Propagation::Stem,
+    ));
 
     match result {
         Err(InvoiceError::Wallet(error)) => assert_implausible_wallet_error(&error),

@@ -30,8 +30,8 @@ use lepic_slate::origin::WireOrigin;
 use lepic_store::{AccountIndex, StoreError, StoreKeys, WalletStore};
 use lepic_transport::file::{FILE, FilePolicy};
 use lepic_transport::loopback::LoopbackTransport;
+use lepic_transport::method::Method;
 use lepic_transport::policy::{Encoding, FormatPolicy};
-use lepic_transport::registry::TransportRegistry;
 use lepic_transport::transport::{Destination, TransportId};
 use lepic_wallet::{
     NodeEndpoint, Ports, ReceiveError, ReceiveRequest, SharedRng, Wallet, WalletConfig, WalletName,
@@ -190,6 +190,8 @@ pub struct Receiver {
     pub node: MockNode,
     pub seed: Seed,
     pub wallet: ReceiverWallet,
+    /// The wallet's ends of the file and echo loopback pairs.
+    methods: Vec<Arc<dyn Method>>,
 }
 
 impl Receiver {
@@ -218,7 +220,7 @@ impl Receiver {
             .unwrap();
         let stores = TestStores::default();
         let node = node_at(tip);
-        let mut transports = TransportRegistry::new();
+        let mut methods: Vec<Arc<dyn Method>> = Vec::new();
         for (id, policy) in [
             (FILE, Arc::new(FilePolicy) as Arc<dyn FormatPolicy>),
             (EPICBOX, Arc::new(EchoPolicy)),
@@ -229,16 +231,16 @@ impl Receiver {
                 Destination::new("receiver".to_owned()),
                 Destination::new("sender".to_owned()),
             );
-            transports.register(Box::new(own)).unwrap();
+            methods.push(Arc::new(own));
         }
         let ports = Ports {
             node: node.client(),
             stores: stores.clone(),
             secrets: TestVault::default(),
-            transports,
             clock: Arc::new(FixedClock(fixed_time())),
             rng: SharedRng::new(RepeatingRng(1)),
             runtime: runtime.handle().clone(),
+            notices: None,
         };
         let config = WalletConfig {
             name: WalletName::new("receiver").unwrap(),
@@ -261,11 +263,18 @@ impl Receiver {
             node,
             seed: Seed::from_mnemonic(mnemonic).unwrap(),
             wallet,
+            methods,
         }
     }
 
     pub fn block_on<T>(&self, future: impl Future<Output = T>) -> T {
         self.runtime.block_on(future)
+    }
+
+    /// The wallet's end of the transport `transport` names.
+    pub fn method(&self, transport: TransportId) -> Arc<dyn Method> {
+        let method = self.methods.iter().find(|method| method.id() == transport);
+        Arc::clone(method.unwrap_or_else(|| panic!("no transport {transport}")))
     }
 
     pub fn complete_restore_scan(&self) {
@@ -295,8 +304,10 @@ impl Receiver {
         json: &str,
         request: ReceiveRequest,
     ) -> Result<lepic_wallet::Received, ReceiveError> {
-        self.runtime
-            .block_on(self.wallet.receive(transport, &wire(json), request))
+        self.runtime.block_on(
+            self.wallet
+                .receive(&self.method(transport), &wire(json), request),
+        )
     }
 
     /// The wallet's database, opened with the key the engine seals contexts under.
@@ -332,12 +343,11 @@ impl Receiver {
         Result<lepic_wallet::Received, ReceiveError>,
     ) {
         let (a, b) = (wire(json), wire(json));
+        let method = self.method(transport);
         self.runtime.block_on(async {
             tokio::join!(
-                self.wallet
-                    .receive(transport, &a, ReceiveRequest::default()),
-                self.wallet
-                    .receive(transport, &b, ReceiveRequest::default())
+                self.wallet.receive(&method, &a, ReceiveRequest::default()),
+                self.wallet.receive(&method, &b, ReceiveRequest::default())
             )
         })
     }

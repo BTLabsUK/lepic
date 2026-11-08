@@ -32,7 +32,6 @@ use lepic_wallet::selection::SelectionStrategy;
 use lepic_wallet::send::{Delivery, SendRequest};
 use receive_harness::Receiver;
 use send_support::{ACCOUNT, FUNDING, PEER, Sender, TIP, uuid};
-use support::LOOPBACK;
 
 const AMOUNT: u64 = 100_000_000;
 
@@ -52,7 +51,6 @@ fn request() -> SendRequest {
 
 fn to_peer() -> Delivery {
     Delivery::Deliver {
-        transport: LOOPBACK,
         to: Destination::new(PEER.to_owned()),
     }
 }
@@ -74,7 +72,11 @@ fn exchange() -> Exchange {
     let sender = Sender::new();
     let sent = sender
         .harness
-        .block_on(sender.wallet.send(request(), to_peer()))
+        .block_on(
+            sender
+                .wallet
+                .send(&sender.harness.method(), request(), to_peer()),
+        )
         .unwrap();
     let (s1, _) = sender.received().unwrap();
     let receiver = Receiver::new(RECEIVER_MNEMONIC, TIP);
@@ -177,19 +179,20 @@ fn finalize_and_cancel_at_once_end_in_one_consistent_state() {
         for cancel_first in [false, true] {
             let exchange = exchange();
             let wallet = &exchange.sender.wallet;
+            let method = exchange.sender.harness.method();
             let (finalized, cancelled) = exchange.sender.harness.block_on(async {
                 if cancel_first {
                     let (cancelled, finalized) =
                         tokio::join!(wallet.cancel(exchange.tx_id), async {
                             after_yields(round).await;
                             wallet
-                                .finalize(LOOPBACK, &exchange.s2, Propagation::Stem)
+                                .finalize(&method, &exchange.s2, Propagation::Stem)
                                 .await
                         });
                     (finalized, cancelled)
                 } else {
                     tokio::join!(
-                        wallet.finalize(LOOPBACK, &exchange.s2, Propagation::Stem),
+                        wallet.finalize(&method, &exchange.s2, Propagation::Stem),
                         async {
                             after_yields(round).await;
                             wallet.cancel(exchange.tx_id).await
@@ -213,7 +216,7 @@ fn finalize_and_cancel_at_once_end_in_one_consistent_state() {
                 assert!(again.is_err(), "round {round}: a posted send was cancelled");
             }
             let refinalized = exchange.sender.harness.block_on(wallet.finalize(
-                LOOPBACK,
+                &exchange.sender.harness.method(),
                 &exchange.s2,
                 Propagation::Stem,
             ));
@@ -235,13 +238,14 @@ fn two_finalizes_of_one_s2_at_once_push_only_that_transaction() {
     for round in 0..=SWEEP {
         let exchange = exchange();
         let wallet = &exchange.sender.wallet;
+        let method = exchange.sender.harness.method();
         let (first, second) = exchange.sender.harness.block_on(async {
             tokio::join!(
-                wallet.finalize(LOOPBACK, &exchange.s2, Propagation::Stem),
+                wallet.finalize(&method, &exchange.s2, Propagation::Stem),
                 async {
                     after_yields(round).await;
                     wallet
-                        .finalize(LOOPBACK, &exchange.s2, Propagation::Stem)
+                        .finalize(&method, &exchange.s2, Propagation::Stem)
                         .await
                 }
             )
@@ -264,10 +268,11 @@ fn two_sends_at_once_never_lock_one_coin_twice() {
     for round in 0..=SWEEP {
         let sender = Sender::new();
         let wallet = &sender.wallet;
+        let method = sender.harness.method();
         let (first, second) = sender.harness.block_on(async {
-            tokio::join!(wallet.send(request(), to_peer()), async {
+            tokio::join!(wallet.send(&method, request(), to_peer()), async {
                 after_yields(round).await;
-                wallet.send(request(), to_peer()).await
+                wallet.send(&method, request(), to_peer()).await
             })
         });
         // One coin of 14.6 EPIC pays two sends of 1 EPIC only one at a time.
@@ -296,12 +301,14 @@ fn cancel_and_send_at_once_never_spend_a_coin_the_other_released() {
         let wallet = &sender.wallet;
         let first = sender
             .harness
-            .block_on(wallet.send(request(), to_peer()))
+            .block_on(wallet.send(&sender.harness.method(), request(), to_peer()))
             .unwrap();
         let (cancelled, second) = sender.harness.block_on(async {
             tokio::join!(wallet.cancel(first.tx_id), async {
                 after_yields(round).await;
-                wallet.send(request(), to_peer()).await
+                wallet
+                    .send(&sender.harness.method(), request(), to_peer())
+                    .await
             })
         });
         cancelled.unwrap();

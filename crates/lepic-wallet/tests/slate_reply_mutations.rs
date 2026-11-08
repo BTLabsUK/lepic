@@ -37,7 +37,6 @@ use proptest::test_runner::{Config, TestCaseError, TestRunner};
 use receive_harness::Receiver;
 use send_support::{ACCOUNT, PEER, Sender, TIP, uuid};
 use serde_json::Value;
-use support::LOOPBACK;
 
 const AMOUNT: u64 = 100_000_000;
 const INVOICE_AMOUNT: u64 = 300_000_000;
@@ -302,6 +301,7 @@ fn exchange() -> Exchange {
     let sent = sender
         .harness
         .block_on(sender.wallet.send(
+            &sender.harness.method(),
             SendRequest {
                 minimum_confirmations: 1,
                 strategy: SelectionStrategy::Smallest,
@@ -309,7 +309,6 @@ fn exchange() -> Exchange {
                 ..SendRequest::new(ACCOUNT, Amount::new(AMOUNT))
             },
             Delivery::Deliver {
-                transport: LOOPBACK,
                 to: Destination::new(PEER.to_owned()),
             },
         ))
@@ -357,7 +356,7 @@ impl Exchange {
     fn assert_refused(&self, name: &str, s2: &WireSlate) {
         let before = self.snapshot();
         let result = self.sender.harness.block_on(self.sender.wallet.finalize(
-            LOOPBACK,
+            &self.sender.harness.method(),
             s2,
             Propagation::Stem,
         ));
@@ -386,12 +385,11 @@ fn the_unchanged_s2_still_finalizes_after_every_refusal() {
     let finalized = exchange
         .sender
         .harness
-        .block_on(
-            exchange
-                .sender
-                .wallet
-                .finalize(LOOPBACK, &exchange.s2, Propagation::Stem),
-        )
+        .block_on(exchange.sender.wallet.finalize(
+            &exchange.sender.harness.method(),
+            &exchange.s2,
+            Propagation::Stem,
+        ))
         .unwrap();
     assert_eq!(finalized.tx_id, exchange.tx_id);
 }
@@ -423,12 +421,11 @@ fn an_s2_with_any_number_field_moved_or_hex_digit_flipped_is_refused() {
             let result = exchange
                 .sender
                 .harness
-                .block_on(
-                    exchange
-                        .sender
-                        .wallet
-                        .finalize(LOOPBACK, &s2, Propagation::Stem),
-                );
+                .block_on(exchange.sender.wallet.finalize(
+                    &exchange.sender.harness.method(),
+                    &s2,
+                    Propagation::Stem,
+                ));
             if result.is_ok() {
                 return Err(TestCaseError::fail(format!(
                     "{field} {delta} was finalized"

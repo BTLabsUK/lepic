@@ -45,7 +45,6 @@ use receive_harness::{Receiver, json, vector};
 use send_support::{ACCOUNT, PEER, Sender, TIP, V2Only, legacy_codecs, uuid};
 use serde_json::Value;
 use std::sync::Arc;
-use support::LOOPBACK;
 use support::both_stores;
 
 const AMOUNT: u64 = 100_000_000;
@@ -96,9 +95,9 @@ fn exchange_replying(
     let sent = sender
         .harness
         .block_on(sender.wallet.send(
+            &sender.harness.method(),
             request,
             Delivery::Deliver {
-                transport: LOOPBACK,
                 to: Destination::new(PEER.to_owned()),
             },
         ))
@@ -125,9 +124,11 @@ fn reply(s1: &WireSlate, message: Option<&str>) -> WireSlate {
 
 impl Exchange {
     fn finalize(&self, s2: &WireSlate) -> Result<lepic_wallet::Finalized, FinalizeError> {
-        self.sender
-            .harness
-            .block_on(self.sender.wallet.finalize(LOOPBACK, s2, Propagation::Stem))
+        self.sender.harness.block_on(self.sender.wallet.finalize(
+            &self.sender.harness.method(),
+            s2,
+            Propagation::Stem,
+        ))
     }
 
     fn post(&self, tx_id: TxId) -> Result<Posted, FinalizeError> {

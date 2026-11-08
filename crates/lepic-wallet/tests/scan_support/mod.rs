@@ -231,7 +231,7 @@ pub fn rechecking_wallet_with(
             node,
             stores: ports.stores,
             secrets: ports.secrets,
-            transports: ports.transports,
+            notices: ports.notices,
             clock: ports.clock,
             rng: ports.rng,
             runtime: ports.runtime,

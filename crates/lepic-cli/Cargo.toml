@@ -25,6 +25,7 @@ jiff = { workspace = true, features = ["std"] }
 lepic-epicbox.workspace = true
 lepic-foreign.workspace = true
 lepic-keychain.workspace = true
+lepic-methods = { workspace = true, features = ["epicbox", "http", "tor"] }
 lepic-node.workspace = true
 lepic-primitives.workspace = true
 lepic-store.workspace = true

@@ -19,8 +19,6 @@ mock-relay = ["epicbox", "lepic-epicbox/mock-relay"]
 [dependencies]
 lepic-epicbox = { workspace = true, optional = true }
 lepic-foreign = { workspace = true, optional = true }
-lepic-primitives.workspace = true
-lepic-slate.workspace = true
 lepic-tor = { workspace = true, optional = true }
 lepic-transport.workspace = true
 thiserror.workspace = true

@@ -516,13 +516,13 @@ fn a_withdrawal_through_the_mailbox_is_received_and_answered_through_the_outbox(
     let mut issuer_events = world.issuer.wallet.subscribe();
     let sent = world
         .block_on(world.payer.wallet.send(
+            &crate::support::file(),
             SendRequest {
                 minimum_confirmations: 1,
                 strategy: SelectionStrategy::Smallest,
                 ..SendRequest::new(ACCOUNT, Amount::new(AMOUNT))
             },
             Delivery::Export {
-                transport: lepic_transport::file::FILE,
                 to: lepic_transport::transport::Location::File(
                     tempfile::tempdir().unwrap().keep().join("s1.tx"),
                 ),
@@ -562,13 +562,13 @@ fn a_payment_through_the_mailbox_to_a_wallet_that_refuses_them_is_declined() {
     let mut payer_events = world.payer.wallet.subscribe();
     let sent = world
         .block_on(world.payer.wallet.send(
+            &crate::support::file(),
             SendRequest {
                 minimum_confirmations: 1,
                 strategy: SelectionStrategy::Smallest,
                 ..SendRequest::new(ACCOUNT, Amount::new(AMOUNT))
             },
             Delivery::Export {
-                transport: lepic_transport::file::FILE,
                 to: lepic_transport::transport::Location::File(
                     tempfile::tempdir().unwrap().keep().join("s1.tx"),
                 ),
@@ -977,12 +977,11 @@ fn a_contact_notice_counts_only_for_slates_exchanged_with_that_contact() {
     let world = World::new();
     let issued = world.issue(None);
     let paid = world
-        .block_on(
-            world
-                .payer
-                .wallet
-                .pay_parked_invoice(issued.slate_id, pay_request()),
-        )
+        .block_on(world.payer.wallet.pay_parked_invoice(
+            &world.payer.method,
+            issued.slate_id,
+            pay_request(),
+        ))
         .unwrap();
     let mallory = world.stranger();
     let (on_mallory, on_payer) = world.pair(&mallory, &world.payer);
@@ -1160,13 +1159,13 @@ fn send_through_mailbox(
 ) -> lepic_store::TxId {
     let sent = world
         .block_on(world.payer.wallet.send(
+            &crate::support::file(),
             SendRequest {
                 minimum_confirmations: 1,
                 strategy: SelectionStrategy::Smallest,
                 ..SendRequest::new(ACCOUNT, Amount::new(AMOUNT))
             },
             Delivery::Export {
-                transport: lepic_transport::file::FILE,
                 to: lepic_transport::transport::Location::File(
                     tempfile::tempdir().unwrap().keep().join("s1.tx"),
                 ),
@@ -1257,7 +1256,11 @@ fn address_invoice_calls_never_act_on_a_contact_invoice() {
             .is_empty()
     );
     assert!(matches!(
-        world.block_on(wallet.pay_parked_invoice(unpaid.slate_id, pay_request())),
+        world.block_on(wallet.pay_parked_invoice(
+            &world.payer.method,
+            unpaid.slate_id,
+            pay_request()
+        )),
         Err(lepic_wallet::invoice::InvoiceError::NotParked { .. })
     ));
     assert!(matches!(
@@ -1275,9 +1278,9 @@ fn address_invoice_calls_never_act_on_a_contact_invoice() {
     let paid = world.pay_contact(&to_pay);
     assert!(matches!(
         world.block_on(wallet.resend(
+            &world.payer.method,
             paid.tx_id,
             Delivery::Deliver {
-                transport: lepic_epicbox::TRANSPORT_ID,
                 to: lepic_transport::transport::Destination::new(world.issuer.address.to_string()),
             },
         )),
@@ -1400,13 +1403,13 @@ fn mailbox_slates_are_recorded_as_epicbox_and_sealed_files_as_files() {
     world.payer.fund(1, world::FUNDING);
     let sent = world
         .block_on(world.payer.wallet.send(
+            &crate::support::file(),
             SendRequest {
                 minimum_confirmations: 1,
                 strategy: SelectionStrategy::Smallest,
                 ..SendRequest::new(ACCOUNT, Amount::new(AMOUNT))
             },
             Delivery::Export {
-                transport: lepic_transport::file::FILE,
                 to: lepic_transport::transport::Location::File(
                     tempfile::tempdir().unwrap().keep().join("s1.tx"),
                 ),
@@ -1436,12 +1439,11 @@ fn a_contact_cannot_take_over_another_payment_by_its_slate_id() {
     let world = World::new();
     let issued = world.issue(None);
     let paid = world
-        .block_on(
-            world
-                .payer
-                .wallet
-                .pay_parked_invoice(issued.slate_id, pay_request()),
-        )
+        .block_on(world.payer.wallet.pay_parked_invoice(
+            &world.payer.method,
+            issued.slate_id,
+            pay_request(),
+        ))
         .unwrap();
     let mallory = world.stranger();
     mallory.fund(1, world::FUNDING);
@@ -1451,13 +1453,13 @@ fn a_contact_cannot_take_over_another_payment_by_its_slate_id() {
     let file = tempfile::tempdir().unwrap().keep().join("s1.tx");
     world
         .block_on(mallory.wallet.send(
+            &crate::support::file(),
             SendRequest {
                 minimum_confirmations: 1,
                 strategy: SelectionStrategy::Smallest,
                 ..SendRequest::new(ACCOUNT, Amount::new(AMOUNT))
             },
             Delivery::Export {
-                transport: lepic_transport::file::FILE,
                 to: lepic_transport::transport::Location::File(file.clone()),
             },
         ))
@@ -1542,6 +1544,7 @@ fn a_contact_invoice_carries_the_issuers_message_only_when_it_verifies() {
     let file = tempfile::tempdir().unwrap().keep().join("i1.tx");
     let unsigned = world
         .block_on(world.issuer.wallet.issue_invoice(
+            &crate::support::file(),
             InvoiceRequest {
                 account: ACCOUNT,
                 amount: Amount::new(AMOUNT),
@@ -1549,7 +1552,6 @@ fn a_contact_invoice_carries_the_issuers_message_only_when_it_verifies() {
                 ttl_blocks: None,
             },
             Delivery::Export {
-                transport: lepic_transport::file::FILE,
                 to: lepic_transport::transport::Location::File(file.clone()),
             },
         ))
@@ -1732,6 +1734,7 @@ fn a_contact_message_sealed_long_ago_or_without_its_send_time_is_not_taken() {
         let file = tempfile::tempdir().unwrap().keep().join("i1.tx");
         world
             .block_on(world.issuer.wallet.issue_invoice(
+                &crate::support::file(),
                 InvoiceRequest {
                     account: ACCOUNT,
                     amount: Amount::new(AMOUNT),
@@ -1739,7 +1742,6 @@ fn a_contact_message_sealed_long_ago_or_without_its_send_time_is_not_taken() {
                     ttl_blocks: None,
                 },
                 Delivery::Export {
-                    transport: lepic_transport::file::FILE,
                     to: lepic_transport::transport::Location::File(file.clone()),
                 },
             ))

@@ -45,6 +45,7 @@ use lepic_wallet::Wallet;
 use lepic_wallet::error::WalletError;
 use lepic_wallet::extension::ContactNotices;
 use lepic_wallet::notice::Notice;
+use lepic_wallet::method::Method;
 use lepic_wallet::ports::{SecretVault, StoreOpener};
 use thiserror::Error;
 
@@ -440,6 +441,12 @@ impl From<StoreError> for ContactError {
 }
 
 /// The ids a pairing hands the host to follow it by.
+/// The method contact slates are encoded and decoded with: sealed text and contact mailboxes
+/// carry them as files do.
+pub(crate) fn file_method() -> Arc<dyn Method> {
+    Arc::new(lepic_transport::file::FileTransport::new())
+}
+
 pub(crate) fn new_id<R: rand_core::CryptoRng + ?Sized>(rng: &mut R) -> [u8; 16] {
     let mut id = [0u8; 16];
     rng.fill_bytes(&mut id);

@@ -195,7 +195,7 @@ fn relays<N: lepic_node::NodeApi + 'static>(
     } else {
         RelayMode::Online
     };
-    ContactRelays::new(opened.epicbox.clone(), mode).with_meeting(meeting.to_vec())
+    ContactRelays::new((*opened.epicbox).clone(), mode).with_meeting(meeting.to_vec())
 }
 
 /// Pays the contact `contact_id` through its mailbox, for `lepic tx send --to-contact`. The S1
@@ -207,7 +207,7 @@ pub(super) async fn send_to_contact<N: lepic_node::NodeApi + 'static>(
     purpose: Option<Purpose>,
     data_dir: &Path,
 ) -> Result<SentSlate, CliError> {
-    let relays = ContactRelays::new(opened.epicbox.clone(), RelayMode::Online);
+    let relays = ContactRelays::new((*opened.epicbox).clone(), RelayMode::Online);
     let slate_file = SlateFile::new(data_dir)?;
     Ok(opened
         .wallet
@@ -1086,7 +1086,7 @@ pub(super) async fn collect_online<N: lepic_node::NodeApi + 'static>(
     meeting: &[lepic_epicbox::RelayEndpoint],
     trigger: CollectTrigger,
 ) -> Result<(), CliError> {
-    let relays = ContactRelays::new(opened.epicbox.clone(), RelayMode::Online)
+    let relays = ContactRelays::new((*opened.epicbox).clone(), RelayMode::Online)
         .with_meeting(meeting.to_vec());
     collect(opened, &relays, trigger).await.map(drop)
 }

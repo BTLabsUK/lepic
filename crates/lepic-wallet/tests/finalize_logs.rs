@@ -47,9 +47,9 @@ fn finalize_and_post_log_in_their_spans_and_never_log_secrets_or_amounts() {
     let sent = sender
         .harness
         .block_on(sender.wallet.send(
+            &sender.harness.method(),
             request,
             Delivery::Deliver {
-                transport: LOOPBACK,
                 to: Destination::new(PEER.to_owned()),
             },
         ))
@@ -71,7 +71,11 @@ fn finalize_and_post_log_in_their_spans_and_never_log_secrets_or_amounts() {
     let ((), captured) = capture(|| {
         let error = sender
             .harness
-            .block_on(sender.wallet.finalize(LOOPBACK, &s2, Propagation::Stem))
+            .block_on(
+                sender
+                    .wallet
+                    .finalize(&sender.harness.method(), &s2, Propagation::Stem),
+            )
             .unwrap_err();
         assert!(
             matches!(error, FinalizeError::NotPosted { .. }),

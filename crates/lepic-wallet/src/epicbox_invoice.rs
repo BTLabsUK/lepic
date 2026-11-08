@@ -10,6 +10,7 @@
 //! records that the payer does not pay invoices. [`crate::Wallet::sweep_invoices`] expires
 //! what was left unpaid on either side.
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use jiff::Timestamp;
@@ -27,7 +28,8 @@ use lepic_store::{
     WalletStore,
 };
 use lepic_transport::file::FILE;
-use lepic_transport::transport::{Destination, Transport};
+use lepic_transport::method::Method;
+use lepic_transport::transport::Destination;
 use tracing::{debug, info, instrument, warn};
 use uuid::Uuid;
 
@@ -281,12 +283,13 @@ where
     /// when the payment was stored but the relay failed; [`Wallet::resend`] tries again.
     #[instrument(skip_all, fields(
         wallet = %self.config().name,
-        transport = TRANSPORT_ID.as_str(),
+        transport = %method.id(),
         slate_id = %slate_id,
         stage = %Stage::I2,
     ))]
     pub async fn pay_parked_invoice(
         &self,
+        method: &Arc<dyn Method>,
         slate_id: SlateId,
         mut request: PayRequest,
     ) -> Result<PaidInvoice, InvoiceError> {
@@ -315,22 +318,18 @@ where
             return Err(InvoiceError::NotParked { slate_id });
         }
         let codecs = stored_codecs(network);
-        let i1 = epicbox_decode(&codecs, &WireSlate::binary(MediaType::JSON, parked.bytes))
-            .map_err(InvoiceError::Decode)?;
+        let wire = WireSlate::binary(MediaType::JSON, parked.bytes);
+        let i1 = epicbox_decode(&codecs, &wire).map_err(InvoiceError::Decode)?;
+        let from = method.sender_facts(&wire);
         let to = Destination::new(parked.sender_address);
         request.ttl_blocks = request.ttl_blocks.or(Some(DEFAULT_PAYMENT_TTL_BLOCKS));
         let paid = self
-            .pay_decoded(TRANSPORT_ID, i1, request, Some(to.clone()))
+            .pay_decoded(method, i1, from, request, Some(to.clone()))
             .await?;
         info!(tx_id = paid.tx_id.0, "invoice paid");
-        let outbound = self
-            .ports()
-            .transports
-            .get(TRANSPORT_ID)
-            .and_then(Transport::outbound)
-            .ok_or(InvoiceError::CannotDeliver {
-                transport: TRANSPORT_ID,
-            })?;
+        let outbound = method.outbound().ok_or(InvoiceError::CannotDeliver {
+            transport: method.id(),
+        })?;
         outbound.deliver(&to, &paid.reply).await.map_err(|source| {
             InvoiceError::PaymentUndelivered {
                 tx_id: paid.tx_id,

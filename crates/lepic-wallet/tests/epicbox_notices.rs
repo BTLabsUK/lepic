@@ -84,11 +84,11 @@ impl World {
     }
 
     fn pay(&self, issued: &IssuedInvoice) -> PaidInvoice {
-        self.block_on(
-            self.payer
-                .wallet
-                .pay_parked_invoice(issued.slate_id, pay_request()),
-        )
+        self.block_on(self.payer.wallet.pay_parked_invoice(
+            &self.payer.method,
+            issued.slate_id,
+            pay_request(),
+        ))
         .unwrap()
     }
 

@@ -18,9 +18,9 @@ use lepic_primitives::amount::{Fee, Height};
 use lepic_store::TxId;
 use lepic_transport::transport::{BoxFuture, Destination, TransportId};
 use lepic_wallet::coinbase::{Coinbase, CoinbaseRequest};
-use lepic_wallet::send::Delivery;
+use lepic_wallet::send::{Delivery, SendError};
 use lepic_wallet::slate::WireSlate;
-use lepic_wallet::{ProofKey, ReceiveError, ReceiveRequest};
+use lepic_wallet::{FinalizeError, ProofKey, ReceiveError, ReceiveRequest};
 use tokio::net::TcpStream;
 use tracing::{debug, warn};
 
@@ -126,7 +126,6 @@ fn foreign_url(url: &str, allow_plain_http: bool) -> Result<ForeignUrl, WalletEr
 
 fn delivery(url: &ForeignUrl) -> Delivery {
     Delivery::Deliver {
-        transport: TRANSPORT_ID,
         to: Destination::new(url.as_uri()),
     }
 }
@@ -206,7 +205,12 @@ impl Session {
             self.policy
                 .send_request_with(amount, minimum_confirmations, message, options)?;
         let url = foreign_url(url, allow_plain_http)?;
-        let sent = self.engine.send(request, delivery(&url)).await?;
+        let method = self
+            .method(TRANSPORT_ID)
+            .ok_or(SendError::UnknownTransport {
+                transport: TRANSPORT_ID,
+            })?;
+        let sent = self.engine.send(method, request, delivery(&url)).await?;
         let slate_id = sent.slate_id.to_string();
         let posted = self.finalize_http_reply(&slate_id).await?;
         Ok(HttpSentTx {
@@ -235,7 +239,14 @@ impl Session {
                 ));
             }
         };
-        self.engine.resend(TxId(tx_id), delivery(&url)).await?;
+        let method = self
+            .method(TRANSPORT_ID)
+            .ok_or(SendError::UnknownTransport {
+                transport: TRANSPORT_ID,
+            })?;
+        self.engine
+            .resend(method, TxId(tx_id), delivery(&url))
+            .await?;
         let posted = self.finalize_http_reply(&slate_id).await?;
         Ok(HttpResentTx {
             tx_id,
@@ -264,9 +275,12 @@ impl Session {
                 "the other wallet's answer was not kept; send it again",
             )
         })?;
+        let method = self
+            .method(transport)
+            .ok_or(FinalizeError::UnknownTransport { transport })?;
         match self
             .engine
-            .finalize(transport, &reply, Propagation::Fluff)
+            .finalize(method, &reply, Propagation::Fluff)
             .await
         {
             Ok(_) => Ok(true),
@@ -419,6 +433,13 @@ impl ReceiveHandler for HttpReceiver {
             };
             let boundary = session.runtime().boundary.clone();
             let transport = self.transport;
+            let Some(method) = session.method(transport).cloned() else {
+                let error = WalletError::from(ReceiveError::UnknownTransport { transport });
+                let refusal = refusal(error.kind);
+                debug!(transport = %transport, error = %error, "payment refused");
+                self.refused(refusal);
+                return Err(refusal);
+            };
             let request = ReceiveRequest {
                 proof_key: self.proof_key,
                 ..ReceiveRequest::default()
@@ -427,7 +448,7 @@ impl ReceiveHandler for HttpReceiver {
                 .run("http_receive", async move {
                     match session
                         .engine
-                        .receive_unsolicited(transport, &slate, request)
+                        .receive_unsolicited(&method, &slate, request)
                         .await
                     {
                         Err(ReceiveError::OpenReceipts(cause)) => Ok(Err(cause)),

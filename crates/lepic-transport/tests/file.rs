@@ -1,15 +1,14 @@
 // SPDX-License-Identifier: Apache-2.0
 //! The file transport: byte-exact export and import, the size limit, unreadable paths, and its
-//! registration.
+//! capabilities.
 
 use std::path::Path;
 
 use lepic_slate::codec::legacy::v2_json::LEGACY_V2_JSON;
 use lepic_slate::codec::legacy::v3_json::LEGACY_V3_JSON;
 use lepic_slate::codec::{MAX_WIRE_SLATE_LEN, MediaType, WireSlate};
-use lepic_transport::error::{FileError, FileOperation, RegistryError, TransportError};
+use lepic_transport::error::{FileError, FileOperation, TransportError};
 use lepic_transport::file::{FILE, FileTransport};
-use lepic_transport::registry::TransportRegistry;
 use lepic_transport::transport::{Exchange, Location, Transport};
 
 fn location(path: &Path) -> Location {
@@ -166,18 +165,5 @@ fn file_transport_offers_exchange_only_and_accepts_both_legacy_codecs() {
     assert_eq!(
         transport.policy().accepted(),
         &[LEGACY_V2_JSON, LEGACY_V3_JSON]
-    );
-}
-
-#[test]
-fn registry_finds_a_transport_by_id_and_refuses_a_second_with_the_same_id() {
-    let mut registry = TransportRegistry::new();
-    registry.register(Box::new(FileTransport::new())).unwrap();
-
-    assert_eq!(registry.get(FILE).map(Transport::id), Some(FILE));
-    assert_eq!(registry.ids().collect::<Vec<_>>(), [FILE]);
-    assert_eq!(
-        registry.register(Box::new(FileTransport::new())),
-        Err(RegistryError::DuplicateTransport { transport: FILE })
     );
 }

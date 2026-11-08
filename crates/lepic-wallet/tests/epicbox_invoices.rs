@@ -18,8 +18,8 @@ mod world;
 
 use std::time::Duration;
 
+use lepic_epicbox::EpicboxClient;
 use lepic_epicbox::marker::v3::carries_lepic_marker;
-use lepic_epicbox::{EpicboxClient, TRANSPORT_ID};
 use lepic_node::Propagation;
 use lepic_primitives::amount::{Amount, Height};
 use lepic_slate::codec::legacy::v3_json::V3JsonCodec;
@@ -130,12 +130,11 @@ fn a_paid_invoice_is_finalized_and_posted_by_the_issuer() {
     let issued = world.issue(None);
 
     let paid = world
-        .block_on(
-            world
-                .payer
-                .wallet
-                .pay_parked_invoice(issued.slate_id, pay_request()),
-        )
+        .block_on(world.payer.wallet.pay_parked_invoice(
+            &world.payer.method,
+            issued.slate_id,
+            pay_request(),
+        ))
         .unwrap();
     assert_eq!(paid.slate.stage(), Stage::I2);
     assert!(carries_lepic_marker(&paid.reply));
@@ -197,12 +196,11 @@ fn an_issued_and_a_paid_invoice_are_invoices_on_both_sides() {
         (TxDirection::Incoming, TxFlow::Invoice)
     );
     let paid = world
-        .block_on(
-            world
-                .payer
-                .wallet
-                .pay_parked_invoice(issued.slate_id, pay_request()),
-        )
+        .block_on(world.payer.wallet.pay_parked_invoice(
+            &world.payer.method,
+            issued.slate_id,
+            pay_request(),
+        ))
         .unwrap();
     assert_eq!(
         flow(&world.payer.wallet, paid.tx_id),
@@ -225,12 +223,11 @@ fn a_payer_is_known_to_run_lepic_after_its_marked_payment() {
     assert_eq!(capability(), PeerInvoiceSupport::Unknown);
     let issued = world.issue(None);
     world
-        .block_on(
-            world
-                .payer
-                .wallet
-                .pay_parked_invoice(issued.slate_id, pay_request()),
-        )
+        .block_on(world.payer.wallet.pay_parked_invoice(
+            &world.payer.method,
+            issued.slate_id,
+            pay_request(),
+        ))
         .unwrap();
     assert_eq!(capability(), PeerInvoiceSupport::Unknown);
 
@@ -433,12 +430,11 @@ fn expiry_deletes_parked_invoices_cancels_issued_ones_and_refuses_late_payments(
     world.issuer.clock.advance(DAY + Duration::from_secs(1));
     // The payer pays the first before its own sweep; the issuer sweeps before it reads it.
     let paid = world
-        .block_on(
-            world
-                .payer
-                .wallet
-                .pay_parked_invoice(late.slate_id, pay_request()),
-        )
+        .block_on(world.payer.wallet.pay_parked_invoice(
+            &world.payer.method,
+            late.slate_id,
+            pay_request(),
+        ))
         .unwrap();
     let payer_sweep = world
         .block_on(world.payer.wallet.sweep_invoices(expiry))
@@ -512,6 +508,7 @@ fn a_payment_past_its_ttl_is_offered_for_cancel_and_not_expired_by_refresh() {
     let issued = world.issue(None);
     let paid = world
         .block_on(world.payer.wallet.pay_parked_invoice(
+            &world.payer.method,
             issued.slate_id,
             PayRequest {
                 ttl_blocks: Some(2),
@@ -558,12 +555,11 @@ fn a_stored_payment_is_delivered_again_after_a_failed_delivery() {
     world.relay.set_refusing(true);
 
     let error = world
-        .block_on(
-            world
-                .payer
-                .wallet
-                .pay_parked_invoice(issued.slate_id, pay_request()),
-        )
+        .block_on(world.payer.wallet.pay_parked_invoice(
+            &world.payer.method,
+            issued.slate_id,
+            pay_request(),
+        ))
         .unwrap_err();
     let InvoiceError::PaymentUndelivered {
         tx_id, slate_id, ..
@@ -579,9 +575,9 @@ fn a_stored_payment_is_delivered_again_after_a_failed_delivery() {
     let elsewhere = World::address_of(8);
     let error = world
         .block_on(world.payer.wallet.resend(
+            &world.payer.method,
             tx_id,
             Delivery::Deliver {
-                transport: TRANSPORT_ID,
                 to: Destination::new(elsewhere.to_string()),
             },
         ))
@@ -598,9 +594,9 @@ fn a_stored_payment_is_delivered_again_after_a_failed_delivery() {
 
     world
         .block_on(world.payer.wallet.resend(
+            &world.payer.method,
             tx_id,
             Delivery::Deliver {
-                transport: TRANSPORT_ID,
                 to: Destination::new(world.issuer.address.to_string()),
             },
         ))
@@ -627,12 +623,11 @@ fn a_declined_invoice_cannot_be_paid() {
         PendingInvoiceStatus::Declined
     );
     let error = world
-        .block_on(
-            world
-                .payer
-                .wallet
-                .pay_parked_invoice(issued.slate_id, pay_request()),
-        )
+        .block_on(world.payer.wallet.pay_parked_invoice(
+            &world.payer.method,
+            issued.slate_id,
+            pay_request(),
+        ))
         .unwrap_err();
     assert!(
         matches!(error, InvoiceError::NotParked { slate_id } if slate_id == issued.slate_id),
@@ -702,12 +697,11 @@ fn a_cancelled_payment_has_exactly_its_inputs_spent_to_the_payer_itself() {
     world.payer.fund(9, 2 * FUNDING);
     let issued = world.issue(None);
     let paid = world
-        .block_on(
-            world
-                .payer
-                .wallet
-                .pay_parked_invoice(issued.slate_id, pay_request()),
-        )
+        .block_on(world.payer.wallet.pay_parked_invoice(
+            &world.payer.method,
+            issued.slate_id,
+            pay_request(),
+        ))
         .unwrap();
     let locked = |world: &World| -> Vec<_> {
         world
@@ -764,6 +758,7 @@ fn expiry_cancels_an_invoice_issued_by_file_and_left_unpaid() {
     let world = World::new();
     let issued = world
         .block_on(world.issuer.wallet.issue_invoice(
+            &crate::support::file(),
             lepic_wallet::invoice::InvoiceRequest {
                 account: ACCOUNT,
                 amount: Amount::new(AMOUNT),
@@ -771,7 +766,6 @@ fn expiry_cancels_an_invoice_issued_by_file_and_left_unpaid() {
                 ttl_blocks: None,
             },
             Delivery::Export {
-                transport: lepic_transport::file::FILE,
                 to: lepic_transport::transport::Location::File(
                     tempfile::tempdir().unwrap().keep().join("i1.tx"),
                 ),

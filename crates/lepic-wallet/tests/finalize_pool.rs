@@ -37,7 +37,7 @@ use lepic_wallet::{Event, Ports, StoreOpener, Wallet};
 use receive_harness::Receiver;
 use send_support::{ACCOUNT, FUNDING, NEXT_CHILD, PEER, SENDER_MNEMONIC, TIP, context_key, output};
 use serde_json::{Value, json};
-use support::{Harness, LOOPBACK, TestStore, TestStores, TestVault, password};
+use support::{Harness, TestStore, TestStores, TestVault, password};
 
 const AMOUNT: u64 = 100_000_000;
 
@@ -115,7 +115,7 @@ impl Posting {
             ),
             stores: shared.stores,
             secrets: shared.secrets,
-            transports: shared.transports,
+            notices: shared.notices,
             clock: shared.clock,
             rng: shared.rng,
             runtime: shared.runtime,
@@ -153,13 +153,13 @@ impl Posting {
 
         let sent = harness
             .block_on(wallet.send(
+                &harness.method(),
                 SendRequest {
                     minimum_confirmations: 1,
                     strategy: SelectionStrategy::Smallest,
                     ..SendRequest::new(ACCOUNT, Amount::new(AMOUNT))
                 },
                 Delivery::Deliver {
-                    transport: LOOPBACK,
                     to: Destination::new(PEER.to_owned()),
                 },
             ))
@@ -186,8 +186,11 @@ impl Posting {
     }
 
     fn finalize(&self) -> Result<lepic_wallet::Finalized, FinalizeError> {
-        self.harness
-            .block_on(self.wallet.finalize(LOOPBACK, &self.s2, Propagation::Stem))
+        self.harness.block_on(self.wallet.finalize(
+            &self.harness.method(),
+            &self.s2,
+            Propagation::Stem,
+        ))
     }
 
     fn post(&self) -> Result<Posted, FinalizeError> {

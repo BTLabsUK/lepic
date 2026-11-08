@@ -25,10 +25,10 @@
 
 mod build;
 
+use std::sync::Arc;
+
 use jiff::Timestamp;
 use lepic_crypto::{Commitment, CryptoError};
-use lepic_epicbox::TRANSPORT_ID as EPICBOX;
-use lepic_epicbox::marker::v3::MarkedV3JsonCodec;
 use lepic_keychain::{IdentifierError, Keychain, KeychainError, ProofError, SwitchCommitment};
 use lepic_node::{NodeApi, NodeError, Propagation};
 use lepic_primitives::amount::{Amount, ArithmeticError, Fee, Height};
@@ -36,13 +36,11 @@ use lepic_primitives::committed::KernelSumError;
 use lepic_primitives::output::{OutputFeatures, OutputIdentifier};
 use lepic_primitives::params::Network;
 use lepic_primitives::validate::ValidationError;
-use lepic_slate::codec::legacy::v2_json::V2JsonCodec;
 use lepic_slate::codec::legacy::v3_json::{LEGACY_V3_JSON, V3JsonCodec};
 use lepic_slate::codec::{Codec, EncodeContext, MediaType, WireSlate};
 use lepic_slate::error::{DecodeError, EncodeError, RegistryError, SlateError};
 use lepic_slate::model::{Slate, SlateId};
 use lepic_slate::origin::WireOrigin;
-use lepic_slate::registry::CodecRegistry;
 use lepic_slate::role::Role;
 use lepic_slate::stage::Stage;
 use lepic_store::{
@@ -51,10 +49,8 @@ use lepic_store::{
     TxState, WalletStore,
 };
 use lepic_transport::error::{FormatError, TransportError};
-use lepic_transport::file::FILE;
-use lepic_transport::policy::{Encoding, FormatPolicy, encode_with};
-use lepic_transport::registry::TransportRegistry;
-use lepic_transport::transport::{Destination, Transport, TransportId};
+use lepic_transport::method::{Encoded, Method, SenderFacts, Sending};
+use lepic_transport::transport::{Destination, TransportId};
 use thiserror::Error;
 use tracing::field::Empty;
 use tracing::{Span, debug, info, instrument};
@@ -65,7 +61,6 @@ pub use build::{
 };
 
 use crate::account::{AccountError, next_output_key};
-use crate::codecs;
 use crate::error::WalletError;
 use crate::extension::ReplyKeys;
 use crate::finalize::{Finalized, FinalizedSlate, PushFailure, SpentInputs};
@@ -377,87 +372,22 @@ pub struct PaidInvoice {
     pub reply: WireSlate,
 }
 
-/// The codecs a legacy transport policy decodes and encodes with, at the network's base fee.
-fn legacy_codecs(base_fee: Fee) -> Result<CodecRegistry, InvoiceError> {
-    codecs_with(Box::new(V3JsonCodec::new(base_fee)), base_fee)
-}
-
-/// The codecs invoice stages go out with over `transport`: over Epicbox the V3 shape carries
-/// the LEPIC marker, so a reply that keeps it proves the peer runs LEPIC. A file or paste I1
-/// carries the marker with `reply_key`, so a LEPIC payer can answer sealed (RFC 0002 5).
-fn invoice_codecs(
-    transport: TransportId,
-    base_fee: Fee,
-    reply_key: Option<[u8; 32]>,
-    features: u32,
-) -> Result<CodecRegistry, InvoiceError> {
-    let v3 = V3JsonCodec::new(base_fee);
-    match reply_key {
-        _ if transport == EPICBOX => codecs_with(
-            Box::new(MarkedV3JsonCodec::new(v3).with_features(features)),
-            base_fee,
-        ),
-        Some(key) if transport == FILE => codecs_with(
-            Box::new(MarkedV3JsonCodec::new(v3).with_reply_key(key)),
-            base_fee,
-        ),
-        _ => codecs_with(Box::new(v3), base_fee),
-    }
-}
-
-fn codecs_with(v3: Box<dyn Codec>, base_fee: Fee) -> Result<CodecRegistry, InvoiceError> {
-    Ok(codecs::legacy_with(
-        v3,
-        Box::new(V2JsonCodec::new(base_fee)),
-    ))
-}
-
 fn uuid(slate_id: SlateId) -> Uuid {
     Uuid::from_bytes(*slate_id.as_bytes())
 }
 
-fn registered(
-    transports: &TransportRegistry,
-    transport: TransportId,
-) -> Result<&dyn Transport, InvoiceError> {
-    transports
-        .get(transport)
-        .ok_or(InvoiceError::UnknownTransport { transport })
-}
-
-/// The transport of `delivery`, if it can carry the slate the way `delivery` says.
-fn delivering<'a>(
-    transports: &'a TransportRegistry,
-    delivery: &Delivery,
-) -> Result<&'a dyn Transport, InvoiceError> {
-    let id = delivery.transport();
-    let transport = registered(transports, id)?;
+/// Whether `method` can carry the slate the way `delivery` says.
+fn check_delivery(method: &dyn Method, delivery: &Delivery) -> Result<(), InvoiceError> {
     match delivery {
-        Delivery::Deliver { .. } if transport.outbound().is_none() => {
-            Err(InvoiceError::CannotDeliver { transport: id })
+        Delivery::Deliver { .. } if method.outbound().is_none() => {
+            Err(InvoiceError::CannotDeliver {
+                transport: method.id(),
+            })
         }
-        Delivery::Export { .. } if transport.exchange().is_none() => {
-            Err(InvoiceError::CannotExport { transport: id })
-        }
-        Delivery::Deliver { .. } | Delivery::Export { .. } => Ok(transport),
-    }
-}
-
-/// The encoding of a new I1 over `transport`. Over Epicbox it is V3, which upstream's
-/// untagged parse reads first, instead of the V2 shape the Epicbox policy gives a new S1: the
-/// payer's TTL on I2 has no field in V2, and I2 answers in the shape of I1.
-fn new_invoice_encoding(
-    transport: &dyn Transport,
-    slate: &Slate,
-    context: &EncodeContext,
-) -> Encoding {
-    if transport.id() == EPICBOX {
-        Encoding {
-            codec: LEGACY_V3_JSON,
-            legacy_header: None,
-        }
-    } else {
-        transport.policy().for_new_slate(slate, context)
+        Delivery::Export { .. } if method.exchange().is_none() => Err(InvoiceError::CannotExport {
+            transport: method.id(),
+        }),
+        Delivery::Deliver { .. } | Delivery::Export { .. } => Ok(()),
     }
 }
 
@@ -591,7 +521,7 @@ struct InvoiceEnvironment<'a> {
     tip: Height,
     now: Timestamp,
     reply_keys: Option<&'a dyn ReplyKeys>,
-    /// What the marker of an Epicbox invoice stage claims.
+    /// What this wallet's marker claims.
     features: u32,
 }
 
@@ -616,11 +546,11 @@ impl InvoiceEnvironment<'_> {
 }
 
 /// Reserves the issuer's output key, builds, encodes and stores an I1 in the caller's store
-/// transaction. Returns the transaction and the I1 as the transport sends a new slate.
+/// transaction. Returns the transaction and the I1 as the method sends a new slate.
 fn issue_stored(
     repos: &mut dyn Repositories,
     env: &InvoiceEnvironment<'_>,
-    transport: &dyn Transport,
+    method: &dyn Method,
     delivery: &Delivery,
     request: &InvoiceRequest,
     randomness: I1Randomness,
@@ -647,21 +577,26 @@ fn issue_stored(
     )?;
     let slate = built.slate;
     let context = encode_context(env.network, &slate);
-    let reply_key = env.reply_keys.and_then(|keys| {
-        keys.reply_public_key(
-            env.keychain,
-            env.network,
-            request.account,
-            *slate.id().as_bytes(),
-        )
-    });
-    let wire = encode_with(
-        &invoice_codecs(transport.id(), env.base_fee(), reply_key, env.features)?,
-        new_invoice_encoding(transport, &slate, &context),
-        &slate,
-        &context,
-    )
-    .map_err(InvoiceError::Encode)?;
+    let reply_key = env
+        .reply_keys
+        .filter(|_| method.carries().reply_key)
+        .and_then(|keys| {
+            keys.reply_public_key(
+                env.keychain,
+                env.network,
+                request.account,
+                *slate.id().as_bytes(),
+            )
+        });
+    let sending = Sending {
+        network: env.network,
+        features: env.features,
+        reply_key,
+    };
+    let wire = method
+        .encode_new(&slate, &context, &sending)
+        .map_err(InvoiceError::Encode)?
+        .wire;
     let stored = env.stored(&slate)?;
 
     let slate_id = uuid(slate.id());
@@ -670,7 +605,7 @@ fn issue_stored(
         direction: TxDirection::Incoming,
         state: TxState::Received,
         slate_id: Some(slate_id),
-        transport: Some(transport.id().as_str().to_owned()),
+        transport: Some(method.id().as_str().to_owned()),
         amount_credited: request.amount,
         amount_debited: Amount::ZERO,
         fee: None,
@@ -702,13 +637,15 @@ fn issue_stored(
     Ok((tx_id, slate, wire))
 }
 
-/// Selects the payer's inputs, builds I2, encodes it by the transport's reply rule and stores
-/// the locked inputs, the change, the transaction and the I2 in the caller's store transaction.
+/// Selects the payer's inputs, builds I2, encodes it by the method's reply rule to the I1's
+/// sender `from` and stores the locked inputs, the change, the transaction and the I2 in the
+/// caller's store transaction.
+#[allow(clippy::too_many_arguments)] // One store transaction's inputs; a struct would only rename them.
 fn pay_stored(
     repos: &mut dyn Repositories,
     env: &InvoiceEnvironment<'_>,
-    transport: TransportId,
-    policy: &dyn FormatPolicy,
+    method: &dyn Method,
+    from: &SenderFacts,
     i1: &Slate,
     request: &PayRequest,
     randomness: &I2Randomness,
@@ -773,25 +710,25 @@ fn pay_stored(
     };
     let slate = build_i2(env.keychain, i1, &plan, randomness)?;
     let context = encode_context(env.network, &slate);
-    let encoding = policy.for_reply(&slate, &context);
-    let reply = encode_with(
-        &invoice_codecs(transport, env.base_fee(), None, env.features)?,
-        encoding,
-        &slate,
-        &context,
-    )
-    .map_err(InvoiceError::Encode)?;
+    let sending = Sending {
+        network: env.network,
+        features: env.features,
+        reply_key: None,
+    };
+    let Encoded { wire: reply, codec } = method
+        .encode_reply(&slate, &context, &sending, from)
+        .map_err(InvoiceError::Encode)?;
 
     let tx_id = store_payment(
         repos,
         env,
         &StoredPayment {
-            transport,
+            transport: method.id(),
             account: request.account,
             slate_id: uuid(slate_id),
             plan: &plan,
             debited: selection.total,
-            codec: encoding.codec.as_str(),
+            codec: codec.as_str(),
             reply: &reply,
         },
     )?;
@@ -997,48 +934,45 @@ where
 {
     /// Issues an invoice for `request.amount` to `request.account`: builds the I1 with this
     /// wallet's output, stores the output, the private context, the transaction (incoming,
-    /// `received`) and the I1, then delivers it as `delivery` says, encoded with that
-    /// transport's rule for a new slate. Over Epicbox the I1 goes out as V3 with the LEPIC
+    /// `received`) and the I1, then delivers it over `method` as `delivery` says, encoded with
+    /// the method's rule for a new slate. Over Epicbox the I1 goes out as V3 with the LEPIC
     /// marker.
     ///
     /// Asks the node for its tip. Fails, with nothing stored, with [`InvoiceError::Wallet`]
     /// carrying [`WalletError::Locked`], an unknown account or
     /// [`WalletError::RestoreScanRequired`], [`InvoiceError::Node`],
-    /// [`InvoiceError::UnknownTransport`], [`InvoiceError::CannotDeliver`] or
-    /// [`InvoiceError::CannotExport`]. Fails with [`InvoiceError::Undelivered`] when the
-    /// invoice was stored but the transport failed; [`Wallet::cancel`] withdraws it.
+    /// [`InvoiceError::CannotDeliver`] or [`InvoiceError::CannotExport`]. Fails with
+    /// [`InvoiceError::Undelivered`] when the invoice was stored but the method failed;
+    /// [`Wallet::cancel`] withdraws it.
     #[instrument(skip_all, fields(
         wallet = %self.config().name,
-        transport = %delivery.transport(),
+        transport = %method.id(),
         stage = %Stage::I1,
         tx_id = Empty,
         slate_id = Empty,
     ))]
     pub async fn issue_invoice(
         &self,
+        method: &Arc<dyn Method>,
         request: InvoiceRequest,
         delivery: Delivery,
     ) -> Result<IssuedInvoice, InvoiceError> {
-        delivering(&self.ports().transports, &delivery)?;
-        let (tx_id, slate, wire) = self.issue_unsent(request, delivery.clone()).await?;
+        check_delivery(&**method, &delivery)?;
+        let (tx_id, slate, wire) = self.issue_unsent(method, request, delivery.clone()).await?;
         let span = Span::current();
         span.record("tx_id", tx_id.0);
         span.record("slate_id", tracing::field::display(slate.id()));
         info!("invoice issued");
 
-        let transport = delivering(&self.ports().transports, &delivery)?;
-        let outcome = match (&delivery, transport.outbound(), transport.exchange()) {
+        let transport = method.id();
+        let outcome = match (&delivery, method.outbound(), method.exchange()) {
             (Delivery::Deliver { to, .. }, Some(outbound), _) => outbound.deliver(to, &wire).await,
             (Delivery::Export { to, .. }, _, Some(exchange)) => exchange.export(&wire, to).await,
             (Delivery::Deliver { .. }, None, _) => {
-                return Err(InvoiceError::CannotDeliver {
-                    transport: delivery.transport(),
-                });
+                return Err(InvoiceError::CannotDeliver { transport });
             }
             (Delivery::Export { .. }, _, None) => {
-                return Err(InvoiceError::CannotExport {
-                    transport: delivery.transport(),
-                });
+                return Err(InvoiceError::CannotExport { transport });
             }
         };
         outcome.map_err(|source| InvoiceError::Undelivered {
@@ -1054,17 +988,18 @@ where
         })
     }
 
-    /// Issues and stores an invoice as [`Wallet::issue_invoice`] does, encoded for the
-    /// transport of `delivery` and recording its destination, without delivering it.
+    /// Issues and stores an invoice as [`Wallet::issue_invoice`] does, encoded for `method`
+    /// and recording the destination of `delivery`, without delivering it.
     pub async fn issue_unsent(
         &self,
+        method: &Arc<dyn Method>,
         request: InvoiceRequest,
         delivery: Delivery,
     ) -> Result<(TxId, Slate, WireSlate), InvoiceError> {
         let session = self.session()?;
-        registered(&self.ports().transports, delivery.transport())?;
         let (tip, _) = self.stage_tip(&session, InvoiceError::Node).await?;
         let reply_keys = self.reply_keys();
+        let method = Arc::clone(method);
         self.blocking(move |ports, config| {
             let env = InvoiceEnvironment {
                 keychain: &session.keychain,
@@ -1074,12 +1009,11 @@ where
                 reply_keys: reply_keys.as_deref(),
                 features: config.claimed_features(),
             };
-            let issued =
-                registered(&ports.transports, delivery.transport()).and_then(|transport| {
-                    let randomness = I1Randomness::draw(&mut **ports.rng.lock())
-                        .map_err(InvoiceError::Signing)?;
+            let issued = I1Randomness::draw(&mut **ports.rng.lock())
+                .map_err(InvoiceError::Signing)
+                .and_then(|randomness| {
                     session.store.write(|repos| {
-                        issue_stored(repos, &env, transport, &delivery, &request, randomness)
+                        issue_stored(repos, &env, &*method, &delivery, &request, randomness)
                     })
                 });
             Ok(issued)
@@ -1087,11 +1021,11 @@ where
         .await?
     }
 
-    /// Pays the issuer's I1, which arrived over `transport`: checks it, selects inputs from
+    /// Pays the issuer's I1, which arrived over `method`: checks it, selects inputs from
     /// `request.account`, adds them with the change, the fee, this wallet's public data,
     /// message and partial signature, and stores the locked inputs, the change, the transaction
     /// (outgoing, `sent`) and the I2 reply in one store transaction. The caller sends the reply
-    /// over the same transport.
+    /// over the same method.
     ///
     /// Asks the node for its tip, which becomes the slate height and the base of
     /// `request.ttl_blocks`. Fails with [`InvoiceError::AmountMismatch`] when the invoice asks
@@ -1109,37 +1043,38 @@ where
     /// seed before a scan from genesis completed. Nothing is stored on failure.
     #[instrument(skip_all, fields(
         wallet = %self.config().name,
-        transport = %transport,
+        transport = %method.id(),
         slate_id = Empty,
         stage = Empty,
         tx_id = Empty,
     ))]
     pub async fn pay_invoice(
         &self,
-        transport: TransportId,
+        method: &Arc<dyn Method>,
         wire: &WireSlate,
         request: PayRequest,
     ) -> Result<PaidInvoice, InvoiceError> {
-        let network = self.config().network;
-        let i1 = registered(&self.ports().transports, transport)?
-            .policy()
-            .decode(&legacy_codecs(network.params().default_base_fee())?, wire)
+        let i1 = method
+            .decode(self.config().network, wire)
             .map_err(InvoiceError::Decode)?;
         let span = Span::current();
         span.record("slate_id", tracing::field::display(i1.id()));
         span.record("stage", i1.stage().as_str());
-        let paid = self.pay_decoded(transport, i1, request, None).await?;
+        let from = method.sender_facts(wire);
+        let paid = self.pay_decoded(method, i1, from, request, None).await?;
         span.record("tx_id", paid.tx_id.0);
         info!("invoice paid");
         Ok(paid)
     }
 
-    /// Checks and pays a decoded I1, as [`Wallet::pay_invoice`] describes. With `parked`, the
+    /// Checks and pays a decoded I1, as [`Wallet::pay_invoice`] describes; `from` is what the
+    /// I1's wire said about its sender, which the I2's encoding follows. With `parked`, the
     /// same store transaction marks that parked invoice paid and records where the I2 goes.
     pub async fn pay_decoded(
         &self,
-        transport: TransportId,
+        method: &Arc<dyn Method>,
         i1: Slate,
+        from: SenderFacts,
         request: PayRequest,
         parked: Option<Destination>,
     ) -> Result<PaidInvoice, InvoiceError> {
@@ -1165,6 +1100,7 @@ where
         check_height(&i1, limit)?;
         debug!(height = tip.value(), "slate checked");
 
+        let method = Arc::clone(method);
         let paid = self
             .blocking(move |ports, config| {
                 let env = InvoiceEnvironment {
@@ -1175,36 +1111,36 @@ where
                     reply_keys: None,
                     features: config.claimed_features(),
                 };
-                let paid = registered(&ports.transports, transport).and_then(|carrier| {
-                    let randomness = I2Randomness::draw(&mut **ports.rng.lock())
-                        .map_err(InvoiceError::Signing)?;
-                    session.store.write(|repos| {
-                        let paid = pay_stored(
-                            repos,
-                            &env,
-                            transport,
-                            carrier.policy(),
-                            &i1,
-                            &request,
-                            &randomness,
-                        )?;
-                        if let Some(to) = &parked {
-                            repos.set_pending_invoice_status(
-                                uuid(i1.id()),
-                                PendingInvoiceStatus::Paid,
+                let paid = I2Randomness::draw(&mut **ports.rng.lock())
+                    .map_err(InvoiceError::Signing)
+                    .and_then(|randomness| {
+                        session.store.write(|repos| {
+                            let paid = pay_stored(
+                                repos,
+                                &env,
+                                &*method,
+                                &from,
+                                &i1,
+                                &request,
+                                &randomness,
                             )?;
-                            repos.set_counterparty(paid.tx_id, to.as_str())?;
-                        }
-                        Ok(paid)
-                    })
-                });
+                            if let Some(to) = &parked {
+                                repos.set_pending_invoice_status(
+                                    uuid(i1.id()),
+                                    PendingInvoiceStatus::Paid,
+                                )?;
+                                repos.set_counterparty(paid.tx_id, to.as_str())?;
+                            }
+                            Ok(paid)
+                        })
+                    });
                 Ok(paid)
             })
             .await??;
         Ok(paid)
     }
 
-    /// Finalizes the payer's I2, which arrived over `transport`, and posts the transaction:
+    /// Finalizes the payer's I2, which arrived over `method`, and posts the transaction:
     /// checks the payment against the I1 this wallet issued, verifies the payer's message and
     /// partial signature, builds and validates the final transaction, stores I3 and drops the
     /// private context in one store transaction, then pushes the transaction to the node with
@@ -1226,23 +1162,20 @@ where
     /// Every other failure stores nothing.
     #[instrument(skip_all, fields(
         wallet = %self.config().name,
-        transport = %transport,
+        transport = %method.id(),
         slate_id = Empty,
         stage = Empty,
         tx_id = Empty,
     ))]
     pub async fn finalize_invoice(
         &self,
-        transport: TransportId,
+        method: &Arc<dyn Method>,
         wire: &WireSlate,
         propagation: Propagation,
     ) -> Result<Finalized, InvoiceError> {
         let session = self.session()?;
         let network = self.config().network;
-        let i2 = registered(&self.ports().transports, transport)?
-            .policy()
-            .decode(&legacy_codecs(network.params().default_base_fee())?, wire)
-            .map_err(InvoiceError::Decode)?;
+        let i2 = method.decode(network, wire).map_err(InvoiceError::Decode)?;
         let span = Span::current();
         span.record("slate_id", tracing::field::display(i2.id()));
         span.record("stage", i2.stage().as_str());

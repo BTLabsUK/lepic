@@ -26,7 +26,6 @@ const AMOUNT: u64 = 100_000_000;
 
 fn to(destination: &str) -> Delivery {
     Delivery::Deliver {
-        transport: LOOPBACK,
         to: Destination::new(destination.to_owned()),
     }
 }
@@ -34,6 +33,7 @@ fn to(destination: &str) -> Delivery {
 #[test]
 fn send_and_cancel_log_in_their_spans_and_never_log_secrets_or_amounts() {
     let sender = Sender::new();
+    let method = sender.harness.method();
     let request = SendRequest {
         minimum_confirmations: 1,
         strategy: SelectionStrategy::Smallest,
@@ -43,7 +43,7 @@ fn send_and_cancel_log_in_their_spans_and_never_log_secrets_or_amounts() {
     let ((sent, tx_id), captured) = capture(|| {
         let error = sender
             .harness
-            .block_on(sender.wallet.send(request, to("nobody")))
+            .block_on(sender.wallet.send(&method, request, to("nobody")))
             .unwrap_err();
         let SendError::Undelivered {
             tx_id, slate_id, ..
@@ -53,7 +53,7 @@ fn send_and_cancel_log_in_their_spans_and_never_log_secrets_or_amounts() {
         };
         sender
             .harness
-            .block_on(sender.wallet.resend(tx_id, to(PEER)))
+            .block_on(sender.wallet.resend(&method, tx_id, to(PEER)))
             .unwrap();
         sender
             .harness

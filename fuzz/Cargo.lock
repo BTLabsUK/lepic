@@ -1056,6 +1056,7 @@ dependencies = [
  "lepic-epicbox",
  "lepic-foreign",
  "lepic-keychain",
+ "lepic-methods",
  "lepic-node",
  "lepic-primitives",
  "lepic-store",
@@ -1136,6 +1137,17 @@ dependencies = [
  "sha2",
  "thiserror",
  "zeroize",
+]
+
+[[package]]
+name = "lepic-methods"
+version = "0.3.1"
+dependencies = [
+ "lepic-epicbox",
+ "lepic-foreign",
+ "lepic-tor",
+ "lepic-transport",
+ "thiserror",
 ]
 
 [[package]]

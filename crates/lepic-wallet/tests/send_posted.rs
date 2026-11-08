@@ -27,7 +27,7 @@ use std::time::Duration;
 use lepic_crypto::Commitment;
 use lepic_epicbox::marker::features::LEPIC_FEATURES;
 use lepic_epicbox::marker::v3::{carries_lepic_marker, lepic_marker_features};
-use lepic_epicbox::{EpicboxAddress, EpicboxClient, TRANSPORT_ID};
+use lepic_epicbox::{EpicboxAddress, EpicboxClient};
 use lepic_node::mock::MockFailure;
 use lepic_primitives::amount::Amount;
 use lepic_slate::codec::{MediaType, WireSlate};
@@ -113,13 +113,13 @@ impl World {
 
     fn send_to(&self, to: &EpicboxAddress) -> SentSlate {
         self.block_on(self.sender().wallet.send(
+            &self.sender().method,
             SendRequest {
                 minimum_confirmations: 1,
                 strategy: SelectionStrategy::Smallest,
                 ..SendRequest::new(ACCOUNT, Amount::new(AMOUNT))
             },
             Delivery::Deliver {
-                transport: TRANSPORT_ID,
                 to: Destination::new(to.to_string()),
             },
         ))

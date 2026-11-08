@@ -275,9 +275,18 @@ impl Method for EpicboxTransport {
     ) -> Result<Encoded, FormatError> {
         let base_fee = sending.network.params().default_base_fee();
         let encoding = self.policy().for_reply(slate, context);
-        // Only a sender that marked its slate gets a marked reply, so a stock sender never sees
-        // the key.
-        let codecs = if from.marked {
+        // An I2 answers an invoice, which only LEPIC sends over Epicbox, so its V3 shape always
+        // carries the marker. Only a sender that marked its S1 gets a marked S2, so a stock
+        // sender never sees the key.
+        let codecs = if slate.stage() == Stage::I2 {
+            codecs::legacy_with(
+                Box::new(
+                    MarkedV3JsonCodec::new(V3JsonCodec::new(base_fee))
+                        .with_features(sending.features),
+                ),
+                Box::new(V2JsonCodec::new(base_fee)),
+            )
+        } else if from.marked {
             codecs::legacy_with(
                 Box::new(
                     MarkedV3JsonCodec::new(V3JsonCodec::new(base_fee))

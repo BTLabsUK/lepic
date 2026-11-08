@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Errors of transports, format policies and the transport registry.
+//! Errors of transports and format policies.
 
 use lepic_slate::codec::CodecId;
 use lepic_slate::error::EncodeError;
@@ -75,11 +75,4 @@ pub enum FormatError {
     CodecNotRegistered { codec: CodecId },
     #[error("slate cannot be encoded in the chosen format")]
     Encode(#[from] EncodeError),
-}
-
-/// A transport registry that cannot accept a registration.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
-pub enum RegistryError {
-    #[error("transport {transport} is already registered")]
-    DuplicateTransport { transport: TransportId },
 }

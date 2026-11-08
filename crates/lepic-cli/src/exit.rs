@@ -169,7 +169,7 @@ pub enum CliError {
     #[error("epicbox address rejected")]
     Address(#[source] lepic_epicbox::AddressError),
     #[error("transport registration failed")]
-    Registry(#[from] lepic_transport::error::RegistryError),
+    Registry(#[from] lepic_methods::registry::RegistryError),
     #[error("could not {what}")]
     Io {
         what: &'static str,

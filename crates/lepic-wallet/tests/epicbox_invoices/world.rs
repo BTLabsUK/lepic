@@ -37,14 +37,16 @@ use lepic_primitives::output::{OutputFeatures, OutputIdentifier};
 use lepic_primitives::params::Network;
 use lepic_slate::codec::legacy::v3_json::V3JsonCodec;
 use lepic_slate::codec::{Codec, WireSlate};
+use lepic_slate::error::DecodeError;
+use lepic_slate::model::Slate;
 use lepic_slate::stage::Stage;
 use lepic_store::{
     AccountIndex, KeyId, MemoryStore, OutputRecord, OutputStatus, PeerCompat, PendingInvoice,
     PendingInvoiceStatus, Repositories, StoreError, StoreKeys, WalletStore,
 };
-use lepic_transport::error::TransportError;
+use lepic_transport::error::{FormatError, TransportError};
+use lepic_transport::method::{Carries, EncodeContext, Encoded, Method, SenderFacts, Sending};
 use lepic_transport::policy::FormatPolicy;
-use lepic_transport::registry::TransportRegistry;
 use lepic_transport::transport::{
     BoxFuture, Destination, Inbound, Outbound, Transport, TransportId,
 };
@@ -196,6 +198,47 @@ impl Transport for RecordingEpicbox {
     }
 }
 
+impl Method for RecordingEpicbox {
+    fn carries(&self) -> Carries {
+        self.inner.carries()
+    }
+
+    fn decode(&self, network: Network, wire: &WireSlate) -> Result<Slate, DecodeError> {
+        self.inner.decode(network, wire)
+    }
+
+    fn sender_facts(&self, wire: &WireSlate) -> SenderFacts {
+        self.inner.sender_facts(wire)
+    }
+
+    fn encode_new(
+        &self,
+        slate: &Slate,
+        context: &EncodeContext,
+        sending: &Sending,
+    ) -> Result<Encoded, FormatError> {
+        self.inner.encode_new(slate, context, sending)
+    }
+
+    fn encode_reply(
+        &self,
+        slate: &Slate,
+        context: &EncodeContext,
+        sending: &Sending,
+        from: &SenderFacts,
+    ) -> Result<Encoded, FormatError> {
+        self.inner.encode_reply(slate, context, sending, from)
+    }
+
+    fn peer_key(&self, network: Network, address: &str) -> Option<String> {
+        self.inner.peer_key(network, address)
+    }
+
+    fn same_payee(&self, network: Network, to: &Destination, allowed: &str) -> bool {
+        self.inner.same_payee(network, to, allowed)
+    }
+}
+
 impl Outbound for RecordingEpicbox {
     fn deliver<'a>(
         &'a self,
@@ -250,6 +293,8 @@ fn context_key(seed: &Seed) -> StoreKeys {
 pub struct Party {
     pub wallet: PartyWallet,
     pub epicbox: EpicboxTransport,
+    /// `epicbox` as the engine's method, recording where each delivery went.
+    pub method: Arc<dyn Method>,
     /// The payments address, index 0, attached to `epicbox`.
     pub address: EpicboxAddress,
     pub clock: TestClock,
@@ -312,17 +357,11 @@ impl Party {
         let epicbox = EpicboxTransport::new(settings(), RelayNetwork::Floonet, relay.connector());
         let delivered_to = Arc::default();
         let deliveries_failing = Arc::default();
-        let mut transports = TransportRegistry::new();
-        transports
-            .register(Box::new(RecordingEpicbox {
-                inner: epicbox.clone(),
-                delivered_to: Arc::clone(&delivered_to),
-                failing: Arc::clone(&deliveries_failing),
-            }))
-            .unwrap();
-        transports
-            .register(Box::new(lepic_transport::file::FileTransport::new()))
-            .unwrap();
+        let method: Arc<dyn Method> = Arc::new(RecordingEpicbox {
+            inner: epicbox.clone(),
+            delivered_to: Arc::clone(&delivered_to),
+            failing: Arc::clone(&deliveries_failing),
+        });
         let stores = CountingStores::default();
         let clock = TestClock(Arc::new(Mutex::new(fixed_time())));
         let data_dir = PathBuf::from(format!("/{name}"));
@@ -330,10 +369,10 @@ impl Party {
             node: node.client(),
             stores: stores.clone(),
             secrets: TestVault::default(),
-            transports,
             clock: Arc::new(clock.clone()),
             rng: SharedRng::new(StdRng::seed_from_u64(seed_rng)),
             runtime: runtime.handle().clone(),
+            notices: Some(Arc::clone(&method)),
         };
         let config = WalletConfig {
             name: WalletName::new(name).unwrap(),
@@ -356,6 +395,7 @@ impl Party {
         Self {
             wallet,
             epicbox,
+            method,
             address,
             clock,
             delivered_to,
@@ -714,6 +754,7 @@ impl World {
 
     pub fn issue_to(&self, to: &EpicboxAddress, message: Option<&str>) -> IssuedInvoice {
         self.block_on(self.issuer.wallet.issue_invoice(
+            &self.issuer.method,
             InvoiceRequest {
                 account: ACCOUNT,
                 amount: Amount::new(AMOUNT),
@@ -721,7 +762,6 @@ impl World {
                 ttl_blocks: None,
             },
             Delivery::Deliver {
-                transport: TRANSPORT_ID,
                 to: Destination::new(to.to_string()),
             },
         ))

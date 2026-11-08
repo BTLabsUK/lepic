@@ -30,7 +30,6 @@ use lepic_slate::codec::legacy::v3_json::V3JsonCodec;
 use lepic_slate::codec::{Codec, EncodeContext, MediaType, WireSlate};
 use lepic_slate::stage::Stage;
 use lepic_store::{SealMode, SlateStage, TxId};
-use lepic_transport::file::FILE;
 use lepic_transport::transport::Location;
 use lepic_wallet::ReceiveRequest;
 use lepic_wallet::selection::SelectionStrategy;
@@ -59,13 +58,13 @@ impl World {
         let path = dir.path().join("s1.tx");
         let sent = self
             .block_on(self.payer.wallet.send(
+                &crate::support::file(),
                 SendRequest {
                     minimum_confirmations: 1,
                     strategy: SelectionStrategy::Smallest,
                     ..SendRequest::new(ACCOUNT, Amount::new(AMOUNT))
                 },
                 Delivery::Export {
-                    transport: FILE,
                     to: Location::File(path.clone()),
                 },
             ))
@@ -307,12 +306,11 @@ fn a_marked_s1_is_answered_sealed_to_its_reply_key_and_a_stripped_one_plain() {
         .unwrap();
 
     let received = world
-        .block_on(
-            world
-                .issuer
-                .wallet
-                .receive(FILE, &marked, ReceiveRequest::default()),
-        )
+        .block_on(world.issuer.wallet.receive(
+            &crate::support::file(),
+            &marked,
+            ReceiveRequest::default(),
+        ))
         .unwrap();
     let answer = world
         .issuer
@@ -341,10 +339,11 @@ fn a_marked_s1_is_answered_sealed_to_its_reply_key_and_a_stripped_one_plain() {
     let twin = world.issuer_twin();
     let stripped = codec().encode(&slate, &context).unwrap();
     let received = world
-        .block_on(
-            twin.wallet
-                .receive(FILE, &stripped, ReceiveRequest::default()),
-        )
+        .block_on(twin.wallet.receive(
+            &crate::support::file(),
+            &stripped,
+            ReceiveRequest::default(),
+        ))
         .unwrap();
     assert_eq!(
         twin.wallet
@@ -400,12 +399,11 @@ fn a_file_s1_carries_the_reply_key_and_its_answer_comes_back_sealed() {
     );
 
     let received = world
-        .block_on(
-            world
-                .issuer
-                .wallet
-                .receive(FILE, &file, ReceiveRequest::default()),
-        )
+        .block_on(world.issuer.wallet.receive(
+            &crate::support::file(),
+            &file,
+            ReceiveRequest::default(),
+        ))
         .unwrap();
     let answer = world
         .issuer

@@ -17,7 +17,6 @@ mod world;
 
 use std::time::Duration;
 
-use lepic_epicbox::TRANSPORT_ID;
 use lepic_primitives::amount::Amount;
 use lepic_transport::transport::Destination;
 use lepic_wallet::peer_compat::PeerKind;
@@ -39,13 +38,13 @@ fn idle_drains_send_nothing_to_any_payments_address() {
     // One payment between the two LEPIC wallets, so each knows the other runs LEPIC.
     world
         .block_on(world.payer.wallet.send(
+            &world.payer.method,
             SendRequest {
                 minimum_confirmations: 1,
                 strategy: SelectionStrategy::Smallest,
                 ..SendRequest::new(ACCOUNT, Amount::new(AMOUNT))
             },
             Delivery::Deliver {
-                transport: TRANSPORT_ID,
                 to: Destination::new(world.issuer.address.to_string()),
             },
         ))

@@ -578,13 +578,13 @@ fn a_mismatch_while_a_sealed_answer_waits_finalizes_nothing_and_the_send_cancels
     let (payer_side, _) = world.pair(payer, issuer);
     let sent = world
         .block_on(payer.wallet.send(
+            &crate::support::file(),
             SendRequest {
                 minimum_confirmations: 1,
                 strategy: SelectionStrategy::Smallest,
                 ..SendRequest::new(world::ACCOUNT, Amount::new(world::AMOUNT))
             },
             Delivery::Export {
-                transport: lepic_transport::file::FILE,
                 to: lepic_transport::transport::Location::File(
                     tempfile::tempdir().unwrap().keep().join("s1.tx"),
                 ),

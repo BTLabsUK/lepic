@@ -5,7 +5,7 @@
 use std::path::{Path, PathBuf};
 
 use lepic_primitives::amount::Amount;
-use lepic_transport::file::{FILE, FileTransport, response_path};
+use lepic_transport::file::{FileTransport, response_path};
 use lepic_transport::transport::{Exchange as _, Location};
 use lepic_wallet::invoice::{InvoiceRequest, PaidInvoice};
 use lepic_wallet::send::Delivery;
@@ -42,6 +42,7 @@ impl Session {
         let issued = self
             .engine
             .issue_invoice(
+                &self.file,
                 InvoiceRequest {
                     account: DEFAULT_ACCOUNT,
                     amount: Amount::new(amount),
@@ -49,7 +50,6 @@ impl Session {
                     ttl_blocks: Some(self.policy.invoice_ttl_blocks),
                 },
                 Delivery::Export {
-                    transport: FILE,
                     to: Location::File(path),
                 },
             )
@@ -116,7 +116,7 @@ impl Session {
         let request = self
             .policy
             .pay_request(amount, minimum_confirmations, message, options)?;
-        Ok(self.engine.pay_invoice(FILE, wire, request).await?)
+        Ok(self.engine.pay_invoice(&self.file, wire, request).await?)
     }
 
     pub(crate) async fn pay_invoice_slate(

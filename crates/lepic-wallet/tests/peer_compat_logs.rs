@@ -13,7 +13,6 @@ mod world;
 
 use std::time::Duration;
 
-use lepic_epicbox::TRANSPORT_ID;
 use lepic_primitives::amount::Amount;
 use lepic_telemetry::{LogLevel, assert_no_secrets, capture};
 use lepic_transport::transport::Destination;
@@ -27,13 +26,13 @@ fn a_send_with_its_notice_logs_no_peer_key_above_debug() {
     let ((), captured) = capture(|| {
         world
             .block_on(world.payer.wallet.send(
+                &world.payer.method,
                 SendRequest {
                     minimum_confirmations: 1,
                     strategy: SelectionStrategy::Smallest,
                     ..SendRequest::new(ACCOUNT, Amount::new(AMOUNT))
                 },
                 Delivery::Deliver {
-                    transport: TRANSPORT_ID,
                     to: Destination::new(world.issuer.address.to_string()),
                 },
             ))

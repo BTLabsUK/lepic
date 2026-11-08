@@ -45,6 +45,7 @@ use lepic_slate::stage::Stage;
 use lepic_store::{
     Repositories, SlateStage, StoreError, StoredSlate, TxDirection, TxId, TxState, WalletStore,
 };
+use lepic_transport::method::Method;
 use lepic_transport::transport::{Destination, TransportId};
 use thiserror::Error;
 use tracing::field::Empty;
@@ -59,7 +60,7 @@ use crate::lifecycle::Session;
 use crate::ports::{SecretVault, StoreOpener};
 use crate::refresh::{KernelAt, RefreshError, final_kernel, stored_slate};
 use crate::release::record_finalized;
-use crate::send::{BuiltS1, SENDER_CONTEXT, SenderContext, block_header_version, epicbox_key};
+use crate::send::{BuiltS1, SENDER_CONTEXT, SenderContext, block_header_version};
 use crate::send_limit::effective_cutoff;
 use crate::state::{StateChange, apply_transition, check_transition, state_name};
 use crate::wallet::Wallet;
@@ -478,7 +479,10 @@ fn count(len: usize) -> u64 {
 }
 
 /// What the store transaction of a finalize runs with, so it needs no `Ports`.
-struct FinalizeEnvironment {
+struct FinalizeEnvironment<'a> {
+    /// The method the S2 came over, which tells its peers apart; `None` for an S2 this wallet
+    /// gave itself.
+    method: Option<&'a dyn Method>,
     network: Network,
     tip: Height,
     now: Timestamp,
@@ -490,33 +494,38 @@ pub(crate) enum Answerer {
     /// The user brought it in, by file, paste or QR, or a channel that already checked its
     /// sender handed it over.
     Imported,
-    /// An Epicbox relay delivered it from this address, whose key the relay authenticated.
-    Epicbox(Destination),
+    /// The method delivered it from this address, whose key the method authenticated.
+    From(Destination),
 }
 
-/// Refuses an S2 a relay delivered unless it came from the Epicbox key the transaction's S1
-/// was delivered to. Every holder of a slate carried out by file, QR or paste could answer
-/// it, so such a send records no counterparty and only an import finalizes it. The domain of
-/// an Epicbox address is not authenticated, so only the keys are compared.
+/// Refuses an S2 a method delivered unless it came from the peer key the transaction's S1 was
+/// delivered to. Every holder of a slate carried out by file, QR or paste could answer it, so
+/// such a send records no counterparty and only an import finalizes it. Only the keys the
+/// method names are compared, so a part of an address the method does not authenticate is
+/// ignored.
 fn check_answerer(
     repos: &dyn Repositories,
+    method: Option<&dyn Method>,
     network: Network,
     tx_id: TxId,
     answerer: &Answerer,
 ) -> Result<(), FinalizeError> {
-    let Answerer::Epicbox(from) = answerer else {
+    let Answerer::From(from) = answerer else {
         return Ok(());
+    };
+    let Some(method) = method else {
+        return Err(FinalizeError::UnexpectedAnswerer { tx_id });
     };
     let expected = repos
         .counterparty(tx_id)?
-        .and_then(|address| epicbox_key(network, &address));
-    match (expected, epicbox_key(network, from.as_str())) {
+        .and_then(|address| method.peer_key(network, &address));
+    match (expected, method.peer_key(network, from.as_str())) {
         (Some(expected), Some(from)) if expected == from => Ok(()),
         _ => Err(FinalizeError::UnexpectedAnswerer { tx_id }),
     }
 }
 
-impl FinalizeEnvironment {
+impl FinalizeEnvironment<'_> {
     fn base_fee(&self) -> Fee {
         self.network.params().default_base_fee()
     }
@@ -584,7 +593,7 @@ fn finalized_from(s3: &Slate, s2: &Slate) -> bool {
 fn finalize_stored(
     repos: &mut dyn Repositories,
     keychain: &Keychain,
-    env: &FinalizeEnvironment,
+    env: &FinalizeEnvironment<'_>,
     s2: &Slate,
     answerer: &Answerer,
 ) -> Result<StoredS3, FinalizeError> {
@@ -595,7 +604,7 @@ fn finalize_stored(
         .transaction_by_slate(slate_uuid, TxDirection::Outgoing)?
         .ok_or(FinalizeError::UnknownSlate { slate_id })?;
     let tx_id = entry.id;
-    check_answerer(repos, env.network, tx_id, answerer)?;
+    check_answerer(repos, env.method, env.network, tx_id, answerer)?;
     match entry.entry.state {
         TxState::Sent => {}
         state @ (TxState::Finalized | TxState::Posted | TxState::Confirmed) => {
@@ -705,7 +714,12 @@ pub(crate) fn finalize_own(
     let stored = finalize_stored(
         repos,
         keychain,
-        &FinalizeEnvironment { network, tip, now },
+        &FinalizeEnvironment {
+            method: None,
+            network,
+            tip,
+            now,
+        },
         s2,
         &Answerer::Imported,
     )?;
@@ -902,18 +916,18 @@ where
     /// failure stores nothing.
     #[instrument(skip_all, fields(
         wallet = %self.config().name,
-        transport = %transport,
+        transport = %method.id(),
         slate_id = Empty,
         stage = Empty,
         tx_id = Empty,
     ))]
     pub async fn finalize(
         &self,
-        transport: TransportId,
+        method: &Arc<dyn Method>,
         wire: &WireSlate,
         propagation: Propagation,
     ) -> Result<Finalized, FinalizeError> {
-        self.finalize_from(transport, wire, propagation, Answerer::Imported)
+        self.finalize_from(method, wire, propagation, Answerer::Imported)
             .await
     }
 
@@ -921,22 +935,15 @@ where
     /// transaction before anything else.
     pub(crate) async fn finalize_from(
         &self,
-        transport: TransportId,
+        method: &Arc<dyn Method>,
         wire: &WireSlate,
         propagation: Propagation,
         answerer: Answerer,
     ) -> Result<Finalized, FinalizeError> {
         let session = self.session()?;
         let network = self.config().network;
-        let base_fee = network.params().default_base_fee();
-        let policy = self
-            .ports()
-            .transports
-            .get(transport)
-            .ok_or(FinalizeError::UnknownTransport { transport })?
-            .policy();
-        let s2 = policy
-            .decode(&codecs::legacy(base_fee), wire)
+        let s2 = method
+            .decode(network, wire)
             .map_err(FinalizeError::Decode)?;
         let span = Span::current();
         span.record("slate_id", tracing::field::display(s2.id()));
@@ -945,9 +952,11 @@ where
             return Err(FinalizeError::WrongStage { stage: s2.stage() });
         }
         let (tip, _) = self.stage_tip(&session, FinalizeError::Node).await?;
+        let method = Arc::clone(method);
         let stored = self
             .blocking(move |ports, _| {
                 let env = FinalizeEnvironment {
+                    method: Some(&*method),
                     network,
                     tip,
                     now: ports.clock.now(),

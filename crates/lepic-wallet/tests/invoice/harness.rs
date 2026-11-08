@@ -23,7 +23,7 @@ use lepic_store::{
 };
 use lepic_transport::file::{FILE, FilePolicy};
 use lepic_transport::loopback::LoopbackTransport;
-use lepic_transport::registry::TransportRegistry;
+use lepic_transport::method::Method;
 use lepic_transport::transport::{Destination, Inbound};
 use lepic_wallet::invoice::{InvoiceError, InvoiceRequest, IssuedInvoice, PaidInvoice, PayRequest};
 use lepic_wallet::send::Delivery;
@@ -82,6 +82,8 @@ pub struct Party {
     seed: Seed,
     pub keychain: Keychain,
     pub wallet: PartyWallet,
+    /// The wallet's end of its file transport, a loopback pair.
+    pub method: Arc<dyn Method>,
     /// The other end of the wallet's file transport.
     pub peer: LoopbackTransport,
 }
@@ -106,16 +108,15 @@ impl Party {
             Destination::new("own".to_owned()),
             Destination::new("peer".to_owned()),
         );
-        let mut transports = TransportRegistry::new();
-        transports.register(Box::new(own)).unwrap();
+        let method: Arc<dyn Method> = Arc::new(own);
         let ports = Ports {
             node: node.client(),
             stores: stores.clone(),
             secrets: TestVault::default(),
-            transports,
             clock: Arc::new(FixedClock(fixed_time())),
             rng: SharedRng::new(RepeatingRng(1)),
             runtime: runtime.handle().clone(),
+            notices: None,
         };
         let config = WalletConfig {
             name: WalletName::new("invoice").unwrap(),
@@ -139,6 +140,7 @@ impl Party {
             keychain: Keychain::from_seed(&seed, Network::Floonet).unwrap(),
             seed,
             wallet,
+            method,
             peer,
         }
     }
@@ -209,6 +211,7 @@ impl Party {
         ttl_blocks: Option<u64>,
     ) -> Result<IssuedInvoice, InvoiceError> {
         self.block_on(self.wallet.issue_invoice(
+            &self.method,
             InvoiceRequest {
                 account: ACCOUNT,
                 amount: Amount::new(amount),
@@ -216,18 +219,20 @@ impl Party {
                 ttl_blocks,
             },
             Delivery::Deliver {
-                transport: FILE,
                 to: Destination::new("peer".to_owned()),
             },
         ))
     }
 
     pub fn pay(&self, wire: &WireSlate, request: PayRequest) -> Result<PaidInvoice, InvoiceError> {
-        self.block_on(self.wallet.pay_invoice(FILE, wire, request))
+        self.block_on(self.wallet.pay_invoice(&self.method, wire, request))
     }
 
     pub fn finalize(&self, wire: &WireSlate) -> Result<Finalized, InvoiceError> {
-        self.block_on(self.wallet.finalize_invoice(FILE, wire, Propagation::Stem))
+        self.block_on(
+            self.wallet
+                .finalize_invoice(&self.method, wire, Propagation::Stem),
+        )
     }
 
     /// The next slate the peer end of the file transport received.

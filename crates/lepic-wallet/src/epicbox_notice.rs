@@ -34,7 +34,7 @@ use lepic_store::{
     TxState, WalletStore,
 };
 use lepic_transport::error::TransportError;
-use lepic_transport::transport::{Destination, Outbound, Transport};
+use lepic_transport::transport::Destination;
 use tracing::{debug, info, warn};
 use uuid::Uuid;
 
@@ -850,13 +850,16 @@ where
         let Some(kernel) = finalized.kernel() else {
             return;
         };
+        let Some(notices) = self.ports().notices.as_ref().map(|notices| notices.id()) else {
+            return;
+        };
         let over_epicbox = async {
             let session = self.session()?;
             self.blocking(move |_, _| {
                 Ok(session
                     .store
                     .read(|repos| repos.transaction(tx_id))?
-                    .is_some_and(|entry| entry.transport.as_deref() == Some(TRANSPORT_ID.as_str())))
+                    .is_some_and(|entry| entry.transport.as_deref() == Some(notices.as_str())))
             })
             .await
         };
@@ -995,7 +998,7 @@ where
             slate_id,
             kind: NoticeKind::Posted { excess },
         };
-        let _ = self.send_notice(None, &to, notice, answer_marked).await;
+        let _ = self.send_notice(&to, notice, answer_marked).await;
     }
 
     /// Tells the payer that the cancelled invoice `tx_id` is withdrawn, when it was one issued
@@ -1029,7 +1032,7 @@ where
             slate_id,
             kind: NoticeKind::Withdrawn,
         };
-        self.send_notice(None, &to, notice, payment_marked || declined)
+        self.send_notice(&to, notice, payment_marked || declined)
             .await?;
         let recorded = self
             .inbox_write(move |repos, _| {
@@ -1105,7 +1108,7 @@ where
             slate_id,
             kind: NoticeKind::Cancelled,
         };
-        self.send_notice(None, &to, notice, answer_marked).await?;
+        self.send_notice(&to, notice, answer_marked).await?;
         let recorded = self
             .inbox_write(move |repos, _| {
                 let mut marks = repos.tx_marks(tx_id)?;
@@ -1157,7 +1160,7 @@ where
             slate_id,
             kind: NoticeKind::Declined,
         };
-        let _ = self.send_notice(None, &to, notice, marked).await;
+        let _ = self.send_notice(&to, notice, marked).await;
     }
 
     async fn counterparty_of(
@@ -1200,17 +1203,16 @@ where
             slate_id,
             kind: NoticeKind::Declined,
         };
-        self.send_notice(None, to, notice, marked).await
+        self.send_notice(to, notice, marked).await
     }
 
-    /// Sends `notice` to `to`, through `sender` or else the registered Epicbox transport, when
-    /// the exchange's own incoming slate came `exchange_marked` and the key is LEPIC lately. A
+    /// Sends `notice` to `to` over [`crate::ports::Ports::notices`], when the exchange's own
+    /// incoming slate came `exchange_marked` and the key is LEPIC lately. A
     /// paired contact's notice goes to its mailbox instead, which only LEPIC reads. A notice
     /// that was not sent is logged here, and the reason is returned for the one caller that
     /// holds a message on it.
     async fn send_notice(
         &self,
-        sender: Option<&dyn Outbound>,
         to: &Destination,
         notice: Notice,
         exchange_marked: bool,
@@ -1236,11 +1238,16 @@ where
                     Hold::Withheld
                 });
         }
-        let network = relay_network(self.config().network);
-        let Some(key) = key_of(to.as_str(), network) else {
+        let Some(method) = self.ports().notices.as_ref() else {
+            warn!(slate_id = %slate_id, "notice not sent");
+            return Err(Hold::NoOutbound {
+                transport: TRANSPORT_ID,
+            });
+        };
+        let Some(key) = method.peer_key(self.config().network, to.as_str()) else {
             debug!(slate_id = %slate_id, "notice not sent to a destination that is no address");
             return Err(Hold::Reply(TransportError::UnknownDestination {
-                transport: TRANSPORT_ID,
+                transport: method.id(),
             }));
         };
         if !exchange_marked {
@@ -1266,15 +1273,10 @@ where
                 return Err(error.into());
             }
         }
-        let registered = self
-            .ports()
-            .transports
-            .get(TRANSPORT_ID)
-            .and_then(Transport::outbound);
-        let Some(outbound) = sender.or(registered) else {
+        let Some(outbound) = method.outbound() else {
             warn!(slate_id = %slate_id, "notice not sent");
             return Err(Hold::NoOutbound {
-                transport: TRANSPORT_ID,
+                transport: method.id(),
             });
         };
         let length = crate::notice::notice_length(&mut **self.ports().rng.lock());

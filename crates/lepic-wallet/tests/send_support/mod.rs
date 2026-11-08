@@ -6,7 +6,7 @@
 // panic (docs/rules.md).
 #![allow(dead_code, clippy::unwrap_used, clippy::panic)]
 
-use std::sync::{Arc, PoisonError};
+use std::sync::Arc;
 
 use lepic_keychain::{Identifier, Keychain, Seed, SwitchCommitment};
 use lepic_primitives::amount::{Amount, Height};
@@ -23,10 +23,10 @@ use lepic_store::{
 };
 use lepic_transport::file::FilePolicy;
 use lepic_transport::loopback::LoopbackTransport;
+use lepic_transport::method::Method;
 use lepic_transport::policy::{Encoding, FormatPolicy};
-use lepic_transport::registry::TransportRegistry;
-use lepic_transport::transport::{Destination, Inbound, Transport};
-use lepic_wallet::{Clock, Ports, StoreOpener, Wallet, WalletConfig};
+use lepic_transport::transport::{Destination, Inbound};
+use lepic_wallet::{Clock, Ports, StoreOpener, Wallet};
 use uuid::Uuid;
 
 use crate::support::{
@@ -74,13 +74,26 @@ impl Sender {
         Self::with_policy_and_clock(policy, None)
     }
 
+    /// The funded sender sending its notices through `notices`.
+    pub fn with_notices(notices: Arc<dyn Method>) -> Self {
+        Self::loopback_with(Arc::new(FilePolicy), None, Some(notices))
+    }
+
     /// The funded sender reading `clock`, for tests that move the chain days ahead.
     pub fn with_clock(clock: Arc<dyn Clock>) -> Self {
         Self::with_policy_and_clock(Arc::new(FilePolicy), Some(clock))
     }
 
     fn with_policy_and_clock(policy: Arc<dyn FormatPolicy>, clock: Option<Arc<dyn Clock>>) -> Self {
-        Self::build(clock, |harness, peer| {
+        Self::loopback_with(policy, clock, None)
+    }
+
+    fn loopback_with(
+        policy: Arc<dyn FormatPolicy>,
+        clock: Option<Arc<dyn Clock>>,
+        notices: Option<Arc<dyn Method>>,
+    ) -> Self {
+        Self::build(clock, notices, |harness, peer| {
             let (own, other) = LoopbackTransport::pair(
                 LOOPBACK,
                 policy,
@@ -88,46 +101,24 @@ impl Sender {
                 Destination::new(PEER.to_owned()),
             );
             *peer = Some(other);
-            let mut registry = TransportRegistry::new();
-            registry.register(Box::new(own)).unwrap();
-            (harness.config(Network::Floonet), registry)
-        })
-    }
-
-    /// The funded sender with extra transports next to the loopback one.
-    pub fn with_transports(extra: Vec<Box<dyn Transport>>) -> Self {
-        Self::build(None, |harness, peer| {
-            let mut registry = harness.transports();
-            *peer = harness
-                .peer
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner)
-                .take();
-            let config = harness.config(Network::Floonet);
-            for transport in extra {
-                registry.register(transport).unwrap();
-            }
-            (config, registry)
+            harness.set_method(Arc::new(own));
         })
     }
 
     fn build(
         clock: Option<Arc<dyn Clock>>,
-        transports: impl FnOnce(
-            &Harness,
-            &mut Option<LoopbackTransport>,
-        ) -> (WalletConfig, TransportRegistry),
+        notices: Option<Arc<dyn Method>>,
+        loopback: impl FnOnce(&Harness, &mut Option<LoopbackTransport>),
     ) -> Self {
         let harness = Harness::new();
+        let mut ports: Ports<_, TestStores, TestVault> = harness.ports(harness.vault.clone());
         let mut peer = None;
-        let (config, registry) = transports(&harness, &mut peer);
-        let mut ports: Ports<_, TestStores, TestVault> = Ports {
-            transports: registry,
-            ..harness.ports(harness.vault.clone())
-        };
+        loopback(&harness, &mut peer);
+        let config = harness.config(Network::Floonet);
         if let Some(clock) = clock {
             ports.clock = clock;
         }
+        ports.notices = notices;
         let wallet = Wallet::new(config, ports).unwrap();
         harness
             .block_on(wallet.restore(password("sender"), SENDER_MNEMONIC))

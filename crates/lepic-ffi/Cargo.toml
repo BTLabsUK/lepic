@@ -16,7 +16,7 @@ default = ["tor"]
 # sends to onions: `lepic-tor` and everything that needs it (ADR 0026). Without it every Tor
 # function of the API stays, with the same signature, and fails with `Unsupported` or reports
 # Tor as off, so one generated binding serves both builds.
-tor = ["dep:lepic-tor"]
+tor = ["dep:lepic-tor", "lepic-methods/tor"]
 # An in-process scripted node and Epicbox relay for the binding's own tests
 # (the binding repository's `test/`). Never in an app build.
 mock = ["lepic-node/mock", "lepic-epicbox/mock-relay", "lepic-keychain/test-kdf"]
@@ -29,6 +29,7 @@ jiff = { workspace = true, features = ["std"] }
 lepic-epicbox.workspace = true
 lepic-foreign.workspace = true
 lepic-keychain.workspace = true
+lepic-methods = { workspace = true, features = ["epicbox", "http"] }
 lepic-node.workspace = true
 lepic-primitives.workspace = true
 lepic-store.workspace = true

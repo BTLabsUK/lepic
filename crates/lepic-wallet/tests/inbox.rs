@@ -25,7 +25,6 @@ use lepic_epicbox::{Network as RelayNetwork, TRANSPORT_ID};
 use lepic_node::mock::MockFailure;
 use lepic_slate::codec::{MediaType, WireSlate};
 use lepic_store::{AccountIndex, InboxEntry, InboxStatus, TxDirection, TxState, WalletStore};
-use lepic_transport::file::FILE;
 use lepic_transport::transport::{Destination, Inbound, Location, Transport};
 use lepic_wallet::details::{SlateMessage, TxFlow};
 use lepic_wallet::event::{Connection, TransportState, TransportStatus};
@@ -189,7 +188,11 @@ fn a_crash_between_storing_s2_and_acknowledging_gives_exactly_one_s2() {
         let envelope = within(subscription.next_envelope()).await.unwrap().unwrap();
         world
             .receiver_wallet
-            .receive(TRANSPORT_ID, envelope.wire(), ReceiveRequest::default())
+            .receive(
+                &world.receiver_method,
+                envelope.wire(),
+                ReceiveRequest::default(),
+            )
             .await
             .unwrap();
         drop(subscription);
@@ -229,7 +232,11 @@ fn reply_then_crash(world: &World, record_processed: bool) {
         let envelope = within(subscription.next_envelope()).await.unwrap().unwrap();
         let received = world
             .receiver_wallet
-            .receive(TRANSPORT_ID, envelope.wire(), ReceiveRequest::default())
+            .receive(
+                &world.receiver_method,
+                envelope.wire(),
+                ReceiveRequest::default(),
+            )
             .await
             .unwrap();
         world
@@ -364,20 +371,20 @@ fn an_answer_over_epicbox_to_an_s1_exported_as_a_file_is_not_finalized() {
     let path = dir.path().join("send.slate");
     world
         .block_on(world.sender.wallet.send(
+            &crate::support::file(),
             request(),
             Delivery::Export {
-                transport: FILE,
                 to: Location::File(path.clone()),
             },
         ))
         .unwrap();
     let s1 = WireSlate::text(MediaType::JSON, std::fs::read_to_string(&path).unwrap());
     let answer = world
-        .block_on(
-            world
-                .receiver_wallet
-                .receive(TRANSPORT_ID, &s1, ReceiveRequest::default()),
-        )
+        .block_on(world.receiver_wallet.receive(
+            &world.receiver_method,
+            &s1,
+            ReceiveRequest::default(),
+        ))
         .unwrap();
     let posted = world.post_to_sender(9, answer.reply.as_text().unwrap());
 
@@ -411,11 +418,11 @@ fn an_answer_from_another_key_than_the_receivers_is_not_finalized() {
     world.block_on(world.send());
     let s1 = WireSlate::text(MediaType::JSON, peek_s1(&world));
     let answer = world
-        .block_on(
-            world
-                .receiver_wallet
-                .receive(TRANSPORT_ID, &s1, ReceiveRequest::default()),
-        )
+        .block_on(world.receiver_wallet.receive(
+            &world.receiver_method,
+            &s1,
+            ReceiveRequest::default(),
+        ))
         .unwrap();
     world.post_to_sender(9, answer.reply.as_text().unwrap());
 
@@ -534,7 +541,11 @@ fn an_s1_redelivered_after_its_receive_was_cancelled_is_rejected() {
         let envelope = within(subscription.next_envelope()).await.unwrap().unwrap();
         let received = world
             .receiver_wallet
-            .receive(TRANSPORT_ID, envelope.wire(), ReceiveRequest::default())
+            .receive(
+                &world.receiver_method,
+                envelope.wire(),
+                ReceiveRequest::default(),
+            )
             .await
             .unwrap();
         (received.tx_id, envelope.ack_token().as_str().to_owned())
@@ -676,12 +687,12 @@ fn the_receiver_sees_the_senders_message_after_a_listener_receive() {
     let world = World::new();
     world
         .block_on(world.sender.wallet.send(
+            &world.sender_method,
             SendRequest {
                 message: Some("for the pizza".to_owned()),
                 ..world::request()
             },
             Delivery::Deliver {
-                transport: TRANSPORT_ID,
                 to: Destination::new(world.receiver_address.to_string()),
             },
         ))

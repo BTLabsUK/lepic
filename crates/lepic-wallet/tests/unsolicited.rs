@@ -49,7 +49,7 @@ fn unsolicited(
     n: u32,
 ) -> Result<Received, ReceiveError> {
     receiver.block_on(receiver.wallet.receive_unsolicited(
-        transport,
+        &receiver.method(transport),
         &wire(&s1_numbered(n)),
         ReceiveRequest::default(),
     ))
@@ -153,7 +153,7 @@ fn below_the_cap_a_slate_that_is_not_a_payment_is_rejected_as_by_receive() {
     let s2 = json(&vector("send_file_ttl_s2_v3"));
 
     let rejected = receiver.block_on(receiver.wallet.receive_unsolicited(
-        FILE,
+        &receiver.method(FILE),
         &wire(&s2),
         ReceiveRequest::default(),
     ));
@@ -189,11 +189,11 @@ fn a_wallet_that_refuses_unsolicited_payments_receives_nothing_new() {
 fn a_wallet_that_refuses_unsolicited_payments_still_answers_one_taken_by_hand_again() {
     let receiver = refusing_receiver();
     let by_hand = receiver
-        .block_on(
-            receiver
-                .wallet
-                .receive(FILE, &wire(&s1_numbered(1)), ReceiveRequest::default()),
-        )
+        .block_on(receiver.wallet.receive(
+            &receiver.method(FILE),
+            &wire(&s1_numbered(1)),
+            ReceiveRequest::default(),
+        ))
         .unwrap();
 
     let again = unsolicited(&receiver, FILE, 1).unwrap();

@@ -31,7 +31,7 @@ impl<H: Host> Run<'_, H> {
             ProfileCommand::Set(args) => {
                 let profile = set_value(&args)?;
                 let opened = self.open().await?;
-                let relays = ContactRelays::new(opened.epicbox.clone(), RelayMode::Online)
+                let relays = ContactRelays::new((*opened.epicbox).clone(), RelayMode::Online)
                     .with_meeting(self.settings.servers.meeting_relays.clone());
                 let queued = opened
                     .wallet
@@ -79,7 +79,7 @@ impl<H: Host> Run<'_, H> {
                     .clone()
                     .ok_or(CliError::DomainNotConfigured)?;
                 let opened = self.open().await?;
-                let relays = ContactRelays::new(opened.epicbox.clone(), RelayMode::Online)
+                let relays = ContactRelays::new((*opened.epicbox).clone(), RelayMode::Online)
                     .with_meeting(self.settings.servers.meeting_relays.clone());
                 let queued = opened
                     .wallet

@@ -57,6 +57,7 @@ use lepic_store::{
     WalletStore,
 };
 use lepic_transport::error::TransportError;
+use lepic_transport::method::Method;
 use lepic_transport::transport::{Destination, Envelope, Inbound, TransportId};
 use thiserror::Error;
 use tokio::sync::watch;
@@ -74,7 +75,7 @@ use crate::invoice::InvoiceError;
 use crate::notice::{self, Payload};
 use crate::ports::{SecretVault, StoreOpener};
 use crate::receipt_cap::{NoRoom, Sender};
-use crate::receive::{ReceiveError, ReceiveRequest, legacy_codecs};
+use crate::receive::{ReceiveError, ReceiveRequest};
 use crate::refresh::last_confirmed;
 use crate::twin_answer::{self, Refused, Step};
 use crate::wallet::Wallet;
@@ -689,8 +690,8 @@ where
 
     /// Connects to the relay once, handles every pending message and disconnects: the mode for
     /// background work on mobile. Attaches the wallet's identity first, as
-    /// [`Wallet::epicbox_attach`] does. `epicbox` must be the transport registered in the
-    /// wallet's registry, or a clone of it.
+    /// [`Wallet::epicbox_attach`] does. Slates that arrive are taken and answered over
+    /// `epicbox`.
     ///
     /// Stops at the first message that fails for a transient reason, such as the node being
     /// unreachable, and leaves it and everything behind it on the relay for the next drain.
@@ -698,8 +699,7 @@ where
     /// confirmed height at or past its cutoff; the drain makes one refresh itself before it
     /// holds one. A reply or an expired slate is not held past the bound the module docs give.
     /// Fails with [`InboxError::Subscription`] when the relay connection fails; whatever was
-    /// handled until then stays handled. Fails as [`Wallet::epicbox_attach`] does, and with
-    /// [`InboxError::UnknownTransport`] when Epicbox is not registered.
+    /// handled until then stays handled. Fails as [`Wallet::epicbox_attach`] does.
     #[instrument(skip_all, fields(wallet = %self.config().name, transport = TRANSPORT_ID.as_str()))]
     pub async fn epicbox_drain(
         &self,
@@ -707,7 +707,9 @@ where
     ) -> Result<InboxSummary, InboxError> {
         let client = self.inbox_client(epicbox).await?;
         let subscription = client.drain().map_err(InboxError::Subscription)?;
-        self.run_inbox(&subscription, None, backoff(epicbox)).await
+        let method: Arc<dyn Method> = Arc::new(epicbox.clone());
+        self.run_inbox(&method, &subscription, None, backoff(epicbox))
+            .await
     }
 
     /// Holds a relay connection and handles messages as they arrive, until `handle` is stopped:
@@ -731,26 +733,17 @@ where
         let subscription = client
             .listen_with_held_rounds(self.config().policy.listener_held_rounds)
             .map_err(InboxError::Subscription)?;
-        self.run_inbox(&subscription, Some(handle), backoff(epicbox))
+        let method: Arc<dyn Method> = Arc::new(epicbox.clone());
+        self.run_inbox(&method, &subscription, Some(handle), backoff(epicbox))
             .await
     }
 
     /// The attached client for a drain or a listen, after pruning the relay inbox. Pruning runs
     /// before the subscription starts, so the host sees every connection state.
     async fn inbox_client(&self, epicbox: &EpicboxTransport) -> Result<EpicboxClient, InboxError> {
-        self.check_epicbox_registered()?;
         let client = self.attached_client(epicbox)?;
         self.prune_relay_inbox().await;
         Ok(client)
-    }
-
-    pub(crate) fn check_epicbox_registered(&self) -> Result<(), InboxError> {
-        if self.ports().transports.get(TRANSPORT_ID).is_none() {
-            return Err(InboxError::UnknownTransport {
-                transport: TRANSPORT_ID,
-            });
-        }
-        Ok(())
     }
 
     pub(crate) async fn prune_relay_inbox(&self) {
@@ -762,6 +755,7 @@ where
     /// Consumes the subscription and stops it, while its connection state goes out as events.
     pub(crate) async fn run_inbox(
         &self,
+        epicbox: &Arc<dyn Method>,
         subscription: &Subscription,
         listen: Option<&ListenHandle>,
         backoff: Backoff,
@@ -769,6 +763,7 @@ where
         let consume = async {
             let consumed = self
                 .consume(
+                    epicbox,
                     subscription,
                     listen,
                     backoff,
@@ -825,6 +820,7 @@ where
 
     async fn consume(
         &self,
+        epicbox: &Arc<dyn Method>,
         subscription: &Subscription,
         listen: Option<&ListenHandle>,
         backoff: Backoff,
@@ -869,7 +865,15 @@ where
                 }
             };
             match self
-                .settle(subscription, &item, listen, backoff, pruning, route)
+                .settle(
+                    epicbox,
+                    subscription,
+                    &item,
+                    listen,
+                    backoff,
+                    pruning,
+                    route,
+                )
                 .await
             {
                 Some(handled) => summary.count(handled),
@@ -883,8 +887,10 @@ where
 
     /// Handles `item` until it settles, then acknowledges it. Returns `None` when it is held:
     /// at once in a drain, and in a listen once the listen is stopped while retrying.
+    #[allow(clippy::too_many_arguments)]
     async fn settle(
         &self,
+        epicbox: &Arc<dyn Method>,
         subscription: &Subscription,
         item: &Item,
         listen: Option<&ListenHandle>,
@@ -897,13 +903,13 @@ where
             let try_number = attempt.saturating_add(1);
             let disposition = match listen {
                 None => {
-                    self.handle(subscription, item, pruning, try_number, route)
+                    self.handle(epicbox, subscription, item, pruning, try_number, route)
                         .await
                 }
                 Some(handle) => tokio::select! {
                     biased;
                     () = handle.abandoned() => return None,
-                    disposition = self.handle(subscription, item, pruning, try_number, route) => disposition,
+                    disposition = self.handle(epicbox, subscription, item, pruning, try_number, route) => disposition,
                 },
             };
             match (disposition, listen) {
@@ -976,6 +982,7 @@ where
     /// Handles `item` on its try number `attempt`, counted from 1.
     async fn handle(
         &self,
+        epicbox: &Arc<dyn Method>,
         subscription: &Subscription,
         item: &Item,
         pruning: &PruneSchedule,
@@ -993,8 +1000,15 @@ where
                 Ok(Handled::Rejected)
             }
             Item::Envelope(envelope, _) => {
-                self.handle_envelope(subscription, msg_id.as_deref(), envelope, attempt, route)
-                    .await
+                self.handle_envelope(
+                    epicbox,
+                    subscription,
+                    msg_id.as_deref(),
+                    envelope,
+                    attempt,
+                    route,
+                )
+                .await
             }
         };
         let handled = match outcome {
@@ -1037,6 +1051,7 @@ where
 
     async fn handle_envelope(
         &self,
+        epicbox: &Arc<dyn Method>,
         subscription: &Subscription,
         msg_id: Option<&str>,
         envelope: &Envelope,
@@ -1056,9 +1071,9 @@ where
             }
         }
         let applied = match route {
-            None => self.apply(msg_id, envelope, attempt).await,
+            None => self.apply(epicbox, msg_id, envelope, attempt).await,
             Some(route) => {
-                self.apply_at_listing(msg_id, envelope, attempt, route)
+                self.apply_at_listing(epicbox, msg_id, envelope, attempt, route)
                     .await
             }
         };
@@ -1081,22 +1096,13 @@ where
 
     async fn apply(
         &self,
+        epicbox: &Arc<dyn Method>,
         msg_id: Option<&str>,
         envelope: &Envelope,
         attempt: u32,
     ) -> Result<Handled, Settlement> {
         let reply_to = envelope.reply_to().ok_or(Refusal::NoReplyAddress)?;
         let network = self.config().network;
-        let transport = self
-            .ports()
-            .transports
-            .get(TRANSPORT_ID)
-            .ok_or(WalletError::Config(
-                crate::config::ConfigError::UnknownTransport {
-                    transport: TRANSPORT_ID,
-                },
-            ))
-            .map_err(Hold::from)?;
         match notice::classify(envelope.wire()) {
             Payload::Slate => {}
             Payload::Notice(notice) => return Ok(self.take_notice(notice, reply_to).await?),
@@ -1129,18 +1135,16 @@ where
                 return Ok(Handled::Dropped);
             }
         }
-        let codecs = legacy_codecs(network).map_err(Hold::Receive)?;
-        let slate = transport
-            .policy()
-            .decode(&codecs, envelope.wire())
+        let slate = epicbox
+            .decode(network, envelope.wire())
             .map_err(Refusal::Decode)?;
         match slate.stage() {
             Stage::S1 => {
-                self.answer(msg_id, attempt, envelope, &slate, reply_to, None)
+                self.answer(epicbox, msg_id, attempt, envelope, &slate, reply_to, None)
                     .await
             }
             Stage::S2 => {
-                self.complete(msg_id, attempt, envelope, &slate, reply_to)
+                self.complete(epicbox, msg_id, attempt, envelope, &slate, reply_to)
                     .await
             }
             Stage::I1 => match self.bounced_invoice(&slate, reply_to).await? {
@@ -1151,7 +1155,7 @@ where
                 None => Err(Refusal::UnsupportedStage { stage: Stage::I1 }.into()),
             },
             Stage::I2 => {
-                self.complete_invoice(msg_id, attempt, envelope, &slate, reply_to)
+                self.complete_invoice(epicbox, msg_id, attempt, envelope, &slate, reply_to)
                     .await
             }
             stage => Err(Refusal::UnsupportedStage { stage }.into()),
@@ -1165,6 +1169,7 @@ where
     /// pushed, that payer is sent a `posted` notice.
     async fn complete_invoice(
         &self,
+        epicbox: &Arc<dyn Method>,
         msg_id: Option<&str>,
         attempt: u32,
         envelope: &Envelope,
@@ -1185,7 +1190,7 @@ where
             .await
             .map_err(Hold::from)?;
         match self
-            .finalize_invoice(TRANSPORT_ID, envelope.wire(), POST_PROPAGATION)
+            .finalize_invoice(epicbox, envelope.wire(), POST_PROPAGATION)
             .await
         {
             Ok(finalized) => {
@@ -1468,8 +1473,10 @@ where
     /// different S1 under a slate id received before is refused, and so is a new one over the
     /// open receipt caps, or at the payments address of a wallet that refuses payments nobody
     /// asked for. A reply that cannot be delivered is given up at the hold bound.
+    #[allow(clippy::too_many_arguments)]
     async fn answer(
         &self,
+        epicbox: &Arc<dyn Method>,
         msg_id: Option<&str>,
         attempt: u32,
         envelope: &Envelope,
@@ -1483,7 +1490,7 @@ where
         let features = lepic_marker_features(envelope.wire());
         match self
             .receive_from(
-                TRANSPORT_ID,
+                epicbox,
                 envelope.wire(),
                 ReceiveRequest::default(),
                 Some(reply_to.clone()),
@@ -1513,7 +1520,7 @@ where
                     return Ok(Handled::Repeated);
                 }
                 let replied = match route {
-                    None => self.reply(reply_to, &received.reply).await,
+                    None => self.reply(&**epicbox, reply_to, &received.reply).await,
                     Some(route) => route.reply(reply_to, &received.reply).await,
                 };
                 match replied {
@@ -1549,15 +1556,15 @@ where
         }
     }
 
-    async fn reply(&self, to: &Destination, wire: &WireSlate) -> Result<(), Hold> {
-        let outbound = self
-            .ports()
-            .transports
-            .get(TRANSPORT_ID)
-            .and_then(|transport| transport.outbound())
-            .ok_or(Hold::NoOutbound {
-                transport: TRANSPORT_ID,
-            })?;
+    async fn reply(
+        &self,
+        epicbox: &dyn Method,
+        to: &Destination,
+        wire: &WireSlate,
+    ) -> Result<(), Hold> {
+        let outbound = epicbox.outbound().ok_or(Hold::NoOutbound {
+            transport: epicbox.id(),
+        })?;
         outbound.deliver(to, wire).await.map_err(Hold::Reply)?;
         info!(stage = Stage::S2.as_str(), "slate sent");
         Ok(())
@@ -1570,6 +1577,7 @@ where
     /// of a send cancelled here is answered with a `cancelled` notice and refused.
     async fn complete(
         &self,
+        epicbox: &Arc<dyn Method>,
         msg_id: Option<&str>,
         attempt: u32,
         envelope: &Envelope,
@@ -1596,10 +1604,10 @@ where
         };
         let finalized = self
             .finalize_from(
-                TRANSPORT_ID,
+                epicbox,
                 envelope.wire(),
                 POST_PROPAGATION,
-                Answerer::Epicbox(reply_to.clone()),
+                Answerer::From(reply_to.clone()),
             )
             .await;
         // What the answer showed is recorded before any notice about the send is decided, so

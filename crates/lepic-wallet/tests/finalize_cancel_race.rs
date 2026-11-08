@@ -44,7 +44,7 @@ use lepic_wallet::send::{Delivery, SendRequest};
 use lepic_wallet::{Ports, StoreOpener, Wallet, WalletError};
 use receive_harness::Receiver;
 use send_support::{ACCOUNT, FUNDING, PEER, Sender, TIP};
-use support::{LOOPBACK, TestStore, TestStores, TestVault, both_stores, password};
+use support::{TestStore, TestStores, TestVault, both_stores, password};
 use tokio::sync::{Notify, watch};
 
 const AMOUNT: u64 = 100_000_000;
@@ -282,13 +282,13 @@ impl Race {
         let sent = sender
             .harness
             .block_on(sender.wallet.send(
+                &sender.harness.method(),
                 SendRequest {
                     minimum_confirmations: 1,
                     strategy: SelectionStrategy::Smallest,
                     ..SendRequest::new(ACCOUNT, Amount::new(AMOUNT))
                 },
                 Delivery::Deliver {
-                    transport: LOOPBACK,
                     to: Destination::new(PEER.to_owned()),
                 },
             ))
@@ -316,7 +316,7 @@ impl Race {
                     writes: writes.clone(),
                 },
                 secrets: ports.secrets,
-                transports: ports.transports,
+                notices: ports.notices,
                 clock: ports.clock,
                 rng: ports.rng,
                 runtime: ports.runtime,
@@ -362,8 +362,9 @@ impl Race {
         until: Until,
     ) -> (Result<Finalized, FinalizeError>, Result<(), WalletError>) {
         self.gate.arm();
+        let method = self.sender.harness.method();
         self.sender.harness.block_on(async {
-            let finalize = self.wallet.finalize(LOOPBACK, &self.s2, Propagation::Stem);
+            let finalize = self.wallet.finalize(&method, &self.s2, Propagation::Stem);
             let cancel = async {
                 self.gate.reached.notified().await;
                 self.run_while_held(self.wallet.cancel(self.tx_id), until)
@@ -384,7 +385,11 @@ impl Race {
             let finalize = async {
                 self.gate.reached.notified().await;
                 self.run_while_held(
-                    self.wallet.finalize(LOOPBACK, &self.s2, Propagation::Stem),
+                    self.wallet.finalize(
+                        &self.sender.harness.method(),
+                        &self.s2,
+                        Propagation::Stem,
+                    ),
                     Until::Committed,
                 )
                 .await
@@ -488,7 +493,10 @@ fn a_post_while_cancel_waits_on_the_kernel_lookup_waits_and_pushes_nothing() {
         .fail_next("push_transaction", MockFailure::Unreachable);
     race.sender
         .harness
-        .block_on(race.wallet.finalize(LOOPBACK, &race.s2, Propagation::Stem))
+        .block_on(
+            race.wallet
+                .finalize(&race.sender.harness.method(), &race.s2, Propagation::Stem),
+        )
         .unwrap_err();
     assert_eq!(race.state(), TxState::Finalized);
 

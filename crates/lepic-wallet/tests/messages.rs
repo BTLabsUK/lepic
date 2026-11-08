@@ -27,7 +27,6 @@ use lepic_wallet::send::{Delivery, SendRequest};
 use receive_harness::Receiver;
 use send_support::{ACCOUNT, PEER, Sender, TIP};
 use serde_json::Value;
-use support::LOOPBACK;
 
 const RECEIVER_MNEMONIC: &str = "legal winner thank year wave sausage worth useful legal winner \
     thank year wave sausage worth useful legal winner thank year wave sausage worth title";
@@ -54,9 +53,9 @@ fn sent(text: &str) -> (Sender, TxId, WireSlate) {
     let sent = sender
         .harness
         .block_on(sender.wallet.send(
+            &sender.harness.method(),
             request(text),
             Delivery::Deliver {
-                transport: LOOPBACK,
                 to: Destination::new(PEER.to_owned()),
             },
         ))
@@ -135,7 +134,11 @@ fn the_sender_sees_both_messages_after_finalize() {
 
     sender
         .harness
-        .block_on(sender.wallet.finalize(LOOPBACK, &s2, Propagation::Fluff))
+        .block_on(
+            sender
+                .wallet
+                .finalize(&sender.harness.method(), &s2, Propagation::Fluff),
+        )
         .unwrap();
 
     assert_eq!(
@@ -186,12 +189,12 @@ fn a_send_without_a_message_shows_none() {
     let sent = sender
         .harness
         .block_on(sender.wallet.send(
+            &sender.harness.method(),
             SendRequest {
                 message: None,
                 ..request("")
             },
             Delivery::Deliver {
-                transport: LOOPBACK,
                 to: Destination::new(PEER.to_owned()),
             },
         ))

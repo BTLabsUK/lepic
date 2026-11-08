@@ -9,6 +9,8 @@
 //! service key and the generation; no secret, signature over a LEPIC domain, or ECDH value
 //! leaves the wallet.
 
+use std::sync::Arc;
+
 use lepic_crypto::{EcdsaSignature, PublicKey};
 use lepic_epicbox::EpicboxClient;
 use lepic_epicbox::transport::EpicboxTransport;
@@ -17,6 +19,7 @@ use lepic_node::NodeApi;
 use lepic_slate::codec::WireSlate;
 use lepic_slate::stage::Stage;
 use lepic_store::WalletStore;
+use lepic_transport::method::Method;
 use lepic_transport::transport::{Destination, Outbound};
 use tracing::{info, instrument};
 
@@ -28,7 +31,6 @@ use crate::error::WalletError;
 use crate::namespace::{self, Listing};
 use crate::notice::{self, Payload};
 use crate::ports::{SecretVault, StoreOpener};
-use crate::receive::legacy_codecs;
 use crate::wallet::Wallet;
 
 /// Where the messages of a listing drain are answered from.
@@ -106,7 +108,6 @@ where
         listing: &Listing,
         epicbox: &EpicboxTransport,
     ) -> Result<InboxSummary, InboxError> {
-        self.check_epicbox_registered()?;
         let identity = self.listing_identity(listing, epicbox)?;
         let route = ListingRoute {
             listing: *listing,
@@ -114,8 +115,10 @@ where
         };
         self.prune_relay_inbox().await;
         let subscription = route.client.drain().map_err(InboxError::Subscription)?;
+        let method: Arc<dyn Method> = Arc::new(epicbox.clone());
         let consumed = self
             .consume(
+                &method,
                 &subscription,
                 None,
                 backoff(epicbox),
@@ -193,19 +196,13 @@ where
     /// [`Self::apply`] for a message at a listing: S1 slates and notices only.
     pub(super) async fn apply_at_listing(
         &self,
+        epicbox: &Arc<dyn Method>,
         msg_id: Option<&str>,
         envelope: &lepic_transport::transport::Envelope,
         attempt: u32,
         route: &ListingRoute,
     ) -> Result<super::Handled, Settlement> {
         let reply_to = envelope.reply_to().ok_or(Refusal::NoReplyAddress)?;
-        let transport = self
-            .ports()
-            .transports
-            .get(TRANSPORT_ID)
-            .ok_or(Hold::NoOutbound {
-                transport: TRANSPORT_ID,
-            })?;
         match notice::classify(envelope.wire()) {
             Payload::Slate => {}
             Payload::Notice(notice) => return Ok(self.take_notice(notice, reply_to).await?),
@@ -213,15 +210,21 @@ where
                 return Ok(super::Handled::Dropped);
             }
         }
-        let codecs = legacy_codecs(self.config().network).map_err(Hold::Receive)?;
-        let slate = transport
-            .policy()
-            .decode(&codecs, envelope.wire())
+        let slate = epicbox
+            .decode(self.config().network, envelope.wire())
             .map_err(Refusal::Decode)?;
         match slate.stage() {
             Stage::S1 => {
-                self.answer(msg_id, attempt, envelope, &slate, reply_to, Some(route))
-                    .await
+                self.answer(
+                    epicbox,
+                    msg_id,
+                    attempt,
+                    envelope,
+                    &slate,
+                    reply_to,
+                    Some(route),
+                )
+                .await
             }
             stage => Err(Refusal::UnsupportedStage { stage }.into()),
         }

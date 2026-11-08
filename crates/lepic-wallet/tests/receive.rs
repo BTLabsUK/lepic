@@ -24,7 +24,6 @@ use lepic_store::{
     WalletStore,
 };
 use lepic_transport::file::FILE;
-use lepic_transport::transport::TransportId;
 use lepic_wallet::chain::SLATE_LEAD_BLOCKS;
 use lepic_wallet::event::{AnsweredSlate, ReceivedTransaction};
 use lepic_wallet::{Event, ReceiveError, WalletError};
@@ -525,20 +524,13 @@ fn rejects_slates_past_s1() {
     assert_eq!(receiver.transaction_count(), 0);
 }
 
-every_store!(rejects_an_unknown_transport_and_a_locked_wallet);
-fn rejects_an_unknown_transport_and_a_locked_wallet() {
+every_store!(rejects_a_locked_wallet);
+fn rejects_a_locked_wallet() {
     let (s1, _) = delivered_s1("send_file_plain");
     let receiver = Receiver::new(
         &receiver_mnemonic(&vector("send_file_plain_s2_v3")),
         slate_height(&s1),
     );
-    let unknown = TransportId::new("carrier-pigeon");
-    let error = receiver.receive(unknown, &json(&s1), None).unwrap_err();
-    assert!(
-        matches!(error, ReceiveError::UnknownTransport { transport } if transport == unknown),
-        "{error:?}"
-    );
-
     receiver.wallet.lock();
     let error = receiver.receive(FILE, &json(&s1), None).unwrap_err();
     assert!(

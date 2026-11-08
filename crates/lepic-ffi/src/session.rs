@@ -17,13 +17,13 @@ use lepic_epicbox::{
 };
 use lepic_keychain::vault::SecretName;
 use lepic_keychain::{SecretStore as _, Seed, Vault};
+use lepic_methods::registry::Methods;
 use lepic_node::{NodeApi as _, Propagation, webpki_tls_config};
 use lepic_primitives::amount::{Amount, Fee, Height};
 use lepic_primitives::params::Network;
 use lepic_store::{AccountIndex, OutputStatus as EngineOutputStatus, TxId, TxState};
-use lepic_transport::file::{FILE, FileTransport, response_path};
-use lepic_transport::registry::TransportRegistry;
-use lepic_transport::transport::{BoxFuture, Destination, Exchange as _, Location};
+use lepic_transport::file::{FileTransport, response_path};
+use lepic_transport::transport::{BoxFuture, Destination, Exchange as _, Location, TransportId};
 use lepic_wallet::details::TransactionDetails as EngineTransactionDetails;
 use lepic_wallet::event::{Balance, Connection, TransportState as EngineTransportState};
 use lepic_wallet::inbox::ListenHandle;
@@ -32,6 +32,7 @@ use lepic_wallet::legacy_history::{
     TxOrigin as EngineTxOrigin,
 };
 use lepic_wallet::lifecycle::PhraseCheck;
+use lepic_wallet::method::Method;
 use lepic_wallet::peer_compat::PeerKind;
 use lepic_wallet::refresh::{BalanceCategory, OutputDetails, RefreshOutcome};
 use lepic_wallet::scan::{
@@ -199,6 +200,10 @@ pub(crate) struct Session {
     store: AppSecretStore,
     vault: VaultBytes,
     epicbox: Option<EpicboxSlot>,
+    /// The methods the engine sends, receives and finalizes through, by transport id.
+    methods: Methods,
+    /// The file method, which every session has.
+    file: Arc<dyn Method>,
     listener: Mutex<Option<ListenHandle>>,
     /// The handle a listener that a server switch ended continues with.
     relisten: Mutex<Option<ListenHandle>>,
@@ -457,7 +462,10 @@ impl lepic_epicbox::Connector for OfflineRelay {
 
 /// The transaction methods a session registers.
 struct SessionTransports {
-    registry: TransportRegistry,
+    methods: Methods,
+    file: Arc<dyn Method>,
+    /// The Epicbox method, when the wallet has a relay; it carries the engine's notices.
+    epicbox: Option<Arc<dyn Method>>,
     http: lepic_foreign::HttpTransport,
     #[cfg(feature = "tor")]
     tor: lepic_tor::TorTransport,
@@ -470,29 +478,33 @@ fn session_transports(
     tuning: &Tuning,
     send_tor: &Arc<RelayTor>,
 ) -> Result<SessionTransports, WalletError> {
-    let mut registry = TransportRegistry::new();
-    registry
-        .register(Box::new(FileTransport::new()))
+    let mut methods = Methods::new();
+    let file: Arc<dyn Method> = Arc::new(FileTransport::new());
+    methods
+        .register(Arc::clone(&file))
         .map_err(|error| invalid(error.to_string()))?;
-    if let Some(epicbox) = epicbox {
-        registry
-            .register(Box::new(epicbox.clone()))
+    let epicbox = epicbox.map(|epicbox| Arc::new(epicbox.clone()) as Arc<dyn Method>);
+    if let Some(epicbox) = &epicbox {
+        methods
+            .register(Arc::clone(epicbox))
             .map_err(|error| invalid(error.to_string()))?;
     }
     let http = http::http_transport(tuning, send_tor)?;
-    registry
-        .register(Box::new(http.clone()))
+    methods
+        .register(Arc::new(http.clone()))
         .map_err(|error| invalid(error.to_string()))?;
     #[cfg(feature = "tor")]
     let tor = tor::tor_transport(tuning);
     #[cfg(feature = "tor")]
     {
-        registry
-            .register(Box::new(tor.clone()))
+        methods
+            .register(Arc::new(tor.clone()))
             .map_err(|error| invalid(error.to_string()))?;
     }
     Ok(SessionTransports {
-        registry,
+        methods,
+        file,
+        epicbox,
         http,
         #[cfg(feature = "tor")]
         tor,
@@ -507,7 +519,7 @@ fn engine(
     data_dir: &Path,
     node: Node,
     claim: &Arc<ClaimHolder>,
-    transports: TransportRegistry,
+    notices: Option<Arc<dyn Method>>,
     policy: &Policy,
     vault: &VaultBytes,
 ) -> Result<EngineWallet, WalletError> {
@@ -527,10 +539,10 @@ fn engine(
         node,
         stores: ClaimedStores::new(Arc::clone(claim), runtime),
         secrets: AppVault::new(vault.clone(), runtime.kdf),
-        transports,
         clock: Arc::new(SystemClock),
         rng: SharedRng::new(os_rng()?),
         runtime: runtime.boundary.handle.clone(),
+        notices,
     };
     let engine = Wallet::new(engine_config, ports)?;
     lepic_wallet_contacts::install(&engine);
@@ -583,15 +595,17 @@ impl Session {
             &onion_routes,
         )?
         .map(EpicboxSlot::new);
-        let SessionTransports {
-            registry,
-            http,
-            #[cfg(feature = "tor")]
-            tor,
-        } = session_transports(epicbox.as_ref(), &tuning, &send_tor)?;
+        let transports = session_transports(epicbox.as_ref(), &tuning, &send_tor)?;
         let vault = VaultBytes::default();
         let engine = engine(
-            runtime, config, &data_dir, node, &claim, registry, &policy, &vault,
+            runtime,
+            config,
+            &data_dir,
+            node,
+            &claim,
+            transports.epicbox,
+            &policy,
+            &vault,
         )?;
         Ok(Self {
             engine,
@@ -601,15 +615,17 @@ impl Session {
             store,
             vault,
             epicbox,
+            methods: transports.methods,
+            file: transports.file,
             listener: Mutex::default(),
             relisten: Mutex::default(),
             listen_run: tokio::sync::Mutex::default(),
             servers: tokio::sync::RwLock::default(),
-            http,
+            http: transports.http,
             http_listener: Mutex::default(),
             http_starts: AtomicU64::new(0),
             #[cfg(feature = "tor")]
-            tor,
+            tor: transports.tor,
             #[cfg(feature = "tor")]
             tor_slot: Mutex::default(),
             #[cfg(feature = "tor")]
@@ -1289,10 +1305,10 @@ impl Session {
         let sent = self
             .engine
             .send(
+                &self.file,
                 self.policy
                     .file_send_request(amount, minimum_confirmations, message, options)?,
                 Delivery::Export {
-                    transport: FILE,
                     to: Location::File(path),
                 },
             )
@@ -1322,10 +1338,10 @@ impl Session {
         let sent = match self
             .engine
             .send(
+                &self.file,
                 self.policy
                     .file_send_request(amount, minimum_confirmations, message, options)?,
                 Delivery::Export {
-                    transport: FILE,
                     to: Location::File(scratch.path.clone()),
                 },
             )
@@ -1399,7 +1415,7 @@ impl Session {
     async fn receive_wire(&self, wire: &WireSlate) -> Result<Received, WalletError> {
         Ok(self
             .engine
-            .receive(FILE, wire, ReceiveRequest::default())
+            .receive(&self.file, wire, ReceiveRequest::default())
             .await?)
     }
 
@@ -1422,10 +1438,12 @@ impl Session {
     async fn finalize_wire(&self, wire: &WireSlate) -> Result<FinalizedTx, WalletError> {
         let finalized = if self.is_invoice_payment(wire) {
             self.engine
-                .finalize_invoice(FILE, wire, Propagation::Fluff)
+                .finalize_invoice(&self.file, wire, Propagation::Fluff)
                 .await?
         } else {
-            self.engine.finalize(FILE, wire, Propagation::Fluff).await?
+            self.engine
+                .finalize(&self.file, wire, Propagation::Fluff)
+                .await?
         };
         Ok(FinalizedTx {
             tx_id: finalized.tx_id.0,
@@ -1516,6 +1534,22 @@ impl Session {
                     "epicbox is not configured for this wallet",
                 )
             })
+    }
+
+    /// The Epicbox method registered for the relay in use.
+    fn epicbox_method(&self) -> Result<&Arc<dyn Method>, WalletError> {
+        self.methods.get(TRANSPORT_ID).ok_or_else(|| {
+            WalletError::new(
+                WalletErrorKind::Unsupported,
+                "epicbox is not configured for this wallet",
+            )
+        })
+    }
+
+    /// The method registered as `transport`; a send through one the session lacks fails as
+    /// the engine failed it before.
+    pub(crate) fn method(&self, transport: TransportId) -> Option<&Arc<dyn Method>> {
+        self.methods.get(transport)
     }
 
     pub(crate) fn peer_compat(&self, address: &str) -> Result<PeerCompat, WalletError> {
@@ -1643,15 +1677,16 @@ impl Session {
             self.policy
                 .send_request_with(amount, minimum_confirmations, message, options)?;
         let epicbox = self.epicbox()?;
+        let method = self.epicbox_method()?;
         relay_address(&address, self.network)
             .ok_or_else(|| invalid("not an epicbox address with a relay on this network"))?;
         self.engine.epicbox_attach(&epicbox)?;
         let sent = self
             .engine
             .send(
+                method,
                 request,
                 Delivery::Deliver {
-                    transport: TRANSPORT_ID,
                     to: Destination::new(address),
                 },
             )
@@ -1661,6 +1696,7 @@ impl Session {
 
     pub(crate) async fn resend_epicbox(&self, tx_id: u32) -> Result<(), WalletError> {
         let epicbox = self.epicbox()?;
+        let method = self.epicbox_method()?;
         let details = self.engine.transaction_details(TxId(tx_id)).await?;
         let to = details
             .counterparty
@@ -1671,13 +1707,7 @@ impl Session {
         self.engine.epicbox_attach(&epicbox)?;
         Ok(self
             .engine
-            .resend(
-                TxId(tx_id),
-                Delivery::Deliver {
-                    transport: TRANSPORT_ID,
-                    to,
-                },
-            )
+            .resend(method, TxId(tx_id), Delivery::Deliver { to })
             .await?)
     }
 

@@ -4,9 +4,16 @@
 
 use std::sync::Arc;
 
-pub use lepic_transport::error::RegistryError;
 use lepic_transport::method::Method;
 use lepic_transport::transport::TransportId;
+use thiserror::Error;
+
+/// A method registry that cannot accept a registration.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+pub enum RegistryError {
+    #[error("transport {transport} is already registered")]
+    DuplicateTransport { transport: TransportId },
+}
 
 /// The registered methods, in registration order.
 #[derive(Default)]

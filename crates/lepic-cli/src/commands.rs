@@ -17,6 +17,7 @@ use lepic_foreign::{
 };
 use lepic_keychain::Identifier;
 use lepic_keychain::vault::MAX_WALLET_SEED_FILE_LEN;
+use lepic_methods::registry::Methods;
 use lepic_node::{NodeApi, NodeClient, Propagation, RpcTransport};
 use lepic_primitives::amount::{Fee, Height};
 use lepic_primitives::params::Network;
@@ -27,8 +28,7 @@ use lepic_store::{
 use lepic_tor::{SocksProxy, TorProcess, TorSettings, TorState};
 use lepic_transport::error::TransportError;
 use lepic_transport::file::{FILE, FileTransport, response_path};
-use lepic_transport::registry::TransportRegistry;
-use lepic_transport::transport::{BoxFuture, Destination, Exchange as _, Location};
+use lepic_transport::transport::{BoxFuture, Destination, Exchange as _, Location, TransportId};
 use lepic_wallet::chain::ImplausibleNodeData;
 use lepic_wallet::coinbase::{Coinbase, CoinbaseRequest};
 use lepic_wallet::details::TransactionDetails;
@@ -40,10 +40,11 @@ use lepic_wallet::finalize::{FinalizeError, Posted};
 use lepic_wallet::inbox::{InboxSummary, ListenHandle};
 use lepic_wallet::invoice::{InvoiceError, InvoiceRequest, PayRequest};
 use lepic_wallet::legacy_history::{ImportWorkDir, LegacyImportStatus, TxOrigin};
+use lepic_wallet::method::Method;
 use lepic_wallet::refresh::{BalanceCategory, OutputDetails, RefreshError, RefreshOutcome};
 use lepic_wallet::scan::{ScanCancel, ScanOptions, ScanStart, ScanSummary};
 use lepic_wallet::selection::SelectionStrategy;
-use lepic_wallet::send::{Delivery, SendRequest};
+use lepic_wallet::send::{Delivery, SendError, SendRequest, SentSlate};
 use lepic_wallet::slate::WireSlate;
 use lepic_wallet::state::state_name;
 use lepic_wallet::{
@@ -104,14 +105,17 @@ impl Clock for SystemClock {
     }
 }
 
-/// One command's wallet handle and the Epicbox transport registered in it.
+/// One command's wallet handle and the methods it sends and receives over.
 struct Opened<N: NodeApi + 'static> {
     wallet: CliWallet<N>,
-    epicbox: EpicboxTransport,
+    /// Every method below, looked up by id.
+    methods: Methods,
+    file: Arc<dyn Method>,
+    epicbox: Arc<EpicboxTransport>,
     /// Holds the answers of HTTP sends until they are finalized.
-    http: lepic_foreign::HttpTransport,
+    http: Arc<lepic_foreign::HttpTransport>,
     /// Holds the answers of Tor sends until they are finalized.
-    tor: lepic_tor::TorTransport,
+    tor: Arc<lepic_tor::TorTransport>,
     /// Taken by a send over Tor for as long as its tor is attached to [`Self::tor`], which only
     /// one send at a time can use.
     tor_gate: Arc<tokio::sync::Mutex<()>>,
@@ -133,6 +137,24 @@ impl<N: NodeApi + 'static> Opened<N> {
             .stores
             .opened()
             .ok_or(CliError::Wallet(WalletError::Locked))
+    }
+
+    /// The method a send or resend over `transport` goes through.
+    fn send_method(&self, transport: TransportId) -> Result<&Arc<dyn Method>, SendError> {
+        self.methods
+            .get(transport)
+            .ok_or(SendError::UnknownTransport { transport })
+    }
+
+    /// Sends over `transport` to the payee `delivery` names.
+    async fn send(
+        &self,
+        transport: TransportId,
+        request: SendRequest,
+        delivery: Delivery,
+    ) -> Result<SentSlate, SendError> {
+        let method = self.send_method(transport)?;
+        self.wallet.send(method, request, delivery).await
     }
 }
 
@@ -755,7 +777,7 @@ impl<H: Host> Run<'_, H> {
         let data_dir = &self.settings.data_dir;
         let sending = async {
             let sent = match payee {
-                Payee::Delivery(delivery) => opened.wallet.send(request, delivery).await?,
+                Payee::Delivery(_, delivery) => opened.send(transport, request, delivery).await?,
                 Payee::Contact(id) => {
                     contact::send_to_contact(&opened, id, request, purpose, data_dir).await?
                 }
@@ -801,17 +823,19 @@ impl<H: Host> Run<'_, H> {
     }
 
     async fn resend(&mut self, args: ResendArgs) -> Result<Report, CliError> {
-        let (delivery, destination) =
+        let (transport, delivery, destination) =
             self.delivery(args.destination, args.plain_http.allow_plain_http)?;
         let opened = self.open().await?;
-        if delivery.transport() == TRANSPORT_ID {
+        if transport == TRANSPORT_ID {
             opened.wallet.epicbox_attach(&opened.epicbox)?;
         }
-        let transport = delivery.transport();
         let tx_id = TxId(args.tx.tx_id);
         let tor = self.tor_for(transport, &args.tor, &opened).await?;
         let resending = async {
-            opened.wallet.resend(tx_id, delivery).await?;
+            opened
+                .wallet
+                .resend(opened.send_method(transport)?, tx_id, delivery)
+                .await?;
             if !is_direct(transport) {
                 return Ok("sent");
             }
@@ -962,7 +986,7 @@ impl<H: Host> Run<'_, H> {
             Arc::new(HttpReceiver {
                 opened: Arc::clone(&opened),
                 counts: Arc::clone(&counts),
-                transport: lepic_tor::TRANSPORT_ID,
+                method: Arc::clone(&opened.tor) as Arc<dyn Method>,
                 proof_key,
             })
         };
@@ -1051,12 +1075,12 @@ impl<H: Host> Run<'_, H> {
             let id = contact::contact_id(&text)?;
             return Ok((Payee::Contact(id), id.to_string()));
         }
-        let (delivery, destination) =
+        let (transport, delivery, destination) =
             self.delivery(DestinationArgs { to, to_file }, allow_plain_http)?;
-        Ok((Payee::Delivery(delivery), destination))
+        Ok((Payee::Delivery(transport, delivery), destination))
     }
 
-    /// Where a first slate goes, and how the report names it. An address is parsed here,
+    /// Where a first slate goes, the method it goes through, and how the report names it. An address is parsed here,
     /// before the wallet stores anything: a send to an address that cannot be delivered to
     /// would leave a transaction behind with its inputs locked. An address with a scheme is a
     /// listening wallet's HTTP endpoint; plain HTTP to another computer needs
@@ -1065,13 +1089,13 @@ impl<H: Host> Run<'_, H> {
         &self,
         destination: DestinationArgs,
         allow_plain_http: bool,
-    ) -> Result<(Delivery, String), CliError> {
+    ) -> Result<(TransportId, Delivery, String), CliError> {
         match (destination.to, destination.to_file) {
             (Some(address), _) if is_onion(&address) => {
                 let onion = lepic_tor::parse_onion(&address).map_err(CliError::OnionAddress)?;
                 Ok((
+                    lepic_tor::TRANSPORT_ID,
                     Delivery::Deliver {
-                        transport: lepic_tor::TRANSPORT_ID,
                         to: Destination::new(onion.host()),
                     },
                     onion.host(),
@@ -1085,8 +1109,8 @@ impl<H: Host> Run<'_, H> {
                 };
                 let url = ForeignUrl::parse(&address, plain).map_err(CliError::HttpUrl)?;
                 Ok((
+                    lepic_foreign::TRANSPORT_ID,
                     Delivery::Deliver {
-                        transport: lepic_foreign::TRANSPORT_ID,
                         to: Destination::new(url.as_uri()),
                     },
                     url.as_uri(),
@@ -1106,8 +1130,8 @@ impl<H: Host> Run<'_, H> {
                     parsed.to_string()
                 };
                 Ok((
+                    TRANSPORT_ID,
                     Delivery::Deliver {
-                        transport: TRANSPORT_ID,
                         to: Destination::new(address.clone()),
                     },
                     address,
@@ -1116,8 +1140,8 @@ impl<H: Host> Run<'_, H> {
             (None, Some(path)) => {
                 let text = path.display().to_string();
                 Ok((
+                    FILE,
                     Delivery::Export {
-                        transport: FILE,
                         to: Location::File(path),
                     },
                     text,
@@ -1203,17 +1227,21 @@ impl<H: Host> Run<'_, H> {
         {
             return Err(CliError::InvoiceOverHttp);
         }
-        let (delivery, destination) = self.delivery(args.destination, false)?;
+        let (transport, delivery, destination) = self.delivery(args.destination, false)?;
         let opened = self.open().await?;
         let account = opened.wallet.account(&args.account.account)?;
-        if delivery.transport() == TRANSPORT_ID {
+        if transport == TRANSPORT_ID {
             opened.wallet.epicbox_attach(&opened.epicbox)?;
         }
-        let transport = delivery.transport().to_string();
+        let method = opened
+            .methods
+            .get(transport)
+            .ok_or(InvoiceError::UnknownTransport { transport })?;
         let file = matches!(delivery, Delivery::Export { .. }).then(|| destination.clone());
         let issued = opened
             .wallet
             .issue_invoice(
+                method,
                 InvoiceRequest {
                     account: account.index,
                     amount,
@@ -1227,7 +1255,7 @@ impl<H: Host> Run<'_, H> {
             tx_id: issued.tx_id.0,
             slate_id: issued.slate_id.to_string(),
             amount: format_amount(issued.amount),
-            transport,
+            transport: transport.to_string(),
             destination,
             file,
         }))
@@ -1255,7 +1283,11 @@ impl<H: Host> Run<'_, H> {
             .ok_or(InvoiceError::NotParked { slate_id })?;
         opened.wallet.epicbox_attach(&opened.epicbox)?;
         let request = spend.pay_request(account.index, amount, args.message.message);
-        let paid = opened.wallet.pay_parked_invoice(slate_id, request).await?;
+        let epicbox: Arc<dyn Method> = opened.epicbox.clone();
+        let paid = opened
+            .wallet
+            .pay_parked_invoice(&epicbox, slate_id, request)
+            .await?;
         Ok(Report::InvoicePay(InvoicePayReport {
             tx_id: paid.tx_id.0,
             slate_id: paid.slate.id().to_string(),
@@ -1279,7 +1311,10 @@ impl<H: Host> Run<'_, H> {
             .await
             .map_err(slate_file(&file))?;
         let request = spend.pay_request(account.index, amount, args.message.message);
-        let paid = opened.wallet.pay_invoice(FILE, &wire, request).await?;
+        let paid = opened
+            .wallet
+            .pay_invoice(&opened.file, &wire, request)
+            .await?;
         let reply = args
             .reply
             .reply_file
@@ -1382,25 +1417,28 @@ impl<H: Host> Run<'_, H> {
             what: "set up tls for http",
             source: std::io::Error::other(error),
         })?;
-        let http =
-            lepic_foreign::HttpTransport::new(ForeignClient::new(self.settings.tuning.send, tls));
+        let http = Arc::new(lepic_foreign::HttpTransport::new(ForeignClient::new(
+            self.settings.tuning.send,
+            tls,
+        )));
         let relay = ClientSettings::new(self.settings.relay.clone(), self.settings.tuning.relay);
-        let epicbox = EpicboxTransport::new(
+        let epicbox = Arc::new(EpicboxTransport::new(
             relay,
             relay_network(self.settings.network),
             self.host.relay_connector(self.settings)?,
-        );
-        let tor = lepic_tor::TorTransport::new(lepic_tor::OnionClient::new(
-            self.settings.tuning.onion_client(),
         ));
-        let mut transports = TransportRegistry::new();
-        for transport in [
-            Box::new(FileTransport::new()) as Box<dyn lepic_transport::transport::Transport>,
-            Box::new(epicbox.clone()),
-            Box::new(http.clone()),
-            Box::new(tor.clone()),
+        let tor = Arc::new(lepic_tor::TorTransport::new(lepic_tor::OnionClient::new(
+            self.settings.tuning.onion_client(),
+        )));
+        let file: Arc<dyn Method> = Arc::new(FileTransport::new());
+        let mut methods = Methods::new();
+        for method in [
+            Arc::clone(&file),
+            Arc::clone(&epicbox) as Arc<dyn Method>,
+            Arc::clone(&http) as Arc<dyn Method>,
+            Arc::clone(&tor) as Arc<dyn Method>,
         ] {
-            transports.register(transport)?;
+            methods.register(method)?;
         }
         let rng = StdRng::try_from_rng(&mut SysRng).map_err(|error| CliError::Io {
             what: "seed the random number generator",
@@ -1410,10 +1448,10 @@ impl<H: Host> Run<'_, H> {
             node: self.host.node(self.settings)?,
             stores: CliStores::default(),
             secrets: FileVault::new(&self.settings.data_dir, self.host.vault_kdf()),
-            transports,
             clock: Arc::new(SystemClock),
             rng: SharedRng::new(rng),
             runtime: tokio::runtime::Handle::current(),
+            notices: Some(Arc::clone(&epicbox) as Arc<dyn Method>),
         };
         let config = WalletConfig {
             name: WalletName::new(WALLET_NAME).map_err(WalletError::from)?,
@@ -1434,6 +1472,8 @@ impl<H: Host> Run<'_, H> {
         lepic_wallet_contacts::install(&wallet);
         Ok(Opened {
             wallet,
+            methods,
+            file,
             epicbox,
             http,
             tor,
@@ -1503,17 +1543,17 @@ fn caller_slate_id(text: &str) -> Result<SlateId, CliError> {
     Ok(slate_id)
 }
 
-/// Where a send goes: through a transport, or to a paired contact's mailbox.
+/// Where a send goes: through a method, or to a paired contact's mailbox.
 enum Payee {
-    Delivery(Delivery),
+    Delivery(TransportId, Delivery),
     Contact(ContactId),
 }
 
 impl Payee {
     /// The transport the send is stored with: a contact's slate leaves as a file to seal.
-    const fn transport(&self) -> lepic_transport::transport::TransportId {
+    const fn transport(&self) -> TransportId {
         match self {
-            Self::Delivery(delivery) => delivery.transport(),
+            Self::Delivery(transport, _) => *transport,
             Self::Contact(_) => FILE,
         }
     }
@@ -1541,8 +1581,8 @@ fn repeated_send(
         .checked_sub(entry.amount_credited.value())
         .and_then(|value| value.checked_sub(fee));
     let to_same = match payee {
-        Payee::Delivery(Delivery::Deliver { to, .. }) => first.counterparty.as_ref() == Some(to),
-        Payee::Delivery(Delivery::Export { .. }) => first_contact.is_none(),
+        Payee::Delivery(_, Delivery::Deliver { to }) => first.counterparty.as_ref() == Some(to),
+        Payee::Delivery(_, Delivery::Export { .. }) => first_contact.is_none(),
         Payee::Contact(id) => first_contact == Some(*id),
     };
     let transport = payee.transport();
@@ -1580,7 +1620,7 @@ pub(crate) fn is_onion(address: &str) -> bool {
 /// the send is reported in: `sent` for a transport whose answer comes later.
 async fn finalize_direct_reply<N: NodeApi + 'static>(
     opened: &Opened<N>,
-    transport: lepic_transport::transport::TransportId,
+    transport: TransportId,
     tx_id: TxId,
     slate_id: &str,
     fluff: bool,
@@ -1593,9 +1633,13 @@ async fn finalize_direct_reply<N: NodeApi + 'static>(
         return Ok("sent");
     };
     let reply = reply.ok_or(CliError::HttpReplyLost { tx_id: tx_id.0 })?;
+    let method = opened
+        .methods
+        .get(transport)
+        .ok_or(FinalizeError::UnknownTransport { transport })?;
     opened
         .wallet
-        .finalize(transport, &reply, propagation(fluff))
+        .finalize(method, &reply, propagation(fluff))
         .await?;
     Ok("posted")
 }
@@ -1643,7 +1687,7 @@ impl HttpListener {
         let receiver = Arc::new(HttpReceiver {
             opened: Arc::clone(opened),
             counts: Arc::clone(&counts),
-            transport: lepic_foreign::TRANSPORT_ID,
+            method: Arc::clone(&opened.http) as Arc<dyn Method>,
             proof_key: ProofKey::Payments,
         });
         let port = args.port.unwrap_or(settings.tuning.listen_port);
@@ -1688,13 +1732,13 @@ fn counted(port: u16, exposure: Exposure, counts: &HttpCounts) -> HttpListenRepo
     }
 }
 
-/// The wallet behind `http listen` and `tor listen`, recording receipts as `transport`'s and
+/// The wallet behind `http listen` and `tor listen`, receiving over `method` and
 /// signing payment proofs with `proof_key`, the key of the address the listener serves.
 /// Receipts reach the user as the wallet's events.
 struct HttpReceiver<N: NodeApi + 'static> {
     opened: Arc<Opened<N>>,
     counts: Arc<HttpCounts>,
-    transport: lepic_transport::transport::TransportId,
+    method: Arc<dyn Method>,
     proof_key: ProofKey,
 }
 
@@ -1705,7 +1749,7 @@ impl<N: NodeApi + 'static> ReceiveHandler for HttpReceiver<N> {
                 .opened
                 .wallet
                 .receive_unsolicited(
-                    self.transport,
+                    &self.method,
                     &slate,
                     ReceiveRequest {
                         proof_key: self.proof_key,
@@ -1727,7 +1771,7 @@ impl<N: NodeApi + 'static> ReceiveHandler for HttpReceiver<N> {
                     self.counts.refused.fetch_add(1, Ordering::Relaxed);
                     let error = CliError::from(error);
                     tracing::debug!(
-                        transport = %self.transport,
+                        transport = %self.method.id(),
                         error = %lepic_telemetry::ErrorChain(&error),
                         "payment refused"
                     );
@@ -1762,7 +1806,7 @@ impl<N: NodeApi + 'static> ReceiveHandler for HttpReceiver<N> {
                 Ok(coinbase) => Ok(coinbase_answer(&coinbase)),
                 Err(error) => {
                     tracing::warn!(
-                        transport = %self.transport,
+                        transport = %self.method.id(),
                         error = %lepic_telemetry::ErrorChain(&error),
                         "coinbase refused"
                     );
@@ -2018,7 +2062,7 @@ async fn receive_slate<N: NodeApi + 'static>(
         message,
         ..ReceiveRequest::default()
     };
-    Ok(opened.wallet.receive(FILE, wire, request).await?)
+    Ok(opened.wallet.receive(&opened.file, wire, request).await?)
 }
 
 /// Finalizes `wire`, a reply slate as a file holds it, to a send or to an invoice, and posts it.
@@ -2029,11 +2073,15 @@ async fn finalize_slate<N: NodeApi + 'static>(
 ) -> Result<Report, CliError> {
     let propagation = propagation(fluff);
     // Which flow the slate answers is known only once it is decoded, which the engine does.
-    let finalized = match opened.wallet.finalize(FILE, wire, propagation).await {
+    let finalized = match opened
+        .wallet
+        .finalize(&opened.file, wire, propagation)
+        .await
+    {
         Err(error @ FinalizeError::WrongStage { .. }) => {
             match opened
                 .wallet
-                .finalize_invoice(FILE, wire, propagation)
+                .finalize_invoice(&opened.file, wire, propagation)
                 .await
             {
                 Err(InvoiceError::WrongStage { .. }) => return Err(error.into()),

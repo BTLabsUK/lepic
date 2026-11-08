@@ -3,7 +3,6 @@
 
 use jiff::Timestamp;
 use lepic_crypto::Commitment;
-use lepic_epicbox::TRANSPORT_ID as EPICBOX;
 use lepic_node::NodeApi;
 use lepic_primitives::amount::Height;
 use lepic_primitives::output::OutputFeatures;
@@ -154,8 +153,9 @@ pub struct SlateMessage {
     pub text: String,
 }
 
-/// The sender's report that it posted a payment received over Epicbox, while the payment waits
-/// for it. Reads a setting only for such a payment.
+/// The sender's report that it posted a received payment, while the payment waits for it.
+/// Reports come only from a method that carries notices, so another payment finds none. Reads
+/// a setting only for a payment that waits.
 fn sender_report(
     repos: &dyn Repositories,
     transaction: &StoredTransaction,
@@ -165,7 +165,6 @@ fn sender_report(
     if entry.slate_id.is_some()
         && entry.direction == TxDirection::Incoming
         && entry.state == TxState::Received
-        && entry.transport.as_deref() == Some(EPICBOX.as_str())
     {
         posted_report(repos, transaction.id, now)
     } else {

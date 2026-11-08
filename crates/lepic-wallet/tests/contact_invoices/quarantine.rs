@@ -64,13 +64,13 @@ pub(super) fn s1_text(world: &World) -> String {
     let file = tempfile::tempdir().unwrap().keep().join("s1.tx");
     world
         .block_on(world.payer.wallet.send(
+            &crate::support::file(),
             SendRequest {
                 minimum_confirmations: 1,
                 strategy: SelectionStrategy::Smallest,
                 ..SendRequest::new(ACCOUNT, Amount::new(AMOUNT))
             },
             Delivery::Export {
-                transport: lepic_transport::file::FILE,
                 to: lepic_transport::transport::Location::File(file.clone()),
             },
         ))

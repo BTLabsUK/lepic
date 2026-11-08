@@ -282,7 +282,6 @@ fn onion(text: &str) -> Result<OnionAddress, WalletError> {
 
 fn delivery(onion: &OnionAddress) -> Delivery {
     Delivery::Deliver {
-        transport: TRANSPORT_ID,
         to: Destination::new(onion.host()),
     }
 }
@@ -726,10 +725,16 @@ impl Session {
         self.engine
             .estimate_fee(request.amount, request.selection_options())
             .await?;
+        let method = self
+            .method(TRANSPORT_ID)
+            .ok_or(SendError::UnknownTransport {
+                transport: TRANSPORT_ID,
+            })
+            .map_err(send_error)?;
         report(TorEvent::of(TorEventKind::Sending));
         let sent = self
             .engine
-            .send(request, delivery(&onion))
+            .send(method, request, delivery(&onion))
             .await
             .map_err(send_error)?;
         let slate_id = sent.slate_id.to_string();
@@ -762,9 +767,15 @@ impl Session {
             }
         };
         let report = self.tor_send_report()?;
+        let method = self
+            .method(TRANSPORT_ID)
+            .ok_or(SendError::UnknownTransport {
+                transport: TRANSPORT_ID,
+            })
+            .map_err(send_error)?;
         report(TorEvent::of(TorEventKind::Sending));
         self.engine
-            .resend(TxId(tx_id), delivery(&onion))
+            .resend(method, TxId(tx_id), delivery(&onion))
             .await
             .map_err(send_error)?;
         let posted = self

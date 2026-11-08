@@ -20,7 +20,7 @@ mod support;
 #[path = "epicbox_invoices/world.rs"]
 mod world;
 
-use lepic_epicbox::{EpicboxAddress, TRANSPORT_ID};
+use lepic_epicbox::EpicboxAddress;
 use lepic_primitives::amount::Amount;
 use lepic_slate::model::SlateId;
 use lepic_store::{TxDirection, TxState};
@@ -55,13 +55,13 @@ fn declined(slate_id: SlateId) -> String {
 fn send_to(world: &World, to: &EpicboxAddress) -> SentSlate {
     world
         .block_on(world.payer.wallet.send(
+            &world.payer.method,
             SendRequest {
                 minimum_confirmations: 1,
                 strategy: SelectionStrategy::Smallest,
                 ..SendRequest::new(ACCOUNT, Amount::new(AMOUNT))
             },
             Delivery::Deliver {
-                transport: TRANSPORT_ID,
                 to: Destination::new(to.to_string()),
             },
         ))

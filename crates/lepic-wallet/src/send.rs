@@ -19,14 +19,12 @@
 //! releases its inputs.
 
 use std::num::NonZeroUsize;
+use std::sync::Arc;
 
 use blake2::Blake2b256;
 use blake2::digest::{FixedOutput, Update};
 use jiff::Timestamp;
 use lepic_crypto::{Commitment, CryptoError, Message, PublicKey, SecretKey, aggsig};
-use lepic_epicbox::marker::v2::MarkedV2JsonCodec;
-use lepic_epicbox::marker::v3::MarkedV3JsonCodec;
-use lepic_epicbox::{EpicboxAddress, TRANSPORT_ID as EPICBOX};
 use lepic_keychain::proof::create_output;
 use lepic_keychain::{
     Identifier, IdentifierError, Keychain, KeychainError, ProofBuilder, ProofError,
@@ -39,7 +37,6 @@ use lepic_primitives::input::Input;
 use lepic_primitives::output::{OutputFeatures, OutputIdentifier};
 use lepic_primitives::params::Network;
 use lepic_primitives::tx::TransactionBody;
-use lepic_slate::codec::legacy::v2_json::V2JsonCodec;
 use lepic_slate::codec::legacy::v3_json::{LEGACY_V3_JSON, V3JsonCodec};
 use lepic_slate::codec::{Codec, CodecId, EncodeContext, MediaType, WireSlate};
 use lepic_slate::error::{DecodeError, EncodeError, ProofAddressError, SlateError};
@@ -48,7 +45,6 @@ use lepic_slate::model::{
     SlateId,
 };
 use lepic_slate::origin::WireOrigin;
-use lepic_slate::registry::CodecRegistry;
 use lepic_slate::stage::{Flow, Stage};
 use lepic_store::{
     AccountIndex, KeyId, OutboxEntry, OutboxId, OutboxStatus, OutputRecord, OutputStatus,
@@ -56,9 +52,8 @@ use lepic_store::{
     TransactionEntry, TxDirection, TxId, TxState, WalletStore,
 };
 use lepic_transport::error::{FormatError, TransportError};
-use lepic_transport::file::FILE;
-use lepic_transport::registry::TransportRegistry;
-use lepic_transport::transport::{Destination, Location, Transport, TransportId};
+use lepic_transport::method::{Method, Sending};
+use lepic_transport::transport::{Destination, Location, TransportId};
 use rand_core::CryptoRng;
 use thiserror::Error;
 use tracing::field::Empty;
@@ -69,7 +64,6 @@ use crate::account::{self, AccountError, next_output_key};
 use crate::codecs;
 use crate::error::WalletError;
 use crate::extension::ReplyKeys;
-use crate::inbox::relay_network;
 use crate::ports::{SecretVault, StoreOpener};
 use crate::refresh::with_spend_confirmations;
 use crate::selection::{self, Selection, SelectionError, SelectionOptions, SelectionStrategy};
@@ -242,27 +236,13 @@ impl SendRequest {
     }
 }
 
-/// How a slate leaves the wallet.
+/// How a slate leaves the wallet, through the method the call names.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Delivery {
-    /// Through a transport that delivers, such as Epicbox.
-    Deliver {
-        transport: TransportId,
-        to: Destination,
-    },
+    /// Through a method that delivers, such as Epicbox.
+    Deliver { to: Destination },
     /// Through a method where the user carries the slate, such as a file.
-    Export {
-        transport: TransportId,
-        to: Location,
-    },
-}
-
-impl Delivery {
-    pub const fn transport(&self) -> TransportId {
-        match self {
-            Self::Deliver { transport, .. } | Self::Export { transport, .. } => *transport,
-        }
-    }
+    Export { to: Location },
 }
 
 /// A slate that was stored and delivered.
@@ -540,75 +520,41 @@ pub(crate) const fn block_header_version(network: Network, height: Height) -> u1
     }
 }
 
-/// The codecs of the legacy methods, in the detection order `receive` uses.
-fn legacy_codecs(base_fee: Fee) -> CodecRegistry {
-    codecs_with(Box::new(V2JsonCodec::new(base_fee)), base_fee)
-}
-
-/// The codecs a new S1 goes out with over `transport`: over Epicbox the V2 shape carries the
-/// LEPIC marker, so a reply that keeps it proves the receiver runs LEPIC, and a stock receiver
-/// drops it.
-fn delivery_codecs(transport: TransportId, base_fee: Fee, features: u32) -> CodecRegistry {
-    let v2 = V2JsonCodec::new(base_fee);
-    if transport == EPICBOX {
-        codecs_with(
-            Box::new(MarkedV2JsonCodec::new(v2).with_features(features)),
-            base_fee,
-        )
-    } else {
-        codecs_with(Box::new(v2), base_fee)
-    }
-}
-
-fn codecs_with(v2: Box<dyn Codec>, base_fee: Fee) -> CodecRegistry {
-    codecs::legacy_with(Box::new(V3JsonCodec::new(base_fee)), v2)
-}
-
-fn transport<'a>(
-    transports: &'a TransportRegistry,
-    delivery: &Delivery,
-) -> Result<&'a dyn Transport, SendError> {
-    let id = delivery.transport();
-    let transport = transports
-        .get(id)
-        .ok_or(SendError::UnknownTransport { transport: id })?;
+/// Fails unless `method` can carry `delivery`: deliver for [`Delivery::Deliver`], export for
+/// [`Delivery::Export`].
+fn check_delivery(method: &dyn Method, delivery: &Delivery) -> Result<(), SendError> {
     match delivery {
-        Delivery::Deliver { .. } if transport.outbound().is_none() => {
-            Err(SendError::CannotDeliver { transport: id })
-        }
-        Delivery::Export { .. } if transport.exchange().is_none() => {
-            Err(SendError::CannotExport { transport: id })
-        }
-        Delivery::Deliver { .. } | Delivery::Export { .. } => Ok(transport),
+        Delivery::Deliver { .. } if method.outbound().is_none() => Err(SendError::CannotDeliver {
+            transport: method.id(),
+        }),
+        Delivery::Export { .. } if method.exchange().is_none() => Err(SendError::CannotExport {
+            transport: method.id(),
+        }),
+        Delivery::Deliver { .. } | Delivery::Export { .. } => Ok(()),
     }
 }
 
-/// The S1 as the transport sends a new slate.
+/// The S1 as the method sends a new slate.
 fn encode_for_delivery(
     env: &SendEnvironment<'_>,
-    delivery: &Delivery,
     slate: &Slate,
     account: AccountIndex,
     context: &EncodeContext,
 ) -> Result<WireSlate, SendError> {
-    let base_fee = env.base_fee();
-    let policy = transport(env.transports, delivery)?.policy();
-    // A file or paste S1 carries the reply key in the LEPIC marker, so a LEPIC receiver can
-    // answer sealed (RFC 0002 5); stock wallets ignore the extra key.
+    // A method that carries a reply key gets one, so a LEPIC receiver can answer sealed
+    // (RFC 0002 5).
     let reply_key = env
         .reply_keys
-        .filter(|_| delivery.transport() == FILE)
+        .filter(|_| env.method.carries().reply_key)
         .and_then(|keys| {
             keys.reply_public_key(env.keychain, env.network, account, *slate.id().as_bytes())
         });
-    let codecs = match reply_key {
-        Some(key) => codecs::legacy_with(
-            Box::new(MarkedV3JsonCodec::new(V3JsonCodec::new(base_fee)).with_reply_key(key)),
-            Box::new(V2JsonCodec::new(base_fee)),
-        ),
-        None => delivery_codecs(delivery.transport(), base_fee, env.features),
+    let sending = Sending {
+        network: env.network,
+        features: env.features,
+        reply_key,
     };
-    Ok(policy.encode_new_slate(&codecs, slate, context)?)
+    Ok(env.method.encode_new(slate, context, &sending)?.wire)
 }
 
 /// What the store transaction of a send produced, for the delivery that follows it.
@@ -626,12 +572,12 @@ struct StoredS1 {
 
 /// What the store transaction of a send or resend runs with, so it needs no `Ports`.
 struct SendEnvironment<'a> {
-    transports: &'a TransportRegistry,
+    method: &'a dyn Method,
     keychain: &'a Keychain,
     network: Network,
     now: Timestamp,
     reply_keys: Option<&'a dyn ReplyKeys>,
-    /// What the marker of an Epicbox S1 claims.
+    /// What this wallet's marker claims.
     features: u32,
 }
 
@@ -734,22 +680,16 @@ fn create_s1(
             network: env.network,
             now: env.now,
             tip,
-            transport: delivery.transport(),
+            transport: env.method.id(),
         },
         request,
         selection,
         randomness,
     )?;
-    let wire = encode_for_delivery(
-        env,
-        delivery,
-        &built.slate,
-        request.account,
-        &built.encode_context,
-    )?;
+    let wire = encode_for_delivery(env, &built.slate, request.account, &built.encode_context)?;
     record_counterparty(repos, built.tx_id, delivery)?;
     let slate_uuid = Uuid::from_bytes(*built.slate.id().as_bytes());
-    let outbox = enqueue_delivery(repos, delivery, slate_uuid, env.now)?;
+    let outbox = enqueue_delivery(repos, env.method.id(), delivery, slate_uuid, env.now)?;
     Ok(StoredS1 {
         tx_id: built.tx_id,
         slate_id: built.slate.id(),
@@ -901,20 +841,21 @@ pub(crate) fn record_counterparty(
     delivery: &Delivery,
 ) -> Result<(), StoreError> {
     match delivery {
-        Delivery::Deliver { to, .. } => repos.set_counterparty(tx_id, to.as_str()),
+        Delivery::Deliver { to } => repos.set_counterparty(tx_id, to.as_str()),
         Delivery::Export { .. } => Ok(()),
     }
 }
 
-/// Records a delivery to a destination in the outbox, reusing a pending entry for the same
-/// slate and destination. Exports have no destination to record.
+/// Records a delivery over `transport` to a destination in the outbox, reusing a pending entry
+/// for the same slate and destination. Exports have no destination to record.
 fn enqueue_delivery(
     repos: &mut dyn Repositories,
+    transport: TransportId,
     delivery: &Delivery,
     slate_id: Uuid,
     now: Timestamp,
 ) -> Result<Option<OutboxId>, SendError> {
-    let Delivery::Deliver { transport, to } = delivery else {
+    let Delivery::Deliver { to } = delivery else {
         return Ok(None);
     };
     let pending = repos
@@ -1014,14 +955,13 @@ fn stored_s1_for_delivery(
     let slate = slate.with_origin(None);
     let wire = encode_for_delivery(
         env,
-        delivery,
         &slate,
         entry.account,
         &EncodeContext {
             block_header_version,
         },
     )?;
-    let outbox = enqueue_delivery(repos, delivery, slate_uuid, env.now)?;
+    let outbox = enqueue_delivery(repos, env.method.id(), delivery, slate_uuid, env.now)?;
     record_counterparty(repos, tx_id, delivery)?;
     Ok(StoredS1 {
         tx_id,
@@ -1034,25 +974,22 @@ fn stored_s1_for_delivery(
     })
 }
 
-/// Whether `delivery` goes over Epicbox to the key of the address `allowed`.
-fn same_epicbox_key(network: Network, delivery: &Delivery, allowed: Option<&str>) -> bool {
-    let Delivery::Deliver { transport, to } = delivery else {
+/// Whether `delivery` goes over `method` to the peer of the address `allowed`.
+fn same_payee(
+    method: &dyn Method,
+    network: Network,
+    delivery: &Delivery,
+    allowed: Option<&str>,
+) -> bool {
+    let Delivery::Deliver { to } = delivery else {
         return false;
     };
-    *transport == EPICBOX
-        && allowed
-            .and_then(|allowed| epicbox_key(network, allowed))
-            .is_some_and(|allowed| epicbox_key(network, to.as_str()) == Some(allowed))
-}
-
-/// The key of `address` when it is an Epicbox address on `network`.
-pub(crate) fn epicbox_key(network: Network, address: &str) -> Option<PublicKey> {
-    EpicboxAddress::parse_key(address, relay_network(network)).ok()
+    allowed.is_some_and(|allowed| method.same_payee(network, to, allowed))
 }
 
 /// The stored I2 of an invoice payment, as it was encoded for its first delivery. It was
-/// encoded by the reply rule of the transport the invoice came over, which gave it the shape of
-/// the I1 and over Epicbox the LEPIC marker, so it goes out unchanged.
+/// encoded by the reply rule of the method the invoice came over, which gave it the shape of
+/// the I1 and the marker when the I1 carried one, so it goes out unchanged.
 fn stored_i2_for_delivery(
     repos: &mut dyn Repositories,
     env: &SendEnvironment<'_>,
@@ -1064,7 +1001,7 @@ fn stored_i2_for_delivery(
         .slate(slate_uuid, SlateStage::Invoice2)?
         .ok_or(SendError::NotResendable { tx_id })?;
     let wire = WireSlate::binary(MediaType::JSON, stored.bytes);
-    let slate = legacy_codecs(env.base_fee())
+    let slate = codecs::legacy(env.base_fee())
         .decode(&wire)
         .map_err(SendError::StoredSlate)?;
     if slate.stage() != Stage::I2 {
@@ -1076,7 +1013,7 @@ fn stored_i2_for_delivery(
         // caller's address may name the same key under another domain, which the relay does
         // not authenticate, so the recorded one is used.
         let allowed = repos.counterparty(tx_id)?;
-        if !same_epicbox_key(env.network, delivery, allowed.as_deref()) {
+        if !same_payee(env.method, env.network, delivery, allowed.as_deref()) {
             return Err(SendError::PayeeMismatch { tx_id });
         }
         allowed.map(Destination::new)
@@ -1108,7 +1045,7 @@ where
     /// it is unanswered.
     ///
     /// Fails, with nothing stored, with [`SendError::Wallet`] carrying [`WalletError::Locked`]
-    /// when the wallet is locked, [`SendError::Node`] when the chain tip is unavailable, [`SendError::UnknownTransport`],
+    /// when the wallet is locked, [`SendError::Node`] when the chain tip is unavailable,
     /// [`SendError::CannotDeliver`] or [`SendError::CannotExport`], a
     /// [`SendError::Selection`] error, or [`SendError::Unrepresentable`] when the transport's
     /// format cannot carry the slate. A send with change fails with
@@ -1118,25 +1055,27 @@ where
     /// [`Wallet::resend`] or [`Wallet::cancel`].
     #[instrument(skip_all, fields(
         wallet = %self.config().name,
-        transport = %delivery.transport(),
+        transport = %method.id(),
         stage = %Stage::S1,
         tx_id = Empty,
         slate_id = Empty,
     ))]
     pub async fn send(
         &self,
+        method: &Arc<dyn Method>,
         request: SendRequest,
         delivery: Delivery,
     ) -> Result<SentSlate, SendError> {
         let session = self.session()?;
-        transport(&self.ports().transports, &delivery)?;
+        check_delivery(&**method, &delivery)?;
         let (tip, _) = self.stage_tip(&session, SendError::Node).await?;
         let target = delivery.clone();
         let reply_keys = self.reply_keys();
+        let carrier = Arc::clone(method);
         let stored = self
             .blocking(move |ports, config| {
                 let env = SendEnvironment {
-                    transports: &ports.transports,
+                    method: &*carrier,
                     keychain: &session.keychain,
                     network: config.network,
                     now: ports.clock.now(),
@@ -1163,7 +1102,7 @@ where
         span.record("tx_id", stored.tx_id.0);
         span.record("slate_id", tracing::field::display(stored.slate_id));
         info!("slate created");
-        self.deliver(&stored, &delivery).await?;
+        self.deliver(&**method, &stored, &delivery).await?;
         Ok(SentSlate {
             tx_id: stored.tx_id,
             slate_id: stored.slate_id,
@@ -1185,20 +1124,26 @@ where
     /// the transport fails again.
     #[instrument(skip_all, fields(
         wallet = %self.config().name,
-        transport = %delivery.transport(),
+        transport = %method.id(),
         stage = %Stage::S1,
         tx_id = %tx_id,
         slate_id = Empty,
     ))]
-    pub async fn resend(&self, tx_id: TxId, delivery: Delivery) -> Result<(), SendError> {
+    pub async fn resend(
+        &self,
+        method: &Arc<dyn Method>,
+        tx_id: TxId,
+        delivery: Delivery,
+    ) -> Result<(), SendError> {
         let session = self.session()?;
-        transport(&self.ports().transports, &delivery)?;
+        check_delivery(&**method, &delivery)?;
         let target = delivery.clone();
         let reply_keys = self.reply_keys();
+        let carrier = Arc::clone(method);
         let stored = self
             .blocking(move |ports, config| {
                 let env = SendEnvironment {
-                    transports: &ports.transports,
+                    method: &*carrier,
                     keychain: &session.keychain,
                     network: config.network,
                     now: ports.clock.now(),
@@ -1212,34 +1157,33 @@ where
             .await??;
         Span::current().record("slate_id", tracing::field::display(stored.slate_id));
         let delivery = match &stored.bound_to {
-            Some(to) => Delivery::Deliver {
-                transport: delivery.transport(),
-                to: to.clone(),
-            },
+            Some(to) => Delivery::Deliver { to: to.clone() },
             None => delivery,
         };
-        self.deliver(&stored, &delivery).await
+        self.deliver(&**method, &stored, &delivery).await
     }
 
-    /// Hands the wire slate to the transport, then records the attempt in the outbox. A store
+    /// Hands the wire slate to `method`, then records the attempt in the outbox. A store
     /// failure while recording is logged and not returned, because the slate already left.
-    async fn deliver(&self, stored: &StoredS1, delivery: &Delivery) -> Result<(), SendError> {
-        let transport = transport(&self.ports().transports, delivery)?;
-        let outcome = match (delivery, transport.outbound(), transport.exchange()) {
-            (Delivery::Deliver { to, .. }, Some(outbound), _) => {
+    async fn deliver(
+        &self,
+        method: &dyn Method,
+        stored: &StoredS1,
+        delivery: &Delivery,
+    ) -> Result<(), SendError> {
+        let outcome = match (delivery, method.outbound(), method.exchange()) {
+            (Delivery::Deliver { to }, Some(outbound), _) => {
                 outbound.deliver(to, &stored.wire).await
             }
-            (Delivery::Export { to, .. }, _, Some(exchange)) => {
-                exchange.export(&stored.wire, to).await
-            }
+            (Delivery::Export { to }, _, Some(exchange)) => exchange.export(&stored.wire, to).await,
             (Delivery::Deliver { .. }, None, _) => {
                 return Err(SendError::CannotDeliver {
-                    transport: delivery.transport(),
+                    transport: method.id(),
                 });
             }
             (Delivery::Export { .. }, _, None) => {
                 return Err(SendError::CannotExport {
-                    transport: delivery.transport(),
+                    transport: method.id(),
                 });
             }
         };
@@ -1279,6 +1223,7 @@ mod tests {
     use super::*;
 
     use lepic_epicbox::marker::v3::{carries_lepic_marker, lepic_marker_features};
+    use lepic_slate::codec::legacy::v2_json::V2JsonCodec;
 
     fn key(byte: u8) -> SecretKey {
         SecretKey::from_array([byte; 32]).unwrap()
@@ -1378,22 +1323,30 @@ mod tests {
         let context = EncodeContext {
             block_header_version: 6,
         };
-        let encode = |transport, features| {
-            delivery_codecs(transport, base_fee, features)
-                .encode(
-                    lepic_slate::codec::legacy::v2_json::LEGACY_V2_JSON,
-                    &slate,
-                    &context,
-                )
-                .unwrap()
-                .unwrap()
+        let relay = lepic_epicbox::mock_relay::MockRelay::new(lepic_epicbox::Network::Floonet);
+        let endpoint = lepic_epicbox::RelayEndpoint::new(
+            lepic_epicbox::Domain::parse("relay.test").unwrap(),
+            None,
+            lepic_epicbox::Security::Plain,
+        );
+        let epicbox = lepic_epicbox::transport::EpicboxTransport::new(
+            lepic_epicbox::testing::client_settings(endpoint),
+            lepic_epicbox::Network::Floonet,
+            relay.connector(),
+        );
+        let sending = Sending {
+            network: Network::Floonet,
+            features: 0x21,
+            reply_key: None,
         };
-        let epicbox = encode(EPICBOX, 0x21);
-        assert_eq!(lepic_marker_features(&epicbox), Some(0x21));
-        let file = encode(FILE, 0x21);
+        let encode =
+            |method: &dyn Method| method.encode_new(&slate, &context, &sending).unwrap().wire;
+        let marked = encode(&epicbox);
+        assert_eq!(lepic_marker_features(&marked), Some(0x21));
+        let file = encode(&lepic_transport::file::FileTransport::default());
         assert!(!carries_lepic_marker(&file));
         assert!(!file.as_text().unwrap().contains("lepic"));
         // The marker is a constant of the build: the same claim writes the same bytes.
-        assert_eq!(encode(EPICBOX, 0x21), epicbox);
+        assert_eq!(encode(&epicbox), marked);
     }
 }

@@ -20,7 +20,6 @@ mod world;
 
 use std::time::Duration;
 
-use lepic_epicbox::TRANSPORT_ID;
 use lepic_node::LocatedKernel;
 use lepic_node::mock::ChainOutput;
 use lepic_primitives::amount::{Amount, Height};
@@ -51,9 +50,9 @@ fn send_request() -> SendRequest {
 fn send(world: &World) -> SentSlate {
     world
         .block_on(world.payer.wallet.send(
+            &world.payer.method,
             send_request(),
             Delivery::Deliver {
-                transport: TRANSPORT_ID,
                 to: Destination::new(world.issuer.address.to_string()),
             },
         ))
@@ -363,12 +362,11 @@ fn a_payment_the_other_install_reads_first_is_left_for_the_issuing_install() {
     );
     let issued = world.issue(None);
     world
-        .block_on(
-            world
-                .payer
-                .wallet
-                .pay_parked_invoice(issued.slate_id, pay_request()),
-        )
+        .block_on(world.payer.wallet.pay_parked_invoice(
+            &world.payer.method,
+            issued.slate_id,
+            pay_request(),
+        ))
         .unwrap();
     let mut twin_events = twin.wallet.subscribe();
 
@@ -496,7 +494,7 @@ fn answered_twice(world: &World, twin: &Party) -> SentSlate {
     let sent = send(world);
     let twin_answer = world
         .block_on(twin.wallet.receive(
-            TRANSPORT_ID,
+            &twin.method,
             &proposal(world, &sent),
             ReceiveRequest::default(),
         ))
@@ -609,7 +607,7 @@ fn a_receive_whose_inputs_no_refresh_saw_unspent_is_not_superseded() {
     let sent = send(&world);
     world
         .block_on(twin.wallet.receive(
-            TRANSPORT_ID,
+            &twin.method,
             &proposal(&world, &sent),
             ReceiveRequest::default(),
         ))

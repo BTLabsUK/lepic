@@ -16,7 +16,6 @@ use lepic_primitives::amount::{Amount, Height};
 use lepic_primitives::output::OutputFeatures;
 use lepic_store::WalletStore;
 use lepic_store::{AccountIndex, OutputRecord, OutputStatus, TxState};
-use lepic_transport::file::{FILE, FileTransport};
 use lepic_transport::transport::{Destination, Location};
 use lepic_wallet::chain::TIP_STEP_BLOCKS;
 use lepic_wallet::event::Event;
@@ -25,7 +24,7 @@ use lepic_wallet::selection::{Selection, SelectionError, SelectionOptions, Selec
 use lepic_wallet::send::{Delivery, SendError, SendRequest};
 use lepic_wallet::{AccountError, WalletError};
 use send_support::{ACCOUNT, FUNDING, PEER, Sender, TIP, output};
-use support::{LOOPBACK, fixed_time};
+use support::fixed_time;
 
 const AMOUNT: u64 = 100_000_000;
 const TTL_BLOCKS: u64 = 5;
@@ -49,7 +48,6 @@ fn request(amount: Amount, strategy: SelectionStrategy) -> SendRequest {
 
 fn to_peer() -> Delivery {
     Delivery::Deliver {
-        transport: LOOPBACK,
         to: Destination::new(PEER.to_owned()),
     }
 }
@@ -72,11 +70,11 @@ fn commitments(outputs: &[OutputRecord]) -> Vec<[u8; 33]> {
 fn send_matches(sender: &Sender, estimate: &Selection, strategy: SelectionStrategy) {
     let sent = sender
         .harness
-        .block_on(
-            sender
-                .wallet
-                .send(request(estimate.amount, strategy), to_peer()),
-        )
+        .block_on(sender.wallet.send(
+            &sender.harness.method(),
+            request(estimate.amount, strategy),
+            to_peer(),
+        ))
         .unwrap();
     assert_eq!(sent.fee, estimate.fee, "{strategy:?}");
     let locked: Vec<OutputRecord> = sender
@@ -288,11 +286,12 @@ fn on_chain(output: &OutputRecord, height: u64) -> ChainOutput {
 
 #[test]
 fn transactions_are_listed_newest_first_with_counterparty_ttl_and_confirmation() {
-    let sender = Sender::with_transports(vec![Box::new(FileTransport::new())]);
+    let sender = Sender::new();
     sender.fund(1, FUNDING);
     let delivered = sender
         .harness
         .block_on(sender.wallet.send(
+            &sender.harness.method(),
             SendRequest {
                 ttl_blocks: Some(TTL_BLOCKS),
                 ..request(Amount::new(AMOUNT), SelectionStrategy::Smallest)
@@ -304,9 +303,9 @@ fn transactions_are_listed_newest_first_with_counterparty_ttl_and_confirmation()
     let exported = sender
         .harness
         .block_on(sender.wallet.send(
+            &crate::support::file(),
             request(Amount::new(AMOUNT), SelectionStrategy::Smallest),
             Delivery::Export {
-                transport: FILE,
                 to: Location::File(dir.path().join("send.slate")),
             },
         ))
@@ -385,6 +384,7 @@ fn a_second_read_lists_the_same_rows_and_a_cancel_shows_in_the_next() {
     let sent = sender
         .harness
         .block_on(sender.wallet.send(
+            &sender.harness.method(),
             request(Amount::new(AMOUNT), SelectionStrategy::Smallest),
             to_peer(),
         ))
@@ -420,7 +420,11 @@ fn a_send_lists_its_change_in_its_details_also_once_another_send_spends_it() {
     let request = request(Amount::new(AMOUNT), SelectionStrategy::Smallest);
     let first = sender
         .harness
-        .block_on(sender.wallet.send(request.clone(), to_peer()))
+        .block_on(
+            sender
+                .wallet
+                .send(&sender.harness.method(), request.clone(), to_peer()),
+        )
         .unwrap();
     let change = sender
         .outputs()
@@ -443,7 +447,11 @@ fn a_send_lists_its_change_in_its_details_also_once_another_send_spends_it() {
     sender.harness.block_on(sender.wallet.refresh()).unwrap();
     let second = sender
         .harness
-        .block_on(sender.wallet.send(request, to_peer()))
+        .block_on(
+            sender
+                .wallet
+                .send(&sender.harness.method(), request, to_peer()),
+        )
         .unwrap();
 
     let spent = sender
@@ -525,6 +533,7 @@ fn an_estimate_leaves_out_what_minimum_confirmations_excludes_as_the_send_does()
     let sent = sender
         .harness
         .block_on(sender.wallet.send(
+            &sender.harness.method(),
             SendRequest {
                 minimum_confirmations: 2,
                 ..request(Amount::new(AMOUNT), strategy)
@@ -551,6 +560,7 @@ fn outputs_add_up_to_the_balance_in_each_category() {
     sender
         .harness
         .block_on(sender.wallet.send(
+            &sender.harness.method(),
             request(Amount::new(AMOUNT), SelectionStrategy::Smallest),
             to_peer(),
         ))
@@ -639,6 +649,7 @@ fn excluded_outputs_are_never_selected_by_an_estimate_or_a_send() {
         assert_eq!(max.total, Amount::new(2 * FUNDING), "{strategy:?}");
     }
     let sent = sender.harness.block_on(sender.wallet.send(
+        &sender.harness.method(),
         SendRequest {
             exclude_outputs: vec![small],
             ..request(Amount::new(AMOUNT), SelectionStrategy::All)

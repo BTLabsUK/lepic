@@ -28,10 +28,10 @@ use lepic_primitives::amount::Height;
 use lepic_primitives::hash::Hash;
 use lepic_primitives::params::Network;
 use lepic_store::{MemoryStore, Repositories, SqliteStore, StoreError, StoreKeys, WalletStore};
-use lepic_transport::file::FilePolicy;
+use lepic_transport::file::{FilePolicy, FileTransport};
 use lepic_transport::loopback::LoopbackTransport;
-use lepic_transport::registry::TransportRegistry;
 use lepic_transport::transport::{Destination, TransportId};
+use lepic_wallet::method::Method;
 use lepic_wallet::scan::{ScanCancel, ScanOptions};
 use lepic_wallet::{
     Clock, DATABASE_FILE, NodeEndpoint, Password, Ports, SecretVault, SecretVaultError, SharedRng,
@@ -43,6 +43,11 @@ use tempfile::TempDir;
 use tokio::runtime::Runtime;
 
 pub const LOOPBACK: TransportId = TransportId::new("loopback");
+
+/// The file method, stateless, so any instance carries what another wrote.
+pub fn file() -> Arc<dyn Method> {
+    Arc::new(FileTransport::new())
+}
 
 /// Golden vector `keys/wallet_seed_seed32`: a `wallet.seed` written by `epic-wallet`.
 pub const WALLET_SEED_VECTOR: &str =
@@ -447,6 +452,8 @@ pub struct Harness {
     pub stores: TestStores,
     pub vault: TestVault,
     pub peer: Arc<Mutex<Option<LoopbackTransport>>>,
+    /// The wallet's end of the loopback transport [`Harness::peer`] is the other end of.
+    pub own: Arc<Mutex<Option<Arc<dyn Method>>>>,
     pub data_dir: PathBuf,
 }
 
@@ -460,6 +467,7 @@ impl Harness {
             stores: TestStores::default(),
             vault: TestVault::default(),
             peer: Arc::default(),
+            own: Arc::default(),
             data_dir: PathBuf::from("/wallet-data"),
         }
     }
@@ -489,21 +497,23 @@ impl Harness {
         wallet
     }
 
+    /// The ports of a new wallet handle, and a fresh loopback pair for it.
     pub fn ports(&self, vault: TestVault) -> Ports<NodeClient<MockNode>, TestStores, TestVault> {
+        self.loopback();
         Ports {
             node: self.node.client(),
             stores: self.stores.clone(),
             secrets: vault,
-            transports: self.transports(),
             clock: Arc::new(FixedClock(fixed_time())),
             rng: SharedRng::new(StdRng::seed_from_u64(42)),
             runtime: self.runtime.handle().clone(),
+            notices: None,
         }
     }
 
-    /// A registry holding one end of a fresh loopback pair; the other end replaces
-    /// [`Harness::peer`].
-    pub fn transports(&self) -> TransportRegistry {
+    /// A fresh loopback pair: the wallet's end becomes [`Harness::method`], the other end
+    /// replaces [`Harness::peer`].
+    pub fn loopback(&self) -> Arc<dyn Method> {
         let (own, peer) = LoopbackTransport::pair(
             LOOPBACK,
             Arc::new(FilePolicy),
@@ -511,9 +521,23 @@ impl Harness {
             Destination::new("peer".to_owned()),
         );
         *self.peer.lock().unwrap_or_else(PoisonError::into_inner) = Some(peer);
-        let mut registry = TransportRegistry::new();
-        registry.register(Box::new(own)).unwrap();
-        registry
+        self.set_method(Arc::new(own))
+    }
+
+    /// Makes `method` the wallet's end of the loopback transport and returns it.
+    pub fn set_method(&self, method: Arc<dyn Method>) -> Arc<dyn Method> {
+        *self.own.lock().unwrap_or_else(PoisonError::into_inner) = Some(Arc::clone(&method));
+        method
+    }
+
+    /// The wallet's end of the latest loopback pair, which the engine's loopback sends,
+    /// receives and finalizes go through.
+    pub fn method(&self) -> Arc<dyn Method> {
+        let own = self.own.lock().unwrap_or_else(PoisonError::into_inner);
+        let Some(method) = own.as_ref() else {
+            panic!("no loopback pair was made");
+        };
+        Arc::clone(method)
     }
 
     pub fn block_on<T>(&self, future: impl Future<Output = T>) -> T {

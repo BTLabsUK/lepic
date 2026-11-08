@@ -45,9 +45,7 @@ use lepic_wallet::send::{Delivery, SendError, SendRequest};
 use lepic_wallet::{Clock, Ports, ReceiveRequest, StoreOpener, Wallet, WalletError};
 use send_support::{ACCOUNT, FUNDING, NEXT_CHILD, PEER, SENDER_MNEMONIC, TIP, context_key, output};
 use serde_json::Value;
-use support::{
-    Harness, LOOPBACK, TestStore, TestStores, TestVault, TestWallet, fixed_time, password,
-};
+use support::{Harness, TestStore, TestStores, TestVault, TestWallet, fixed_time, password};
 use uuid::Uuid;
 
 const AMOUNT: u64 = 100_000_000;
@@ -205,6 +203,7 @@ impl Payment {
         let sent = sender
             .harness
             .block_on(sender.wallet.send(
+                &sender.harness.method(),
                 SendRequest {
                     minimum_confirmations: 1,
                     strategy: SelectionStrategy::Smallest,
@@ -212,7 +211,6 @@ impl Payment {
                     ..SendRequest::new(ACCOUNT, Amount::new(AMOUNT))
                 },
                 Delivery::Deliver {
-                    transport: LOOPBACK,
                     to: Destination::new(PEER.to_owned()),
                 },
             ))
@@ -227,11 +225,11 @@ impl Payment {
             .clone();
         let received = receiver
             .harness
-            .block_on(
-                receiver
-                    .wallet
-                    .receive(LOOPBACK, &s1, ReceiveRequest::default()),
-            )
+            .block_on(receiver.wallet.receive(
+                &receiver.harness.method(),
+                &s1,
+                ReceiveRequest::default(),
+            ))
             .unwrap();
         let outputs = receiver.outputs();
         assert_eq!(outputs.len(), 1);
@@ -252,11 +250,11 @@ impl Payment {
     fn finalized(self) -> Self {
         self.sender
             .harness
-            .block_on(
-                self.sender
-                    .wallet
-                    .finalize(LOOPBACK, &self.s2, Propagation::Stem),
-            )
+            .block_on(self.sender.wallet.finalize(
+                &self.sender.harness.method(),
+                &self.s2,
+                Propagation::Stem,
+            ))
             .unwrap();
         self
     }
@@ -484,12 +482,11 @@ fn a_sender_cancel_of_a_finalized_send_keeps_a_watch_that_restores_its_change() 
     let error = payment
         .sender
         .harness
-        .block_on(
-            payment
-                .sender
-                .wallet
-                .finalize(LOOPBACK, &payment.s2, Propagation::Stem),
-        )
+        .block_on(payment.sender.wallet.finalize(
+            &payment.sender.harness.method(),
+            &payment.s2,
+            Propagation::Stem,
+        ))
         .unwrap_err();
     assert!(
         matches!(error, FinalizeError::NotPosted { .. }),
@@ -583,12 +580,11 @@ fn a_sender_cancel_mined_after_the_kernel_watch_still_restores_its_change() {
     payment
         .sender
         .harness
-        .block_on(
-            payment
-                .sender
-                .wallet
-                .finalize(LOOPBACK, &payment.s2, Propagation::Stem),
-        )
+        .block_on(payment.sender.wallet.finalize(
+            &payment.sender.harness.method(),
+            &payment.s2,
+            Propagation::Stem,
+        ))
         .unwrap_err();
     let change: Vec<OutputRecord> = payment
         .sender
@@ -782,13 +778,13 @@ fn an_output_with_another_switch_commitment_counts_but_is_never_spent() {
     let sent = sender
         .harness
         .block_on(sender.wallet.send(
+            &sender.harness.method(),
             SendRequest {
                 minimum_confirmations: 1,
                 strategy: SelectionStrategy::Smallest,
                 ..SendRequest::new(ACCOUNT, max.amount)
             },
             Delivery::Deliver {
-                transport: LOOPBACK,
                 to: Destination::new(PEER.to_owned()),
             },
         ))
@@ -799,13 +795,13 @@ fn an_output_with_another_switch_commitment_counts_but_is_never_spent() {
     let error = sender
         .harness
         .block_on(sender.wallet.send(
+            &sender.harness.method(),
             SendRequest {
                 minimum_confirmations: 1,
                 strategy: SelectionStrategy::Smallest,
                 ..SendRequest::new(ACCOUNT, Amount::new(ODD / 2))
             },
             Delivery::Deliver {
-                transport: LOOPBACK,
                 to: Destination::new(PEER.to_owned()),
             },
         ))

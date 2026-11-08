@@ -5,17 +5,19 @@
 
 use std::cmp::Reverse;
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use lepic_node::NodeApi;
 use lepic_slate::codec::WireSlate;
 use lepic_store::{OpenReceipt, StoreError, TxDirection, TxId, WalletStore};
+use lepic_transport::method::Method;
 use lepic_transport::transport::TransportId;
 use tracing::{debug, info, instrument, warn};
 use uuid::Uuid;
 
 use crate::error::WalletError;
 use crate::ports::{SecretVault, StoreOpener};
-use crate::receive::{ReceiveError, ReceiveRequest, Received, check_proposal, legacy_codecs};
+use crate::receive::{ReceiveError, ReceiveRequest, Received, check_proposal};
 use crate::wallet::Wallet;
 use lepic_primitives::error_chain::ErrorChain;
 
@@ -97,22 +99,17 @@ where
     #[instrument(
         name = "receive_unsolicited",
         skip_all,
-        fields(wallet = %self.config().name, transport = %transport)
+        fields(wallet = %self.config().name, transport = %method.id())
     )]
     pub async fn receive_unsolicited(
         &self,
-        transport: TransportId,
+        method: &Arc<dyn Method>,
         wire: &WireSlate,
         request: ReceiveRequest,
     ) -> Result<Received, ReceiveError> {
-        let policy = self
-            .ports()
-            .transports
-            .get(transport)
-            .ok_or(ReceiveError::UnknownTransport { transport })?
-            .policy();
-        let slate = policy
-            .decode(&legacy_codecs(self.config().network)?, wire)
+        let transport = method.id();
+        let slate = method
+            .decode(self.config().network, wire)
             .map_err(ReceiveError::Decode)?;
         check_proposal(&slate)?;
         // Taken after the checks, so slates that are not payments never wait for it.
@@ -126,7 +123,7 @@ where
             Err(NoRoom::FromSender | NoRoom::Full) => return Err(ReceiveError::OpenReceipts(None)),
             Err(NoRoom::Refused) => return Err(ReceiveError::Refused),
         }
-        self.receive(transport, wire, request).await
+        self.receive(method, wire, request).await
     }
 
     /// Checks the open receipt caps of `transport` before the new S1 `slate_id`, from `sender`

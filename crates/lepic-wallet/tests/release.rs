@@ -45,9 +45,7 @@ use lepic_wallet::{Clock, Event, Ports, StoreOpener, Wallet, WalletError};
 use receive_harness::Receiver;
 use send_support::{ACCOUNT, FUNDING, NEXT_CHILD, PEER, SENDER_MNEMONIC, TIP, context_key, output};
 use support::both_stores;
-use support::{
-    Harness, LOOPBACK, TestStore, TestStores, TestVault, TestWallet, fixed_time, password,
-};
+use support::{Harness, TestStore, TestStores, TestVault, TestWallet, fixed_time, password};
 
 const AMOUNT: u64 = 100_000_000;
 
@@ -180,13 +178,13 @@ impl Releasing {
 
         let sent = harness
             .block_on(wallet.send(
+                &harness.method(),
                 SendRequest {
                     minimum_confirmations: 1,
                     strategy: SelectionStrategy::Smallest,
                     ..SendRequest::new(ACCOUNT, Amount::new(AMOUNT))
                 },
                 Delivery::Deliver {
-                    transport: LOOPBACK,
                     to: Destination::new(PEER.to_owned()),
                 },
             ))
@@ -215,8 +213,11 @@ impl Releasing {
     }
 
     fn finalize(&self) -> Result<lepic_wallet::Finalized, FinalizeError> {
-        self.harness
-            .block_on(self.wallet.finalize(LOOPBACK, &self.s2, Propagation::Stem))
+        self.harness.block_on(self.wallet.finalize(
+            &self.harness.method(),
+            &self.s2,
+            Propagation::Stem,
+        ))
     }
 
     fn state(&self) -> TxState {
@@ -677,7 +678,7 @@ fn refuses_to_release_an_incoming_finalized_or_posted_transaction() {
         // An invoice issuer's transaction: incoming, finalized from its I3, with the kernel
         // known from the stored final slate.
         let final_slate = releasing.harness.block_on(releasing.wallet.finalize(
-            LOOPBACK,
+            &releasing.harness.method(),
             &releasing.s2,
             Propagation::Stem,
         ));
@@ -1087,13 +1088,13 @@ impl Releasing {
         let sent = self
             .harness
             .block_on(self.wallet.send(
+                &self.harness.method(),
                 SendRequest {
                     minimum_confirmations: 1,
                     strategy: SelectionStrategy::Smallest,
                     ..SendRequest::new(ACCOUNT, Amount::new(AMOUNT))
                 },
                 Delivery::Deliver {
-                    transport: LOOPBACK,
                     to: Destination::new(PEER.to_owned()),
                 },
             ))
@@ -1110,7 +1111,10 @@ impl Releasing {
             .unwrap()
             .reply;
         self.harness
-            .block_on(self.wallet.finalize(LOOPBACK, &s2, Propagation::Stem))
+            .block_on(
+                self.wallet
+                    .finalize(&self.harness.method(), &s2, Propagation::Stem),
+            )
             .unwrap();
         sent.tx_id
     }

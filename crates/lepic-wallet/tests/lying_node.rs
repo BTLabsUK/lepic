@@ -47,9 +47,7 @@ use lepic_wallet::send::{Delivery, SendRequest};
 use lepic_wallet::{Ports, StoreOpener, Wallet};
 use scan_support::{PASSWORD, full_scan_vector, options, restore, snapshot};
 use send_support::{ACCOUNT, FUNDING, NEXT_CHILD, PEER, SENDER_MNEMONIC, TIP, context_key, output};
-use support::{
-    Harness, LOOPBACK, TestStore, TestStores, TestVault, complete_restore_scan, password,
-};
+use support::{Harness, TestStore, TestStores, TestVault, complete_restore_scan, password};
 
 const AMOUNT: u64 = 100_000_000;
 
@@ -217,7 +215,7 @@ impl Liar {
             },
             stores: base.stores,
             secrets: base.secrets,
-            transports: base.transports,
+            notices: base.notices,
             clock: base.clock,
             rng: base.rng,
             runtime: base.runtime,
@@ -276,6 +274,7 @@ impl Liar {
     fn send(&self, ttl_blocks: Option<u64>) -> TxId {
         self.harness
             .block_on(self.wallet.send(
+                &self.harness.method(),
                 SendRequest {
                     minimum_confirmations: 1,
                     strategy: SelectionStrategy::Smallest,
@@ -283,7 +282,6 @@ impl Liar {
                     ..SendRequest::new(ACCOUNT, Amount::new(AMOUNT))
                 },
                 Delivery::Deliver {
-                    transport: LOOPBACK,
                     to: Destination::new(PEER.to_owned()),
                 },
             ))
@@ -569,7 +567,7 @@ fn lying_restore(lies: Lies) -> (Harness, LiarWallet, Arc<Mutex<Lies>>, serde_js
             },
             stores: base.stores,
             secrets: base.secrets,
-            transports: base.transports,
+            notices: base.notices,
             clock: base.clock,
             rng: base.rng,
             runtime: base.runtime,
@@ -782,7 +780,7 @@ fn http_wallet(harness: &Harness, runtime: &tokio::runtime::Runtime, url: &str) 
             node,
             stores: base.stores,
             secrets: base.secrets,
-            transports: base.transports,
+            notices: base.notices,
             clock: base.clock,
             rng: base.rng,
             runtime: runtime.handle().clone(),

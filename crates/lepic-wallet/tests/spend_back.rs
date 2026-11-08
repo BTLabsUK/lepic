@@ -41,7 +41,7 @@ use lepic_wallet::self_send::{SelfSendError, SelfSent};
 use lepic_wallet::send::{Delivery, SendRequest};
 use receive_harness::Receiver;
 use send_support::{ACCOUNT, FUNDING, PEER, Sender, TIP};
-use support::{LOOPBACK, MovableClock, fixed_time, some_proof};
+use support::{MovableClock, fixed_time, some_proof};
 
 const AMOUNT: u64 = 100_000_000;
 
@@ -91,13 +91,13 @@ impl Wallet {
             .sender
             .harness
             .block_on(self.sender.wallet.send(
+                &self.sender.harness.method(),
                 SendRequest {
                     minimum_confirmations: 1,
                     strategy: SelectionStrategy::Smallest,
                     ..SendRequest::new(ACCOUNT, Amount::new(AMOUNT))
                 },
                 Delivery::Deliver {
-                    transport: LOOPBACK,
                     to: Destination::new(PEER.to_owned()),
                 },
             ))
@@ -114,11 +114,11 @@ impl Wallet {
         let error = self
             .sender
             .harness
-            .block_on(
-                self.sender
-                    .wallet
-                    .finalize(LOOPBACK, &s2, Propagation::Stem),
-            )
+            .block_on(self.sender.wallet.finalize(
+                &self.sender.harness.method(),
+                &s2,
+                Propagation::Stem,
+            ))
             .unwrap_err();
         assert!(
             matches!(error, FinalizeError::NotPosted { .. }),

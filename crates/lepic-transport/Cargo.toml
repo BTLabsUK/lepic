@@ -1,6 +1,6 @@
 [package]
 name = "lepic-transport"
-description = "Transport traits, transport registry, format policy and the file transport."
+description = "Transport traits, the method port, format policy and the file transport."
 version.workspace = true
 edition.workspace = true
 license.workspace = true

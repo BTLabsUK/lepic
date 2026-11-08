@@ -29,7 +29,7 @@ use lepic_wallet::state::InvalidTransition;
 use lepic_wallet::{ReceiveRequest, StoreOpener};
 use send_support::{ACCOUNT, PEER, Sender, context_key, uuid};
 use support::every_store;
-use support::{Harness, LOOPBACK, TestVault, password};
+use support::{Harness, TestVault, password};
 use tokio::sync::broadcast::error::TryRecvError;
 
 fn request() -> SendRequest {
@@ -42,7 +42,6 @@ fn request() -> SendRequest {
 
 fn to(destination: &str) -> Delivery {
     Delivery::Deliver {
-        transport: LOOPBACK,
         to: Destination::new(destination.to_owned()),
     }
 }
@@ -77,7 +76,11 @@ fn cancel_before_delivery_releases_the_inputs_and_drops_the_pending_delivery() {
     let sender = Sender::new();
     let error = sender
         .harness
-        .block_on(sender.wallet.send(request(), to("nobody")))
+        .block_on(
+            sender
+                .wallet
+                .send(&sender.harness.method(), request(), to("nobody")),
+        )
         .unwrap_err();
     let SendError::Undelivered {
         tx_id, slate_id, ..
@@ -101,7 +104,11 @@ fn a_repair_scan_cancels_a_waiting_send_as_a_cancel_does() {
     let sender = Sender::new();
     let error = sender
         .harness
-        .block_on(sender.wallet.send(request(), to("nobody")))
+        .block_on(
+            sender
+                .wallet
+                .send(&sender.harness.method(), request(), to("nobody")),
+        )
         .unwrap_err();
     let SendError::Undelivered { slate_id, .. } = error else {
         panic!("{error:?}");
@@ -129,7 +136,11 @@ fn cancel_after_delivery_releases_the_inputs_for_the_next_send() {
     let sender = Sender::new();
     let sent = sender
         .harness
-        .block_on(sender.wallet.send(request(), to(PEER)))
+        .block_on(
+            sender
+                .wallet
+                .send(&sender.harness.method(), request(), to(PEER)),
+        )
         .unwrap();
     let mut events = sender.wallet.subscribe();
     sender
@@ -141,7 +152,11 @@ fn cancel_after_delivery_releases_the_inputs_for_the_next_send() {
 
     let next = sender
         .harness
-        .block_on(sender.wallet.send(request(), to(PEER)))
+        .block_on(
+            sender
+                .wallet
+                .send(&sender.harness.method(), request(), to(PEER)),
+        )
         .unwrap();
     assert_ne!(next.tx_id, sent.tx_id);
     assert!(
@@ -157,7 +172,11 @@ fn cancelling_twice_changes_nothing_the_second_time() {
     let sender = Sender::new();
     let sent = sender
         .harness
-        .block_on(sender.wallet.send(request(), to(PEER)))
+        .block_on(
+            sender
+                .wallet
+                .send(&sender.harness.method(), request(), to(PEER)),
+        )
         .unwrap();
     sender
         .harness
@@ -179,7 +198,11 @@ fn rejects_cancelling_a_posted_confirmed_or_expired_transaction() {
         let sender = Sender::new();
         let sent = sender
             .harness
-            .block_on(sender.wallet.send(request(), to(PEER)))
+            .block_on(
+                sender
+                    .wallet
+                    .send(&sender.harness.method(), request(), to(PEER)),
+            )
             .unwrap();
         sender
             .store
@@ -231,7 +254,11 @@ fn cancel_of_a_received_transaction_drops_its_output_and_context() {
     let sender = Sender::new();
     let sent = sender
         .harness
-        .block_on(sender.wallet.send(request(), to(PEER)))
+        .block_on(
+            sender
+                .wallet
+                .send(&sender.harness.method(), request(), to(PEER)),
+        )
         .unwrap();
     let (wire, _) = sender.received().unwrap();
 
@@ -242,7 +269,7 @@ fn cancel_of_a_received_transaction_drops_its_output_and_context() {
         .unwrap();
     support::complete_restore_scan(&harness.runtime, &receiver);
     let received = harness
-        .block_on(receiver.receive(LOOPBACK, &wire, ReceiveRequest::default()))
+        .block_on(receiver.receive(&harness.method(), &wire, ReceiveRequest::default()))
         .unwrap();
     let store = harness
         .stores

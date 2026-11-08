@@ -20,8 +20,8 @@ use lepic_store::{
     AccountIndex, CONTEXT_KEY_LEN, MemoryStore, PEER_TAG_KEY_LEN, StoreError, StoreKey, StoreKeys,
     StoredTransaction, TxDirection, TxId, TxState, WalletStore,
 };
-use lepic_transport::file::{FILE, FileTransport};
-use lepic_transport::registry::TransportRegistry;
+use lepic_transport::file::FileTransport;
+use lepic_transport::method::Method;
 use lepic_transport::transport::Location;
 use lepic_wallet::event::Event;
 use lepic_wallet::invoice::{InvoiceRequest, PayRequest};
@@ -82,6 +82,8 @@ pub struct LepicParty {
     next_seed: u64,
     data_dir: PathBuf,
     mnemonic: String,
+    /// The file method every exchange goes through.
+    file: Arc<dyn Method>,
 }
 
 impl LepicParty {
@@ -112,6 +114,7 @@ impl LepicParty {
             next_seed: seed.wrapping_add(1),
             data_dir,
             mnemonic: mnemonic.to_owned(),
+            file: Arc::new(FileTransport::new()),
         }
     }
 
@@ -135,28 +138,14 @@ impl LepicParty {
     }
 
     fn import(&self, path: &Path) -> WireSlate {
-        let exchange = self
-            .wallet
-            .ports()
-            .transports
-            .get(FILE)
-            .unwrap()
-            .exchange()
-            .unwrap();
+        let exchange = self.file.exchange().unwrap();
         self.runtime
             .block_on(exchange.import(&Location::File(path.to_path_buf())))
             .unwrap_or_else(|e| panic!("{}: lepic could not read {path:?}: {e}", self.name))
     }
 
     fn export(&self, wire: &WireSlate, path: &Path) {
-        let exchange = self
-            .wallet
-            .ports()
-            .transports
-            .get(FILE)
-            .unwrap()
-            .exchange()
-            .unwrap();
+        let exchange = self.file.exchange().unwrap();
         self.runtime
             .block_on(exchange.export(wire, &Location::File(path.to_path_buf())))
             .unwrap();
@@ -184,7 +173,7 @@ impl LepicParty {
             .map(|bytes| ProofAddress::from_bytes(bytes).unwrap());
         let sent = self
             .runtime
-            .block_on(self.wallet.send(request, export_to(out)))?;
+            .block_on(self.wallet.send(&self.file, request, export_to(out)))?;
         Ok(sent.slate_id.to_string())
     }
 
@@ -202,7 +191,7 @@ impl LepicParty {
         };
         let received = self
             .runtime
-            .block_on(self.wallet.receive(FILE, &wire, request))?;
+            .block_on(self.wallet.receive(&self.file, &wire, request))?;
         self.export(&received.reply, out);
         Ok(received.slate.id().to_string())
     }
@@ -210,7 +199,7 @@ impl LepicParty {
     fn try_finalize(&self, input: &Path) -> Result<(), FinalizeError> {
         let wire = self.import(input);
         self.runtime
-            .block_on(self.wallet.finalize(FILE, &wire, Propagation::Fluff))?;
+            .block_on(self.wallet.finalize(&self.file, &wire, Propagation::Fluff))?;
         Ok(())
     }
 
@@ -251,7 +240,7 @@ impl LepicParty {
         let slate_id = match waiting {
             Some(waiting) => {
                 self.runtime
-                    .block_on(self.wallet.resend(waiting.id, export_to(out)))
+                    .block_on(self.wallet.resend(&self.file, waiting.id, export_to(out)))
                     .unwrap_or_else(|e| panic!("{}: lepic resend failed: {e:?}", self.name));
                 waiting.entry.slate_id.unwrap().to_string()
             }
@@ -311,8 +300,6 @@ fn engine(
     runtime: &Runtime,
     seed: u64,
 ) -> Engine {
-    let mut transports = TransportRegistry::new();
-    transports.register(Box::new(FileTransport::new())).unwrap();
     let node = NodeClient::new(
         HttpTransport::new(
             node_url,
@@ -340,10 +327,10 @@ fn engine(
         node,
         stores: stores.clone(),
         secrets: vault.clone(),
-        transports,
         clock: Arc::new(FixedClock(Timestamp::from_second(1_790_000_000).unwrap())),
         rng: SharedRng::new(StdRng::seed_from_u64(seed)),
         runtime: runtime.handle().clone(),
+        notices: None,
     };
     Wallet::new(config, ports).unwrap()
 }
@@ -362,7 +349,6 @@ fn change_outputs(spend: &Spend) -> NonZeroUsize {
 
 fn export_to(path: &Path) -> Delivery {
     Delivery::Export {
-        transport: FILE,
         to: Location::File(path.to_path_buf()),
     }
 }
@@ -396,7 +382,10 @@ impl Party for LepicParty {
         };
         let issued = self
             .runtime
-            .block_on(self.wallet.issue_invoice(request, export_to(out)))
+            .block_on(
+                self.wallet
+                    .issue_invoice(&self.file, request, export_to(out)),
+            )
             .unwrap_or_else(|e| panic!("{}: lepic issue_invoice failed: {e:?}", self.name));
         issued.slate_id.to_string()
     }
@@ -411,7 +400,7 @@ impl Party for LepicParty {
         request.message = pay.message.clone();
         let paid = self
             .runtime
-            .block_on(self.wallet.pay_invoice(FILE, &wire, request))
+            .block_on(self.wallet.pay_invoice(&self.file, &wire, request))
             .unwrap_or_else(|e| panic!("{}: lepic pay_invoice failed: {e:?}", self.name));
         self.export(&paid.reply, out);
         paid.slate.id().to_string()
@@ -422,7 +411,7 @@ impl Party for LepicParty {
         self.runtime
             .block_on(
                 self.wallet
-                    .finalize_invoice(FILE, &wire, Propagation::Fluff),
+                    .finalize_invoice(&self.file, &wire, Propagation::Fluff),
             )
             .unwrap_or_else(|e| panic!("{}: lepic finalize_invoice failed: {e:?}", self.name));
     }

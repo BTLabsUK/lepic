@@ -8,14 +8,13 @@
 //! `epic-wallet`'s `receive_tx` does it (`docs/compat/legacy-slates.md`, "Lifecycle").
 
 use crate::namespace::{self, Listing};
+use std::sync::Arc;
+
 use ed25519_dalek::{Signer, SigningKey};
 use lepic_crypto::aggsig::{
     calculate_partial_sig, create_secnonce, sign_single, verify_completed_sig,
 };
 use lepic_crypto::{Commitment, CryptoError, Message, PublicKey, SecretKey, Signature};
-use lepic_epicbox::TRANSPORT_ID as EPICBOX;
-use lepic_epicbox::marker::v2::MarkedV2JsonCodec;
-use lepic_epicbox::marker::v3::{MarkedV3JsonCodec, carries_lepic_marker};
 use lepic_keychain::proof::create_output;
 use lepic_keychain::{
     Identifier, Keychain, KeychainError, ProofBuilder, ProofError, SwitchCommitment,
@@ -30,7 +29,6 @@ use lepic_primitives::output::Output;
 use lepic_primitives::params::Network;
 use lepic_primitives::tx::TransactionBody;
 use lepic_slate::codec::WireSlate;
-use lepic_slate::codec::legacy::v2_json::V2JsonCodec;
 use lepic_slate::codec::legacy::v3_json::{LEGACY_V3_JSON, V3JsonCodec};
 use lepic_slate::codec::{Codec as _, EncodeContext};
 use lepic_slate::error::{DecodeError, RegistryError, SlateError};
@@ -46,7 +44,7 @@ use lepic_store::{
     StoredSlate, TransactionEntry, TxDirection, TxId, TxState, WalletStore,
 };
 use lepic_transport::error::FormatError;
-use lepic_transport::policy::encode_with;
+use lepic_transport::method::{Encoded, Method, SenderFacts, Sending};
 use lepic_transport::transport::{Destination, TransportId};
 use rand_core::CryptoRng;
 use thiserror::Error;
@@ -207,12 +205,11 @@ where
     /// from the seed before a scan from genesis completed. Nothing is stored on failure.
     pub async fn receive(
         &self,
-        transport: TransportId,
+        method: &Arc<dyn Method>,
         wire: &WireSlate,
         request: ReceiveRequest,
     ) -> Result<Received, ReceiveError> {
-        self.receive_from(transport, wire, request, None, None)
-            .await
+        self.receive_from(method, wire, request, None, None).await
     }
 
     /// [`Wallet::receive`] of a slate that came from `counterparty`, which is stored with the
@@ -220,11 +217,11 @@ where
     #[instrument(
         name = "receive",
         skip_all,
-        fields(wallet = %self.config().name, transport = %transport, slate_id, stage)
+        fields(wallet = %self.config().name, transport = %method.id(), slate_id, stage)
     )]
     pub(crate) async fn receive_from(
         &self,
-        transport: TransportId,
+        method: &Arc<dyn Method>,
         wire: &WireSlate,
         request: ReceiveRequest,
         counterparty: Option<Destination>,
@@ -232,15 +229,8 @@ where
     ) -> Result<Received, ReceiveError> {
         let session = self.session()?;
         let network = self.config().network;
-        let policy = self
-            .ports()
-            .transports
-            .get(transport)
-            .ok_or(ReceiveError::UnknownTransport { transport })?
-            .policy();
-        let slate = policy
-            .decode(&legacy_codecs(network)?, wire)
-            .map_err(ReceiveError::Decode)?;
+        let transport = method.id();
+        let slate = method.decode(network, wire).map_err(ReceiveError::Decode)?;
         let span = Span::current();
         span.record("slate_id", tracing::field::display(slate.id()));
         span.record("stage", slate.stage().as_str());
@@ -252,22 +242,24 @@ where
         check_ttl(&slate, tip)?;
         check_height(&slate, limit)?;
         let context = self.encode_context(&slate).await?;
-        let marked = transport == EPICBOX && carries_lepic_marker(wire);
+        let from = method.sender_facts(wire);
         let features = self.config().claimed_features();
         debug!(height = tip.value(), "slate checked");
 
+        let method = Arc::clone(method);
         let answer = self
             .blocking(move |ports, _| {
                 Ok(store_reply(
                     ports,
                     &session,
+                    &*method,
                     &Proposal {
                         slate,
                         transport,
                         network,
                         context,
                         counterparty,
-                        marked,
+                        from,
                         features,
                         listing,
                     },
@@ -343,9 +335,9 @@ struct Proposal {
     network: Network,
     context: EncodeContext,
     counterparty: Option<Destination>,
-    /// The S1 came over Epicbox with the LEPIC marker, so its S2 carries the marker too.
-    marked: bool,
-    /// What the marker of a marked S2 claims.
+    /// What the S1 says about its sender, which the method's reply follows.
+    from: SenderFacts,
+    /// What this wallet's marker claims.
     features: u32,
     /// The listing the S1 came in on; `None` for the payments address.
     listing: Option<Listing>,
@@ -361,22 +353,22 @@ enum Answer {
     Repeated(Received),
 }
 
-/// Builds S2, encodes it by the transport's reply rule and stores everything in one store
+/// Builds S2, encodes it by the method's reply rule and stores everything in one store
 /// transaction, so the output key it reserves is used exactly once. The check for a slate id
 /// received before runs inside that transaction, so two receives of one S1 store it once.
 fn store_reply<N, S: StoreOpener, V>(
     ports: &Ports<N, S, V>,
     session: &Session<S::Store>,
+    method: &dyn Method,
     proposal: &Proposal,
     request: &ReceiveRequest,
 ) -> Result<Answer, ReceiveError> {
     let transport = proposal.transport;
-    let policy = ports
-        .transports
-        .get(transport)
-        .ok_or(ReceiveError::UnknownTransport { transport })?
-        .policy();
-    let codecs = reply_codecs(proposal.network, proposal.marked, proposal.features)?;
+    let sending = Sending {
+        network: proposal.network,
+        features: proposal.features,
+        reply_key: None,
+    };
     let now = ports.clock.now();
     session.store.write(|repos| {
         if let Some(received) =
@@ -387,17 +379,10 @@ fn store_reply<N, S: StoreOpener, V>(
         // Store first, generator second, as everywhere: the reverse order deadlocks with a
         // contact operation that draws inside its own store write.
         let response = respond(repos, session, proposal, request, &mut **ports.rng.lock())?;
-        let encoding = policy.for_reply(&response.slate, &proposal.context);
-        let reply = encode_with(&codecs, encoding, &response.slate, &proposal.context)
+        let Encoded { wire: reply, codec } = method
+            .encode_reply(&response.slate, &proposal.context, &sending, &proposal.from)
             .map_err(ReceiveError::Encode)?;
-        let tx_id = store_response(
-            repos,
-            &response,
-            &reply,
-            encoding.codec.as_str(),
-            transport,
-            now,
-        )?;
+        let tx_id = store_response(repos, &response, &reply, codec.as_str(), transport, now)?;
         if let Some(counterparty) = &proposal.counterparty {
             repos.set_counterparty(tx_id, counterparty.as_str())?;
         }
@@ -444,7 +429,7 @@ pub(crate) fn receive_own<D>(
         network,
         context,
         counterparty: None,
-        marked: false,
+        from: SenderFacts::default(),
         features: 0,
         listing: None,
     };
@@ -471,23 +456,6 @@ pub(crate) fn receive_own<D>(
 /// The codecs a legacy transport policy decodes and encodes with, at the network's base fee.
 pub fn legacy_codecs(network: Network) -> Result<CodecRegistry, ReceiveError> {
     Ok(codecs::legacy(network.params().default_base_fee()))
-}
-
-/// The codecs an S2 is encoded with: the legacy ones, carrying the LEPIC marker when `marked`.
-/// Only a sender that marked its S1 gets a marked reply, so a stock sender never sees the key.
-fn reply_codecs(
-    network: Network,
-    marked: bool,
-    features: u32,
-) -> Result<CodecRegistry, ReceiveError> {
-    if !marked {
-        return legacy_codecs(network);
-    }
-    let base_fee = network.params().default_base_fee();
-    Ok(codecs::legacy_with(
-        Box::new(MarkedV3JsonCodec::new(V3JsonCodec::new(base_fee)).with_features(features)),
-        Box::new(MarkedV2JsonCodec::new(V2JsonCodec::new(base_fee)).with_features(features)),
-    ))
 }
 
 /// An S1 whose sender message, if any, is signed by the sender.

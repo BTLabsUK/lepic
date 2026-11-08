@@ -25,7 +25,6 @@ use std::time::Duration;
 
 use lepic_primitives::amount::Amount;
 use lepic_slate::codec::{MediaType, WireSlate};
-use lepic_transport::file::FILE;
 use lepic_transport::transport::Location;
 use lepic_wallet::ReceiveRequest;
 use lepic_wallet::selection::SelectionStrategy;
@@ -46,13 +45,13 @@ fn payer_s1(world: &World) -> WireSlate {
     let path = dir.path().join("s1.tx");
     world
         .block_on(world.payer.wallet.send(
+            &crate::support::file(),
             SendRequest {
                 minimum_confirmations: 1,
                 strategy: SelectionStrategy::Smallest,
                 ..SendRequest::new(ACCOUNT, Amount::new(AMOUNT))
             },
             Delivery::Export {
-                transport: FILE,
                 to: Location::File(path.clone()),
             },
         ))
@@ -71,12 +70,11 @@ fn a_receive_beside_a_contact_seal_never_deadlocks() {
     let s1s: Vec<WireSlate> = (0..SLATES).map(|_| payer_s1(&world)).collect();
     // A received transaction the issuer can seal its S2 of for the payer.
     let first = world
-        .block_on(
-            world
-                .issuer
-                .wallet
-                .receive(FILE, &s1s[0], ReceiveRequest::default()),
-        )
+        .block_on(world.issuer.wallet.receive(
+            &crate::support::file(),
+            &s1s[0],
+            ReceiveRequest::default(),
+        ))
         .unwrap();
 
     let raced = world.block_on(async {
@@ -86,7 +84,7 @@ fn a_receive_beside_a_contact_seal_never_deadlocks() {
                 world
                     .issuer
                     .wallet
-                    .receive(FILE, s1, ReceiveRequest::default())
+                    .receive(&crate::support::file(), s1, ReceiveRequest::default())
                     .await
                     .unwrap();
             }

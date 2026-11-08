@@ -19,7 +19,6 @@ use lepic_store::{
     PendingInvoiceStatus, Repositories, SlateStage, StoreError, TxDirection, TxId, TxState,
     WalletStore,
 };
-use lepic_transport::file::FILE;
 use lepic_transport::transport::Destination;
 use serde::{Deserialize, Serialize};
 use tracing::{debug, info, instrument, warn};
@@ -29,7 +28,7 @@ use super::collect::Told;
 use super::keys::{contact_network, signing_key};
 use super::quarantine::QuarantineReason;
 use super::{ContactError, ContactRelays, LockedRng, RelayMode};
-use crate::ContactBook;
+use crate::{ContactBook, file_method};
 use lepic_primitives::error_chain::ErrorChain;
 use lepic_wallet::event::{ContactInvoiceEvent, ContactSlateEvent, Event};
 use lepic_wallet::invoice::{InvoiceError, InvoiceRequest, IssuedInvoice, PaidInvoice, PayRequest};
@@ -264,9 +263,9 @@ where
         let (tx_id, slate, wire) = self
             .wallet
             .issue_unsent(
+                &file_method(),
                 request,
                 lepic_wallet::send::Delivery::Deliver {
-                    transport: FILE,
                     to: Destination::new(peer_mailbox),
                 },
             )
@@ -414,15 +413,17 @@ where
                 })
             })
             .await?;
-        let codecs = legacy_codecs(network).map_err(ContactError::Receive)?;
-        let i1 = codecs
-            .decode(&WireSlate::binary(MediaType::JSON, parked.bytes))
+        let file = file_method();
+        let wire = WireSlate::binary(MediaType::JSON, parked.bytes);
+        let i1 = file
+            .decode(network, &wire)
             .map_err(|_| ContactError::NotASlate)?;
         let paid = self
             .wallet
             .pay_decoded(
-                FILE,
+                &file,
                 i1,
+                file.sender_facts(&wire),
                 request,
                 Some(Destination::new(parked.sender_address)),
             )
@@ -657,7 +658,7 @@ where
         }
         let received = match self
             .wallet
-            .receive(FILE, wire, ReceiveRequest::default())
+            .receive(&file_method(), wire, ReceiveRequest::default())
             .await
         {
             Ok(received) => received,
@@ -712,7 +713,11 @@ where
         slate: &lepic_slate::model::Slate,
     ) -> Result<lepic_epicbox::Handled, ContactError> {
         use lepic_epicbox::Handled;
-        match self.wallet.finalize(FILE, wire, Propagation::Stem).await {
+        match self
+            .wallet
+            .finalize(&file_method(), wire, Propagation::Stem)
+            .await
+        {
             Ok(finalized) => {
                 self.wallet
                     .emit(Event::ContactPaymentFinalized(ContactSlateEvent {
@@ -786,7 +791,7 @@ where
         use lepic_epicbox::Handled;
         match self
             .wallet
-            .finalize_invoice(FILE, wire, Propagation::Stem)
+            .finalize_invoice(&file_method(), wire, Propagation::Stem)
             .await
         {
             Ok(finalized) => {

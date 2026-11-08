@@ -20,14 +20,13 @@ use lepic_store::{
     ContactId, ContactRecord, ContactState, Repositories, SealMode, SlateStage, StoreError,
     TxDirection, TxId, TxState, WalletStore,
 };
-use lepic_transport::file::FILE;
 use lepic_transport::transport::Location;
 use tracing::{info, instrument, warn};
 use uuid::Uuid;
 
 use super::keys::{contact_keys, contact_network, enc_secret, signing_key};
 use super::{ContactError, LockedRng};
-use crate::ContactBook;
+use crate::{ContactBook, file_method};
 use lepic_wallet::finalize::Finalized;
 use lepic_wallet::invoice::{PaidInvoice, PayRequest};
 use lepic_wallet::ports::{SecretVault, StoreOpener};
@@ -347,10 +346,9 @@ where
     ) -> Result<SentSlate, ContactError> {
         self.contact_check_mailbox_send(contact_id).await?;
         let delivery = Delivery::Export {
-            transport: FILE,
             to: Location::File(slate_file),
         };
-        let sent = match self.wallet.send(request, delivery).await {
+        let sent = match self.wallet.send(&file_method(), request, delivery).await {
             Ok(sent) => sent,
             // Stored and locked, but the slate file was not written: nothing reaches the
             // contact, so the send is given up rather than left holding its inputs.
@@ -487,7 +485,7 @@ where
         }
         let received = self
             .wallet
-            .receive(FILE, &opened.wire, request)
+            .receive(&file_method(), &opened.wire, request)
             .await
             .map_err(ContactError::Receive)?;
         let answer = self
@@ -519,7 +517,7 @@ where
         }
         let paid = self
             .wallet
-            .pay_invoice(FILE, &opened.wire, request)
+            .pay_invoice(&file_method(), &opened.wire, request)
             .await
             .map_err(ContactError::Invoice)?;
         let answer = self
@@ -543,12 +541,12 @@ where
         match opened.stage {
             Stage::S2 => self
                 .wallet
-                .finalize(FILE, &opened.wire, propagation)
+                .finalize(&file_method(), &opened.wire, propagation)
                 .await
                 .map_err(ContactError::Finalize),
             Stage::I2 => self
                 .wallet
-                .finalize_invoice(FILE, &opened.wire, propagation)
+                .finalize_invoice(&file_method(), &opened.wire, propagation)
                 .await
                 .map_err(ContactError::Invoice),
             stage => Err(ContactError::Stage(stage)),

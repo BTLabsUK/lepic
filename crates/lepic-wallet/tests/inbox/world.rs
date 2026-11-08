@@ -6,6 +6,7 @@
 #![allow(dead_code, clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use std::future::Future;
+use std::sync::Arc;
 use std::time::Duration;
 
 use crate::send_support::{ACCOUNT, Sender, context_key};
@@ -22,7 +23,7 @@ use lepic_epicbox::{
 use lepic_primitives::amount::Amount;
 use lepic_primitives::params::Network;
 use lepic_store::{AccountIndex, InboxEntry, StoreError, TxState, WalletStore};
-use lepic_transport::file::FileTransport;
+use lepic_transport::method::Method;
 use lepic_transport::transport::Destination;
 use lepic_wallet::event::{TransportState, TransportStatus};
 use lepic_wallet::selection::SelectionStrategy;
@@ -146,12 +147,10 @@ impl Receiver {
         settings: ClientSettings,
     ) -> (TestWallet, EpicboxTransport) {
         let epicbox = EpicboxTransport::new(settings, RelayNetwork::Floonet, relay.connector());
-        let mut transports = lepic_transport::registry::TransportRegistry::new();
-        transports.register(Box::new(epicbox.clone())).unwrap();
         let config = self.harness.config(Network::Floonet);
         let ports: Ports<_, TestStores, TestVault> = Ports {
-            transports,
             runtime,
+            notices: Some(Arc::new(epicbox.clone())),
             ..self.harness.ports(self.vault.clone())
         };
         (Wallet::new(config, ports).unwrap(), epicbox)
@@ -176,10 +175,14 @@ pub struct World {
     pub relay: MockRelay,
     pub sender: Sender,
     pub sender_epicbox: EpicboxTransport,
+    /// `sender_epicbox` as the engine's method.
+    pub sender_method: Arc<dyn Method>,
     pub sender_address: EpicboxAddress,
     pub receiver: Receiver,
     pub receiver_wallet: TestWallet,
     pub receiver_epicbox: EpicboxTransport,
+    /// `receiver_epicbox` as the engine's method.
+    pub receiver_method: Arc<dyn Method>,
     pub receiver_address: EpicboxAddress,
 }
 
@@ -197,10 +200,7 @@ impl World {
         let relay = MockRelay::new(RelayNetwork::Floonet);
         let sender_epicbox =
             EpicboxTransport::new(settings(), RelayNetwork::Floonet, relay.connector());
-        let sender = Sender::with_transports(vec![
-            Box::new(sender_epicbox.clone()),
-            Box::new(FileTransport::new()),
-        ]);
+        let sender = Sender::with_notices(Arc::new(sender_epicbox.clone()));
         let sender_address = sender.wallet.epicbox_attach(&sender_epicbox).unwrap();
         let receiver = Receiver::new();
         let (receiver_wallet, receiver_epicbox) =
@@ -214,10 +214,12 @@ impl World {
             runtime,
             relay,
             sender,
+            sender_method: Arc::new(sender_epicbox.clone()),
             sender_epicbox,
             sender_address,
             receiver,
             receiver_wallet,
+            receiver_method: Arc::new(receiver_epicbox.clone()),
             receiver_epicbox,
             receiver_address,
         }
@@ -231,9 +233,9 @@ impl World {
         self.sender
             .wallet
             .send(
+                &self.sender_method,
                 request(),
                 Delivery::Deliver {
-                    transport: TRANSPORT_ID,
                     to: Destination::new(self.receiver_address.to_string()),
                 },
             )

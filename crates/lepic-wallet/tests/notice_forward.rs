@@ -21,7 +21,7 @@ mod support;
 mod world;
 
 use lepic_crypto::Commitment;
-use lepic_epicbox::{EpicboxAddress, TRANSPORT_ID};
+use lepic_epicbox::EpicboxAddress;
 use lepic_primitives::amount::Amount;
 use lepic_slate::model::SlateId;
 use lepic_store::{TxDirection, TxId};
@@ -84,13 +84,13 @@ fn only_message(world: &World, byte: u8) -> String {
 fn posted_payment(world: &World) -> (TxId, Notice) {
     let sent = world
         .block_on(world.payer.wallet.send(
+            &world.payer.method,
             SendRequest {
                 minimum_confirmations: 1,
                 strategy: SelectionStrategy::Smallest,
                 ..SendRequest::new(ACCOUNT, Amount::new(AMOUNT))
             },
             Delivery::Deliver {
-                transport: TRANSPORT_ID,
                 to: Destination::new(World::address_of(SENDER).to_string()),
             },
         ))

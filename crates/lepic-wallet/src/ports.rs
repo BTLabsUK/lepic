@@ -11,7 +11,7 @@ use lepic_keychain::vault::BackendError;
 #[cfg(feature = "sqlite")]
 use lepic_store::{AtRest, MigrationObserver, SqliteStore};
 use lepic_store::{AtRestReport, StoreError, StoreKey, StoreKeys, WalletStore};
-use lepic_transport::registry::TransportRegistry;
+use lepic_transport::method::Method;
 use rand_core::CryptoRng;
 use thiserror::Error;
 use tokio::runtime::Handle;
@@ -260,17 +260,17 @@ pub struct Ports<N, S, V> {
     pub node: N,
     pub stores: S,
     pub secrets: V,
-    pub transports: TransportRegistry,
     pub clock: Arc<dyn Clock>,
     pub rng: SharedRng,
     /// Blocking work (key derivation, database access) runs on this runtime's blocking pool.
     pub runtime: Handle,
+    /// The method that carries LEPIC notices to counterparties when the engine changes state
+    /// on its own (cancel, release, decline); `None` sends none.
+    pub notices: Option<Arc<dyn Method>>,
 }
 
 impl<N, S, V> std::fmt::Debug for Ports<N, S, V> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Ports")
-            .field("transports", &self.transports)
-            .finish_non_exhaustive()
+        f.debug_struct("Ports").finish_non_exhaustive()
     }
 }

@@ -25,7 +25,8 @@ use lepic_slate::model::{ProofAddress, SlateId};
 use lepic_slate::stage::Stage;
 use lepic_store::{OutboxStatus, OutputStatus, SlateStage, TxDirection, TxState, WalletStore};
 use lepic_transport::error::TransportError;
-use lepic_transport::file::{FILE, FileTransport};
+use lepic_transport::file::FILE;
+use lepic_transport::method::{Carries, Method};
 use lepic_transport::policy::FormatPolicy;
 use lepic_transport::transport::{
     BoxFuture, Destination, Location, Outbound, Transport, TransportId,
@@ -53,7 +54,6 @@ fn request(amount: u64) -> SendRequest {
 
 fn to(destination: &str) -> Delivery {
     Delivery::Deliver {
-        transport: LOOPBACK,
         to: Destination::new(destination.to_owned()),
     }
 }
@@ -71,7 +71,11 @@ fn send_stores_the_s1_with_its_inputs_locked_and_delivers_it() {
     let sender = Sender::new();
     let sent = sender
         .harness
-        .block_on(sender.wallet.send(request(AMOUNT), to(PEER)))
+        .block_on(
+            sender
+                .wallet
+                .send(&sender.harness.method(), request(AMOUNT), to(PEER)),
+        )
         .unwrap();
     assert_eq!(sent.amount, Amount::new(AMOUNT));
     assert_eq!(sent.fee.value(), FEE);
@@ -152,7 +156,11 @@ fn send_writes_a_v3_file_with_header_three_with_or_without_ttl() {
     sender.fund(1, FUNDING);
     let plain = sender
         .harness
-        .block_on(sender.wallet.send(request(AMOUNT), to(PEER)))
+        .block_on(
+            sender
+                .wallet
+                .send(&sender.harness.method(), request(AMOUNT), to(PEER)),
+        )
         .unwrap();
     let (wire, slate) = sender.received().unwrap();
     assert_eq!(slate.id(), plain.slate_id);
@@ -170,7 +178,11 @@ fn send_writes_a_v3_file_with_header_three_with_or_without_ttl() {
     };
     let sent = sender
         .harness
-        .block_on(sender.wallet.send(with_ttl, to(PEER)))
+        .block_on(
+            sender
+                .wallet
+                .send(&sender.harness.method(), with_ttl, to(PEER)),
+        )
         .unwrap();
     let (wire, slate) = sender.received().unwrap();
     assert_eq!(slate.id(), sent.slate_id);
@@ -189,15 +201,15 @@ fn send_writes_a_v3_file_with_header_three_with_or_without_ttl() {
 
 both_stores!(send_exports_the_s1_to_a_file);
 fn send_exports_the_s1_to_a_file() {
-    let sender = Sender::with_transports(vec![Box::new(FileTransport::new())]);
+    let sender = Sender::new();
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("send.slate");
     let sent = sender
         .harness
         .block_on(sender.wallet.send(
+            &crate::support::file(),
             request(AMOUNT),
             Delivery::Export {
-                transport: FILE,
                 to: Location::File(path.clone()),
             },
         ))
@@ -228,7 +240,11 @@ fn refuses_a_payment_proof_the_transport_cannot_carry_before_storing_anything() 
     ] {
         let error = sender
             .harness
-            .block_on(sender.wallet.send(request, to(PEER)))
+            .block_on(
+                sender
+                    .wallet
+                    .send(&sender.harness.method(), request, to(PEER)),
+            )
             .unwrap_err();
         assert!(
             matches!(
@@ -250,7 +266,11 @@ fn refuses_a_payment_proof_the_transport_cannot_carry_before_storing_anything() 
     // Without TTL or payment proof the V2 shape carries the slate.
     sender
         .harness
-        .block_on(sender.wallet.send(request(AMOUNT), to(PEER)))
+        .block_on(
+            sender
+                .wallet
+                .send(&sender.harness.method(), request(AMOUNT), to(PEER)),
+        )
         .unwrap();
     let (wire, _) = sender.received().unwrap();
     assert!(wire.as_text().unwrap().starts_with(
@@ -270,7 +290,11 @@ fn a_send_with_change_waits_for_the_restore_scan_of_a_rebuilt_database() {
 
     let error = sender
         .harness
-        .block_on(sender.wallet.send(request(AMOUNT), to(PEER)))
+        .block_on(
+            sender
+                .wallet
+                .send(&sender.harness.method(), request(AMOUNT), to(PEER)),
+        )
         .unwrap_err();
 
     assert!(
@@ -292,7 +316,11 @@ fn a_send_with_a_given_slate_id_is_made_once() {
     };
     let sent = sender
         .harness
-        .block_on(sender.wallet.send(once.clone(), to(PEER)))
+        .block_on(
+            sender
+                .wallet
+                .send(&sender.harness.method(), once.clone(), to(PEER)),
+        )
         .unwrap();
     assert_eq!(sent.slate_id, slate_id);
     assert_eq!(sender.received().unwrap().1.id(), slate_id);
@@ -301,7 +329,7 @@ fn a_send_with_a_given_slate_id_is_made_once() {
     // first send instead of failing for funds.
     let error = sender
         .harness
-        .block_on(sender.wallet.send(once, to(PEER)))
+        .block_on(sender.wallet.send(&sender.harness.method(), once, to(PEER)))
         .unwrap_err();
     assert!(
         matches!(
@@ -321,7 +349,11 @@ fn refuses_a_send_the_outputs_cannot_cover_before_storing_anything() {
     let sender = Sender::new();
     let error = sender
         .harness
-        .block_on(sender.wallet.send(request(FUNDING), to(PEER)))
+        .block_on(
+            sender
+                .wallet
+                .send(&sender.harness.method(), request(FUNDING), to(PEER)),
+        )
         .unwrap_err();
     assert!(
         matches!(
@@ -334,32 +366,32 @@ fn refuses_a_send_the_outputs_cannot_cover_before_storing_anything() {
     assert_eq!(sender.next_child(), NEXT_CHILD);
 }
 
-both_stores!(refuses_a_transport_that_is_not_registered_or_cannot_deliver);
-fn refuses_a_transport_that_is_not_registered_or_cannot_deliver() {
+both_stores!(refuses_a_method_that_cannot_deliver_or_cannot_export);
+fn refuses_a_method_that_cannot_deliver_or_cannot_export() {
     let sender = Sender::new();
-    let unknown = sender
+    let cannot_deliver = sender
         .harness
         .block_on(sender.wallet.send(
+            &crate::support::file(),
             request(AMOUNT),
             Delivery::Deliver {
-                transport: FILE,
                 to: Destination::new(PEER.to_owned()),
             },
         ))
         .unwrap_err();
     assert!(
         matches!(
-            unknown,
-            SendError::UnknownTransport { transport } if transport == FILE
+            cannot_deliver,
+            SendError::CannotDeliver { transport } if transport == FILE
         ),
-        "{unknown:?}"
+        "{cannot_deliver:?}"
     );
     let cannot_export = sender
         .harness
         .block_on(sender.wallet.send(
+            &sender.harness.method(),
             request(AMOUNT),
             Delivery::Export {
-                transport: LOOPBACK,
                 to: Location::File("unused".into()),
             },
         ))
@@ -376,7 +408,11 @@ fn a_failed_delivery_leaves_the_transaction_waiting_and_resend_delivers_it() {
     let sender = Sender::new();
     let error = sender
         .harness
-        .block_on(sender.wallet.send(request(AMOUNT), to("nobody")))
+        .block_on(
+            sender
+                .wallet
+                .send(&sender.harness.method(), request(AMOUNT), to("nobody")),
+        )
         .unwrap_err();
     let SendError::Undelivered {
         tx_id,
@@ -403,7 +439,11 @@ fn a_failed_delivery_leaves_the_transaction_waiting_and_resend_delivers_it() {
     // The same destination again counts another attempt on the same outbox entry.
     let again = sender
         .harness
-        .block_on(sender.wallet.resend(tx_id, to("nobody")))
+        .block_on(
+            sender
+                .wallet
+                .resend(&sender.harness.method(), tx_id, to("nobody")),
+        )
         .unwrap_err();
     assert!(matches!(again, SendError::Undelivered { .. }));
     let pending = sender.outbox(OutboxStatus::Pending);
@@ -412,7 +452,11 @@ fn a_failed_delivery_leaves_the_transaction_waiting_and_resend_delivers_it() {
 
     sender
         .harness
-        .block_on(sender.wallet.resend(tx_id, to(PEER)))
+        .block_on(
+            sender
+                .wallet
+                .resend(&sender.harness.method(), tx_id, to(PEER)),
+        )
         .unwrap();
     let (_, delivered) = sender.received().unwrap();
     assert_eq!(delivered.id(), slate_id);
@@ -435,7 +479,11 @@ fn a_send_is_undelivered_while_every_attempt_failed() {
     };
     let error = sender
         .harness
-        .block_on(sender.wallet.send(request(AMOUNT), to("nobody")))
+        .block_on(
+            sender
+                .wallet
+                .send(&sender.harness.method(), request(AMOUNT), to("nobody")),
+        )
         .unwrap_err();
     let SendError::Undelivered { tx_id, .. } = error else {
         panic!("{error:?}");
@@ -444,14 +492,22 @@ fn a_send_is_undelivered_while_every_attempt_failed() {
 
     sender
         .harness
-        .block_on(sender.wallet.resend(tx_id, to(PEER)))
+        .block_on(
+            sender
+                .wallet
+                .resend(&sender.harness.method(), tx_id, to(PEER)),
+        )
         .unwrap();
     assert!(!undelivered(tx_id));
 
     let other = Sender::new();
     let delivered = other
         .harness
-        .block_on(other.wallet.send(request(AMOUNT), to(PEER)))
+        .block_on(
+            other
+                .wallet
+                .send(&other.harness.method(), request(AMOUNT), to(PEER)),
+        )
         .unwrap();
     let details = other
         .harness
@@ -465,7 +521,11 @@ fn resend_refuses_a_transaction_that_is_not_waiting_for_delivery() {
     let sender = Sender::new();
     let unknown = sender
         .harness
-        .block_on(sender.wallet.resend(lepic_store::TxId(9), to(PEER)))
+        .block_on(
+            sender
+                .wallet
+                .resend(&sender.harness.method(), lepic_store::TxId(9), to(PEER)),
+        )
         .unwrap_err();
     assert!(
         matches!(
@@ -477,7 +537,11 @@ fn resend_refuses_a_transaction_that_is_not_waiting_for_delivery() {
 
     let sent = sender
         .harness
-        .block_on(sender.wallet.send(request(AMOUNT), to(PEER)))
+        .block_on(
+            sender
+                .wallet
+                .send(&sender.harness.method(), request(AMOUNT), to(PEER)),
+        )
         .unwrap();
     sender
         .harness
@@ -485,7 +549,11 @@ fn resend_refuses_a_transaction_that_is_not_waiting_for_delivery() {
         .unwrap();
     let cancelled = sender
         .harness
-        .block_on(sender.wallet.resend(sent.tx_id, to(PEER)))
+        .block_on(
+            sender
+                .wallet
+                .resend(&sender.harness.method(), sent.tx_id, to(PEER)),
+        )
         .unwrap_err();
     assert!(
         matches!(
@@ -502,7 +570,11 @@ fn send_needs_an_unlocked_wallet() {
     sender.wallet.lock();
     let error = sender
         .harness
-        .block_on(sender.wallet.send(request(AMOUNT), to(PEER)))
+        .block_on(
+            sender
+                .wallet
+                .send(&sender.harness.method(), request(AMOUNT), to(PEER)),
+        )
         .unwrap_err();
     assert!(
         matches!(error, SendError::Wallet(WalletError::Locked)),
@@ -538,6 +610,12 @@ impl Transport for Observer {
 
     fn outbound(&self) -> Option<&dyn Outbound> {
         Some(self)
+    }
+}
+
+impl Method for Observer {
+    fn carries(&self) -> Carries {
+        Carries::default()
     }
 }
 
@@ -581,10 +659,11 @@ both_stores!(inputs_are_locked_and_the_s1_stored_before_the_transport_is_called)
 fn inputs_are_locked_and_the_s1_stored_before_the_transport_is_called() {
     let store = Arc::new(Mutex::new(None));
     let seen = Arc::new(Mutex::new(None));
-    let sender = Sender::with_transports(vec![Box::new(Observer {
+    let sender = Sender::new();
+    let observer: Arc<dyn Method> = Arc::new(Observer {
         store: Arc::clone(&store),
         seen: Arc::clone(&seen),
-    })]);
+    });
     *store.lock().unwrap() = Some(
         lepic_wallet::StoreOpener::open(
             &sender.harness.stores,
@@ -597,9 +676,9 @@ fn inputs_are_locked_and_the_s1_stored_before_the_transport_is_called() {
     sender
         .harness
         .block_on(sender.wallet.send(
+            &observer,
             request(AMOUNT),
             Delivery::Deliver {
-                transport: OBSERVER,
                 to: Destination::new(PEER.to_owned()),
             },
         ))

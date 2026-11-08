@@ -13,11 +13,13 @@ use std::time::Duration;
 
 use lepic_epicbox::TRANSPORT_ID;
 use lepic_epicbox::transport::{EpicboxPolicy, EpicboxTransport};
-use lepic_transport::error::TransportError;
+use lepic_primitives::params::Network;
+use lepic_transport::error::{FormatError, TransportError};
+use lepic_transport::method::{Carries, EncodeContext, Encoded, Method, SenderFacts, Sending};
 use lepic_transport::policy::FormatPolicy;
 use lepic_transport::transport::{BoxFuture, Destination, Outbound, Transport, TransportId};
 use lepic_wallet::inbox::ListenHandle;
-use lepic_wallet::slate::WireSlate;
+use lepic_wallet::slate::{DecodeError, Slate, WireSlate};
 use tokio::time::timeout;
 use tracing::{info, warn};
 
@@ -81,6 +83,47 @@ impl Transport for EpicboxSlot {
 
     fn outbound(&self) -> Option<&dyn Outbound> {
         Some(self)
+    }
+}
+
+impl Method for EpicboxSlot {
+    fn carries(&self) -> Carries {
+        self.current().carries()
+    }
+
+    fn decode(&self, network: Network, wire: &WireSlate) -> Result<Slate, DecodeError> {
+        self.current().decode(network, wire)
+    }
+
+    fn sender_facts(&self, wire: &WireSlate) -> SenderFacts {
+        self.current().sender_facts(wire)
+    }
+
+    fn encode_new(
+        &self,
+        slate: &Slate,
+        context: &EncodeContext,
+        sending: &Sending,
+    ) -> Result<Encoded, FormatError> {
+        self.current().encode_new(slate, context, sending)
+    }
+
+    fn encode_reply(
+        &self,
+        slate: &Slate,
+        context: &EncodeContext,
+        sending: &Sending,
+        from: &SenderFacts,
+    ) -> Result<Encoded, FormatError> {
+        self.current().encode_reply(slate, context, sending, from)
+    }
+
+    fn peer_key(&self, network: Network, address: &str) -> Option<String> {
+        self.current().peer_key(network, address)
+    }
+
+    fn same_payee(&self, network: Network, to: &Destination, allowed: &str) -> bool {
+        self.current().same_payee(network, to, allowed)
     }
 }
 
