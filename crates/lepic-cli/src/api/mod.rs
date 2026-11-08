@@ -40,7 +40,7 @@ pub(crate) use events::epicbox_state;
 pub(crate) use problem::Problem;
 pub(crate) use tls::OwnerTls;
 
-use openapi::Problems;
+use openapi::{Problems, Security};
 
 use crate::api_clients::{Clients, Fingerprint};
 use crate::app_config::ApiLimits;
@@ -60,12 +60,15 @@ macro_rules! api {
                 version = "1.0.0",
                 description = "The owner API of `lepic serve`, on its Unix socket, and the \
                     payment endpoint of `lepic serve --http`. Response bodies are the JSON \
-                    `lepic --output json` prints. Amounts are decimal strings in EPIC.",
+                    `lepic --output json` prints. Amounts are decimal strings in EPIC. The owner \
+                    routes are answered on the socket to its own user, and with `--owner-tls` \
+                    over mutual TLS to the clients `api-clients` lists; an operation marked \
+                    `x-socket-only` is refused over TLS.",
                 license(name = "Apache-2.0"),
             ),
             paths(openapi::foreign::foreign, $(routes::$route),*),
             components(schemas(Problem)),
-            modifiers(&Problems),
+            modifiers(&Problems, &Security),
         )]
         pub(crate) struct Document;
 

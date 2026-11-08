@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "LEPIC wallet API",
-    "description": "The owner API of `lepic serve`, on its Unix socket, and the payment endpoint of `lepic serve --http`. Response bodies are the JSON `lepic --output json` prints. Amounts are decimal strings in EPIC.",
+    "description": "The owner API of `lepic serve`, on its Unix socket, and the payment endpoint of `lepic serve --http`. Response bodies are the JSON `lepic --output json` prints. Amounts are decimal strings in EPIC. The owner routes are answered on the socket to its own user, and with `--owner-tls` over mutual TLS to the clients `api-clients` lists; an operation marked `x-socket-only` is refused over TLS.",
     "license": {
       "name": "Apache-2.0"
     },
@@ -996,7 +996,7 @@
           "service"
         ],
         "summary": "The wallet's events",
-        "description": "A server-sent event stream: each event's `event` field is its `kind` and its `data` line\nis the event as JSON. A client that falls behind gets a `lagged` event saying how many it\nmissed, and the stream goes on.",
+        "description": "A server-sent event stream: each event's `event` field is its `kind` and its `data` line\nis the event as JSON. A client that falls behind gets a `lagged` event saying how many it\nmissed, and the stream goes on. A stream over the owner TLS listener ends at the\nconnection age limit, and the client opens it again.",
         "operationId": "events",
         "responses": {
           "200": {
@@ -4204,7 +4204,7 @@
               "string",
               "null"
             ],
-            "description": "A random version-4 UUID the caller stores before sending. A send made again under it\nsends nothing and reports the first send with `repeated: true`."
+            "description": "A random version-4 UUID the caller stores before sending. A send made again under it\nsends nothing and reports the first send with `repeated: true`. Required on the owner\nTLS listener."
           },
           "to": {
             "type": "string",
@@ -4674,6 +4674,18 @@
           }
         }
       }
+    },
+    "securitySchemes": {
+      "ownerTls": {
+        "type": "mutualTLS",
+        "description": "A client certificate whose Ed25519 key `lepic api client add` listed in the wallet's `api-clients` file."
+      }
     }
-  }
+  },
+  "security": [
+    {},
+    {
+      "ownerTls": []
+    }
+  ]
 }

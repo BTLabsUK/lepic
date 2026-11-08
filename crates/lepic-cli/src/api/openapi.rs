@@ -4,6 +4,7 @@
 
 use hyper::body::Bytes;
 use utoipa::openapi::schema::Ref;
+use utoipa::openapi::security::{SecurityRequirement, SecurityScheme};
 use utoipa::openapi::{Content, OpenApi as Document, RefOr, ResponseBuilder};
 use utoipa::{Modify, OpenApi as _};
 
@@ -51,6 +52,35 @@ impl Modify for Problems {
                     .insert("default".to_owned(), RefOr::T(problem.clone()));
             }
         }
+    }
+}
+
+/// The name of the owner TLS listener's security scheme.
+const OWNER_TLS: &str = "ownerTls";
+
+/// Declares the owner TLS scheme and lets a request in on either listener: the socket, where
+/// the peer's uid is the credential and the document has no scheme for it, or owner TLS.
+pub(crate) struct Security;
+
+impl Modify for Security {
+    fn modify(&self, openapi: &mut Document) {
+        let tls = SecurityScheme::MutualTls {
+            description: Some(
+                "A client certificate whose Ed25519 key `lepic api client add` listed in the \
+                 wallet's `api-clients` file."
+                    .to_owned(),
+            ),
+            deprecated: None,
+            extensions: None,
+        };
+        openapi
+            .components
+            .get_or_insert_with(Default::default)
+            .add_security_scheme(OWNER_TLS, tls);
+        openapi.security = Some(vec![
+            SecurityRequirement::default(),
+            SecurityRequirement::new(OWNER_TLS, Vec::<String>::new()),
+        ]);
     }
 }
 
