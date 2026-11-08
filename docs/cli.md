@@ -784,19 +784,18 @@ contact, 100 an hour).
 JSON reports: `{"domain","network","domain_key"}`, `{"path","bytes","url"}` and
 `{"domain","queued"}`.
 
-For services: run the wallet with the profile in its config and change it live with `profile set`.
+For services: run the wallet with the profile in its config and change it with `profile set`
+while `serve` is stopped.
 
 ```
 $ cat ~/.lepic/config.toml
 profile = "no-payments,automated"
-$ lepic --service profile set --bits 0x1
+$ lepic profile set --bits 0x1
 Profile 1 (no-payments) queued for 4 contact(s); `lepic contact collect` sends them.
 The settings give 3; later updates tell that again unless you set `profile` too.
-$ lepic --service profile show
+$ lepic profile show
 Profile 3 (no-payments, automated)
 ```
-
-`--service` refuses a `--profile` that differs from the one `serve` opened with.
 
 `contact allow-invoices <ID> on` lets a verified contact send invoices; they arrive with
 `contact collect` and wait in `contact invoices` until `contact pay-invoice <SLATE_ID> <AMOUNT>`
@@ -838,8 +837,7 @@ payload whose record no longer reads is dropped from the list and frees its plac
 per contact (256 from private pairings); more stay on the relay until some are acknowledged, and
 `contact collect` leaves them unopened until then. When the contact's wallet is known not to claim
 app payloads, `post` prints a warning to stderr and sets `peer_lacks_app_payloads` in its JSON;
-the payload is sent all the same. Through `--service`, `serve` reads the `--file` path, so give
-an absolute one; the request holds at most 64 KiB, so `--hex` carries about half that.
+the payload is sent all the same.
 
 `tx send <AMOUNT> --to-contact <ID>` pays a contact through its mailbox: the slate is sealed to
 the contact, queued in the outbox and posted at once when the relay answers. `--purpose
@@ -912,15 +910,13 @@ height <n>.` The JSON document keeps `"state": "posted"` and adds `"already_on_c
 
 ## Service
 
-`lepic serve` keeps one unlocked wallet open and answers other `lepic` commands over a local
-socket. A script that runs many commands, such as a bot, then unlocks the wallet once and never
-fights over `.lepic.lock`. Unix only: on other platforms `serve` and `--service` fail with a usage
-error.
+`lepic serve` keeps one unlocked wallet open and answers the wallet API over HTTP/1.1 on a local
+socket (ADR 0050). A script that makes many calls, such as a bot, then unlocks the wallet once and
+never fights over `.lepic.lock`. Unix only: on other platforms `serve` fails with a usage error.
 
 ```
 lepic serve &                               # asks for the password once
-lepic --service wallet info                 # answered by the running serve
-lepic --service=/run/user/1000/l.sock tx list
+curl --unix-socket ~/.lepic/mainnet/lepic.sock http://lepic/v1/wallet
 ```
 
 `serve` opens the wallet as every other command does (password from the environment, a file or a
@@ -928,31 +924,24 @@ prompt) and holds `.lepic.lock` until it stops. While it runs it also:
 
 - listens on the Epicbox relay and expires invoices, as `epicbox listen` does;
 - collects the contacts' mailboxes at start, every mailbox at once, then every minute as the app's
-  foreground tick does, keeping relay backoff (`contact collect` through `--service` tries
-  everything at once);
+  foreground tick does, keeping relay backoff;
 - refreshes the wallet from the node at start and every minute.
 
-A failed tick is logged at `warn` and never ends `serve`. `lepic --service serve status` shows,
-for the refresh and the collect, the failures since the last success, the last error and the time
-of the last success; `serve` only reports them and keeps trying every minute. Without `--service`,
-`serve status` exits with code 2 (`usage`).
-
-```
-$ lepic --service serve status
-Refresh  0 failures in a row, last success 2026-11-04T10:15:02Z
-Collect  3 failures in a row, last success 2026-11-04T10:12:01Z, last error: ...
-```
-
-With `--output json`, each of `refresh` and `collect` holds `consecutive_failures`, `last_error`
-(`null` before any failure, kept after a success) and `last_success` (`null` before the first).
+A failed tick is logged at `warn` and never ends `serve`. `GET /v1/status` shows, for the refresh
+and the collect, the failures since the last success, the last error and the time of the last
+success; `serve` only reports them and keeps trying every minute. Each of `refresh` and `collect`
+holds `consecutive_failures`, `last_error` (`null` before any failure, kept after a success) and
+`last_success` (`null` before the first). The status also holds `uptime_s`, the `requests`
+served, in flight and refused, the `epicbox` listener's state, the wallet's `height` and the
+`node_tip`.
 
 `lepic serve --http` also answers payments over HTTP on the wallet it holds, with the listener of
 `http listen` (same limits, same `/v2/foreign` wire format). `--port`, `--internet`, `--coinbase`
 and `--coinbase-remote` mean what they mean for `http listen` and need `--http`; without `--port`
 the configured listen port is used. A port that cannot be bound stops `serve` from starting.
 Behind a local reverse proxy every caller is loopback, so `--coinbase` then serves every caller
-the proxy forwards. Payments and Epicbox receipts take turns on the wallet. `serve status` then
-shows the listener, and the report `serve` prints when it stops holds its counts:
+the proxy forwards. Payments, API calls and Epicbox receipts take turns on the wallet. The status
+then shows the listener, and the report `serve` prints when it stops holds its counts:
 
 ```
 {"refresh": {...}, "collect": {...},
@@ -969,39 +958,48 @@ has mode 600 and `serve` drops connections from any other user. A socket file le
 `serve` is replaced; any other file at the path is an error and is left alone. The socket is removed
 when `serve` stops.
 
-`--service` sends the command to `serve` instead of running it. It prints what the command would
-have printed and exits with its code. Without `--service` a command never goes to `serve`. A bare
-`--service` uses the client's default socket; `--service=/path/s.sock` names one. If nothing answers
-at the socket, the exit code is 5 and the kind `service_unavailable`.
+### The API
 
-Requests run at the same time, except sends over Tor, which take turns. The output format is the
-client's `--output` (or its `LEPIC_OUTPUT` and settings file). The request's log options are
-accepted and ignored, because `serve` logs to its own stderr.
+`docs/api/openapi.json` is the OpenAPI 3.1 document; `GET /v1/openapi.json` serves it.
 
-`serve` refuses with exit code 2 (`usage`) what cannot work inside it:
+| Route | Command it runs |
+|---|---|
+| `GET /v1/status` | the running serve, above |
+| `GET /v1/events` | the wallet's events, as server-sent events |
+| `GET /v1/wallet` | `wallet info` |
+| `GET /v1/wallet/address` | `wallet address` |
+| `PUT /v1/wallet/password` | `wallet password`, with `current_password` and `new_password` |
+| `GET /v1/outputs?account=` | `wallet outputs` |
+| `GET /v1/node` | `node status` |
+| `GET /v1/transactions?account=` | `tx list` |
+| `GET /v1/transactions/{tx_id}` | `tx show` |
+| `POST /v1/transactions` | `tx send` over Epicbox: `amount`, `to`, and optionally `slate_id`, `account`, `message`, `min_confirmations` and `change_outputs` |
+| `POST /v1/slates/receive` | `tx receive`, with the `slate` text; the reply slate is in the report |
+| `POST /v1/slates/finalize` | `tx finalize`, with the `slate` text and `fluff` |
 
-- `wallet init`, `wallet restore` and `wallet import-seed`;
-- `serve` (but not `serve status`), `epicbox listen`, `http listen` and `tor listen`, because
-  `serve` owns the process;
-- `contact open-sealed -`, which would read the stdin of `serve`;
-- `--network` with another network than `serve` opened, and `--service`.
+A response body is the command's `--output json` report. Amounts are strings with eight
+decimals. An error is RFC 9457 problem details (`application/problem+json`): `type`
+`about:blank`, `title`, `status`, `detail` (the error and its causes) and `code`, the error kind
+of the table below, plus `tx_id` when the error is about a stored transaction. The kind sets the
+status: `usage` 400, `wrong_password` 403, `not_found` 404, `wallet_state` 409, `rejected` and
+`insufficient_funds` 422, `internal` and `config` 500, `node`, `transport` and `incomplete` 502,
+`interrupted` 503. An unknown route is 404, a wrong method 405 with `Allow`, bad JSON or an unknown
+field 400, and a body over the limit 413.
 
-`--data-dir`, `--config` and `--settings` in a request are ignored: the socket picks the wallet, so
-`lepic --data-dir /srv/faucet --service tx list` finds the socket there and runs on whatever wallet
-that `serve` holds.
+In `GET /v1/events` each event's `event` field is its `kind` and its `data` line the event as
+JSON. A client that falls behind gets a `lagged` event with `missed`, and the stream goes on.
 
-A command that reads a secret from stdin fails, as `serve` gives every request an empty stdin.
+`lepic-config.toml`'s `[api]` table bounds the API: connections served at once (more are closed
+unanswered and counted as refused), the time for a request's headers and for its body, and the
+largest body. A call to the wallet has no deadline.
 
 On SIGINT or SIGTERM `serve` stops accepting connections and stops the listener. Each running
 request is interrupted as Ctrl-C interrupts the command run on its own, and `serve` waits for every
-one to answer: most end at once with exit code 12, and a `tx send` that may have stored its
-transaction answers with its `tx_id`. A request still being read is closed unanswered. A second
-signal does nothing, as for any `lepic` command; SIGKILL ends `serve` at once. It then locks the
-wallet, removes the socket and releases the lock. Its report names the socket, the number of requests served and what the listener received.
-
-The protocol is local to the CLI and may change: one request per connection, one JSON line
-`{"args":[...]}` of at most 64 KiB, answered by one JSON object `{"code":0,"stdout":"","stderr":""}`.
-Use `lepic --service` rather than the socket directly.
+one to answer: most end at once with `interrupted`, and a send that may have stored its
+transaction answers `incomplete` with its `tx_id`. Event streams end. A second signal does nothing,
+as for any `lepic` command; SIGKILL ends `serve` at once. It then locks the wallet, removes the
+socket and releases the lock. Its report names the socket, the number of requests served and what
+the listener received.
 
 ## Data and logs
 
@@ -1042,7 +1040,6 @@ Amounts are strings with eight decimals. The exit code says what kind of failure
 | 3 | `config` | invalid settings or config file |
 | 4 | `wrong_password` | the password did not unlock the wallet |
 | 5 | `wallet_state` | no wallet, a wallet already exists, it is in use, or it belongs to another network |
-| 5 | `service_unavailable` | `--service` found no `lepic serve` at the socket |
 | 6 | `not_found` | no such transaction, slate or account |
 | 7 | `rejected` | the slate or request was refused; nothing was stored |
 | 8 | `insufficient_funds` | not enough spendable funds |
