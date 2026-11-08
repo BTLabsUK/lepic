@@ -1347,11 +1347,12 @@ where
             .await
     }
 
-    /// Sends `notice` to `to` over `method`, the method of the exchange, when the exchange's
-    /// own incoming slate came `exchange_marked` and the key is LEPIC lately. A paired
-    /// contact's notice goes to its mailbox instead, which only LEPIC reads. A notice that was
-    /// not sent is logged here, and the reason is returned for the callers that hold a message
-    /// on it: [`Hold::Withheld`] without a method or over one that sends no notices.
+    /// Sends `notice` to `to` over the method of [`crate::ports::Ports::methods`] named as
+    /// `method`, the method of the exchange, when the exchange's own incoming slate came
+    /// `exchange_marked` and the key is LEPIC lately. A paired contact's notice goes to its
+    /// mailbox instead, which only LEPIC reads. A notice that was not sent is logged here, and
+    /// the reason is returned for the callers that hold a message on it: [`Hold::Withheld`]
+    /// without such a method or over one that sends no notices.
     async fn send_notice(
         &self,
         method: Option<Arc<dyn Method>>,
@@ -1380,7 +1381,14 @@ where
                     Hold::Withheld
                 });
         }
-        let Some(method) = method else {
+        // The method of the exchange names the method; the one of the wallet's ports by that
+        // name sends, as the host set it up.
+        let Some(method) = method.and_then(|method| {
+            self.ports()
+                .methods
+                .as_ref()?
+                .method_named(method.id().as_str())
+        }) else {
             warn!(slate_id = %slate_id, "notice not sent");
             return Err(Hold::Withheld);
         };
