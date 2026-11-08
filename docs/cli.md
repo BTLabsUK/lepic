@@ -976,6 +976,41 @@ when `serve` stops.
 | `POST /v1/transactions` | `tx send` over Epicbox: `amount`, `to`, and optionally `slate_id`, `account`, `message`, `min_confirmations` and `change_outputs` |
 | `POST /v1/slates/receive` | `tx receive`, with the `slate` text; the reply slate is in the report |
 | `POST /v1/slates/finalize` | `tx finalize`, with the `slate` text and `fluff` |
+| `POST /v1/transactions/{tx_id}/cancel` | `tx cancel` |
+| `POST /v1/transactions/{tx_id}/release` | `tx release` |
+| `POST /v1/transactions/{tx_id}/post` | `tx post`, with `fluff` |
+| `POST /v1/wallet/scan` | `wallet scan`, with `start_height` or `reset_chain` |
+| `GET /v1/epicbox` | `epicbox status` |
+| `GET /v1/epicbox/peers/{address}` | `epicbox peer` |
+| `GET /v1/profile` | `profile show` |
+| `PATCH /v1/profile` | `profile set`, with `names` or `bits` |
+| `GET /v1/profile/domain` | `profile domain show` |
+| `POST /v1/profile/domain/file` | `profile domain file`; the file text is in the report, nothing is written |
+| `POST /v1/profile/domain/attach` | `profile domain attach` |
+| `GET /v1/contacts` | `contact list` |
+| `DELETE /v1/contacts/{id}` | `contact remove` |
+| `PATCH /v1/contacts/{id}` | `contact label` and `contact allow-invoices`, with `label` or `allow_invoices` |
+| `POST /v1/contacts/invites` | `contact invite` |
+| `POST /v1/contacts/requests` | `contact request` |
+| `POST /v1/contacts/preview` | `contact open`, with the `link` text |
+| `POST /v1/contacts/accept` | `contact accept` |
+| `POST /v1/contacts/enter` | `contact enter`, with one to five `input` words |
+| `POST /v1/contacts/collect` | `contact collect` |
+| `POST /v1/contacts/{id}/sas` | `contact sas`, which records the verdict |
+| `POST /v1/contacts/{id}/check` | `contact check` |
+| `POST /v1/contacts/{id}/key-check` | `contact key-check`, with the old pairing in `old` |
+| `POST /v1/contacts/{id}/keys` | `contact keys`, which records the choice |
+| `POST /v1/contacts/{id}/move` | `contact move`, with `host` for `--apply` |
+| `POST /v1/contacts/move-home` | `contact move-home` |
+| `POST /v1/contacts/card` | `contact show-card` |
+| `POST /v1/contacts/cards/scan` | `contact scan-card` |
+| `GET /v1/contacts/quarantine` | `contact quarantine` |
+| `GET /v1/contact-invoices` | `contact invoices` |
+| `POST /v1/contacts/export` | `contact export`; the records are in `backup`, nothing is written |
+| `POST /v1/contacts/import` | `contact import`, with the `backup` text |
+| `POST /v1/contacts/{id}/payloads` | `contact payload post` |
+| `GET /v1/payloads` | `contact payload list` |
+| `POST /v1/payloads/{id}/ack` | `contact payload ack` |
 
 A response body is the command's `--output json` report. Amounts are strings with eight
 decimals. An error is RFC 9457 problem details (`application/problem+json`): `type`
