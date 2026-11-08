@@ -296,3 +296,98 @@ fn node_host(url: &str) -> &str {
         .rsplit_once('@')
         .map_or(authority, |(_, host)| host)
 }
+
+#[cfg(test)]
+mod tests {
+    // Tests may unwrap (docs/rules.md).
+    #![allow(clippy::unwrap_used)]
+
+    use lepic_epicbox::mock_relay::MockRelay;
+    use lepic_epicbox::testing::client_settings;
+    use lepic_epicbox::{ClientError, Domain, Network as RelayNetwork, RelayEndpoint, Security};
+    use lepic_transport::marker::v3::carries_lepic_marker;
+
+    use lepic_methods::registry::Methods;
+
+    use lepic_wallet::slate::MediaType;
+
+    use super::*;
+
+    fn epicbox() -> Epicbox {
+        let endpoint =
+            RelayEndpoint::new(Domain::parse("relay.test").unwrap(), None, Security::Plain);
+        Epicbox::new(
+            client_settings(endpoint),
+            RelayNetwork::Floonet,
+            MockRelay::new(RelayNetwork::Floonet).connector(),
+        )
+    }
+
+    /// The method the engine reaches for `epicbox`, registered as a session registers it.
+    fn registered(slot: &EpicboxSlot) -> Arc<dyn Method> {
+        let mut methods = Methods::new();
+        methods.register(Arc::new(slot.clone())).unwrap();
+        Arc::clone(methods.get(TRANSPORT_ID).unwrap())
+    }
+
+    fn first_slate(method: &dyn Method) -> Slate {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../testdata/vectors/slates/send_file_plain_input_s1_v2.json");
+        let vector: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+        let json = vector["expected"]["json"].as_str().unwrap().to_owned();
+        method
+            .decode(Network::Floonet, &WireSlate::text(MediaType::JSON, json))
+            .unwrap()
+    }
+
+    #[test]
+    fn a_send_through_the_registered_method_carries_the_lepic_marker() {
+        let slot = EpicboxSlot::new(epicbox());
+        let method = registered(&slot);
+        let slate = first_slate(&*method);
+        let sending = Sending::new(Network::Floonet, 0x0f, None);
+        let context = EncodeContext {
+            block_header_version: 1,
+        };
+        let encoded = method.encode_new(&slate, &context, &sending).unwrap();
+        assert!(carries_lepic_marker(&encoded.wire));
+        assert!(method.sender_facts(&encoded.wire).marked);
+        let direct = epicbox().encode_new(&slate, &context, &sending).unwrap();
+        assert_eq!(encoded.wire.as_text(), direct.wire.as_text());
+    }
+
+    #[test]
+    fn the_slot_answers_as_the_epicbox_does() {
+        let slot = EpicboxSlot::new(epicbox());
+        let epicbox = epicbox();
+        let valid = "zzRMBr82zhzvz6hAxJMecEchV4ohxJkrNtDKLqwJMq7EQ4y2ibhQ@epicbox.example:443";
+        for address in [valid, "not an address", ""] {
+            let from_slot = slot.peer_key(Network::Floonet, address);
+            let direct = epicbox.peer_key(Network::Floonet, address);
+            assert_eq!(from_slot.is_ok(), direct.is_ok(), "{address}");
+            if let (Ok(a), Ok(b)) = (from_slot, direct) {
+                assert_eq!(a, b);
+            }
+        }
+        assert!(slot.peer_key(Network::Floonet, valid).is_ok());
+        assert!(slot.peer_key(Network::Floonet, "not an address").is_err());
+        let errors = [
+            TransportError::from(ClientError::BinarySlate),
+            TransportError::from(ClientError::Relay {
+                kind: lepic_epicbox::RelayErrorKind::InvalidRequest,
+            }),
+            TransportError::from(ClientError::Relay {
+                kind: lepic_epicbox::RelayErrorKind::UnknownError,
+            }),
+        ];
+        for error in &errors {
+            assert_eq!(
+                slot.delivery_is_permanent(error),
+                epicbox.delivery_is_permanent(error)
+            );
+        }
+        assert!(slot.delivery_is_permanent(&errors[0]));
+        assert!(!slot.delivery_is_permanent(&errors[2]));
+    }
+}
