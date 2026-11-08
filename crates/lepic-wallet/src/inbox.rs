@@ -570,8 +570,9 @@ where
     V: SecretVault + 'static,
 {
     /// The address key of the default account at index 0, as `epic-wallet` derives it: the
-    /// secret of the wallet's payments address. It leaves the engine only for a method to build
-    /// the identity it receives and sends under.
+    /// secret of the wallet's payments address. Its one caller is the Epicbox method in
+    /// `lepic-methods`, which connects to the relay as that address; no other caller should
+    /// read it.
     ///
     /// Fails with [`WalletError::Locked`].
     pub fn address_secret(&self) -> Result<SecretKey, WalletError> {
@@ -580,8 +581,9 @@ where
         Ok(session.keychain.address_key(&parent, ADDRESS_INDEX)?)
     }
 
-    /// The secret key of `listing`'s address. It leaves the engine only for a method to build
-    /// the identity it receives and sends under at the listing.
+    /// The secret key of `listing`'s address. Its callers are the Epicbox method in
+    /// `lepic-methods`: it connects to the relay as the listing's address, and it signs a
+    /// service listing with it; no other caller should read it.
     ///
     /// Fails with [`WalletError::Locked`].
     pub fn listing_secret(&self, listing: &Listing) -> Result<SecretKey, WalletError> {
