@@ -755,6 +755,26 @@ $ lepic in-person answers <SLATE_ID>
 $ lepic in-person finalize <SLATE_ID> 1
 ```
 
+A send works the same way the other way round. The sender shows a raw `lepic.v1` S1, with no
+payment proof and a TTL of 15 blocks unless `--ttl-blocks` says otherwise; it takes the spending
+options of `send`. The send is stored and its inputs stay locked until an answer is finalized or
+the TTL passes, when refresh expires it.
+
+```
+$ lepic in-person send 0.8 --out code.bin
+```
+
+The receiver reads the code, receives it and posts or shows back the sealed S2:
+
+```
+$ lepic in-person read --file code.bin
+$ lepic in-person receive --file code.bin --out answer.bin
+$ lepic in-person post <SLATE_ID> --relay-ok
+```
+
+The sender collects or takes the answers as the payee of an invoice code does. Each check code
+is four digits of the receiver's public excess. `in-person finalize` finalizes the one picked.
+
 ## Contacts
 
 Pairing (RFC 0002) ties this wallet to another wallet or a service with keys of their own, so
@@ -1074,8 +1094,10 @@ when `serve` stops.
 | `GET /v1/payloads` | `contact payload list` |
 | `POST /v1/payloads/{id}/ack` | `contact payload ack` |
 | `POST /v1/in-person/invoices` | `in-person invoice`, with `amount`, `account`, `message` and `ttl_blocks`; the code is `code`, as hex |
+| `POST /v1/in-person/sends` | `in-person send`, with `amount`, `account`, `message`, `ttl_blocks`, `min_confirmations` and `change_outputs`; the code is `code`, as hex |
 | `POST /v1/in-person/read` | `in-person read`, with the scanned `code` as hex |
 | `POST /v1/in-person/pay` | `in-person pay`, with `amount` and the scanned `code` as hex; the sealed answer is `envelope`, as hex |
+| `POST /v1/in-person/receive` | `in-person receive`, with the scanned `code` as hex, `account` and `message`; the sealed answer is `envelope`, as hex |
 | `POST /v1/in-person/{slate_id}/post` | `in-person post`, with `relay_ok` |
 | `POST /v1/in-person/take` | `in-person take`, with `answer`: the hex digits, the armoured text, or the UR parts |
 | `GET /v1/in-person/{slate_id}/answers` | `in-person answers` |
