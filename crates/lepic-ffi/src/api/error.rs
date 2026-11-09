@@ -497,16 +497,16 @@ impl WalletError {
         } else {
             kind
         };
-        if kind == WalletErrorKind::WalletTooNew {
-            if let Some((found, supported)) = schema_too_new(error) {
-                return Self::new(
-                    kind,
-                    format!(
-                        "this wallet was saved by a newer version of the app (store version \
-                         {found}; this version reads up to {supported}): update the app to open it"
-                    ),
-                );
-            }
+        if kind == WalletErrorKind::WalletTooNew
+            && let Some((found, supported)) = schema_too_new(error)
+        {
+            return Self::new(
+                kind,
+                format!(
+                    "this wallet was saved by a newer version of the app (store version \
+                     {found}; this version reads up to {supported}): update the app to open it"
+                ),
+            );
         }
         Self::new(kind, display_error_chain(error).join(": "))
     }
