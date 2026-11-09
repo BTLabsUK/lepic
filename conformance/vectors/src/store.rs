@@ -25,6 +25,8 @@ const TAG_DOMAIN: &[u8] = b"lepic-store peer tag v1";
 const ASSOCIATED_DATA_DOMAIN: &[u8] = b"lepic-store peer compat v1";
 const SEALED_FORMAT: u8 = 1;
 const RECORD_VERSION: u8 = 1;
+/// The version of a row that keeps the peer's native seal key after the version 1 fields.
+const RECORD_VERSION_NATIVE: u8 = 2;
 
 /// Fixed test-only seed entropy, peer keys and nonces. Never real wallet material.
 struct Case {
@@ -44,9 +46,12 @@ struct Record {
     claimed: u32,
     works: u32,
     features_at: Option<i64>,
+    /// The X25519 key native slates are sealed to, hex; absent from a version 1 row.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    native_key: Option<&'static str>,
 }
 
-const CASES: [Case; 2] = [
+const CASES: [Case; 3] = [
     Case {
         name: "peer_compat",
         entropy: [
@@ -65,6 +70,7 @@ const CASES: [Case; 2] = [
             claimed: 0b1011,
             works: 0b0001,
             features_at: Some(1_790_000_000_123_456_789),
+            native_key: None,
         },
     },
     Case {
@@ -83,6 +89,29 @@ const CASES: [Case; 2] = [
             claimed: 1,
             works: 1,
             features_at: None,
+            native_key: None,
+        },
+    },
+    Case {
+        name: "peer_compat_native",
+        entropy: [
+            0x3c, 0x1e, 0x0f, 0x87, 0xc3, 0xe1, 0xf0, 0x78, 0x21, 0x43, 0x65, 0x87, 0xa9, 0xcb,
+            0xed, 0x0f, 0xf1, 0xe2, 0xd3, 0xc4, 0xb5, 0xa6, 0x97, 0x88, 0x79, 0x6a, 0x5b, 0x4c,
+            0x3d, 0x2e, 0x1f, 0x00,
+        ],
+        peer_key: "esYq3kTn8vB5dR2xW7mZ4cH9jF6gL1pNa3sQe8uXo2KiVt5bD7Ry",
+        nonce: [
+            0x90, 0x91, 0x92, 0x93, 0x94, 0x95, 0x96, 0x97, 0x98, 0x99, 0x9a, 0x9b, 0x9c, 0x9d,
+            0x9e, 0x9f, 0xa0, 0xa1, 0xa2, 0xa3, 0xa4, 0xa5, 0xa6, 0xa7,
+        ],
+        // The latest marked message claimed native slates with its seal key (RFC 0003 5.15).
+        record: Record {
+            last_marked_at: Some(1_791_000_000_000_000_000),
+            last_unmarked_at: None,
+            claimed: 0b1000_1111,
+            works: 0b0000_0001,
+            features_at: Some(1_791_000_000_000_000_000),
+            native_key: Some("db0931f8a2c4e6b81d3f5a7c9e0b2d4f6a8c1e3b5d7f9a0c2e4b6d8f0a1cb109"),
         },
     },
 ];
@@ -138,7 +167,12 @@ fn record_bytes(record: &Record) -> Vec<u8> {
             presence |= bit;
         }
     }
-    let mut bytes = vec![RECORD_VERSION, presence];
+    let version = if record.native_key.is_some() {
+        RECORD_VERSION_NATIVE
+    } else {
+        RECORD_VERSION
+    };
+    let mut bytes = vec![version, presence];
     for time in [
         record.last_marked_at,
         record.last_unmarked_at,
@@ -148,6 +182,14 @@ fn record_bytes(record: &Record) -> Vec<u8> {
     }
     bytes.extend_from_slice(&record.claimed.to_be_bytes());
     bytes.extend_from_slice(&record.works.to_be_bytes());
+    if let Some(key) = record.native_key {
+        bytes.extend(
+            key.as_bytes()
+                .chunks(2)
+                .filter_map(|pair| std::str::from_utf8(pair).ok())
+                .filter_map(|pair| u8::from_str_radix(pair, 16).ok()),
+        );
+    }
     bytes
 }
 
@@ -157,6 +199,14 @@ fn render_case(pins: &Pins, case: &Case) -> Result<Rendered, Error> {
     let key_tag = keyed(&peer_tag_key, &[TAG_DOMAIN, case.peer_key.as_bytes()]);
     let associated_data = [ASSOCIATED_DATA_DOMAIN, &key_tag].concat();
     let record = record_bytes(&case.record);
+    let key_len = if case.record.native_key.is_some() {
+        32
+    } else {
+        0
+    };
+    if record.len() != 34 + key_len {
+        return Err(inconsistent("record length"));
+    }
     let sealed = seal(&context_key, &case.nonce, &associated_data, &record)?;
     if open(&context_key, &associated_data, &sealed)? != record {
         return Err(inconsistent("sealed row opens to its record"));

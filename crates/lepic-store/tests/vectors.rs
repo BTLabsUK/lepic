@@ -18,7 +18,7 @@ use serde_json::Value;
 
 const NODE_REPO: &str = "https://github.com/EpicCash/epic";
 const NODE_COMMIT: &str = "82fa7e813dc3b9bf137b9dd523d847f4210f5ba4";
-const CASES: [&str; 2] = ["peer_compat", "peer_compat_migrated"];
+const CASES: [&str; 3] = ["peer_compat", "peer_compat_migrated", "peer_compat_native"];
 
 fn vector(name: &str) -> Value {
     let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -58,6 +58,7 @@ fn compat(record: &Value) -> PeerCompat {
         claimed: u32::try_from(record["claimed"].as_u64().unwrap()).unwrap(),
         works: u32::try_from(record["works"].as_u64().unwrap()).unwrap(),
         features_at: time(&record["features_at"]),
+        native_key: record.get("native_key").map(array),
     }
 }
 

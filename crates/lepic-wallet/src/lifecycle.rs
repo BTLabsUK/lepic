@@ -749,7 +749,7 @@ mod tests {
     /// derived them.
     #[test]
     fn store_keys_match_the_store_vectors() {
-        for name in ["peer_compat", "peer_compat_migrated"] {
+        for name in ["peer_compat", "peer_compat_migrated", "peer_compat_native"] {
             let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
                 .join("../../testdata/vectors/store")
                 .join(format!("{name}.json"));

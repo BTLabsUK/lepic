@@ -30,12 +30,17 @@ const ASSOCIATED_DATA_DOMAIN: &[u8] = b"lepic-store peer compat v1";
 /// Version of the record inside the sealed bytes. Later fields go into a new version, so the
 /// table needs no migration for them.
 const RECORD_V1: u8 = 1;
+/// The version 1 record followed by the peer's native seal key. A row without that key is
+/// still written as version 1.
+const RECORD_V2: u8 = 2;
 const HAS_LAST_MARKED: u8 = 1;
 const HAS_LAST_UNMARKED: u8 = 1 << 1;
 const HAS_FEATURES_AT: u8 = 1 << 2;
 const KNOWN_PRESENCE: u8 = HAS_LAST_MARKED | HAS_LAST_UNMARKED | HAS_FEATURES_AT;
 /// Version, presence bits, three timestamps, two bit sets.
 pub(crate) const RECORD_V1_LEN: usize = 1 + 1 + 3 * 8 + 2 * 4;
+/// Version 1 and a 32-byte key.
+pub(crate) const RECORD_V2_LEN: usize = RECORD_V1_LEN + 32;
 
 /// The key that peer tags are keyed hashes under.
 pub struct PeerTagKey(Zeroizing<[u8; PEER_TAG_KEY_LEN]>);
@@ -97,6 +102,9 @@ pub struct PeerCompat {
     /// When `claimed` was last written from a message that carried feature bits; `None` for a
     /// peer that never sent any.
     pub features_at: Option<Timestamp>,
+    /// The X25519 key the latest marked message sealed native slates to, when it claimed them
+    /// (RFC 0003 5.15); `None` when that message claimed none or carried no valid key.
+    pub native_key: Option<[u8; 32]>,
 }
 
 impl PeerCompat {
@@ -126,7 +134,8 @@ fn put_time(record: &mut Vec<u8>, time: Option<Timestamp>) -> Result<(), StoreEr
 }
 
 /// The record as it is sealed: version, presence bits, the three dates as big-endian
-/// nanoseconds (zero when absent), then `claimed` and `works` big-endian.
+/// nanoseconds (zero when absent), then `claimed` and `works` big-endian, then in version 2 the
+/// native seal key.
 pub(crate) fn encode_record(compat: &PeerCompat) -> Result<Vec<u8>, StoreError> {
     let mut presence = 0;
     for (time, bit) in [
@@ -138,14 +147,21 @@ pub(crate) fn encode_record(compat: &PeerCompat) -> Result<Vec<u8>, StoreError> 
             presence |= bit;
         }
     }
-    let mut record = Vec::with_capacity(RECORD_V1_LEN);
-    record.push(RECORD_V1);
+    let mut record = Vec::with_capacity(RECORD_V2_LEN);
+    record.push(if compat.native_key.is_some() {
+        RECORD_V2
+    } else {
+        RECORD_V1
+    });
     record.push(presence);
     put_time(&mut record, compat.last_marked_at)?;
     put_time(&mut record, compat.last_unmarked_at)?;
     put_time(&mut record, compat.features_at)?;
     record.extend_from_slice(&compat.claimed.to_be_bytes());
     record.extend_from_slice(&compat.works.to_be_bytes());
+    if let Some(key) = &compat.native_key {
+        record.extend_from_slice(key);
+    }
     Ok(record)
 }
 
@@ -183,7 +199,7 @@ fn take_time(
 pub(crate) fn decode_record(record: &[u8]) -> Result<PeerCompat, StoreError> {
     let mut rest = record;
     let [version] = take::<1>(&mut rest, "record version")?;
-    if version != RECORD_V1 {
+    if version != RECORD_V1 && version != RECORD_V2 {
         return Err(corrupt("record version"));
     }
     let [presence] = take::<1>(&mut rest, "presence")?;
@@ -200,6 +216,11 @@ pub(crate) fn decode_record(record: &[u8]) -> Result<PeerCompat, StoreError> {
         features_at: take_time(&mut rest, presence & HAS_FEATURES_AT != 0, "features at")?,
         claimed: u32::from_be_bytes(take::<4>(&mut rest, "claimed")?),
         works: u32::from_be_bytes(take::<4>(&mut rest, "works")?),
+        native_key: if version == RECORD_V2 {
+            Some(take::<32>(&mut rest, "native key")?)
+        } else {
+            None
+        },
     };
     if !rest.is_empty() {
         return Err(corrupt("record length"));
@@ -286,6 +307,14 @@ mod tests {
             claimed: 0b111,
             works: 0b1,
             features_at: Some(at(1_790_000_000)),
+            native_key: None,
+        }
+    }
+
+    fn native() -> PeerCompat {
+        PeerCompat {
+            native_key: Some([9; 32]),
+            ..full()
         }
     }
 
@@ -296,13 +325,24 @@ mod tests {
             assert_eq!(record.len(), RECORD_V1_LEN);
             assert_eq!(decode_record(&record).unwrap(), compat);
         }
+        let record = encode_record(&native()).unwrap();
+        assert_eq!((record[0], record.len()), (RECORD_V2, RECORD_V2_LEN));
+        assert_eq!(
+            record[..RECORD_V1_LEN][1..],
+            encode_record(&full()).unwrap()[1..]
+        );
+        assert_eq!(decode_record(&record).unwrap(), native());
     }
 
     #[test]
     fn rejects_records_of_another_version_length_or_presence() {
         let record = encode_record(&full()).unwrap();
         let mut other_version = record.clone();
-        other_version[0] = 2;
+        other_version[0] = 3;
+        let mut short_key = encode_record(&native()).unwrap();
+        short_key.pop();
+        let mut no_key = record.clone();
+        no_key[0] = RECORD_V2;
         let mut unknown_presence = record.clone();
         unknown_presence[1] |= 1 << 3;
         let mut absent_but_set = encode_record(&PeerCompat::default()).unwrap();
@@ -314,6 +354,8 @@ mod tests {
             unknown_presence,
             absent_but_set,
             longer,
+            short_key,
+            no_key,
             record[..record.len() - 1].to_vec(),
             Vec::new(),
         ] {

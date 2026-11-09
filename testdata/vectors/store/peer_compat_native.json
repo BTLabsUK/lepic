@@ -1,0 +1,31 @@
+{
+  "schema": 1,
+  "area": "store",
+  "name": "peer_compat_native",
+  "generator": "conformance/vectors/store",
+  "upstream": {
+    "repo": "https://github.com/EpicCash/epic",
+    "commit": "82fa7e813dc3b9bf137b9dd523d847f4210f5ba4"
+  },
+  "inputs": {
+    "entropy": "3c1e0f87c3e1f07821436587a9cbed0ff1e2d3c4b5a69788796a5b4c3d2e1f00",
+    "peer_key": "esYq3kTn8vB5dR2xW7mZ4cH9jF6gL1pNa3sQe8uXo2KiVt5bD7Ry",
+    "nonce": "909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7",
+    "record": {
+      "last_marked_at": 1791000000000000000,
+      "last_unmarked_at": null,
+      "claimed": 143,
+      "works": 1,
+      "features_at": 1791000000000000000,
+      "native_key": "db0931f8a2c4e6b81d3f5a7c9e0b2d4f6a8c1e3b5d7f9a0c2e4b6d8f0a1cb109"
+    }
+  },
+  "expected": {
+    "context_key": "a6001abdf5efc6d1c4ace47199c2c914938bad5a32114f4ff2b5e1f1d58bf095",
+    "peer_tag_key": "da6919d6fcbab5ad88f43844ecffcc83850c5b1055d3b9e083a5adab0d63adc0",
+    "key_tag": "b70713d147a960d77f0a68730f0a46985eb93b6cb06cd5ae5520c7106d27a7ca",
+    "associated_data": "6c657069632d73746f7265207065657220636f6d706174207631b70713d147a960d77f0a68730f0a46985eb93b6cb06cd5ae5520c7106d27a7ca",
+    "record": "020518dae902c8b98000000000000000000018dae902c8b980000000008f00000001db0931f8a2c4e6b81d3f5a7c9e0b2d4f6a8c1e3b5d7f9a0c2e4b6d8f0a1cb109",
+    "sealed": "01909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7d0a0ed02c0a59146386b2e71a40a3668c111ad3dfd9586df9d46a13e29cbdc1c1a9368101f4775bed0c5114597c4eb6a07102b6ff4962c2bb6e5a51a3ae56290acd68495e52029726f0089681dc19fd8c35d"
+  }
+}

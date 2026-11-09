@@ -387,6 +387,7 @@ fn peer_rows_hold_no_peer_key_in_the_database_file() {
         claimed: 1,
         works: 1,
         features_at: None,
+        native_key: None,
     };
     backend
         .store()

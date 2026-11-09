@@ -2178,6 +2178,7 @@ fn contact_backup_carries_nothing_known_of_peer_keys<B: Backend>() {
         claimed: 0b11,
         works: 0b1,
         features_at: Some(support::time(1)),
+        native_key: None,
     };
     write(source.store(), |repos| {
         repos.put_contact(&contact(1, 1))?;
