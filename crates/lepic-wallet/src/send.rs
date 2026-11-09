@@ -1185,7 +1185,9 @@ where
                     network: config.network,
                     now: ports.clock.now(),
                     reply_keys: reply_keys.as_deref(),
-                    features: config.claimed_features(),
+                    claim: Claim::of(config, &session.seed),
+                    native_direct: config.native_direct,
+                    sealing: None,
                 };
                 let randomness = S1Randomness::draw(&mut **ports.rng.lock());
                 Ok(randomness.map_err(SendError::from).and_then(|randomness| {
@@ -1210,6 +1212,7 @@ where
                 slate_id: stored.slate_id,
                 amount: stored.amount,
                 fee: stored.fee,
+                format: stored.format,
             },
             stored.slate,
         ))

@@ -1274,7 +1274,7 @@ where
                 tip,
                 now: ports.clock.now(),
                 reply_keys: None,
-                features: config.claimed_features(),
+                claim: Claim::of(config, &session.seed),
             };
             Ok(session.store.read(|repos| check_stored(repos, &env, &i2)))
         })
