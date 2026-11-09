@@ -489,6 +489,7 @@ fn contact_kind(error: &ContactError) -> ErrorKind {
         ContactError::InPerson(InPersonRefusal::NoCode | InPersonRefusal::NoAnswer) => {
             ErrorKind::NotFound
         }
+        ContactError::InPerson(InPersonRefusal::TtlTooShort { .. }) => ErrorKind::Usage,
         ContactError::InPerson(_) => ErrorKind::Rejected,
         ContactError::Epic1Link(_) => ErrorKind::Usage,
         ContactError::Epic1(Epic1Refusal::NotIssued | Epic1Refusal::NoPayment) => {

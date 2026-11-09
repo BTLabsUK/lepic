@@ -756,7 +756,9 @@ whose name is a slate id is given with its directory, as in `./<SLATE_ID>`.
 
 Face to face, the payee shows a code for one scan and the payer answers it, with no pairing.
 The code is a raw `lepic.v1` I1 (RFC 0003 §9): it names no payment proof, and the payer refuses
-it after its TTL, 15 blocks unless `--ttl-blocks` says otherwise. Online, it also names a
+it after its TTL. The app chooses the TTL: `--ttl-blocks` sets it, and without it LEPIC uses
+30 blocks. LEPIC keeps a margin of 10 blocks (the payer stops paying 10 blocks before the
+cutoff) and refuses a TTL of 10 blocks or fewer as an invalid argument. Online, it also names a
 mailbox on the payee's own relay for the answer; with that relay on this device it names none,
 and the answer is shown back.
 
@@ -800,7 +802,7 @@ $ lepic in-person finalize <SLATE_ID> 1
 ```
 
 A send works the same way the other way round. The sender shows a raw `lepic.v1` S1, with no
-payment proof and a TTL of 15 blocks unless `--ttl-blocks` says otherwise; it takes the spending
+payment proof and the TTL of `in-person invoice` (`--ttl-blocks`, 30 blocks by default, more than 10); it takes the spending
 options of `send`. The send is stored and its inputs stay locked until an answer is finalized or
 the TTL passes, when refresh expires it.
 

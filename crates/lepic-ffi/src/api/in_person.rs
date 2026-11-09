@@ -61,11 +61,13 @@ pub fn in_person_qr_read(parts: Vec<String>) -> Result<InPersonQrProgress, Walle
 
 impl EpicWallet {
     /// Makes an in-person invoice for `amount` atomic units, with no payment proof, good for
-    /// `ttl_blocks` blocks past the chain tip (15 when `None`). With `Online` the code names a
-    /// reply mailbox on the wallet's relay, which [`EpicWallet::contacts_collect`] then
+    /// `ttl_blocks` blocks past the chain tip. The app chooses the TTL: LEPIC uses 30 when
+    /// `None` and refuses one of 10 or fewer with `InvalidArgument`, as the payer stops paying
+    /// 10 blocks before the cutoff. With `Online` the code names a reply mailbox on the wallet's relay, which [`EpicWallet::contacts_collect`] then
     /// watches until the code expires. The invoice and the code are stored.
     ///
-    /// Fails with `InvalidArgument` for a zero amount, and as `issue_invoice` fails.
+    /// Fails with `InvalidArgument` for a zero amount or a TTL of 10 blocks or fewer, and as
+    /// `issue_invoice` fails.
     pub async fn in_person_invoice(
         &self,
         amount: u64,

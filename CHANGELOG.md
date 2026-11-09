@@ -35,7 +35,7 @@ Conventional Commit messages at release time.
 ### Added
 
 - `lepic in-person` and `/v1/in-person/…`: invoices made face to face (RFC 0003 §9). The payee
-  shows a raw `lepic.v1` I1 for one scan, with no payment proof, a TTL of 15 blocks unless set,
+  shows a raw `lepic.v1` I1 for one scan, with no payment proof, a TTL of 30 blocks unless set (more than 10, or refused),
   the reply key and, online, a mailbox on its own relay. The payer reads it, pays it, and seals
   the I2 to the reply key in an anonymous type `0A` envelope, posted to the mailbox with
   `--relay-ok` or shown back for `in-person take`. `contact collect` watches each open code's
@@ -46,7 +46,7 @@ Conventional Commit messages at release time.
   resolved addresses when connecting directly and by name through Tor.
 - `lepic in-person send` and `receive`, `POST /v1/in-person/sends` and `/v1/in-person/receive`:
   sends made face to face (RFC 0003 §9). The sender shows a raw `lepic.v1` S1 with no payment
-  proof, a TTL of 15 blocks unless set, the reply key and, online, a mailbox on its own relay;
+  proof, a TTL of 30 blocks unless set (more than 10), the reply key and, online, a mailbox on its own relay;
   the send is stored and its inputs locked. The receiver reads and receives it, and seals the S2
   as an answer to an invoice code is sealed. Each answer is listed with its check code, from the
   receiver's public excess, a later answer with the same code is flagged, and

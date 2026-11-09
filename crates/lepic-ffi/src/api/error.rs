@@ -835,6 +835,7 @@ const fn in_person_kind(refusal: InPersonRefusal) -> WalletErrorKind {
         R::NoMailbox => K::InPersonNoMailbox,
         R::UrIncomplete => K::UrCodeIncomplete,
         R::StoredAnswer => K::Other,
+        R::TtlTooShort { .. } => K::InvalidArgument,
         _ => K::InvalidSlate,
     }
 }
@@ -1440,6 +1441,10 @@ mod tests {
             (
                 E::InPerson(InPersonRefusal::UrIncomplete),
                 K::UrCodeIncomplete,
+            ),
+            (
+                E::InPerson(InPersonRefusal::TtlTooShort { margin: 10 }),
+                K::InvalidArgument,
             ),
             (E::InPerson(InPersonRefusal::Proof), K::InvalidSlate),
             (E::InPerson(InPersonRefusal::Loopback), K::InvalidSlate),

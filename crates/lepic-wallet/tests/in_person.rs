@@ -1017,3 +1017,38 @@ fn a_send_code_past_its_ttl_expires_at_refresh_and_frees_its_inputs() {
     );
     assert!(late.is_err(), "{late:?}");
 }
+
+#[test]
+fn a_ttl_at_or_under_the_margin_is_refused_and_the_default_is_thirty_blocks() {
+    assert_eq!(IN_PERSON_TTL_BLOCKS, 30);
+    let world = World::new();
+    let expected = InPersonRefusal::TtlTooShort {
+        margin: INVOICE_TTL_MARGIN_BLOCKS,
+    };
+    let invoice_with = |ttl: u64| {
+        world.block_on(world.issuer.wallet.contact_book().in_person_invoice(
+            &relays(&world.issuer),
+            InPersonInvoiceRequest {
+                ttl_blocks: Some(ttl),
+                ..request()
+            },
+        ))
+    };
+    let send_with = |ttl: u64| {
+        world.block_on(world.payer.wallet.contact_book().in_person_send(
+            &relays(&world.payer),
+            SendRequest {
+                ttl_blocks: Some(ttl),
+                ..send_request()
+            },
+        ))
+    };
+    for ttl in [0, 1, INVOICE_TTL_MARGIN_BLOCKS] {
+        assert_eq!(refusal(invoice_with(ttl)), expected, "invoice ttl {ttl}");
+        assert_eq!(refusal(send_with(ttl)), expected, "send ttl {ttl}");
+    }
+    // One block over the margin is accepted, on both paths.
+    let ttl = INVOICE_TTL_MARGIN_BLOCKS + 1;
+    assert_eq!(invoice_with(ttl).unwrap().ttl_cutoff, TIP + ttl);
+    assert_eq!(send_with(ttl).unwrap().ttl_cutoff, TIP + ttl);
+}

@@ -47,7 +47,7 @@ use lepic_transport::transport::{BoxFuture, Location};
 use lepic_wallet::account::{DEFAULT_ACCOUNT_LABEL, parent_key_id};
 use lepic_wallet::event::{Event, InPersonAnswerEvent};
 use lepic_wallet::finalize::Finalized;
-use lepic_wallet::invoice::{InvoiceRequest, PayRequest};
+use lepic_wallet::invoice::{INVOICE_TTL_MARGIN_BLOCKS, InvoiceRequest, PayRequest};
 use lepic_wallet::namespace::{PostRole, check_code};
 use lepic_wallet::ports::{SecretVault, StoreOpener};
 use lepic_wallet::receive::ReceiveRequest;
@@ -63,14 +63,27 @@ use super::relay::{check_online, mailbox_client, meeting_host, parse_host};
 use super::{ContactError, ContactRelays, LockedRng, RelayMode};
 use crate::{ContactBook, file_method, hex};
 
-/// The TTL of an in-person code, in blocks past the chain tip, when the caller gives none.
-pub const IN_PERSON_TTL_BLOCKS: u64 = 15;
+/// The TTL of an in-person code, in blocks past the chain tip, for a caller that passes no
+/// `ttl_blocks` (the CLI, tests). The expiry is the app's choice: an app passes its own, and
+/// LEPIC refuses one at or under [`INVOICE_TTL_MARGIN_BLOCKS`].
+pub const IN_PERSON_TTL_BLOCKS: u64 = 30;
 
 /// The state of a code this wallet showed, by slate id.
 const CODE_PREFIX: &str = "inperson.code.";
 
 /// The state of an answer this wallet made to a code it scanned, by slate id.
 const REPLY_PREFIX: &str = lepic_wallet::IN_PERSON_REPLY_PREFIX;
+
+/// Refuses a TTL the payer would refuse from the start: it stops paying `margin` blocks
+/// before the cutoff.
+fn check_ttl(ttl_blocks: u64) -> Result<u64, ContactError> {
+    if ttl_blocks <= INVOICE_TTL_MARGIN_BLOCKS {
+        return Err(refused(InPersonRefusal::TtlTooShort {
+            margin: INVOICE_TTL_MARGIN_BLOCKS,
+        }));
+    }
+    Ok(ttl_blocks)
+}
 
 /// Why an in-person call refused its input.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
@@ -85,6 +98,13 @@ pub enum InPersonRefusal {
     /// The code has no TTL.
     #[error("the code has no TTL")]
     NoTtl,
+    /// The TTL is at or under the margin before the cutoff where the payer refuses, so the
+    /// code could never be paid.
+    #[error("the TTL must be more than {margin} blocks")]
+    TtlTooShort {
+        /// [`INVOICE_TTL_MARGIN_BLOCKS`].
+        margin: u64,
+    },
     /// The slate is at a stage this call does not take.
     #[error("the slate is at a stage this call does not take")]
     WrongStage,
@@ -126,7 +146,8 @@ pub struct InPersonInvoiceRequest {
     pub account: AccountIndex,
     pub amount: Amount,
     pub message: Option<String>,
-    /// Blocks past the chain tip; [`IN_PERSON_TTL_BLOCKS`] when `None`.
+    /// Blocks past the chain tip, more than [`INVOICE_TTL_MARGIN_BLOCKS`];
+    /// [`IN_PERSON_TTL_BLOCKS`] when `None`.
     pub ttl_blocks: Option<u64>,
 }
 
@@ -547,7 +568,9 @@ where
     /// `relays` are online it also names a reply mailbox on the wallet's own relay, which
     /// collecting then watches until the TTL. The invoice and the code are stored.
     ///
-    /// Fails with [`ContactError::Invoice`] as [`lepic_wallet::Wallet::issue_invoice`] does.
+    /// Fails with [`ContactError::InPerson`] when the TTL is at or under
+    /// [`INVOICE_TTL_MARGIN_BLOCKS`], and with [`ContactError::Invoice`] as
+    /// [`lepic_wallet::Wallet::issue_invoice`] does.
     #[instrument(skip_all, fields(wallet = %self.wallet.config().name))]
     pub async fn in_person_invoice(
         &self,
@@ -555,6 +578,7 @@ where
         request: InPersonInvoiceRequest,
     ) -> Result<InPersonCode, ContactError> {
         self.check_contact_network(relays)?;
+        let ttl_blocks = check_ttl(request.ttl_blocks.unwrap_or(IN_PERSON_TTL_BLOCKS))?;
         let account = request.account;
         let (tx_id, slate, _) = self
             .wallet
@@ -564,7 +588,7 @@ where
                     account,
                     amount: request.amount,
                     message: request.message,
-                    ttl_blocks: Some(request.ttl_blocks.unwrap_or(IN_PERSON_TTL_BLOCKS)),
+                    ttl_blocks: Some(ttl_blocks),
                 },
                 // Never exported: issue_unsent only records where the slate would go, and a
                 // file records no counterparty.
@@ -587,7 +611,8 @@ where
     /// [`ContactBook::in_person_invoice`] makes an invoice. The send is stored and its inputs
     /// stay locked until an answer is finalized, the TTL passes or it is cancelled.
     ///
-    /// Fails with [`ContactError::InPerson`] when `request` asks for a payment proof, and with
+    /// Fails with [`ContactError::InPerson`] when `request` asks for a payment proof or a TTL
+    /// at or under [`INVOICE_TTL_MARGIN_BLOCKS`], and with
     /// [`ContactError::Send`] as [`lepic_wallet::Wallet::send`] fails before it delivers.
     #[instrument(skip_all, fields(wallet = %self.wallet.config().name))]
     pub async fn in_person_send(
@@ -599,9 +624,10 @@ where
             return Err(refused(InPersonRefusal::Proof));
         }
         self.check_contact_network(relays)?;
+        let ttl_blocks = check_ttl(request.ttl_blocks.unwrap_or(IN_PERSON_TTL_BLOCKS))?;
         let account = request.account;
         let request = SendRequest {
-            ttl_blocks: Some(request.ttl_blocks.unwrap_or(IN_PERSON_TTL_BLOCKS)),
+            ttl_blocks: Some(ttl_blocks),
             ..request
         };
         let (sent, slate) = self

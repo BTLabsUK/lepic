@@ -1292,8 +1292,10 @@ V3 slate (type `01`) reaches it with a few hundred inputs.
 - No payment proof in person **[Reasoning]**: the sender of an S1 does not know the receiver's
   proof key before the first scan, and the invoice flow has no proofs (5.10).
 - Every in-person S1 and I1 sets a TTL, so a walk-away frees the inputs. **[Specified]** The
-  default is 15 minutes, 15 blocks **[Decided]** (owner, 2026-11-08), turned into blocks as in 5.13 (one block
-  a minute, rounded up to a whole block).
+  expiry is the app's choice **[Decided]** (owner, 2026-11-09, replacing 15 blocks of 2026-11-08): the app
+  passes its own TTL in blocks. LEPIC keeps the 10-block margin (the payer stops paying 10 blocks before the
+  cutoff, 5.13), refuses a TTL at or under it, and falls back to 30 blocks for a caller that passes none
+  (the CLI, tests).
 
 Sizes, **[Reasoning]**: bytes from the 5.10 layout (the codec is not built, so these are computed,
 not measured), a 20-character relay domain in record `02`, codes from the shipped UR framing
@@ -1508,7 +1510,7 @@ Offline fallback, two scans:
    her comes from that phone; whether the app still asks the question is to explore in the wallet
    app.
 6. If Alice's code has closed before an S2 arrives, her wallet drains the reply mailbox until the
-   TTL (15 minutes by default, 5.18). If no S2 ever comes, Alice cancels, or the TTL frees her
+   TTL (the app's choice, 30 blocks by default, 5.18). If no S2 ever comes, Alice cancels, or the TTL frees her
    inputs.
 
 Onlookers: anyone who films the first code learns the amount, the message, the requester's keys,
@@ -1727,7 +1729,7 @@ Paths are in the LEPIC repository at `main` `078eadb7` unless marked otherwise.
 | In-person answers: closed on the first, each reported with its check code, finalized only on the consumer's call; the app's check-code confirmation | LEPIC part implemented **[Unmerged]** on `feat/in-person-invoice` (invoice codes) and `feat/in-person-send` (send codes): `crates/lepic-wallet-contacts/src/in_person.rs`, `lepic in-person`, `/v1/in-person/…`; app part **[App]**, to explore in the wallet app | 6.7 |
 | Hosts from untrusted input: report host, relay-list flag and address class; post on the consumer's word, through Tor when configured; loopback refused on the resolved address | **[Decided]** (O-17), address classes **[Decided]** (O-18); implemented for in-person posts **[Unmerged]** on `feat/in-person-invoice`: `lepic_transport::host_rule`, `Connector::connect_untrusted` in `crates/lepic-epicbox/src/session.rs` | 5.14 |
 | epic1 send with no answer: the same sealed S1 to the next entry on request, cancel and unlock | **[Decided]** (owner, 2026-11-09), not built | 5.14, 6.3 |
-| Default TTLs (epic1 send 24 hours, in person 15 minutes), link-mailbox index spaces, restore and watch time, hyphens in relay domains | **[Decided]** (after drafts 4 and 5), not built | 5.2, 5.9, 5.13, 5.14, 5.18 |
+| Default TTLs (epic1 send 24 hours, in person the app's choice, fallback 30 blocks), link-mailbox index spaces, restore and watch time, hyphens in relay domains | **[Decided]** (after drafts 4 and 5), not built | 5.2, 5.9, 5.13, 5.14, 5.18 |
 | Per-class HPKE `info` | **[Specified]** (draft 2), not built | 5.4 |
 | Seal key `lepic-wallet seal key v1` | **[Decided]** label, context **[Specified]**, not built, no vector | 5.2 |
 | epic1 proof key | **[Decided]** (O-8), not built, no vector | 5.2 |
