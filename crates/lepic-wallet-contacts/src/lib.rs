@@ -83,6 +83,8 @@ pub use lepic_contact::{
     ContactKind, DomainName, Network as ContactNetwork, PairingClass, Purpose, Refusal, SasSymbol,
     VerifyingKey,
 };
+/// The `BEGINEPICTX.` text of an in-person answer, to show instead of its bytes.
+pub use lepic_seal::armor_tx;
 pub use lepic_store::PairingEndReason;
 pub use lepic_store::PairingRole;
 pub use lepic_wallet::event::PairingFailure;
