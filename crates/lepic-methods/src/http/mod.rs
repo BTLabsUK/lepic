@@ -119,6 +119,15 @@ impl Http {
         }
     }
 
+    /// The HTTP method sending through `client` instead, holding its answers with this one's, so
+    /// [`Http::take_reply`] on either finds them.
+    pub fn through(&self, client: ForeignClient) -> Self {
+        Self {
+            client,
+            held: Arc::clone(&self.held),
+        }
+    }
+
     /// The receiver's answer to the slate with `slate_id`, removed from the held answers.
     pub fn take_reply(&self, slate_id: &str) -> Option<WireSlate> {
         let mut held = self.held.lock().unwrap_or_else(PoisonError::into_inner);
