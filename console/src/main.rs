@@ -2,10 +2,12 @@
 //! `lepic-console`: a local page that shows one LEPIC wallet through `lepic serve`'s API.
 //!
 //! The console depends on no LEPIC crate. It reaches serve over its Unix socket and answers
-//! one page on a loopback address. At launch it draws a token and prints a link that carries it.
-//! The browser that opens the link gets a cookie with the token; a request without that cookie
-//! is answered with 401. `Host` must be the console's own address, and a write must come from
-//! the console's own origin.
+//! one page on a loopback address. The page and its assets are answered to any request for the
+//! console's own address. At launch the console draws a link token and prints a link that
+//! carries it in the URL fragment, on stderr. The page trades the token for a session with
+//! `POST /session`; the link then stops working and a new one is printed. Every `/api` request
+//! carries its session in `Authorization: Bearer`, and no cookie is set. `Host` must be the
+//! console's own address, and a write must come from the console's own origin.
 
 mod policy;
 mod proxy;
@@ -71,8 +73,8 @@ async fn main() -> ExitCode {
     }
 }
 
-/// Draws the launch token from the system's random source, as lower-case hex.
-fn draw_token() -> Result<String, String> {
+/// Draws a token from the system's random source, as lower-case hex.
+pub(crate) fn draw_token() -> Result<String, String> {
     let mut bytes = [0u8; TOKEN_BYTES];
     File::open("/dev/urandom")
         .and_then(|mut source| source.read_exact(&mut bytes))
@@ -93,17 +95,17 @@ async fn run(args: Args) -> Result<(), String> {
             return Err("no home directory to find the default socket in; pass --socket".into());
         }
     };
-    let token = draw_token()?;
+    let link = draw_token()?;
     let listener = TcpListener::bind(args.listen)
         .await
         .map_err(|error| format!("cannot listen on {}: {error}", args.listen))?;
     let listen = listener
         .local_addr()
         .map_err(|error| format!("cannot read the listen address: {error}"))?;
-    let console = Arc::new(Console::new(listen.to_string(), socket, token));
-    println!(
-        "lepic-console on http://{listen}/?token={} for {}",
-        console.token(),
+    let console = Arc::new(Console::new(listen.to_string(), socket, link));
+    eprintln!(
+        "lepic-console on http://{listen}/#token={} for {}",
+        console.link(),
         console.socket().display()
     );
     loop {

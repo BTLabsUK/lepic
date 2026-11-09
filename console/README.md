@@ -17,28 +17,44 @@ cd console
 cargo run --locked -- --network floonet
 ```
 
-At launch the console draws a token and prints one line:
+At launch the console draws a link token and prints one line on stderr:
 
 ```
-lepic-console on http://127.0.0.1:7421/?token=<64 hex digits> for <socket>
+lepic-console on http://127.0.0.1:7421/#token=<64 hex digits> for <socket>
 ```
 
-Open that link. The console answers it with a redirect to `/` and a cookie, and the page
-works in that browser from then on. A new launch draws a new token. Flags:
+Open that link. The token is in the URL fragment, so the browser never sends it to a server.
+The page reads it, removes it from the address bar and trades it for a session with
+`POST /session`. The page keeps the session in `sessionStorage` and sends it on every API
+request, so a reload keeps it and each tab and each console (each address has its own origin)
+holds its own. The link works once: when it is used, the console prints a new link on stderr
+(`lepic-console: the link was used; for another tab open http://127.0.0.1:7421/#token=<new>`).
+A page opened without a valid link or stored session shows a message that says to open the
+console with the link from its terminal. Flags:
 
 - `--socket PATH`: the socket serve answers on. Without it the console uses the socket in
   the default data dir of `--network` (`mainnet` unless given).
 - `--listen ADDR`: the loopback address and port to serve the page on.
 
+Two consoles on different ports, for example mainnet on 7421 and floonet on 7422, draw their
+own tokens and sessions and do not affect each other.
+
 ## What it answers
 
-- Requests that carry the cookie `lepic-console` with the launch token: the page, its assets
-  and `/api` alike. The cookie is set when the browser opens the printed link (`HttpOnly`,
-  `SameSite=Strict`). A request without it, or with another value, gets 401.
+- The page and its assets (`/`, `/console.css`, `/console.js`, `/vendor/scalar.js`) to any
+  request for its own address. They are the same embedded files in every binary and hold no
+  secret. No cookie is set anywhere.
+- `POST /session` with the link token in the header `X-Lepic-Console-Link` and the console's
+  own `Origin`. The token is compared in constant time. On success the console answers 200
+  with `{"session": "<64 hex digits>"}`, keeps the session (at most 16; the oldest is dropped
+  for a new one), replaces the link token with a new one and prints it. A wrong or missing
+  token gets 401 and changes nothing. Of concurrent exchanges of one token exactly one wins.
+- `/api` requests that carry `Authorization: Bearer <session>` with a session the console
+  handed out. A request without one, or with another value, gets 401.
 - Requests whose `Host` header is exactly its own listen address. Anything else is refused
   with 421, so a page on another host name cannot reach it through DNS tricks.
-- Reads with the cookie; writes (anything but GET) only with an `Origin`
-  header equal to the console's own origin. Other origins and an absent origin get 403.
+- Reads under `/api` with a session; writes (anything but GET) also need an `Origin` header
+  equal to the console's own origin. Other origins and an absent origin get 403.
 - A fixed list of API routes under `/api`: the status, wallet, address, outputs,
   transactions, transaction detail, node, event stream and OpenAPI document reads, and the
   cancel of one transaction. Nothing else is proxied.

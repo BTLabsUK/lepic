@@ -1,20 +1,22 @@
 // SPDX-License-Identifier: Apache-2.0
-//! What the console answers: requests addressed to its own listen address, from the browser that
-//! opened the printed link, writes from its own page only, and a fixed list of API routes.
+//! What the console answers: requests addressed to its own listen address; the page and its
+//! assets to anyone who reaches that address; a session exchange for the link token printed at
+//! launch; API requests that carry a session in `Authorization: Bearer`; writes from its own
+//! origin only; and a fixed list of API routes.
 
 use hyper::Method;
 use hyper::header::{self, HeaderMap};
 
-/// The name of the cookie that carries the launch token.
-pub(crate) const COOKIE_NAME: &str = "lepic-console";
+/// The header that carries the link token to `POST /session`.
+pub(crate) const LINK_HEADER: &str = "x-lepic-console-link";
 
 /// Why a request is refused before it is routed.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum Refusal {
     /// The `Host` header is not the console's own listen address.
     WrongHost,
-    /// The request does not carry the launch token in its cookie.
-    NoToken,
+    /// The request does not carry a session in `Authorization: Bearer`.
+    NoSession,
     /// A request that is not a read came without the console's own `Origin`.
     ForeignOrigin,
 }
@@ -27,6 +29,15 @@ pub(crate) fn host_is_own(listen: &str, headers: &HeaderMap) -> bool {
         == Some(listen)
 }
 
+/// Whether the request's `Origin` is exactly the console's own origin.
+fn origin_is_own(listen: &str, headers: &HeaderMap) -> bool {
+    let own = format!("http://{listen}");
+    headers
+        .get(header::ORIGIN)
+        .and_then(|value| value.to_str().ok())
+        == Some(own.as_str())
+}
+
 /// Compares two strings in time that depends on their length only.
 pub(crate) fn same_token(left: &str, right: &str) -> bool {
     left.len() == right.len()
@@ -37,50 +48,54 @@ pub(crate) fn same_token(left: &str, right: &str) -> bool {
             == 0
 }
 
-/// The value of the `token` parameter in a query string, if there is one.
-pub(crate) fn query_token(query: Option<&str>) -> Option<&str> {
-    query?
-        .split('&')
-        .find_map(|pair| pair.strip_prefix("token="))
-}
-
-fn has_cookie(token: &str, headers: &HeaderMap) -> bool {
+/// The session in the request's `Authorization: Bearer` header, if there is one.
+fn bearer(headers: &HeaderMap) -> Option<&str> {
     headers
-        .get_all(header::COOKIE)
-        .iter()
-        .filter_map(|value| value.to_str().ok())
-        .flat_map(|line| line.split(';'))
-        .filter_map(|pair| {
-            pair.trim()
-                .strip_prefix(COOKIE_NAME)
-                .and_then(|rest| rest.strip_prefix('='))
-        })
-        .any(|value| same_token(value, token))
+        .get(header::AUTHORIZATION)?
+        .to_str()
+        .ok()?
+        .strip_prefix("Bearer ")
 }
 
-/// Refuses a request sent to another host name, one without the launch token's cookie, or a
-/// write another page sent. `listen` is the address the console answers on, as a browser writes
-/// it in `Host`; `token` is the token drawn at launch.
-pub(crate) fn admit(
+/// The link token the request offers in the console's link header, if there is one.
+pub(crate) fn offered_link(headers: &HeaderMap) -> Option<&str> {
+    headers.get(LINK_HEADER)?.to_str().ok()
+}
+
+/// Refuses a request for the page or an asset that was sent to another host name. `listen` is
+/// the address the console answers on, as a browser writes it in `Host`.
+pub(crate) fn admit_page(listen: &str, headers: &HeaderMap) -> Result<(), Refusal> {
+    if host_is_own(listen, headers) {
+        Ok(())
+    } else {
+        Err(Refusal::WrongHost)
+    }
+}
+
+/// Refuses a session exchange sent to another host name or from another origin. The link token
+/// itself is checked by the caller, which owns it.
+pub(crate) fn admit_exchange(listen: &str, headers: &HeaderMap) -> Result<(), Refusal> {
+    admit_page(listen, headers)?;
+    if origin_is_own(listen, headers) {
+        Ok(())
+    } else {
+        Err(Refusal::ForeignOrigin)
+    }
+}
+
+/// Refuses an API request sent to another host name, one without a session `is_session`
+/// accepts, or a write another page sent.
+pub(crate) fn admit_api(
     listen: &str,
-    token: &str,
     method: &Method,
     headers: &HeaderMap,
+    is_session: impl FnOnce(&str) -> bool,
 ) -> Result<(), Refusal> {
-    if !host_is_own(listen, headers) {
-        return Err(Refusal::WrongHost);
+    admit_page(listen, headers)?;
+    if !bearer(headers).is_some_and(is_session) {
+        return Err(Refusal::NoSession);
     }
-    if !has_cookie(token, headers) {
-        return Err(Refusal::NoToken);
-    }
-    if method == Method::GET {
-        return Ok(());
-    }
-    let own = format!("http://{listen}");
-    let origin = headers
-        .get(header::ORIGIN)
-        .and_then(|value| value.to_str().ok());
-    if origin == Some(own.as_str()) {
+    if method == Method::GET || origin_is_own(listen, headers) {
         Ok(())
     } else {
         Err(Refusal::ForeignOrigin)
@@ -121,8 +136,8 @@ mod tests {
     use super::*;
 
     const LISTEN: &str = "127.0.0.1:7421";
-    const TOKEN: &str = "0123456789abcdef";
-    const COOKIE: &str = "lepic-console=0123456789abcdef";
+    const SESSION: &str = "0123456789abcdef";
+    const BEARER: &str = "Bearer 0123456789abcdef";
 
     fn headers(pairs: &[(header::HeaderName, &str)]) -> HeaderMap {
         pairs
@@ -131,39 +146,61 @@ mod tests {
             .collect()
     }
 
+    fn is_session(offered: &str) -> bool {
+        same_token(offered, SESSION)
+    }
+
     #[test]
-    fn a_read_needs_the_exact_host() {
-        let own = headers(&[(header::HOST, LISTEN), (header::COOKIE, COOKIE)]);
-        assert_eq!(admit(LISTEN, TOKEN, &Method::GET, &own), Ok(()));
+    fn a_page_needs_the_exact_host_and_nothing_else() {
+        assert_eq!(
+            admit_page(LISTEN, &headers(&[(header::HOST, LISTEN)])),
+            Ok(())
+        );
         for host in [
             "localhost:7421",
             "127.0.0.1",
             "127.0.0.1:7422",
             "evil.example",
         ] {
-            let other = headers(&[(header::HOST, host), (header::COOKIE, COOKIE)]);
             assert_eq!(
-                admit(LISTEN, TOKEN, &Method::GET, &other),
+                admit_page(LISTEN, &headers(&[(header::HOST, host)])),
                 Err(Refusal::WrongHost)
             );
         }
         assert_eq!(
-            admit(LISTEN, TOKEN, &Method::GET, &HeaderMap::new()),
+            admit_page(LISTEN, &HeaderMap::new()),
             Err(Refusal::WrongHost)
         );
     }
 
     #[test]
-    fn a_write_needs_the_console_as_origin() {
+    fn an_api_read_needs_the_exact_host() {
+        let own = headers(&[(header::HOST, LISTEN), (header::AUTHORIZATION, BEARER)]);
+        assert_eq!(admit_api(LISTEN, &Method::GET, &own, is_session), Ok(()));
+        for host in ["localhost:7421", "127.0.0.1", "127.0.0.1:7422"] {
+            let other = headers(&[(header::HOST, host), (header::AUTHORIZATION, BEARER)]);
+            assert_eq!(
+                admit_api(LISTEN, &Method::GET, &other, is_session),
+                Err(Refusal::WrongHost)
+            );
+        }
+        assert_eq!(
+            admit_api(LISTEN, &Method::GET, &HeaderMap::new(), is_session),
+            Err(Refusal::WrongHost)
+        );
+    }
+
+    #[test]
+    fn an_api_write_needs_the_console_as_origin() {
         let own = headers(&[
             (header::HOST, LISTEN),
-            (header::COOKIE, COOKIE),
+            (header::AUTHORIZATION, BEARER),
             (header::ORIGIN, "http://127.0.0.1:7421"),
         ]);
-        assert_eq!(admit(LISTEN, TOKEN, &Method::POST, &own), Ok(()));
-        let absent = headers(&[(header::HOST, LISTEN), (header::COOKIE, COOKIE)]);
+        assert_eq!(admit_api(LISTEN, &Method::POST, &own, is_session), Ok(()));
+        let absent = headers(&[(header::HOST, LISTEN), (header::AUTHORIZATION, BEARER)]);
         assert_eq!(
-            admit(LISTEN, TOKEN, &Method::POST, &absent),
+            admit_api(LISTEN, &Method::POST, &absent, is_session),
             Err(Refusal::ForeignOrigin)
         );
         for origin in [
@@ -174,78 +211,96 @@ mod tests {
         ] {
             let foreign = headers(&[
                 (header::HOST, LISTEN),
-                (header::COOKIE, COOKIE),
+                (header::AUTHORIZATION, BEARER),
                 (header::ORIGIN, origin),
             ]);
             assert_eq!(
-                admit(LISTEN, TOKEN, &Method::POST, &foreign),
+                admit_api(LISTEN, &Method::POST, &foreign, is_session),
                 Err(Refusal::ForeignOrigin)
             );
             assert_eq!(
-                admit(LISTEN, TOKEN, &Method::OPTIONS, &foreign),
+                admit_api(LISTEN, &Method::OPTIONS, &foreign, is_session),
                 Err(Refusal::ForeignOrigin)
             );
         }
     }
 
     #[test]
-    fn the_host_check_comes_before_the_origin_check() {
+    fn the_host_check_comes_before_the_session_and_origin_checks() {
         let other = headers(&[
             (header::HOST, "localhost:7421"),
-            (header::COOKIE, COOKIE),
-            (header::ORIGIN, "http://127.0.0.1:7421"),
+            (header::ORIGIN, "http://evil.example"),
         ]);
         assert_eq!(
-            admit(LISTEN, TOKEN, &Method::POST, &other),
+            admit_api(LISTEN, &Method::POST, &other, is_session),
             Err(Refusal::WrongHost)
         );
+        assert_eq!(admit_exchange(LISTEN, &other), Err(Refusal::WrongHost));
     }
 
     #[test]
-    fn a_request_needs_the_launch_token_in_its_cookie() {
-        let own = |cookie: Option<&str>| {
+    fn an_api_request_needs_a_session_in_its_bearer_header() {
+        let own = |authorization: Option<&str>| {
             let mut pairs = vec![(header::HOST, LISTEN)];
-            if let Some(cookie) = cookie {
-                pairs.push((header::COOKIE, cookie));
+            if let Some(authorization) = authorization {
+                pairs.push((header::AUTHORIZATION, authorization));
             }
             headers(&pairs)
         };
         assert_eq!(
-            admit(LISTEN, TOKEN, &Method::GET, &own(None)),
-            Err(Refusal::NoToken)
+            admit_api(LISTEN, &Method::GET, &own(None), is_session),
+            Err(Refusal::NoSession)
         );
-        for cookie in [
-            "lepic-console=0123456789abcdee",
-            "lepic-console=0123456789abcde",
-            "lepic-console=",
-            "other=0123456789abcdef",
-            "xlepic-console=0123456789abcdef",
+        for authorization in [
+            "Bearer 0123456789abcdee",
+            "Bearer 0123456789abcde",
+            "Bearer ",
+            "Bearer",
+            "bearer 0123456789abcdef",
+            "Basic 0123456789abcdef",
+            "0123456789abcdef",
         ] {
             assert_eq!(
-                admit(LISTEN, TOKEN, &Method::GET, &own(Some(cookie))),
-                Err(Refusal::NoToken),
-                "{cookie}"
+                admit_api(LISTEN, &Method::GET, &own(Some(authorization)), is_session),
+                Err(Refusal::NoSession),
+                "{authorization}"
             );
         }
-        for cookie in [
-            COOKIE,
-            "a=b; lepic-console=0123456789abcdef",
-            "lepic-console=0123456789abcdef; a=b",
-        ] {
+        assert_eq!(
+            admit_api(LISTEN, &Method::GET, &own(Some(BEARER)), is_session),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn an_exchange_needs_the_console_as_origin() {
+        let own = headers(&[
+            (header::HOST, LISTEN),
+            (header::ORIGIN, "http://127.0.0.1:7421"),
+        ]);
+        assert_eq!(admit_exchange(LISTEN, &own), Ok(()));
+        for origin in [None, Some("null"), Some("http://localhost:7421")] {
+            let mut pairs = vec![(header::HOST, LISTEN)];
+            if let Some(origin) = origin {
+                pairs.push((header::ORIGIN, origin));
+            }
             assert_eq!(
-                admit(LISTEN, TOKEN, &Method::GET, &own(Some(cookie))),
-                Ok(()),
-                "{cookie}"
+                admit_exchange(LISTEN, &headers(&pairs)),
+                Err(Refusal::ForeignOrigin)
             );
         }
     }
 
     #[test]
-    fn the_token_is_read_from_the_query() {
-        assert_eq!(query_token(Some("token=ab")), Some("ab"));
-        assert_eq!(query_token(Some("x=1&token=ab")), Some("ab"));
-        assert_eq!(query_token(Some("x=1")), None);
-        assert_eq!(query_token(None), None);
+    fn the_link_is_read_from_its_header() {
+        assert_eq!(
+            offered_link(&headers(&[(
+                header::HeaderName::from_static(LINK_HEADER),
+                "ab"
+            )])),
+            Some("ab")
+        );
+        assert_eq!(offered_link(&HeaderMap::new()), None);
         assert!(same_token("ab", "ab"));
         assert!(!same_token("ab", "ac"));
         assert!(!same_token("ab", "abc"));

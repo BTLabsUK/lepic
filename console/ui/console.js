@@ -5,12 +5,15 @@ const DETAILS_EVERY_MS = 30000;
 const AFTER_EVENT_MS = 1500;
 const FEED_CAP = 500;
 const THEME_KEY = "lepic-console-theme";
+const SESSION_KEY = "lepic-console-session";
+const NO_SESSION = "Open the console with the link lepic-console printed in its terminal. A new link is printed each time one is used.";
 
 const $ = (id) => document.getElementById(id);
 
 // The API reference, once its tab has been opened.
 let reference = null;
 let referenceLoading = false;
+let referenceDocument = null;
 
 // Small DOM builder: el("td", { class: "num" }, "12") or el("dl", null, [a, b]).
 function el(tag, attrs, children) {
@@ -101,6 +104,114 @@ $("theme").addEventListener("click", () => {
   if (saved === "light" || saved === "dark") applyTheme(saved);
 })();
 
+// Session: the link token in the address is traded for a session, which every request carries
+
+class Problem extends Error {
+  constructor(body, status) {
+    super(body.detail || body.title || `HTTP ${status}`);
+    this.code = body.code || null;
+    this.status = status;
+  }
+}
+
+let session = null;
+
+function storedSession() {
+  try { return sessionStorage.getItem(SESSION_KEY); } catch { return null; }
+}
+
+function keepSession(value) {
+  try {
+    if (value) sessionStorage.setItem(SESSION_KEY, value);
+    else sessionStorage.removeItem(SESSION_KEY);
+  } catch { /* storage may be off; the session then lasts until a reload */ }
+}
+
+// The link token leaves the address bar before anything else runs, so it is never in the
+// history or in a later request. Null when the address holds no link.
+function takeLink() {
+  const prefix = "#token=";
+  if (!location.hash.startsWith(prefix)) return null;
+  const value = location.hash.slice(prefix.length);
+  history.replaceState(null, "", location.pathname + location.search);
+  return value;
+}
+
+async function exchangeLink(link) {
+  const response = await fetch("/session", {
+    method: "POST",
+    cache: "no-store",
+    headers: { "X-Lepic-Console-Link": link },
+  });
+  if (!response.ok) throw new Error(`HTTP ${response.status}`);
+  const body = await response.json();
+  if (typeof body.session !== "string" || body.session === "") throw new Error("no session in the answer");
+  return body.session;
+}
+
+// Trades a link for a session. An old link leaves the session this tab already holds, if any.
+async function openLink(link) {
+  try {
+    session = await exchangeLink(link);
+    keepSession(session);
+  } catch { /* a used or wrong link */ }
+}
+
+// Settles once the link in the address has been traded, or there was none to trade.
+let sessionReady = (async () => {
+  session = storedSession();
+  const link = takeLink();
+  if (link !== null) await openLink(link);
+})();
+
+// A link pasted into a tab that already shows the console changes the fragment only.
+window.addEventListener("hashchange", () => {
+  const link = takeLink();
+  if (link === null) return;
+  sessionReady = openLink(link).then(() => {
+    if (!session) return;
+    $("no-session").hidden = true;
+    refreshAll();
+    readEvents();
+  });
+});
+
+function noSession() {
+  session = null;
+  keepSession(null);
+  $("no-session").hidden = false;
+  setLink("bad", "Not opened with a link");
+  setEventsState(NO_SESSION);
+  return new Problem({ detail: NO_SESSION, code: "no_session" }, 401);
+}
+
+async function authorization() {
+  await sessionReady;
+  if (!session) throw noSession();
+  return { Authorization: `Bearer ${session}` };
+}
+
+// The API, through the console's own proxy
+
+async function api(path, init) {
+  const auth = await authorization();
+  let response;
+  try {
+    response = await fetch(`/api${path}`, {
+      cache: "no-store",
+      ...init,
+      headers: { ...((init && init.headers) || {}), ...auth },
+    });
+  } catch (error) {
+    throw new Problem({ detail: `the console itself is not answering: ${error.message}`, code: "console" }, 0);
+  }
+  if (response.status === 401) throw noSession();
+  const type = response.headers.get("content-type") || "";
+  const body = type.includes("json") ? await response.json().catch(() => ({})) : {};
+  if (!response.ok) throw new Problem(body, response.status);
+  return body;
+}
+
 // Tabs with hash routing
 
 const tabs = [...document.querySelectorAll('[role="tab"]')];
@@ -137,29 +248,6 @@ for (const tab of tabs) {
 
 window.addEventListener("hashchange", () => showTab(location.hash.slice(1) || "overview", false));
 showTab(location.hash.slice(1) || "overview", false);
-
-// The API, through the console's own proxy
-
-class Problem extends Error {
-  constructor(body, status) {
-    super(body.detail || body.title || `HTTP ${status}`);
-    this.code = body.code || null;
-    this.status = status;
-  }
-}
-
-async function api(path, init) {
-  let response;
-  try {
-    response = await fetch(`/api${path}`, { cache: "no-store", ...init });
-  } catch (error) {
-    throw new Problem({ detail: `the console itself is not answering: ${error.message}`, code: "console" }, 0);
-  }
-  const type = response.headers.get("content-type") || "";
-  const body = type.includes("json") ? await response.json().catch(() => ({})) : {};
-  if (!response.ok) throw new Problem(body, response.status);
-  return body;
-}
 
 // Reachability banner and connection line
 
@@ -505,12 +593,25 @@ function setEventsState(text) {
   $("events-state").textContent = text;
 }
 
+let eventsOpen = false;
+
 async function readEvents() {
+  if (eventsOpen) return;
+  eventsOpen = true;
+  try {
+    await keepReadingEvents();
+  } finally {
+    eventsOpen = false;
+  }
+}
+
+async function keepReadingEvents() {
   let delay = 1000;
   for (;;) {
     setEventsState("Opening the event stream…");
     try {
-      const response = await fetch("/api/v1/events", { cache: "no-store" });
+      const response = await fetch("/api/v1/events", { cache: "no-store", headers: await authorization() });
+      if (response.status === 401) throw noSession();
       if (!response.ok) {
         const body = await response.json().catch(() => ({}));
         throw new Problem(body, response.status);
@@ -520,6 +621,7 @@ async function readEvents() {
       await consume(response.body);
       setEventsState("The stream ended. Reconnecting");
     } catch (error) {
+      if (error.code === "no_session") return;
       if (isUnreachable(error)) markUnreachable(error);
       setEventsState(`Stream not open (${error.message}). Reconnecting`);
     }
@@ -571,7 +673,7 @@ async function refreshStatus() {
     renderStatus(status);
   } catch (error) {
     if (isUnreachable(error)) markUnreachable(error);
-    else setLink("busy", `Status not available: ${error.message}`);
+    else if (error.code !== "no_session") setLink("busy", `Status not available: ${error.message}`);
   }
 }
 
@@ -587,6 +689,7 @@ async function refreshDetails() {
     try {
       render(await api(path));
     } catch (error) {
+      if (error.code === "no_session") return;
       if (isUnreachable(error)) markUnreachable(error);
       if (container) renderProblemInto(container, what, error);
       else if (path.endsWith("/address")) $("address").textContent = `Not available: ${error.message}`;
@@ -613,7 +716,7 @@ readEvents();
 // The whole configuration every time: Scalar replaces, rather than merges, what it is given.
 function referenceOptions() {
   return {
-    url: "/api/v1/openapi.json",
+    content: referenceDocument,
     withDefaultFonts: false,
     telemetry: false,
     hideClientButton: true,
@@ -628,9 +731,18 @@ function referenceOptions() {
   };
 }
 
-function loadReference() {
+// The document is fetched with the session and handed to the reference, which cannot send the
+// header itself.
+async function loadReference() {
   if (reference || referenceLoading) return;
   referenceLoading = true;
+  try {
+    referenceDocument = await api("/v1/openapi.json");
+  } catch (error) {
+    referenceLoading = false;
+    $("api-note").textContent = `The API document is not available: ${error.message}`;
+    return;
+  }
   const script = el("script", { src: "/vendor/scalar.js" });
   script.addEventListener("load", () => {
     if (!window.Scalar) {
