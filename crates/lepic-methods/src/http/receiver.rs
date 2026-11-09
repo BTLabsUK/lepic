@@ -155,8 +155,9 @@ pub fn coinbase_answer(coinbase: &Coinbase) -> CoinbaseAnswer {
 }
 
 /// The class the foreign server answers a failed receive with: [`Refusal::Rejected`] when the
-/// slate or the request is at fault and the sender gains nothing by trying again,
-/// [`Refusal::Unavailable`] for everything about this wallet, its node or the process.
+/// same slate would fail the same way again, so the sender gains nothing by trying again, as
+/// the engine's inbox decides for a message; [`Refusal::Unavailable`] for everything about
+/// this wallet, its node or the process that may pass.
 pub fn refuse(error: &ReceiveError) -> Refusal {
     match error {
         ReceiveError::Decode(_)
@@ -171,7 +172,11 @@ pub fn refuse(error: &ReceiveError) -> Refusal {
         | ReceiveError::ForeignProofAddress
         | ReceiveError::Refused
         | ReceiveError::UnknownTransport { .. }
-        | ReceiveError::Slate(_) => Refusal::Rejected,
+        | ReceiveError::Output(_)
+        | ReceiveError::Signing(_)
+        | ReceiveError::Excess(_)
+        | ReceiveError::Slate(_)
+        | ReceiveError::Encode(_) => Refusal::Rejected,
         ReceiveError::Wallet(
             WalletError::Config(_)
             | WalletError::WrongPassword
@@ -230,6 +235,20 @@ mod tests {
                 Refusal::Rejected,
             ),
             (ReceiveError::FeeOverflow, Refusal::Rejected),
+            (
+                ReceiveError::Output(lepic_keychain::ProofError::InvalidNonce),
+                Refusal::Rejected,
+            ),
+            (
+                ReceiveError::Excess(lepic_primitives::committed::KernelSumError::Mismatch),
+                Refusal::Rejected,
+            ),
+            (
+                ReceiveError::Encode(lepic_transport::error::FormatError::CodecNotRegistered {
+                    codec: lepic_slate::codec::legacy::v2_json::LEGACY_V2_JSON,
+                }),
+                Refusal::Rejected,
+            ),
             (ReceiveError::ForeignProofAddress, Refusal::Rejected),
             (ReceiveError::Refused, Refusal::Rejected),
             (
