@@ -1,66 +1,83 @@
 # Architecture
 
-## TL;DR
+LEPIC is an Epic Cash wallet written as a Rust library. It runs inside the process of the app
+that uses it: the `lepic` command-line wallet, or BT Wallet through the Flutter binding. It speaks
+the wire formats of `epic-wallet` and the Epic node, and adds its own formats for exchanges
+between two LEPIC wallets.
 
-LEPIC is a Cargo workspace of small crates arranged in layers: pure, deterministic crates for crypto,
-transactions, keys and slates at the bottom; I/O crates for the node, storage and transports in the
-middle; the wallet engine above them; and the CLI and mobile bindings on top. Slates have one domain
-model and several wire codecs, and each transport declares which codecs it speaks. Dependency edges
-between crates are fixed below and checked by `cargo xtask deps-check`.
+This page shows how the workspace is cut into crates, which crate may use which, how slates move
+between formats, and what happens in the main flows.
+
+## Layers
+
+```text
+ hosts       lepic-cli                     lepic-ffi  ── lepic-flutter (own repository) ── BT Wallet
+               │                              │
+ contacts    lepic-wallet-contacts ───────────┤
+               │                              │
+ methods     lepic-methods  (file, http, tor, epicbox)
+               │
+ engine      lepic-wallet  ── ports: NodeApi, StoreOpener, SecretVault, Clock, SharedRng, MethodLookup
+               │
+ I/O         lepic-node  lepic-store  lepic-transport  lepic-epicbox  lepic-peer
+             lepic-legacy-rpc  lepic-tor  lepic-epic1  lepic-telemetry
+               │
+ pure        lepic-crypto  lepic-primitives  lepic-keychain  lepic-slate
+             lepic-legacy-slate  lepic-native-slate  lepic-seal  lepic-contact
+```
+
+- **Pure crates** compute. They take keys, randomness and the time as arguments, and do no I/O.
+- **I/O crates** talk to one outside thing each: the node, the database, a relay, a socket, Tor.
+- **The engine**, `lepic-wallet`, holds the wallet's rules. It reaches the outside only through
+  ports that the host fills in.
+- **Methods**, `lepic-methods`, are the ways a slate travels: a file, the HTTP foreign API, Tor,
+  Epicbox. Each sits behind a feature of the same name.
+- **Contacts**, `lepic-wallet-contacts`, add pairing, contact mailboxes and epic1 payments on top
+  of the engine and the methods.
+- **Hosts** build the ports, the Tokio runtime and logging, and present the result: a command
+  line or a Dart API.
+
+`lepic-epic1` sits with the I/O crates in the edge table because it depends on `lepic-epicbox`
+for the network type, but it does no I/O itself.
 
 ## Crates
 
-| Crate | Responsibility | I/O |
+| Crate | Layer | Role |
 |---|---|---|
-| `lepic-crypto` | Safe boundary over the pinned secp256k1-zkp wrapper: commitments, Bulletproofs, aggregate signatures, ECDSA, ECDH. Validates every length and key before the call. | none |
-| `lepic-primitives` | Binary serialization, hashing, transaction, input, output and kernel types, weights and fees, per-network chain parameters. Ported from the node. | none |
-| `lepic-keychain` | Mnemonic to seed, BIP32 derivation, identifiers and paths, switch commitments, proof builders and rewind, seed vault formats, the host app's data file format (`docs/compat/wfeh.md`). | none |
-| `lepic-slate` | Slate domain model, stages and roles, codec trait, codec registry, the `ur:epic-slate` QR form of slate text (ADR 0025). | none |
-| `lepic-legacy-slate` | The V2 and V3 JSON slate codecs `epic-wallet` speaks, and the marked codecs that add the LEPIC marker to them (ADR 0052). | none |
-| `lepic-native-slate` | The native slate codec `lepic.v1` (EPICTX): the binary layout with its TLV tail, the network and block header version rule, a JSON view for display and tests. | none |
-| `lepic-seal` | The sealed envelope format (RFC 0002, RFC 0003): the header, HPKE with its key classes, the inner fields with padding and type 0A, both armors and the payment file classifier, contact cards. | none |
-| `lepic-contact` | Contact pairing formats (RFC 0002): invites, pairing replies and confirms, the SAS, private pairings. Re-exports the envelope, its armor and contact cards from `lepic-seal` at their former paths. | none |
-| `lepic-epic1` | The epic1 address (bech32m, RFC 0003 §5.13) and the epic1 payment link with its Epicbox transport entries (RFC 0003 §5.14): pure text codes over the contact and Epicbox address types. | none |
-| `lepic-node` | Node JSON-RPC client for the foreign API, with strict response validation and bounded sizes. | network |
-| `lepic-store` | SQLite storage behind repository traits, migrations, encryption of private transaction context, the database file encrypted at rest (ADR 0032). | disk |
-| `lepic-transport` | Transport traits, the method port and the registry's lookup, the LEPIC marker's feature bits, format policy; with its default `legacy` feature the shared legacy codec registries and the file transport. | disk |
-| `lepic-epicbox` | Epicbox addresses, message crypto, protocol frames, the relay client. Protocol only: the `epicbox` method lives in `lepic-methods`. | network |
-| `lepic-peer` | The native direct endpoint (EPICTX 5.15): `GET /v1/peer` and `POST /v1/peer/slates` with their problem answers and the reply cache, the advert a listener adds to `check_version`, pin origins, and the client. It carries envelopes as bytes: the wallet behind it seals and opens them. | network |
-| `lepic-legacy-rpc` | The legacy JSON-RPC dialect: the wallet foreign API over HTTP (ADR 0017, ADR 0052): JSON-RPC messages, the client, the listener. Protocol only: it implements no LEPIC trait, and the `http` method and the receiver live in `lepic-methods`, which re-exports its API. | network |
-| `lepic-tor` | Tor on desktop and Android (ADR 0018): onion v3 addresses and the wallet's onion key, a tor child process per wallet driven over its control port, SOCKS5. Protocol only: the `tor` method lives in `lepic-methods`; `OnionClientSettings` stays here. | network, child process |
-| `lepic-wallet` | The engine: accounts, output selection, send, receive, finalize, cancel, scan, refresh, transaction state machine, events. It holds no method: a transaction stores a transport id, which the engine resolves through the consumer's registry (`Ports.methods`); with none it sends no notice. It names a method's id only where the data does: an invoice that came back over Epicbox, and the method an old wallet's history implies when it is imported. | through ports |
-| `lepic-wallet-contacts` | Contacts on the engine (RFC 0002): pairing, contact mailboxes, sealed slates, contact invoices, key checks, app payloads and in-person codes (RFC 0003 §9). Drives `lepic-wallet` through its public calls and the hooks of `lepic_wallet::extension`. | through ports |
-| `lepic-methods` | Transaction methods: the registry of methods and one module per method, each behind a feature. The `epicbox` module is the Epicbox method, usable without the engine (`epicbox`); its inbox loop, which hands the engine the payments, notices and invoices the relay delivers, and listing addresses need the engine (`epicbox-wallet`). The `http` and `tor` modules are the HTTP and Tor methods, and the one receiver of a foreign-API listener; they re-export what their wire crates offer. The `file` method stays in `lepic-transport`. Re-exports the port of `lepic-transport`. | through ports |
-| `lepic-telemetry` | Tracing subscribers for CLI and mobile, redaction helpers. | stderr, files |
-| `lepic-cli` | The `lepic` binary. | all |
-| `lepic-ffi` | LEPIC's FFI API, built with flutter_rust_bridge (ADR 0007). The Flutter binding is a separate repository (ADR 0023). | all |
-| `xtask` | Build, check, vector, mobile packaging and release commands. | all |
+| [`lepic-crypto`](../crates/lepic-crypto/README.md) | pure | Checked boundary over secp256k1-zkp: commitments, range proofs, Schnorr and ECDSA signatures |
+| [`lepic-primitives`](../crates/lepic-primitives/README.md) | pure | Transactions, binary serialization, hashing, weights, fees, chain parameters |
+| [`lepic-keychain`](../crates/lepic-keychain/README.md) | pure | Mnemonic, BIP32 derivation, output keys, proof builders, seed vault format |
+| [`lepic-slate`](../crates/lepic-slate/README.md) | pure | Version-free slate model, the `Codec` trait, the codec registry |
+| [`lepic-legacy-slate`](../crates/lepic-legacy-slate/README.md) | pure | V2 and V3 JSON slates as `epic-wallet` writes them, plain or with the LEPIC marker |
+| [`lepic-native-slate`](../crates/lepic-native-slate/README.md) | pure | The binary `lepic.v1` slate |
+| [`lepic-seal`](../crates/lepic-seal/README.md) | pure | Sealed envelopes, armor, contact cards, domain claims |
+| [`lepic-contact`](../crates/lepic-contact/README.md) | pure | Pairing messages, private pairing, key check, SAS, pairing words |
+| [`lepic-node`](../crates/lepic-node/README.md) | I/O | Client for the Epic node's foreign JSON-RPC API, and a mock node |
+| [`lepic-store`](../crates/lepic-store/README.md) | I/O | Wallet database behind repository traits: SQLite, encrypted at rest, or in memory |
+| [`lepic-transport`](../crates/lepic-transport/README.md) | I/O | Transport traits, the method port, format policies, the file method |
+| [`lepic-epicbox`](../crates/lepic-epicbox/README.md) | I/O | Epicbox addresses, message crypto, frames and the relay client |
+| [`lepic-epic1`](../crates/lepic-epic1/README.md) | I/O (no I/O itself) | The epic1 address and payment link |
+| [`lepic-peer`](../crates/lepic-peer/README.md) | I/O | The native direct endpoint `/v1/peer` and its client |
+| [`lepic-legacy-rpc`](../crates/lepic-legacy-rpc/README.md) | I/O | The foreign API of `epic-wallet` over HTTP: client and listener |
+| [`lepic-tor`](../crates/lepic-tor/README.md) | I/O | Onion service and onion client over a bundled `tor` binary |
+| [`lepic-telemetry`](../crates/lepic-telemetry/README.md) | I/O | Tracing subscribers for the hosts, redaction, log capture for tests |
+| [`lepic-wallet`](../crates/lepic-wallet/README.md) | engine | The wallet: accounts, refresh, scan, send, receive, invoice, finalize, post |
+| [`lepic-methods`](../crates/lepic-methods/README.md) | methods | The method registry and the file, http, tor and epicbox methods |
+| [`lepic-wallet-contacts`](../crates/lepic-wallet-contacts/README.md) | contacts | Pairing, contact mailboxes, native slates between contacts, epic1 payments |
+| [`lepic-cli`](../crates/lepic-cli/README.md) | host | The `lepic` command-line wallet |
+| [`lepic-ffi`](../crates/lepic-ffi/README.md) | host | flutter_rust_bridge API for the app |
 
-Outside the product workspace, with their own `Cargo.lock`:
-
-- `conformance/` runs the reference `epic-wallet` and node code to generate golden vectors and to run
-  differential tests against LEPIC. It is the only place those crates appear (ADR 0009).
-- `fuzz/` holds cargo-fuzz targets.
-- `interop/` runs LEPIC against real `epic-wallet` binaries and a local Epicbox relay.
-
-### Feature code kept out of the money core
-
-Contact pairing and its key schedule (RFC 0002) live in `lepic-wallet-contacts` (ADR 0029), the
-LEPIC marker of slates sent between LEPIC wallets in `lepic-legacy-slate` (`marker`), with its
-feature bits in `lepic-transport` (`marker::features`), which the methods that use it share. What the pure crates keep of LEPIC's own features is the least the
-features need from the wallet's keychain:
-
-- `lepic-keychain` `contact_identity`: the plain key at `m/<a>/2/0` that the contact key
-  schedule starts from.
-- `lepic-keychain` `app_data`: the app's `WFEH` backup file (`docs/compat/wfeh.md`), sealed under
-  a key derived from the wallet root.
-
-Nothing in consensus, keys of funds or the slates `epic-wallet` reads depends on them, so a review
-of the money core can leave them out.
+`xtask` holds the repository's own tooling (`cargo xtask --help`). Outside the workspace sit
+`conformance/`, `fuzz/`, `interop/`, `console/` and the vendored secp256k1-zkp in
+`third_party/`.
 
 ## Allowed dependency edges
 
-```
+`cargo xtask deps-check` reads this section. It fails when a crate's real dependencies differ
+from the block below, when a pure crate takes a dependency that does I/O, and when a banned crate
+appears anywhere in the tree.
+
+```text
 lepic-crypto      -> (external only)
 lepic-primitives  -> lepic-crypto
 lepic-keychain    -> lepic-crypto, lepic-primitives
@@ -85,82 +102,184 @@ lepic-cli         -> lepic-wallet, lepic-wallet-contacts, lepic-methods, lepic-t
 lepic-ffi         -> lepic-wallet, lepic-wallet-contacts, lepic-methods, lepic-telemetry, lepic-epicbox, lepic-tor, lepic-transport, lepic-node, lepic-store, lepic-keychain, lepic-primitives
 ```
 
-The block applies to normal and build dependencies. Any crate may take `lepic-telemetry` as a
-dev-dependency for its log-capture test helpers, and `lepic-wallet` takes `lepic-wallet-contacts`
-as one, so the contact tests run on the engine's own test harness (ADR 0029). `lepic-wallet` also
-takes `lepic-methods` and `lepic-epicbox` as dev-dependencies, so its tests drive the engine through
-the Epicbox method on a mock relay (ADR 0051), and `lepic-epicbox` takes `lepic-legacy-slate`
-as one, so its vectors encode the V2 slates the relay carries, and so does `lepic-native-slate`,
-whose vectors decode like their V3 JSON (ADR 0052). Any other edge is a design change and needs an ADR.
-`lepic-ffi`'s edge to `lepic-tor` is optional, behind its default `tor` feature (ADR 0026).
-The edges to `lepic-legacy-slate` of `lepic-transport` and `lepic-methods`, and the edge to
-`lepic-legacy-rpc` of `lepic-methods`, are optional, behind their default `legacy` feature
-(ADR 0052); `cargo xtask no-legacy` builds the crates that need no legacy crate without it.
-`lepic-wallet` keeps its edge to `lepic-legacy-slate`: it stores slates as V3 JSON.
+The block covers normal and build dependencies. A few dev-dependencies sit outside it, each so a
+crate's tests can use a real neighbour:
+
+| Crate | Dev-dependency | Why |
+|---|---|---|
+| any crate | `lepic-telemetry` | log capture in tests |
+| `lepic-wallet` | `lepic-wallet-contacts`, `lepic-methods`, `lepic-epicbox` | contact and Epicbox tests on the engine's own harness (ADR 0029, ADR 0051) |
+| `lepic-epicbox` | `lepic-legacy-slate` | vectors that encode the V2 slates a relay carries |
+| `lepic-native-slate` | `lepic-legacy-slate` | vectors that decode like their V3 JSON (ADR 0052) |
+
+Any other edge is a design change and needs an ADR.
+
+Some edges are optional:
+
+- `lepic-ffi` → `lepic-tor` is behind the default `tor` feature (ADR 0026).
+- `lepic-transport` → `lepic-legacy-slate`, `lepic-methods` → `lepic-legacy-slate` and
+  `lepic-methods` → `lepic-legacy-rpc` are behind the default `legacy` feature (ADR 0052).
+  `cargo xtask no-legacy` builds the crates that need no legacy crate without it.
+- `lepic-wallet` → `lepic-legacy-slate` is not optional: the engine stores slates as V3 JSON.
+
 Pure crates (`crypto`, `primitives`, `keychain`, `slate`, `legacy-slate`, `native-slate`, `seal`, `contact`) may not depend on Tokio or the filesystem,
 read a clock, or create their own randomness.
 
-## Engine and ports
+## Ports
 
-The engine depends on traits, not implementations:
+The engine names what it needs as traits and generic parameters, and the host supplies them in a
+`Ports` value (`crates/lepic-wallet/src/ports.rs`):
 
-| Port | Implemented by |
-|---|---|
-| `NodeApi` | `lepic-node`, and a mock node in tests |
-| `StoreOpener` (opens the `WalletStore` after unlock, keyed from the seed) | `lepic_wallet::SqliteStores` over `lepic-store`, the CLI's `CliStores`, in-memory stores in tests |
-| `Method` (the slate's method: codecs, marker, peer key, delivery) | `lepic-transport::file`, `lepic-methods`, and a loopback in tests |
-| `SecretVault` (`exists`, `create`, `unlock` with a password, yielding a `lepic_keychain::SecretStore`) | the CLI's `FileVault` over a `lepic-keychain` vault file on desktop, `lepic-ffi`'s `AppVault` over the platform keystore on mobile, a fast vault in tests |
-| `Clock`, `Rng` | real implementations in `lepic-cli` and `lepic-ffi`, fixed ones in tests |
+| Port | What it gives the engine | Implementations |
+|---|---|---|
+| `NodeApi` (`lepic-node`) | chain tip, outputs, kernels, push of a transaction | `NodeClient` over HTTP; `MockNode` with the `mock` feature |
+| `StoreOpener` | the wallet database, opened or created | `EncryptingSqliteStores`, `SqliteStores`, `EncryptedSqliteStores`; host wrappers in `lepic-cli` and `lepic-ffi` |
+| `SecretVault` | the sealed seed, created or unlocked with a password | a vault file in `lepic-cli`; the app's secure storage in `lepic-ffi` |
+| `Clock`, `SharedRng`, runtime `Handle`, `MethodLookup` | the time, randomness, a Tokio runtime and the methods by name | the host's real ones; fixed ones in tests |
 
-The engine owns no runtime and no globals. `lepic-cli` and `lepic-ffi` create the Tokio runtime and
-pass it in.
+A `Wallet` is `Wallet::new(config, ports)`, where `WalletConfig` carries the network, the name
+and every policy value. The library has no defaults for hosts, ports or limits; hosts read them
+from `settings.toml` (ADR 0030, ADR 0036). See [Configuration](configuration.md).
 
-## Slates, codecs and transports
+Contacts plug into the engine through hooks in `lepic_wallet::extension`: `ReplyKeys`,
+`NativeSlates`, `ContactNotices` and `PairRequests`. `lepic-wallet-contacts` installs them; a
+wallet without them refuses what they would handle.
 
+## Slates, codecs and methods
+
+A slate is the document two wallets pass back and forth to build one transaction. LEPIC keeps
+one version-free model of it, `lepic_slate::Slate` (ADR 0002), and converts at the edge.
+
+```text
+ wire bytes ──Codec::decode──▶ Slate ──engine──▶ Slate ──Codec::encode──▶ wire bytes
+               ▲                                             ▲
+               └──────────── FormatPolicy picks ─────────────┘
 ```
-              +---------------------- lepic-slate ----------------------+
- wire bytes   |  Codec (legacy V2 JSON | legacy V3 JSON | future native) |   domain Slate
- <----------> |  detect / decode / encode, lossless or a typed error     | <------------> engine
-              +---------------------------------------------------------+
-                         ^ chosen by FormatPolicy of the transport
-              +----------+-----------+
-              |  Transport           |  epicbox: accepts V2, V3; sends V2, V3 for invoices; replies in the inbound shape
-              |  (file, epicbox,...) |  file:    accepts V2, V3; writes V3
-              +----------------------+
-```
 
-- The domain `Slate` is version-free: explicit stage, explicit roles, typed fields. It can hold a
-  partial body, so a compact native format does not need the sender's inputs and outputs on the wire.
-  A slate decoded from a legacy format keeps its wire origin (codec and legacy header) so a reply can
-  echo what the peer sent.
-- A codec maps between one wire format and the domain model. Encoding fails with a typed error when
-  the format cannot carry something the slate contains. Nothing is dropped silently.
-- A transport's `FormatPolicy` lists the codecs it accepts, the codec it sends by default, and the
-  reply rule. Adding a method is one transport module plus one registration; adding a format is one
-  codec module plus one registration.
-- ADRs 0002, 0003 and 0012 hold the reasoning and the native format proposal.
+- A **codec** maps one wire format to and from `Slate`. Codecs never convert into each other.
+- A **format policy** (ADR 0003) belongs to a transport and decides which codec reads an
+  incoming slate and which writes a new slate or a reply. The engine never names a codec.
+- A **method** is a transport plus its policy and what it knows about peers
+  (`lepic_transport::method::Method`). The engine looks methods up by `TransportId`.
+
+### Wire formats
+
+| Format | Codec id | Crate | Used for |
+|---|---|---|---|
+| V2 JSON | `legacy-v2` | `lepic-legacy-slate` | `epic-wallet` peers; standard sends over Epicbox |
+| V3 JSON | `legacy-v3` | `lepic-legacy-slate` | `epic-wallet` peers; files; invoice stages over Epicbox; what the engine stores |
+| `lepic.v1` | `lepic.v1` | `lepic-native-slate` | between two LEPIC wallets that both claim native slates |
+
+The legacy codecs match `epic-wallet`'s output byte for byte, quirks included, and change only to
+fix a mismatch a golden vector shows. See [Legacy slates](compat/legacy-slates.md).
+
+### The LEPIC marker
+
+A LEPIC wallet adds `"lepic":{"version":1}` as the last top-level key of the V2 and V3 JSON
+slates it sends over Epicbox, so the peer knows it runs LEPIC. Stock `epic-wallet` ignores the key
+and drops it. The marked codecs share the ids `legacy-v2` and `legacy-v3` with the plain ones.
+
+- Over Epicbox the marker carries `f`, the feature bits the wallet claims
+  (`lepic_transport::marker::features`). The bit registry only grows.
+- A file or paste slate may carry `reply`, an X25519 key for a sealed answer.
+- A wallet that takes native slates over Epicbox writes `f` and `reply` together; `reply` is then
+  the seal key of its payments address.
+
+### Format policies
+
+| Method | Reads | Writes a new slate | Writes a reply |
+|---|---|---|---|
+| file (`lepic-transport`) | V2 or V3, by `version_info.version` | V3 (ADR 0015) | V3, next to the input with a `.response` suffix |
+| http (`lepic-methods`) | V3 or V2 | V2 | the shape that came in |
+| epicbox (`lepic-methods`) | V3 or V2, detected by shape | S1 as marked V2; I1 as marked V3 | the shape that came in; I2 always as marked V3 |
+
+### Native slates
+
+`lepic.v1` is a binary slate with a 51-byte header and an extension tail (RFC 0003). It carries
+what the other party needs and nothing else. It travels in two ways:
+
+- between paired contacts, sealed in a type 0A envelope through their mailboxes, when the host
+  turns on `WalletConfig::native_direct` and the contact claims `NATIVE_SLATES`;
+- over Epicbox to a peer whose marker claimed native slates, through the `NativeSlates` hook.
+
+The engine itself works on V3 JSON. `lepic-wallet-contacts` converts at the edge. See
+[EPICTX](protocols/epictx.md).
 
 ## Main flows
 
-Send, standard flow:
+Each flow is a `Wallet` method that takes the method to use. Every step stores its result before
+it returns.
 
-1. The engine selects outputs, builds the S1 slate, stores the private context encrypted, and locks
-   the selected outputs, in one store transaction.
-2. The transport's policy picks a codec. The codec encodes. The transport delivers.
-3. The response arrives, through the Epicbox inbox or a file import. It is detected and decoded with
-   a codec the transport accepts, validated against the stored context, finalized, and posted to the
-   node. Then it is acknowledged to the relay.
+**Send** (standard flow, S1 → S2 → S3). `Wallet::send` selects outputs, builds change with its
+range proofs, locks the inputs, stores the transaction and S1, and then delivers S1 through the
+method (`Delivery::Deliver`) or writes it for the user to carry (`Delivery::Export`). A stored
+send that failed to deliver waits for `Wallet::resend` or `Wallet::cancel`.
 
-Receive is the mirror: decode S1, validate, add the output and the partial signature, store, reply
-through the same transport in the format its policy prescribes for replies, acknowledge.
+**Receive.** `Wallet::receive` decodes S1 with the method's policy, checks it against the chain
+tip, adds an output and a partial signature, stores the result and returns S2 in the shape the
+policy picks.
 
-Every inbound message is idempotent on `(slate_id, stage)`. A relay message is acknowledged only after
-its effect is stored or it was rejected for good.
+**Finalize and post.** `Wallet::finalize` checks S2 against the stored send, completes the
+signatures and builds the transaction (S3). `Wallet::post` sends it to the node. A transaction
+whose kernel is already on chain counts as posted.
 
-## Mobile shape
+**Invoice** (I1 → I2 → I3). `Wallet::issue_invoice` creates I1 for the payer.
+`Wallet::pay_invoice` adds the payer's inputs and signature (I2). `Wallet::finalize_invoice`
+completes I3 on the issuer's side, which then posts it.
 
-A phone suspends the app, so Epicbox runs in two modes: `listen` keeps a connection while the app is
-in the foreground, and `drain` connects, processes everything pending, and disconnects. A host
-that wants background work schedules a `drain`; BT Wallet schedules none, so messages wait on the
-relay until the app opens. Events (balance, transaction stage, sync progress,
-transport state) stream to the host through the binding.
+**Refresh and scan.** `Wallet::refresh` brings outputs and transactions in line with the node's
+UTXO set and kernels. A scan rebuilds outputs from the chain after a restore.
+
+**Drain and listen** (Epicbox). The epicbox method's `drain` takes every waiting message once and
+returns, for background work on mobile. `listen` holds a relay connection and handles messages as
+they arrive, until the host stops it. Both hand each message to the engine's inbox, which decides
+what it is: a slate to answer, a reply to finalize, or a notice. A message that fails for a
+transient reason stays on the relay for the next attempt.
+
+## Mobile
+
+`lepic-ffi` exposes the engine to Dart with flutter_rust_bridge (ADR 0007). The generated Dart
+package lives in its own repository, lepic-flutter (ADR 0023), which records the fingerprint of
+the API it was generated from in `crates/lepic-ffi/bridge.sha256`.
+
+- `LepicRuntime` owns one multi-threaded Tokio runtime for the app.
+- The seed stays in the app's secure storage; the binding passes the sealed vault bytes in and out
+  around each engine call (ADR 0014).
+- Logs go to a `LogSink` the app implements, or to an on-device `LogRing`.
+- Tor is a build feature (ADR 0026). With it, each open wallet runs a bundled `tor` binary as a
+  child process.
+
+See [FFI](ffi.md).
+
+## Storage at rest
+
+| What | Where | Protection |
+|---|---|---|
+| Seed | a vault file (CLI) or the app's secure storage | XChaCha20-Poly1305 under an Argon2id key from the password |
+| Wallet database | SQLite file in the wallet directory | SQLite3 Multiple Ciphers under a key derived from the seed (ADR 0032) |
+| Transaction contexts (blinding factors, nonces) | rows in the database | also sealed with XChaCha20-Poly1305 under a key from the wallet's root key, bound to their row |
+| Logs | stderr or a rotating file (CLI); the app's sink or `LogRing` | `LogRing` redacts each record before it reaches the disk |
+
+`EncryptingSqliteStores` copies a plain database into an encrypted one when it opens a directory
+that holds one. Every opener of a wallet directory takes one OS lock (`DataDirLock`), so the CLI
+and the app never open one database at once.
+
+## No global state
+
+The network, settings, runtime, clock, randomness and paths are values passed in (ADR 0011). Two
+wallets on different networks run in one process, and tests run in parallel.
+
+The only process-wide values are immutable: constant tables such as the BIP39 word list, and the
+one secp256k1 context in `lepic-crypto`. A host may blind that context once at start with
+`lepic_crypto::randomize_context`. Library crates emit `tracing` events and never install a
+subscriber; the host installs one from `lepic-telemetry`.
+
+## Related
+
+- [Docs index](README.md)
+- [Configuration](configuration.md), [CLI](cli.md), [FFI](ffi.md)
+- [Protocols](protocols/README.md): [EPICTX](protocols/epictx.md), [epic1](protocols/epic1.md),
+  [Pairing](protocols/pairing.md), [Epicbox](protocols/epicbox.md), [Tor](protocols/tor.md),
+  [HTTP](protocols/http.md)
+- [Architecture decision records](adr/README.md)
+- [Rules](rules.md), [Logging](logging.md)
