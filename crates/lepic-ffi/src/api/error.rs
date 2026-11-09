@@ -11,7 +11,7 @@ use lepic_wallet::selection::SelectionError;
 use lepic_wallet::self_send::SelfSendError;
 use lepic_wallet::send::SendError;
 use lepic_wallet::{FinalizeError, ReceiveError};
-use lepic_wallet_contacts::ContactError;
+use lepic_wallet_contacts::{ContactError, InPersonRefusal};
 
 /// What went wrong, in terms the app can act on. The numbers in [`WalletErrorKind::code`] are
 /// part of the API and never change meaning; the binding's README lists them.
@@ -249,6 +249,17 @@ pub enum WalletErrorKind {
     /// asked to move to (`ContactView::requested_relay`), or the contact asked for no move.
     /// Nothing changed.
     RelayMoveNotRequested,
+    /// This wallet holds no in-person code or answer for the slate, or no answer with that
+    /// number was taken for the code.
+    InPersonNotFound,
+    /// `EpicWallet::in_person_post` was called without the user confirming the relay the
+    /// answer goes to. Nothing was posted.
+    RelayNotConfirmed,
+    /// The in-person code named no reply mailbox: show the answer instead of posting it.
+    InPersonNoMailbox,
+    /// The QR parts scanned do not make a whole code yet: keep scanning and pass every part
+    /// scanned so far.
+    UrCodeIncomplete,
 }
 
 impl WalletErrorKind {
@@ -341,6 +352,10 @@ impl WalletErrorKind {
             Self::WrongKey => 90,
             Self::PairingKindDiffers => 91,
             Self::RelayMoveNotRequested => 92,
+            Self::InPersonNotFound => 93,
+            Self::RelayNotConfirmed => 94,
+            Self::InPersonNoMailbox => 95,
+            Self::UrCodeIncomplete => 96,
         }
     }
 }
@@ -722,10 +737,26 @@ impl From<ContactError> for WalletError {
                 E::RelayMoveNotRequested => K::RelayMoveNotRequested,
                 E::Domain(_) | E::NoDomainConfigured | E::NoDomainClaim => K::InvalidArgument,
                 E::Post(_) => K::TransportFailed,
+                E::Native(_) => K::InvalidSlate,
+                E::InPerson(refusal) => in_person_kind(*refusal),
                 _ => K::Other,
             },
         };
         Self::chained(kind, &error)
+    }
+}
+
+/// The kind of an in-person refusal: a code or answer refused is an invalid slate.
+const fn in_person_kind(refusal: InPersonRefusal) -> WalletErrorKind {
+    use InPersonRefusal as R;
+    use WalletErrorKind as K;
+    match refusal {
+        R::NoCode | R::NoAnswer => K::InPersonNotFound,
+        R::RelayNotConfirmed => K::RelayNotConfirmed,
+        R::NoMailbox => K::InPersonNoMailbox,
+        R::UrIncomplete => K::UrCodeIncomplete,
+        R::StoredAnswer => K::Other,
+        _ => K::InvalidSlate,
     }
 }
 
@@ -861,6 +892,10 @@ mod tests {
             (K::WrongKey, 90),
             (K::PairingKindDiffers, 91),
             (K::RelayMoveNotRequested, 92),
+            (K::InPersonNotFound, 93),
+            (K::RelayNotConfirmed, 94),
+            (K::InPersonNoMailbox, 95),
+            (K::UrCodeIncomplete, 96),
         ];
         for (kind, code) in expected {
             assert_eq!(kind.code(), code, "{kind:?}");
@@ -1200,6 +1235,22 @@ mod tests {
             (E::NoDomainClaim, K::InvalidArgument),
             (E::NetworkMismatch, K::InvalidArgument),
             (E::TooLarge { max: 1 }, K::InvalidArgument),
+            (E::InPerson(InPersonRefusal::NoCode), K::InPersonNotFound),
+            (E::InPerson(InPersonRefusal::NoAnswer), K::InPersonNotFound),
+            (
+                E::InPerson(InPersonRefusal::RelayNotConfirmed),
+                K::RelayNotConfirmed,
+            ),
+            (
+                E::InPerson(InPersonRefusal::NoMailbox),
+                K::InPersonNoMailbox,
+            ),
+            (
+                E::InPerson(InPersonRefusal::UrIncomplete),
+                K::UrCodeIncomplete,
+            ),
+            (E::InPerson(InPersonRefusal::Proof), K::InvalidSlate),
+            (E::InPerson(InPersonRefusal::Loopback), K::InvalidSlate),
             (E::Wallet(lepic_wallet::WalletError::Locked), K::Locked),
             (
                 E::Invoice(InvoiceError::NotParked {

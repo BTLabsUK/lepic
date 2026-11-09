@@ -26,6 +26,8 @@
 //! outbox that [`EpicWallet::contacts_outbox_deliver`] posts; run both when the app opens, on
 //! a foreground tick and on a push wake-up.
 
+use flutter_rust_bridge::frb;
+
 use crate::api::error::WalletError;
 use crate::api::types::{
     CollectTrigger, ContactCollectReport, ContactImportSummary, ContactInvoiceView, ContactKind,
@@ -1049,5 +1051,37 @@ impl EpicWallet {
             session.contacts_import(document).await
         })
         .await
+    }
+
+    /// Turns native slates to contacts (RFC 0003) on or off for this wallet. While it is on,
+    /// new slates to a contact that claims native slates over a pairing that is not private
+    /// go as native slates; [`ContactView`] says so in `native_slates`. It is off until this
+    /// turns it on. The setting is kept in the wallet's directory and takes effect when the
+    /// wallet next opens; [`EpicWallet::native_direct_in_use`] says what this session does.
+    /// Deleting the wallet removes it.
+    ///
+    /// Fails with `Io` when the setting cannot be written.
+    #[frb(sync)]
+    pub fn set_native_direct(&self, enabled: bool) -> Result<(), WalletError> {
+        self.boundary().guard("set_native_direct", || {
+            self.session.set_native_direct(enabled)
+        })
+    }
+
+    /// The native slates setting as [`EpicWallet::set_native_direct`] last saved it: what the
+    /// wallet does from its next open.
+    #[frb(sync)]
+    pub fn native_direct(&self) -> bool {
+        self.boundary()
+            .guard_or("native_direct", false, || self.session.native_direct())
+    }
+
+    /// Whether this session sends native slates to contacts that claim them: the setting as
+    /// it was when the wallet opened.
+    #[frb(sync)]
+    pub fn native_direct_in_use(&self) -> bool {
+        self.boundary().guard_or("native_direct_in_use", false, || {
+            self.session.native_direct_active()
+        })
     }
 }

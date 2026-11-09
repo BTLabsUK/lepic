@@ -74,7 +74,7 @@ pub(super) fn contact_id(text: &str) -> Result<ContactId, WalletError> {
     Ok(ContactId(id))
 }
 
-fn slate_id(text: &str) -> Result<SlateId, WalletError> {
+pub(super) fn slate_id(text: &str) -> Result<SlateId, WalletError> {
     SlateId::parse(text).map_err(|_| invalid("not a slate id"))
 }
 
@@ -99,7 +99,7 @@ fn bounded<'a>(text: &'a str, max: usize, what: &str) -> Result<&'a str, WalletE
     Ok(text)
 }
 
-fn ms(time: jiff::Timestamp) -> i64 {
+pub(super) fn ms(time: jiff::Timestamp) -> i64 {
     time.as_millisecond()
 }
 
@@ -174,7 +174,7 @@ const fn state(state: ContactState) -> PairingState {
     }
 }
 
-const fn stage(stage: Stage) -> SlateStage {
+pub(super) const fn stage(stage: Stage) -> SlateStage {
     match stage {
         Stage::S1 => SlateStage::S1,
         Stage::S2 => SlateStage::S2,
@@ -251,6 +251,7 @@ fn view(view: EngineContactView) -> ContactView {
         peer_enc_key: view.peer_enc_key.map(|key| key.to_vec()),
         ended_reason: view.ended_reason.map(end_reason),
         ended_at_ms: view.ended_at.map(ms),
+        native_slates: view.native_slates,
     }
 }
 
@@ -369,7 +370,10 @@ pub(super) fn outbox_event(kind: WalletEventKind, news: &OutboxNews) -> WalletEv
 
 impl Session {
     /// The relays contact calls reach, from the wallet's Epicbox transport.
-    fn contact_relays(&self, mode: ContactRelayMode) -> Result<ContactRelays, WalletError> {
+    pub(super) fn contact_relays(
+        &self,
+        mode: ContactRelayMode,
+    ) -> Result<ContactRelays, WalletError> {
         Ok(ContactRelays::new(self.epicbox()?, relay_mode(mode)))
     }
 
@@ -648,6 +652,7 @@ impl Session {
             quarantined: count(report.quarantined),
             quarantine_dropped: count(report.quarantine_dropped),
             buffered: count(report.buffered),
+            in_person: count(report.in_person),
             messages: count(report.messages),
             paired: count(report.paired),
             failed: report

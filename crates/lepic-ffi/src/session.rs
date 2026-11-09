@@ -94,6 +94,7 @@ pub(crate) use http::HttpReport;
 #[cfg(all(test, unix))]
 #[cfg(feature = "tor")]
 pub(crate) use tor::TorReport;
+mod in_person;
 mod invoice;
 mod servers;
 
@@ -530,7 +531,7 @@ fn engine(
         profile: config.profile,
         domain: config.domain.clone(),
         policy: policy.wallet,
-        native_direct: false,
+        native_direct: data_dir.join(NATIVE_DIRECT_FILE).exists(),
     };
     let ports = Ports {
         node,
@@ -1007,6 +1008,27 @@ impl Session {
 
     pub(crate) fn set_minimum_confirmations(&self, count: u64) -> Result<(), WalletError> {
         Ok(self.engine.set_minimum_confirmations(count)?)
+    }
+
+    /// Whether this session sends native slates to contacts that claim them.
+    pub(crate) fn native_direct_active(&self) -> bool {
+        self.engine.config().native_direct
+    }
+
+    /// Whether the next session of this wallet sends native slates, as last saved.
+    pub(crate) fn native_direct(&self) -> bool {
+        self.data_dir.join(NATIVE_DIRECT_FILE).exists()
+    }
+
+    /// Saves `native_direct` for the sessions opened after this one.
+    pub(crate) fn set_native_direct(&self, enabled: bool) -> Result<(), WalletError> {
+        let path = self.data_dir.join(NATIVE_DIRECT_FILE);
+        if enabled {
+            std::fs::write(&path, []).map_err(|error| io("saving native_direct", &error))
+        } else {
+            remove_if_present(std::fs::remove_file(&path))
+                .map_err(|error| io("saving native_direct", &error))
+        }
     }
 
     pub(crate) fn outputs(&self) -> Result<Vec<WalletOutput>, WalletError> {
@@ -2241,6 +2263,15 @@ fn invoice_event(event: &Event) -> Option<WalletEvent> {
             message: Some(not_posted.reason.clone()),
             ..WalletEvent::of(WalletEventKind::NotPosted)
         },
+        Event::InPersonAnswer(answer) => WalletEvent {
+            tx_id: Some(answer.tx_id.0),
+            slate_id: Some(answer.slate_id.to_string()),
+            slate_stage: Some(answer.stage.as_str().to_owned()),
+            answer: Some(answer.answer),
+            check_code: Some(answer.check_code.clone()),
+            same_code: Some(answer.same_code),
+            ..WalletEvent::of(WalletEventKind::InPersonAnswer)
+        },
         _ => return None,
     })
 }
@@ -2610,8 +2641,13 @@ pub(crate) const TOR_DIR: &str = "tor";
 /// since: the next session waits for tor from its first connection.
 pub(crate) const TOR_EXPECTED_FILE: &str = "tor-expected";
 
+/// The file inside the wallet's data directory that turns `native_direct` on (RFC 0003) for the
+/// sessions opened after it was written. Without it native slates stay off.
+pub(crate) const NATIVE_DIRECT_FILE: &str = "native-direct";
+
 /// Removes what a session leaves in the wallet's directory besides the database: scratch slate
-/// files a stopped call did not remove, the tor expectation and tor's own directory. A deleted
+/// files a stopped call did not remove, the tor expectation, the native-direct switch and tor's
+/// own directory. A deleted
 /// wallet leaves nothing of its payments or its connections behind.
 async fn remove_session_files(data_dir: &Path) -> Result<(), WalletError> {
     let dir = data_dir.to_owned();
@@ -2625,6 +2661,7 @@ async fn remove_session_files(data_dir: &Path) -> Result<(), WalletError> {
             }
         }
         remove_if_present(std::fs::remove_file(dir.join(TOR_EXPECTED_FILE)))?;
+        remove_if_present(std::fs::remove_file(dir.join(NATIVE_DIRECT_FILE)))?;
         remove_if_present(std::fs::remove_dir_all(dir.join(TOR_DIR)))
     })
     .await

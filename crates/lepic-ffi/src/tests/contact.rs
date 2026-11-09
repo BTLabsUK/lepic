@@ -24,26 +24,26 @@ use crate::api::wallet::EpicWallet;
 
 use ContactRelayMode::{EpicboxOff, Offline, Online};
 
-const EPIC: u64 = 100_000_000;
+pub(super) const EPIC: u64 = 100_000_000;
 
 /// The wallets' relay and their meeting relay, so pairing words are offered; the mock relay
 /// serves it.
-const RELAY: &str = "relay.example.org";
+pub(super) const RELAY: &str = "relay.example.org";
 
 /// The meeting relays every pairing call names, as the app's settings would.
 fn meeting() -> Vec<String> {
     vec![RELAY.to_owned()]
 }
 
-struct World {
-    chain: MockChain,
-    runtime: LepicRuntime,
+pub(super) struct World {
+    pub(super) chain: MockChain,
+    pub(super) runtime: LepicRuntime,
     _relay: MockRelay,
     dirs: Vec<tempfile::TempDir>,
 }
 
 impl World {
-    fn new() -> Self {
+    pub(super) fn new() -> Self {
         let chain = MockChain::new(1).unwrap();
         let mut runtime = chain.runtime(LogLevel::Warn).unwrap();
         let relay = MockRelay::new(RelayNetwork::Floonet);
@@ -56,7 +56,7 @@ impl World {
         }
     }
 
-    fn config(&mut self, epicbox_domain: &str) -> WalletConfig {
+    pub(super) fn config(&mut self, epicbox_domain: &str) -> WalletConfig {
         let dir = tempfile::tempdir().unwrap();
         let config = WalletConfig {
             policy: Default::default(),
@@ -92,11 +92,11 @@ impl World {
         .unwrap()
     }
 
-    async fn wallet(&mut self) -> EpicWallet {
+    pub(super) async fn wallet(&mut self) -> EpicWallet {
         self.wallet_with(None).await
     }
 
-    async fn funded(&mut self) -> EpicWallet {
+    pub(super) async fn funded(&mut self) -> EpicWallet {
         let wallet = self.wallet().await;
         let phrase = wallet.mnemonic("password".to_owned()).await.unwrap();
         self.chain
@@ -110,7 +110,7 @@ impl World {
 
 /// Pairs `anna` and `ben` by an invite link through the relay. Returns each side's id of the
 /// other.
-async fn pair(anna: &EpicWallet, ben: &EpicWallet) -> (String, String) {
+pub(super) async fn pair(anna: &EpicWallet, ben: &EpicWallet) -> (String, String) {
     let invite = anna
         .pairing_invite(
             "Anna".to_owned(),
@@ -1160,7 +1160,7 @@ async fn labels_follow_the_name_rule_and_marker_texts_are_bounded() {
 }
 
 /// Drains what the wallet raised so far.
-fn raised(
+pub(super) fn raised(
     events: &mut tokio::sync::broadcast::Receiver<lepic_wallet::Event>,
 ) -> Vec<lepic_wallet::Event> {
     let mut raised = Vec::new();

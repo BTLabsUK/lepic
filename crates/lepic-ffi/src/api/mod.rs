@@ -7,6 +7,7 @@ pub mod contact;
 pub mod diagnostics;
 pub mod error;
 pub mod http;
+pub mod in_person;
 pub mod invoice;
 pub mod policy;
 pub mod runtime;

@@ -1,5 +1,6 @@
 //! Plain data exchanged with Dart. Amounts are in the smallest unit (1 EPIC = 100_000_000).
 
+use flutter_rust_bridge::frb;
 use lepic_primitives::params::Network;
 use lepic_store::TxState;
 
@@ -1015,6 +1016,7 @@ pub struct PeerCompat {
 /// A paired contact, from `EpicWallet::contacts` and `EpicWallet::contact`. Holds no key.
 /// Times are milliseconds since the Unix epoch.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[frb(non_opaque)]
 pub struct ContactView {
     /// 32 lowercase hex characters; the id every contact call takes.
     pub contact_id: String,
@@ -1082,6 +1084,10 @@ pub struct ContactView {
     pub peer_enc_key: Option<Vec<u8>>,
     pub ended_reason: Option<PairingEndReason>,
     pub ended_at_ms: Option<i64>,
+    /// New slates to the contact go as native slates (RFC 0003): `native_direct` is on, the
+    /// contact claims native slates and the pairing is not private.
+    #[frb(default = false)]
+    pub native_slates: bool,
 }
 
 /// Whether a contact's domain claim is proven by the well-known file its domain serves.
@@ -1335,6 +1341,7 @@ pub enum CollectTrigger {
 
 /// What one `EpicWallet::contacts_collect` did.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[frb(non_opaque)]
 pub struct ContactCollectReport {
     pub mailboxes: u32,
     /// Mailboxes whose drain stopped at the per-mailbox message limit.
@@ -1366,6 +1373,10 @@ pub struct ContactCollectReport {
     pub quarantine_dropped: u32,
     /// Notices for a slate this wallet does not hold yet, kept to apply when it arrives.
     pub buffered: u32,
+    /// Answers taken from the reply mailboxes of in-person codes; each also raised
+    /// `InPersonAnswer`.
+    #[frb(default = 0)]
+    pub in_person: u32,
 }
 
 /// A pairing in progress that ended with nothing stored.
@@ -1783,6 +1794,12 @@ pub enum WalletEventKind {
     /// to `Cancelled` comes with it. Its `receiver_declined_at_ms` is set from now on. Raised
     /// once per send, over Epicbox from a LEPIC receiver or from a paired contact.
     PaymentDeclined,
+    /// An answer to an in-person code this wallet showed was taken, from its reply mailbox or
+    /// by `EpicWallet::in_person_take`: `tx_id`, `slate_id`, `slate_stage` (`S2` or `I2`),
+    /// `answer`, `check_code` and `same_code` are set. Nothing was finalized: show the answer
+    /// with its check code, and finalize the one the user picks with
+    /// `EpicWallet::in_person_finalize`. Raised once per answer.
+    InPersonAnswer,
 }
 
 /// How a key check from `EpicWallet::contact_key_check` stands.
@@ -1844,6 +1861,12 @@ pub struct WalletEvent {
     pub contact_change: Option<ContactChange>,
     /// For `ContactUpdated` with `Ended`.
     pub ended_reason: Option<PairingEndReason>,
+    /// For `InPersonAnswer`: the answer's number among the answers to its code, from 1.
+    pub answer: Option<u32>,
+    /// For `InPersonAnswer`: the four digits the answering wallet shows for the answer.
+    pub check_code: Option<String>,
+    /// For `InPersonAnswer`: an earlier answer to the code had the same check code.
+    pub same_code: Option<bool>,
 }
 
 impl WalletEvent {
@@ -1879,8 +1902,130 @@ impl WalletEvent {
             request_id: None,
             contact_change: None,
             ended_reason: None,
+            answer: None,
+            check_code: None,
+            same_code: None,
         }
     }
+}
+
+/// A reply mailbox an in-person code names, as `EpicWallet::in_person_read` reports it: show
+/// it before the answer is posted there.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InPersonHost {
+    pub host: String,
+    pub port: u16,
+    /// The host is in the wallet's relay list.
+    pub in_relay_list: bool,
+    /// The host is an address on the local network rather than the internet.
+    pub local_network: bool,
+}
+
+/// An in-person code to show, from `EpicWallet::in_person_invoice` or
+/// `EpicWallet::in_person_send`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InPersonCode {
+    pub tx_id: u32,
+    pub slate_id: String,
+    /// The raw `lepic.v1` slate to show: as one byte-mode QR code, or as the parts
+    /// `in_person_qr_parts` gives.
+    pub bytes: Vec<u8>,
+    /// The code is good until this height.
+    pub ttl_cutoff: u64,
+    /// `domain:port` of the reply mailbox the code names; `None` when it names none and the
+    /// answer comes back by scan.
+    pub mailbox: Option<String>,
+}
+
+/// A scanned in-person code, read by `EpicWallet::in_person_read`. Nothing is stored.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InPersonRead {
+    pub slate_id: String,
+    /// `S1` for a send to receive, `I1` for an invoice to pay.
+    pub stage: SlateStage,
+    pub amount: u64,
+    /// The fee of the send; for an invoice, the estimated fee of paying it, `None` when no
+    /// estimate could be made.
+    pub fee: Option<u64>,
+    /// The other party's message, as it gave it: show it as quoted text.
+    pub message: Option<String>,
+    /// The code is good until this height.
+    pub ttl_cutoff: u64,
+    /// The reply mailbox the answer would be posted to; `None` when the answer is shown back.
+    pub mailbox: Option<InPersonHost>,
+}
+
+/// The answer to a scanned in-person code, from `EpicWallet::in_person_pay` or
+/// `EpicWallet::in_person_receive`. It is stored.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InPersonReply {
+    pub tx_id: u32,
+    pub slate_id: String,
+    /// The sealed answer: post it with `EpicWallet::in_person_post`, or show it as one
+    /// byte-mode QR code, as `armored` text or as the parts `in_person_qr_parts` gives.
+    pub envelope: Vec<u8>,
+    /// `envelope` as `BEGINEPICTX.` text.
+    pub armored: String,
+    /// Four digits to show: the other party finalizes the answer that shows the same.
+    pub check_code: String,
+    pub mailbox: Option<InPersonHost>,
+}
+
+/// An answer taken for a code this wallet showed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InPersonAnswerView {
+    /// The answer's number among the answers to its code, from 1.
+    pub number: u32,
+    pub check_code: String,
+    /// An earlier answer to the code had the same check code: the user cannot tell the two
+    /// apart by it.
+    pub same_code: bool,
+    pub received_at_ms: i64,
+}
+
+/// A code this wallet showed and the answers taken for it, from
+/// `EpicWallet::in_person_answers`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InPersonCodeView {
+    pub tx_id: u32,
+    pub slate_id: String,
+    /// `S1` or `I1`.
+    pub stage: SlateStage,
+    pub ttl_cutoff: u64,
+    pub mailbox: Option<String>,
+    /// No more answers are taken.
+    pub closed: bool,
+    /// The number of the answer finalized.
+    pub finalized: Option<u32>,
+    pub answers: Vec<InPersonAnswerView>,
+}
+
+/// An answer taken by `EpicWallet::in_person_take` or `EpicWallet::in_person_take_qr`.
+/// Nothing was finalized.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InPersonTaken {
+    pub tx_id: u32,
+    pub slate_id: String,
+    /// `S1` or `I1`: the code the answer is for.
+    pub stage: SlateStage,
+    /// The answer's number among the answers to its code, from 1.
+    pub answer: u32,
+    pub check_code: String,
+    /// An earlier answer to the code had the same check code.
+    pub same_code: bool,
+    /// The same answer was taken before; nothing new was stored.
+    pub duplicate: bool,
+}
+
+/// How far the scanned parts of an in-person QR code got, from `in_person_qr_read`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InPersonQrProgress {
+    pub complete: bool,
+    pub received_fragments: u32,
+    pub fragment_count: u32,
+    /// Once `complete`: the code or answer, to pass to `EpicWallet::in_person_read` or
+    /// `EpicWallet::in_person_take`. Not yet checked.
+    pub bytes: Option<Vec<u8>>,
 }
 
 #[cfg(test)]

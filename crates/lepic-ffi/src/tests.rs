@@ -17,6 +17,7 @@ mod address_signature;
 mod contact;
 mod forwarded;
 mod http;
+mod in_person;
 mod invoice;
 mod kernel_lookup;
 mod listener;
@@ -1629,6 +1630,7 @@ async fn delete_wallet_removes_scratch_slates_and_the_tor_files() {
     let dir = fixture.dir.path();
     std::fs::write(dir.join(".lepic-0123456789abcdef.slate"), b"{}").unwrap();
     std::fs::write(dir.join("tor-expected"), []).unwrap();
+    std::fs::write(dir.join("native-direct"), []).unwrap();
     std::fs::create_dir_all(dir.join("tor").join("state")).unwrap();
     std::fs::write(dir.join("tor").join("state").join("guards"), b"x").unwrap();
     std::fs::write(dir.join("kept.txt"), b"x").unwrap();
@@ -1639,6 +1641,7 @@ async fn delete_wallet_removes_scratch_slates_and_the_tor_files() {
 
     assert!(!dir.join(".lepic-0123456789abcdef.slate").exists());
     assert!(!dir.join("tor-expected").exists());
+    assert!(!dir.join("native-direct").exists());
     assert!(!dir.join("tor").exists());
     assert!(dir.join("kept.txt").exists());
 }
