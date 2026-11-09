@@ -10,7 +10,7 @@ use std::time::Duration;
 use jiff::Timestamp;
 use lepic_contact::{
     Capabilities, ContactCard, Content, EncPublicKey, EncSecretKey, Hint, HintKey, HintRule,
-    MessageType, Purpose, SealedEnvelope, armor, dearmor, seal,
+    MessageType, Opened, Purpose, SealedEnvelope, armor, dearmor, seal,
 };
 use lepic_node::{NodeApi, Propagation};
 use lepic_slate::codec::{MediaType, WireSlate};
@@ -222,6 +222,7 @@ where
         channel: Channel,
     ) -> Result<String, ContactError> {
         let network = self.wallet.config().network;
+        let native_direct = self.wallet.config().native_direct;
         let net = contact_network(network);
         let session = self.wallet.session()?;
         let armored = self
@@ -263,15 +264,33 @@ where
                         sent_at: super::collect::send_time(ports.clock.now()),
                         ..Content::new(MessageType::Slate, stored.bytes)
                     };
-                    let envelope = seal(
-                        net,
-                        card.enc_key(),
-                        card.hint_rule(),
-                        &content,
-                        Some(&signing_key(&keys)),
-                        &mut LockedRng(&mut **ports.rng.lock()),
-                    )
-                    .map_err(ContactError::Encode)?;
+                    // A new slate through the mailbox goes native when both sides take it; an
+                    // answer posted here answers a request that came as text, in its format.
+                    let native = channel == Channel::Mailbox
+                        && matches!(stage, SlateStage::Standard1 | SlateStage::Invoice1)
+                        && super::native::wants_native(native_direct, &record);
+                    let mut guard = ports.rng.lock();
+                    let mut rng = LockedRng(&mut **guard);
+                    let envelope = if native {
+                        super::native::seal_native(
+                            network,
+                            &card,
+                            content,
+                            &signing_key(&keys),
+                            &mut rng,
+                        )?
+                    } else {
+                        seal(
+                            net,
+                            card.enc_key(),
+                            card.hint_rule(),
+                            &content,
+                            Some(&signing_key(&keys)),
+                            &mut rng,
+                        )
+                        .map_err(ContactError::Encode)?
+                    };
+                    drop(guard);
                     link_tx(repos, tx_id, contact_id)?;
                     Ok(armor(&envelope))
                 })
@@ -415,8 +434,9 @@ where
             .ok_or(ContactError::NotForThisInstall)?;
         let (opened, contact) = match opening {
             Opening::Contact { key, records } => {
-                let opened = sealed.open(&key).map_err(|_| ContactError::CannotOpen)?;
-                let contact = match &opened.sender {
+                let opened =
+                    super::native::open_any(&sealed, &key).map_err(|_| ContactError::CannotOpen)?;
+                let contact = match &opened.0.sender {
                     Some(sender) => Some(
                         records
                             .iter()
@@ -434,15 +454,31 @@ where
                 (opened, contact)
             }
             Opening::Reply { key } => {
-                let opened = sealed.open(&key).map_err(|_| ContactError::CannotOpen)?;
+                let opened =
+                    super::native::open_any(&sealed, &key).map_err(|_| ContactError::CannotOpen)?;
                 (opened, None)
             }
         };
-        let content = opened.content;
+        let ((Opened { content, .. }, native), contact) = (opened, contact);
         if content.kind != MessageType::Slate {
             return Err(ContactError::NotASlate);
         }
-        let wire = wire_text(content.body)?;
+        let body = if native {
+            // An anonymous native invoice is never taken: it needs the payer's consent
+            // (RFC 0003 5.9).
+            if contact.is_none()
+                && super::native::decode_native(network, &content.body)
+                    .is_some_and(|slate| slate.stage() == Stage::I1)
+            {
+                return Err(ContactError::NotASlate);
+            }
+            self.v3_of_native(&content.body)
+                .await?
+                .ok_or(ContactError::NotASlate)?
+        } else {
+            content.body
+        };
+        let wire = wire_text(body)?;
         let slate = legacy_codecs(network)
             .map_err(|_| ContactError::NotASlate)?
             .decode(&wire)

@@ -937,7 +937,7 @@ where
         if class.private().is_some() && channel.is_none() {
             return Ok(Handled::Stored);
         }
-        let Some(opened) = self.open_contact_envelope(
+        let Some((opened, native)) = self.open_contact_envelope(
             &sealed,
             &keys,
             &recorded,
@@ -995,17 +995,18 @@ where
         if current {
             self.forget_old_salt(contact_id).await?;
         }
-        self.dispatch_contact_message(relays, contact_id, opened, envelope, told)
+        self.dispatch_contact_message(relays, contact_id, opened, native, envelope, told)
             .await
     }
 
     /// Hands an opened message from a contact to the engine part that takes its kind, against
-    /// the contact's record as stored now.
+    /// the contact's record as stored now. `native` marks a `lepic.v1` slate.
     async fn dispatch_contact_message(
         &self,
         relays: &ContactRelays,
         contact_id: ContactId,
         opened: Opened,
+        native: bool,
         envelope: &[u8],
         told: &mut Told,
     ) -> Result<Handled, ContactError> {
@@ -1022,7 +1023,7 @@ where
         Ok(match opened.content.kind {
             MessageType::ContactUpdate => Handled::Stored,
             MessageType::Slate => {
-                self.take_contact_slate(&record, opened.content, told)
+                self.take_contact_slate(&record, opened.content, native, told)
                     .await?
             }
             MessageType::Notice => {
@@ -1042,7 +1043,8 @@ where
 
     /// Opens an envelope from a contact's mailbox, signed by the contact's `recorded` key and
     /// under `channel` for a private pairing; `None` drops it. The contact is told to the host
-    /// as sealed unopenable once a cycle, in `told`.
+    /// as sealed unopenable once a cycle, in `told`. The flag marks a native slate (type `0A`),
+    /// which only a base pairing carries.
     fn open_contact_envelope(
         &self,
         sealed: &SealedEnvelope<'_>,
@@ -1051,10 +1053,12 @@ where
         channel: Option<&lepic_contact::ChannelKey>,
         contact_id: ContactId,
         told: &mut std::collections::BTreeSet<ContactId>,
-    ) -> Option<Opened> {
+    ) -> Option<(Opened, bool)> {
         let opened = match channel {
-            None => sealed.open_from(&enc_secret(keys), recorded),
-            Some(channel) => sealed.open_from_psk(&enc_secret(keys), recorded, channel),
+            None => super::native::open_any_from(sealed, &enc_secret(keys), recorded),
+            Some(channel) => sealed
+                .open_from_psk(&enc_secret(keys), recorded, channel)
+                .map(|opened| (opened, false)),
         };
         let opened = match opened {
             Ok(opened) => opened,
@@ -1077,7 +1081,7 @@ where
                 return None;
             }
         };
-        if opened.sender.is_none() {
+        if opened.0.sender.is_none() {
             debug!("anonymous envelope in a contact mailbox dropped");
             return None;
         }

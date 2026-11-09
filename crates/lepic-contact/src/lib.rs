@@ -27,11 +27,12 @@ pub use lepic_seal::wire::verifying_key;
 pub use lepic_seal::{
     CARD_FORMAT, Capabilities, CardFields, ContactCard, ContactKind, ContactName, Content,
     DOMAIN_TAG, DomainClaim, DomainError, DomainKey, DomainName, ENVELOPE_VERSION, EncPublicKey,
-    EncSecretKey, HEADER_LEN, Hint, HintKey, HintRule, MAGIC, MAX_ARMOR_LEN, MAX_CARD_LEN,
-    MAX_DOMAIN_LEN, MAX_ENVELOPE_LEN, MAX_HOST_LEN, MAX_MAILBOX_LEN, MAX_NAME_LEN,
-    MAX_REFERENCE_LEN, MailboxAddress, MessageType, Network, Opened, Purpose, Reference, RelayHost,
-    SEALED_FILE_EXTENSION, SUITE, SealedEnvelope, SigningKey, VerifyingKey, armor, dearmor,
-    decode_content, looks_sealed, seal, seal_psk,
+    EncSecretKey, HEADER_LEN, Hint, HintKey, HintRule, KeyClass, MAGIC, MAX_ARMOR_LEN,
+    MAX_BODY_LEN, MAX_CARD_LEN, MAX_DOMAIN_LEN, MAX_ENVELOPE_LEN, MAX_HOST_LEN, MAX_MAILBOX_LEN,
+    MAX_NAME_LEN, MAX_REFERENCE_LEN, MailboxAddress, MessageType, NATIVE_SLATE, Network, Opened,
+    Purpose, Reference, RelayHost, SEALED_FILE_EXTENSION, SUITE, SealedEnvelope, SigningKey,
+    TxContent, TxKey, TxOpened, VerifyingKey, armor, dearmor, decode_content, looks_sealed, seal,
+    seal_psk, seal_tx,
 };
 pub use pairing::{
     Commitment, Confirm, ConfirmBody, ConfirmCode, InviteId, MAX_PAIRING_ENVELOPE_LEN, Nonce,

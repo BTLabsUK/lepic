@@ -268,6 +268,7 @@ pub(crate) fn queue_status(
         record,
         &class,
         Content::new(MessageType::Notice, text.into_bytes()),
+        false,
         now,
         &mut rng,
     )?;

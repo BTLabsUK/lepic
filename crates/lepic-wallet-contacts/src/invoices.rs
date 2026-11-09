@@ -77,6 +77,9 @@ struct InvoiceNote {
     purpose: Option<u8>,
     reference: Option<String>,
     expires: Option<u64>,
+    /// The invoice came as a native slate, so its answer goes native too.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    native: bool,
 }
 
 fn purpose_byte(purpose: Purpose) -> u8 {
@@ -159,13 +162,16 @@ fn contact_sender_key(contact_id: ContactId) -> String {
 }
 
 /// `content` with our current card, sealed at `now` and signed to the contact of `record` of
-/// `class`.
+/// `class`. With `native`, `content` is a slate as V3 JSON and goes as `lepic.v1` in a type
+/// `0A` envelope; a private pairing never carries one.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn seal_to_record(
     keychain: &lepic_keychain::Keychain,
     network: lepic_primitives::params::Network,
     record: &ContactRecord,
     class: &super::private::RecordClass,
     content: Content,
+    native: bool,
     now: Timestamp,
     rng: &mut LockedRng<'_>,
 ) -> Result<Vec<u8>, ContactError> {
@@ -179,6 +185,13 @@ pub(crate) fn seal_to_record(
         ..content
     };
     match class.private() {
+        None if native => {
+            let content = Content {
+                card: Some(own),
+                ..content
+            };
+            return super::native::seal_native(network, &card, content, &signing_key(&keys), rng);
+        }
         None => seal(
             net,
             card.enc_key(),
@@ -278,8 +291,9 @@ where
             .map(lepic_contact::Reference::new)
             .transpose()
             .map_err(ContactError::Name)?;
+        let native = super::native::wants_native(self.wallet.config().native_direct, &record);
         let envelope = self
-            .seal_for_contact(
+            .seal_slate_for_contact(
                 &record,
                 Content {
                     purpose: Some(details.purpose),
@@ -287,6 +301,7 @@ where
                     expires: details.expires,
                     ..Content::new(MessageType::Slate, wire.as_bytes().to_vec())
                 },
+                native,
             )
             .await?;
         let slate_uuid = uuid(slate.id());
@@ -393,7 +408,7 @@ where
         // The trust check and the payment take one turn of the contact engine, so no
         // collecting cycle can end the contact's trust between them.
         let turn = self.wallet.contact_turn().await;
-        let (parked, contact_id) = self
+        let (parked, contact_id, native) = self
             .contact_work(move |_, _| {
                 session.store.read(|repos| {
                     let parked = repos
@@ -410,7 +425,12 @@ where
                     if !trusted {
                         return Err(ContactError::NotVerified);
                     }
-                    Ok((parked, contact))
+                    // An I2 answers in the format its I1 came in.
+                    let native = repos
+                        .setting(&format!("{INVOICE_PREFIX}{slate_uuid}"))?
+                        .and_then(|text| serde_json::from_str::<InvoiceNote>(&text).ok())
+                        .is_some_and(|note| note.native);
+                    Ok((parked, contact, native))
                 })
             })
             .await?;
@@ -436,6 +456,7 @@ where
             slate_uuid,
             SlateStage::Invoice2,
             &paid.reply,
+            native,
         )
         .await?;
         drop(turn);
@@ -445,7 +466,7 @@ where
     }
 
     /// Links the slate and the transaction to the contact, seals `reply` to it, signed, and
-    /// queues it for the contact's mailbox.
+    /// queues it for the contact's mailbox; `native` as [`Self::send_answer`] takes it.
     async fn answer_contact(
         &self,
         contact_id: ContactId,
@@ -453,9 +474,11 @@ where
         slate_id: Uuid,
         stage: SlateStage,
         reply: &WireSlate,
+        native: bool,
     ) -> Result<(), ContactError> {
         self.link_exchange(contact_id, tx_id, slate_id).await?;
-        self.send_answer(contact_id, slate_id, stage, reply).await
+        self.send_answer(contact_id, slate_id, stage, reply, native)
+            .await
     }
 
     /// Records the exchange of `slate_id` and `tx_id` with the contact.
@@ -478,13 +501,15 @@ where
         .await
     }
 
-    /// Seals `reply` to the contact, signed, and queues it for the contact's mailbox.
+    /// Seals `reply` to the contact, signed, and queues it for the contact's mailbox. With
+    /// `native`, for a request that came native, it goes as `lepic.v1`.
     async fn send_answer(
         &self,
         contact_id: ContactId,
         slate_id: Uuid,
         stage: SlateStage,
         reply: &WireSlate,
+        native: bool,
     ) -> Result<(), ContactError> {
         let session = self.wallet.session()?;
         let record = self
@@ -497,9 +522,10 @@ where
             })
             .await?;
         let envelope = self
-            .seal_for_contact(
+            .seal_slate_for_contact(
                 &record,
                 Content::new(MessageType::Slate, reply.as_bytes().to_vec()),
+                native,
             )
             .await?;
         self.enqueue_for_contact(contact_id, slate_id, stage, &envelope)
@@ -512,6 +538,17 @@ where
         &self,
         record: &ContactRecord,
         content: Content,
+    ) -> Result<Vec<u8>, ContactError> {
+        self.seal_slate_for_contact(record, content, false).await
+    }
+
+    /// [`Self::seal_for_contact`], as `lepic.v1` in a type `0A` envelope with `native`, for a
+    /// slate as V3 JSON.
+    pub(crate) async fn seal_slate_for_contact(
+        &self,
+        record: &ContactRecord,
+        content: Content,
+        native: bool,
     ) -> Result<Vec<u8>, ContactError> {
         let network = self.wallet.config().network;
         let session = self.wallet.session()?;
@@ -533,6 +570,7 @@ where
             record,
             &class,
             content,
+            native,
             now,
             &mut rng,
         )
@@ -551,16 +589,28 @@ where
     /// Takes a sealed slate from a contact's mailbox (RFC 0002 11.2 and 12.5). An I1 parks only
     /// from a verified contact that may send invoices; an S1 is received and answered through the
     /// outbox; an S2 or I2 is finalized and posted.
+    /// A `native` slate is taken as its V3 JSON, and answered native.
     pub(crate) async fn take_contact_slate(
         &self,
         record: &ContactRecord,
         content: Content,
+        native: bool,
         told: &mut Told,
     ) -> Result<lepic_epicbox::Handled, ContactError> {
         use lepic_epicbox::Handled;
         let network = self.wallet.config().network;
         let contact_id = record.contact_id;
-        let Ok(text) = String::from_utf8(content.body) else {
+        let body = if native {
+            let Some(body) = self.v3_of_native(&content.body).await? else {
+                debug!("undecodable native slate from a contact dropped");
+                told.dropped = Some(QuarantineReason::UndecodableSlate);
+                return Ok(Handled::Stored);
+            };
+            body
+        } else {
+            content.body
+        };
+        let Ok(text) = String::from_utf8(body) else {
             told.dropped = Some(QuarantineReason::UndecodableSlate);
             return Ok(Handled::Stored);
         };
@@ -595,6 +645,7 @@ where
                         .reference
                         .map(|reference| reference.as_str().to_owned()),
                     content.expires,
+                    native,
                 )
                 .await?;
                 if !self.apply_early_notices(slate.id()).await {
@@ -603,7 +654,7 @@ where
                 Ok(Handled::Stored)
             }
             Stage::S1 => {
-                self.take_contact_payment(contact_id, &wire, &slate, content.purpose, told)
+                self.take_contact_payment(contact_id, &wire, &slate, content.purpose, native, told)
                     .await
             }
             Stage::S2 | Stage::I2
@@ -634,6 +685,7 @@ where
         wire: &WireSlate,
         slate: &lepic_slate::model::Slate,
         purpose: Option<Purpose>,
+        native: bool,
         told: &mut Told,
     ) -> Result<lepic_epicbox::Handled, ContactError> {
         use lepic_epicbox::Handled;
@@ -686,6 +738,7 @@ where
                     uuid(slate.id()),
                     SlateStage::Standard2,
                     &received.reply,
+                    native,
                 )
                 .await?;
             }
@@ -970,6 +1023,7 @@ where
         .await
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn park_contact_invoice(
         &self,
         record: &ContactRecord,
@@ -978,6 +1032,7 @@ where
         purpose: Option<Purpose>,
         reference: Option<String>,
         expires: Option<u64>,
+        native: bool,
     ) -> Result<(), ContactError> {
         let contact_id = record.contact_id;
         let session = self.wallet.session()?;
@@ -988,6 +1043,7 @@ where
             purpose: purpose.map(purpose_byte),
             reference: reference.clone(),
             expires,
+            native,
         };
         let parked = self
             .contact_work(move |ports, _| {

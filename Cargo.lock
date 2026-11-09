@@ -1605,6 +1605,7 @@ dependencies = [
  "lepic-keychain",
  "lepic-legacy-slate",
  "lepic-methods",
+ "lepic-native-slate",
  "lepic-node",
  "lepic-primitives",
  "lepic-slate",

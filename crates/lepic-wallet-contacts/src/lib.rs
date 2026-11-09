@@ -21,6 +21,7 @@ mod key_schedule;
 mod keycheck;
 mod keys;
 mod manage;
+mod native;
 mod outbox;
 mod pairing;
 mod payload;
