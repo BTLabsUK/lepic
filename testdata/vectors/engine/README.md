@@ -1,13 +1,16 @@
 # Engine vectors
 
-Generator: `conformance/vectors/src/engine/`. Consumers: W-02 (selection), W-06 (restore), W-07
-(refresh), through `MockNode` (N-01) for the node side.
+Generator: `conformance/vectors/src/engine/`. The vectors cover output selection, wallet restore
+and wallet refresh. The restore and refresh sessions serve their node side through `MockNode`.
+The envelope and encoding rules are in [../README.md](../README.md).
 
-Every case drives an upstream `epic-wallet` instance (`DefaultLCProvider` over its sqlite backend)
-through its public owner and foreign API. `upstream` names the wallet commit, which pins the node
-commit in its own lockfile. Wallets use an empty password and derive their keychain with
-`is_floonet = false`, which is what `epic-wallet` does on every chain type except floonet. The chain
-type is `AutomatedTesting`, so coinbase maturity is 3 blocks.
+Every case drives an upstream `epic-wallet` v4.1.0 instance (`DefaultLCProvider` over its sqlite
+backend) through its public owner and foreign API. `upstream` names the wallet commit, which pins
+the node commit in its own lockfile. Wallets use an empty password and derive their keychain with
+`is_floonet = false`, which is what `epic-wallet` does on every chain type except floonet. The
+chain type is `AutomatedTesting`, so coinbase maturity is 3 blocks.
+
+Files: `selection_*` (13 cases), `refresh_*` (6) and `restore_full_scan`.
 
 `selection_*`: one stored UTXO set and one send request each. `inputs.utxos` lists the outputs in
 the order they were stored; `index` is the position in that list, and upstream breaks ties between
