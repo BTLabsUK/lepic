@@ -1,0 +1,46 @@
+{
+  "schema": 1,
+  "area": "slates_native",
+  "name": "send_file_height_locked_s1_floonet",
+  "generator": "conformance/vectors/slates/native",
+  "upstream": {
+    "repo": "https://github.com/EpicCash/epic-wallet",
+    "commit": "845b3fcf4df12ed0139929c62157015447a9d063"
+  },
+  "inputs": {
+    "case": "send_file_height_locked",
+    "stage": "S1",
+    "network": "floonet",
+    "base": "slates/send_file_height_locked_s1_v3",
+    "tail": {
+      "unknown": []
+    },
+    "v3_json": "{\"version_info\":{\"version\":3,\"orig_version\":3,\"block_header_version\":6},\"num_participants\":2,\"id\":\"0436430c-2b02-624c-2032-570501212b11\",\"tx\":{\"offset\":\"d202964900000000d302964900000000d402964900000000d502964900000000\",\"body\":{\"inputs\":[{\"features\":\"Coinbase\",\"commit\":\"0889d62841941eba3c354c826b7b5f4a9d14cd908928f3960bce9aca686f3cfc88\"}],\"outputs\":[{\"features\":\"Plain\",\"commit\":\"08f9cb5d32faba953f9906a67058e6696107df66734a52f71d4be9b51811ca98b5\",\"proof\":\"bffc8747163dc51f26809ba9ed5554f3b3b9debbdf0c9275c2c92e359d548dff7c80023a2e727f3a8b36498a42aca9d5654c79740482e6e5810f735c30e096bb081e208b3f3f9892a77738ff93dab66b3872dd4453f1f9dc10cc8bf0602208f4f261ee51d0197ddea06596fe3575937f28a0af4ba4922419442374b8e8350008ceb7371727701a0714d405f5fd2797c648ef65f030684975fa06553288a7cdc567b5747018fb03f751a02a743baedfbfebae6bffb54ca962cdb8a96f87a8d28cc6d725610e7a38ef8829d98797bcc2a5267bf24b91d5b75f18be22c59173469fca1f272185309cc5b699264c4ad5f1b8422b31c31341043721fab7ac9a62d31ba8f3bf885fa7d86460f1e765cf1cf2d61c9839ce4d1b419b74734943cdc6333ba63ba3260bdfaae6e277752c992ca4bea1a12df6aa09f79a1219c31e1f81365eb0e95dccfeba21444803424a719d101f3428fda6d99a700ebb902f812c3648203c0500a544c2053995bf54978c1df8f5a83e3c2e934f227763c17d0fcdbc136e5f53073a6bf2e724ab2f0f41ca89a452f752580783b4356ab3ac89b16193a2c44c9bc17fe06fc94c40c8ca2cc3919e871550f0f6b3d248bb276de78e5a115256e130ef6839cf42914391481a0e257850eb26bdef33be3d6a267e6df9cffe697c0833504231c61ffaedd836bd5e4c80bd319326396a8c7b0c32bdab5acab71fb6eccad59bbbe5f1ae18e1ca782370b111e458001446d64ef78fedd0f2d0fbcd39625490443cdfa247b66556a23f77d767655651c98cf9f928ad861b6ffdf4cf677b64cea1be3a9f75b1131b71bec9d5d713b67792c7a1ae49955bdc31d079215d579fc830c332fdb1c4ac733cda053c108824e4644491e6d783d8811ce1fdebd0d594ae12646356abf1fc7f6bad1a92add9748225fedbafe109485058ea5ed95699d56a\"}],\"kernels\":[{\"features\":\"HeightLocked\",\"fee\":\"800000\",\"lock_height\":\"5\",\"excess\":\"000000000000000000000000000000000000000000000000000000000000000000\",\"excess_sig\":\"00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000\"}]}},\"amount\":\"190000000\",\"fee\":\"800000\",\"height\":\"4\",\"lock_height\":\"5\",\"ttl_cutoff_height\":null,\"participant_data\":[{\"id\":\"0\",\"public_blind_excess\":\"03230f415a3c22aa05e9949f4c3b97b58a269b803effcadb4ba52315aba45b45a1\",\"public_nonce\":\"031b84c5567b126440995d3ed5aaba0565d71e1834604819ff9c17f5e9d5dd078f\",\"part_sig\":null,\"message\":null,\"message_sig\":null}],\"payment_proof\":null}"
+  },
+  "expected": {
+    "size": 161,
+    "lepic_v1": "8945534c010101000200060436430c2b02624c2032570501212b11000000000b532b8000000000000c350000000000000000040000000000000005d202964900000000d302964900000000d402964900000000d50296490000000003230f415a3c22aa05e9949f4c3b97b58a269b803effcadb4ba52315aba45b45a1031b84c5567b126440995d3ed5aaba0565d71e1834604819ff9c17f5e9d5dd078f00000000",
+    "view": {
+      "amount": "190000000",
+      "fee": "800000",
+      "flags": [],
+      "header_version": 6,
+      "height": "4",
+      "id": "0436430c-2b02-624c-2032-570501212b11",
+      "inputs": [],
+      "kernel_features": "height_locked",
+      "lock_height": "5",
+      "network": "floonet",
+      "offset": "d202964900000000d302964900000000d402964900000000d502964900000000",
+      "outputs": [],
+      "sender": {
+        "public_blind_excess": "03230f415a3c22aa05e9949f4c3b97b58a269b803effcadb4ba52315aba45b45a1",
+        "public_nonce": "031b84c5567b126440995d3ed5aaba0565d71e1834604819ff9c17f5e9d5dd078f"
+      },
+      "stage": "S1",
+      "tail": {
+        "unknown": []
+      }
+    }
+  }
+}

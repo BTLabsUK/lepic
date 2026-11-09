@@ -1,0 +1,51 @@
+{
+  "schema": 1,
+  "area": "slates_native",
+  "name": "send_file_payment_proof_s1_mainnet",
+  "generator": "conformance/vectors/slates/native",
+  "upstream": {
+    "repo": "https://github.com/EpicCash/epic-wallet",
+    "commit": "845b3fcf4df12ed0139929c62157015447a9d063"
+  },
+  "inputs": {
+    "case": "send_file_payment_proof",
+    "stage": "S1",
+    "network": "mainnet",
+    "base": "slates/send_file_payment_proof_s1_v3",
+    "tail": {
+      "unknown": []
+    },
+    "v3_json": "{\"version_info\":{\"version\":3,\"orig_version\":3,\"block_header_version\":6},\"num_participants\":2,\"id\":\"0436430c-2b02-624c-2032-570501212b04\",\"tx\":{\"offset\":\"d202964900000000d302964900000000d402964900000000d502964900000000\",\"body\":{\"inputs\":[{\"features\":\"Coinbase\",\"commit\":\"0889d62841941eba3c354c826b7b5f4a9d14cd908928f3960bce9aca686f3cfc88\"}],\"outputs\":[{\"features\":\"Plain\",\"commit\":\"09adb81eec60c0c4ca36d9fa351dc871d3c82d73a6a963ed7f2bf5b57d38648e36\",\"proof\":\"77507ffc0ca182013944d7717f95e1b08208d3d56aea80594bb8ce825c4c9ea6f2a36592044352089f5dbe780597fe45f5eb3c11d3ac8212408cb3bca8dea1de0eb0ff352b50ef9178a572038ff4973ddd0b99fb3d3e5fce66d95f6f6eef185f3870852ac0b74f43768acd453d95b0a515bc57421adab7f7fa5122a7f01009dc82bf646def2e494d26ac818a4e62ec133527f3065a31b763e7abfbef56c1baf5c873250f55cd4a61b5464415c8bc18367b4249b393314f815dd46cb1522a5f5a02272c8399adbe4e5a152ca1babc2aeefe9408e185307edbd04d10f2ac3094b055507b927e0b824d1694a8ba9d018ad913012f12d97b0068812be738175d024e7494187145d57e689023ef455af3e4f47983e9e925f7c2fc489b53f9e613ace933da773b389e67cd8402a017663f37096e58ebcb98c510c83daf19805211b4c29ff22a64a619b3d6b32621f3b96265f223c1843002593a7be6fbbbef382aed0fa89301b7dc780936b8095951117cca77d9c31d2773ed416e9e48226ac2a08d58c37c7e7e9d88276cc6377e362376894314a22a04536532bb933efdbe215e29b270d937ba6bf20502aa1cf068ea5aa79d1dd7934e0aab933fe322e5fda281d035b8bbaa044d5f648a818ad7dfb1a439d6301baf65aae7d98ca083c21512d4a601dbd0ab53df7c5484a6aed95c8ce1cdb815547ec57fc4b92d22170d8581c0a18531dd4922dd0fa3d9fd056f864d84311fabc81ac86e8305a9174c3476ec44bc2403e97c32103ea6ac19364a6ad9b97b3026db304b738fc39c163fa2dcfe06efc54fadda0a65c4075b80fa3f96381a366ecd3106e3e96c2750192925d195ec047bc3136dd05e8a45ec8493b823bad8a9218e7b76e91e170ea5be29036e1f6eb9eafca717992513c34e51b3fcd9dfcc0e5739e4ea14609391f4c21d7821a72ab021080753\"}],\"kernels\":[{\"features\":\"Plain\",\"fee\":\"800000\",\"lock_height\":\"0\",\"excess\":\"000000000000000000000000000000000000000000000000000000000000000000\",\"excess_sig\":\"00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000\"}]}},\"amount\":\"140000000\",\"fee\":\"800000\",\"height\":\"4\",\"lock_height\":\"0\",\"ttl_cutoff_height\":null,\"participant_data\":[{\"id\":\"0\",\"public_blind_excess\":\"02ea1e922465b0c35420c71a905efbb1406a8fe4be3ed57b3f339ec7acd723a092\",\"public_nonce\":\"031b84c5567b126440995d3ed5aaba0565d71e1834604819ff9c17f5e9d5dd078f\",\"part_sig\":null,\"message\":null,\"message_sig\":null}],\"payment_proof\":{\"sender_address\":\"fd5c6c0ad1e51fbc1d58ca746c29585795368ec6727ae4a74b9082cda91e7fd0\",\"receiver_address\":\"b03c84d7f781b536c96668d93b37768c7812b76449c17aaf0a9d11a003c3c737\",\"receiver_signature\":null}}"
+  },
+  "expected": {
+    "size": 217,
+    "lepic_v1": "8945534c010001040000060436430c2b02624c2032570501212b040000000008583b0000000000000c35000000000000000004d202964900000000d302964900000000d402964900000000d50296490000000002ea1e922465b0c35420c71a905efbb1406a8fe4be3ed57b3f339ec7acd723a092031b84c5567b126440995d3ed5aaba0565d71e1834604819ff9c17f5e9d5dd078ffd5c6c0ad1e51fbc1d58ca746c29585795368ec6727ae4a74b9082cda91e7fd0b03c84d7f781b536c96668d93b37768c7812b76449c17aaf0a9d11a003c3c73700000000",
+    "view": {
+      "amount": "140000000",
+      "fee": "800000",
+      "flags": [
+        "proof"
+      ],
+      "header_version": 6,
+      "height": "4",
+      "id": "0436430c-2b02-624c-2032-570501212b04",
+      "inputs": [],
+      "kernel_features": "plain",
+      "network": "mainnet",
+      "offset": "d202964900000000d302964900000000d402964900000000d502964900000000",
+      "outputs": [],
+      "payment_proof": {
+        "receiver_address": "b03c84d7f781b536c96668d93b37768c7812b76449c17aaf0a9d11a003c3c737",
+        "sender_address": "fd5c6c0ad1e51fbc1d58ca746c29585795368ec6727ae4a74b9082cda91e7fd0"
+      },
+      "sender": {
+        "public_blind_excess": "02ea1e922465b0c35420c71a905efbb1406a8fe4be3ed57b3f339ec7acd723a092",
+        "public_nonce": "031b84c5567b126440995d3ed5aaba0565d71e1834604819ff9c17f5e9d5dd078f"
+      },
+      "stage": "S1",
+      "tail": {
+        "unknown": []
+      }
+    }
+  }
+}

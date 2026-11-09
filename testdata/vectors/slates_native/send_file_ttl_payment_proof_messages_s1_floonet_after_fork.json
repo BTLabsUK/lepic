@@ -1,0 +1,59 @@
+{
+  "schema": 1,
+  "area": "slates_native",
+  "name": "send_file_ttl_payment_proof_messages_s1_floonet_after_fork",
+  "generator": "conformance/vectors/slates/native",
+  "upstream": {
+    "repo": "https://github.com/EpicCash/epic-wallet",
+    "commit": "845b3fcf4df12ed0139929c62157015447a9d063"
+  },
+  "inputs": {
+    "case": "send_file_ttl_payment_proof_messages",
+    "stage": "S1",
+    "network": "floonet",
+    "base": "slates/send_file_ttl_payment_proof_messages_s1_v3",
+    "height_shift": "25800",
+    "tail": {
+      "unknown": []
+    },
+    "v3_json": "{\"version_info\":{\"version\":3,\"orig_version\":3,\"block_header_version\":7},\"num_participants\":2,\"id\":\"0436430c-2b02-624c-2032-570501212b05\",\"tx\":{\"offset\":\"d202964900000000d302964900000000d402964900000000d502964900000000\",\"body\":{\"inputs\":[{\"features\":\"Coinbase\",\"commit\":\"0889d62841941eba3c354c826b7b5f4a9d14cd908928f3960bce9aca686f3cfc88\"}],\"outputs\":[{\"features\":\"Plain\",\"commit\":\"0928255ae642261a6466521e4ab4be66ebc03809a1fa5fe71fddff016dfd0643de\",\"proof\":\"17a09156aaa7fa71ffaf8cd0fb6170effc5098ddbe8322dd21b5635bf4d2909160ff5ba12114dc757c2b7666f90ed0190374603969046c956fd6cc1ed7af72d40d0d2b528589dd7931b89eaf4d44f75947776ce6241fb4c1981ffe2c5852c628a21f6c8077aac9d91b832b695f8064633356c2aeaee09a65735bab0903c3b50e8d1cacaba85363ac7a19a8d8a7e337b60f43b831873ab4a6351772211673cf7980bddb2e2c2e7d38ee05516623309ca52fc55a05e0012c0cca020405b93ca87103ac771f72b7f75856bb5a8eb06f0ca9cfe8283d26af09279051854eea7650668cff900c16e2e502080fb2447c43da738c66ff872f73ef5104d516d740e11eb44ffa44f00b7a128a384e716ad67dfeeb2ddfd7f1ce6b483c9c0459294da8270f130adcdf7b6a2d7d95dabbda342d5ec8de0000066b70bc14b7c9632df194cd801dcb4e402c2eaf51ffb19b4299c159a592b98c924cc735f48a721b48d6106bd401690027e0fe63782e0576b26cb0dffe53493455fdabbb13bcc94ea365be2a3bb67fab3f3c43a9557502b8c55cfeb303c35eec5cb8255f90a2d709ea85b7e8e3603c245f7e131cf842e01717a3020752c71d7fb3a23557de81433e6c86dfaa190ad225b55336e0ab43082ac59efc1c4bc427da3398b240827a180244d9d7cf1ce818708f5c340e036e6f8d586e1c829b23b994259eec799cabd8b7e26264cf1d91286358e03939437e10515452b7d8dab45f50e75d24367449a33212e02f23ac4b626a9a9bf97f4e8023f5b3c4353483f78401d6b7f4493dadfc48ebc26f479e99718a97b68db03aca8e4e06381bdb6452cdd51b830968825fdcf868ff19ac00baffe3ba38df01cb43ca90558b1b0776773906e0099a14ea1db579f419cf8790e7d001eca333cfcb6fb2e1e3f5a065702f11ce4fb68d3af66fc4fc1bd059098a378cda\"}],\"kernels\":[{\"features\":\"Plain\",\"fee\":\"800000\",\"lock_height\":\"0\",\"excess\":\"000000000000000000000000000000000000000000000000000000000000000000\",\"excess_sig\":\"00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000\"}]}},\"amount\":\"150000000\",\"fee\":\"800000\",\"height\":\"25804\",\"lock_height\":\"0\",\"ttl_cutoff_height\":\"25834\",\"participant_data\":[{\"id\":\"0\",\"public_blind_excess\":\"03e4d89b21b8e986c821a96b40c583aac6cc442c77f94b6a44115dad6eacbbf5be\",\"public_nonce\":\"031b84c5567b126440995d3ed5aaba0565d71e1834604819ff9c17f5e9d5dd078f\",\"part_sig\":null,\"message\":\"lepic vector: sender message\",\"message_sig\":\"8f07ddd5e9f5179cff19486034181ed76505baaad53e5d994064127b56c5841bf86e63ca0f17559b987dd88ec43aec6c7c820f5f1de0217087d5f058f163553a\"}],\"payment_proof\":{\"sender_address\":\"fd5c6c0ad1e51fbc1d58ca746c29585795368ec6727ae4a74b9082cda91e7fd0\",\"receiver_address\":\"b03c84d7f781b536c96668d93b37768c7812b76449c17aaf0a9d11a003c3c737\",\"receiver_signature\":null}}"
+  },
+  "expected": {
+    "size": 319,
+    "lepic_v1": "8945534c0101010e0000070436430c2b02624c2032570501212b050000000008f0d18000000000000c350000000000000064cc00000000000064ead202964900000000d302964900000000d402964900000000d50296490000000003e4d89b21b8e986c821a96b40c583aac6cc442c77f94b6a44115dad6eacbbf5be031b84c5567b126440995d3ed5aaba0565d71e1834604819ff9c17f5e9d5dd078f001c6c6570696320766563746f723a2073656e646572206d6573736167658f07ddd5e9f5179cff19486034181ed76505baaad53e5d994064127b56c5841bf86e63ca0f17559b987dd88ec43aec6c7c820f5f1de0217087d5f058f163553afd5c6c0ad1e51fbc1d58ca746c29585795368ec6727ae4a74b9082cda91e7fd0b03c84d7f781b536c96668d93b37768c7812b76449c17aaf0a9d11a003c3c73700000000",
+    "view": {
+      "amount": "150000000",
+      "fee": "800000",
+      "flags": [
+        "ttl",
+        "proof",
+        "sender_message"
+      ],
+      "header_version": 7,
+      "height": "25804",
+      "id": "0436430c-2b02-624c-2032-570501212b05",
+      "inputs": [],
+      "kernel_features": "plain",
+      "network": "floonet",
+      "offset": "d202964900000000d302964900000000d402964900000000d502964900000000",
+      "outputs": [],
+      "payment_proof": {
+        "receiver_address": "b03c84d7f781b536c96668d93b37768c7812b76449c17aaf0a9d11a003c3c737",
+        "sender_address": "fd5c6c0ad1e51fbc1d58ca746c29585795368ec6727ae4a74b9082cda91e7fd0"
+      },
+      "sender": {
+        "message": {
+          "signature": "8f07ddd5e9f5179cff19486034181ed76505baaad53e5d994064127b56c5841bf86e63ca0f17559b987dd88ec43aec6c7c820f5f1de0217087d5f058f163553a",
+          "text": "lepic vector: sender message"
+        },
+        "public_blind_excess": "03e4d89b21b8e986c821a96b40c583aac6cc442c77f94b6a44115dad6eacbbf5be",
+        "public_nonce": "031b84c5567b126440995d3ed5aaba0565d71e1834604819ff9c17f5e9d5dd078f"
+      },
+      "stage": "S1",
+      "tail": {
+        "unknown": []
+      },
+      "ttl_cutoff_height": "25834"
+    }
+  }
+}

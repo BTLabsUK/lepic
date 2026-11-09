@@ -1,0 +1,51 @@
+{
+  "schema": 1,
+  "area": "slates_native",
+  "name": "invoice_file_messages_i1_mainnet",
+  "generator": "conformance/vectors/slates/native",
+  "upstream": {
+    "repo": "https://github.com/EpicCash/epic-wallet",
+    "commit": "845b3fcf4df12ed0139929c62157015447a9d063"
+  },
+  "inputs": {
+    "case": "invoice_file_messages",
+    "stage": "I1",
+    "network": "mainnet",
+    "base": "slates/invoice_file_messages_i1_v3",
+    "tail": {
+      "unknown": []
+    },
+    "v3_json": "{\"version_info\":{\"version\":3,\"orig_version\":3,\"block_header_version\":6},\"num_participants\":2,\"id\":\"0436430c-2b02-624c-2032-570501212b0e\",\"tx\":{\"offset\":\"d202964900000000d302964900000000d402964900000000d502964900000000\",\"body\":{\"inputs\":[],\"outputs\":[{\"features\":\"Plain\",\"commit\":\"09f35bc32950587173564e78578e49f09054dcf2f54e6c70b1f6d75649699c5bc8\",\"proof\":\"0afa24fe2dc34034616ac705fc46b171c6afb0e0934176a8df56d8396560ceb057c9ccea9e1b12e83b6cf46320d49a4d5fe82221f0784f5dd9f1a948bd9037db0eff59c9689b2a5ef0c47f6f3fe748d89a77d865db6cc3cf7dd1db3467de3718e7d29b79b3c6025646554823dc634d24ef69ac9d7fe1f0b23bfada27aaaf3a0c335cfb650ac43535e90fb5fa6ccc9834f71076212f0cf8ba37ffd840f6dafd73bc429c2e3e60ea77a90cb540416d2d085b8eb41e8097256d15158fdfd3c97d5afa5a6d805fd188125c115dfc20643da59dc2294f3d2d188acfa0f3ad76c2f32570ab1d50bf905a93260188821d0c89ad5162830fae7f20e0150605d4cea3ec0378ef52bc85119e1b77f271dff13c75cd88af96579fda62deabbf9c5b9ba1a2380f5f96bcc9c6f91580f95a84d30dd0967f4ad466f4f35b35d7b9b756dbd83dad21c50be8463b3d65cdf6ac73fd04f7a4247e572615ecfbe1698b1013dea4a0fa2835006cb96bcbc606a8f4f146eeba21786f5b36a3d977dfb44442639e3b74c3b81b9a9600ce5d79fffabc4f998a4cb953fba03face033aca1cdf8d0045cc2d81b8a08c74b984fc6742e932bce08f5bb3275b39f14c280b9d42b03b8b56d55f4fd1ea7a08e8bece4732eb91e256f6952891449f8ce2ebef7b3ca0aeeeba4b3455946585e7effc8cdd3bc20221cd816808c927c4354d40cb31e147146e53dba36d97332806324c3f701af8fb37a4264e5b4d334296b4fd499a5410bcde0e4abffb7d6a2f578494daf63f9af798807215a667d836e90ad708f992e26da21a82fc8966696ef45f0c2461980772fbe4b016bee84150255001842f343ddb4b887f75dc77513417ee460d6696a7860616799bb5d51a3e2c5899e6d4cc209844556f33c4b4ed44b28962772117ddc059c53d860c47a4371c70fab676a15d00f20f90f843413f5\"}],\"kernels\":[{\"features\":\"Plain\",\"fee\":\"0\",\"lock_height\":\"0\",\"excess\":\"000000000000000000000000000000000000000000000000000000000000000000\",\"excess_sig\":\"00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000\"}]}},\"amount\":\"310000000\",\"fee\":\"0\",\"height\":\"4\",\"lock_height\":\"0\",\"ttl_cutoff_height\":null,\"participant_data\":[{\"id\":\"1\",\"public_blind_excess\":\"02304604a743171614ddfbd485da20fa3eb8d7514763014212f9d452b1f9cc78a4\",\"public_nonce\":\"031b84c5567b126440995d3ed5aaba0565d71e1834604819ff9c17f5e9d5dd078f\",\"part_sig\":null,\"message\":\"lepic vector: receiver message\",\"message_sig\":\"8f07ddd5e9f5179cff19486034181ed76505baaad53e5d994064127b56c5841b79c488573a565714e795c50393d08850be5b9b38842cfb2e32e38a62ac4832b5\"}],\"payment_proof\":null}"
+  },
+  "expected": {
+    "size": 249,
+    "lepic_v1": "8945534c010004100000060436430c2b02624c2032570501212b0e00000000127a398000000000000000000000000000000004d202964900000000d302964900000000d402964900000000d50296490000000002304604a743171614ddfbd485da20fa3eb8d7514763014212f9d452b1f9cc78a4031b84c5567b126440995d3ed5aaba0565d71e1834604819ff9c17f5e9d5dd078f001e6c6570696320766563746f723a207265636569766572206d6573736167658f07ddd5e9f5179cff19486034181ed76505baaad53e5d994064127b56c5841b79c488573a565714e795c50393d08850be5b9b38842cfb2e32e38a62ac4832b500000000",
+    "view": {
+      "amount": "310000000",
+      "fee": "0",
+      "flags": [
+        "receiver_message"
+      ],
+      "header_version": 6,
+      "height": "4",
+      "id": "0436430c-2b02-624c-2032-570501212b0e",
+      "inputs": [],
+      "kernel_features": "plain",
+      "network": "mainnet",
+      "offset": "d202964900000000d302964900000000d402964900000000d502964900000000",
+      "outputs": [],
+      "receiver": {
+        "message": {
+          "signature": "8f07ddd5e9f5179cff19486034181ed76505baaad53e5d994064127b56c5841b79c488573a565714e795c50393d08850be5b9b38842cfb2e32e38a62ac4832b5",
+          "text": "lepic vector: receiver message"
+        },
+        "public_blind_excess": "02304604a743171614ddfbd485da20fa3eb8d7514763014212f9d452b1f9cc78a4",
+        "public_nonce": "031b84c5567b126440995d3ed5aaba0565d71e1834604819ff9c17f5e9d5dd078f"
+      },
+      "stage": "I1",
+      "tail": {
+        "unknown": []
+      }
+    }
+  }
+}

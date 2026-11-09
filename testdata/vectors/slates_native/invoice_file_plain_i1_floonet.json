@@ -1,0 +1,45 @@
+{
+  "schema": 1,
+  "area": "slates_native",
+  "name": "invoice_file_plain_i1_floonet",
+  "generator": "conformance/vectors/slates/native",
+  "upstream": {
+    "repo": "https://github.com/EpicCash/epic-wallet",
+    "commit": "845b3fcf4df12ed0139929c62157015447a9d063"
+  },
+  "inputs": {
+    "case": "invoice_file_plain",
+    "stage": "I1",
+    "network": "floonet",
+    "base": "slates/invoice_file_plain_i1_v3",
+    "tail": {
+      "unknown": []
+    },
+    "v3_json": "{\"version_info\":{\"version\":3,\"orig_version\":3,\"block_header_version\":6},\"num_participants\":2,\"id\":\"0436430c-2b02-624c-2032-570501212b0d\",\"tx\":{\"offset\":\"d202964900000000d302964900000000d402964900000000d502964900000000\",\"body\":{\"inputs\":[],\"outputs\":[{\"features\":\"Plain\",\"commit\":\"096ca6c33669b5c43184187dbb642cf214440746c23bad3068d936e861f232b74e\",\"proof\":\"bc954b8d4a2bdf07897c5bcbbbc4071cc2909c9ebde423ae4e593006dc7a64b77d4c9eb6b1ef2a9cba3e3a32a0f1c10c9eee72ee41b050136f6df72d7f8e99b8094bc8c870f4e929254634536996ceb4b0ffd3b60f1cd0368a376af39fefbdc2d8f272ae8fad96761bf5ace0873e63418cf8d0ca5d33a71b3b602a8ef9d62ff5fbf498d6958e66944c93122a09097ec714dd714decb9892f1718d2d0eeaffc2b7f11eba7aed9341eeec8968b26f38eacbb9d653b6a46a40b1588d03fab70d0fce78d488a12026c9a94c6c250f1c0947eaed65ba8673877e40bdc6fdd794f9add2b6a578d435c022d13a3b5145875ab4f5767375ed0655e8d534f94e30a8f90c7dda3b5243f34f517ed3f71de70115c7e44c338e53ca664bc3285ad1c2f3369cb6c4c600f8c7ea6773147ceee7b1cdfdfcebe719afa25287fc8b8b120ba5a0139f6dc909f0a11732f2ac349e2816f04048e3f63139a36dd0ebcc37743f53286aa8be80164f69946d31cf1f0b5afc85d799640f2ab78813315a81090f667585ccbc688ce209b714d7bcdc604e32f6b83c0548769fee169cd3a2e3215972bfea5d35414d723849045697eaf0a38831ee552842263efb8a840d1fb5784f94d418f3a81135f0d6dd06b5fe78c0b94ad51ec3367b6516b4b6c3c89e1c132602db781b5331ea288598647944aba4fc777f6de3b9a50975e11e459002af92aa23a456546559b30be899607942f80061270df350a44899ff39843c1bf302331ec2ad9654f8842751062f4dbc9078ef5e67bbe7d6631e1efafbbce012be2cd252ee96e5060a2f185b2b00cb6489b1788c9a57ac55245348e26996af54500088f6b1882e40c4984d25befda52f0d6701479a08203956046295b10c481f2e0732176a6f10411c73bb20571b165691b514ad28902e51f6b88f338093c1f36b865f474a106405b6274d0\"}],\"kernels\":[{\"features\":\"Plain\",\"fee\":\"0\",\"lock_height\":\"0\",\"excess\":\"000000000000000000000000000000000000000000000000000000000000000000\",\"excess_sig\":\"00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000\"}]}},\"amount\":\"300000000\",\"fee\":\"0\",\"height\":\"4\",\"lock_height\":\"0\",\"ttl_cutoff_height\":null,\"participant_data\":[{\"id\":\"1\",\"public_blind_excess\":\"0359f68d6611fe4e48d5a0191e06290c86171cbb4fab44fef8d8cd8714f4b8e9d1\",\"public_nonce\":\"031b84c5567b126440995d3ed5aaba0565d71e1834604819ff9c17f5e9d5dd078f\",\"part_sig\":null,\"message\":null,\"message_sig\":null}],\"payment_proof\":null}"
+  },
+  "expected": {
+    "size": 153,
+    "lepic_v1": "8945534c010104000000060436430c2b02624c2032570501212b0d0000000011e1a30000000000000000000000000000000004d202964900000000d302964900000000d402964900000000d5029649000000000359f68d6611fe4e48d5a0191e06290c86171cbb4fab44fef8d8cd8714f4b8e9d1031b84c5567b126440995d3ed5aaba0565d71e1834604819ff9c17f5e9d5dd078f00000000",
+    "view": {
+      "amount": "300000000",
+      "fee": "0",
+      "flags": [],
+      "header_version": 6,
+      "height": "4",
+      "id": "0436430c-2b02-624c-2032-570501212b0d",
+      "inputs": [],
+      "kernel_features": "plain",
+      "network": "floonet",
+      "offset": "d202964900000000d302964900000000d402964900000000d502964900000000",
+      "outputs": [],
+      "receiver": {
+        "public_blind_excess": "0359f68d6611fe4e48d5a0191e06290c86171cbb4fab44fef8d8cd8714f4b8e9d1",
+        "public_nonce": "031b84c5567b126440995d3ed5aaba0565d71e1834604819ff9c17f5e9d5dd078f"
+      },
+      "stage": "I1",
+      "tail": {
+        "unknown": []
+      }
+    }
+  }
+}

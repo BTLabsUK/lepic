@@ -7,6 +7,9 @@
 mod flows;
 mod harness;
 mod malformed;
+mod native;
+
+use std::sync::{Arc, Mutex, PoisonError};
 
 use serde::Serialize;
 
@@ -225,17 +228,42 @@ struct StageExpected {
 pub(crate) fn generate(_pins: &Pins) -> Result<Vec<Rendered>, Error> {
     let _chain_type = chain_type_guard();
     let upstream = git_source(LOCKFILE, "epic_wallet_libwallet")?;
+    let flows = flows()?;
     let mut vectors = Vec::new();
-    let mut flows = Vec::new();
-    for case in CASES {
-        let record = run_case(case)?;
+    for (case, record) in flows.iter() {
         for stage in &record.stages {
-            vectors.extend(render_stage(&upstream, case, &record, stage)?);
+            vectors.extend(render_stage(&upstream, case, record, stage)?);
         }
-        flows.push((case, record));
     }
     vectors.extend(malformed::generate(&upstream, &flows)?);
     Ok(vectors)
+}
+
+/// The `slates_native` area: the `lepic.v1` form of the same flows.
+pub(crate) fn generate_native(_pins: &Pins) -> Result<Vec<Rendered>, Error> {
+    let _chain_type = chain_type_guard();
+    let upstream = git_source(LOCKFILE, "epic_wallet_libwallet")?;
+    native::generate(&upstream, &flows()?)
+}
+
+type Flows = Arc<Vec<(&'static Case, FlowRecord)>>;
+
+/// The flows of every case, run once per process. Both slate areas read them, so their slate
+/// ids are the ones of a single run however many areas one process generates. The caller holds
+/// the chain type guard.
+fn flows() -> Result<Flows, Error> {
+    static FLOWS: Mutex<Option<Flows>> = Mutex::new(None);
+    let mut cached = FLOWS.lock().unwrap_or_else(PoisonError::into_inner);
+    if let Some(flows) = cached.as_ref() {
+        return Ok(Arc::clone(flows));
+    }
+    let mut flows = Vec::new();
+    for case in CASES {
+        flows.push((case, run_case(case)?));
+    }
+    let flows = Arc::new(flows);
+    *cached = Some(Arc::clone(&flows));
+    Ok(flows)
 }
 
 fn run_case(case: &Case) -> Result<FlowRecord, Error> {

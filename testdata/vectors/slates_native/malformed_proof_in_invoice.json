@@ -1,0 +1,19 @@
+{
+  "schema": 1,
+  "area": "slates_native",
+  "name": "malformed_proof_in_invoice",
+  "generator": "conformance/vectors/slates/native",
+  "upstream": {
+    "repo": "https://github.com/EpicCash/epic-wallet",
+    "commit": "845b3fcf4df12ed0139929c62157015447a9d063"
+  },
+  "inputs": {
+    "base": "slates/invoice_file_plain_i1_v3",
+    "mutation": "an I1 with a payment proof",
+    "decode_network": "mainnet",
+    "lepic_v1": "8945534c010004040000060436430c2b02624c2032570501212b0d0000000011e1a30000000000000000000000000000000004d202964900000000d302964900000000d402964900000000d5029649000000000359f68d6611fe4e48d5a0191e06290c86171cbb4fab44fef8d8cd8714f4b8e9d1031b84c5567b126440995d3ed5aaba0565d71e1834604819ff9c17f5e9d5dd078ffd5c6c0ad1e51fbc1d58ca746c29585795368ec6727ae4a74b9082cda91e7fd0b03c84d7f781b536c96668d93b37768c7812b76449c17aaf0a9d11a003c3c73700000000"
+  },
+  "expected": {
+    "error": "ProofInInvoice"
+  }
+}

@@ -101,6 +101,7 @@ process can create at most 256 test-RNG slates; larger case sets are split acros
 | `slates` | G-03 | deterministic under test-RNG | Slate ids, offsets and nonces come from the test-RNG mode. Any value still drawn at random is recorded, and the vector says which. |
 | `epicbox` | G-04 | randomized for messages | Addresses and signatures are deterministic. Encrypted messages record the salt, nonce and ciphertext upstream drew. |
 | `engine` | G-05 | deterministic | Selection, and the recorded node responses of restore and refresh sessions on a test chain built in a fixed order with upstream's test mode. |
+| `slates_native` | EPICTX step 4 | deterministic | The `slates` flows re-encoded by an independent `lepic.v1` encoder; no value is drawn. |
 
 ## Areas present
 
@@ -137,6 +138,12 @@ separate upstream's `verify_completed_sig` from kernel verification. The generat
 Stage vectors of the standard and invoice flows over the file and Epicbox methods, and upstream's
 parse outcomes for malformed slates. Case setup, file names and fields are described in
 [slates/README.md](slates/README.md).
+
+### slates_native
+
+The `slates` area's flow slates in the native `lepic.v1` layout of the EPICTX specification, with
+their JSON view, the same slates with a TLV tail, and malformed byte strings with the error the
+decoder names. Details are in [slates_native/README.md](slates_native/README.md).
 
 ### epicbox
 

@@ -84,7 +84,8 @@ dev-dependency for its log-capture test helpers, and `lepic-wallet` takes `lepic
 as one, so the contact tests run on the engine's own test harness (ADR 0029). `lepic-wallet` also
 takes `lepic-methods` and `lepic-epicbox` as dev-dependencies, so its tests drive the engine through
 the Epicbox method on a mock relay (ADR 0051), and `lepic-epicbox` takes `lepic-legacy-slate`
-as one, so its vectors encode the V2 slates the relay carries (ADR 0052). Any other edge is a design change and needs an ADR.
+as one, so its vectors encode the V2 slates the relay carries, and so does `lepic-native-slate`,
+whose vectors decode like their V3 JSON (ADR 0052). Any other edge is a design change and needs an ADR.
 `lepic-ffi`'s edge to `lepic-tor` is optional, behind its default `tor` feature (ADR 0026).
 The edges to `lepic-legacy-slate` of `lepic-transport` and `lepic-methods`, and the edge to
 `lepic-legacy-rpc` of `lepic-methods`, are optional, behind their default `legacy` feature

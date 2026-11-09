@@ -1,0 +1,19 @@
+{
+  "schema": 1,
+  "area": "slates_native",
+  "name": "malformed_message_not_utf8",
+  "generator": "conformance/vectors/slates/native",
+  "upstream": {
+    "repo": "https://github.com/EpicCash/epic-wallet",
+    "commit": "845b3fcf4df12ed0139929c62157015447a9d063"
+  },
+  "inputs": {
+    "base": "slates/send_file_messages_s1_v3",
+    "mutation": "sender message first byte ff",
+    "decode_network": "mainnet",
+    "lepic_v1": "8945534c010001080000060436430c2b02624c2032570501212b0100000000068e778000000000000c35000000000000000004d202964900000000d302964900000000d402964900000000d502964900000000023a09d783f9af6d632de2e1202bf3f9273145c204e819ddb47b1ca36fff670084031b84c5567b126440995d3ed5aaba0565d71e1834604819ff9c17f5e9d5dd078f001cff6570696320766563746f723a2073656e646572206d6573736167658f07ddd5e9f5179cff19486034181ed76505baaad53e5d994064127b56c5841b73cee0aa44ad57908bf59e928fbaeb976145b1984ad80f648fb6f7617cbf486300000000"
+  },
+  "expected": {
+    "error": "MessageNotUtf8"
+  }
+}

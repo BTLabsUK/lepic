@@ -15,12 +15,13 @@ const DEV_DEPENDENCY_ANYWHERE: &str = "lepic-telemetry";
 /// Dev-dependency edges `docs/architecture.md` allows besides its block: the engine's tests
 /// drive the contacts crate through the engine's own test harness (ADR 0029), and the engine
 /// through the Epicbox method on a mock relay (ADR 0051); the Epicbox vectors encode the V2
-/// slates the relay carries (ADR 0052).
+/// slates the relay carries, and the native codec's vectors compare against V3 JSON (ADR 0052).
 const DEV_ONLY_EDGES: &[(&str, &str)] = &[
     ("lepic-wallet", "lepic-wallet-contacts"),
     ("lepic-wallet", "lepic-methods"),
     ("lepic-wallet", "lepic-epicbox"),
     ("lepic-epicbox", "lepic-legacy-slate"),
+    ("lepic-native-slate", "lepic-legacy-slate"),
 ];
 /// Members that are repository tooling rather than product crates. They may depend on no member.
 const TOOLING_MEMBERS: &[&str] = &["xtask"];

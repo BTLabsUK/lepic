@@ -48,6 +48,10 @@ const AREAS: &[Area] = &[
         generate: slates::generate,
     },
     Area {
+        name: "slates_native",
+        generate: slates::generate_native,
+    },
+    Area {
         name: "engine",
         generate: engine::generate,
     },

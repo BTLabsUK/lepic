@@ -1,0 +1,19 @@
+{
+  "schema": 1,
+  "area": "slates_native",
+  "name": "malformed_tail_repeated_type",
+  "generator": "conformance/vectors/slates/native",
+  "upstream": {
+    "repo": "https://github.com/EpicCash/epic-wallet",
+    "commit": "845b3fcf4df12ed0139929c62157015447a9d063"
+  },
+  "inputs": {
+    "base": "slates/send_file_plain_s1_v3",
+    "mutation": "tail record 80 twice",
+    "decode_network": "mainnet",
+    "lepic_v1": "8945534c010001000000060436430c2b02624c2032570501212b000000000005f5e10000000000000c35000000000000000004d202964900000000d302964900000000d402964900000000d5029649000000000380ce1292adbdf4b77828c29a8449d0f964cc247052d1ec2eb70605aae1ab8b75031b84c5567b126440995d3ed5aaba0565d71e1834604819ff9c17f5e9d5dd078f00000000800000800000"
+  },
+  "expected": {
+    "error": "Tail.Order"
+  }
+}
