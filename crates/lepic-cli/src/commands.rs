@@ -88,6 +88,7 @@ use crate::vault::{FileVault, VAULT_FILE};
 
 mod api_client;
 mod contact;
+mod epic1;
 mod in_person;
 pub(crate) mod peer;
 mod profile;
@@ -332,6 +333,8 @@ impl<H: Host> Run<'_, H> {
             Command::Node(NodeCommand::Status) => self.node_status().await,
             Command::Contact(args) => self.contact(args).await,
             Command::InPerson(args) => self.in_person(args).await,
+            Command::Epic1(args) => self.epic1(args).await,
+            Command::Epictx(command) => self.epictx(command).await,
             Command::Profile(command) => self.profile(command).await,
             Command::Serve(args) => self.serve(args).await,
             Command::Api(ApiCommand::Client(command)) => self.api_client(command),

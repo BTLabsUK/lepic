@@ -15,7 +15,7 @@ use lepic_wallet::scan::ScanError;
 use lepic_wallet::selection::SelectionError;
 use lepic_wallet::send::SendError;
 use lepic_wallet::{AccountError, ReceiveError, WalletError};
-use lepic_wallet_contacts::{ContactError, DirectError, InPersonRefusal};
+use lepic_wallet_contacts::{ContactError, DirectError, Epic1Refusal, InPersonRefusal};
 use thiserror::Error;
 
 use crate::amount::AmountError;
@@ -151,6 +151,8 @@ pub enum CliError {
     Store(#[from] StoreError),
     #[error("give --to or --to-file")]
     NoDestination,
+    #[error("the link asks no amount: give --amount")]
+    Epic1Amount,
     #[error("slate id is not of the form xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx")]
     SlateId,
     #[error("--slate-id must be a random version-4 uuid, made for this send")]
@@ -296,6 +298,7 @@ impl CliError {
             | Self::Amount(_)
             | Self::Zero { .. }
             | Self::NoDestination
+            | Self::Epic1Amount
             | Self::SlateId
             | Self::NotRandomSlateId
             | Self::ReplyFileForParked
@@ -487,6 +490,11 @@ fn contact_kind(error: &ContactError) -> ErrorKind {
             ErrorKind::NotFound
         }
         ContactError::InPerson(_) => ErrorKind::Rejected,
+        ContactError::Epic1Link(_) => ErrorKind::Usage,
+        ContactError::Epic1(Epic1Refusal::NotIssued | Epic1Refusal::NoPayment) => {
+            ErrorKind::NotFound
+        }
+        ContactError::Epic1(_) => ErrorKind::Rejected,
         ContactError::Post(_) => ErrorKind::Transport,
         ContactError::NotCancelled { cause, .. } => contact_kind(cause),
         _ => ErrorKind::Internal,

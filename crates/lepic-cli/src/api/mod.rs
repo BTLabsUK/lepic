@@ -155,6 +155,17 @@ api!(
     in_person_take,
     in_person_answers,
     in_person_finalize,
+    epic1_address,
+    epic1_link,
+    epic1_links,
+    epic1_retire,
+    epic1_read,
+    epic1_pay,
+    epic1_post_next,
+    epic1_answers,
+    epic1_post_answer,
+    epic1_restore,
+    epictx_open,
 );
 
 /// The operation extension that keeps a route off the TLS listener.

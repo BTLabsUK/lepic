@@ -14,6 +14,14 @@ use crate::amount::{AmountError, format_units, parse_amount};
 use crate::exit::CliError;
 use crate::settings::OutputFormat;
 
+mod epic1;
+
+pub use epic1::{
+    Epic1AddressReport, Epic1AnswerReport, Epic1AnswersReport, Epic1AttemptReport,
+    Epic1LinkEntryReport, Epic1LinkReport, Epic1LinksReport, Epic1PaidReport, Epic1PostReport,
+    Epic1ReadReport, Epic1RestoreReport, Epic1RetireReport, EpictxOpenReport,
+};
+
 // One report is built per command and rendered at once, so the size of its largest variant
 // costs nothing worth a box around it.
 #[allow(clippy::large_enum_variant)]
@@ -91,6 +99,16 @@ pub enum Report {
     InPersonAnswers(InPersonAnswersReport),
     PeerPins(PeerPinListReport),
     PeerForget(PeerForgetReport),
+    Epic1Address(Epic1AddressReport),
+    Epic1Link(Epic1LinkReport),
+    Epic1Retire(Epic1RetireReport),
+    Epic1Links(Epic1LinksReport),
+    Epic1Read(Epic1ReadReport),
+    Epic1Paid(Epic1PaidReport),
+    Epic1Answers(Epic1AnswersReport),
+    Epic1Post(Epic1PostReport),
+    Epic1Restore(Epic1RestoreReport),
+    EpictxOpen(EpictxOpenReport),
 }
 
 #[derive(Serialize)]
@@ -633,6 +651,8 @@ pub struct ContactCollectReport {
     pub messages: usize,
     pub paired: usize,
     pub delivered: usize,
+    /// Payments taken at epic1 link mailboxes and answers finalized.
+    pub epic1: usize,
     /// Pairings in progress that ended with nothing stored.
     pub failed: Vec<ContactFailureReport>,
     pub unreachable: Vec<String>,
@@ -1456,6 +1476,16 @@ fn write_human(out: &mut Vec<u8>, report: &Report) -> std::io::Result<()> {
         | Report::InPersonPost(_)
         | Report::InPersonTaken(_)
         | Report::InPersonAnswers(_) => write_in_person_human(out, report),
+        Report::Epic1Address(_)
+        | Report::Epic1Link(_)
+        | Report::Epic1Retire(_)
+        | Report::Epic1Links(_)
+        | Report::Epic1Read(_)
+        | Report::Epic1Paid(_)
+        | Report::Epic1Answers(_)
+        | Report::Epic1Post(_)
+        | Report::Epic1Restore(_)
+        | Report::EpictxOpen(_) => epic1::write_epic1_human(out, report),
         Report::ApiClientAdd(r) => writeln!(out, "Client {} added: {}", r.name, r.fingerprint),
         Report::ApiClientRemove(r) => writeln!(out, "Client {} removed.", r.name),
         Report::ApiClientList(r) if r.clients.is_empty() => writeln!(out, "No clients."),
@@ -2011,6 +2041,9 @@ fn write_pairing_human(out: &mut Vec<u8>, report: &Report) -> std::io::Result<()
             }
             if r.buffered > 0 {
                 writeln!(out, "{} early notices kept.", r.buffered)?;
+            }
+            if r.epic1 > 0 {
+                writeln!(out, "{} epic1 payments taken or finalized.", r.epic1)?;
             }
             if r.quarantined > 0 {
                 writeln!(out, "{} messages quarantined.", r.quarantined)?;
@@ -2897,6 +2930,7 @@ mod tests {
                     messages: 2,
                     paired: 0,
                     delivered: 1,
+                    epic1: 0,
                     failed: vec![],
                     unreachable: vec![],
                 }),

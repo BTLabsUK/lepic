@@ -918,6 +918,412 @@
         }
       }
     },
+    "/v1/epic1/address": {
+      "get": {
+        "tags": [
+          "epic1"
+        ],
+        "summary": "The epic1 address of an account",
+        "operationId": "epic1_address",
+        "parameters": [
+          {
+            "name": "account",
+            "in": "query",
+            "description": "Account label; the default account when absent",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Epic1AddressReport"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error, as RFC 9457 problem details",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/epic1/answers": {
+      "get": {
+        "tags": [
+          "epic1"
+        ],
+        "summary": "The answers to payments taken at link mailboxes, with the relays they go to",
+        "operationId": "epic1_answers",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Epic1AnswersReport"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error, as RFC 9457 problem details",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/epic1/links": {
+      "get": {
+        "tags": [
+          "epic1"
+        ],
+        "summary": "The link mailboxes in use",
+        "operationId": "epic1_links",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Epic1LinksReport"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error, as RFC 9457 problem details",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "epic1"
+        ],
+        "summary": "Issue a link to the epic1 address of an account",
+        "description": "A payment to the link is taken by `POST /v1/contacts/collect`.",
+        "operationId": "epic1_link",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Epic1LinkBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Epic1LinkReport"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error, as RFC 9457 problem details",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/epic1/links/{n}/retire": {
+      "post": {
+        "tags": [
+          "epic1"
+        ],
+        "summary": "Retire a printed link: its mailbox is read no more",
+        "operationId": "epic1_retire",
+        "parameters": [
+          {
+            "name": "n",
+            "in": "path",
+            "description": "The printed link's number, as the list shows it",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Epic1RetireBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Epic1RetireReport"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error, as RFC 9457 problem details",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/epic1/pay": {
+      "post": {
+        "tags": [
+          "epic1"
+        ],
+        "summary": "Pay an epic1 link",
+        "description": "The payment is posted to the first relay of the link; when that post fails,\n`POST /v1/epic1/{slate_id}/post-next` tries the next one.",
+        "operationId": "epic1_pay",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Epic1PayBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Epic1PaidReport"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error, as RFC 9457 problem details",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/epic1/read": {
+      "post": {
+        "tags": [
+          "epic1"
+        ],
+        "summary": "Show what an epic1 link asks, and the relays a payment goes to, before paying it",
+        "operationId": "epic1_read",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Epic1ReadBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Epic1ReadReport"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error, as RFC 9457 problem details",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/epic1/restore": {
+      "post": {
+        "tags": [
+          "epic1"
+        ],
+        "summary": "Read the link mailboxes of the wallet's seed after a restore",
+        "operationId": "epic1_restore",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Epic1RestoreReport"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error, as RFC 9457 problem details",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/epic1/{slate_id}/post-answer": {
+      "post": {
+        "tags": [
+          "epic1"
+        ],
+        "summary": "Post the answer to a payment taken at a link mailbox to the payer's reply mailbox",
+        "operationId": "epic1_post_answer",
+        "parameters": [
+          {
+            "name": "slate_id",
+            "in": "path",
+            "description": "The payment's slate id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Epic1PostAnswerBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Epic1PostReport"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error, as RFC 9457 problem details",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/epic1/{slate_id}/post-next": {
+      "post": {
+        "tags": [
+          "epic1"
+        ],
+        "summary": "Post a payment to an epic1 link to the next relay of the link",
+        "operationId": "epic1_post_next",
+        "parameters": [
+          {
+            "name": "slate_id",
+            "in": "path",
+            "description": "The payment's slate id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Epic1PostNextBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Epic1PaidReport"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error, as RFC 9457 problem details",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/epicbox": {
       "get": {
         "tags": [
@@ -973,6 +1379,46 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/PeerReport"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error, as RFC 9457 problem details",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/epictx/open": {
+      "post": {
+        "tags": [
+          "epic1"
+        ],
+        "summary": "Show the slate in an .epictx file as it arrived, without taking it",
+        "operationId": "epictx_open",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EpictxOpenBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EpictxOpenReport"
                 }
               }
             }
@@ -2940,6 +3386,7 @@
           "messages",
           "paired",
           "delivered",
+          "epic1",
           "failed",
           "unreachable"
         ],
@@ -2954,6 +3401,11 @@
           },
           "delivered": {
             "type": "integer",
+            "minimum": 0
+          },
+          "epic1": {
+            "type": "integer",
+            "description": "Payments taken at epic1 link mailboxes and answers finalized.",
             "minimum": 0
           },
           "failed": {
@@ -3531,6 +3983,457 @@
         },
         "additionalProperties": false
       },
+      "Epic1AddressReport": {
+        "type": "object",
+        "description": "The epic1 address of an account, from `epic1 address`.",
+        "required": [
+          "account",
+          "address"
+        ],
+        "properties": {
+          "account": {
+            "type": "string"
+          },
+          "address": {
+            "type": "string"
+          }
+        }
+      },
+      "Epic1AnswerReport": {
+        "type": "object",
+        "description": "An answer this wallet made for a payment taken at a link mailbox.",
+        "required": [
+          "tx_id",
+          "slate_id",
+          "mailbox",
+          "posted"
+        ],
+        "properties": {
+          "host": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/InPersonHostReport",
+                "description": "The relay as it is shown before posting; absent when it cannot be posted to."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "mailbox": {
+            "type": "string",
+            "description": "The relay of the payer's reply mailbox, as written."
+          },
+          "posted": {
+            "type": "boolean"
+          },
+          "slate_id": {
+            "type": "string"
+          },
+          "tx_id": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          }
+        }
+      },
+      "Epic1AnswersReport": {
+        "type": "object",
+        "description": "The answers to payments taken at link mailboxes, from `epic1 answers`.",
+        "required": [
+          "answers"
+        ],
+        "properties": {
+          "answers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Epic1AnswerReport"
+            }
+          }
+        }
+      },
+      "Epic1AttemptReport": {
+        "type": "object",
+        "description": "One post of a payment to a relay of its link.",
+        "required": [
+          "host"
+        ],
+        "properties": {
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why the post failed; absent when it went through."
+          },
+          "host": {
+            "type": "string"
+          }
+        }
+      },
+      "Epic1LinkBody": {
+        "type": "object",
+        "description": "A link to issue to the epic1 address of an account.",
+        "properties": {
+          "account": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The account label; the default account when absent."
+          },
+          "amount": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The amount to ask for, in EPIC, as a decimal string."
+          },
+          "message": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A message to the payer."
+          },
+          "printed": {
+            "type": "boolean",
+            "description": "A printed link, kept until retired, instead of an on-screen one."
+          },
+          "relays": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The relays the link names, `domain[:port]`, up to three; the wallet's relay when empty."
+          }
+        },
+        "additionalProperties": false
+      },
+      "Epic1LinkEntryReport": {
+        "type": "object",
+        "description": "A link mailbox in use.",
+        "required": [
+          "account",
+          "kind",
+          "n",
+          "issued_at",
+          "relays"
+        ],
+        "properties": {
+          "account": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The account's index.",
+            "minimum": 0
+          },
+          "issued_at": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "n": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "relays": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "used_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When a payment last arrived at the mailbox."
+          }
+        }
+      },
+      "Epic1LinkReport": {
+        "type": "object",
+        "description": "A link issued, from `epic1 link`.",
+        "required": [
+          "link",
+          "address",
+          "kind",
+          "n"
+        ],
+        "properties": {
+          "address": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "description": "`on_screen` or `printed`."
+          },
+          "link": {
+            "type": "string",
+            "description": "The link text, `epic:epic1…?epicbox=…`."
+          },
+          "n": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          }
+        }
+      },
+      "Epic1LinksReport": {
+        "type": "object",
+        "description": "The link mailboxes in use, from `epic1 links`.",
+        "required": [
+          "links"
+        ],
+        "properties": {
+          "links": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Epic1LinkEntryReport"
+            }
+          }
+        }
+      },
+      "Epic1PaidReport": {
+        "type": "object",
+        "description": "A payment to an epic1 link, from `epic1 pay` and `epic1 post-next`.",
+        "required": [
+          "tx_id",
+          "slate_id",
+          "address",
+          "attempts"
+        ],
+        "properties": {
+          "address": {
+            "type": "string"
+          },
+          "attempts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Epic1AttemptReport"
+            }
+          },
+          "posted": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "The relay of the link, from 0, the payment was posted to; absent when every post failed.",
+            "minimum": 0
+          },
+          "slate_id": {
+            "type": "string"
+          },
+          "tx_id": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          }
+        }
+      },
+      "Epic1PayBody": {
+        "type": "object",
+        "description": "An epic1 link to pay.",
+        "required": [
+          "link"
+        ],
+        "properties": {
+          "account": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The account label; the default account when absent."
+          },
+          "amount": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The amount to pay, in EPIC, as a decimal string; the amount the link asks when absent."
+          },
+          "change_outputs": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Outputs the change is split into.",
+            "minimum": 0
+          },
+          "hosts_ok": {
+            "type": "boolean",
+            "description": "The relays `POST /v1/epic1/read` showed for the link were checked and may be used."
+          },
+          "link": {
+            "type": "string",
+            "description": "The link text, `epic:epic1…`."
+          },
+          "message": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A message to the payee."
+          },
+          "min_confirmations": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Confirmations an output needs before it is spent.",
+            "minimum": 0
+          },
+          "proof": {
+            "type": "boolean",
+            "description": "Ask the payee for a payment proof signed with its epic1 proof key."
+          }
+        },
+        "additionalProperties": false
+      },
+      "Epic1PostAnswerBody": {
+        "type": "object",
+        "description": "The consent to post an answer to the payer's reply mailbox.",
+        "properties": {
+          "relay_ok": {
+            "type": "boolean",
+            "description": "The relay `GET /v1/epic1/answers` showed for the answer was checked and may be used."
+          }
+        },
+        "additionalProperties": false
+      },
+      "Epic1PostNextBody": {
+        "type": "object",
+        "description": "The consent to post a payment to the next relay of its link.",
+        "properties": {
+          "hosts_ok": {
+            "type": "boolean",
+            "description": "The relays `POST /v1/epic1/read` showed for the link were checked and may be used."
+          }
+        },
+        "additionalProperties": false
+      },
+      "Epic1PostReport": {
+        "type": "object",
+        "description": "An answer posted, from `epic1 post-answer`.",
+        "required": [
+          "slate_id",
+          "posted"
+        ],
+        "properties": {
+          "posted": {
+            "type": "boolean"
+          },
+          "slate_id": {
+            "type": "string"
+          }
+        }
+      },
+      "Epic1ReadBody": {
+        "type": "object",
+        "description": "An epic1 link to read.",
+        "required": [
+          "link"
+        ],
+        "properties": {
+          "link": {
+            "type": "string",
+            "description": "The link text, `epic:epic1…`."
+          }
+        },
+        "additionalProperties": false
+      },
+      "Epic1ReadReport": {
+        "type": "object",
+        "description": "What an epic1 link asks, from `epic1 read`.",
+        "required": [
+          "address",
+          "hosts"
+        ],
+        "properties": {
+          "address": {
+            "type": "string",
+            "description": "The payee: the epic1 address, never a mailbox."
+          },
+          "amount": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "hosts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/InPersonHostReport"
+            },
+            "description": "The relays a payment is posted to, in the order they are tried."
+          },
+          "label": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "message": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "Epic1RestoreReport": {
+        "type": "object",
+        "description": "The link mailboxes read after a restore, from `epic1 restore`.",
+        "required": [
+          "taken"
+        ],
+        "properties": {
+          "taken": {
+            "type": "integer",
+            "description": "Payments taken and answers finalized.",
+            "minimum": 0
+          }
+        }
+      },
+      "Epic1RetireBody": {
+        "type": "object",
+        "description": "The account a printed link belongs to.",
+        "properties": {
+          "account": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The account label; the default account when absent."
+          }
+        },
+        "additionalProperties": false
+      },
+      "Epic1RetireReport": {
+        "type": "object",
+        "description": "A printed link freed, from `epic1 retire`.",
+        "required": [
+          "account",
+          "n",
+          "retired"
+        ],
+        "properties": {
+          "account": {
+            "type": "string"
+          },
+          "n": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "retired": {
+            "type": "boolean"
+          }
+        }
+      },
       "EpicboxStatusReport": {
         "type": "object",
         "required": [
@@ -3548,6 +4451,68 @@
           },
           "relay": {
             "type": "string"
+          }
+        }
+      },
+      "EpictxOpenBody": {
+        "type": "object",
+        "description": "An .epictx file to show.",
+        "required": [
+          "text"
+        ],
+        "properties": {
+          "text": {
+            "type": "string",
+            "description": "The file's text."
+          }
+        },
+        "additionalProperties": false
+      },
+      "EpictxOpenReport": {
+        "type": "object",
+        "description": "A slate in an .epictx file as it arrived, from `epictx open`.",
+        "required": [
+          "native",
+          "slate"
+        ],
+        "properties": {
+          "contact_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The contact whose key signed the envelope; absent for an anonymous one."
+          },
+          "expires": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "When the sender stops honouring the slate, in unix seconds; advisory.",
+            "minimum": 0
+          },
+          "native": {
+            "type": "boolean",
+            "description": "The body is a `lepic.v1` slate."
+          },
+          "purpose": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`payment`, `deposit`, `withdrawal`, `refund` or `request`."
+          },
+          "reference": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The sender's own reference, never trusted for crediting."
+          },
+          "slate": {
+            "type": "object",
+            "description": "Every field of a `lepic.v1` slate, with its network, kernel features, header version\nand tail; for another slate its V3 JSON."
           }
         }
       },

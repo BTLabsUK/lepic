@@ -146,6 +146,11 @@ pub enum Command {
     /// Ask for or make a payment face to face, through a code scanned once
     #[command(name = "in-person")]
     InPerson(InPersonArgs),
+    /// Take payments at an epic1 address through links, and pay epic1 links
+    Epic1(Epic1Args),
+    /// Look into .epictx files
+    #[command(subcommand)]
+    Epictx(EpictxCommand),
     /// Show or change what this wallet tells its paired contacts about the host
     #[command(subcommand)]
     Profile(ProfileCommand),
@@ -1090,6 +1095,142 @@ pub struct InPersonFinalizeArgs {
     pub answer: u32,
     #[command(flatten)]
     pub fluff: FluffArg,
+}
+
+#[derive(Debug, Args)]
+pub struct Epic1Args {
+    #[command(subcommand)]
+    pub command: Epic1Command,
+    /// Reach no relay at all
+    #[arg(long, global = true)]
+    pub offline: bool,
+    /// Treat Epicbox as switched off: no relay connections
+    #[arg(long, global = true, conflicts_with = "offline")]
+    pub epicbox_off: bool,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum Epic1Command {
+    /// Show the epic1 address of an account
+    Address(AccountArg),
+    /// Make a link to the account's epic1 address; payments to it come to a link mailbox
+    #[command(after_help = "\
+An on-screen link takes the next of 50 mailboxes, which wrap; a printed one the first of 32 not \
+in use, until `lepic epic1 retire`. `lepic contact collect` takes the payments and answers them.")]
+    Link(Epic1LinkArgs),
+    /// Free the mailbox of a printed link; payments to the link are no longer taken
+    Retire(Epic1RetireArgs),
+    /// List the link mailboxes in use
+    Links,
+    /// Show what an epic1 link asks, and the relays a payment would be posted to
+    Read(Epic1LinkArg),
+    /// Pay an epic1 link; `lepic contact collect` finalizes the answer
+    #[command(after_help = "\
+Check the relays `lepic epic1 read` shows, then give --hosts-ok. The payment is posted to the \
+link's first relay, and to the next when a post fails, at most three.")]
+    Pay(Epic1PayArgs),
+    /// Post a payment again, the same bytes, to the next relay of its link
+    PostNext(Epic1PostNextArgs),
+    /// List the answers this wallet made for payments taken at its links
+    Answers,
+    /// Post the answer to a payment taken at a link to the payer's reply mailbox
+    PostAnswer(Epic1PostAnswerArgs),
+    /// After a restore from the phrase, read every link mailbox on the wallet's relay once
+    Restore,
+}
+
+#[derive(Debug, Args)]
+pub struct Epic1LinkArgs {
+    #[command(flatten)]
+    pub account: AccountArg,
+    /// Amount to ask for, in EPIC
+    #[arg(long, value_name = "AMOUNT")]
+    pub amount: Option<String>,
+    #[command(flatten)]
+    pub message: MessageArg,
+    /// A printed link, kept until retired, instead of an on-screen one
+    #[arg(long)]
+    pub printed: bool,
+    /// A relay the link names, `domain[:port]`, up to three [default: the wallet's relay]
+    #[arg(long = "relay", value_name = "RELAY")]
+    pub relays: Vec<String>,
+}
+
+#[derive(Debug, Args)]
+pub struct Epic1RetireArgs {
+    #[command(flatten)]
+    pub account: AccountArg,
+    /// The printed link's number, as `epic1 links` lists it
+    #[arg(value_name = "N")]
+    pub n: u32,
+}
+
+#[derive(Debug, Args)]
+pub struct Epic1LinkArg {
+    /// The link, `epic:epic1…`
+    #[arg(value_name = "LINK")]
+    pub link: String,
+}
+
+#[derive(Debug, Args)]
+pub struct Epic1PayArgs {
+    #[command(flatten)]
+    pub link: Epic1LinkArg,
+    /// Amount to pay, in EPIC [default: the amount the link asks]
+    #[arg(long, value_name = "AMOUNT")]
+    pub amount: Option<String>,
+    #[command(flatten)]
+    pub account: AccountArg,
+    #[command(flatten)]
+    pub message: MessageArg,
+    #[command(flatten)]
+    pub spend: SpendArgs,
+    /// Ask the payee for a payment proof signed with its epic1 proof key
+    #[arg(long)]
+    pub proof: bool,
+    /// The relays `epic1 read` showed for the link were checked and may be used
+    #[arg(long)]
+    pub hosts_ok: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct Epic1PostNextArgs {
+    /// Slate id of the payment, as `epic1 pay` printed it
+    #[arg(value_name = "SLATE_ID")]
+    pub slate_id: String,
+    /// The relays of the link were checked and may be used
+    #[arg(long)]
+    pub hosts_ok: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct Epic1PostAnswerArgs {
+    /// Slate id of the payment, as `epic1 answers` lists it
+    #[arg(value_name = "SLATE_ID")]
+    pub slate_id: String,
+    /// The relay `epic1 answers` showed was checked and may be used
+    #[arg(long)]
+    pub relay_ok: bool,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum EpictxCommand {
+    /// Open an .epictx file with this wallet's keys and print its slate as JSON; nothing is
+    /// stored
+    #[command(after_help = "\
+A lepic.v1 slate is shown field by field, with its network, kernel features, header version and \
+tail; any other slate as its V3 JSON.")]
+    Open(EpictxOpenArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct EpictxOpenArgs {
+    /// The .epictx file, or - to read the text from standard input
+    #[arg(value_name = "FILE|-")]
+    pub input: String,
+    /// The file's text, read instead of `input`; set by the API, never on the command line.
+    #[arg(skip)]
+    pub text: Option<String>,
 }
 
 #[derive(Debug, Subcommand)]

@@ -18,14 +18,16 @@ use crate::cli::{
     ContactLabelArgs, ContactLinkArg, ContactMoveArgs, ContactMoveHomeArgs, ContactNameArg,
     ContactPayloadAckArgs, ContactPayloadArgs, ContactPayloadCommand, ContactPayloadPostArgs,
     ContactRequestArgs, ContactSasArgs, ContactScanArgs, ContactSwitchArgs, DEFAULT_CHANGE_OUTPUTS,
-    DEFAULT_CONTACT_NAME, DomainArgs, DomainCommand, EpicboxCommand, FluffArg, HttpReach,
-    InPersonArgs, InPersonCodeArg, InPersonCommand, InPersonFinalizeArgs, InPersonInvoiceArgs,
-    InPersonPayArgs, InPersonPostArgs, InPersonReadArgs, InPersonReceiveArgs, InPersonSendArgs,
-    InPersonSlateArg, InPersonTakeArgs, InviteExpiryArg, KeysArg, LegacyArg, ListArgs, ListingArgs,
-    MAX_DRAIN_DAYS, MessageArg, NodeCommand, OnOffArg, OutFileArg, PeerArgs, PeerCommand,
-    PeerForgetArgs, PlainHttpArg, PostArgs, ProfileCommand, ProfileSetArgs, SasArg, SelectionArg,
-    SendArgs, SendDestinationArgs, SendSlateIdArg, SpendArgs, TorBinaryArgs, TxCommand, TxIdArgs,
-    TxShowArgs, WalletCommand, WalletScanArgs,
+    DEFAULT_CONTACT_NAME, DomainArgs, DomainCommand, Epic1Args, Epic1Command, Epic1LinkArg,
+    Epic1LinkArgs, Epic1PayArgs, Epic1PostAnswerArgs, Epic1PostNextArgs, Epic1RetireArgs,
+    EpicboxCommand, EpictxCommand, EpictxOpenArgs, FluffArg, HttpReach, InPersonArgs,
+    InPersonCodeArg, InPersonCommand, InPersonFinalizeArgs, InPersonInvoiceArgs, InPersonPayArgs,
+    InPersonPostArgs, InPersonReadArgs, InPersonReceiveArgs, InPersonSendArgs, InPersonSlateArg,
+    InPersonTakeArgs, InviteExpiryArg, KeysArg, LegacyArg, ListArgs, ListingArgs, MAX_DRAIN_DAYS,
+    MessageArg, NodeCommand, OnOffArg, OutFileArg, PeerArgs, PeerCommand, PeerForgetArgs,
+    PlainHttpArg, PostArgs, ProfileCommand, ProfileSetArgs, SasArg, SelectionArg, SendArgs,
+    SendDestinationArgs, SendSlateIdArg, SpendArgs, TorBinaryArgs, TxCommand, TxIdArgs, TxShowArgs,
+    WalletCommand, WalletScanArgs,
 };
 use crate::commands::is_onion;
 use crate::output::{
@@ -34,7 +36,9 @@ use crate::output::{
     ContactKeyCheckReport, ContactLinkReport, ContactListReport, ContactMoveHomeReport,
     ContactPayloadAckReport, ContactPayloadListReport, ContactPayloadPostReport,
     ContactPreviewReport, ContactQuarantineReport, ContactRemoveReport, ContactReport,
-    EpicboxStatusReport, FinalizeReport, InPersonAnswersReport, InPersonCodeReport,
+    Epic1AddressReport, Epic1AnswersReport, Epic1LinkReport, Epic1LinksReport, Epic1PaidReport,
+    Epic1PostReport, Epic1ReadReport, Epic1RestoreReport, Epic1RetireReport, EpicboxStatusReport,
+    EpictxOpenReport, FinalizeReport, InPersonAnswersReport, InPersonCodeReport,
     InPersonPaidReport, InPersonPostReport, InPersonReadReport, InPersonTakenReport, InfoReport,
     MethodsReport, NodeStatusReport, OutputsReport, PasswordReport, PeerForgetReport,
     PeerPinListReport, PeerReport, PostReport, ProfileDomainAttachReport,
@@ -385,6 +389,90 @@ pub(crate) struct InPersonPostBody {
 pub(crate) struct InPersonTakeBody {
     /// The answer: its sealed bytes as hex digits, its armoured text, or its UR parts.
     answer: Vec<String>,
+}
+
+/// A link to issue to the epic1 address of an account.
+#[derive(Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct Epic1LinkBody {
+    /// The account label; the default account when absent.
+    account: Option<String>,
+    /// The amount to ask for, in EPIC, as a decimal string.
+    amount: Option<String>,
+    /// A message to the payer.
+    message: Option<String>,
+    /// A printed link, kept until retired, instead of an on-screen one.
+    #[serde(default)]
+    printed: bool,
+    /// The relays the link names, `domain[:port]`, up to three; the wallet's relay when empty.
+    #[serde(default)]
+    relays: Vec<String>,
+}
+
+/// The account a printed link belongs to.
+#[derive(Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct Epic1RetireBody {
+    /// The account label; the default account when absent.
+    account: Option<String>,
+}
+
+/// An epic1 link to read.
+#[derive(Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct Epic1ReadBody {
+    /// The link text, `epic:epic1…`.
+    link: String,
+}
+
+/// An epic1 link to pay.
+#[derive(Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct Epic1PayBody {
+    /// The link text, `epic:epic1…`.
+    link: String,
+    /// The amount to pay, in EPIC, as a decimal string; the amount the link asks when absent.
+    amount: Option<String>,
+    /// The account label; the default account when absent.
+    account: Option<String>,
+    /// A message to the payee.
+    message: Option<String>,
+    /// Confirmations an output needs before it is spent.
+    min_confirmations: Option<u64>,
+    /// Outputs the change is split into.
+    change_outputs: Option<usize>,
+    /// Ask the payee for a payment proof signed with its epic1 proof key.
+    #[serde(default)]
+    proof: bool,
+    /// The relays `POST /v1/epic1/read` showed for the link were checked and may be used.
+    #[serde(default)]
+    hosts_ok: bool,
+}
+
+/// The consent to post a payment to the next relay of its link.
+#[derive(Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct Epic1PostNextBody {
+    /// The relays `POST /v1/epic1/read` showed for the link were checked and may be used.
+    #[serde(default)]
+    hosts_ok: bool,
+}
+
+/// The consent to post an answer to the payer's reply mailbox.
+#[derive(Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct Epic1PostAnswerBody {
+    /// The relay `GET /v1/epic1/answers` showed for the answer was checked and may be used.
+    #[serde(default)]
+    relay_ok: bool,
+}
+
+/// An .epictx file to show.
+#[derive(Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct EpictxOpenBody {
+    /// The file's text.
+    text: String,
 }
 
 /// The answer to finalize.
@@ -1598,6 +1686,194 @@ pub(crate) async fn in_person_finalize(api: &Api<'_>, request: Request) -> Answe
     api.run(in_person(InPersonCommand::Finalize(args))).await
 }
 
+/// The epic1 address of an account
+#[utoipa::path(
+    get,
+    path = "/v1/epic1/address",
+    tag = "epic1",
+    params(("account" = Option<String>, Query, description = "Account label; the default account when absent")),
+    responses((status = 200, body = Epic1AddressReport)),
+)]
+pub(crate) async fn epic1_address(api: &Api<'_>, request: Request) -> Answer {
+    let query: AccountQuery = request.query()?;
+    api.run(epic1(Epic1Command::Address(account(query.account))))
+        .await
+}
+
+/// Issue a link to the epic1 address of an account
+///
+/// A payment to the link is taken by `POST /v1/contacts/collect`.
+#[utoipa::path(
+    post,
+    path = "/v1/epic1/links",
+    tag = "epic1",
+    request_body = Epic1LinkBody,
+    responses((status = 200, body = Epic1LinkReport)),
+)]
+pub(crate) async fn epic1_link(api: &Api<'_>, request: Request) -> Answer {
+    let body: Epic1LinkBody = request.json()?;
+    let args = Epic1LinkArgs {
+        account: account(body.account),
+        amount: body.amount,
+        message: MessageArg {
+            message: body.message,
+        },
+        printed: body.printed,
+        relays: body.relays,
+    };
+    api.run(epic1(Epic1Command::Link(args))).await
+}
+
+/// The link mailboxes in use
+#[utoipa::path(
+    get,
+    path = "/v1/epic1/links",
+    tag = "epic1",
+    responses((status = 200, body = Epic1LinksReport)),
+)]
+pub(crate) async fn epic1_links(api: &Api<'_>, _request: Request) -> Answer {
+    api.run(epic1(Epic1Command::Links)).await
+}
+
+/// Retire a printed link: its mailbox is read no more
+#[utoipa::path(
+    post,
+    path = "/v1/epic1/links/{n}/retire",
+    tag = "epic1",
+    params(("n" = u32, Path, description = "The printed link's number, as the list shows it")),
+    request_body = Epic1RetireBody,
+    responses((status = 200, body = Epic1RetireReport)),
+)]
+pub(crate) async fn epic1_retire(api: &Api<'_>, request: Request) -> Answer {
+    let body: Epic1RetireBody = request.json()?;
+    let n = request
+        .param("n")?
+        .parse()
+        .map_err(|_| Problem::usage("n is not a link number"))?;
+    let args = Epic1RetireArgs {
+        account: account(body.account),
+        n,
+    };
+    api.run(epic1(Epic1Command::Retire(args))).await
+}
+
+/// Show what an epic1 link asks, and the relays a payment goes to, before paying it
+#[utoipa::path(
+    post,
+    path = "/v1/epic1/read",
+    tag = "epic1",
+    request_body = Epic1ReadBody,
+    responses((status = 200, body = Epic1ReadReport)),
+)]
+pub(crate) async fn epic1_read(api: &Api<'_>, request: Request) -> Answer {
+    let body: Epic1ReadBody = request.json()?;
+    let args = Epic1LinkArg { link: body.link };
+    api.run(epic1(Epic1Command::Read(args))).await
+}
+
+/// Pay an epic1 link
+///
+/// The payment is posted to the first relay of the link; when that post fails,
+/// `POST /v1/epic1/{slate_id}/post-next` tries the next one.
+#[utoipa::path(
+    post,
+    path = "/v1/epic1/pay",
+    tag = "epic1",
+    request_body = Epic1PayBody,
+    responses((status = 200, body = Epic1PaidReport)),
+)]
+pub(crate) async fn epic1_pay(api: &Api<'_>, request: Request) -> Answer {
+    let body: Epic1PayBody = request.json()?;
+    let args = Epic1PayArgs {
+        link: Epic1LinkArg { link: body.link },
+        amount: body.amount,
+        account: account(body.account),
+        message: MessageArg {
+            message: body.message,
+        },
+        spend: spend(body.min_confirmations, body.change_outputs),
+        proof: body.proof,
+        hosts_ok: body.hosts_ok,
+    };
+    api.run(epic1(Epic1Command::Pay(args))).await
+}
+
+/// Post a payment to an epic1 link to the next relay of the link
+#[utoipa::path(
+    post,
+    path = "/v1/epic1/{slate_id}/post-next",
+    tag = "epic1",
+    params(("slate_id" = String, Path, description = "The payment's slate id")),
+    request_body = Epic1PostNextBody,
+    responses((status = 200, body = Epic1PaidReport)),
+)]
+pub(crate) async fn epic1_post_next(api: &Api<'_>, request: Request) -> Answer {
+    let body: Epic1PostNextBody = request.json()?;
+    let args = Epic1PostNextArgs {
+        slate_id: request.param("slate_id")?.to_owned(),
+        hosts_ok: body.hosts_ok,
+    };
+    api.run(epic1(Epic1Command::PostNext(args))).await
+}
+
+/// The answers to payments taken at link mailboxes, with the relays they go to
+#[utoipa::path(
+    get,
+    path = "/v1/epic1/answers",
+    tag = "epic1",
+    responses((status = 200, body = Epic1AnswersReport)),
+)]
+pub(crate) async fn epic1_answers(api: &Api<'_>, _request: Request) -> Answer {
+    api.run(epic1(Epic1Command::Answers)).await
+}
+
+/// Post the answer to a payment taken at a link mailbox to the payer's reply mailbox
+#[utoipa::path(
+    post,
+    path = "/v1/epic1/{slate_id}/post-answer",
+    tag = "epic1",
+    params(("slate_id" = String, Path, description = "The payment's slate id")),
+    request_body = Epic1PostAnswerBody,
+    responses((status = 200, body = Epic1PostReport)),
+)]
+pub(crate) async fn epic1_post_answer(api: &Api<'_>, request: Request) -> Answer {
+    let body: Epic1PostAnswerBody = request.json()?;
+    let args = Epic1PostAnswerArgs {
+        slate_id: request.param("slate_id")?.to_owned(),
+        relay_ok: body.relay_ok,
+    };
+    api.run(epic1(Epic1Command::PostAnswer(args))).await
+}
+
+/// Read the link mailboxes of the wallet's seed after a restore
+#[utoipa::path(
+    post,
+    path = "/v1/epic1/restore",
+    tag = "epic1",
+    responses((status = 200, body = Epic1RestoreReport)),
+)]
+pub(crate) async fn epic1_restore(api: &Api<'_>, _request: Request) -> Answer {
+    api.run(epic1(Epic1Command::Restore)).await
+}
+
+/// Show the slate in an .epictx file as it arrived, without taking it
+#[utoipa::path(
+    post,
+    path = "/v1/epictx/open",
+    tag = "epic1",
+    request_body = EpictxOpenBody,
+    responses((status = 200, body = EpictxOpenReport)),
+)]
+pub(crate) async fn epictx_open(api: &Api<'_>, request: Request) -> Answer {
+    let body: EpictxOpenBody = request.json()?;
+    let args = EpictxOpenArgs {
+        input: "-".to_owned(),
+        text: Some(body.text),
+    };
+    api.run(Call::Command(Command::Epictx(EpictxCommand::Open(args))))
+        .await
+}
+
 fn tx_id(request: &Request) -> Result<TxIdArgs, Problem> {
     let tx_id = request
         .param("tx_id")?
@@ -1636,6 +1912,14 @@ fn payload(command: ContactPayloadCommand) -> Call {
 
 fn in_person(command: InPersonCommand) -> Call {
     Call::Command(Command::InPerson(InPersonArgs {
+        command,
+        offline: false,
+        epicbox_off: false,
+    }))
+}
+
+fn epic1(command: Epic1Command) -> Call {
+    Call::Command(Command::Epic1(Epic1Args {
         command,
         offline: false,
         epicbox_off: false,

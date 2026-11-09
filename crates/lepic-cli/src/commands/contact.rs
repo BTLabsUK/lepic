@@ -106,7 +106,7 @@ fn failure_name(reason: PairingFailure) -> &'static str {
     }
 }
 
-fn purpose_name(purpose: Purpose) -> &'static str {
+pub(super) fn purpose_name(purpose: Purpose) -> &'static str {
     match purpose {
         Purpose::Payment => "payment",
         Purpose::DepositRequest => "deposit",
@@ -235,12 +235,12 @@ pub(super) async fn send_to_contact<N: lepic_node::NodeApi + 'static>(
 
 /// A slate file that exists only for one send, removed when dropped, also when the send is
 /// interrupted.
-struct SlateFile {
-    path: PathBuf,
+pub(super) struct SlateFile {
+    pub(super) path: PathBuf,
 }
 
 impl SlateFile {
-    fn new(data_dir: &Path) -> Result<Self, CliError> {
+    pub(super) fn new(data_dir: &Path) -> Result<Self, CliError> {
         let name: [u8; 8] = super::random_bytes()?;
         let name: String = name.iter().map(|byte| format!("{byte:02x}")).collect();
         Ok(Self {
@@ -1097,6 +1097,7 @@ async fn collect<N: lepic_node::NodeApi + 'static>(
         messages: collected.messages,
         paired: collected.paired,
         delivered: collected.delivered,
+        epic1: collected.epic1,
         failed: collected
             .failed
             .iter()

@@ -588,6 +588,50 @@ fn in_person_routes_refuse_bad_input() {
 }
 
 #[test]
+fn epic1_routes_answer_and_refuse_bad_input() {
+    let (host, wallet) = funded();
+
+    serving(host, &wallet, |socket, _| {
+        let address = http(socket, "GET", "/v1/epic1/address", None).ok();
+        let text = address["address"].as_str().unwrap_or_default();
+        assert!(text.contains("epic1"), "{address}");
+        let links = http(socket, "GET", "/v1/epic1/links", None).ok();
+        assert_eq!(links["links"], serde_json::json!([]), "{links}");
+        problem(
+            &http(socket, "POST", "/v1/epic1/read", Some(r#"{"link":"x"}"#)),
+            400,
+            "usage",
+        );
+        problem(
+            &http(socket, "POST", "/v1/epic1/links/one/retire", Some("{}")),
+            400,
+            "usage",
+        );
+        // Hex digits only: a transaction another wallet saved, never opened as a slate.
+        problem(
+            &http(
+                socket,
+                "POST",
+                "/v1/epictx/open",
+                Some(r#"{"text":"0a1b2c3d"}"#),
+            ),
+            400,
+            "usage",
+        );
+        problem(
+            &http(
+                socket,
+                "POST",
+                "/v1/epictx/open",
+                Some(r#"{"text":"x","path":"y"}"#),
+            ),
+            400,
+            "usage",
+        );
+    });
+}
+
+#[test]
 fn payload_routes_list_and_refuse_bad_input() {
     let (host, wallet) = funded();
 

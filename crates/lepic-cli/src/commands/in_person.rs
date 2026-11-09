@@ -278,7 +278,7 @@ fn write_or_hex(
     }
 }
 
-fn slate_id(text: &str) -> Result<SlateId, CliError> {
+pub(super) fn slate_id(text: &str) -> Result<SlateId, CliError> {
     SlateId::parse(text.trim()).map_err(|_| CliError::SlateId)
 }
 
@@ -289,7 +289,7 @@ fn stage_name(stage: Stage) -> &'static str {
     }
 }
 
-fn host_report(report: &HostReport) -> InPersonHostReport {
+pub(super) fn host_report(report: &HostReport) -> InPersonHostReport {
     InPersonHostReport {
         host: report.host.clone(),
         port: report.port,
