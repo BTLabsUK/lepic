@@ -34,6 +34,7 @@ pub mod invoice;
 pub mod legacy_history;
 pub mod lifecycle;
 pub mod namespace;
+mod native_epicbox;
 pub mod notice;
 mod notices;
 mod onion_key;

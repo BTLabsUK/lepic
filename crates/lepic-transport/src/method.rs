@@ -79,6 +79,10 @@ pub struct Sending {
     /// The formats the receiver's native endpoint reads, when the method found one; `None`
     /// sends in the legacy formats.
     pub peer: Option<PeerFormats>,
+    /// The X25519 key native slates to this wallet over the method are sealed to, which its
+    /// marker advertises with [`crate::marker::features::NATIVE_SLATES`] in `features`; set only
+    /// when this wallet takes them there.
+    pub seal_key: Option<[u8; 32]>,
 }
 
 impl Sending {
@@ -89,6 +93,7 @@ impl Sending {
             features,
             reply_key,
             peer: None,
+            seal_key: None,
         }
     }
 
@@ -96,6 +101,12 @@ impl Sending {
     #[must_use]
     pub const fn with_peer(mut self, peer: Option<PeerFormats>) -> Self {
         self.peer = peer;
+        self
+    }
+
+    /// The same, advertising `seal_key` for native slates.
+    pub const fn with_seal_key(mut self, seal_key: [u8; 32]) -> Self {
+        self.seal_key = Some(seal_key);
         self
     }
 }

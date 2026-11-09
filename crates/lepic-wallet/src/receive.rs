@@ -44,7 +44,7 @@ use lepic_store::{
     StoredSlate, TransactionEntry, TxDirection, TxId, TxState, WalletStore,
 };
 use lepic_transport::error::FormatError;
-use lepic_transport::method::{Encoded, Method, SenderFacts, Sending};
+use lepic_transport::method::{Encoded, Method, SenderFacts};
 use lepic_transport::transport::{Destination, TransportId};
 use rand_core::CryptoRng;
 use thiserror::Error;
@@ -56,6 +56,7 @@ use crate::codecs;
 use crate::error::WalletError;
 use crate::event::{AnsweredSlate, Event, ReceivedTransaction};
 use crate::lifecycle::Session;
+use crate::native_epicbox::Claim;
 use crate::ports::{Ports, SecretVault, StoreOpener};
 use crate::wallet::Wallet;
 
@@ -276,7 +277,12 @@ where
         check_ttl(&slate, tip)?;
         check_height(&slate, limit)?;
         let context = self.encode_context(&slate).await?;
-        let features = self.config().claimed_features();
+        // An answer from a listing claims no native slates, so the listing's address is not
+        // linked to the payments address's seal key.
+        let claim = match listing {
+            None => Claim::of(self.config(), &session.seed),
+            Some(_) => Claim::plain(self.config().claimed_features()),
+        };
         debug!(height = tip.value(), "slate checked");
 
         let method = Arc::clone(method);
@@ -293,7 +299,7 @@ where
                         context,
                         counterparty,
                         from,
-                        features,
+                        claim,
                         listing,
                     },
                     &request,
@@ -371,7 +377,7 @@ struct Proposal {
     /// What the S1 says about its sender, which the method's reply follows.
     from: SenderFacts,
     /// What this wallet's marker claims.
-    features: u32,
+    claim: Claim,
     /// The listing the S1 came in on; `None` for the payments address.
     listing: Option<Listing>,
 }
@@ -397,7 +403,7 @@ fn store_reply<N, S: StoreOpener, V>(
     request: &ReceiveRequest,
 ) -> Result<Answer, ReceiveError> {
     let transport = proposal.transport;
-    let sending = Sending::new(proposal.network, proposal.features, None);
+    let sending = proposal.claim.sending(proposal.network, None);
     let now = ports.clock.now();
     session.store.write(|repos| {
         if let Some(received) =
@@ -459,7 +465,7 @@ pub(crate) fn receive_own<D>(
         context,
         counterparty: None,
         from: SenderFacts::default(),
-        features: 0,
+        claim: Claim::plain(0),
         listing: None,
     };
     let request = ReceiveRequest {

@@ -52,7 +52,7 @@ use lepic_store::{
     TransactionEntry, TxDirection, TxId, TxState, WalletStore,
 };
 use lepic_transport::error::{FormatError, TransportError};
-use lepic_transport::method::{Method, Sending};
+use lepic_transport::method::Method;
 use lepic_transport::transport::{Destination, Location, TransportId};
 use rand_core::CryptoRng;
 use thiserror::Error;
@@ -64,6 +64,7 @@ use crate::account::{self, AccountError, next_output_key};
 use crate::codecs;
 use crate::error::WalletError;
 use crate::extension::ReplyKeys;
+use crate::native_epicbox::Claim;
 use crate::ports::{SecretVault, StoreOpener};
 use crate::refresh::with_spend_confirmations;
 use crate::selection::{self, Selection, SelectionError, SelectionOptions, SelectionStrategy};
@@ -549,7 +550,7 @@ fn encode_for_delivery(
         .and_then(|keys| {
             keys.reply_public_key(env.keychain, env.network, account, *slate.id().as_bytes())
         });
-    let sending = Sending::new(env.network, env.features, reply_key);
+    let sending = env.claim.sending(env.network, reply_key);
     Ok(env.method.encode_new(slate, context, &sending)?.wire)
 }
 
@@ -576,7 +577,7 @@ struct SendEnvironment<'a> {
     now: Timestamp,
     reply_keys: Option<&'a dyn ReplyKeys>,
     /// What this wallet's marker claims.
-    features: u32,
+    claim: Claim,
 }
 
 impl SendEnvironment<'_> {
@@ -1081,7 +1082,7 @@ where
                     network: config.network,
                     now: ports.clock.now(),
                     reply_keys: reply_keys.as_deref(),
-                    features: config.claimed_features(),
+                    claim: Claim::of(config, &session.seed),
                 };
                 let randomness = S1Randomness::draw(&mut **ports.rng.lock());
                 Ok(randomness.map_err(SendError::from).and_then(|randomness| {
@@ -1203,7 +1204,7 @@ where
                     network: config.network,
                     now: ports.clock.now(),
                     reply_keys: reply_keys.as_deref(),
-                    features: config.claimed_features(),
+                    claim: Claim::of(config, &session.seed),
                 };
                 Ok(session
                     .store
@@ -1279,6 +1280,7 @@ mod tests {
 
     use lepic_legacy_slate::v2_json::V2JsonCodec;
     use lepic_transport::marker::v3::{carries_lepic_marker, lepic_marker_features};
+    use lepic_transport::method::Sending;
 
     fn key(byte: u8) -> SecretKey {
         SecretKey::from_array([byte; 32]).unwrap()
@@ -1364,31 +1366,107 @@ mod tests {
         assert_eq!(drawn.slate_id.to_string().as_bytes()[14], b'4');
     }
 
-    #[test]
-    fn only_an_epicbox_s1_carries_the_features_and_files_carry_no_marker() {
+    /// The S1 of the plain-send vector.
+    fn vector_s1() -> Slate {
         let base_fee = Network::Floonet.params().default_base_fee();
         let vector: serde_json::Value = serde_json::from_str(include_str!(
             "../../../testdata/vectors/slates/send_epicbox_plain_s1_v2.json"
         ))
         .unwrap();
         let json = vector["expected"]["json"].as_str().unwrap().to_owned();
-        let slate = V2JsonCodec::new(base_fee)
+        V2JsonCodec::new(base_fee)
             .decode(&WireSlate::text(lepic_slate::codec::MediaType::JSON, json))
-            .unwrap();
-        let context = EncodeContext {
-            block_header_version: 6,
-        };
+            .unwrap()
+    }
+
+    fn floonet_epicbox() -> lepic_methods::epicbox::Epicbox {
         let relay = lepic_epicbox::mock_relay::MockRelay::new(lepic_epicbox::Network::Floonet);
         let endpoint = lepic_epicbox::RelayEndpoint::new(
             lepic_epicbox::Domain::parse("relay.test").unwrap(),
             None,
             lepic_epicbox::Security::Plain,
         );
-        let epicbox = lepic_methods::epicbox::Epicbox::new(
+        lepic_methods::epicbox::Epicbox::new(
             lepic_epicbox::testing::client_settings(endpoint),
             lepic_epicbox::Network::Floonet,
             relay.connector(),
+        )
+    }
+
+    fn config(native_direct: bool) -> crate::WalletConfig {
+        crate::WalletConfig {
+            name: crate::WalletName::new("w").unwrap(),
+            network: Network::Floonet,
+            data_dir: std::path::PathBuf::from("/w"),
+            node: crate::NodeEndpoint::parse("http://127.0.0.1:1").unwrap(),
+            offline: false,
+            host_features: 0,
+            profile: 0,
+            domain: None,
+            policy: crate::WalletPolicy::default(),
+            native_direct,
+        }
+    }
+
+    #[test]
+    fn the_native_claim_rides_the_marker_only_with_native_direct_on() {
+        use lepic_transport::marker::features::NATIVE_SLATES;
+        use lepic_transport::marker::v3::lepic_marker_reply_key;
+        let seed = lepic_keychain::Seed::from_entropy(&[7; 32]).unwrap();
+        let slate = vector_s1();
+        let context = EncodeContext {
+            block_header_version: 6,
+        };
+        let epicbox = floonet_epicbox();
+        let encode = |sending: &Sending| epicbox.encode_new(&slate, &context, sending).unwrap();
+
+        // Off: the marker is the one a wallet without the claim writes, byte for byte.
+        let off = Claim::of(&config(false), &seed);
+        let features = config(false).claimed_features();
+        assert_eq!(off, Claim::plain(features));
+        let before = encode(&Sending::new(Network::Floonet, features, None)).wire;
+        assert_eq!(encode(&off.sending(Network::Floonet, None)).wire, before);
+
+        // On: bit 7 and the payments address's kind-03 public key.
+        let on = Claim::of(&config(true), &seed);
+        let key = *crate::native_epicbox::payments_seal_key(&seed, Network::Floonet)
+            .unwrap()
+            .public_key()
+            .as_bytes();
+        assert_eq!(on.seal_key, Some(key));
+        let claimed = encode(&on.sending(Network::Floonet, None)).wire;
+        assert_eq!(
+            lepic_marker_features(&claimed),
+            Some(features | NATIVE_SLATES)
         );
+        assert_eq!(lepic_marker_reply_key(&claimed), Some(key));
+        assert_eq!(lepic_marker_features(&before), Some(features));
+        assert_eq!(lepic_marker_reply_key(&before), None);
+
+        // A reader that knows no marker reads the same slate from both.
+        let base_fee = Network::Floonet.params().default_base_fee();
+        let stock = V2JsonCodec::new(base_fee);
+        assert_eq!(stock.decode(&claimed).unwrap(), slate);
+        assert_eq!(stock.decode(&before).unwrap(), slate);
+
+        // The kind-03 key is not the epic1's.
+        let epic1 = crate::namespace::seal_key(
+            &seed,
+            0,
+            lepic_contact::Network::Floonet,
+            crate::namespace::SealKeyKind::Epic1,
+        )
+        .unwrap();
+        assert_ne!(epic1.public_key().as_bytes(), &key);
+    }
+
+    #[test]
+    fn only_an_epicbox_s1_carries_the_features_and_files_carry_no_marker() {
+        let slate = vector_s1();
+        let context = EncodeContext {
+            block_header_version: 6,
+        };
+        let epicbox = floonet_epicbox();
         let sending = Sending::new(Network::Floonet, 0x21, None);
         let encode =
             |method: &dyn Method| method.encode_new(&slate, &context, &sending).unwrap().wire;

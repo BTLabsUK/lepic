@@ -111,6 +111,25 @@ impl FormatPolicy for EpicboxPolicy {
     }
 }
 
+/// The marked V2 codec of a slate this wallet sends: the marker claims `sending.features`, and
+/// carries the key native slates are sealed to when the wallet takes them (RFC 0003 5.15).
+fn marked_v2(base_fee: lepic_primitives::amount::Fee, sending: &Sending) -> MarkedV2JsonCodec {
+    let codec = MarkedV2JsonCodec::new(V2JsonCodec::new(base_fee));
+    match sending.seal_key {
+        Some(key) => codec.with_native_claim(sending.features, key),
+        None => codec.with_features(sending.features),
+    }
+}
+
+/// [`marked_v2`] in the V3 shape.
+fn marked_v3(base_fee: lepic_primitives::amount::Fee, sending: &Sending) -> MarkedV3JsonCodec {
+    let codec = MarkedV3JsonCodec::new(V3JsonCodec::new(base_fee));
+    match sending.seal_key {
+        Some(key) => codec.with_native_claim(sending.features, key),
+        None => codec.with_features(sending.features),
+    }
+}
+
 /// Why the Epicbox transport could not deliver.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 #[non_exhaustive]
@@ -269,10 +288,7 @@ impl Method for Epicbox {
                 self.policy().for_new_slate(slate, context),
                 codecs::legacy_with(
                     Box::new(V3JsonCodec::new(base_fee)),
-                    Box::new(
-                        MarkedV2JsonCodec::new(V2JsonCodec::new(base_fee))
-                            .with_features(sending.features),
-                    ),
+                    Box::new(marked_v2(base_fee, sending)),
                 ),
             ),
             // An I1 goes out as V3, which upstream's untagged parse reads first, because the
@@ -283,10 +299,7 @@ impl Method for Epicbox {
                     legacy_header: None,
                 },
                 codecs::legacy_with(
-                    Box::new(
-                        MarkedV3JsonCodec::new(V3JsonCodec::new(base_fee))
-                            .with_features(sending.features),
-                    ),
+                    Box::new(marked_v3(base_fee, sending)),
                     Box::new(V2JsonCodec::new(base_fee)),
                 ),
             ),
@@ -316,22 +329,13 @@ impl Method for Epicbox {
         // sender never sees the key.
         let codecs = if slate.stage() == Stage::I2 {
             codecs::legacy_with(
-                Box::new(
-                    MarkedV3JsonCodec::new(V3JsonCodec::new(base_fee))
-                        .with_features(sending.features),
-                ),
+                Box::new(marked_v3(base_fee, sending)),
                 Box::new(V2JsonCodec::new(base_fee)),
             )
         } else if from.marked {
             codecs::legacy_with(
-                Box::new(
-                    MarkedV3JsonCodec::new(V3JsonCodec::new(base_fee))
-                        .with_features(sending.features),
-                ),
-                Box::new(
-                    MarkedV2JsonCodec::new(V2JsonCodec::new(base_fee))
-                        .with_features(sending.features),
-                ),
+                Box::new(marked_v3(base_fee, sending)),
+                Box::new(marked_v2(base_fee, sending)),
             )
         } else {
             codecs::legacy(base_fee)

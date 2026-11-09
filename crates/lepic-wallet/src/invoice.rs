@@ -49,7 +49,7 @@ use lepic_store::{
     TxState, WalletStore,
 };
 use lepic_transport::error::{FormatError, TransportError};
-use lepic_transport::method::{Encoded, Method, SenderFacts, Sending};
+use lepic_transport::method::{Encoded, Method, SenderFacts};
 use lepic_transport::transport::{Destination, TransportId};
 use thiserror::Error;
 use tracing::field::Empty;
@@ -64,6 +64,7 @@ use crate::account::{AccountError, next_output_key};
 use crate::error::WalletError;
 use crate::extension::ReplyKeys;
 use crate::finalize::{Finalized, FinalizedSlate, PushFailure, SpentInputs};
+use crate::native_epicbox::Claim;
 use crate::ports::{SecretVault, StoreOpener};
 use crate::refresh::with_spend_confirmations;
 use crate::selection::{self, SelectionError, SelectionRequest, SelectionStrategy};
@@ -522,7 +523,7 @@ struct InvoiceEnvironment<'a> {
     now: Timestamp,
     reply_keys: Option<&'a dyn ReplyKeys>,
     /// What this wallet's marker claims.
-    features: u32,
+    claim: Claim,
 }
 
 impl InvoiceEnvironment<'_> {
@@ -588,7 +589,7 @@ fn issue_stored(
                 *slate.id().as_bytes(),
             )
         });
-    let sending = Sending::new(env.network, env.features, reply_key);
+    let sending = env.claim.sending(env.network, reply_key);
     let wire = method
         .encode_new(&slate, &context, &sending)
         .map_err(InvoiceError::Encode)?
@@ -706,7 +707,7 @@ fn pay_stored(
     };
     let slate = build_i2(env.keychain, i1, &plan, randomness)?;
     let context = encode_context(env.network, &slate);
-    let sending = Sending::new(env.network, env.features, None);
+    let sending = env.claim.sending(env.network, None);
     let Encoded { wire: reply, codec } = method
         .encode_reply(&slate, &context, &sending, from)
         .map_err(InvoiceError::Encode)?;
@@ -1064,7 +1065,7 @@ where
                 tip,
                 now: ports.clock.now(),
                 reply_keys: reply_keys.as_deref(),
-                features: config.claimed_features(),
+                claim: Claim::of(config, &session.seed),
             };
             let issued = I1Randomness::draw(&mut **ports.rng.lock())
                 .map_err(InvoiceError::Signing)
@@ -1166,7 +1167,7 @@ where
                     tip,
                     now: ports.clock.now(),
                     reply_keys: None,
-                    features: config.claimed_features(),
+                    claim: Claim::of(config, &session.seed),
                 };
                 let paid = I2Randomness::draw(&mut **ports.rng.lock())
                     .map_err(InvoiceError::Signing)
@@ -1303,7 +1304,7 @@ where
                     tip,
                     now: ports.clock.now(),
                     reply_keys: None,
-                    features: config.claimed_features(),
+                    claim: Claim::of(config, &session.seed),
                 };
                 Ok(session
                     .store
