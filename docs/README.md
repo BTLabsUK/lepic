@@ -83,7 +83,7 @@ LEPIC matches the formats of the reference wallet and node. Each note describes 
 - [CONTRIBUTING](../CONTRIBUTING.md): branches, commit format and the check gate.
 - [Rules](rules.md): the project's coding, compatibility and testing rules.
 - [Logging](logging.md): log levels, fields and redaction.
-- [Budgets](budgets.md): the size and speed budgets the checks enforce.
+- [Budgets](budgets.md): the size and performance limits `cargo xtask budget` measures.
 - [Fuzzing](fuzzing.md): the fuzz targets and how to run them.
 - [Interop suite](../interop/README.md): tests against the reference wallet, node and relay.
 - Notes on the [mobile build](spikes/f-03-mobile-build.md) and the
