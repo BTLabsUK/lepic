@@ -96,6 +96,28 @@ mod server {
             .map_err(CliError::io("restrict the socket to its owner"))?;
         Ok(listening)
     }
+
+    #[cfg(test)]
+    mod tests {
+        // Tests may unwrap (docs/rules.md).
+        #![allow(clippy::unwrap_used)]
+
+        use super::*;
+
+        /// The peer's uid against serve's: a second account to connect from is not at hand in a
+        /// test, so serve's uid is changed instead.
+        #[tokio::test]
+        async fn a_peer_of_another_user_is_refused() {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("s.sock");
+            let mut listening = bind(&path).unwrap();
+            let _client = UnixStream::connect(&path).await.unwrap();
+            let stream = listening.accept().await.unwrap();
+            assert!(listening.is_this_user(&stream));
+            listening.owner = listening.owner.wrapping_add(1);
+            assert!(!listening.is_this_user(&stream));
+        }
+    }
 }
 
 #[cfg(all(test, unix))]

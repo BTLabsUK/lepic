@@ -645,6 +645,81 @@ fn a_received_slate_is_answered_and_the_sender_finalizes_the_reply() {
 }
 
 #[test]
+fn the_finalize_route_posts_the_receivers_reply() {
+    let (host, wallet) = funded();
+    let (receiver, _) = receiver(&host);
+    let slate = wallet.path("payment.slate");
+    let sent = wallet
+        .run(
+            &host,
+            &["tx", "send", "1.5", "--to-file", slate.to_str().unwrap()],
+        )
+        .ok()
+        .json();
+    let received = receiver
+        .run(&host, &["tx", "receive", slate.to_str().unwrap()])
+        .ok()
+        .json();
+    let reply = std::fs::read_to_string(support::text(&received, "reply_file")).unwrap();
+    let body = serde_json::json!({ "slate": reply }).to_string();
+
+    serving(host, &wallet, |socket, client| {
+        let finalized = http(socket, "POST", "/v1/slates/finalize", Some(&body)).ok();
+        assert_eq!(finalized["tx_id"], sent["tx_id"], "{finalized}");
+        assert_eq!(finalized["slate_id"], sent["slate_id"], "{finalized}");
+        assert_eq!(finalized["state"], "posted", "{finalized}");
+        assert_eq!(client.node.pushed_transactions().len(), 1);
+        problem(
+            &http(socket, "POST", "/v1/slates/finalize", Some("{")),
+            400,
+            "usage",
+        );
+    });
+}
+
+#[test]
+fn a_send_over_http_is_received_finalized_and_posted() {
+    let (host, wallet) = funded();
+    let (receiver, _) = receiver(&host);
+
+    serving(host, &wallet, |socket, client| {
+        let mut payee = client.without_interrupt();
+        let stop = Arc::new(AtomicBool::new(false));
+        let signal = Arc::clone(&stop);
+        payee.interrupt_when = Some(Arc::new(move || signal.load(Ordering::SeqCst)));
+        let dir = tempfile::tempdir().unwrap();
+        let payee_socket = dir.path().join("payee.sock");
+        let payee_arg = payee_socket.to_str().unwrap();
+        std::thread::scope(|scope| {
+            let server = scope.spawn(|| {
+                receiver.run(
+                    &payee,
+                    &["serve", "--socket", payee_arg, "--http", "--port", "0"],
+                )
+            });
+            let stopping = Stop(&stop);
+            wait_for_socket(&payee_socket);
+            let status = http(&payee_socket, "GET", "/v1/status", None).ok();
+            let port = status["http"]["port"].as_u64().unwrap();
+            let to = format!("http://127.0.0.1:{port}");
+            let body = serde_json::json!({ "amount": "1", "to": to, "method": "http" });
+
+            let sent = http(socket, "POST", "/v1/transactions", Some(&body.to_string())).ok();
+            assert_eq!(sent["transport"], "http", "{sent}");
+            assert_eq!(sent["destination"], format!("{to}/v2/foreign"), "{sent}");
+            assert_eq!(sent["state"], "posted", "{sent}");
+            assert_eq!(sent["delivered"], true, "{sent}");
+            assert_eq!(client.node.pushed_transactions().len(), 1);
+            let status = http(&payee_socket, "GET", "/v1/status", None).ok();
+            assert_eq!(status["http"]["received"], 1, "{status}");
+
+            drop(stopping);
+            server.join().unwrap().ok();
+        });
+    });
+}
+
+#[test]
 fn the_password_route_re_encrypts_the_vault() {
     let host = TestHost::new();
     let wallet = Instance::new("serving password");
