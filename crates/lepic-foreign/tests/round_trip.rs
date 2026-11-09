@@ -846,3 +846,36 @@ async fn a_wallet_without_a_coinbase_builder_refuses() {
     assert_eq!(answer["result"]["Err"]["GenericError"], "wallet not ready");
     listener.shutdown().await;
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_client_to_other_computers_does_not_reach_a_wallet_on_this_one() {
+    let wallet = handler(None);
+    let listener = listen(
+        ListenSettings::new(
+            Exposure::LocalOnly,
+            0,
+            lepic_foreign::testing::listen_limits(),
+        ),
+        wallet.clone(),
+    )
+    .await
+    .unwrap();
+    let port = listener.local_addr().port();
+    let guarded = ForeignClient::to_other_computers(
+        lepic_foreign::testing::client_settings(),
+        webpki_tls_config().unwrap(),
+    );
+    for host in ["localhost", "127.0.0.1", "127.1", "[::ffff:127.0.0.1]"] {
+        let url = ForeignUrl::parse(&format!("http://{host}:{port}"), PlainHttp::Allowed).unwrap();
+        let refused = guarded.receive_tx(&url, &s1()).await.unwrap_err();
+        assert!(
+            matches!(refused, ClientError::ThisComputer),
+            "{host}: {refused:?}"
+        );
+    }
+    assert_eq!(wallet.calls.load(Ordering::SeqCst), 0);
+    // The plain client still reaches it.
+    let reply = client().receive_tx(&url(port), &s1()).await.unwrap();
+    assert_eq!(reply.as_text(), Some(S2));
+    listener.shutdown().await;
+}

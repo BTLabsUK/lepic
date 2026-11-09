@@ -17,7 +17,7 @@ use lepic_slate::codec::WireSlate;
 use rustls::ClientConfig;
 use tracing::debug;
 
-use crate::dial::{ForeignConnector, ForeignDialer};
+use crate::dial::{ForeignConnector, ForeignDialer, refused_this_computer};
 use crate::error::ClientError;
 use crate::rpc::{self, VersionInfo};
 use crate::url::ForeignUrl;
@@ -63,7 +63,23 @@ impl std::fmt::Debug for ForeignClient {
 impl ForeignClient {
     /// Construction does no I/O; requests need a Tokio runtime.
     pub fn new(settings: ClientSettings, tls: Arc<ClientConfig>) -> Self {
-        Self::build(settings, tls, None)
+        let mut http = HttpConnector::new();
+        http.enforce_http(false);
+        http.set_connect_timeout(Some(settings.connect_timeout));
+        http.set_nodelay(true);
+        Self::build(settings, tls, ForeignConnector::Direct(http))
+    }
+
+    /// As [`ForeignClient::new`], but it never connects to this computer: a host that is, or
+    /// resolves to, a loopback or unspecified address fails with [`ClientError::ThisComputer`].
+    /// The check is made on the addresses each connection resolves. Private and link-local
+    /// addresses are other computers and are connected to. The client has its own connection
+    /// pool, so it never reuses a connection another client opened.
+    pub fn to_other_computers(settings: ClientSettings, tls: Arc<ClientConfig>) -> Self {
+        let route = ForeignConnector::OtherComputers {
+            connect_timeout: settings.connect_timeout,
+        };
+        Self::build(settings, tls, route)
     }
 
     /// As [`ForeignClient::new`], but every connection is opened by `dialer`, which the
@@ -74,24 +90,10 @@ impl ForeignClient {
         tls: Arc<ClientConfig>,
         dialer: Arc<dyn ForeignDialer>,
     ) -> Self {
-        Self::build(settings, tls, Some(dialer))
+        Self::build(settings, tls, ForeignConnector::Dialed(dialer))
     }
 
-    fn build(
-        settings: ClientSettings,
-        tls: Arc<ClientConfig>,
-        dialer: Option<Arc<dyn ForeignDialer>>,
-    ) -> Self {
-        let route = dialer.map_or_else(
-            || {
-                let mut http = HttpConnector::new();
-                http.enforce_http(false);
-                http.set_connect_timeout(Some(settings.connect_timeout));
-                http.set_nodelay(true);
-                ForeignConnector::Direct(http)
-            },
-            ForeignConnector::Dialed,
-        );
+    fn build(settings: ClientSettings, tls: Arc<ClientConfig>, route: ForeignConnector) -> Self {
         let connector = HttpsConnectorBuilder::new()
             .with_tls_config(Arc::unwrap_or_clone(tls))
             .https_or_http()
@@ -136,11 +138,13 @@ impl ForeignClient {
     }
 
     async fn exchange(&self, request: Request<Full<Bytes>>) -> Result<Vec<u8>, ClientError> {
-        let response = self
-            .client
-            .request(request)
-            .await
-            .map_err(|error| ClientError::Unreachable(Box::new(error)))?;
+        let response = self.client.request(request).await.map_err(|error| {
+            if refused_this_computer(&error) {
+                ClientError::ThisComputer
+            } else {
+                ClientError::Unreachable(Box::new(error))
+            }
+        })?;
         match response.status() {
             StatusCode::NOT_FOUND => return Err(ClientError::NotFound),
             status if !status.is_success() => {

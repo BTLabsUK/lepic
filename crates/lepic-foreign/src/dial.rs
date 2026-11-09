@@ -4,17 +4,22 @@
 //! send the bytes another way, such as through tor. TLS and the `Host` header stay those of the
 //! wallet's URL whatever the dialer connects to.
 
+use std::error::Error;
 use std::future::Future;
 use std::io;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
+use std::time::Duration;
 
 use hyper::Uri;
 use hyper_util::client::legacy::connect::{Connected, Connection, HttpConnector};
 use hyper_util::rt::TokioIo;
 use tokio::io::{AsyncRead, AsyncWrite};
+use tokio::net::TcpStream;
 use tower_service::Service;
+
+use crate::url::is_this_computer;
 
 /// A byte stream to a wallet, before TLS.
 pub trait ForeignStream: AsyncRead + AsyncWrite + Send + Unpin {}
@@ -30,11 +35,63 @@ pub trait ForeignDialer: Send + Sync {
     fn dial<'a>(&'a self, host: &'a str, port: u16) -> ForeignDialFuture<'a>;
 }
 
-/// What hyper-rustls wraps: either hyper's own connector or a [`ForeignDialer`].
+/// What hyper-rustls wraps: hyper's own connector, one that connects only to other computers,
+/// or a [`ForeignDialer`].
 #[derive(Clone)]
 pub(crate) enum ForeignConnector {
     Direct(HttpConnector),
+    OtherComputers { connect_timeout: Duration },
     Dialed(Arc<dyn ForeignDialer>),
+}
+
+/// The refusal of an address that is this computer's own, carried inside the connector's
+/// [`io::Error`] until the client turns it into [`crate::ClientError::ThisComputer`].
+#[derive(Debug, thiserror::Error)]
+#[error("the address is one of this computer's own")]
+pub(crate) struct ThisComputer;
+
+/// Whether `error` or one of its causes is a [`ThisComputer`] refusal.
+pub(crate) fn refused_this_computer(error: &(dyn Error + 'static)) -> bool {
+    let mut cause = Some(error);
+    while let Some(error) = cause {
+        let inner = error
+            .downcast_ref::<io::Error>()
+            .and_then(io::Error::get_ref)
+            .map(|inner| inner as &(dyn Error + 'static));
+        if error.is::<ThisComputer>() || inner.is_some_and(<dyn Error>::is::<ThisComputer>) {
+            return true;
+        }
+        cause = error.source();
+    }
+    false
+}
+
+/// Resolves `host` and connects to the first of its addresses that is not this computer's own.
+/// The check is on the resolved addresses, the ones connected to, so an answer that names this
+/// computer is never connected to whatever an earlier lookup said.
+pub(crate) async fn connect_to_other_computer(host: &str, port: u16) -> io::Result<TcpStream> {
+    let mut refused = false;
+    let mut failed = None;
+    for address in tokio::net::lookup_host((host, port)).await? {
+        if is_this_computer(address.ip()) {
+            refused = true;
+            continue;
+        }
+        match TcpStream::connect(address).await {
+            Ok(stream) => {
+                stream.set_nodelay(true)?;
+                return Ok(stream);
+            }
+            Err(error) => failed = Some(error),
+        }
+    }
+    Err(failed.unwrap_or_else(|| {
+        if refused {
+            io::Error::new(io::ErrorKind::PermissionDenied, ThisComputer)
+        } else {
+            io::Error::new(io::ErrorKind::NotFound, "the host has no address")
+        }
+    }))
 }
 
 pub(crate) struct Dialed(TokioIo<Box<dyn ForeignStream>>);
@@ -81,7 +138,7 @@ impl Service<Uri> for ForeignConnector {
     fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
         match self {
             Self::Direct(http) => http.poll_ready(cx).map_err(io::Error::other),
-            Self::Dialed(_) => Poll::Ready(Ok(())),
+            Self::OtherComputers { .. } | Self::Dialed(_) => Poll::Ready(Ok(())),
         }
     }
 
@@ -91,6 +148,23 @@ impl Service<Uri> for ForeignConnector {
                 let connecting = http.call(uri);
                 Box::pin(async move {
                     let stream = connecting.await.map_err(io::Error::other)?.into_inner();
+                    Ok(Dialed(TokioIo::new(
+                        Box::new(stream) as Box<dyn ForeignStream>
+                    )))
+                })
+            }
+            Self::OtherComputers { connect_timeout } => {
+                let connect_timeout = *connect_timeout;
+                Box::pin(async move {
+                    let (host, port) = dial_target(&uri)?;
+                    let stream = tokio::time::timeout(
+                        connect_timeout,
+                        connect_to_other_computer(&host, port),
+                    )
+                    .await
+                    .map_err(|_| {
+                        io::Error::new(io::ErrorKind::TimedOut, "connecting took too long")
+                    })??;
                     Ok(Dialed(TokioIo::new(
                         Box::new(stream) as Box<dyn ForeignStream>
                     )))
@@ -125,7 +199,41 @@ fn dial_target(uri: &Uri) -> io::Result<(String, u16)> {
 
 #[cfg(test)]
 mod tests {
+    use tokio::net::TcpListener;
+
     use super::*;
+
+    /// A listener on `address` and a check that nothing connected to it.
+    async fn untouched(address: &str) -> (u16, impl FnOnce()) {
+        let listener = TcpListener::bind((address, 0)).await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let check = move || {
+            let waker = std::task::Waker::noop();
+            let mut cx = Context::from_waker(waker);
+            assert!(
+                listener.poll_accept(&mut cx).is_pending(),
+                "a connection reached {address}"
+            );
+        };
+        (port, check)
+    }
+
+    #[tokio::test]
+    async fn refuses_names_and_literals_that_resolve_to_this_computer() {
+        let (port, nothing_connected) = untouched("127.0.0.1").await;
+        for host in [
+            "127.0.0.1",
+            "localhost",
+            "127.1",
+            "0.0.0.0",
+            "::ffff:127.0.0.1",
+        ] {
+            let error = connect_to_other_computer(host, port).await.unwrap_err();
+            assert!(refused_this_computer(&error), "{host}: {error}");
+            assert_eq!(error.kind(), io::ErrorKind::PermissionDenied, "{host}");
+        }
+        nothing_connected();
+    }
 
     #[test]
     fn takes_the_port_of_the_url_or_the_default_of_its_scheme() {

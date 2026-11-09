@@ -45,6 +45,8 @@ pub enum ClientError {
     Url(#[from] UrlError),
     #[error("tls configuration failed")]
     TlsConfig(#[source] rustls::Error),
+    #[error("the address is one of this computer's own, which this client does not send to")]
+    ThisComputer,
     #[error("could not reach the other wallet")]
     Unreachable(#[source] Box<dyn std::error::Error + Send + Sync>),
     #[error("the other wallet did not answer in time")]

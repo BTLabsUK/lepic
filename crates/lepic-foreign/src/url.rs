@@ -90,6 +90,18 @@ impl ForeignUrl {
         self.port
     }
 
+    /// Whether the host is a name or literal address of this computer: `localhost` or a name
+    /// under it, or an address [`is_this_computer`] matches. A name that only resolves to one is
+    /// not matched here; [`crate::ForeignClient::to_other_computers`] checks what names resolve
+    /// to when it connects.
+    pub fn names_this_computer(&self) -> bool {
+        let host = self.host.trim_end_matches('.');
+        let bare = host.trim_start_matches('[').trim_end_matches(']');
+        host == "localhost"
+            || host.ends_with(".localhost")
+            || bare.parse::<IpAddr>().is_ok_and(is_this_computer)
+    }
+
     /// The full URL of the endpoint.
     pub fn as_uri(&self) -> String {
         let scheme = match self.scheme {
@@ -147,6 +159,14 @@ fn split_port(authority: &str, scheme: Scheme) -> Result<(&str, u16), UrlError> 
         },
     };
     Ok((host, port))
+}
+
+/// Whether a connection to `ip` stays on this computer: a loopback address, IPv4-mapped too, or
+/// the unspecified address, which reaches this computer when connected to. Private, link-local
+/// and every other address are another computer's.
+pub fn is_this_computer(ip: IpAddr) -> bool {
+    let ip = ip.to_canonical();
+    ip.is_loopback() || ip.is_unspecified()
 }
 
 fn is_loopback(host: &str) -> bool {
@@ -232,6 +252,67 @@ mod tests {
             err(&format!("https://{}.Onion../", "ABCDEFGHIJKLMNOP")),
             UrlError::OnionNeedsTor
         );
+    }
+
+    #[test]
+    fn this_computer_is_loopback_and_unspecified_only() {
+        for own in [
+            "127.0.0.1",
+            "127.255.0.9",
+            "0.0.0.0",
+            "::1",
+            "::",
+            "::ffff:127.0.0.1",
+            "::ffff:0.0.0.0",
+        ] {
+            assert!(is_this_computer(own.parse().unwrap()), "{own}");
+        }
+        for other in [
+            "10.0.0.5",
+            "172.16.0.1",
+            "192.168.1.20",
+            "169.254.10.1",
+            "100.64.0.1",
+            "203.0.113.7",
+            "fe80::1",
+            "fd00::1",
+            "::ffff:192.168.1.20",
+            "2001:db8::1",
+        ] {
+            assert!(!is_this_computer(other.parse().unwrap()), "{other}");
+        }
+    }
+
+    #[test]
+    fn names_this_computer_by_name_or_literal() {
+        let names = |input: &str| {
+            ForeignUrl::parse(input, PlainHttp::Allowed)
+                .unwrap()
+                .names_this_computer()
+        };
+        for own in [
+            "http://localhost",
+            "http://LocalHost.:3415",
+            "http://wallet.localhost",
+            "http://127.0.0.1:3415",
+            "https://127.9.9.9",
+            "http://0.0.0.0",
+            "http://[::1]:3415",
+            "http://[::]",
+            "http://[::ffff:127.0.0.1]",
+        ] {
+            assert!(names(own), "{own}");
+        }
+        for other in [
+            "http://192.168.1.20:3415",
+            "http://10.0.0.5",
+            "http://[fe80::1]",
+            "https://wallet.example",
+            "https://localhost.example",
+            "https://notlocalhost",
+        ] {
+            assert!(!names(other), "{other}");
+        }
     }
 
     proptest::proptest! {

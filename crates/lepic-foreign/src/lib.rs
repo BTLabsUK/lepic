@@ -22,4 +22,4 @@ pub use server::{
     CoinbaseAccess, Exposure, ListenLimits, ListenSettings, ListenerHandle, ReceiveHandler,
     Refusal, listen,
 };
-pub use url::{DEFAULT_LISTEN_PORT, ForeignUrl, PlainHttp, Scheme};
+pub use url::{DEFAULT_LISTEN_PORT, ForeignUrl, PlainHttp, Scheme, is_this_computer};
