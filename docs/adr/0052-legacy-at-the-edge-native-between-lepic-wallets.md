@@ -434,6 +434,14 @@ are steps 10 to 12.
    can see it; the sealed envelope carries `lepic.v1` when both cards claim native slates.
    Backend. Done: acceptance pairing run with both formats; an older build peer gets V3 JSON.
    Then measure before going on.
+   Built on `feat/native-contacts`, unmerged. Lead decisions: every wallet claims bit 7
+   `NATIVE_SLATES`, because every build with the codec reads native slates whatever it sends;
+   `native_direct` is a `WalletConfig` value, default `false`, because the contact send path
+   reads its policy there and the binding keeps it off for the release; native goes over the
+   contact mailbox only, not over private pairings, and a stored slate sealed again to copy as
+   text keeps type `01`. An answer
+   takes its kernel excess from the participants' public excesses (the body of a native proposal
+   is not carried).
 7. **(b) The payer scans the payee's I1 in person**, face to face and at a paypoint ("paypoint
    starts"): a raw `lepic.v1` I1 with the reply-key and reply-mailbox tail records, the I2
    sealed and posted to the reply mailbox (one scan) or shown as animated codes offline,

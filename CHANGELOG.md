@@ -47,17 +47,31 @@ Conventional Commit messages at release time.
   independent bech32m, and the `epic1_link` fuzz target.
 - `lepic-native-slate`, the native slate codec `lepic.v1` of EPICTX: a binary slate with the
   network and block header version in its header, a TLV tail for reply records, a JSON view, and
-  `NativeV1Codec` for the codec registry (media type `application/vnd.lepic.slate`). The wallet
-  does not use it yet. Golden vectors in `testdata/vectors/slates_native` and a `slate_native`
-  fuzz target cover it.
+  `NativeV1Codec` for the codec registry (media type `application/vnd.lepic.slate`). Paired
+  contacts use it when both claim native slates (below). Golden vectors in
+  `testdata/vectors/slates_native` and a `slate_native` fuzz target cover it.
 - `lepic-seal`, the sealed envelope format in a crate of its own (RFC 0003, ADR 0052).
-  `lepic-contact` re-exports the envelope, its armor and contact cards at their former paths.
-  New in it, not yet used by the engine: envelope type `0A` with a reply mailbox (tag `09`);
-  slate envelopes padded to at least 768 bytes (tag `FE`), which readers of RFC 0002 open as
-  before; the seal, epic1 and listener key classes (`KeyClass`, `seal_tx`, `open_tx`); the
-  `BEGINEPICTX.` armor beside `BEGINEPICSEALED.` (`armor_tx`, `dearmor_marked`); and `classify`
-  for payment files. A body over 65,535 bytes is refused with `EncodeError::BodyTooLarge`, which
-  carries the limit and the size and replaces `FieldTooLong` for the body.
+  `lepic-contact` re-exports the envelope, its armor and contact cards at their former paths. New
+  in it: envelope type `0A` with a reply mailbox (tag `09`); slate envelopes padded to at least
+  768 bytes (tag `FE`), which readers of RFC 0002 open as before; the seal, epic1 and listener key
+  classes (`KeyClass`, `seal_tx`, `open_tx`); the `BEGINEPICTX.` armor beside `BEGINEPICSEALED.`
+  (`armor_tx`, `dearmor_marked`); and `classify` for payment files. A body over 65,535 bytes is
+  refused with `EncodeError::BodyTooLarge`, which carries the limit and the size and replaces
+  `FieldTooLong` for the body. The engine uses type `0A`, the padding and the `BEGINEPICTX.` armor
+  for paired contacts (below); the reply mailbox, the new key classes and `classify` are not used
+  by it yet.
+- Native slates between paired contacts (RFC 0003 §6.1, step 6), off by default. A wallet with
+  `native_direct = true` (`WalletConfig::native_direct`, the CLI setting `native_direct` or
+  `LEPIC_NATIVE_DIRECT`) seals a new S1 or I1 to a contact as `lepic.v1` in envelope type `0A`
+  when the contact's pairing claims native slates, over the contact mailbox, armored with
+  `BEGINEPICTX.`; the mailbox reader takes both marker pairs. Every wallet claims native slates in
+  its pairing (feature bit 7, `NATIVE_SLATES`) and reads them; a reply uses the format of its
+  request, and private pairings and contacts without the claim get V3 JSON in type `01` as before.
+  A `0A` that does not decode is reported as an undecodable slate, and a native slate over the
+  65,535-byte body limit is refused before it is stored. The kernel excess of an answered slate
+  comes from the participants' public excesses, so an answer without the proposal's body
+  finalizes. The contact report and `lepic contact list` gain `native_slates`. The binding sets
+  `native_direct` to `false`.
 - Local quarantine and an early-notice buffer, both off by default (ADR 0049).
   `quarantine_max_bytes` keeps contact messages that opened and could not be taken, with
   `contact_quarantine`, `contact_quarantine_retry`, `contact_quarantine_discard` and

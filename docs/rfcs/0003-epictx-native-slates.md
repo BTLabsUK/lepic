@@ -1676,7 +1676,8 @@ Paths are in the LEPIC repository at `main` `078eadb7` unless marked otherwise.
 | `BEGINEPICSEALED.` armour, `.epicsealed`, 96 KiB bound, typed checksum error | **[Shipped]** | `crates/lepic-contact/src/armor.rs` |
 | Contact keys, reply keys | **[Shipped]** | `crates/lepic-wallet-contacts/src/key_schedule.rs` |
 | Sealed slates to contacts and sealed answers to marked files | **[Shipped]** | `crates/lepic-wallet-contacts/src/sealed.rs` |
-| Marker with reply key, `MarkedV3JsonCodec`, feature bits | **[Shipped]** at `crates/lepic-epicbox/src/marker/`; moved to `crates/lepic-transport/src/marker/` **[Unmerged]** | bit 7 `NATIVE_SLATES` not yet |
+| Marker with reply key, `MarkedV3JsonCodec`, feature bits | **[Shipped]** at `crates/lepic-epicbox/src/marker/`; moved to `crates/lepic-transport/src/marker/` **[Unmerged]** | bit 7 `NATIVE_SLATES` claimed in every pairing **[Unmerged]** (`feat/native-contacts`, step 6) |
+| Native slates in paired-contact mailboxes (6.1, step 6): `lepic.v1` in type `0A` when `native_direct` is on and the contact claims bit 7, replies in the request's format, `BEGINEPICTX.` text | **[Unmerged]** `feat/native-contacts`, off by default (`native_direct = false`) | `crates/lepic-wallet-contacts/src/native.rs`, `crates/lepic-wallet/tests/contact_native.rs` |
 | ADR 0033 namespace construction, onion key | **[Shipped]** | `lepic_wallet::namespace` |
 | `api tls v1` namespace key | **[Unmerged]** | `feat/wallet-methods` only (ADR 0033 row "unreleased") |
 | Methods refactor (ADR 0050, 0051) | **[Unmerged]** | `feat/wallet-methods` at `c100d2bc`; `crates/lepic-methods/` exists only there |
