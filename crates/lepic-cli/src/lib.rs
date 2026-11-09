@@ -1,11 +1,13 @@
 // SPDX-License-Identifier: Apache-2.0
-//! The `lepic` command-line wallet, as a library so tests drive it in-process with a mock node
-//! and a mock relay.
+//! The `lepic` command-line wallet as a library, so tests run whole commands in-process against
+//! a mock node and a mock relay.
 //!
-//! [`run`] parses the arguments, resolves the settings once, installs logging for the command's
-//! duration only, runs the command on its own Tokio runtime and prints its report. Everything
-//! the process would take from the outside (environment, standard streams, node, relay, signal)
-//! comes in through [`Host`] and [`Console`], so the CLI keeps no global state.
+//! [`run`] parses the arguments, resolves the settings once, installs logging for the command
+//! only, runs the command on its own Tokio runtime, prints its report and returns the exit code.
+//! The environment, standard streams, node, relay and interrupt signal reach it through [`Host`]
+//! and [`Console`], so the crate keeps no global state.
+//!
+//! The crate's `README.md` describes its parts; `docs/cli.md` is the user guide.
 
 pub mod amount;
 #[cfg(unix)]
