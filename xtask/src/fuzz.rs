@@ -44,6 +44,7 @@ const TARGETS: &[&str] = &[
     "slate_v2",
     "slate_v3",
     "slate_detect",
+    "slate_native",
     "file_import",
     "epicbox_frame",
     "epicbox_address",
@@ -378,6 +379,11 @@ fn chain_seeds(root: &Path, vectors: &Path, target: &str) -> Result<Option<BTree
             }
             for vector in read_area(vectors, "epicbox", "message_")? {
                 seeds.extend(text_fields(&vector, "plaintext"));
+            }
+        }
+        "slate_native" => {
+            for vector in read_area(vectors, "slates_native", "")? {
+                seeds.extend(hex_fields(&vector, "lepic_v1"));
             }
         }
         "node_response" => {

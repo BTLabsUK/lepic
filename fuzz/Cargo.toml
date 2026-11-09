@@ -25,6 +25,7 @@ lepic-keychain = { path = "../crates/lepic-keychain" }
 lepic-legacy-rpc = { path = "../crates/lepic-legacy-rpc" }
 lepic-legacy-slate = { path = "../crates/lepic-legacy-slate" }
 lepic-methods = { path = "../crates/lepic-methods", features = ["epicbox"] }
+lepic-native-slate = { path = "../crates/lepic-native-slate" }
 lepic-node = { path = "../crates/lepic-node" }
 lepic-primitives = { path = "../crates/lepic-primitives" }
 lepic-slate = { path = "../crates/lepic-slate" }
@@ -74,6 +75,13 @@ bench = false
 [[bin]]
 name = "slate_detect"
 path = "fuzz_targets/slate_detect.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "slate_native"
+path = "fuzz_targets/slate_native.rs"
 test = false
 doc = false
 bench = false

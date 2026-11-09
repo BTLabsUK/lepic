@@ -1096,6 +1096,7 @@ dependencies = [
  "lepic-legacy-rpc",
  "lepic-legacy-slate",
  "lepic-methods",
+ "lepic-native-slate",
  "lepic-node",
  "lepic-primitives",
  "lepic-slate",
@@ -1187,6 +1188,17 @@ dependencies = [
  "thiserror",
  "tokio",
  "tracing",
+]
+
+[[package]]
+name = "lepic-native-slate"
+version = "0.3.1"
+dependencies = [
+ "lepic-crypto",
+ "lepic-primitives",
+ "lepic-slate",
+ "serde",
+ "thiserror",
 ]
 
 [[package]]
