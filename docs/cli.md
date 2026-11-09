@@ -144,6 +144,9 @@ either way.
 The wallet takes native slates from its contacts whatever the switch says, and answers a slate
 in the format it came in.
 
+The switch also sends native slates to HTTP and Tor listeners that offer them; see Pinned keys
+under Direct over Tor.
+
 #### Domain
 
 `domain` (`--domain <DOMAIN>`, `LEPIC_DOMAIN`, `domain = "example.com"`) is the domain the wallet
@@ -619,11 +622,26 @@ tries again later, or `lepic tx cancel <ID>` gives up.
 
 ### Pinned keys
 
-A LEPIC wallet listening over HTTP or Tor also offers its native endpoint, `/v1/peer`, with a
-seal key. A send to it pins that key under the address's origin: `http://host:port`,
-`https://host:port`, or the onion name alone. A later send to the origin stops when the wallet
-there shows another key, and names both keys. Once the change is confirmed with the payee,
-forget the pin; the next send pins the key it is shown.
+With `native_direct` on, a LEPIC wallet listening over HTTP or Tor also offers its native
+endpoint, `/v1/peer`, with a seal key: the onion's own key on the onion, a key of its own over
+HTTP. With the switch off it answers `check_version` without the `lepic` key and serves no
+native routes. With `native_direct` on, a send to a wallet that offers the endpoint goes there as a `lepic.v1` slate in a sealed envelope, and the first one
+that succeeds pins the key under the address's origin: `http://host:port`, `https://host:port`,
+or the onion name alone. A payment proof asked for over the endpoint names the listener's proof
+address, the onion's key on the onion and the payment-proof address over HTTP. With the switch
+off, or to a listener that offers no endpoint and is not pinned, the send goes as before and
+pins nothing. `--output json` reports `dialect`, `native` or `legacy`, for a send or resend to a
+listener.
+
+A send to a pinned origin never falls back to the V2 or V3 slate by itself. It stops, with
+nothing stored, when the wallet there shows another key (the hint names both keys), when it no
+longer offers the endpoint, or when it cannot be asked. A native exchange that fails after the
+slate was stored exits with code 11 and the inputs stay locked, as for any send. A native post
+goes to other computers only: a host that resolves to this computer fails to connect.
+
+`--legacy` on `tx send` or `tx resend` sends the V2 or V3 slate whatever the listener offers,
+and neither checks nor pins its key. Once a key change is confirmed with the payee, forget the
+pin; the next send pins the key it is shown.
 
 ```
 $ lepic peer pins
@@ -1070,7 +1088,7 @@ when `serve` stops.
 | `GET /v1/node` | `node status` |
 | `GET /v1/transactions?account=` | `tx list` |
 | `GET /v1/transactions/{tx_id}` | `tx show` |
-| `POST /v1/transactions` | `tx send`: `amount`, `to`, and optionally `method` (one of `GET /v1/methods`; Epicbox when absent; the API sends over `epicbox` and `http`), `slate_id`, `account`, `message`, `min_confirmations` and `change_outputs`. Over TLS an `http` send goes to other computers only: a `to` naming `localhost`, a loopback or an unspecified address is a 400 `usage` problem and stores nothing, and a host that resolves only to such addresses fails to connect, leaving the send stored and undelivered |
+| `POST /v1/transactions` | `tx send`: `amount`, `to`, and optionally `method` (one of `GET /v1/methods`; Epicbox when absent; the API sends over `epicbox` and `http`), `slate_id`, `account`, `message`, `min_confirmations`, `change_outputs` and `legacy` (as `--legacy`; the report's `dialect` says which went). Over TLS an `http` send goes to other computers only: a `to` naming `localhost`, a loopback or an unspecified address is a 400 `usage` problem and stores nothing, and a host that resolves only to such addresses fails to connect, leaving the send stored and undelivered |
 | `POST /v1/slates/receive` | `tx receive`, with the `slate` text; the reply slate is in the report |
 | `POST /v1/slates/finalize` | `tx finalize`, with the `slate` text and `fluff` |
 | `POST /v1/transactions/{tx_id}/cancel` | `tx cancel` |
@@ -1267,6 +1285,9 @@ With human output, an error ends with a `hint:` line that names what to try next
 | `http address rejected` (exit 2) | The `--to` URL is not `http(s)://host[:port][/path]`, or is plain `http` to another computer without `--allow-plain-http`. Nothing was stored. |
 | `invoices go over epicbox or through a slate file, not over http` (exit 2) | `invoice issue --to` was given an address with a scheme (`://`). |
 | `the http listener could not start` (exit 10) | Another program holds the port, or the port needs privileges; pick another with `--port`. |
+| `the send to the listener stopped: ... shows another key than the pinned one` (exit 7) | The listener's key is not the one pinned for its origin; the hint names both. Nothing was stored. Confirm the change with the payee, then `lepic peer forget <ORIGIN>`, or send with `--legacy`. |
+| `the send to the listener stopped: ... is pinned but advertises no native endpoint` (exit 7) | The pinned listener no longer offers native slates. Nothing was stored; `--legacy` sends the V2 or V3 slate. |
+| `the send to the listener stopped: transaction N is stored and its native exchange failed` (exit 11) | The endpoint refused or could not be reached; nothing went as a V2 or V3 slate. `tx resend`, with `--legacy` if wanted, or `tx cancel`. |
 | `give --tor-binary to use tor` (exit 2) | `tor listen`, or a send to an onion address, needs the path of the tor binary. Nothing was stored. |
 | `onion address rejected` (exit 2) | The `--to` address names an onion that is not a valid onion v3 address, or has a typo. Nothing was stored. |
 | `tor is not working: tor failed (missing)` (exit 3) | No tor binary at the `--tor-binary` path. Nothing was stored. |
