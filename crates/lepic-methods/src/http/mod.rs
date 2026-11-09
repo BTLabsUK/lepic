@@ -27,15 +27,15 @@ use tracing::debug;
 
 mod receiver;
 
-#[cfg(unix)]
-pub use lepic_legacy_rpc::listen_unix;
 pub use lepic_legacy_rpc::rpc::MAX_BODY_LEN;
 pub use lepic_legacy_rpc::{
     BlockFees, ClientError, ClientSettings, CoinbaseAccess, CoinbaseAnswer, DEFAULT_LISTEN_PORT,
     Exposure, ListenError, ListenLimits, ListenSettings, ListenerHandle, ListenerUrl, PlainHttp,
     ReceiveHandler, Refusal, RpcClient, RpcDialFuture, RpcDialer, RpcError, RpcStream, Scheme,
-    UrlError, listen, webpki_tls_config,
+    UrlError, listen, listen_with, webpki_tls_config,
 };
+#[cfg(unix)]
+pub use lepic_legacy_rpc::{listen_unix, listen_unix_with};
 pub use receiver::{Counts, Host, Receiver, coinbase_answer, coinbase_request, refuse};
 
 /// The transport id of the HTTP method, stored with its transactions.

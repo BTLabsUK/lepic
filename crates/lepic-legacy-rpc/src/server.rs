@@ -35,6 +35,7 @@ use hyper::server::conn::http1;
 use hyper::service::service_fn;
 use hyper::{Method, Request, Response, StatusCode};
 use hyper_util::rt::{TokioIo, TokioTimer};
+use lepic_peer::{PeerEndpoint, PeerRoute, ProblemCode, problem_response};
 use lepic_slate::codec::WireSlate;
 use lepic_transport::transport::BoxFuture;
 use serde::Deserialize;
@@ -267,6 +268,17 @@ pub async fn listen(
     settings: ListenSettings,
     handler: Arc<dyn ReceiveHandler>,
 ) -> Result<ListenerHandle, ListenError> {
+    listen_with(settings, handler, None).await
+}
+
+/// As [`listen`], and with `peer` the socket also serves the native endpoint (ADR 0052) at
+/// `/v1/peer` and advertises it in `check_version` under `peer`'s seal key. Without `peer`
+/// those routes are not found and `check_version` carries no advert.
+pub async fn listen_with(
+    settings: ListenSettings,
+    handler: Arc<dyn ReceiveHandler>,
+    peer: Option<Arc<PeerEndpoint>>,
+) -> Result<ListenerHandle, ListenError> {
     let address = SocketAddr::new(settings.exposure.address(), settings.port);
     let listener = TcpListener::bind(address).await.map_err(|source| {
         if source.kind() == std::io::ErrorKind::AddrInUse {
@@ -287,7 +299,7 @@ pub async fn listen(
     let (shutdown, stopped) = watch::channel(false);
     let task = tokio::spawn(accept_loop(
         Bound::Tcp(listener),
-        served(settings, handler),
+        served(settings, handler, peer),
         stopped,
     ));
     info!(
@@ -317,6 +329,17 @@ pub async fn listen_unix(
     settings: ListenSettings,
     handler: Arc<dyn ReceiveHandler>,
 ) -> Result<ListenerHandle, ListenError> {
+    listen_unix_with(path, settings, handler, None).await
+}
+
+/// As [`listen_unix`], serving and advertising the native endpoint as [`listen_with`] does.
+#[cfg(unix)]
+pub async fn listen_unix_with(
+    path: &Path,
+    settings: ListenSettings,
+    handler: Arc<dyn ReceiveHandler>,
+    peer: Option<Arc<PeerEndpoint>>,
+) -> Result<ListenerHandle, ListenError> {
     let bind_error = |source| ListenError::Bind { port: 0, source };
     match std::fs::remove_file(path) {
         Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
@@ -328,7 +351,7 @@ pub async fn listen_unix(
     let (shutdown, stopped) = watch::channel(false);
     let task = tokio::spawn(accept_loop(
         Bound::Unix(listener, path.to_owned()),
-        served(settings, handler),
+        served(settings, handler, peer),
         stopped,
     ));
     info!(
@@ -344,9 +367,14 @@ pub async fn listen_unix(
     })
 }
 
-fn served(settings: ListenSettings, handler: Arc<dyn ReceiveHandler>) -> Arc<Served> {
+fn served(
+    settings: ListenSettings,
+    handler: Arc<dyn ReceiveHandler>,
+    peer: Option<Arc<PeerEndpoint>>,
+) -> Arc<Served> {
     Arc::new(Served {
         handler,
+        peer,
         settings,
         requests: Mutex::new(Window::new()),
         payments_only: Mutex::new(Window::new()),
@@ -401,6 +429,9 @@ impl Bound {
 
 struct Served {
     handler: Arc<dyn ReceiveHandler>,
+    /// The native endpoint of this socket: its key is the one this socket was given, whatever
+    /// host a request names.
+    peer: Option<Arc<PeerEndpoint>>,
     settings: ListenSettings,
     requests: Mutex<Window>,
     /// Requests read once `requests` is spent, served only if they are payments.
@@ -659,6 +690,11 @@ async fn answer(
     } else {
         state.admit_request()
     };
+    if let Some(peer) = &state.peer
+        && let Some(route) = PeerRoute::from_path(request.uri().path())
+    {
+        return answer_peer(state, peer, admission, route, request).await;
+    }
     let Some(admission) = admission else {
         debug!("request limit reached");
         return status(StatusCode::SERVICE_UNAVAILABLE);
@@ -728,7 +764,7 @@ async fn serve(
         place.keep();
     }
     match request.call {
-        Call::CheckVersion => json(rpc::encode_version_response(&request.id)),
+        Call::CheckVersion => json(state.version_response(&request.id)),
         Call::ReceiveTx(slate) => {
             // Only what could be a payment spends the payment budget.
             let slot = if payment {
@@ -782,6 +818,72 @@ async fn serve(
                 json(rpc::encode_refusal_response(&request.id, refusal.reason()))
             }
         },
+    }
+}
+
+impl Served {
+    /// The `check_version` answer, with the advert of this socket's native endpoint if it has
+    /// one.
+    fn version_response(&self, id: &str) -> Vec<u8> {
+        let advert = self.peer.as_ref().map(|peer| peer.advert());
+        rpc::encode_version_response_with(id, advert.as_ref())
+    }
+}
+
+/// How long a caller over a budget is told to wait: the budgets are per minute.
+const BUDGET_RETRY: Duration = Duration::from_secs(60);
+
+/// A request for a route of the native endpoint. It spends the same budgets as the foreign
+/// API: past the request budget only a posted envelope is read, as a payment, and each envelope
+/// the wallet takes spends the payment budget. Over a budget the answer is `rate_limited`.
+async fn answer_peer(
+    state: &Served,
+    peer: &PeerEndpoint,
+    admission: Option<Admission<'_>>,
+    route: PeerRoute,
+    request: Request<Incoming>,
+) -> Response<Full<Bytes>> {
+    if request.method() != route.method() {
+        return status(StatusCode::METHOD_NOT_ALLOWED);
+    }
+    let rate_limited = || problem_response(ProblemCode::RateLimited, Some(BUDGET_RETRY));
+    // Loopback connections are set apart for a mining node; this route is not one of its.
+    let admission = match admission {
+        Some(Admission::Loopback) => state.admit_request(),
+        other => other,
+    };
+    let Some(mut admission) = admission else {
+        debug!("request limit reached");
+        return rate_limited();
+    };
+    if let Admission::PaymentOnly(place) = &mut admission {
+        if route != PeerRoute::Slates {
+            debug!("request limit reached");
+            return rate_limited();
+        }
+        place.keep();
+    }
+    if route == PeerRoute::Info {
+        return peer.info_response();
+    }
+    let limit = state.settings.receives_per_minute;
+    let Some(slot) = Served::take_slot(&state.receives, limit) else {
+        debug!("receive limit reached");
+        return rate_limited();
+    };
+    let answering = peer.answer(route, request, state.settings.body_timeout);
+    match tokio::time::timeout(state.settings.request_timeout, answering).await {
+        Ok(answer) => {
+            // Only an envelope the wallet took spends the payment budget.
+            if !answer.received {
+                Served::give_back(&state.receives, slot, limit);
+            }
+            answer.response
+        }
+        Err(_) => {
+            debug!("request timed out");
+            problem_response(ProblemCode::NotReady, Some(BUDGET_RETRY))
+        }
     }
 }
 

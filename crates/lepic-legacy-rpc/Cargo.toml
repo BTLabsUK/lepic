@@ -19,6 +19,7 @@ http-body-util.workspace = true
 hyper = { workspace = true, features = ["client", "server", "http1"] }
 hyper-rustls.workspace = true
 hyper-util = { workspace = true, features = ["client-legacy", "http1", "server", "tokio"] }
+lepic-peer.workspace = true
 lepic-slate.workspace = true
 lepic-transport.workspace = true
 rustls = { workspace = true, features = ["std"] }

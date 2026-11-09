@@ -17,10 +17,10 @@ pub use client::{ClientSettings, RpcClient, webpki_tls_config};
 pub use dial::{RpcDialFuture, RpcDialer, RpcStream};
 pub use error::{ClientError, ListenError, RpcError, UrlError};
 pub use rpc::{BlockFees, CoinbaseAnswer};
-#[cfg(unix)]
-pub use server::listen_unix;
 pub use server::{
     CoinbaseAccess, Exposure, ListenLimits, ListenSettings, ListenerHandle, ReceiveHandler,
-    Refusal, listen,
+    Refusal, listen, listen_with,
 };
+#[cfg(unix)]
+pub use server::{listen_unix, listen_unix_with};
 pub use url::{DEFAULT_LISTEN_PORT, ListenerUrl, PlainHttp, Scheme, is_this_computer};

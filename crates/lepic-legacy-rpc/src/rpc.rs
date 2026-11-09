@@ -9,6 +9,7 @@
 //! with every answer wrapped in `result.Ok` or `result.Err`. Pure functions over bytes, so both
 //! sides and the fuzz targets share them.
 
+use lepic_peer::Advert;
 use lepic_slate::codec::{MAX_WIRE_SLATE_LEN, MediaType, WireSlate};
 use std::fmt;
 
@@ -28,11 +29,14 @@ pub const MAX_BODY_LEN: usize = MAX_WIRE_SLATE_LEN + 64 * 1024;
 const MAX_ID_LEN: usize = 64;
 
 /// The slate versions a listening wallet offers.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VersionInfo {
     pub foreign_api_version: u16,
     pub v3: bool,
     pub v2: bool,
+    /// The native endpoint a LEPIC listener advertises, when the answer carries a readable
+    /// `lepic` key.
+    pub lepic: Option<Advert>,
 }
 
 /// What a caller asked the listener for.
@@ -387,8 +391,16 @@ pub fn encode_coinbase_response(id: &str, answer: &CoinbaseAnswer) -> Vec<u8> {
 
 /// The answer to `check_version`: version 2 with the V3 and V2 slates.
 pub fn encode_version_response(id: &str) -> Vec<u8> {
+    encode_version_response_with(id, None)
+}
+
+/// The answer to `check_version`, with the `lepic` key holding `advert` when there is one.
+pub fn encode_version_response_with(id: &str, advert: Option<&Advert>) -> Vec<u8> {
+    let lepic = advert
+        .map(|advert| format!(r#","lepic":{}"#, advert.to_json()))
+        .unwrap_or_default();
     format!(
-        r#"{{"id":{id},"jsonrpc":"2.0","result":{{"Ok":{{"foreign_api_version":{FOREIGN_API_VERSION},"supported_slate_versions":["V3","V2"]}}}}}}"#
+        r#"{{"id":{id},"jsonrpc":"2.0","result":{{"Ok":{{"foreign_api_version":{FOREIGN_API_VERSION},"supported_slate_versions":["V3","V2"]{lepic}}}}}}}"#
     )
     .into_bytes()
 }
@@ -484,13 +496,16 @@ fn response_ok(body: &[u8]) -> Result<&RawValue, RpcError> {
 struct RawVersion {
     foreign_api_version: u16,
     supported_slate_versions: Vec<String>,
+    #[serde(default)]
+    lepic: Option<serde_json::Value>,
 }
 
 // More names than any wallet sends means the answer is not a version list.
 const MAX_SLATE_VERSIONS: usize = 16;
 
 /// Reads the answer to `check_version`. Fails with [`RpcError::Incompatible`] for a foreign
-/// API older than version 2.
+/// API older than version 2. Unknown keys are ignored; a `lepic` key that is not a readable
+/// advert is read as no advert.
 pub fn decode_version_response(body: &[u8]) -> Result<VersionInfo, RpcError> {
     let ok = response_ok(body)?;
     let raw: RawVersion = serde_json::from_str(ok.get()).map_err(|_| RpcError::Malformed)?;
@@ -505,6 +520,10 @@ pub fn decode_version_response(body: &[u8]) -> Result<VersionInfo, RpcError> {
         foreign_api_version: raw.foreign_api_version,
         v3: offers("V3"),
         v2: offers("V2"),
+        lepic: raw
+            .lepic
+            .as_ref()
+            .and_then(|value| Advert::from_json(value).ok()),
     })
 }
 
@@ -541,6 +560,53 @@ mod tests {
     }
 
     #[test]
+    fn carries_the_advert_and_reads_it_back() {
+        let advert = Advert::new([5; 32]);
+        let answer = encode_version_response_with("3", Some(&advert));
+        assert_eq!(
+            std::str::from_utf8(&answer).unwrap(),
+            format!(
+                r#"{{"id":3,"jsonrpc":"2.0","result":{{"Ok":{{"foreign_api_version":2,"supported_slate_versions":["V3","V2"],"lepic":{{"formats":["lepic.v1"],"path":"/v1/peer","protocol":1,"seal":"{}"}}}}}}}}"#,
+                "05".repeat(32)
+            )
+        );
+        let info = decode_version_response(&answer).unwrap();
+        assert_eq!(info.lepic, Some(advert));
+        assert!(info.v3 && info.v2);
+        assert_eq!(
+            encode_version_response_with("3", None),
+            encode_version_response("3")
+        );
+    }
+
+    #[test]
+    fn reads_the_advert_among_unknown_keys_and_drops_a_malformed_one() {
+        let seal = "0a".repeat(32);
+        let body = |lepic: &str| {
+            format!(
+                r#"{{"id":1,"jsonrpc":"2.0","result":{{"Ok":{{"foreign_api_version":2,"supported_slate_versions":["V2"],"other":[1],{lepic}}}}}}}"#
+            )
+        };
+        let read = |lepic: &str| decode_version_response(body(lepic).as_bytes()).unwrap();
+        let info = read(&format!(
+            r#""lepic":{{"protocol":1,"formats":["lepic.v1","later"],"path":"/v1/peer","seal":"{seal}","x":true}}"#
+        ));
+        let advert = info.lepic.unwrap();
+        assert_eq!(advert.seal, [10; 32]);
+        assert!(advert.offers("lepic.v1"));
+        for malformed in [
+            r#""lepic":null"#.to_owned(),
+            r#""lepic":"yes""#.to_owned(),
+            r#""lepic":{"protocol":1,"formats":["lepic.v1"],"path":"/v1/peer","seal":"00"}"#
+                .to_owned(),
+            format!(r#""lepic":{{"protocol":1,"formats":[],"path":"v1","seal":"{seal}"}}"#),
+            r#""unrelated":1"#.to_owned(),
+        ] {
+            assert_eq!(read(&malformed).lepic, None, "{malformed}");
+        }
+    }
+
+    #[test]
     fn reads_check_version_and_echoes_its_id() {
         let request =
             decode_request(br#"{"jsonrpc":"2.0","method":"check_version","id":7,"params":[]}"#)
@@ -553,7 +619,8 @@ mod tests {
             VersionInfo {
                 foreign_api_version: 2,
                 v3: true,
-                v2: true
+                v2: true,
+                lepic: None,
             }
         );
         assert!(
