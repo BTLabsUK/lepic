@@ -7,6 +7,7 @@ pub mod codecs;
 pub mod error;
 #[cfg(feature = "legacy")]
 pub mod file;
+pub mod host_rule;
 #[cfg(any(test, feature = "loopback"))]
 pub mod loopback;
 pub mod marker;
