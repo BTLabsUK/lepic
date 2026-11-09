@@ -389,14 +389,15 @@ fn a_contact_send_reports_the_format_it_sealed() {
     }
 }
 
-/// Off by default: V3 envelopes as before, though each contact claims native slates.
+/// Off by default: V3 envelopes as before, and no contact claims native slates, because a wallet
+/// claims them in its pairing only while its own switch is on.
 #[test]
 fn both_wallets_off_send_v3_slates_as_stored() {
     let (world, shop_side, ben_side) = paired((false, false), WalletPolicy::default());
     world.payer.fund(1, FUNDING);
     for (party, contact) in [(&world.payer, ben_side), (&world.issuer, shop_side)] {
         let record = party.read(|repos| repos.contact(contact)).unwrap();
-        assert_ne!(record.facts.peer_features & NATIVE_SLATES, 0);
+        assert_eq!(record.facts.peer_features & NATIVE_SLATES, 0);
         assert!(!native_slates(&world, party, contact));
     }
 
@@ -464,11 +465,24 @@ fn contact_files_follow_the_native_slate_setting() {
     }
 }
 
+/// Records that the contact `contact` of `party` claims native slates, as one paired while its
+/// wallet had them on does.
+fn claim_native(party: &Party, contact: ContactId) {
+    let mut record = party.read(|repos| repos.contact(contact)).unwrap();
+    record.facts.peer_features |= NATIVE_SLATES;
+    party
+        .store()
+        .write(|repos| repos.put_contact(&record))
+        .unwrap();
+}
+
 /// A reply takes the format of its request, whatever its own wallet sends.
 #[test]
 fn a_reply_takes_the_format_of_its_request() {
-    // The payer sends native slates, the issuer does not.
+    // The payer sends native slates, the issuer does not. The issuer, paired with its switch
+    // off, claims none; its contact is recorded as claiming them, as after a later update.
     let (world, shop_side, ben_side) = paired((false, true), WalletPolicy::default());
+    claim_native(&world.payer, ben_side);
     world.payer.fund(1, FUNDING);
     assert_eq!(
         send_flow(&world, shop_side, ben_side),
@@ -478,6 +492,7 @@ fn a_reply_takes_the_format_of_its_request() {
 
     // The issuer sends native slates, the payer does not; its invoice waits parked.
     let (world, shop_side, ben_side) = paired((true, false), WalletPolicy::default());
+    claim_native(&world.issuer, shop_side);
     world.payer.fund(1, FUNDING);
     assert_eq!(send_flow(&world, shop_side, ben_side), (V3, V3));
     assert_eq!(
@@ -491,6 +506,7 @@ fn a_contact_that_does_not_claim_native_slates_gets_v3() {
     let (world, shop_side, ben_side) = paired((true, true), WalletPolicy::default());
     for (party, contact) in [(&world.payer, ben_side), (&world.issuer, shop_side)] {
         let mut record = party.read(|repos| repos.contact(contact)).unwrap();
+        assert_ne!(record.facts.peer_features & NATIVE_SLATES, 0);
         record.facts.peer_features &= !NATIVE_SLATES;
         party
             .store()

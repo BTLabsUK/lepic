@@ -97,8 +97,9 @@ Conventional Commit messages at release time.
   `native_direct = true` (`WalletConfig::native_direct`, the CLI setting `native_direct` or
   `LEPIC_NATIVE_DIRECT`) seals a new S1 or I1 to a contact as `lepic.v1` in envelope type `0A`
   when the contact's pairing claims native slates, over the contact mailbox, armored with
-  `BEGINEPICTX.`; the mailbox reader takes both marker pairs. Every wallet claims native slates in
-  its pairing (feature bit 7, `NATIVE_SLATES`) and reads them; a reply uses the format of its
+  `BEGINEPICTX.`; the mailbox reader takes both marker pairs. A wallet claims native slates in
+  its pairing and contact updates (feature bit 7, `NATIVE_SLATES`) only while `native_direct` is on,
+  and reads them always; a reply uses the format of its
   request, and private pairings and contacts without the claim get V3 JSON in type `01` as before.
   A `0A` that does not decode is reported as an undecodable slate, and a native slate over the
   65,535-byte body limit is refused before it is stored. The kernel excess of an answered slate

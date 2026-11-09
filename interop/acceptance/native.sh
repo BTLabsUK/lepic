@@ -263,8 +263,9 @@ native_epicbox() {
 }
 
 # 2. With lepic's native_direct off a contact payment is V3 whatever the contact claims, and a
-# native_direct payer answers it. Every LEPIC contact claims native slates in its pairing card,
-# so the sender's own switch decides.
+# native_direct payer answers it. A LEPIC wallet claims native slates in its pairing card only
+# while its own switch is on, so this contact, whose payer accepted with the switch off, claims
+# none, and the sender's own switch off would decide anyway.
 native_mixed_contact() {
     native_ready || return 1
     [[ "$(NATIVE_DIRECT="" native_slates_to lepic "${MX_L}")" == false ]] ||

@@ -434,8 +434,11 @@ are steps 10 to 12.
    can see it; the sealed envelope carries `lepic.v1` when both cards claim native slates.
    Backend. Done: acceptance pairing run with both formats; an older build peer gets V3 JSON.
    Then measure before going on.
-   Built on `feat/native-contacts`, unmerged. Lead decisions: every wallet claims bit 7
-   `NATIVE_SLATES`, because every build with the codec reads native slates whatever it sends;
+   Built on `feat/native-contacts`, unmerged. Lead decisions: a wallet claims bit 7
+   `NATIVE_SLATES` in its pairing only while native slates are on (`native_direct`), so that
+   with them off the pairing and contact-update feature word is the one older builds write
+   (every build with the codec still reads native slates whatever it sends; a contact paired
+   while native was off learns the claim at the next pairing or contact update);
    `native_direct` is a `WalletConfig` value, default `false`, because the contact send path
    reads its policy there and the binding keeps it off for the release; native goes over the
    contact mailbox only, not over private pairings, and a stored slate sealed again to copy as

@@ -421,17 +421,22 @@ impl WalletConfig {
     }
 
     /// The feature word of a pairing envelope or a contact update: the claimed bits,
-    /// [`lepic_transport::marker::features::NATIVE_SLATES`], which every wallet of this build
-    /// takes from its contacts, and the profile in bits 16 to 31. A plain-send marker uses
-    /// [`Self::claimed_features`] alone.
+    /// [`lepic_transport::marker::features::NATIVE_SLATES`] while `native_direct` is on, and
+    /// the profile in bits 16 to 31. With it off the word is the one builds before native
+    /// slates write. A plain-send marker uses [`Self::claimed_features`] alone.
     pub fn pairing_features(&self) -> u32 {
         self.pairing_features_with(self.profile)
     }
 
     /// [`Self::pairing_features`] with `profile` in place of the configured one.
     pub fn pairing_features_with(&self, profile: u16) -> u32 {
+        let native = if self.native_direct {
+            lepic_transport::marker::features::NATIVE_SLATES
+        } else {
+            0
+        };
         self.claimed_features()
-            | lepic_transport::marker::features::NATIVE_SLATES
+            | native
             | (u32::from(profile) << lepic_transport::marker::features::PROFILE_SHIFT)
     }
 }
@@ -479,18 +484,41 @@ mod tests {
         };
         assert_eq!(config.claimed_features() & HOST_PROFILE, 0);
         assert_eq!(config.claimed_features() & NATIVE_SLATES, 0);
+        // With native slates off the word is the one older builds write.
+        assert_eq!(config.pairing_features(), LEPIC_FEATURES | 3 << 16);
+        assert_eq!(config.pairing_features_with(0), LEPIC_FEATURES);
         assert_eq!(
-            config.pairing_features(),
+            config.pairing_features_with(u16::MAX),
+            LEPIC_FEATURES | HOST_PROFILE
+        );
+    }
+
+    #[test]
+    fn native_slates_ride_the_pairing_word_only_while_native_direct_is_on() {
+        use lepic_transport::marker::features::{HOST_PROFILE, LEPIC_FEATURES, NATIVE_SLATES};
+        let config = |native_direct| WalletConfig {
+            name: WalletName::new("w").unwrap(),
+            network: Network::Floonet,
+            data_dir: PathBuf::from("/w"),
+            node: NodeEndpoint::parse("http://127.0.0.1:1").unwrap(),
+            offline: false,
+            host_features: 0,
+            profile: 3,
+            domain: None,
+            policy: WalletPolicy::default(),
+            native_direct,
+        };
+        assert_eq!(config(false).pairing_features() & NATIVE_SLATES, 0);
+        assert_eq!(
+            config(true).pairing_features(),
             LEPIC_FEATURES | NATIVE_SLATES | 3 << 16
         );
         assert_eq!(
-            config.pairing_features_with(0),
-            LEPIC_FEATURES | NATIVE_SLATES
-        );
-        assert_eq!(
-            config.pairing_features_with(u16::MAX),
+            config(true).pairing_features_with(u16::MAX),
             LEPIC_FEATURES | NATIVE_SLATES | HOST_PROFILE
         );
+        // The marker of a plain send never carries the bit.
+        assert_eq!(config(true).claimed_features() & NATIVE_SLATES, 0);
     }
 
     #[test]
