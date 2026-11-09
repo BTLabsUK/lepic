@@ -18,8 +18,10 @@ pub const DEVICE_FORWARDING: u32 = 1 << 4;
 pub const NAME_SERVICE: u32 = 1 << 5;
 /// Keeping app payloads that arrive over a pairing until the host acknowledges them.
 pub const APP_PAYLOADS: u32 = 1 << 6;
-/// `lepic.v1` slates (envelope type `0A`) in paired-contact mailboxes. Claimed only in the
-/// pairing feature word, never in the marker of a legacy slate.
+/// `lepic.v1` slates (envelope type `0A`): in paired-contact mailboxes when claimed in the
+/// pairing feature word, and at the Epicbox payments address when claimed in the Epicbox marker
+/// together with its `reply` key, the address's seal key (RFC 0003 5.15). Only a wallet with
+/// native sending on claims it, never in the marker of a file or paste slate.
 pub const NATIVE_SLATES: u32 = 1 << 7;
 
 /// The bits the host app may claim; it passes them as one constant of its build.

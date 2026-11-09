@@ -4,6 +4,9 @@
 //! description define it. The generator checks that the Epicbox listener of `epic-wallet`
 //! decodes the marked text to the same V2 slate as the plain one, so a stock receiver answers a
 //! marked S1 as it answers any other.
+//!
+//! The native claim of RFC 0003 5.15 writes `f` with bit 7 and `reply`, the seal key of the
+//! sender's payments address, in the same marker; the same check holds for it.
 
 use epic_wallet_libwallet::{Slate, SlateVersion, VersionedSlate};
 use serde::Serialize;
@@ -17,10 +20,19 @@ const PLAIN_S1: &str =
 /// LEPIC's own bits: the marker (bit 0) and the address proof (bit 2), and with both host bits.
 const FEATURES: [u32; 2] = [0b101, 0b11_0101];
 
+/// LEPIC's bits of this build with `NATIVE_SLATES` (bit 7), and a seal key of kind 03: the
+/// pairing kit's key for the 16-byte seed, account 0, mainnet.
+const NATIVE_CLAIM: (u32, &str) = (
+    0b1100_1111,
+    "db0931f808d543469d942572f2c66f9e23fef5daa265fa5fd59abea978ffb109",
+);
+
 #[derive(Serialize)]
 struct Inputs {
     plain_s1: String,
     features: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reply: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -51,20 +63,40 @@ pub(super) fn generate(wallet: &Upstream) -> Result<Vec<Rendered>, Error> {
     let body = plain
         .strip_suffix('}')
         .ok_or_else(|| Error::reference("plain s1")(CheckFailed::Plaintext))?;
+    let cases = FEATURES
+        .iter()
+        .map(|&features| {
+            (
+                format!("marker_s1_v2_features_{features}"),
+                format!("{body},\"lepic\":{{\"version\":1,\"f\":{features}}}}}"),
+                features,
+                None,
+            )
+        })
+        .chain(std::iter::once({
+            let (features, reply) = NATIVE_CLAIM;
+            (
+                format!("marker_s1_v2_native_claim_{features}"),
+                format!(
+                    "{body},\"lepic\":{{\"version\":1,\"f\":{features},\"reply\":\"{reply}\"}}}}"
+                ),
+                features,
+                Some(reply.to_owned()),
+            )
+        }));
     let mut vectors = Vec::new();
-    for features in FEATURES {
-        let json = format!("{body},\"lepic\":{{\"version\":1,\"f\":{features}}}}}");
+    for (name, json, features, reply) in cases {
         let (version, decoded) = decode(&json)?;
         if version != plain_version || decoded != plain_decoded {
             return Err(Error::reference("marked s1")(CheckFailed::Plaintext));
         }
-        let name = format!("marker_s1_v2_features_{features}");
         vectors.push(render(
             &name,
             wallet,
             Inputs {
                 plain_s1: plain.clone(),
                 features,
+                reply,
             },
             Expected { json },
         )?);

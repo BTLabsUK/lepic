@@ -92,6 +92,14 @@ impl MarkedV3JsonCodec {
         self.extra = MarkerExtra::Features(features);
         self
     }
+
+    /// The codec writing `features` as `f` and `key`, the X25519 key of the sender's payments
+    /// address, as `reply`, for a slate sent over Epicbox only by a wallet that takes native
+    /// slates there (RFC 0003 5.15).
+    pub const fn with_native_claim(mut self, features: u32, key: [u8; 32]) -> Self {
+        self.extra = MarkerExtra::NativeClaim { features, key };
+        self
+    }
 }
 
 impl Codec for MarkedV3JsonCodec {
@@ -458,6 +466,26 @@ mod tests {
             assert!(!text(&wire).contains("\"f\""));
             assert_eq!(lepic_marker_reply_key(&wire), Some(KEY));
         }
+    }
+
+    #[test]
+    fn a_native_claim_writes_f_and_reply_and_both_readers_read_it() {
+        let slate = v3().decode(&vector_wire(VECTORS[0])).unwrap();
+        let plain = v3().encode(&slate, &CONTEXT).unwrap();
+        let body = text(&plain).strip_suffix('}').unwrap();
+        let wire = MarkedV3JsonCodec::new(v3())
+            .with_native_claim(0xb5, KEY)
+            .encode(&slate, &CONTEXT)
+            .unwrap();
+        let hex: String = KEY.iter().map(|byte| format!("{byte:02x}")).collect();
+        assert_eq!(
+            text(&wire),
+            format!("{body},\"lepic\":{{\"version\":1,\"f\":181,\"reply\":\"{hex}\"}}}}")
+        );
+        assert!(carries_lepic_marker(&wire));
+        assert_eq!(lepic_marker_features(&wire), Some(0xb5));
+        assert_eq!(lepic_marker_reply_key(&wire), Some(KEY));
+        assert_eq!(v3().decode(&wire).unwrap(), slate);
     }
 
     #[test]

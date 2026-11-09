@@ -2341,6 +2341,7 @@ dependencies = [
  "ed25519-dalek 3.0.0",
  "hmac 0.13.0",
  "hpke",
+ "lepic-seal",
  "rand_core 0.10.1",
  "sha2 0.11.0",
  "thiserror 2.0.21",
@@ -2382,6 +2383,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "lepic-legacy-slate"
+version = "0.3.1"
+dependencies = [
+ "lepic-crypto",
+ "lepic-primitives",
+ "lepic-slate",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "lepic-node"
 version = "0.3.1"
 dependencies = [
@@ -2413,6 +2425,21 @@ dependencies = [
  "blake2",
  "lepic-crypto",
  "thiserror 2.0.21",
+ "zeroize",
+]
+
+[[package]]
+name = "lepic-seal"
+version = "0.3.1"
+dependencies = [
+ "base64 0.23.1",
+ "ed25519-dalek 3.0.0",
+ "hmac 0.13.0",
+ "hpke",
+ "rand_core 0.10.1",
+ "sha2 0.11.0",
+ "thiserror 2.0.21",
+ "x25519-dalek 3.0.0",
  "zeroize",
 ]
 
@@ -2451,6 +2478,7 @@ name = "lepic-transport"
 version = "0.3.1"
 dependencies = [
  "lepic-crypto",
+ "lepic-legacy-slate",
  "lepic-primitives",
  "lepic-slate",
  "serde",
@@ -2470,6 +2498,7 @@ dependencies = [
  "lepic-contact",
  "lepic-crypto",
  "lepic-keychain",
+ "lepic-legacy-slate",
  "lepic-node",
  "lepic-primitives",
  "lepic-slate",

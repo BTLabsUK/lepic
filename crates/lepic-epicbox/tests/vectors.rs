@@ -97,17 +97,18 @@ fn every_vector_has_a_replay() {
             "{name} is not replayed"
         );
     }
-    assert_eq!(names.len(), 42);
+    assert_eq!(names.len(), 43);
 }
 
-/// `marker_s1_v2_features_*`: the marked V2 S1 over Epicbox with `f`, which `epic-wallet`'s
-/// listener decodes as the plain S1.
+/// `marker_s1_v2_features_*` and `marker_s1_v2_native_claim_*`: the marked V2 S1 over Epicbox
+/// with `f`, and with `f` and `reply` for the native claim, which `epic-wallet`'s listener
+/// decodes as the plain S1.
 #[test]
 fn marked_s1_with_features_is_written_as_the_vector() {
     use lepic_legacy_slate::v2_json::V2JsonCodec;
     use lepic_slate::codec::{Codec, EncodeContext, MediaType, WireSlate};
     use lepic_transport::marker::v2::MarkedV2JsonCodec;
-    use lepic_transport::marker::v3::lepic_marker_features;
+    use lepic_transport::marker::v3::{lepic_marker_features, lepic_marker_reply_key};
     let codec = V2JsonCodec::new(
         lepic_primitives::params::Network::Floonet
             .params()
@@ -121,8 +122,15 @@ fn marked_s1_with_features_is_written_as_the_vector() {
         );
         let features = u32::try_from(vector["inputs"]["features"].as_u64().unwrap()).unwrap();
         let slate = codec.decode(&plain).unwrap();
-        let marked = MarkedV2JsonCodec::new(codec)
-            .with_features(features)
+        let reply = vector["inputs"].get("reply").map(|reply| {
+            lepic_crypto::hex::decode_array::<32>(text(reply)).unwrap()
+        });
+        let marker = MarkedV2JsonCodec::new(codec);
+        let marker = match reply {
+            Some(key) => marker.with_native_claim(features, key),
+            None => marker.with_features(features),
+        };
+        let marked = marker
             .encode(
                 &slate,
                 &EncodeContext {
@@ -136,6 +144,7 @@ fn marked_s1_with_features_is_written_as_the_vector() {
             "{name}"
         );
         assert_eq!(lepic_marker_features(&marked), Some(features), "{name}");
+        assert_eq!(lepic_marker_reply_key(&marked), reply, "{name}");
     }
 }
 

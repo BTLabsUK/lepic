@@ -36,6 +36,14 @@ impl MarkedV2JsonCodec {
         self.extra = MarkerExtra::Features(features);
         self
     }
+
+    /// The codec writing `features` as `f` and `key`, the X25519 key of the sender's payments
+    /// address, as `reply`, for a slate sent over Epicbox only by a wallet that takes native
+    /// slates there (RFC 0003 5.15).
+    pub const fn with_native_claim(mut self, features: u32, key: [u8; 32]) -> Self {
+        self.extra = MarkerExtra::NativeClaim { features, key };
+        self
+    }
 }
 
 impl Codec for MarkedV2JsonCodec {

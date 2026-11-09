@@ -6,7 +6,9 @@
 //!
 //! Over Epicbox the marker also carries `f`, the feature bits the wallet claims
 //! (`lepic_transport::marker::features`); only there, inside the encrypted message, never in a
-//! file or paste slate that anyone holding it can read.
+//! file or paste slate that anyone holding it can read. A wallet that takes native slates over
+//! Epicbox writes `f` and `reply` together: the reply key is then its payments address's seal
+//! key (RFC 0003 5.15).
 //! The marker's `version` stays 1 and carries no build version.
 
 pub mod v2;
@@ -20,6 +22,12 @@ pub(crate) enum MarkerExtra {
     Features(u32),
     /// An X25519 reply key, for a file or paste slate.
     Reply([u8; 32]),
+    /// The claimed feature bits and the X25519 key native slates are sealed to, for a slate that
+    /// goes over Epicbox from a wallet that takes them there.
+    NativeClaim {
+        features: u32,
+        key: [u8; 32],
+    },
 }
 
 /// What follows the last key of the slate object.
@@ -28,8 +36,18 @@ pub(crate) fn marker_text(extra: &MarkerExtra) -> String {
         MarkerExtra::None => ",\"lepic\":{\"version\":1}".to_owned(),
         MarkerExtra::Features(features) => format!(",\"lepic\":{{\"version\":1,\"f\":{features}}}"),
         MarkerExtra::Reply(key) => {
-            let hex: String = key.iter().map(|byte| format!("{byte:02x}")).collect();
-            format!(",\"lepic\":{{\"version\":1,\"reply\":\"{hex}\"}}")
+            format!(
+                ",\"lepic\":{{\"version\":1,\"reply\":\"{}\"}}",
+                key_hex(key)
+            )
         }
+        MarkerExtra::NativeClaim { features, key } => format!(
+            ",\"lepic\":{{\"version\":1,\"f\":{features},\"reply\":\"{}\"}}",
+            key_hex(key)
+        ),
     }
+}
+
+fn key_hex(key: &[u8; 32]) -> String {
+    key.iter().map(|byte| format!("{byte:02x}")).collect()
 }
