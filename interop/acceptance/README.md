@@ -1,99 +1,140 @@
 # CLI acceptance
 
-`run.sh` installs `lepic` with `cargo xtask install` and drives that installed binary, as a user
-would run it from a shell, through every command against the local interop stack: the Epicbox
-relay, the reference node `v4.1.2` on a test-mode chain and two `epic-wallet` `v4.1.0` wallets. It
-covers both directions over Epicbox and slate files, a signed message each way over Epicbox
-(shown by `lepic tx show` and `epic-wallet txs`), invoices both ways, a failed delivery and
-`tx resend`, cancel, restore from the phrase, a restore with `--no-scan` that receives only after
-`wallet scan`, import of an `epic-wallet` `wallet.seed`, the
-exit codes of common mistakes, and an `epic-wallet` payment to a lepic listing address, drained on
-its own and answered from the listing, whose transaction names the listing. Last, lepic pairs
-with a second lepic wallet by invite: both check the words, the payer allows the service's
-invoices, the service invoices it through the contact mailboxes, the payer pays once with the
-amount typed again, the service finalizes and posts, and the payer's `contact collect` shows
-that it was posted. lepic then checks that contact while the payer runs `lepic serve`, which
-answers by itself, so lepic hears the payer again; `serve status` shows the collect and the
-refresh succeeding and serve stops cleanly on Ctrl-C. The CLI keeps no limits of its own: a
-two-letter password makes a wallet, a 72-hour invoice expiry is taken, and only an empty
-password (exit 7) and an expiry of 0 hours (exit 3) are refused. Then lepic sends to that wallet over
-Epicbox while it listens: both slates carry the LEPIC marker, and the listener reports the
-payment as posted by its sender seconds after the sender's push, before it confirms; a stock
-`epic-wallet` receiver's unmarked answer is recorded as another wallet's and is sent no notice. A stock `epic-wallet`
-listener sends lepic's invoice back unpaid; lepic counts it as bounced, records that peer as not
-paying invoices (read from its store, which no command shows), sends it no notice when the
-invoice is cancelled, and pays it over Epicbox afterwards. Both lepic wallets then pair again
-with `native_direct = true`: `contact list` shows `native_slates` on both sides, and an invoice
-goes through the mailboxes as native slates, paid, posted and confirmed. It then prints a pass or fail table and
-exits 0 only when every step passed.
+`run.sh` installs `lepic` with `cargo xtask install` and drives the installed binary through the
+commands a user runs from a shell. It runs against the local stack of [interop/](../README.md):
+the Epicbox relay, the reference node on a test-mode chain and two `epic-wallet` wallets. It
+prints a table of steps and exits 0 only when every step passed.
 
-```
+```bash
 interop/acceptance/run.sh               # build, install, start a clean stack, run, tear down
 interop/acceptance/run.sh --no-build    # reuse the built binaries and the installed lepic
 interop/acceptance/run.sh --keep        # leave the stack running afterwards
 interop/acceptance/run.sh --lepic PATH  # test another lepic binary
 interop/acceptance/run.sh --stack-only  # start a clean stack and keep it until Ctrl-C
 interop/acceptance/run.sh --probes      # probe the relay and a stock listener instead
-interop/acceptance/run.sh --trust       # what a stock wallet's queue gets from lepic instead
+interop/acceptance/run.sh --trust       # run the stock-queue checks instead
 ```
 
-`--probes` runs the checks in `probes.sh` instead of the steps. They cover what invoices and
-notices over Epicbox build on: how a stock listener treats a V3 I1, a marker key and a payload
-that is not a slate, how the relay serves two addresses, and how LEPIC's Epicbox policy reads a
-marked V3 invoice. The probe client is `../probe`, built into `.work/probe-target`. The results are
-recorded in `docs/compat/epicbox.md`, and the raw output goes to the run's `probes/` directory.
+The checks need what [the interop README](../README.md#requirements) lists, plus a Rust toolchain
+for `cargo xtask install`.
 
-`--trust` runs `trust.sh` instead of the steps, on the stock wallet's relay queue (ADR 0016,
-schema version 12 amendment). A lepic "twin" imported from the stock wallet's `wallet.seed` pays
-lepic with the marker, so lepic sees that key run LEPIC just now. Then lepic pays the stock
-wallet, a probe posts a slate to it while lepic finalizes, and lepic pays it three more times
-while its listener is off, as a phone is. The step passes only when the stock wallet answered
-all four payments and the probe's slate, its log shows no `Unable to parse slate`, nothing for
-it is left unacknowledged on the relay, and `lepic epicbox peer` shows the key as another
-wallet's again. The last step reads the relay's log: every `ClientDetails` names
-`wallet_version` `4.1.0`. Run it with `--lepic` on an older build to see the queue lost: that
-build sends the stock wallet a `posted` notice it never acknowledges, and the relay deletes what
-waits behind it after nine challenge rounds, about ten minutes.
+## What a run does
 
-`--stack-only` funds nothing and runs no step: it prints the node URL, the node API secret file,
-the relay and the exchange directory, and holds the stack and its lock until stopped, for a
-lepic outside this script, such as the tests of the Flutter binding, a separate repository
-(https://github.com/BTLabsUK/lepic-flutter). `chain.sh` drives that stack:
-`env`, `height`, `mine <blocks>`, `fund <address> <epic>` (the funder sends over Epicbox) and
-`receive <file>` (the funder answers a send file in the exchange directory).
-The binding repository's README shows the whole workflow.
-
-Needs what `../README.md` lists, plus a Rust toolchain for `cargo xtask install`. Every run
-starts from nothing: a new chain and new wallets, and a lepic home, config file and data
+Every run starts from nothing: a new chain, new wallets, and a `lepic` home, config file and data
 directory under `.work/state`. `lepic` runs with a cleared environment (`env -i`) apart from
-`PATH`, that home and that config file, so nothing from the invoking shell or `~/.lepic` leaks
-in.
-
-The stack is `../compose.yaml` without the lepic container, under the project name
-`lepic-acceptance`. Its services have no route out and listen on loopback, as in V-02. Two TCP
-forwarders (`forward.js`, each listening on its own interface addresses, never a wildcard) carry
-the node API to `127.0.0.1:43413` and the relay to `127.0.0.1:3423` on the host, and nothing
-else: `node-port` in the node's namespace and `gateway` on the internal network and a host
-bridge, since Docker publishes ports only from a container on a non-internal network. The relay
-keeps port 3423 because Epicbox addresses name it. `run.sh` refuses to start when either port is
-taken. Slate files are exchanged through `.work/exchange` (mode 1777, because the wallet
-containers run as their own uid), mounted into the wallets as `/exchange`.
-
+`PATH`, that home and that config file, so nothing from the invoking shell or `~/.lepic` leaks in.
 The chain is usernet, where `epic-wallet` derives mainnet Epicbox addresses, so the config file
-says `network = mainnet`. `epic-wallet` prints its address without the relay port; the steps
+says `network = mainnet`. `epic-wallet` prints its address without the relay port, and the steps
 add `:3423`.
 
-Each run writes `.work/logs/<time>/`: `results.txt` with the table, the lepic version and the
-git tree it ran from; `run.log` with every failed command and its JSON error; and `compose.log`.
+`run.sh` starts the stack, funds the wallets in a setup step and runs the steps in `steps.sh`
+in order. The steps cover:
 
-The EPICTX steps (`native.sh`, listed after the others) run between lepic's wallet and the payer's
-with native slates on: Epicbox payments, contact payments and `.epictx` files, in-person codes
-offline, the code TTL, cancelling, and the direct HTTP endpoint. Every LEPIC contact claims native
-slates, so the V3 case between the two wallets is driven by the sender's `native_direct` switch.
-The product accepts a private address where it refuses loopback for a direct send, so the HTTP
-step reaches its listener through a small forwarder on the docker0 address `172.17.0.1`, never on
-a wildcard. An in-person reply mailbox and an epic1 link need a relay on a non-loopback host,
-which over plain websocket the product does not allow, so those two steps check what the local
-relay gives (a code with no mailbox, an epic1 link refused with exit 7); the full flows run on
-floonet. `ACCEPTANCE_ONLY=<function>[,...]` runs setup and just the listed steps (list
-`step_wallet_init`, `step_receive_by_file` and `step_fund_payer` first), for developing one.
+- both directions over Epicbox and over slate files, and invoices both ways;
+- a failed delivery and `tx resend`, `tx cancel`, `tx list`, `tx show` and `tx post`;
+- `wallet restore`, a restore with `--no-scan` followed by `wallet scan`, and `wallet import-seed`
+  of an `epic-wallet` `wallet.seed`;
+- the exit codes of common mistakes: a wrong password (4), a bad address (2), an overspend (8), no
+  wallet (5) and no node (9);
+- an `epic-wallet` payment to a `lepic` listing address, drained and answered from the listing;
+- a second `lepic` wallet funded by file, paired by invite, with an invoice through the contact
+  mailboxes, and `lepic serve` answering a contact check;
+- `lepic` sending to that wallet over Epicbox while it listens: both slates carry the LEPIC
+  marker and the listener reports the payment as posted by its sender before it confirms;
+- a stock `epic-wallet` listener that sends back an Epicbox invoice unpaid: `lepic` counts it as
+  bounced and sends that peer no notice;
+- no CLI limits: a two-letter password makes a wallet and a 72-hour invoice expiry is taken. Only
+  an empty password (exit code 7) and an expiry of 0 hours (exit code 3) are refused;
+- the EPICTX steps in `native.sh`, between two `lepic` wallets with native slates on: Epicbox
+  payments, contact payments, `.epictx` files, in-person codes offline, the code TTL, `epic1`
+  links, cancelling, and the direct HTTP endpoint.
+
+Details of the EPICTX steps:
+
+- Every LEPIC contact claims native slates, so the sender's `native_direct` switch drives the V3
+  case between the two wallets.
+- The product accepts a private address for a direct send but refuses loopback. The HTTP step
+  reaches its listener through a small forwarder on the docker0 address `172.17.0.1`, never on a
+  wildcard.
+- A relay on a non-loopback host is needed for an in-person reply mailbox and for an `epic1` link,
+  and the product allows plain websocket only to loopback. Those two steps check what the local
+  relay gives: a code with no mailbox, and an `epic1` link refused with exit code 7.
+
+`ACCEPTANCE_ONLY=<function>[,...]` runs setup and only the listed steps, for developing one.
+List `step_wallet_init`, `step_receive_by_file` and `step_fund_payer` first, because the later
+steps need funds. A name that matches no step stops the run before it starts the stack.
+
+Each run writes `.work/logs/<time>/`:
+
+| File | Content |
+|---|---|
+| `results.txt` | the table, the `lepic` version and the git tree it ran from |
+| `run.log` | every failed command and its JSON error |
+| `compose.log` | the logs of every container |
+
+## The stack
+
+The stack is `compose.yaml` here, under the project name `lepic-acceptance`: the services of
+[`../compose.yaml`](../compose.yaml) without the `lepic` container. Its services have no route
+out and listen on loopback. Two TCP forwarders (`forward.js`, each listening on its own interface
+addresses and never on a wildcard) carry the node API to `127.0.0.1:43413` and the relay to
+`127.0.0.1:3423` on the host, and nothing else:
+
+- `node-port` runs in the node's network namespace and exposes both ports on the internal network.
+- `gateway` sits on the internal network and a host bridge, because Docker publishes ports only
+  from a container on a non-internal network.
+
+The relay keeps port 3423 because Epicbox addresses name it. `run.sh` refuses to start when either
+host port is taken, and when the internal network has a route out. Slate files go through
+`.work/exchange`, mounted into the wallets as `/exchange`. It has mode 1777 because the wallet
+containers run as their own uid.
+
+## Probes
+
+`--probes` runs `probes.sh` instead of the steps. The probes check what invoices and notices over
+Epicbox build on:
+
+- how a stock listener treats a V3 I1, a marker key and a payload that is not a slate;
+- how the relay serves two addresses, and how one socket drains mailboxes in turn;
+- how `lepic`'s Epicbox policy reads a marked V3 invoice;
+- that no pairing request goes to an unproven or stale key.
+
+The probe client is [`../probe`](../probe), built into `.work/probe-target`. The raw output of
+each probe goes to `probes/` in the run's log directory. [docs/compat/epicbox.md](../../docs/compat/epicbox.md)
+describes the relay behaviour the probes check.
+
+## Trust checks
+
+`--trust` runs `trust.sh` instead of the steps. It checks what `lepic` sends to a stock wallet's
+payments address once another install on that wallet's recovery phrase ran LEPIC, against
+[ADR 0016](../../docs/adr/0016-epicbox-notices.md).
+
+A `lepic` "twin", imported from the stock wallet's `wallet.seed`, pays `lepic` with the marker, so
+`lepic` sees that key run LEPIC. Then `lepic` pays the stock wallet, a probe posts a slate to it
+while `lepic` finalizes, and `lepic` pays it three more times while its listener is off. The step
+passes when:
+
+- the stock wallet answered all four payments and the probe's slate;
+- its log shows no `Unable to parse slate`;
+- nothing for it is left unacknowledged on the relay;
+- `lepic epicbox peer` shows the key as another wallet's again.
+
+A last step reads the relay's log: every `ClientDetails` names `wallet_version` `4.1.0`. Pass
+`--lepic` to run the same checks against another build.
+
+## Using the stack from outside
+
+`--stack-only` funds nothing and runs no step. It prints the node URL, the node API secret file,
+the relay and the exchange directory, then holds the stack and its lock until stopped. Use it for
+a `lepic` outside this script, such as the tests of the Flutter binding
+([BTLabsUK/lepic-flutter](https://github.com/BTLabsUK/lepic-flutter)).
+
+`chain.sh` drives that stack:
+
+| Command | Effect |
+|---|---|
+| `chain.sh env` | prints the `LEPIC_INTEROP_*` settings as `KEY=value` lines |
+| `chain.sh height` | prints the node's tip height |
+| `chain.sh mine <blocks>` | waits until the miner has added that many blocks |
+| `chain.sh fund <address> <epic>` | the funder sends that amount over Epicbox; the receiving wallet drains or listens to answer |
+| `chain.sh receive <file>` | the funder answers an S1 file in the exchange directory and writes `<file>.response` beside it |
