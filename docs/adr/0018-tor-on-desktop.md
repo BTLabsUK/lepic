@@ -6,9 +6,7 @@ Status: accepted; the onion key is superseded in part by ADR 0044
 
 Direct transactions are first-class in LEPIC, Tor included (ADR 0017): a wallet receives at its
 `.onion` address and sends to another wallet's `.onion` address. The reference `epic-wallet`
-derives that address from its payment-proof key. Its own Tor support writes the onion key in a
-format that tor reads as a different key, so tor publishes another address, and it starts tor
-without any way to learn whether it is ready.
+derives that address from its payment-proof key.
 
 The Epic GUI wallet runs tor itself, and that design works on Linux and Windows: one tor per
 open wallet on private `auto` ports, a control port for readiness and errors, the onion added

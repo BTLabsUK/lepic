@@ -1,7 +1,7 @@
 # Architecture decision records
 
 An architecture decision record (ADR) states one decision about LEPIC, the reason for it and what
-it costs. Each record describes the decision as it holds now.
+it costs. Each record describes the decision as it holds in the code.
 
 Status is one of:
 
