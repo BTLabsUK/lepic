@@ -1,14 +1,15 @@
 // SPDX-License-Identifier: Apache-2.0
 //! The inner fields of an opened envelope: the TLV fields, the card in tag 07, the sender key and
-//! the signature. `seal_open` reaches them only through a valid AEAD tag, so this target feeds
-//! them to the decoder directly. The first byte picks the network and whether the target signs
+//! the signature, read by both the RFC 0002 reader and the type 0A reader. `seal_open` reaches
+//! them only through a valid AEAD tag, so this target feeds them to the decoders directly. The first byte picks the network and whether the target signs
 //! the fuzzer's fields with a fixed key, so the checks after a valid signature see them too.
 
 #![no_main]
 
 use ed25519_dalek::Signer;
-use lepic_contact::{
+use lepic_seal::{
     DecodeError, EncSecretKey, HEADER_LEN, MAGIC, Malformed, Network, SigningKey, decode_content,
+    decode_tx_content,
 };
 use libfuzzer_sys::fuzz_target;
 
@@ -48,6 +49,7 @@ fuzz_target!(|data: &[u8]| {
         0,
     ];
     let recipient = EncSecretKey::from_bytes([11; 32]).public_key();
+    let _ = decode_tx_content(fields, network, &header, &recipient);
     let anonymous = decode_content(fields, network, &header, &recipient);
     if mode & 2 == 0 {
         return;

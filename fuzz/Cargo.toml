@@ -28,6 +28,7 @@ lepic-methods = { path = "../crates/lepic-methods", features = ["epicbox"] }
 lepic-native-slate = { path = "../crates/lepic-native-slate" }
 lepic-node = { path = "../crates/lepic-node" }
 lepic-primitives = { path = "../crates/lepic-primitives" }
+lepic-seal = { path = "../crates/lepic-seal" }
 lepic-slate = { path = "../crates/lepic-slate" }
 lepic-store = { path = "../crates/lepic-store", default-features = false }
 lepic-tor = { path = "../crates/lepic-tor" }
@@ -271,6 +272,13 @@ bench = false
 [[bin]]
 name = "contact_backup_import"
 path = "fuzz_targets/contact_backup_import.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "payment_file"
+path = "fuzz_targets/payment_file.rs"
 test = false
 doc = false
 bench = false

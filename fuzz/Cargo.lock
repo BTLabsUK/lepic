@@ -1004,6 +1004,7 @@ dependencies = [
  "ed25519-dalek",
  "hmac",
  "hpke",
+ "lepic-seal",
  "rand_core 0.10.1",
  "sha2",
  "thiserror",
@@ -1099,6 +1100,7 @@ dependencies = [
  "lepic-native-slate",
  "lepic-node",
  "lepic-primitives",
+ "lepic-seal",
  "lepic-slate",
  "lepic-store",
  "lepic-tor",
@@ -1237,6 +1239,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "lepic-seal"
+version = "0.3.1"
+dependencies = [
+ "base64",
+ "ed25519-dalek",
+ "hmac",
+ "hpke",
+ "rand_core 0.10.1",
+ "sha2",
+ "thiserror",
+ "x25519-dalek",
+ "zeroize",
+]
+
+[[package]]
 name = "lepic-slate"
 version = "0.3.1"
 dependencies = [
@@ -1340,6 +1357,7 @@ dependencies = [
  "rand_core 0.10.1",
  "serde",
  "serde_json",
+ "sha2",
  "thiserror",
  "tokio",
  "tracing",

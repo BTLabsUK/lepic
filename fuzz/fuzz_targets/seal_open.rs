@@ -1,12 +1,14 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Sealed envelopes: decoding and opening untrusted bytes, and sealing then opening any body.
+//! Sealed envelopes: decoding and opening untrusted bytes with every key class, and sealing then
+//! opening any body.
 
 #![no_main]
 
 use std::convert::Infallible;
 
-use lepic_contact::{
-    Content, EncSecretKey, HintRule, MessageType, Network, SealedEnvelope, SigningKey, seal,
+use lepic_seal::{
+    Content, EncSecretKey, HintRule, KeyClass, MessageType, Network, SealedEnvelope, SigningKey,
+    seal,
 };
 use libfuzzer_sys::fuzz_target;
 use rand_core::{TryCryptoRng, TryRng};
@@ -51,6 +53,9 @@ fuzz_target!(|data: &[u8]| {
         for network in [Network::Mainnet, Network::Floonet] {
             if let Ok(sealed) = SealedEnvelope::decode(rest, network) {
                 let _ = sealed.open(&key);
+                for class in [KeyClass::Seal, KeyClass::Epic1, KeyClass::Listener] {
+                    let _ = sealed.open_tx(&key, class);
+                }
             }
         }
         return;

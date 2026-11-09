@@ -72,6 +72,7 @@ const TARGETS: &[&str] = &[
     "slate_flow",
     "legacy_rows",
     "contact_backup_import",
+    "payment_file",
 ];
 
 #[derive(Debug, PartialEq, Eq)]
@@ -540,10 +541,17 @@ fn network_seeds(vectors: &Path, target: &str) -> Result<Option<BTreeSet<Vec<u8>
 }
 
 /// The seeds of the targets that read contact pairing formats. `None` for a target of another family.
-fn contact_seeds(root: &Path, vectors: &Path, target: &str) -> Result<Option<BTreeSet<Vec<u8>>>> {
+/// Seeds for the targets that read sealed envelopes and payment files.
+fn seal_seeds(root: &Path, vectors: &Path, target: &str) -> Result<Option<BTreeSet<Vec<u8>>>> {
     let mut seeds = BTreeSet::new();
     match target {
         "seal_open" => {
+            let epictx = read_pairing(vectors, "epictx_envelopes.json")?;
+            seeds.extend(
+                hex_fields(&epictx, "envelope")
+                    .iter()
+                    .map(|envelope| prefixed(&[0], envelope)),
+            );
             let samples = contact_samples(root)?;
             seeds.extend(
                 hex_fields(&samples, "bytes")
@@ -556,6 +564,40 @@ fn contact_seeds(root: &Path, vectors: &Path, target: &str) -> Result<Option<BTr
                     .map(|body| prefixed(&[1], body)),
             );
         }
+        "armor_sealed" => {
+            seeds.extend(text_fields(&contact_samples(root)?, "armored"));
+            seeds.extend(epictx_armor(vectors)?);
+        }
+        "payment_file" => {
+            let files = read_pairing(vectors, "epictx_files.json")?;
+            seeds.extend(hex_fields(&files, "input_hex"));
+            seeds.extend(epictx_armor(vectors)?);
+        }
+        "envelope_inner" => {
+            let envelopes = read_pairing(vectors, "envelopes.json")?;
+            let epictx = read_pairing(vectors, "epictx_envelopes.json")?;
+            for inner in [
+                hex_fields(&envelopes, "inner"),
+                hex_fields(&epictx, "inner"),
+            ]
+            .concat()
+            {
+                for mode in [0, 1, 2, 3] {
+                    seeds.insert(prefixed(&[mode], &inner));
+                }
+            }
+        }
+        _ => return Ok(None),
+    }
+    Ok(Some(seeds))
+}
+
+fn contact_seeds(root: &Path, vectors: &Path, target: &str) -> Result<Option<BTreeSet<Vec<u8>>>> {
+    if let Some(seeds) = seal_seeds(root, vectors, target)? {
+        return Ok(Some(seeds));
+    }
+    let mut seeds = BTreeSet::new();
+    match target {
         "contact_card" => {
             let samples = contact_samples(root)?;
             let cards = values_of(&samples, "cards")
@@ -572,7 +614,6 @@ fn contact_seeds(root: &Path, vectors: &Path, target: &str) -> Result<Option<BTr
             seeds.extend(text_fields(&samples, "pair"));
             seeds.extend(text_fields(&samples, "pair_reply"));
         }
-        "armor_sealed" => seeds.extend(text_fields(&contact_samples(root)?, "armored")),
         "pair_words" => {
             let path = vectors.join("pairing").join("words.json");
             let text = fs::read_to_string(&path)
@@ -595,14 +636,6 @@ fn contact_seeds(root: &Path, vectors: &Path, target: &str) -> Result<Option<BTr
                 }
                 if let Some(posted) = vector["posted"].as_str() {
                     seeds.insert(prefixed(&[1], posted.as_bytes()));
-                }
-            }
-        }
-        "envelope_inner" => {
-            let envelopes = read_pairing(vectors, "envelopes.json")?;
-            for inner in hex_fields(&envelopes, "inner") {
-                for mode in [0, 1, 2, 3] {
-                    seeds.insert(prefixed(&[mode], &inner));
                 }
             }
         }
@@ -824,6 +857,21 @@ fn contact_samples(root: &Path) -> Result<Value> {
 const CONTACT_SAMPLES: &str = "crates/lepic-contact/tests/snapshots/samples__samples.snap";
 
 /// One of the pairing kit's vector files.
+/// The armored forms of the epictx envelope vectors: wrapped, quoted and with the other marker.
+fn epictx_armor(vectors: &Path) -> Result<BTreeSet<Vec<u8>>> {
+    let envelopes = read_pairing(vectors, "epictx_envelopes.json")?;
+    let mut seeds = BTreeSet::new();
+    for field in [
+        "armored",
+        "armored_wrapped_76",
+        "armored_quoted",
+        "armored_other_marker",
+    ] {
+        seeds.extend(text_fields(&envelopes, field));
+    }
+    Ok(seeds)
+}
+
 fn read_pairing(vectors: &Path, file: &str) -> Result<Value> {
     let path = vectors.join("pairing").join(file);
     let text =
