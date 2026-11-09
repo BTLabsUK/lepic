@@ -5,7 +5,7 @@
 
 use lepic_epicbox::DEFAULT_PORT;
 use lepic_node::NodeError;
-use lepic_store::TxId;
+use lepic_store::{StoreError, TxId};
 use lepic_transport::error::TransportError;
 use lepic_wallet::finalize::FinalizeError;
 use lepic_wallet::inbox::InboxError;
@@ -25,6 +25,12 @@ use crate::settings::Settings;
 
 /// What to try next, when there is something better to say than the error itself.
 pub fn hint(error: &CliError, settings: Option<&Settings>) -> Option<String> {
+    if let Some((found, supported)) = schema_too_new(error) {
+        return Some(format!(
+            "this wallet was saved by a newer version of lepic (store version {found}; this \
+             version reads up to {supported}): update lepic to open it. Nothing was changed"
+        ));
+    }
     if let Some(wallet) = wallet_error(error) {
         return wallet_hint(wallet, settings);
     }
@@ -303,6 +309,16 @@ fn node_hint_text(settings: &Settings) -> String {
 }
 
 /// The wallet error under any of the engine errors that wrap one.
+/// The versions of the store error the error or one of its sources is.
+fn schema_too_new(error: &(dyn std::error::Error + 'static)) -> Option<(u32, u32)> {
+    std::iter::successors(Some(error), |error| error.source()).find_map(|error| {
+        match error.downcast_ref::<StoreError>() {
+            Some(StoreError::SchemaTooNew { found, supported }) => Some((*found, *supported)),
+            _ => None,
+        }
+    })
+}
+
 fn wallet_error(error: &CliError) -> Option<&WalletError> {
     match error {
         CliError::Wallet(error)
@@ -375,6 +391,24 @@ mod tests {
             let named = format!("no floonet wallet in {}", wallet_dir.display());
             assert!(text.contains(&named), "{text}");
             assert!(text.contains("lepic wallet init"), "{text}");
+        }
+    }
+
+    #[test]
+    fn a_wallet_from_a_newer_version_says_to_update_and_that_nothing_changed() {
+        let too_new = || StoreError::SchemaTooNew {
+            found: 17,
+            supported: 16,
+        };
+        for error in [
+            CliError::Store(too_new()),
+            CliError::Wallet(WalletError::Store(too_new())),
+            CliError::Send(SendError::Wallet(WalletError::Store(too_new()))),
+        ] {
+            let text = hint_for(&error);
+            assert!(text.contains("store version 17"), "{text}");
+            assert!(text.contains("reads up to 16"), "{text}");
+            assert!(text.contains("update lepic to open it"), "{text}");
         }
     }
 

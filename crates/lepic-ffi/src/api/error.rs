@@ -307,6 +307,9 @@ pub enum WalletErrorKind {
     Epic1WrongNetwork,
     /// The text is not an epic1 link.
     NotAnEpic1Link,
+    /// The wallet's database was written by a newer LEPIC or app version than this one reads.
+    /// Nothing was changed; update the app to open the wallet. Do not delete or restore it.
+    WalletTooNew,
 }
 
 impl WalletErrorKind {
@@ -420,6 +423,7 @@ impl WalletErrorKind {
             Self::Epic1Finalized => 110,
             Self::Epic1WrongNetwork => 111,
             Self::NotAnEpic1Link => 112,
+            Self::WalletTooNew => 113,
         }
     }
 }
@@ -485,8 +489,31 @@ impl WalletError {
         } else {
             kind
         };
+        if kind == WalletErrorKind::WalletTooNew {
+            if let Some((found, supported)) = schema_too_new(error) {
+                return Self::new(
+                    kind,
+                    format!(
+                        "this wallet was saved by a newer version of the app (store version \
+                         {found}; this version reads up to {supported}): update the app to open it"
+                    ),
+                );
+            }
+        }
         Self::new(kind, display_error_chain(error).join(": "))
     }
+}
+
+/// The versions of the store error `error` or one of its sources is.
+fn schema_too_new(error: &(dyn std::error::Error + 'static)) -> Option<(u32, u32)> {
+    std::iter::successors(Some(error), |error| error.source()).find_map(|error| {
+        match error.downcast_ref::<lepic_store::StoreError>() {
+            Some(lepic_store::StoreError::SchemaTooNew { found, supported }) => {
+                Some((*found, *supported))
+            }
+            _ => None,
+        }
+    })
 }
 
 /// Whether `error` or one of its sources is the refusal of an offline session's port.
@@ -529,6 +556,7 @@ fn engine_kind(error: &lepic_wallet::WalletError) -> WalletErrorKind {
             WalletErrorKind::DamagedDatabase
         }
         E::Store(lepic_store::StoreError::WrongKey) => WalletErrorKind::WrongKey,
+        E::Store(lepic_store::StoreError::SchemaTooNew { .. }) => WalletErrorKind::WalletTooNew,
         E::Store(_) => WalletErrorKind::Io,
         E::SecretVault(_) | E::SecretStore(_) => WalletErrorKind::SecretStore,
         // The node reported a chain position the wallet does not believe.
@@ -1089,6 +1117,7 @@ mod tests {
             (K::Epic1Finalized, 110),
             (K::Epic1WrongNetwork, 111),
             (K::NotAnEpic1Link, 112),
+            (K::WalletTooNew, 113),
         ];
         for (kind, code) in expected {
             assert_eq!(kind.code(), code, "{kind:?}");
@@ -1150,6 +1179,30 @@ mod tests {
             WalletError::from(ScanError::Cancelled).kind,
             WalletErrorKind::Cancelled
         );
+    }
+
+    #[test]
+    fn a_store_from_a_newer_version_is_wallet_too_new_on_every_route() {
+        use lepic_wallet::WalletError as E;
+        let too_new = || lepic_store::StoreError::SchemaTooNew {
+            found: 17,
+            supported: 16,
+        };
+        let expected = "this wallet was saved by a newer version of the app (store version 17; \
+                        this version reads up to 16): update the app to open it";
+        let errors = [
+            WalletError::from(E::Store(too_new())),
+            WalletError::from(SendError::Wallet(E::Store(too_new()))),
+            WalletError::from(ReceiveError::from(too_new())),
+            WalletError::from(ContactError::from(too_new())),
+        ];
+        for error in errors {
+            assert_eq!(error.kind, WalletErrorKind::WalletTooNew);
+            assert_eq!(error.code, 113);
+            assert_eq!(error.message, expected);
+        }
+        let other = WalletError::from(E::Store(lepic_store::StoreError::WalUnavailable));
+        assert_eq!(other.kind, WalletErrorKind::Io);
     }
 
     #[test]

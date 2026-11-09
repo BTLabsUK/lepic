@@ -332,6 +332,8 @@ impl CliError {
             Self::ApiClientNotFound { .. } => ErrorKind::NotFound,
             Self::HttpReplyLost { .. } => ErrorKind::Incomplete,
             Self::Wallet(error) => wallet_kind(error),
+            Self::Store(StoreError::SchemaTooNew { .. }) => ErrorKind::WalletState,
+            Self::Store(_) => ErrorKind::Internal,
             Self::DataDirInUse => ErrorKind::WalletState,
             Self::SlateIdReused { .. } => ErrorKind::Rejected,
             Self::NoSendWithSlate => ErrorKind::NotFound,
@@ -352,7 +354,6 @@ impl CliError {
             Self::Transport(_) | Self::SlateFile { .. } => ErrorKind::Transport,
             Self::Refresh(_)
             | Self::Scan(_)
-            | Self::Store(_)
             | Self::Registry(_)
             | Self::SasTable
             | Self::OwnerTlsCertificate(_)
@@ -389,6 +390,7 @@ fn wallet_kind(error: &WalletError) -> ErrorKind {
         | WalletError::AlreadyOpen
         | WalletError::NetworkMismatch { .. }
         | WalletError::ForeignDatabase
+        | WalletError::Store(StoreError::SchemaTooNew { .. })
         | WalletError::RestoreScanRequired => ErrorKind::WalletState,
         WalletError::Node(_) | WalletError::Implausible(_) => ErrorKind::Node,
         WalletError::UnknownTransaction(_)
@@ -634,6 +636,14 @@ mod tests {
         let cases: Vec<(CliError, ErrorKind)> = vec![
             (WalletError::WrongPassword.into(), ErrorKind::WrongPassword),
             (WalletError::NoWallet.into(), ErrorKind::WalletState),
+            (
+                WalletError::Store(StoreError::SchemaTooNew {
+                    found: 17,
+                    supported: 16,
+                })
+                .into(),
+                ErrorKind::WalletState,
+            ),
             (
                 WalletError::UnknownTransaction(lepic_store::TxId(4)).into(),
                 ErrorKind::NotFound,
