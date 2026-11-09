@@ -7,29 +7,10 @@
 //! Over Epicbox the marker also carries `f`, the [`features`] the wallet claims; only there,
 //! inside the encrypted message, never in a file or paste slate that anyone holding it can read.
 //! The marker's `version` stays 1 and carries no build version.
+//!
+//! The marked V2 and V3 codecs live in `lepic-legacy-slate` with the codecs they wrap
+//! (ADR 0052); the feature bits stay here, since pairing and contacts use them too.
 
 pub mod features;
-pub mod v2;
-pub mod v3;
 
-/// What the marker carries besides its version.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum MarkerExtra {
-    None,
-    /// The claimed feature bits, for a slate that goes over Epicbox.
-    Features(u32),
-    /// An X25519 reply key, for a file or paste slate.
-    Reply([u8; 32]),
-}
-
-/// What follows the last key of the slate object.
-pub(crate) fn marker_text(extra: &MarkerExtra) -> String {
-    match extra {
-        MarkerExtra::None => ",\"lepic\":{\"version\":1}".to_owned(),
-        MarkerExtra::Features(features) => format!(",\"lepic\":{{\"version\":1,\"f\":{features}}}"),
-        MarkerExtra::Reply(key) => {
-            let hex: String = key.iter().map(|byte| format!("{byte:02x}")).collect();
-            format!(",\"lepic\":{{\"version\":1,\"reply\":\"{hex}\"}}")
-        }
-    }
-}
+pub use lepic_legacy_slate::marker::{v2, v3};

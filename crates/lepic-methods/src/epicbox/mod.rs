@@ -9,6 +9,10 @@
 
 use std::sync::{Arc, PoisonError, RwLock};
 
+use lepic_legacy_slate::marker::v2::MarkedV2JsonCodec;
+use lepic_legacy_slate::marker::v3::{
+    MarkedV3JsonCodec, carries_lepic_marker, lepic_marker_features, lepic_marker_reply_key,
+};
 use lepic_legacy_slate::v2_json::LEGACY_V2_JSON;
 use lepic_legacy_slate::v2_json::V2JsonCodec;
 use lepic_legacy_slate::v3_json::LEGACY_V3_JSON;
@@ -22,10 +26,6 @@ use lepic_slate::stage::Stage;
 use lepic_slate::validate::check_size;
 use lepic_transport::codecs;
 use lepic_transport::error::{FormatError, TransportError};
-use lepic_transport::marker::v2::MarkedV2JsonCodec;
-use lepic_transport::marker::v3::{
-    MarkedV3JsonCodec, carries_lepic_marker, lepic_marker_features, lepic_marker_reply_key,
-};
 use lepic_transport::method::{Carries, Encoded, Method, SenderFacts, Sending};
 use lepic_transport::policy::{Encoding, FormatPolicy, encode_with};
 use lepic_transport::transport::{BoxFuture, Destination, Outbound, Transport, TransportId};

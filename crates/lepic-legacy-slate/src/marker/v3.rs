@@ -16,7 +16,7 @@
 use lepic_crypto::hex;
 use serde::Deserialize;
 
-use lepic_legacy_slate::v3_json::V3JsonCodec;
+use crate::v3_json::V3JsonCodec;
 use lepic_slate::codec::{Codec, CodecId, EncodeContext, MediaType, WireSlate};
 use lepic_slate::error::{DecodeError, EncodeError};
 use lepic_slate::model::Slate;
@@ -145,8 +145,8 @@ pub fn carries_lepic_marker(wire: &WireSlate) -> bool {
 
 /// The feature bits in the LEPIC marker of `wire`: its `f` when the marker counts for
 /// [`carries_lepic_marker`] and `f` is an integer that fits a `u32`, unknown bits kept. `None`
-/// for a marker without `f` (an older LEPIC, which claims only
-/// [`MARKER`](super::features::MARKER)), a malformed `f`, or no marker.
+/// for a marker without `f` (an older LEPIC, which claims only `MARKER` of
+/// `lepic_transport::marker::features`), a malformed `f`, or no marker.
 pub fn lepic_marker_features(wire: &WireSlate) -> Option<u32> {
     #[derive(Deserialize)]
     struct Probe {

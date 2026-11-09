@@ -25,10 +25,10 @@ mod probe;
 
 use crate::codecs;
 use crate::error::{FileError, FileOperation, FormatError, TransportError};
-use crate::marker::v3::MarkedV3JsonCodec;
 use crate::method::{Carries, Encoded, Method, Sending};
 use crate::policy::{Encoding, FormatPolicy, encode_with};
 use crate::transport::{BoxFuture, Exchange, Location, Transport, TransportId};
+use lepic_legacy_slate::marker::v3::MarkedV3JsonCodec;
 
 pub const FILE: TransportId = TransportId::new("file");
 

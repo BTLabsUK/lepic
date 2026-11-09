@@ -9,5 +9,6 @@
 
 mod bounded;
 mod fields;
+pub mod marker;
 pub mod v2_json;
 pub mod v3_json;
