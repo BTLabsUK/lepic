@@ -6,7 +6,7 @@
 //! Epicbox claims [`NATIVE_SLATES`] and carries, in the marker's `reply`, the public key of the
 //! payments address's seal key of kind 03 ([`SealKeyKind::Epicbox`]). That key is not the
 //! epic1's (kind 00), so the payments address and the epic1 address are not linkable. With it
-//! off, the marker is what it was before.
+//! off, the marker claims no native slates and carries no seal key.
 
 use jiff::Timestamp;
 use lepic_contact::{

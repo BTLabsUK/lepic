@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Onion v3 addresses and the key tor publishes them with.
 //!
-//! The wallet's onion is its payment-proof key in onion form, so it equals what
-//! `epic-wallet address` prints and survives a restore from the phrase. The key's 32-byte seed
-//! is the wallet's address secret key (`lepic_keychain::Keychain::address_key`, account `m/0/0`,
-//! index 0).
+//! The caller passes the 32-byte ed25519 seed. The wallet's onion has its own key, a key of the
+//! LEPIC namespace (`lepic_wallet::Wallet::onion_key`, ADR 0044); the previous onion's seed is
+//! the address secret key of account `m/0/0`, index 0, so its onion is the payment-proof address
+//! that `epic-wallet address` prints. Both come back after a restore from the phrase.
 
 use std::fmt;
 

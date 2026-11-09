@@ -6,7 +6,7 @@
 
 //! Send, standard flow: build the S1 slate, lock its inputs, store it, deliver it.
 //!
-//! The slate is built as `epic-wallet` `v4.0.2` builds it (`owner::init_send_tx`): selection,
+//! The slate is built as `epic-wallet` `v4.1.0` builds it (`owner::init_send_tx`): selection,
 //! change outputs with their proofs, the kernel offset split off the sender's excess, the
 //! sender's public excess and nonce, an optional signed message, TTL and payment proof
 //! addresses. [`build_s1`] is that construction on its own, with the randomness passed in.

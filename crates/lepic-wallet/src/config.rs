@@ -144,12 +144,11 @@ pub struct WalletConfig {
     /// normalized by the contact book when the wallet opens. `None` for wallets that claim
     /// none, such as apps.
     pub domain: Option<String>,
-    /// Values the host chooses; [`WalletPolicy::default`] is what LEPIC did before they were
-    /// parameters.
+    /// Values the host chooses (ADR 0036); [`WalletPolicy::default`] holds LEPIC's defaults.
     pub policy: WalletPolicy,
     /// Send `lepic.v1` slates (envelope type 0A) to the paired contacts that claim
     /// [`lepic_transport::marker::features::NATIVE_SLATES`], through their mailboxes. A value the
-    /// host chooses (ADR 0036), `false` for what LEPIC did before: type 01 with V3 JSON. Answers
+    /// host chooses (ADR 0036); `false` sends type 01 with V3 JSON. Answers
     /// take the format of their request whatever it says, and native slates are always taken.
     pub native_direct: bool,
 }
