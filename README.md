@@ -182,10 +182,11 @@ runs the differential tests (`cd conformance && cargo test --locked`).
 | `crates/lepic-crypto` | The safe boundary over secp256k1-zkp: commitments, proofs, signatures |
 | `crates/lepic-keychain` | Mnemonics, key derivation, switch commitments, proof builders, seed vaults |
 | `crates/lepic-slate` | Slate model, codecs and the codec registry |
+| `crates/lepic-legacy-slate` | The V2 and V3 JSON slate codecs and the slate marker codecs epic-wallet speaks |
 | `crates/lepic-node` | Client for the Epic node's foreign JSON-RPC API |
 | `crates/lepic-epicbox` | Epicbox addresses, message crypto, protocol frames and relay transport |
 | `crates/lepic-transport` | Transport traits, format policy and the file transport |
-| `crates/lepic-foreign` | The foreign API over HTTP: send to a listening wallet, and listen |
+| `crates/lepic-legacy-rpc` | The foreign JSON-RPC API over HTTP: send to a listening wallet, and listen |
 | `crates/lepic-tor` | The wallet's onion service and sending to onion addresses |
 | `crates/lepic-store` | SQLite wallet storage behind repository traits |
 | `crates/lepic-contact`, `crates/lepic-wallet-contacts` | Contact pairing formats; pairing, mailboxes and invoices on the engine |

@@ -9,6 +9,14 @@ Conventional Commit messages at release time.
 
 ### Changed
 
+- The legacy formats have crates of their own (ADR 0052). `lepic-foreign` is renamed
+  `lepic-legacy-rpc`; the V2 and V3 JSON codecs move from `lepic-slate`'s `codec::legacy` to
+  the new `lepic-legacy-slate`, with the slate marker codecs from `lepic-transport::marker`,
+  which re-exports them. `lepic-transport` and `lepic-methods` gain a default `legacy` feature;
+  without it they build with no legacy crate and the default codecs decode nothing, which
+  `cargo xtask no-legacy` checks, also as a step of `cargo xtask check`. The OpenAPI document
+  lists `/v2/foreign` under a `legacy` tag. Codec ids, transport ids, paths and method names do
+  not change.
 - `lepic serve` answers the wallet API, HTTP/1.1 on its socket (ADR 0050): status, events as
   server-sent events, wallet info, address, outputs and password, node status, transactions,
   Epicbox sends, and slate receive and finalize. Bodies are the commands' JSON reports, errors

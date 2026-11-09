@@ -2,6 +2,7 @@
 
 Status: accepted
 Date: 2026-10-21
+Note: `lepic-foreign` is `lepic-legacy-rpc` since ADR 0052.
 
 ## Context
 

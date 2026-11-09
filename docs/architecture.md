@@ -15,13 +15,14 @@ between crates are fixed below and checked by `cargo xtask deps-check`.
 | `lepic-crypto` | Safe boundary over the pinned secp256k1-zkp wrapper: commitments, Bulletproofs, aggregate signatures, ECDSA, ECDH. Validates every length and key before the call. | none |
 | `lepic-primitives` | Binary serialization, hashing, transaction, input, output and kernel types, weights and fees, per-network chain parameters. Ported from the node. | none |
 | `lepic-keychain` | Mnemonic to seed, BIP32 derivation, identifiers and paths, switch commitments, proof builders and rewind, seed vault formats, the host app's data file format (`docs/compat/wfeh.md`). | none |
-| `lepic-slate` | Slate domain model, stages and roles, codec trait, legacy V2 and V3 JSON codecs, codec registry, the `ur:epic-slate` QR form of slate text (ADR 0025). | none |
+| `lepic-slate` | Slate domain model, stages and roles, codec trait, codec registry, the `ur:epic-slate` QR form of slate text (ADR 0025). | none |
+| `lepic-legacy-slate` | The V2 and V3 JSON slate codecs `epic-wallet` speaks, and the marked codecs that add the LEPIC marker to them (ADR 0052). | none |
 | `lepic-contact` | Contact pairing formats (RFC 0002): the sealed envelope (HPKE to a contact's X25519 key, signed with its Ed25519 key) and its armor, contact cards, invites, pairing replies and confirms, the SAS. | none |
 | `lepic-node` | Node JSON-RPC client for the foreign API, with strict response validation and bounded sizes. | network |
 | `lepic-store` | SQLite storage behind repository traits, migrations, encryption of private transaction context, the database file encrypted at rest (ADR 0032). | disk |
-| `lepic-transport` | Transport traits, the method port and the registry's lookup, the LEPIC marker, shared legacy codecs, format policy, the file transport. | disk |
+| `lepic-transport` | Transport traits, the method port and the registry's lookup, the LEPIC marker's feature bits, format policy; with its default `legacy` feature the shared legacy codec registries and the file transport. | disk |
 | `lepic-epicbox` | Epicbox addresses, message crypto, protocol frames, the relay client. Protocol only: the `epicbox` method lives in `lepic-methods`. | network |
-| `lepic-foreign` | The wallet foreign API over HTTP (ADR 0017): JSON-RPC messages, the client, the listener. Protocol only: it implements no LEPIC trait, and the `http` method and the receiver live in `lepic-methods`, which re-exports its API. | network |
+| `lepic-legacy-rpc` | The legacy JSON-RPC dialect: the wallet foreign API over HTTP (ADR 0017, ADR 0052): JSON-RPC messages, the client, the listener. Protocol only: it implements no LEPIC trait, and the `http` method and the receiver live in `lepic-methods`, which re-exports its API. | network |
 | `lepic-tor` | Tor on desktop and Android (ADR 0018): onion v3 addresses and the wallet's onion key, a tor child process per wallet driven over its control port, SOCKS5. Protocol only: the `tor` method lives in `lepic-methods`; `OnionClientSettings` stays here. | network, child process |
 | `lepic-wallet` | The engine: accounts, output selection, send, receive, finalize, cancel, scan, refresh, transaction state machine, events. It holds no method: a transaction stores a transport id, which the engine resolves through the consumer's registry (`Ports.methods`); with none it sends no notice. It names a method's id only where the data does: an invoice that came back over Epicbox, and the method an old wallet's history implies when it is imported. | through ports |
 | `lepic-wallet-contacts` | Contacts on the engine (RFC 0002): pairing, contact mailboxes, sealed slates, contact invoices, key checks and app payloads. Drives `lepic-wallet` through its public calls and the hooks of `lepic_wallet::extension`. | through ports |
@@ -41,8 +42,8 @@ Outside the product workspace, with their own `Cargo.lock`:
 ### Feature code kept out of the money core
 
 Contact pairing and its key schedule (RFC 0002) live in `lepic-wallet-contacts` (ADR 0029), the
-LEPIC marker of slates sent between LEPIC wallets in `lepic-transport` (`marker`), which the
-methods that use it share. What the pure crates keep of LEPIC's own features is the least the
+LEPIC marker of slates sent between LEPIC wallets in `lepic-legacy-slate` (`marker`), with its
+feature bits in `lepic-transport` (`marker::features`), which the methods that use it share. What the pure crates keep of LEPIC's own features is the least the
 features need from the wallet's keychain:
 
 - `lepic-keychain` `contact_identity`: the plain key at `m/<a>/2/0` that the contact key
@@ -63,12 +64,13 @@ lepic-slate       -> lepic-crypto, lepic-primitives
 lepic-contact     -> (external only)
 lepic-node        -> lepic-primitives, lepic-crypto
 lepic-store       -> lepic-primitives
-lepic-transport   -> lepic-slate, lepic-primitives, lepic-crypto
+lepic-legacy-slate -> lepic-slate, lepic-crypto, lepic-primitives
+lepic-transport   -> lepic-legacy-slate, lepic-slate, lepic-primitives, lepic-crypto
 lepic-epicbox     -> lepic-transport, lepic-slate, lepic-crypto, lepic-primitives
-lepic-foreign     -> lepic-transport, lepic-slate
-lepic-tor         -> lepic-foreign
-lepic-wallet      -> lepic-contact, lepic-store, lepic-node, lepic-transport, lepic-slate, lepic-keychain, lepic-crypto, lepic-primitives
-lepic-methods     -> lepic-wallet, lepic-transport, lepic-epicbox, lepic-foreign, lepic-tor, lepic-node, lepic-slate, lepic-keychain, lepic-crypto, lepic-primitives
+lepic-legacy-rpc  -> lepic-transport, lepic-slate
+lepic-tor         -> lepic-legacy-rpc
+lepic-wallet      -> lepic-contact, lepic-store, lepic-node, lepic-transport, lepic-legacy-slate, lepic-slate, lepic-keychain, lepic-crypto, lepic-primitives
+lepic-methods     -> lepic-wallet, lepic-transport, lepic-epicbox, lepic-legacy-rpc, lepic-legacy-slate, lepic-tor, lepic-node, lepic-slate, lepic-keychain, lepic-crypto, lepic-primitives
 lepic-wallet-contacts -> all crates above
 lepic-telemetry   -> (external only)
 lepic-cli         -> lepic-wallet, lepic-wallet-contacts, lepic-methods, lepic-telemetry, lepic-epicbox, lepic-transport, lepic-node, lepic-store, lepic-keychain, lepic-primitives
@@ -79,9 +81,14 @@ The block applies to normal and build dependencies. Any crate may take `lepic-te
 dev-dependency for its log-capture test helpers, and `lepic-wallet` takes `lepic-wallet-contacts`
 as one, so the contact tests run on the engine's own test harness (ADR 0029). `lepic-wallet` also
 takes `lepic-methods` and `lepic-epicbox` as dev-dependencies, so its tests drive the engine through
-the Epicbox method on a mock relay (ADR 0051). Any other edge is a design change and needs an ADR.
+the Epicbox method on a mock relay (ADR 0051), and `lepic-epicbox` takes `lepic-legacy-slate`
+as one, so its vectors encode the V2 slates the relay carries (ADR 0052). Any other edge is a design change and needs an ADR.
 `lepic-ffi`'s edge to `lepic-tor` is optional, behind its default `tor` feature (ADR 0026).
-Pure crates (`crypto`, `primitives`, `keychain`, `slate`, `contact`) may not depend on Tokio or the filesystem,
+The edges to `lepic-legacy-slate` of `lepic-transport` and `lepic-methods`, and the edge to
+`lepic-legacy-rpc` of `lepic-methods`, are optional, behind their default `legacy` feature
+(ADR 0052); `cargo xtask no-legacy` builds the crates that need no legacy crate without it.
+`lepic-wallet` keeps its edge to `lepic-legacy-slate`: it stores slates as V3 JSON.
+Pure crates (`crypto`, `primitives`, `keychain`, `slate`, `legacy-slate`, `contact`) may not depend on Tokio or the filesystem,
 read a clock, or create their own randomness.
 
 ## Engine and ports

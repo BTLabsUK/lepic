@@ -144,7 +144,7 @@ supports. Byte-level agreement is the bar.
   the reference code; never write or edit a vector by hand. Where upstream draws randomness
   internally, LEPIC is checked by consistency (it decrypts, rewinds or verifies upstream output, and
   upstream accepts LEPIC output in the differential suite). A port with no vectors is not done.
-- The legacy codecs under `lepic-slate`'s `codec::legacy` are frozen: they change only to fix a
+- The legacy codecs in `lepic-legacy-slate` are frozen: they change only to fix a
   mismatch a vector demonstrates. Improvements go into a new codec (ADR 0002).
 - `upstream.toml` maps each ported module to its upstream path and commit, and
   `cargo xtask upstream-drift` reports upstream changes since then. A drift report is reviewed and
