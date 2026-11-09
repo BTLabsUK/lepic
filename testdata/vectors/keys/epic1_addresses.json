@@ -1,0 +1,60 @@
+{
+  "schema": 1,
+  "area": "keys",
+  "name": "epic1_addresses",
+  "generator": "conformance/vectors/keys",
+  "upstream": {
+    "repo": "https://github.com/EpicCash/epic-wallet",
+    "commit": "845b3fcf4df12ed0139929c62157015447a9d063"
+  },
+  "inputs": {
+    "proof_keys": [
+      {
+        "name": "rfc8032_1",
+        "key": "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a"
+      },
+      {
+        "name": "rfc8032_2",
+        "key": "3d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c"
+      }
+    ],
+    "seal_keys": [
+      {
+        "name": "rfc7748_alice",
+        "key": "8520f0098930a754748b7ddcb43ef75a0dbf3a0d26381af4eba4a98eaa9b4e6a"
+      },
+      {
+        "name": "rfc7748_bob",
+        "key": "de9edb7d7b7dc1b4d35b61c2ece435373f8343c85b78674dadfc7e146f882b4f"
+      }
+    ]
+  },
+  "expected": {
+    "cases": [
+      {
+        "proof_key": "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a",
+        "seal_key": "8520f0098930a754748b7ddcb43ef75a0dbf3a0d26381af4eba4a98eaa9b4e6a",
+        "mainnet": "epic1q8t44xqps2cs4d74f0ld8jtyquaqactj70d2vge94upp568hqag34pfq7qycjv98236gklwuksl0wksdhuaq6f3crt6whf9f364fknn2dpsgqt",
+        "floonet": "tepic1q8t44xqps2cs4d74f0ld8jtyquaqactj70d2vge94upp568hqag34pfq7qycjv98236gklwuksl0wksdhuaq6f3crt6whf9f364fknn239lutd"
+      },
+      {
+        "proof_key": "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a",
+        "seal_key": "de9edb7d7b7dc1b4d35b61c2ece435373f8343c85b78674dadfc7e146f882b4f",
+        "mainnet": "epic1q8t44xqps2cs4d74f0ld8jtyquaqactj70d2vge94upp568hqag34h57md7hklwpknf4kcwzanjr2delsdpuskmcvax6mlr7z3hcs2600np0c5",
+        "floonet": "tepic1q8t44xqps2cs4d74f0ld8jtyquaqactj70d2vge94upp568hqag34h57md7hklwpknf4kcwzanjr2delsdpuskmcvax6mlr7z3hcs260nhwmnj"
+      },
+      {
+        "proof_key": "3d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c",
+        "seal_key": "8520f0098930a754748b7ddcb43ef75a0dbf3a0d26381af4eba4a98eaa9b4e6a",
+        "mainnet": "epic1qy75q97rappcjk5jku92wngm067fexpveuhvf95vcrx4tuf273nqepfq7qycjv98236gklwuksl0wksdhuaq6f3crt6whf9f364fknn2fhff0n",
+        "floonet": "tepic1qy75q97rappcjk5jku92wngm067fexpveuhvf95vcrx4tuf273nqepfq7qycjv98236gklwuksl0wksdhuaq6f3crt6whf9f364fknn24nxay4"
+      },
+      {
+        "proof_key": "3d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c",
+        "seal_key": "de9edb7d7b7dc1b4d35b61c2ece435373f8343c85b78674dadfc7e146f882b4f",
+        "mainnet": "epic1qy75q97rappcjk5jku92wngm067fexpveuhvf95vcrx4tuf273nqeh57md7hklwpknf4kcwzanjr2delsdpuskmcvax6mlr7z3hcs260t9cwhv",
+        "floonet": "tepic1qy75q97rappcjk5jku92wngm067fexpveuhvf95vcrx4tuf273nqeh57md7hklwpknf4kcwzanjr2delsdpuskmcvax6mlr7z3hcs260hph6u2"
+      }
+    ]
+  }
+}

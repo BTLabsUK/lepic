@@ -52,7 +52,7 @@ struct Case {
 pub(super) struct EpicboxForm {
     network: &'static str,
     version_bytes: String,
-    public_key: String,
+    pub(super) public_key: String,
     address: String,
 }
 

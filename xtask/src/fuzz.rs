@@ -54,6 +54,7 @@ const TARGETS: &[&str] = &[
     "notice_classify",
     "ffi_inspect_slate",
     "ur_slate_decode",
+    "epic1_link",
     "seal_open",
     "contact_card",
     "pair_invite",
@@ -394,6 +395,11 @@ fn chain_seeds(root: &Path, vectors: &Path, target: &str) -> Result<Option<BTree
         "vault_file" => seeds.extend(vault_seeds()),
         "slate_flow" => seeds.extend(slate_flow_seeds()),
         "ur_slate_decode" => seeds.extend(ur_slate_seeds(root)?),
+        "epic1_link" => {
+            for vector in read_area(vectors, "keys", "epic1_")? {
+                seeds.extend(text_fields(&vector, "text"));
+            }
+        }
         "wallet_seed" => {
             for vector in read_area(vectors, "keys", "wallet_seed_")? {
                 seeds.extend(text_fields(&vector, "file"));

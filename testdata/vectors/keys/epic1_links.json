@@ -1,0 +1,231 @@
+{
+  "schema": 1,
+  "area": "keys",
+  "name": "epic1_links",
+  "generator": "conformance/vectors/keys",
+  "upstream": {
+    "repo": "https://github.com/EpicCash/epic-wallet",
+    "commit": "845b3fcf4df12ed0139929c62157015447a9d063"
+  },
+  "inputs": {
+    "note": "address from the first proof key and the first seal key; mailboxes from the secp256k1 secrets 0x11.., 0x22.., 0x33.."
+  },
+  "expected": {
+    "cases": [
+      {
+        "name": "one_transport_mainnet",
+        "text": "epic:epic1q8t44xqps2cs4d74f0ld8jtyquaqactj70d2vge94upp568hqag34pfq7qycjv98236gklwuksl0wksdhuaq6f3crt6whf9f364fknn2dpsgqt?epicbox=esYrV7nP8DHCHcHcRnook2vAUZRp5DUDiAhVA9GEyi9NaDtQCiLn@relay.example.org&amount=1.5&message=Rent%20for%20May%20%26%20June",
+        "network": "mainnet",
+        "outcome": "link",
+        "reason": null,
+        "address": "epic1q8t44xqps2cs4d74f0ld8jtyquaqactj70d2vge94upp568hqag34pfq7qycjv98236gklwuksl0wksdhuaq6f3crt6whf9f364fknn2dpsgqt",
+        "transports": [
+          {
+            "mailbox": "esYrV7nP8DHCHcHcRnook2vAUZRp5DUDiAhVA9GEyi9NaDtQCiLn",
+            "relay": "relay.example.org",
+            "port": null
+          }
+        ],
+        "skipped": [],
+        "amount_units": "150000000",
+        "message": "Rent for May & June",
+        "can_pay": true
+      },
+      {
+        "name": "three_transports_mainnet",
+        "text": "epic:epic1q8t44xqps2cs4d74f0ld8jtyquaqactj70d2vge94upp568hqag34pfq7qycjv98236gklwuksl0wksdhuaq6f3crt6whf9f364fknn2dpsgqt?epicbox=esYrV7nP8DHCHcHcRnook2vAUZRp5DUDiAhVA9GEyi9NaDtQCiLn@relay.example.org&epicbox=esWqsefCT41rAPXEq1YZdrisX5ZVB6UvYWuPYKZP6SWuWSoBDdq7@relay.example.net:8443&epicbox=esWmUjKF6rFHLWyavDfLQkaQbsQGr4nAaaQ5jtnajvijCqWjCTo4@203.0.113.7:443",
+        "network": "mainnet",
+        "outcome": "link",
+        "reason": null,
+        "address": "epic1q8t44xqps2cs4d74f0ld8jtyquaqactj70d2vge94upp568hqag34pfq7qycjv98236gklwuksl0wksdhuaq6f3crt6whf9f364fknn2dpsgqt",
+        "transports": [
+          {
+            "mailbox": "esYrV7nP8DHCHcHcRnook2vAUZRp5DUDiAhVA9GEyi9NaDtQCiLn",
+            "relay": "relay.example.org",
+            "port": null
+          },
+          {
+            "mailbox": "esWqsefCT41rAPXEq1YZdrisX5ZVB6UvYWuPYKZP6SWuWSoBDdq7",
+            "relay": "relay.example.net",
+            "port": 8443
+          },
+          {
+            "mailbox": "esWmUjKF6rFHLWyavDfLQkaQbsQGr4nAaaQ5jtnajvijCqWjCTo4",
+            "relay": "203.0.113.7",
+            "port": 443
+          }
+        ],
+        "skipped": [],
+        "amount_units": null,
+        "message": null,
+        "can_pay": true
+      },
+      {
+        "name": "fourth_transport_left_out_mainnet",
+        "text": "epic:epic1q8t44xqps2cs4d74f0ld8jtyquaqactj70d2vge94upp568hqag34pfq7qycjv98236gklwuksl0wksdhuaq6f3crt6whf9f364fknn2dpsgqt?epicbox=esYrV7nP8DHCHcHcRnook2vAUZRp5DUDiAhVA9GEyi9NaDtQCiLn@relay.example.org&epicbox=esWqsefCT41rAPXEq1YZdrisX5ZVB6UvYWuPYKZP6SWuWSoBDdq7@relay.example.net:8443&epicbox=esWmUjKF6rFHLWyavDfLQkaQbsQGr4nAaaQ5jtnajvijCqWjCTo4@203.0.113.7:443&epicbox=esYrV7nP8DHCHcHcRnook2vAUZRp5DUDiAhVA9GEyi9NaDtQCiLn@relay.example.com",
+        "network": "mainnet",
+        "outcome": "link",
+        "reason": null,
+        "address": "epic1q8t44xqps2cs4d74f0ld8jtyquaqactj70d2vge94upp568hqag34pfq7qycjv98236gklwuksl0wksdhuaq6f3crt6whf9f364fknn2dpsgqt",
+        "transports": [
+          {
+            "mailbox": "esYrV7nP8DHCHcHcRnook2vAUZRp5DUDiAhVA9GEyi9NaDtQCiLn",
+            "relay": "relay.example.org",
+            "port": null
+          },
+          {
+            "mailbox": "esWqsefCT41rAPXEq1YZdrisX5ZVB6UvYWuPYKZP6SWuWSoBDdq7",
+            "relay": "relay.example.net",
+            "port": 8443
+          },
+          {
+            "mailbox": "esWmUjKF6rFHLWyavDfLQkaQbsQGr4nAaaQ5jtnajvijCqWjCTo4",
+            "relay": "203.0.113.7",
+            "port": 443
+          }
+        ],
+        "skipped": [
+          "transports_over_limit"
+        ],
+        "amount_units": null,
+        "message": null,
+        "can_pay": true
+      },
+      {
+        "name": "mailbox_of_other_network_mainnet",
+        "text": "epic:epic1q8t44xqps2cs4d74f0ld8jtyquaqactj70d2vge94upp568hqag34pfq7qycjv98236gklwuksl0wksdhuaq6f3crt6whf9f364fknn2dpsgqt?epicbox=zzQcF4niw7stoz65e6VG1hnQKekXc8M5rFRDFvP7kneAsEvSEPTa@relay.example.org",
+        "network": "mainnet",
+        "outcome": "link",
+        "reason": null,
+        "address": "epic1q8t44xqps2cs4d74f0ld8jtyquaqactj70d2vge94upp568hqag34pfq7qycjv98236gklwuksl0wksdhuaq6f3crt6whf9f364fknn2dpsgqt",
+        "transports": [],
+        "skipped": [
+          "transport_network"
+        ],
+        "amount_units": null,
+        "message": null,
+        "can_pay": false
+      },
+      {
+        "name": "epicbox_link_with_epic1_mainnet",
+        "text": "epic:esYrV7nP8DHCHcHcRnook2vAUZRp5DUDiAhVA9GEyi9NaDtQCiLn@relay.example.org?epic1=epic1q8t44xqps2cs4d74f0ld8jtyquaqactj70d2vge94upp568hqag34pfq7qycjv98236gklwuksl0wksdhuaq6f3crt6whf9f364fknn2dpsgqt&amount=1",
+        "network": "mainnet",
+        "outcome": "refused",
+        "reason": "not_an_epic1_link",
+        "address": null,
+        "transports": [],
+        "skipped": [],
+        "amount_units": null,
+        "message": null,
+        "can_pay": false
+      },
+      {
+        "name": "one_transport_floonet",
+        "text": "epic:tepic1q8t44xqps2cs4d74f0ld8jtyquaqactj70d2vge94upp568hqag34pfq7qycjv98236gklwuksl0wksdhuaq6f3crt6whf9f364fknn239lutd?epicbox=zzQcF4niw7stoz65e6VG1hnQKekXc8M5rFRDFvP7kneAsEvSEPTa@relay.example.org&amount=1.5&message=Rent%20for%20May%20%26%20June",
+        "network": "floonet",
+        "outcome": "link",
+        "reason": null,
+        "address": "tepic1q8t44xqps2cs4d74f0ld8jtyquaqactj70d2vge94upp568hqag34pfq7qycjv98236gklwuksl0wksdhuaq6f3crt6whf9f364fknn239lutd",
+        "transports": [
+          {
+            "mailbox": "zzQcF4niw7stoz65e6VG1hnQKekXc8M5rFRDFvP7kneAsEvSEPTa",
+            "relay": "relay.example.org",
+            "port": null
+          }
+        ],
+        "skipped": [],
+        "amount_units": "150000000",
+        "message": "Rent for May & June",
+        "can_pay": true
+      },
+      {
+        "name": "three_transports_floonet",
+        "text": "epic:tepic1q8t44xqps2cs4d74f0ld8jtyquaqactj70d2vge94upp568hqag34pfq7qycjv98236gklwuksl0wksdhuaq6f3crt6whf9f364fknn239lutd?epicbox=zzQcF4niw7stoz65e6VG1hnQKekXc8M5rFRDFvP7kneAsEvSEPTa@relay.example.org&epicbox=zzNbdbfYFxcYgmKi3KE1uXb7NAtCi1Mngbd7e6gFsX1hoTuPWAB1@relay.example.net:8443&epicbox=zzNXEgKaukqyrtn48XLngRSeSxizNyf2if7oqfuTX1DXVrZprNgW@203.0.113.7:443",
+        "network": "floonet",
+        "outcome": "link",
+        "reason": null,
+        "address": "tepic1q8t44xqps2cs4d74f0ld8jtyquaqactj70d2vge94upp568hqag34pfq7qycjv98236gklwuksl0wksdhuaq6f3crt6whf9f364fknn239lutd",
+        "transports": [
+          {
+            "mailbox": "zzQcF4niw7stoz65e6VG1hnQKekXc8M5rFRDFvP7kneAsEvSEPTa",
+            "relay": "relay.example.org",
+            "port": null
+          },
+          {
+            "mailbox": "zzNbdbfYFxcYgmKi3KE1uXb7NAtCi1Mngbd7e6gFsX1hoTuPWAB1",
+            "relay": "relay.example.net",
+            "port": 8443
+          },
+          {
+            "mailbox": "zzNXEgKaukqyrtn48XLngRSeSxizNyf2if7oqfuTX1DXVrZprNgW",
+            "relay": "203.0.113.7",
+            "port": 443
+          }
+        ],
+        "skipped": [],
+        "amount_units": null,
+        "message": null,
+        "can_pay": true
+      },
+      {
+        "name": "fourth_transport_left_out_floonet",
+        "text": "epic:tepic1q8t44xqps2cs4d74f0ld8jtyquaqactj70d2vge94upp568hqag34pfq7qycjv98236gklwuksl0wksdhuaq6f3crt6whf9f364fknn239lutd?epicbox=zzQcF4niw7stoz65e6VG1hnQKekXc8M5rFRDFvP7kneAsEvSEPTa@relay.example.org&epicbox=zzNbdbfYFxcYgmKi3KE1uXb7NAtCi1Mngbd7e6gFsX1hoTuPWAB1@relay.example.net:8443&epicbox=zzNXEgKaukqyrtn48XLngRSeSxizNyf2if7oqfuTX1DXVrZprNgW@203.0.113.7:443&epicbox=zzQcF4niw7stoz65e6VG1hnQKekXc8M5rFRDFvP7kneAsEvSEPTa@relay.example.com",
+        "network": "floonet",
+        "outcome": "link",
+        "reason": null,
+        "address": "tepic1q8t44xqps2cs4d74f0ld8jtyquaqactj70d2vge94upp568hqag34pfq7qycjv98236gklwuksl0wksdhuaq6f3crt6whf9f364fknn239lutd",
+        "transports": [
+          {
+            "mailbox": "zzQcF4niw7stoz65e6VG1hnQKekXc8M5rFRDFvP7kneAsEvSEPTa",
+            "relay": "relay.example.org",
+            "port": null
+          },
+          {
+            "mailbox": "zzNbdbfYFxcYgmKi3KE1uXb7NAtCi1Mngbd7e6gFsX1hoTuPWAB1",
+            "relay": "relay.example.net",
+            "port": 8443
+          },
+          {
+            "mailbox": "zzNXEgKaukqyrtn48XLngRSeSxizNyf2if7oqfuTX1DXVrZprNgW",
+            "relay": "203.0.113.7",
+            "port": 443
+          }
+        ],
+        "skipped": [
+          "transports_over_limit"
+        ],
+        "amount_units": null,
+        "message": null,
+        "can_pay": true
+      },
+      {
+        "name": "mailbox_of_other_network_floonet",
+        "text": "epic:tepic1q8t44xqps2cs4d74f0ld8jtyquaqactj70d2vge94upp568hqag34pfq7qycjv98236gklwuksl0wksdhuaq6f3crt6whf9f364fknn239lutd?epicbox=esYrV7nP8DHCHcHcRnook2vAUZRp5DUDiAhVA9GEyi9NaDtQCiLn@relay.example.org",
+        "network": "floonet",
+        "outcome": "link",
+        "reason": null,
+        "address": "tepic1q8t44xqps2cs4d74f0ld8jtyquaqactj70d2vge94upp568hqag34pfq7qycjv98236gklwuksl0wksdhuaq6f3crt6whf9f364fknn239lutd",
+        "transports": [],
+        "skipped": [
+          "transport_network"
+        ],
+        "amount_units": null,
+        "message": null,
+        "can_pay": false
+      },
+      {
+        "name": "epicbox_link_with_epic1_floonet",
+        "text": "epic:zzQcF4niw7stoz65e6VG1hnQKekXc8M5rFRDFvP7kneAsEvSEPTa@relay.example.org?epic1=tepic1q8t44xqps2cs4d74f0ld8jtyquaqactj70d2vge94upp568hqag34pfq7qycjv98236gklwuksl0wksdhuaq6f3crt6whf9f364fknn239lutd&amount=1",
+        "network": "floonet",
+        "outcome": "refused",
+        "reason": "not_an_epic1_link",
+        "address": null,
+        "transports": [],
+        "skipped": [],
+        "amount_units": null,
+        "message": null,
+        "can_pay": false
+      }
+    ]
+  }
+}

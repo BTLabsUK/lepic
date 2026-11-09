@@ -8,6 +8,7 @@
 mod address;
 mod commitments;
 mod derivation;
+mod epic1;
 mod mnemonic;
 mod namespace;
 mod pairing_keys;
@@ -139,6 +140,7 @@ pub(crate) fn generate(pins: &Pins) -> Result<Vec<Rendered>, Error> {
     vectors.extend(commitments::generate(&pins)?);
     vectors.extend(proofs::generate(&pins)?);
     vectors.extend(address::generate(&pins)?);
+    vectors.extend(epic1::generate(&pins)?);
     vectors.extend(seed_file::generate(&pins)?);
     vectors.extend(namespace::generate(&pins)?);
     vectors.extend(pairing_keys::generate(&pins)?);

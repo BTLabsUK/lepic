@@ -1,0 +1,65 @@
+{
+  "schema": 1,
+  "area": "keys",
+  "name": "epic1_addresses_refused",
+  "generator": "conformance/vectors/keys",
+  "upstream": {
+    "repo": "https://github.com/EpicCash/epic-wallet",
+    "commit": "845b3fcf4df12ed0139929c62157015447a9d063"
+  },
+  "inputs": {
+    "note": "built from the first proof key and the first seal key"
+  },
+  "expected": {
+    "cases": [
+      {
+        "name": "mixed_case",
+        "text": "epic1q8t44Xqps2cs4d74f0ld8jtyquaqactj70d2vge94upp568hqag34pfq7qycjv98236gklwuksl0wksdhuaq6f3crt6whf9f364fknn2dpsgqt",
+        "network": "mainnet",
+        "refusal": "mixed_case"
+      },
+      {
+        "name": "bad_checksum",
+        "text": "epic1q8t44xqps2cs4d74f0ld8jtyquaqactj70d2vge94upp568hqag34pfq7qycjv98236gklwuksl0wksdhuaq6f3crt6whf9f364fknn2dpsgqq",
+        "network": "mainnet",
+        "refusal": "checksum"
+      },
+      {
+        "name": "version_00",
+        "text": "epic1qrt44xqps2cs4d74f0ld8jtyquaqactj70d2vge94upp568hqag34pfq7qycjv98236gklwuksl0wksdhuaq6f3crt6whf9f364fknn2jejyd2",
+        "network": "mainnet",
+        "refusal": "version"
+      },
+      {
+        "name": "version_02",
+        "text": "epic1qtt44xqps2cs4d74f0ld8jtyquaqactj70d2vge94upp568hqag34pfq7qycjv98236gklwuksl0wksdhuaq6f3crt6whf9f364fknn29qkuhg",
+        "network": "mainnet",
+        "refusal": "version"
+      },
+      {
+        "name": "floonet_read_as_mainnet",
+        "text": "tepic1q8t44xqps2cs4d74f0ld8jtyquaqactj70d2vge94upp568hqag34pfq7qycjv98236gklwuksl0wksdhuaq6f3crt6whf9f364fknn239lutd",
+        "network": "mainnet",
+        "refusal": "network"
+      },
+      {
+        "name": "mainnet_read_as_floonet",
+        "text": "epic1q8t44xqps2cs4d74f0ld8jtyquaqactj70d2vge94upp568hqag34pfq7qycjv98236gklwuksl0wksdhuaq6f3crt6whf9f364fknn2dpsgqt",
+        "network": "floonet",
+        "refusal": "network"
+      },
+      {
+        "name": "small_order_seal_key",
+        "text": "epic1q8t44xqps2cs4d74f0ld8jtyquaqactj70d2vge94upp568hqag35qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqh080vt",
+        "network": "mainnet",
+        "refusal": "seal_key"
+      },
+      {
+        "name": "one_byte_short",
+        "text": "epic1q8t44xqps2cs4d74f0ld8jtyquaqactj70d2vge94upp568hqag34pfq7qycjv98236gklwuksl0wksdhuaq6f3crt6whf9f364fkns59yvut",
+        "network": "mainnet",
+        "refusal": "length"
+      }
+    ]
+  }
+}

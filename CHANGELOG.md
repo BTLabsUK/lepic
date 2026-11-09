@@ -34,6 +34,18 @@ Conventional Commit messages at release time.
 
 ### Added
 
+- `lepic-epic1`: the epic1 address (bech32m, hrp `epic` and `tepic`, proof key and seal key) and
+  the epic1 payment link with up to three Epicbox transport entries, amount, message and label
+  (RFC 0003 §5.13, §5.14). An Epicbox link is not read as an epic1 link. A link with no usable
+  transport reads and reports that it cannot be paid.
+- `lepic_transport::host_rule`: classifies a relay host from untrusted input as public or on
+  the local network and refuses loopback and unspecified hosts, by name before resolving and by
+  address for each resolved address.
+- `ur:epic-slate` payload version 2 (RFC 0003 §5.18): `encode_ur_binary` and `decode_ur_parts`
+  carry a native slate or an envelope as bytes, uncompressed. Version 1 codes are unchanged.
+- Golden vectors for the epic1 address and link (`testdata/vectors/keys/epic1_*`) from an
+  independent bech32m, and the `epic1_link` fuzz target.
+
 - Local quarantine and an early-notice buffer, both off by default (ADR 0049).
   `quarantine_max_bytes` keeps contact messages that opened and could not be taken, with
   `contact_quarantine`, `contact_quarantine_retry`, `contact_quarantine_discard` and
