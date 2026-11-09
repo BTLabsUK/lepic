@@ -6,7 +6,7 @@
 set -euo pipefail
 
 types='feat|fix|perf|refactor|test|docs|build|ci|chore|revert'
-scopes='primitives|crypto|keychain|slate|contact|node|store|transport|methods|epicbox|wallet|telemetry|ffi|cli|xtask|conformance|fuzz|interop|deps|ci|docs|repo'
+scopes='primitives|crypto|keychain|slate|seal|contact|node|store|transport|methods|epicbox|wallet|telemetry|ffi|cli|xtask|conformance|fuzz|interop|deps|ci|docs|repo'
 
 fail() {
     printf 'commit-msg: %s\n' "$1" >&2
