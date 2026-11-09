@@ -5523,6 +5523,7 @@ fn wire__crate__api__wallet__EpicWallet_in_person_send_impl(
             let api_message = <Option<String>>::sse_decode(&mut deserializer);
             let api_options =
                 <Option<crate::api::types::SendOptions>>::sse_decode(&mut deserializer);
+            let api_ttl_blocks = <Option<u64>>::sse_decode(&mut deserializer);
             let api_relay_mode =
                 <crate::api::types::ContactRelayMode>::sse_decode(&mut deserializer);
             deserializer.end();
@@ -5552,6 +5553,7 @@ fn wire__crate__api__wallet__EpicWallet_in_person_send_impl(
                             api_minimum_confirmations,
                             api_message,
                             api_options,
+                            api_ttl_blocks,
                             api_relay_mode,
                         )
                         .await?;
@@ -14014,12 +14016,14 @@ impl SseDecode for crate::api::types::Epic1Paid {
         let mut var_address = <String>::sse_decode(deserializer);
         let mut var_attempts = <Vec<crate::api::types::Epic1Attempt>>::sse_decode(deserializer);
         let mut var_posted = <Option<u32>>::sse_decode(deserializer);
+        let mut var_format = <crate::api::types::SlateWire>::sse_decode(deserializer);
         return crate::api::types::Epic1Paid {
             tx_id: var_txId,
             slate_id: var_slateId,
             address: var_address,
             attempts: var_attempts,
             posted: var_posted,
+            format: var_format,
         };
     }
 }
@@ -14299,11 +14303,13 @@ impl SseDecode for crate::api::http::HttpResentTx {
         let mut var_slateId = <String>::sse_decode(deserializer);
         let mut var_posted = <bool>::sse_decode(deserializer);
         let mut var_dialect = <crate::api::types::SendDialect>::sse_decode(deserializer);
+        let mut var_format = <crate::api::types::SlateWire>::sse_decode(deserializer);
         return crate::api::http::HttpResentTx {
             tx_id: var_txId,
             slate_id: var_slateId,
             posted: var_posted,
             dialect: var_dialect,
+            format: var_format,
         };
     }
 }
@@ -14432,12 +14438,14 @@ impl SseDecode for crate::api::types::InPersonCode {
         let mut var_bytes = <Vec<u8>>::sse_decode(deserializer);
         let mut var_ttlCutoff = <u64>::sse_decode(deserializer);
         let mut var_mailbox = <Option<String>>::sse_decode(deserializer);
+        let mut var_format = <crate::api::types::SlateWire>::sse_decode(deserializer);
         return crate::api::types::InPersonCode {
             tx_id: var_txId,
             slate_id: var_slateId,
             bytes: var_bytes,
             ttl_cutoff: var_ttlCutoff,
             mailbox: var_mailbox,
+            format: var_format,
         };
     }
 }
@@ -14530,6 +14538,7 @@ impl SseDecode for crate::api::types::InPersonReply {
         let mut var_armored = <String>::sse_decode(deserializer);
         let mut var_checkCode = <String>::sse_decode(deserializer);
         let mut var_mailbox = <Option<crate::api::types::InPersonHost>>::sse_decode(deserializer);
+        let mut var_format = <crate::api::types::SlateWire>::sse_decode(deserializer);
         return crate::api::types::InPersonReply {
             tx_id: var_txId,
             slate_id: var_slateId,
@@ -14537,6 +14546,7 @@ impl SseDecode for crate::api::types::InPersonReply {
             armored: var_armored,
             check_code: var_checkCode,
             mailbox: var_mailbox,
+            format: var_format,
         };
     }
 }
@@ -15702,11 +15712,13 @@ impl SseDecode for crate::api::types::PaidInvoice {
         let mut var_slateId = <String>::sse_decode(deserializer);
         let mut var_amount = <u64>::sse_decode(deserializer);
         let mut var_fee = <u64>::sse_decode(deserializer);
+        let mut var_format = <crate::api::types::SlateWire>::sse_decode(deserializer);
         return crate::api::types::PaidInvoice {
             tx_id: var_txId,
             slate_id: var_slateId,
             amount: var_amount,
             fee: var_fee,
+            format: var_format,
         };
     }
 }
@@ -15719,12 +15731,14 @@ impl SseDecode for crate::api::types::PaidInvoiceSlate {
         let mut var_amount = <u64>::sse_decode(deserializer);
         let mut var_fee = <u64>::sse_decode(deserializer);
         let mut var_json = <String>::sse_decode(deserializer);
+        let mut var_format = <crate::api::types::SlateWire>::sse_decode(deserializer);
         return crate::api::types::PaidInvoiceSlate {
             tx_id: var_txId,
             slate_id: var_slateId,
             amount: var_amount,
             fee: var_fee,
             json: var_json,
+            format: var_format,
         };
     }
 }
@@ -16029,11 +16043,13 @@ impl SseDecode for crate::api::types::ReceivedSlate {
         let mut var_slateId = <String>::sse_decode(deserializer);
         let mut var_json = <String>::sse_decode(deserializer);
         let mut var_repeated = <bool>::sse_decode(deserializer);
+        let mut var_format = <crate::api::types::SlateWire>::sse_decode(deserializer);
         return crate::api::types::ReceivedSlate {
             tx_id: var_txId,
             slate_id: var_slateId,
             json: var_json,
             repeated: var_repeated,
+            format: var_format,
         };
     }
 }
@@ -16167,6 +16183,7 @@ impl SseDecode for crate::api::types::SealedAnswer {
         let mut var_fee = <u64>::sse_decode(deserializer);
         let mut var_answer = <String>::sse_decode(deserializer);
         let mut var_sealed = <bool>::sse_decode(deserializer);
+        let mut var_format = <crate::api::types::SlateWire>::sse_decode(deserializer);
         return crate::api::types::SealedAnswer {
             tx_id: var_txId,
             slate_id: var_slateId,
@@ -16174,6 +16191,7 @@ impl SseDecode for crate::api::types::SealedAnswer {
             fee: var_fee,
             answer: var_answer,
             sealed: var_sealed,
+            format: var_format,
         };
     }
 }
@@ -16997,6 +17015,7 @@ impl SseDecode for crate::api::error::WalletErrorKind {
             102 => crate::api::error::WalletErrorKind::Epic1Finalized,
             103 => crate::api::error::WalletErrorKind::Epic1WrongNetwork,
             104 => crate::api::error::WalletErrorKind::NotAnEpic1Link,
+            105 => crate::api::error::WalletErrorKind::WalletTooNew,
             _ => unreachable!("Invalid variant for WalletErrorKind: {}", inner),
         };
     }
@@ -18786,6 +18805,7 @@ impl flutter_rust_bridge::IntoDart for crate::api::types::Epic1Paid {
             self.address.into_into_dart().into_dart(),
             self.attempts.into_into_dart().into_dart(),
             self.posted.into_into_dart().into_dart(),
+            self.format.into_into_dart().into_dart(),
         ]
         .into_dart()
     }
@@ -19175,6 +19195,7 @@ impl flutter_rust_bridge::IntoDart for crate::api::http::HttpResentTx {
             self.slate_id.into_into_dart().into_dart(),
             self.posted.into_into_dart().into_dart(),
             self.dialect.into_into_dart().into_dart(),
+            self.format.into_into_dart().into_dart(),
         ]
         .into_dart()
     }
@@ -19321,6 +19342,7 @@ impl flutter_rust_bridge::IntoDart for crate::api::types::InPersonCode {
             self.bytes.into_into_dart().into_dart(),
             self.ttl_cutoff.into_into_dart().into_dart(),
             self.mailbox.into_into_dart().into_dart(),
+            self.format.into_into_dart().into_dart(),
         ]
         .into_dart()
     }
@@ -19445,6 +19467,7 @@ impl flutter_rust_bridge::IntoDart for crate::api::types::InPersonReply {
             self.armored.into_into_dart().into_dart(),
             self.check_code.into_into_dart().into_dart(),
             self.mailbox.into_into_dart().into_dart(),
+            self.format.into_into_dart().into_dart(),
         ]
         .into_dart()
     }
@@ -20087,6 +20110,7 @@ impl flutter_rust_bridge::IntoDart for crate::api::types::PaidInvoice {
             self.slate_id.into_into_dart().into_dart(),
             self.amount.into_into_dart().into_dart(),
             self.fee.into_into_dart().into_dart(),
+            self.format.into_into_dart().into_dart(),
         ]
         .into_dart()
     }
@@ -20111,6 +20135,7 @@ impl flutter_rust_bridge::IntoDart for crate::api::types::PaidInvoiceSlate {
             self.amount.into_into_dart().into_dart(),
             self.fee.into_into_dart().into_dart(),
             self.json.into_into_dart().into_dart(),
+            self.format.into_into_dart().into_dart(),
         ]
         .into_dart()
     }
@@ -20549,6 +20574,7 @@ impl flutter_rust_bridge::IntoDart for crate::api::types::ReceivedSlate {
             self.slate_id.into_into_dart().into_dart(),
             self.json.into_into_dart().into_dart(),
             self.repeated.into_into_dart().into_dart(),
+            self.format.into_into_dart().into_dart(),
         ]
         .into_dart()
     }
@@ -20743,6 +20769,7 @@ impl flutter_rust_bridge::IntoDart for crate::api::types::SealedAnswer {
             self.fee.into_into_dart().into_dart(),
             self.answer.into_into_dart().into_dart(),
             self.sealed.into_into_dart().into_dart(),
+            self.format.into_into_dart().into_dart(),
         ]
         .into_dart()
     }
@@ -21738,6 +21765,7 @@ impl flutter_rust_bridge::IntoDart for crate::api::error::WalletErrorKind {
             Self::Epic1Finalized => 102.into_dart(),
             Self::Epic1WrongNetwork => 103.into_dart(),
             Self::NotAnEpic1Link => 104.into_dart(),
+            Self::WalletTooNew => 105.into_dart(),
             _ => unreachable!(),
         }
     }
@@ -22435,6 +22463,7 @@ impl SseEncode for crate::api::types::Epic1Paid {
         <String>::sse_encode(self.address, serializer);
         <Vec<crate::api::types::Epic1Attempt>>::sse_encode(self.attempts, serializer);
         <Option<u32>>::sse_encode(self.posted, serializer);
+        <crate::api::types::SlateWire>::sse_encode(self.format, serializer);
     }
 }
 
@@ -22662,6 +22691,7 @@ impl SseEncode for crate::api::http::HttpResentTx {
         <String>::sse_encode(self.slate_id, serializer);
         <bool>::sse_encode(self.posted, serializer);
         <crate::api::types::SendDialect>::sse_encode(self.dialect, serializer);
+        <crate::api::types::SlateWire>::sse_encode(self.format, serializer);
     }
 }
 
@@ -22759,6 +22789,7 @@ impl SseEncode for crate::api::types::InPersonCode {
         <Vec<u8>>::sse_encode(self.bytes, serializer);
         <u64>::sse_encode(self.ttl_cutoff, serializer);
         <Option<String>>::sse_encode(self.mailbox, serializer);
+        <crate::api::types::SlateWire>::sse_encode(self.format, serializer);
     }
 }
 
@@ -22818,6 +22849,7 @@ impl SseEncode for crate::api::types::InPersonReply {
         <String>::sse_encode(self.armored, serializer);
         <String>::sse_encode(self.check_code, serializer);
         <Option<crate::api::types::InPersonHost>>::sse_encode(self.mailbox, serializer);
+        <crate::api::types::SlateWire>::sse_encode(self.format, serializer);
     }
 }
 
@@ -23781,6 +23813,7 @@ impl SseEncode for crate::api::types::PaidInvoice {
         <String>::sse_encode(self.slate_id, serializer);
         <u64>::sse_encode(self.amount, serializer);
         <u64>::sse_encode(self.fee, serializer);
+        <crate::api::types::SlateWire>::sse_encode(self.format, serializer);
     }
 }
 
@@ -23792,6 +23825,7 @@ impl SseEncode for crate::api::types::PaidInvoiceSlate {
         <u64>::sse_encode(self.amount, serializer);
         <u64>::sse_encode(self.fee, serializer);
         <String>::sse_encode(self.json, serializer);
+        <crate::api::types::SlateWire>::sse_encode(self.format, serializer);
     }
 }
 
@@ -24040,6 +24074,7 @@ impl SseEncode for crate::api::types::ReceivedSlate {
         <String>::sse_encode(self.slate_id, serializer);
         <String>::sse_encode(self.json, serializer);
         <bool>::sse_encode(self.repeated, serializer);
+        <crate::api::types::SlateWire>::sse_encode(self.format, serializer);
     }
 }
 
@@ -24145,6 +24180,7 @@ impl SseEncode for crate::api::types::SealedAnswer {
         <u64>::sse_encode(self.fee, serializer);
         <String>::sse_encode(self.answer, serializer);
         <bool>::sse_encode(self.sealed, serializer);
+        <crate::api::types::SlateWire>::sse_encode(self.format, serializer);
     }
 }
 
@@ -24889,6 +24925,7 @@ impl SseEncode for crate::api::error::WalletErrorKind {
                 crate::api::error::WalletErrorKind::Epic1Finalized => 102,
                 crate::api::error::WalletErrorKind::Epic1WrongNetwork => 103,
                 crate::api::error::WalletErrorKind::NotAnEpic1Link => 104,
+                crate::api::error::WalletErrorKind::WalletTooNew => 105,
                 _ => {
                     unimplemented!("");
                 }
