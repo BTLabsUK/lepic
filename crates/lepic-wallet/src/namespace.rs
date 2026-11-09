@@ -286,7 +286,7 @@ pub fn seal_key(
     Ok(EncSecretKey::from_bytes(*bytes))
 }
 
-/// The epic1 proof key of `account` on `network`. Not used by the engine yet.
+/// The epic1 proof key of `account` on `network`.
 pub fn epic1_proof_key(
     seed: &Seed,
     account: u32,
@@ -334,7 +334,7 @@ pub fn post_key(
     )
 }
 
-/// The key of `mailbox` of `account` on `network`. Not used by the engine yet.
+/// The key of `mailbox` of `account` on `network`.
 pub fn link_mailbox_key(
     seed: &Seed,
     account: u32,

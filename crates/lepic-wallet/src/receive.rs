@@ -88,6 +88,9 @@ pub enum ProofKey {
     Payments,
     /// The wallet's onion key ([`Wallet::onion_key`]): for slates that came to the onion.
     Onion,
+    /// The epic1 proof key of the receiving account on the slate's network
+    /// ([`Wallet::epic1_proof_key`]): for slates that came to the account's epic1 address.
+    Epic1,
 }
 
 /// A received slate: the stored transaction and the S2 reply.
@@ -584,11 +587,19 @@ fn respond<D>(
     let key_id = account::next_output_key(repos, account.index)?;
     let parent = account.parent_key_id()?;
     let keychain = &session.keychain;
-    let onion_key = match request.proof_key {
+    let proof_key = match request.proof_key {
         ProofKey::Payments => None,
         ProofKey::Onion => Some(SigningKey::from_bytes(&*namespace::onion_seed(
             &session.seed,
         )?)),
+        ProofKey::Epic1 => Some(namespace::epic1_proof_key(
+            &session.seed,
+            account.index.0,
+            match proposal.network {
+                Network::Mainnet => lepic_contact::Network::Mainnet,
+                Network::Floonet => lepic_contact::Network::Floonet,
+            },
+        )?),
     };
     build_response(
         keychain,
@@ -598,7 +609,7 @@ fn respond<D>(
             parent,
             message: request.message.as_deref(),
             base_fee: proposal.network.params().default_base_fee(),
-            onion_key: onion_key.as_ref(),
+            proof_key: proof_key.as_ref(),
         },
         rng,
     )
@@ -632,7 +643,7 @@ pub fn build_s2(
             parent,
             message,
             base_fee,
-            onion_key: None,
+            proof_key: None,
         },
         rng,
     )
@@ -644,8 +655,9 @@ struct Contribution<'a> {
     parent: Identifier,
     message: Option<&'a str>,
     base_fee: Fee,
-    /// Signs the payment proof instead of the payment-proof key of `parent`.
-    onion_key: Option<&'a SigningKey>,
+    /// Signs the payment proof instead of the payment-proof key of `parent`: the onion or
+    /// epic1 proof key.
+    proof_key: Option<&'a SigningKey>,
 }
 
 /// S1 to S2 as `add_output_to_slate` and `receive_tx` do it: the output for the slate amount at
@@ -695,7 +707,7 @@ fn build_response(
     let proof_signature = match slate.payment_proof() {
         Some(proof) => {
             let payments;
-            let key = match contribution.onion_key {
+            let key = match contribution.proof_key {
                 Some(key) => key,
                 None => {
                     payments = keychain
