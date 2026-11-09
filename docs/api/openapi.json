@@ -5041,7 +5041,8 @@
         "required": [
           "address",
           "capability",
-          "notices"
+          "notices",
+          "native_slates"
         ],
         "properties": {
           "address": {
@@ -5064,6 +5065,10 @@
               "null"
             ],
             "description": "When its last slate without the marker, or an invoice it sent back, came, RFC 3339."
+          },
+          "native_slates": {
+            "type": "boolean",
+            "description": "Whether its latest marked slate claimed native slates with a valid key. Recorded only\nby a wallet with native slates on."
           },
           "notices": {
             "type": "boolean",
@@ -5684,6 +5689,13 @@
           },
           "fee": {
             "type": "string"
+          },
+          "format": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "How the slate went: `legacy` JSON, or `native` over Epicbox (RFC 0003 11.1). Null for a\nrepeat, which sent nothing."
           },
           "repeated": {
             "type": "boolean",

@@ -585,6 +585,7 @@ impl<H: Host> Run<'_, H> {
                     last_marked_at: stored.last_marked_at.map(|time| time.to_string()),
                     last_unmarked_at: stored.last_unmarked_at.map(|time| time.to_string()),
                     notices: facts.notices,
+                    native_slates: stored.native_key.is_some(),
                 }));
             }
         };
@@ -916,18 +917,7 @@ impl<H: Host> Run<'_, H> {
             (sending, _) => sending,
         };
         let (sent, dialect, state) = sending?;
-        Ok(Report::Send(SendReport {
-            tx_id: sent.tx_id.0,
-            slate_id: sent.slate_id.to_string(),
-            amount: format_amount(sent.amount),
-            fee: format_fee(sent.fee),
-            transport: transport.to_string(),
-            destination,
-            state,
-            repeated: false,
-            delivered: true,
-            dialect: dialect.map(Dialect::as_str),
-        }))
+        Ok(sent_report(&sent, transport, destination, state, dialect))
     }
 
     async fn resend(&mut self, args: ResendArgs) -> Result<Report, CliError> {
@@ -1777,7 +1767,37 @@ fn repeated_send(
         repeated: true,
         delivered: !first.undelivered,
         dialect: None,
+        format: None,
     }))
+}
+
+/// The report of a send this run made and delivered.
+fn sent_report(
+    sent: &SentSlate,
+    transport: TransportId,
+    destination: String,
+    state: &'static str,
+    dialect: Option<Dialect>,
+) -> Report {
+    // A native exchange with a listener stores its S1 as a legacy slate; what went out was
+    // native.
+    let format = match dialect {
+        Some(Dialect::Native) => "native",
+        _ => sent.format.as_str(),
+    };
+    Report::Send(SendReport {
+        tx_id: sent.tx_id.0,
+        slate_id: sent.slate_id.to_string(),
+        amount: format_amount(sent.amount),
+        fee: format_fee(sent.fee),
+        transport: transport.to_string(),
+        destination,
+        state,
+        repeated: false,
+        delivered: true,
+        dialect: dialect.map(Dialect::as_str),
+        format: Some(format),
+    })
 }
 
 /// Whether the address the user gave names an onion, valid or not.

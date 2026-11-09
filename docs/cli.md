@@ -147,6 +147,14 @@ in the format it came in.
 The switch also sends native slates to HTTP and Tor listeners that offer them; see Pinned keys
 under Direct over Tor.
 
+Over Epicbox payments addresses the same switch claims native slates in the LEPIC marker of every
+slate the wallet sends (bit 7, with its seal key for them in `reply`), and sends an S1 as a
+native slate, armored `BEGINEPICTX.`, to a peer that runs LEPIC and whose latest marked slate
+claimed them with a valid key (RFC 0003 11.1). Any other S1 goes as V2 or V3 JSON, so the first
+payment to a peer always does. The `tx send` JSON names the format in `format`: `legacy` or
+`native` (null for a repeat). The wallet opens a native slate at its payments address whatever
+the switch says, answers it natively, and refuses a native invoice there.
+
 #### Domain
 
 `domain` (`--domain <DOMAIN>`, `LEPIC_DOMAIN`, `domain = "example.com"`) is the domain the wallet
@@ -703,7 +711,8 @@ esABC...@epicbox.epiccash.com runs LEPIC: it pays invoices and is sent notices.
 
 Its JSON document has `address`, `capability`, `last_marked_at` and `last_unmarked_at` (RFC
 3339, or null) and `notices`, whether the peer is told of the end of an exchange that came marked
-(a marked message in the last 30 days).
+(a marked message in the last 30 days), and `native_slates`, whether its latest marked slate
+claimed native slates with a valid key; a wallet with `native_direct` off records no claim.
 
 Two LEPIC wallets also tell each other what happened to an invoice, with short notices that
 never move funds. The payer's next `epicbox drain` hears that the service posted the payment. When the service cancels an invoice with `lepic tx cancel`, or it expires, the payer's

@@ -231,6 +231,9 @@ pub struct SendReport {
     /// or `legacy` through its foreign API. Absent for other transports and for a repeat.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub dialect: Option<&'static str>,
+    /// How the slate went: `legacy` JSON, or `native` over Epicbox (RFC 0003 11.1) or to a
+    /// listener's native endpoint. Null for a repeat, which sent nothing.
+    pub format: Option<&'static str>,
 }
 
 #[derive(Debug, Serialize)]
@@ -1087,6 +1090,9 @@ pub struct PeerReport {
     pub last_unmarked_at: Option<String>,
     /// Whether it is told of the end of an exchange that came marked.
     pub notices: bool,
+    /// Whether its latest marked slate claimed native slates with a valid key. Recorded only
+    /// by a wallet with native slates on.
+    pub native_slates: bool,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -1838,6 +1844,11 @@ fn write_invoice_human(out: &mut Vec<u8>, report: &Report) -> std::io::Result<()
             )
         }
         Report::Peer(r) => match r.capability {
+            "lepic" if r.native_slates => writeln!(
+                out,
+                "{} runs LEPIC: it pays invoices, is sent notices and takes native slates.",
+                r.address
+            ),
             "lepic" => writeln!(
                 out,
                 "{} runs LEPIC: it pays invoices and is sent notices.",
@@ -2574,12 +2585,14 @@ mod tests {
                     repeated: false,
                     delivered: true,
                     dialect: None,
+                    format: Some("legacy"),
                 }),
                 vec![
                     "amount",
                     "delivered",
                     "destination",
                     "fee",
+                    "format",
                     "repeated",
                     "slate_id",
                     "state",
@@ -2818,12 +2831,14 @@ mod tests {
                     last_marked_at: None,
                     last_unmarked_at: None,
                     notices: false,
+                    native_slates: false,
                 }),
                 vec![
                     "address",
                     "capability",
                     "last_marked_at",
                     "last_unmarked_at",
+                    "native_slates",
                     "notices",
                 ],
             ),
@@ -3480,6 +3495,23 @@ mod tests {
     }
 
     #[test]
+    fn a_peer_report_says_it_takes_native_slates() {
+        let report = Report::Peer(PeerReport {
+            address: text("esPeer@relay.example.org"),
+            capability: "lepic",
+            last_marked_at: None,
+            last_unmarked_at: None,
+            notices: true,
+            native_slates: true,
+        });
+        assert_eq!(
+            render(&report, OutputFormat::Human).to_string(),
+            "esPeer@relay.example.org runs LEPIC: it pays invoices, is sent notices and takes \
+             native slates.\n"
+        );
+    }
+
+    #[test]
     fn a_peer_report_says_what_is_known_about_invoices() {
         let line = |capability| {
             let report = Report::Peer(PeerReport {
@@ -3488,6 +3520,7 @@ mod tests {
                 last_marked_at: None,
                 last_unmarked_at: None,
                 notices: false,
+                native_slates: false,
             });
             render(&report, OutputFormat::Human).to_string()
         };

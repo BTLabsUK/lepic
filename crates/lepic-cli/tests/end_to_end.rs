@@ -73,6 +73,7 @@ fn send_receive_and_finalize_through_files() {
             "delivered",
             "destination",
             "fee",
+            "format",
             "repeated",
             "slate_id",
             "state",
@@ -82,6 +83,7 @@ fn send_receive_and_finalize_through_files() {
     );
     assert_eq!(sent["amount"], "1.50000000");
     assert_eq!(sent["transport"], "file");
+    assert_eq!(sent["format"], "legacy");
     assert_eq!(sent["state"], "sent");
     assert!(slate.is_file());
 
