@@ -15,6 +15,10 @@
 #   ./run.sh --probes         run the relay and epic-wallet probes of probes.sh instead of the
 #                             steps
 #   ./run.sh --trust          run the stock-queue and relay checks of trust.sh instead
+#
+# ACCEPTANCE_ONLY=<name>[,<name>...] runs setup and only the steps whose function names are listed
+# (list step_wallet_init, step_receive_by_file and step_fund_payer first: the steps need funds), for
+# developing a step.
 set -euo pipefail
 
 ACCEPTANCE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -166,6 +170,9 @@ run_step() {
 run_step "setup and funding" "${setup_step}"
 if [[ "${results[0]}" == PASS ]]; then
     for entry in "${STEPS[@]}"; do
+        if [[ -n "${ACCEPTANCE_ONLY:-}" && ",${ACCEPTANCE_ONLY}," != *",${entry#*:},"* ]]; then
+            continue
+        fi
         run_step "${entry%%:*}" "${entry#*:}"
     done
 fi

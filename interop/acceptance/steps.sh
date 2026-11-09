@@ -1009,6 +1009,9 @@ step_stock_listener_bounces_invoice() {
     DETAIL="I1 ${slate_id} bounced and acknowledged, peer recorded no-invoices, no notice on cancel; later S1 confirmed"
 }
 
+# shellcheck source=native.sh
+source "${ACCEPTANCE_DIR}/native.sh"
+
 STEPS=(
     "node status:step_node_status"
     "wallet init:step_wallet_init"
@@ -1035,3 +1038,4 @@ STEPS=(
     "epic-wallet bounces an epicbox invoice:step_stock_listener_bounces_invoice"
     "lepic invoices lepic with native slates:step_invoice_lepic_native"
 )
+STEPS+=("${NATIVE_STEPS[@]}")
