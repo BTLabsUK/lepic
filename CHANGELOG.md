@@ -31,6 +31,24 @@ Conventional Commit messages at release time.
   proof for the other key's address is refused with `ForeignProofAddress`.
 - The FFI's `start_http_listener` takes a `coinbase` flag; pass `false` to keep the old
   behaviour.
+- The FFI reports the slate format of every call that sends or answers a slate: `format`
+  (`SlateWire`) on `ReceivedSlate`, `SentTx`, `PaidInvoice`, `PaidInvoiceSlate`, `SealedAnswer`,
+  `InPersonCode`, `InPersonReply`, `Epic1Paid`, `HttpSentTx` and `HttpResentTx`. `resend_epicbox`,
+  `contact_post_slate`, `contact_outbox_resend`, `in_person_post` and `epic1_post_answer` return
+  the `SlateWire` instead of nothing; so do `Wallet::resend`, `ContactBook::direct_resend`,
+  `contact_post_slate` and `contact_outbox_resend` in the engine, and `contact_pay_invoice`
+  returns the format with the paid invoice. `in_person_send` takes `ttl_blocks`, as
+  `in_person_invoice` does.
+- A wallet database written by a newer version is refused with the new error kind
+  `WalletTooNew` (113) instead of `Io`.
+- With native slates off, an RFC 0002 slate envelope is sealed without padding and a pairing
+  claims no native slates (bit 7), as before this branch (ADR 0052). Both are claimed and padded
+  only while `native_direct` is on. A contact paired while it was off learns the claim at the
+  next pairing or contact update.
+- A native send to `localhost` or an address literal of this device is refused with
+  `ThisComputer` before anything is stored, and carries `origin`. A name that only resolves to
+  this device is still refused after the send was stored.
+- A code keeps at most 16 different answers; a new one past that is dropped and logged.
 
 ### Added
 
