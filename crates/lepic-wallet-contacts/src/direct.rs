@@ -110,6 +110,10 @@ pub enum DirectError {
         pinned: [u8; PIN_KEY_LEN],
         shown: [u8; PIN_KEY_LEN],
     },
+    /// The listener is on this device and a native send never posts there. Nothing was
+    /// stored; a send in the legacy dialect has to be asked for.
+    #[error("{origin} is on this device, which a native send does not reach")]
+    ThisDevice { origin: String },
     /// The transaction was stored and the native exchange failed. It waits for a resend or a
     /// cancel; nothing went through the legacy dialect.
     #[error("transaction {tx_id} is stored and its native exchange failed")]
@@ -160,7 +164,8 @@ where
     /// the listener advertises; the send is then [`lepic_wallet::Wallet::send`] as before.
     ///
     /// Fails, with nothing stored, with [`DirectError::PinnedNoAdvert`],
-    /// [`DirectError::PinChanged`] or [`DirectError::Probe`] for a pinned origin, and with
+    /// [`DirectError::PinChanged`] or [`DirectError::Probe`] for a pinned origin,
+    /// [`DirectError::ThisDevice`] for a native endpoint on this device, and with
     /// [`DirectError::Send`] as the engine's send fails. A native exchange that fails after the
     /// transaction was stored is [`DirectError::Native`].
     #[instrument(skip_all, fields(wallet = %self.wallet.config().name, transport = %method.id()))]
@@ -306,6 +311,11 @@ where
                     pinned: pin.seal_key,
                     shown: advert.seal,
                 })
+            }
+            // The probe may reach a listener on this device; the post never does, and it is
+            // known now, before the send stores anything.
+            (Some(_), _) if peer.reaches_this_device(probe.origin()) => {
+                Err(DirectError::ThisDevice { origin })
             }
             (Some(advert), _) => Ok(Route::Native(Box::new((probe, advert)))),
         }

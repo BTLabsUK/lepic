@@ -674,10 +674,10 @@ async fn with_native_slates_off_a_send_is_legacy_and_pins_nothing() {
     assert!(!pair.alice.forget_peer_pin(&url(port)).unwrap());
 }
 
-// A native post never goes to this device, so the native exchange to a listener on loopback
-// stops at the post: the advert is read, the send is stored and the error says why.
+// A native post never goes to this device, so a native send to a listener on loopback is
+// refused after the advert is read and before anything is stored.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_native_send_to_this_device_is_refused_and_legacy_can_be_asked_for() {
+async fn a_native_send_to_this_device_is_refused_before_it_stores_and_legacy_can_be_asked_for() {
     let pair = funded_pair().await;
     pair.alice.set_native_direct(true).unwrap();
     EpicWallet::of_session(Arc::clone(&pair.alice)).lock();
@@ -686,21 +686,26 @@ async fn a_native_send_to_this_device_is_refused_and_legacy_can_be_asked_for() {
     let bob = reopen_bob_native(&pair, true).await;
     let events = Events::default();
     let port = listen(&bob, &events).await;
+    let before = alice.transactions().await.unwrap().len();
 
     let refused = alice
         .send_http_with(EPIC, 1, &url(port), false, None, None, false)
         .await
         .unwrap_err();
     assert_eq!(refused.kind, WalletErrorKind::ThisComputer);
-    assert!(refused.tx_id.is_some());
+    assert_eq!(refused.tx_id, None);
+    assert_eq!(refused.origin.as_deref(), Some(url(port).as_str()));
+    assert_eq!(alice.transactions().await.unwrap().len(), before);
     assert_eq!(pair.chain.pushed_count(), 0);
+    assert!(alice.peer_pins().unwrap().is_empty());
 
-    // The stored send goes through the legacy dialect when the user asks for it.
-    let resent = alice
-        .resend_http(refused.tx_id.unwrap(), &url(port), false, true)
+    // Nothing is locked, so the user's retry in the legacy dialect selects the same coins.
+    let sent = alice
+        .send_http_with(EPIC, 1, &url(port), false, None, None, true)
         .await
         .unwrap();
-    assert!(resent.posted);
-    assert_eq!(resent.dialect, SendDialect::Legacy);
+    assert!(sent.posted);
+    assert_eq!(sent.dialect, SendDialect::Legacy);
+    assert_eq!(alice.transactions().await.unwrap().len(), before + 1);
     assert_eq!(pair.chain.pushed_count(), 1);
 }

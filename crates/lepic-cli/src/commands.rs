@@ -1524,8 +1524,9 @@ impl<H: Host> Run<'_, H> {
         // whatever the legacy send to the same address may reach.
         let native_post =
             PeerClient::to_other_computers(self.settings.tuning.http_peer(), tls.clone());
-        let http_peer = HttpPeer::new(http.clone(), native_post.clone());
-        let http_peer_to_other_computers = HttpPeer::new(other_computers.clone(), native_post);
+        let http_peer = HttpPeer::new(http.clone(), native_post.clone()).to_other_computers_only();
+        let http_peer_to_other_computers =
+            HttpPeer::new(other_computers.clone(), native_post).to_other_computers_only();
         let http_to_other_computers: Arc<dyn Method> = Arc::new(other_computers);
         let http = Arc::new(http);
         let relay = ClientSettings::new(self.settings.relay.clone(), self.settings.tuning.relay);

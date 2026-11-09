@@ -82,7 +82,8 @@ pub(super) fn http_transport(
         tor: Arc::clone(tor),
         connect_timeout: tuning.send.connect_timeout,
     });
-    let peer = HttpPeer::new(http.clone(), PeerClient::with_dialer(settings, tls, native));
+    let peer = HttpPeer::new(http.clone(), PeerClient::with_dialer(settings, tls, native))
+        .to_other_computers_only();
     Ok((http, peer))
 }
 

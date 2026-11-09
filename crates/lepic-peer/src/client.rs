@@ -87,6 +87,20 @@ impl AddressClass {
         }
     }
 
+    /// The class of `host` when it names this computer by itself: `localhost` or an address
+    /// literal of this computer's own, with or without the brackets of an IPv6 literal. No name
+    /// is resolved.
+    pub fn of_host(host: &str) -> Option<Self> {
+        if host.eq_ignore_ascii_case("localhost") {
+            return Some(Self::Loopback);
+        }
+        let literal = host
+            .strip_prefix('[')
+            .and_then(|inner| inner.strip_suffix(']'))
+            .unwrap_or(host);
+        literal.parse().ok().and_then(Self::of_this_computer)
+    }
+
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Loopback => "loopback",
@@ -474,6 +488,23 @@ mod tests {
             status_error(StatusCode::BAD_GATEWAY, None),
             PeerClientError::Status { status: 502 }
         ));
+    }
+
+    #[test]
+    fn a_host_names_this_computer_by_itself_only_as_localhost_or_its_literal() {
+        for (host, class) in [
+            ("localhost", Some(AddressClass::Loopback)),
+            ("LocalHost", Some(AddressClass::Loopback)),
+            ("127.0.0.1", Some(AddressClass::Loopback)),
+            ("[::1]", Some(AddressClass::Loopback)),
+            ("::1", Some(AddressClass::Loopback)),
+            ("0.0.0.0", Some(AddressClass::Unspecified)),
+            ("[::]", Some(AddressClass::Unspecified)),
+            ("wallet.example", None),
+            ("10.1.2.3", None),
+        ] {
+            assert_eq!(AddressClass::of_host(host), class, "{host}");
+        }
     }
 
     #[tokio::test]

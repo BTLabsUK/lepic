@@ -146,6 +146,11 @@ fn direct_hint(error: &DirectError) -> Option<String> {
              --legacy to send without the native endpoint"
                 .to_owned(),
         ),
+        DirectError::ThisDevice { .. } => Some(
+            "the listener is on this device, which a native send does not reach; nothing was \
+             stored. --legacy sends the slate without the native endpoint"
+                .to_owned(),
+        ),
         DirectError::Native { tx_id, .. } => Some(format!(
             "the inputs stay locked; deliver it again with `lepic tx resend {tx_id} --to \
              <ADDRESS>`, add --legacy to deliver it without the native endpoint, or give up \

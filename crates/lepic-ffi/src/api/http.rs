@@ -194,10 +194,12 @@ impl EpicWallet {
     /// the errors of [`EpicWallet::estimate_fee`]. For an origin with a pin it fails, storing
     /// nothing, with `PinnedNoAdvert` when the wallet there advertises no native endpoint,
     /// `PinChanged` when it advertises another key, and `PeerProbeFailed` when it could not
-    /// be asked; [`WalletError::origin`] names the origin. A native exchange that fails after
-    /// the send was stored fails with `ThisComputer` for a wallet on this device and
-    /// `NativeExchangeFailed` otherwise; [`WalletError::tx_id`] names the send, which waits for
-    /// a resend or a cancel. Fails with `TransportFailed` when the other
+    /// be asked; [`WalletError::origin`] names the origin. A wallet advertising a native
+    /// endpoint at `localhost` or an address of this device fails, storing nothing, with
+    /// `ThisComputer` and the origin; ask for the legacy dialect. A native exchange that fails
+    /// after the send was stored fails with `ThisComputer` for a name that resolves to this
+    /// device and `NativeExchangeFailed` otherwise; [`WalletError::tx_id`] names the send,
+    /// which waits for a resend or a cancel. Fails with `TransportFailed` when the other
     /// wallet could not be reached, refused, or answered with something else than a slate: the
     /// send is then stored as sent with its inputs locked, so deliver it again with
     /// [`EpicWallet::resend_http`] or cancel it with [`EpicWallet::cancel_transaction`]. Fails

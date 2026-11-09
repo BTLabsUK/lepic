@@ -280,7 +280,10 @@ pub enum WalletErrorKind {
     /// deliver it again, in either dialect, or cancel it.
     NativeExchangeFailed,
     /// The native endpoint's address is one of this device's own; a native slate goes only
-    /// to other devices. The send is stored as `NativeExchangeFailed` describes; deliver it
+    /// to other devices. A send to `localhost` or an address literal of this device fails
+    /// before it stores anything, with `WalletError::origin` set and no `tx_id`: ask for the
+    /// legacy dialect. A name that only resolves to this device fails after the send was
+    /// stored, as `NativeExchangeFailed` describes (`WalletError::tx_id` is set): deliver it
     /// again in the legacy dialect or cancel it.
     ThisComputer,
     /// The text is a record another Epic wallet keeps in its `saved_txs` directory, not a
@@ -448,7 +451,7 @@ pub struct WalletError {
     /// `cancel_transaction`, or try its step again. `None` when nothing was left behind.
     pub tx_id: Option<u32>,
     /// The listener's origin, `scheme://host:port`, for `PinnedNoAdvert`, `PinChanged`,
-    /// `PeerProbeFailed`: the one `EpicWallet::forget_peer_pin` takes.
+    /// `PeerProbeFailed` and a `ThisComputer` refused before anything was stored: the one `EpicWallet::forget_peer_pin` takes.
     pub origin: Option<String>,
     /// For `PinChanged`: the pinned key, 64 hex digits.
     pub pinned_key: Option<String>,
@@ -918,6 +921,11 @@ impl From<DirectError> for WalletError {
             }
             DirectError::Probe { ref origin, .. } => {
                 let mut mapped = Self::chained(K::PeerProbeFailed, &error);
+                mapped.origin = Some(origin.clone());
+                return mapped;
+            }
+            DirectError::ThisDevice { ref origin } => {
+                let mut mapped = Self::chained(K::ThisComputer, &error);
                 mapped.origin = Some(origin.clone());
                 return mapped;
             }
