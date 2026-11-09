@@ -757,7 +757,8 @@ whose name is a slate id is given with its directory, as in `./<SLATE_ID>`.
 Face to face, the payee shows a code for one scan and the payer answers it, with no pairing.
 The code is a raw `lepic.v1` I1 (RFC 0003 §9): it names no payment proof, and the payer refuses
 it after its TTL, 15 blocks unless `--ttl-blocks` says otherwise. Online, it also names a
-mailbox on the payee's own relay for the answer.
+mailbox on the payee's own relay for the answer; with that relay on this device it names none,
+and the answer is shown back.
 
 ```
 $ lepic in-person invoice 0.8 --out code.bin
