@@ -581,9 +581,10 @@ where
         Ok(session.keychain.address_key(&parent, ADDRESS_INDEX)?)
     }
 
-    /// The secret key of `listing`'s address. Its callers are the Epicbox method in
-    /// `lepic-methods`: it connects to the relay as the listing's address, and it signs a
-    /// service listing with it; no other caller should read it.
+    /// The secret key of `listing`'s address. It connects to the relay as the listing's
+    /// address and signs for the listing: the Epicbox method in `lepic-methods` connects and
+    /// signs a service listing with it, and the FFI signs an app's message with it, which needs
+    /// no relay. Nothing else should read it.
     ///
     /// Fails with [`WalletError::Locked`].
     pub fn listing_secret(&self, listing: &Listing) -> Result<SecretKey, WalletError> {

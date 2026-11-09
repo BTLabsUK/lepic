@@ -1070,13 +1070,16 @@ curl --cacert api-tls.pem --cert client.pem --key client.key \
 off. They need no wallet and edit `api-clients`, one `<name> <sha256 hex>` per line, where `#`
 starts a comment; a name is 1 to 64 letters, digits, `.`, `-` and `_`, and a name or key is
 listed once. `add` refuses a file that is not a PEM certificate with an Ed25519 key. `serve`
-reads the file at each connection and resumes no TLS session, so a change applies from the
-client's next connection without a restart. A missing file accepts no client; a malformed one
+reads the file at each handshake and again at each request, and resumes no TLS session, so a
+change applies without a restart: a removed client's next request gets a 403 problem with code
+`usage` and its connection closes. A connection lasts at most `tls_max_connection_age_s` of
+`[api]`, which also ends an event stream. A missing file accepts no client; a malformed one
 accepts none and logs a warning. The JSON reports are `{"name", "fingerprint"}` for `add` and
 `remove`, and `{"clients": [...]}` of those for `list`.
 
-The routes, the `[api]` bounds and the connection cap are those of the socket, shared by both
-listeners. A handshake that fails or does not end within the header time counts as refused.
+The routes and the `[api]` bounds are those of the socket. Each listener has its own
+`max_connections`, so TLS clients cannot take the socket's connections. A handshake that fails
+or does not end within the header time counts as refused.
 `PUT /v1/wallet/password` is answered on the socket only: over TLS it is a 403 problem with code
 `usage`. `GET /v1/status` then holds the listener's address and the fingerprint of its
 certificate, the value `lepic api client add` lists for `api-tls.pem`:

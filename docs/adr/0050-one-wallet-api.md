@@ -77,8 +77,10 @@ The connection proves who calls; no password, token or key travels in a request.
   fingerprint. Clients authenticate with their own Ed25519 certificate; the wallet accepts the
   keys listed in `api-clients` in the data directory, one name and SHA-256 key fingerprint per
   line, as `authorized_keys` does for SSH. `lepic api client add|list|remove` edits the file;
-  `serve` reads it at every handshake, so a removed client is refused from its next
-  connection. Session resumption is off, since a resumed session would skip that check. Every
+  `serve` reads it at every handshake and again at every request, so a removed client is
+  refused from its next request, and a TLS connection ends at an age limit, which ends an
+  event stream too. Session resumption is off, since a resumed session would skip the
+  handshake check. Each listener has its own connection cap. Every
   client listed may call every owner route except those marked `x-socket-only` in the
   document, which answer 403: the password change. An SSH tunnel to the socket remains the
   alternative that needs no LEPIC configuration.
@@ -140,7 +142,12 @@ Stats, status, basic management and the rendered API reference are a separate pr
 other: it reaches `serve` over the socket and serves a local web page on loopback. It depends on
 no LEPIC crate, so it cannot pull policy into the wallet core, and the `lepic` binary carries no
 HTML or JavaScript. Because a loopback page is reachable from the browser, it answers only
-requests whose `Host` is its own address and refuses cross-origin writes. The API reference is
+requests whose `Host` is its own address and refuses cross-origin writes. Any local process or
+page can reach a loopback port, so the console also admits only a browser holding its secret:
+at start it prints a link to stderr whose fragment carries a token, the page trades that token
+once for a session kept in the tab's session storage, and every API call carries the session.
+The token works once, so a link seen later is spent, and nothing is in a cookie, which a browser
+would send to every port of the host. The API reference is
 rendered with Scalar, vendored, with web fonts and its request proxy off.
 
 ### Writing the code and docs
