@@ -22,6 +22,7 @@ pub(crate) const NO_LEGACY_CRATES: &[&str] = &[
     "lepic-store",
     "lepic-telemetry",
     "lepic-transport",
+    "lepic-peer",
     "lepic-methods",
 ];
 

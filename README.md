@@ -186,6 +186,7 @@ runs the differential tests (`cd conformance && cargo test --locked`).
 | `crates/lepic-node` | Client for the Epic node's foreign JSON-RPC API |
 | `crates/lepic-epicbox` | Epicbox addresses, message crypto, protocol frames and relay transport |
 | `crates/lepic-transport` | Transport traits, format policy and the file transport |
+| `crates/lepic-peer` | The native direct endpoint between LEPIC wallets: serve and post sealed envelopes, the advert, pin origins |
 | `crates/lepic-legacy-rpc` | The foreign JSON-RPC API over HTTP: send to a listening wallet, and listen |
 | `crates/lepic-tor` | The wallet's onion service and sending to onion addresses |
 | `crates/lepic-store` | SQLite wallet storage behind repository traits |

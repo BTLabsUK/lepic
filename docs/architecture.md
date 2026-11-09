@@ -25,6 +25,7 @@ between crates are fixed below and checked by `cargo xtask deps-check`.
 | `lepic-store` | SQLite storage behind repository traits, migrations, encryption of private transaction context, the database file encrypted at rest (ADR 0032). | disk |
 | `lepic-transport` | Transport traits, the method port and the registry's lookup, the LEPIC marker's feature bits, format policy; with its default `legacy` feature the shared legacy codec registries and the file transport. | disk |
 | `lepic-epicbox` | Epicbox addresses, message crypto, protocol frames, the relay client. Protocol only: the `epicbox` method lives in `lepic-methods`. | network |
+| `lepic-peer` | The native direct endpoint (EPICTX 5.15): `GET /v1/peer` and `POST /v1/peer/slates` with their problem answers and the reply cache, the advert a listener adds to `check_version`, pin origins, and the client. It carries envelopes as bytes: the wallet behind it seals and opens them. | network |
 | `lepic-legacy-rpc` | The legacy JSON-RPC dialect: the wallet foreign API over HTTP (ADR 0017, ADR 0052): JSON-RPC messages, the client, the listener. Protocol only: it implements no LEPIC trait, and the `http` method and the receiver live in `lepic-methods`, which re-exports its API. | network |
 | `lepic-tor` | Tor on desktop and Android (ADR 0018): onion v3 addresses and the wallet's onion key, a tor child process per wallet driven over its control port, SOCKS5. Protocol only: the `tor` method lives in `lepic-methods`; `OnionClientSettings` stays here. | network, child process |
 | `lepic-wallet` | The engine: accounts, output selection, send, receive, finalize, cancel, scan, refresh, transaction state machine, events. It holds no method: a transaction stores a transport id, which the engine resolves through the consumer's registry (`Ports.methods`); with none it sends no notice. It names a method's id only where the data does: an invoice that came back over Epicbox, and the method an old wallet's history implies when it is imported. | through ports |
@@ -73,7 +74,8 @@ lepic-legacy-slate -> lepic-slate, lepic-crypto, lepic-primitives
 lepic-transport   -> lepic-legacy-slate, lepic-slate, lepic-primitives, lepic-crypto
 lepic-epicbox     -> lepic-transport, lepic-slate, lepic-crypto, lepic-primitives
 lepic-epic1       -> lepic-contact, lepic-epicbox, lepic-crypto, lepic-primitives
-lepic-legacy-rpc  -> lepic-transport, lepic-slate
+lepic-peer        -> lepic-primitives
+lepic-legacy-rpc  -> lepic-peer, lepic-transport, lepic-slate
 lepic-tor         -> lepic-legacy-rpc
 lepic-wallet      -> lepic-contact, lepic-store, lepic-node, lepic-transport, lepic-legacy-slate, lepic-slate, lepic-keychain, lepic-crypto, lepic-primitives
 lepic-methods     -> lepic-wallet, lepic-transport, lepic-epicbox, lepic-legacy-rpc, lepic-legacy-slate, lepic-tor, lepic-node, lepic-slate, lepic-keychain, lepic-crypto, lepic-primitives

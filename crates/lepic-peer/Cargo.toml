@@ -1,0 +1,30 @@
+[package]
+name = "lepic-peer"
+description = "The native direct endpoint (ADR 0052): the /v1/peer routes a listener serves, its advert, and the client that posts an envelope to them."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+http-body-util.workspace = true
+hyper = { workspace = true, features = ["client", "server", "http1"] }
+hyper-rustls.workspace = true
+hyper-util = { workspace = true, features = ["client-legacy", "http1", "tokio"] }
+lepic-primitives.workspace = true
+rustls = { workspace = true, features = ["std"] }
+serde = { workspace = true, features = ["derive", "std"] }
+serde_json = { workspace = true, features = ["std"] }
+sha2.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["net", "rt", "sync", "time"] }
+tower-service.workspace = true
+tracing = { workspace = true, features = ["std", "attributes"] }
+
+[dev-dependencies]
+hyper = { workspace = true, features = ["client", "server", "http1"] }
+tokio = { workspace = true, features = ["io-util", "macros", "net", "rt", "rt-multi-thread", "sync", "time"] }

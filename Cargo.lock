@@ -1334,6 +1334,7 @@ dependencies = [
  "hyper-rustls",
  "hyper-util",
  "lepic-legacy-rpc",
+ "lepic-peer",
  "lepic-slate",
  "lepic-transport",
  "proptest",
@@ -1426,6 +1427,25 @@ dependencies = [
  "tracing",
  "webpki-roots",
  "zeroize",
+]
+
+[[package]]
+name = "lepic-peer"
+version = "0.3.1"
+dependencies = [
+ "http-body-util",
+ "hyper",
+ "hyper-rustls",
+ "hyper-util",
+ "lepic-primitives",
+ "rustls",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror",
+ "tokio",
+ "tower-service",
+ "tracing",
 ]
 
 [[package]]
