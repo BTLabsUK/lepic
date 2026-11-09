@@ -133,7 +133,7 @@ async fn link<N: lepic_node::NodeApi + 'static>(
         amount,
         message,
         printed,
-        relays: link_relays,
+        epicbox: link_relays,
     } = args;
     let wallet = &opened.wallet;
     let request = Epic1LinkRequest {

@@ -151,7 +151,7 @@ pub enum CliError {
     Store(#[from] StoreError),
     #[error("give --to or --to-file")]
     NoDestination,
-    #[error("the link asks no amount: give --amount")]
+    #[error("the link asks no amount: give the amount to pay")]
     Epic1Amount,
     #[error("slate id is not of the form xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx")]
     SlateId,

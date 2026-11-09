@@ -1070,7 +1070,7 @@ pub struct InPersonSlateArg {
 pub struct InPersonPostArgs {
     #[command(flatten)]
     pub slate: InPersonSlateArg,
-    /// The relay `in-person read` showed for the code was checked and may be used
+    /// The relay shown before posting was checked and may be used
     #[arg(long)]
     pub relay_ok: bool,
 }
@@ -1101,10 +1101,10 @@ pub struct InPersonFinalizeArgs {
 pub struct Epic1Args {
     #[command(subcommand)]
     pub command: Epic1Command,
-    /// Reach no relay at all
+    /// Reach no relay at all: pairing by hand or in person and sealed files still work
     #[arg(long, global = true)]
     pub offline: bool,
-    /// Treat Epicbox as switched off: no relay connections
+    /// Treat Epicbox as switched off: no relay connections, contact mailboxes pause
     #[arg(long, global = true, conflicts_with = "offline")]
     pub epicbox_off: bool,
 }
@@ -1143,17 +1143,17 @@ link's first relay, and to the next when a post fails, at most three.")]
 pub struct Epic1LinkArgs {
     #[command(flatten)]
     pub account: AccountArg,
-    /// Amount to ask for, in EPIC
-    #[arg(long, value_name = "AMOUNT")]
+    /// Amount to ask for, in EPIC [default: the payer chooses]
+    #[arg(value_name = "AMOUNT")]
     pub amount: Option<String>,
     #[command(flatten)]
     pub message: MessageArg,
     /// A printed link, kept until retired, instead of an on-screen one
     #[arg(long)]
     pub printed: bool,
-    /// A relay the link names, `domain[:port]`, up to three [default: the wallet's relay]
-    #[arg(long = "relay", value_name = "RELAY")]
-    pub relays: Vec<String>,
+    /// An Epicbox relay the link names, `domain[:port]`, up to three [default: the wallet's relay]
+    #[arg(long, value_name = "RELAY")]
+    pub epicbox: Vec<String>,
 }
 
 #[derive(Debug, Args)]
@@ -1177,7 +1177,7 @@ pub struct Epic1PayArgs {
     #[command(flatten)]
     pub link: Epic1LinkArg,
     /// Amount to pay, in EPIC [default: the amount the link asks]
-    #[arg(long, value_name = "AMOUNT")]
+    #[arg(value_name = "AMOUNT")]
     pub amount: Option<String>,
     #[command(flatten)]
     pub account: AccountArg,
@@ -1198,7 +1198,7 @@ pub struct Epic1PostNextArgs {
     /// Slate id of the payment, as `epic1 pay` printed it
     #[arg(value_name = "SLATE_ID")]
     pub slate_id: String,
-    /// The relays of the link were checked and may be used
+    /// The relays `epic1 read` showed for the link were checked and may be used
     #[arg(long)]
     pub hosts_ok: bool,
 }
@@ -1208,7 +1208,7 @@ pub struct Epic1PostAnswerArgs {
     /// Slate id of the payment, as `epic1 answers` lists it
     #[arg(value_name = "SLATE_ID")]
     pub slate_id: String,
-    /// The relay `epic1 answers` showed was checked and may be used
+    /// The relay shown before posting was checked and may be used
     #[arg(long)]
     pub relay_ok: bool,
 }

@@ -54,11 +54,11 @@ Conventional Commit messages at release time.
   its inputs are released.
 - `lepic epic1` and `/v1/epic1/…`: payments at an epic1 address through links (RFC 0003
   §5.19). `epic1 link` issues an on-screen link, or with `--printed` one kept until `epic1
-  retire`, each with a mailbox of its own on the wallet's relay or the `--relay` hosts given.
+  retire`, each with a mailbox of its own on the wallet's relay or the `--epicbox` hosts given.
   `contact collect` takes the payments there and stores the answers; `epic1 answers` lists them
   with the payer's relay and `epic1 post-answer --relay-ok` posts one. `epic1 restore` reads the
   link mailboxes of a restored seed. `epic1 read` shows what a link asks and its relays, `epic1
-  pay --hosts-ok` pays it, the amount it asks unless `--amount` is given, and `epic1 post-next`
+  pay --hosts-ok` pays it, the amount it asks unless one is given, and `epic1 post-next`
   tries the next relay of the link. The payer's `contact collect` finalizes the answer.
 - `lepic epictx open` and `POST /v1/epictx/open`: shows the slate in an `.epictx` file as JSON,
   a `lepic.v1` slate with its network, kernel features, header version and tail (§5.10), and

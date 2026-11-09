@@ -824,8 +824,8 @@ the payment. An on-screen link is for one payment; a printed one is kept until i
 
 ```
 $ lepic epic1 address
-$ lepic epic1 link --amount 0.8
-$ lepic epic1 link --printed --relay relay.example
+$ lepic epic1 link 0.8
+$ lepic epic1 link --printed --epicbox relay.example
 $ lepic epic1 links
 $ lepic epic1 retire 1
 ```
@@ -845,9 +845,9 @@ $ lepic epic1 post-next <SLATE_ID> --hosts-ok
 ```
 
 `read` shows the address paid, the amount, the message, the label and each relay with its
-`host_rule` and `in_relay_list`. `pay` pays the amount the link asks unless `--amount` is given,
-and takes the spending options of `tx send`; `--proof` asks for a payment proof signed with the
-payee's epic1 proof key. The payment goes to the first relay of the link; when the post fails,
+`host_rule` and `in_relay_list`. `pay` pays the amount the link asks unless an amount follows
+the link, and takes the spending options of `tx send`; `--proof` asks for a payment proof signed
+with the payee's epic1 proof key. The payment goes to the first relay of the link; when the post fails,
 `post-next` tries the next one. The payer's `contact collect` takes the answer at the reply
 mailbox and finalizes it.
 

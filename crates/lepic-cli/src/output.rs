@@ -2938,6 +2938,7 @@ mod tests {
                     "buffered",
                     "capped",
                     "delivered",
+                    "epic1",
                     "failed",
                     "kept",
                     "mailboxes",

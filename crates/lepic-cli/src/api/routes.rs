@@ -1719,7 +1719,7 @@ pub(crate) async fn epic1_link(api: &Api<'_>, request: Request) -> Answer {
             message: body.message,
         },
         printed: body.printed,
-        relays: body.relays,
+        epicbox: body.relays,
     };
     api.run(epic1(Epic1Command::Link(args))).await
 }
