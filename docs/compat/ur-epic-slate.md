@@ -1,4 +1,4 @@
-# Slates in QR codes (`ur:epic-slate` version 1)
+# Slates in QR codes (`ur:epic-slate` versions 1 and 2)
 
 Two phones side by side exchange a slate without a relay, a server or a file: the sender's phone
 shows its S1 (or an issuer its I1) as a looping sequence of QR codes, the other phone scans it,
@@ -128,3 +128,52 @@ one that missed a pure part but caught a fountain part whose other fragments it 
 
 `crates/lepic-slate/tests/snapshots/ur_slate__small_encodings.snap` records the exact codes of a
 short text in both forms.
+
+## Version 2
+
+Version 2 carries a native `lepic.v1` slate or an envelope as bytes, nothing compressed
+(RFC 0003 §5.18). Version 1 is unchanged and keeps its payload, codes and limits as written
+above; `lepic_slate::ur_slate` reads and writes both, version 1 through `encode_ur_slate` and
+`decode_ur_slate`, version 2 through `encode_ur_binary` and `decode_ur_parts`.
+
+### Payload
+
+The message is the same CBOR map with two entries, definite length, keys in ascending order:
+
+| Key | Value |
+|---|---|
+| `1` | Version, the unsigned integer `2`. |
+| `2` | A byte string: the native slate or the envelope, exactly as written to a file. |
+
+The first four bytes of the byte string name its kind:
+
+| Bytes | Kind |
+|---|---|
+| `89 45 53 4C` | Native slate |
+| `89 45 53 45` | Envelope |
+
+The reader returns the whole byte string, magic included, as `UrBinary::NativeSlate` or
+`UrBinary::Envelope`, and refuses any other first four bytes. It checks nothing else about the
+bytes: the codec that reads a slate file reads them next. `decode_ur_parts` reads codes of
+either version and returns the slate JSON text (version 1) or the bytes (version 2); the
+version 1 reader refuses a version 2 code as an unsupported version.
+
+### Codes
+
+The UR type is `epic-slate`, the bytewords style, the case and the part framing are those of
+version 1. A payload of at most 360 bytes (the CBOR map, not the byte string inside it) is one
+single-part code. A longer payload is split into fragments of at most 200 bytes, which is the
+recommended length, and written as `<count>` pure parts followed by the fountain parts, as
+version 1 writes them. The encoder accepts fragment lengths from 16 to 1024 bytes.
+
+### Limits
+
+| Limit | Value |
+|---|---|
+| Byte string, written or read | 67,648 bytes, the largest slate envelope |
+| Fragments in one code | 256 |
+
+A code holds at most 256 fragments, so 200-byte fragments carry up to 51,200 bytes. A larger
+envelope is written with longer fragments, up to 1024 bytes, or is exchanged as a file. The
+other limits of version 1 (part text, parts per call, total text) apply to version 2 codes as
+well.

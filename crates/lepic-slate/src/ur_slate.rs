@@ -7,6 +7,10 @@
 //! recovers the message. Decoding is stateless: the caller passes every distinct part it has
 //! scanned so far and gets the progress, and the slate text once enough parts arrived. Neither
 //! direction parses the slate; the text goes on to the codecs like slate text from a file.
+//!
+//! Payload version 2 (RFC 0003 §5.18) carries a native `lepic.v1` slate or an envelope as bytes,
+//! nothing compressed: [`encode_ur_binary`] writes it and [`decode_ur_parts`] reads either
+//! version. [`encode_ur_slate`] and [`decode_ur_slate`] are version 1 only and unchanged.
 
 use minicbor::data::Type;
 use thiserror::Error;
@@ -15,8 +19,23 @@ use ur::fountain;
 
 /// The UR type of an Epic slate.
 pub const UR_TYPE: &str = "epic-slate";
-/// The payload version this module writes and the only one it reads.
+/// The payload version [`encode_ur_slate`] writes and [`decode_ur_slate`] reads: deflated JSON.
 pub const PAYLOAD_VERSION: u64 = 1;
+/// The payload version of [`encode_ur_binary`]: native slate or envelope bytes.
+pub const BINARY_PAYLOAD_VERSION: u64 = 2;
+/// Magic of a native `lepic.v1` slate; the bytes of a version 2 payload start with it or with
+/// [`ENVELOPE_MAGIC`].
+pub const NATIVE_SLATE_MAGIC: [u8; 4] = [0x89, 0x45, 0x53, 0x4c];
+/// Magic of an envelope.
+pub const ENVELOPE_MAGIC: [u8; 4] = [0x89, 0x45, 0x53, 0x45];
+/// Longest version 2 byte string written or read: the largest slate envelope (RFC 0003 §5.17).
+/// A code of this size needs fragments longer than 200 bytes, because a code holds at most
+/// [`MAX_SEQUENCE_LEN`] fragments (51,200 bytes at 200).
+pub const MAX_BINARY_LEN: usize = 67_648;
+/// A version 2 payload of at most this many bytes is one single-part code.
+pub const SINGLE_CODE_MAX_LEN: usize = 360;
+/// Recommended fragment length of a version 2 multipart code.
+pub const BINARY_FRAGMENT_LEN: usize = 200;
 
 /// Longest slate text that is encoded, and the most a payload may inflate to. A QR sequence for
 /// a slate this long would already be far longer than a person waits for.
@@ -37,6 +56,8 @@ pub const MAX_TOTAL_TEXT_LEN: usize = 1024 * 1024;
 /// Fountain parts the encoder adds after the pure ones, at least.
 pub const MIN_FOUNTAIN_PARTS: usize = 10;
 
+const JSON_PAYLOAD_VERSION_BYTE: u8 = 1;
+const BINARY_PAYLOAD_VERSION_BYTE: u8 = 2;
 const PAYLOAD_KEY_VERSION: u64 = 1;
 const PAYLOAD_KEY_DEFLATE: u64 = 2;
 const DEFLATE_LEVEL: u8 = 10;
@@ -172,19 +193,69 @@ pub fn encode_ur_slate(
         },
     })?;
     let payload = encode_payload(slate_json.as_bytes());
-    if payload.len() <= max_fragment_len {
-        let part = ur::try_encode(&payload, &ur::Type::Custom(UR_TYPE))
-            .map_err(|_| UrEncodeError::Framing)?;
+    encode_parts(&payload, max_fragment_len, max_fragment_len).map_err(|error| match error {
+        FramingError::TooManyFragments(count) => UrEncodeError::TooManyFragments {
+            count,
+            max: MAX_SEQUENCE_LEN,
+        },
+        FramingError::Framing => UrEncodeError::Framing,
+    })
+}
+
+/// The QR texts of a version 2 payload: `bytes` is a native slate or an envelope, told by its
+/// magic. A payload of at most [`SINGLE_CODE_MAX_LEN`] bytes is one single-part code; a longer
+/// one is split into fragments of at most `max_fragment_len` bytes
+/// ([`BINARY_FRAGMENT_LEN`] recommended), written as [`encode_ur_slate`] writes them.
+pub fn encode_ur_binary(
+    bytes: &[u8],
+    max_fragment_len: usize,
+) -> Result<Vec<String>, UrBinaryEncodeError> {
+    if !(MIN_FRAGMENT_LEN..=MAX_FRAGMENT_LEN).contains(&max_fragment_len) {
+        return Err(UrBinaryEncodeError::FragmentLength {
+            len: max_fragment_len,
+            min: MIN_FRAGMENT_LEN,
+            max: MAX_FRAGMENT_LEN,
+        });
+    }
+    if bytes.len() > MAX_BINARY_LEN {
+        return Err(UrBinaryEncodeError::TooLong {
+            len: bytes.len(),
+            max: MAX_BINARY_LEN,
+        });
+    }
+    classify_binary(bytes).ok_or(UrBinaryEncodeError::UnknownMagic)?;
+    let payload = frame_payload(BINARY_PAYLOAD_VERSION_BYTE, bytes);
+    encode_parts(&payload, SINGLE_CODE_MAX_LEN, max_fragment_len).map_err(|error| match error {
+        FramingError::TooManyFragments(count) => UrBinaryEncodeError::TooManyFragments {
+            count,
+            max: MAX_SEQUENCE_LEN,
+        },
+        FramingError::Framing => UrBinaryEncodeError::Framing,
+    })
+}
+
+enum FramingError {
+    TooManyFragments(usize),
+    Framing,
+}
+
+/// One single-part code when `payload` is at most `single_max` bytes, else every pure fragment
+/// of at most `fragment_len` bytes and the fountain parts, uppercase.
+fn encode_parts(
+    payload: &[u8],
+    single_max: usize,
+    fragment_len: usize,
+) -> Result<Vec<String>, FramingError> {
+    if payload.len() <= single_max {
+        let part = ur::try_encode(payload, &ur::Type::Custom(UR_TYPE))
+            .map_err(|_| FramingError::Framing)?;
         return Ok(vec![part.to_ascii_uppercase()]);
     }
-    let mut encoder = ur::Encoder::new(&payload, max_fragment_len, UR_TYPE)
-        .map_err(|_| UrEncodeError::Framing)?;
+    let mut encoder =
+        ur::Encoder::new(payload, fragment_len, UR_TYPE).map_err(|_| FramingError::Framing)?;
     let fragments = encoder.fragment_count();
     if fragments > MAX_SEQUENCE_LEN {
-        return Err(UrEncodeError::TooManyFragments {
-            count: fragments,
-            max: MAX_SEQUENCE_LEN,
-        });
+        return Err(FramingError::TooManyFragments(fragments));
     }
     let total = fragments.saturating_add(fountain_part_count(fragments));
     (0..total)
@@ -192,7 +263,7 @@ pub fn encode_ur_slate(
             encoder
                 .next_part()
                 .map(|part| part.to_ascii_uppercase())
-                .map_err(|_| UrEncodeError::Framing)
+                .map_err(|_| FramingError::Framing)
         })
         .collect()
 }
@@ -205,18 +276,111 @@ pub fn fountain_part_count(fragments: usize) -> usize {
 
 /// Decodes the distinct QR texts scanned so far, in any order and case. Duplicates are
 /// harmless. No parts yields empty progress. The text returned is UTF-8 JSON, not yet checked
-/// as a slate.
+/// as a slate. Reads payload version 1 only; [`decode_ur_parts`] reads both versions.
 pub fn decode_ur_slate<S: AsRef<str>>(parts: &[S]) -> Result<UrProgress, UrDecodeError> {
+    let assembled = assemble(parts)?;
+    let json = match &assembled.payload {
+        Some(payload) => Some(decode_payload(payload)?),
+        None => None,
+    };
+    Ok(UrProgress {
+        resolved_fragments: assembled.resolved_fragments,
+        fragment_count: assembled.fragment_count,
+        json,
+    })
+}
+
+/// What a complete code carries.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum UrContent {
+    /// Payload version 1: the slate JSON text.
+    Json(String),
+    /// Payload version 2.
+    Binary(UrBinary),
+}
+
+/// The bytes of a version 2 payload, told apart by their magic and returned whole, magic
+/// included. Neither is parsed here.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum UrBinary {
+    NativeSlate(Vec<u8>),
+    Envelope(Vec<u8>),
+}
+
+/// How far a set of scanned parts got, for either payload version.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UrContentProgress {
+    pub resolved_fragments: usize,
+    pub fragment_count: usize,
+    /// Set once every fragment is recovered.
+    pub content: Option<UrContent>,
+}
+
+impl UrContentProgress {
+    pub fn is_complete(&self) -> bool {
+        self.content.is_some()
+    }
+}
+
+/// Why a version 2 payload could not be written.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+pub enum UrBinaryEncodeError {
+    #[error("bytes start with neither the native slate nor the envelope magic")]
+    UnknownMagic,
+    #[error("{len} bytes exceed {max} bytes")]
+    TooLong { len: usize, max: usize },
+    #[error("fragment length {len} is outside {min} to {max}")]
+    FragmentLength { len: usize, min: usize, max: usize },
+    #[error("the payload needs {count} fragments, more than {max}")]
+    TooManyFragments { count: usize, max: usize },
+    #[error("multipart framing failed")]
+    Framing,
+}
+
+/// Why scanned parts could not be read as either payload version.
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+pub enum UrContentError {
+    #[error(transparent)]
+    Decode(#[from] UrDecodeError),
+    #[error("payload bytes start with neither the native slate nor the envelope magic")]
+    UnknownMagic,
+    #[error("payload of {len} bytes exceeds {max} bytes")]
+    TooLong { len: usize, max: usize },
+}
+
+/// Like [`decode_ur_slate`], for codes of payload version 1 or 2. Version 2 bytes are checked
+/// for their magic and length only.
+pub fn decode_ur_parts<S: AsRef<str>>(parts: &[S]) -> Result<UrContentProgress, UrContentError> {
+    let assembled = assemble(parts)?;
+    let content = match &assembled.payload {
+        Some(payload) => Some(decode_content(payload)?),
+        None => None,
+    };
+    Ok(UrContentProgress {
+        resolved_fragments: assembled.resolved_fragments,
+        fragment_count: assembled.fragment_count,
+        content,
+    })
+}
+
+/// Fragments gathered from parts, and the CBOR payload once all are there.
+struct Assembled {
+    resolved_fragments: usize,
+    fragment_count: usize,
+    payload: Option<Vec<u8>>,
+}
+
+fn assemble<S: AsRef<str>>(parts: &[S]) -> Result<Assembled, UrDecodeError> {
     check_bounds(parts)?;
     let mut parsed = Vec::with_capacity(parts.len());
     for part in parts {
         parsed.push(parse_part(part.as_ref())?);
     }
     let Some(first) = parsed.first() else {
-        return Ok(UrProgress {
+        return Ok(Assembled {
             resolved_fragments: 0,
             fragment_count: 0,
-            json: None,
+            payload: None,
         });
     };
     match first {
@@ -227,14 +391,13 @@ pub fn decode_ur_slate<S: AsRef<str>>(parts: &[S]) -> Result<UrProgress, UrDecod
             {
                 return Err(UrDecodeError::MixedCodes);
             }
-            let json = decode_payload(payload)?;
-            Ok(UrProgress {
+            Ok(Assembled {
                 resolved_fragments: 1,
                 fragment_count: 1,
-                json: Some(json),
+                payload: Some(payload.clone()),
             })
         }
-        ParsedPart::Multi(_) => decode_multipart(parsed),
+        ParsedPart::Multi(_) => assemble_multipart(parsed),
     }
 }
 
@@ -433,7 +596,7 @@ fn check_message_length(
     Ok(())
 }
 
-fn decode_multipart(parsed: Vec<ParsedPart>) -> Result<UrProgress, UrDecodeError> {
+fn assemble_multipart(parsed: Vec<ParsedPart>) -> Result<Assembled, UrDecodeError> {
     let mut parts = Vec::with_capacity(parsed.len());
     for part in parsed {
         match part {
@@ -455,28 +618,30 @@ fn decode_multipart(parsed: Vec<ParsedPart>) -> Result<UrProgress, UrDecodeError
             .map_err(|_| UrDecodeError::InvalidPart(PartFault::Reassembly))?;
     }
     let resolved_fragments = decoder.resolved_fragment_count().unwrap_or(0);
-    let json = match decoder
+    let payload = decoder
         .message()
-        .map_err(|_| UrDecodeError::InvalidPart(PartFault::Reassembly))?
-    {
-        Some(payload) => Some(decode_payload(&payload)?),
-        None => None,
-    };
-    Ok(UrProgress {
+        .map_err(|_| UrDecodeError::InvalidPart(PartFault::Reassembly))?;
+    Ok(Assembled {
         resolved_fragments,
         fragment_count,
-        json,
+        payload,
     })
 }
 
-/// `{1: version, 2: deflated slate text}`, a definite map with its keys in ascending order.
+/// `{1: 1, 2: deflated slate text}`.
 fn encode_payload(slate_text: &[u8]) -> Vec<u8> {
     let deflated = miniz_oxide::deflate::compress_to_vec(slate_text, DEFLATE_LEVEL);
-    let mut payload = Vec::with_capacity(deflated.len().saturating_add(8));
-    payload.extend_from_slice(&[0xa2, 0x01, 0x01, 0x02]);
-    // A byte string header in its shortest form. Deflate output of at most
-    // MAX_SLATE_TEXT_LEN bytes stays far below the four-byte length form.
-    match (u8::try_from(deflated.len()), u16::try_from(deflated.len())) {
+    frame_payload(JSON_PAYLOAD_VERSION_BYTE, &deflated)
+}
+
+/// `{1: version, 2: body}`, a definite map with its keys in ascending order. `version` is a
+/// CBOR unsigned integer below 24.
+fn frame_payload(version: u8, body: &[u8]) -> Vec<u8> {
+    let mut payload = Vec::with_capacity(body.len().saturating_add(8));
+    payload.extend_from_slice(&[0xa2, 0x01, version, 0x02]);
+    // A byte string header in its shortest form. A body of at most MAX_SLATE_TEXT_LEN or
+    // MAX_BINARY_LEN bytes stays far below the four-byte length form.
+    match (u8::try_from(body.len()), u16::try_from(body.len())) {
         (Ok(len), _) if len < 24 => payload.push(0x40 | len),
         (Ok(len), _) => payload.extend_from_slice(&[0x58, len]),
         (Err(_), Ok(len)) => {
@@ -485,16 +650,50 @@ fn encode_payload(slate_text: &[u8]) -> Vec<u8> {
         }
         (Err(_), Err(_)) => {
             payload.push(0x5a);
-            let len = u32::try_from(deflated.len()).unwrap_or(u32::MAX);
+            let len = u32::try_from(body.len()).unwrap_or(u32::MAX);
             payload.extend_from_slice(&len.to_be_bytes());
         }
     }
-    payload.extend_from_slice(&deflated);
+    payload.extend_from_slice(body);
     payload
 }
 
+fn decode_content(payload: &[u8]) -> Result<UrContent, UrContentError> {
+    let (version, body) = read_payload(payload, &[PAYLOAD_VERSION, BINARY_PAYLOAD_VERSION])?;
+    if version == PAYLOAD_VERSION {
+        return Ok(UrContent::Json(inflate_slate(body)?));
+    }
+    if body.len() > MAX_BINARY_LEN {
+        return Err(UrContentError::TooLong {
+            len: body.len(),
+            max: MAX_BINARY_LEN,
+        });
+    }
+    match classify_binary(body).ok_or(UrContentError::UnknownMagic)? {
+        BinaryKind::NativeSlate => Ok(UrContent::Binary(UrBinary::NativeSlate(body.to_vec()))),
+        BinaryKind::Envelope => Ok(UrContent::Binary(UrBinary::Envelope(body.to_vec()))),
+    }
+}
+
+enum BinaryKind {
+    NativeSlate,
+    Envelope,
+}
+
+fn classify_binary(bytes: &[u8]) -> Option<BinaryKind> {
+    match bytes.get(..4)? {
+        magic if magic == NATIVE_SLATE_MAGIC => Some(BinaryKind::NativeSlate),
+        magic if magic == ENVELOPE_MAGIC => Some(BinaryKind::Envelope),
+        _ => None,
+    }
+}
+
 fn decode_payload(payload: &[u8]) -> Result<String, UrDecodeError> {
-    let deflated = read_payload(payload)?;
+    let (_, deflated) = read_payload(payload, &[PAYLOAD_VERSION])?;
+    inflate_slate(deflated)
+}
+
+fn inflate_slate(deflated: &[u8]) -> Result<String, UrDecodeError> {
     let text = miniz_oxide::inflate::decompress_to_vec_with_limit(deflated, MAX_SLATE_TEXT_LEN)
         .map_err(|error| match error.status {
             miniz_oxide::inflate::TINFLStatus::HasMoreOutput => UrDecodeError::InflatesTooLarge {
@@ -510,7 +709,8 @@ fn decode_payload(payload: &[u8]) -> Result<String, UrDecodeError> {
     }
 }
 
-fn read_payload(payload: &[u8]) -> Result<&[u8], UrDecodeError> {
+/// The version and the byte string of `{1: version, 2: bytes}`, for a version in `accepted`.
+fn read_payload<'a>(payload: &'a [u8], accepted: &[u64]) -> Result<(u64, &'a [u8]), UrDecodeError> {
     let malformed = UrDecodeError::MalformedPayload;
     let mut decoder = minicbor::Decoder::new(payload);
     let Ok(Some(entries)) = decoder.map() else {
@@ -525,7 +725,7 @@ fn read_payload(payload: &[u8]) -> Result<&[u8], UrDecodeError> {
     let version = decoder
         .u64()
         .map_err(|_| malformed(PayloadFault::WrongType))?;
-    if version != PAYLOAD_VERSION {
+    if !accepted.contains(&version) {
         return Err(UrDecodeError::UnsupportedVersion { version });
     }
     match entries {
@@ -541,13 +741,13 @@ fn read_payload(payload: &[u8]) -> Result<&[u8], UrDecodeError> {
     if decoder.datatype().ok() != Some(Type::Bytes) {
         return Err(malformed(PayloadFault::WrongType));
     }
-    let deflated = decoder
+    let body = decoder
         .bytes()
         .map_err(|_| malformed(PayloadFault::WrongType))?;
     if decoder.position() != payload.len() {
         return Err(malformed(PayloadFault::TrailingBytes));
     }
-    Ok(deflated)
+    Ok((version, body))
 }
 
 fn read_key(decoder: &mut minicbor::Decoder<'_>, expected: u64) -> Result<(), UrDecodeError> {
