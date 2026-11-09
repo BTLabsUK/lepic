@@ -8,12 +8,12 @@
 //! is decoded again by the caller's [`CardReader`] and its keys, seq, kind and name come from
 //! that decoding, never from the document. The `.wfeh` key is the same on both networks, so the
 //! document names its network and an import refuses the other one. It holds no secret: pairings
-//! in progress, outbox entries and relay backoff are not exported, and a contact still waiting
+//! in progress, outbox entries and relay backoff are not exported, and a contact waiting
 //! for its reply is left out because nothing could finish it. Neither is a pairing that ended,
 //! or one whose contact was never heard from, so no build restores either as paired. Nothing
 //! learned about the contact's wallet is kept either (the features it claims, when it was heard
 //! or said it verified): a restore learns it again. The contact's proven payments address is
-//! kept, so a restored record can still be attached to an address book entry. A record restored
+//! kept, so a restored record can be attached to an address book entry. A record restored
 //! from it is flagged [`ContactRecord::imported_from_backup`], because the pairing may also live
 //! on the device the backup came from (cases C-11).
 

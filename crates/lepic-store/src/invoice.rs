@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Invoices received and waiting for the user, and the index of the retired invoice address,
-//! kept so the stores of builds that had one read as before; nothing new writes it, and its
-//! address indexes stay reserved.
+//! Invoices received and waiting for the user, and the index of a separate invoice address that
+//! some wallet databases hold. The store keeps that value so such a database opens as it is; no
+//! engine path writes it, and the address indexes it names stay reserved.
 //!
 //! The slate bytes of a pending invoice are sealed under the private context key, with the slate
 //! id and the sender key as associated data, so a row edited to name another sender does not open.
@@ -63,8 +63,8 @@ pub struct PendingInvoice {
     pub bytes: Vec<u8>,
 }
 
-/// An Epicbox address index of the retired invoice identity, as earlier builds stored it. Index
-/// 0 is the payments address, so it is never one.
+/// The Epicbox address index of a separate invoice identity, as some wallet databases hold it.
+/// Index 0 is the payments address, so it is never one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct InvoiceAddressIndex(u32);
 
