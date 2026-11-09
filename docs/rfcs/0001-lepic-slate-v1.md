@@ -1,6 +1,6 @@
 # RFC 0001 lepic.v1: the native slate's stages, framing and engine contract
 
-Status: partly superseded by [RFC 0003](0003-epictx-native-slates.md)
+Status: draft; partly superseded by [RFC 0003](0003-epictx-native-slates.md)
 RFC 0003 §5.10 holds the `lepic.v1` byte layout; this RFC keeps what each stage carries (§3), the
 text framing (§7) and how an answer is completed (§11).
 
