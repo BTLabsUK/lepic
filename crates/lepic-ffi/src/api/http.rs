@@ -132,6 +132,8 @@ pub struct HttpResentTx {
     pub posted: bool,
     /// The dialect the resend took to the other wallet.
     pub dialect: SendDialect,
+    /// How the S1 went out this time, as [`HttpSentTx::format`] says.
+    pub format: SlateWire,
 }
 
 /// The key a listener's native endpoint showed for an origin, kept once it answered a native

@@ -27,7 +27,7 @@ use crate::api::secret_store::AppSecretStore;
 use crate::api::types::{
     Chain, FeeEstimate, FinalizedTx, InboxReport, KernelLocation, LegacyImport, ListenerEvent,
     ListenerEventKind, NodeRoute, NodeTip, PeerCompat, ReceivedSlate, RefreshProgress,
-    ScanProgress, SelfSendRequest, SelfSentTx, SendOptions, SentTx, Slate, SlateInfo,
+    ScanProgress, SelfSendRequest, SelfSentTx, SendOptions, SentTx, Slate, SlateInfo, SlateWire,
     TransactionDetails, UrSlateProgress, WalletConfig, WalletEvent, WalletOutput, WalletSummary,
 };
 use crate::boundary::{Boundary, end_stream, guard, guard_or};
@@ -1398,8 +1398,8 @@ impl EpicWallet {
     /// drain finalizes and posts it when the answer arrives; a wallet that answered the slate
     /// before answers it again the same way. Fails with `InvalidArgument` when `tx_id` is not
     /// a send over Epicbox waiting for its answer, and with `TransportFailed` when the relay fails
-    /// again.
-    pub async fn resend_epicbox(&self, tx_id: u32) -> Result<(), WalletError> {
+    /// again. Returns the format the slate went out in this time.
+    pub async fn resend_epicbox(&self, tx_id: u32) -> Result<SlateWire, WalletError> {
         self.run("resend_epicbox", |session| async move {
             session.resend_epicbox(tx_id).await
         })

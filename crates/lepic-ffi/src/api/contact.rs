@@ -36,7 +36,7 @@ use crate::api::types::{
     OutboxReport, PaidInvoice, PairRequestView, PairingAnswer, PairingCard, PairingClass,
     PairingInvite, PairingLinkResult, PendingPairingView, QuarantineRetryReport,
     QuarantinedMessageView, SasDecision, SealedAnswer, SealedSlateView, SendOptions, SentTx,
-    SlatePurpose,
+    SlatePurpose, SlateWire,
 };
 use crate::api::wallet::EpicWallet;
 use crate::boundary::guard;
@@ -693,13 +693,15 @@ impl EpicWallet {
     /// `SealingOff` only when its wallet cannot open sealed slates, and `NoSlateToSend` when
     /// the transaction has no slate to send or belongs to another contact. A failure leaves
     /// the transaction as it was: `cancel_transaction` unlocks a send's inputs.
+    ///
+    /// Returns the format the slate was sealed in.
     pub async fn contact_post_slate(
         &self,
         contact_id: String,
         tx_id: u32,
         purpose: Option<SlatePurpose>,
         relay_mode: ContactRelayMode,
-    ) -> Result<(), WalletError> {
+    ) -> Result<SlateWire, WalletError> {
         self.run("contact_post_slate", |session| async move {
             session
                 .contact_post_slate(&contact_id, tx_id, purpose, relay_mode)
@@ -949,11 +951,14 @@ impl EpicWallet {
     /// Fails with `NoSlateToSend` for an id the outbox does not hold or whose transaction
     /// finished, was cancelled or expired, `ContactsOffline` or
     /// `EpicboxOff`, and `TransportFailed` when the relay fails.
+    ///
+    /// Returns the format the entry went out in: `Native` for a `BEGINEPICTX.` slate, `Legacy`
+    /// for any other entry, including an app payload, which is no slate.
     pub async fn contact_outbox_resend(
         &self,
         id: u64,
         relay_mode: ContactRelayMode,
-    ) -> Result<(), WalletError> {
+    ) -> Result<SlateWire, WalletError> {
         self.run("contact_outbox_resend", |session| async move {
             session.contact_outbox_resend(id, relay_mode).await
         })

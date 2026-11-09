@@ -28,7 +28,7 @@ use flutter_rust_bridge::frb;
 use crate::api::error::WalletError;
 use crate::api::types::{
     ContactRelayMode, FinalizedTx, InPersonCode, InPersonCodeView, InPersonQrProgress,
-    InPersonRead, InPersonReply, InPersonTaken, SendOptions,
+    InPersonRead, InPersonReply, InPersonTaken, SendOptions, SlateWire,
 };
 use crate::api::wallet::EpicWallet;
 use crate::boundary::guard;
@@ -195,12 +195,14 @@ impl EpicWallet {
     /// answer is stored for the slate, `InPersonNoMailbox` when its code named no mailbox,
     /// `ContactsOffline` or `EpicboxOff` before connecting, and `TransportFailed` when the
     /// post failed.
+    ///
+    /// Returns the format the answer went out in, always `Native`.
     pub async fn in_person_post(
         &self,
         slate_id: String,
         relay_ok: bool,
         relay_mode: ContactRelayMode,
-    ) -> Result<(), WalletError> {
+    ) -> Result<SlateWire, WalletError> {
         self.run("in_person_post", |session| async move {
             session
                 .in_person_post(&slate_id, relay_ok, relay_mode)

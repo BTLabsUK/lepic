@@ -24,7 +24,7 @@ use tokio::sync::watch;
 use tokio::task::JoinHandle;
 use tracing::{debug, info, warn};
 
-use super::http::{HttpReport, http_sent, send_dialect};
+use super::http::{HttpReport, direct_wire, http_sent, send_dialect};
 use super::{DEFAULT_ACCOUNT, Session, invalid, lock};
 use crate::api::error::{WalletError, WalletErrorKind};
 use crate::api::http::{HttpListenerEvent, HttpListenerEventKind, HttpResentTx, HttpSentTx};
@@ -831,6 +831,7 @@ impl Session {
             slate_id,
             posted,
             dialect: send_dialect(direct.dialect),
+            format: direct_wire(direct.dialect, direct.sent),
         })
     }
 

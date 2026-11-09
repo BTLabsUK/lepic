@@ -14,9 +14,10 @@ use lepic_wallet_contacts::{
     InvitePreview as EnginePreview, InviteRequest, InvoiceDetails,
     KeyCheckStart as EngineKeyCheckStart, KeysDecision as EngineKeysDecision, LinkOutcome,
     PairingClass as EngineClass, PairingFailure, PairingRole, Purpose, RelayMode,
-    SasDecision as EngineSasDecision, SasSymbol, SealedAnswer as EngineAnswer, WalletContacts,
+    SasDecision as EngineSasDecision, SasSymbol, SealedAnswer as EngineAnswer, WalletContacts, is_epictx,
 };
 
+use super::http::slate_wire;
 use super::{DEFAULT_ACCOUNT, ScratchFile, Session, invalid};
 use crate::api::error::{WalletError, WalletErrorKind};
 use crate::api::types::{
@@ -28,8 +29,8 @@ use crate::api::types::{
     PairingEndReason as FfiEndReason, PairingFailureReason, PairingInvite, PairingLinkOutcome,
     PairingLinkResult, PairingState, PairingStatus as FfiStatus, PendingPairingView,
     QuarantineRetryReport, QuarantinedMessageView, SasDecision, SasEntry, SealState, SealedAnswer,
-    SealedSlateView, SendOptions, SentTx, SlateMessage, SlatePurpose, SlateStage, WalletEvent,
-    WalletEventKind,
+    SealedSlateView, SendOptions, SentTx, SlateMessage, SlatePurpose, SlateStage, SlateWire,
+    WalletEvent, WalletEventKind,
 };
 
 /// The longest sealed text taken from the app: a slate with its envelope and armor fits many
@@ -333,6 +334,11 @@ fn answer(tx_id: TxId, slate: &Slate, answer: EngineAnswer) -> Result<SealedAnsw
         EngineAnswer::Sealed(text) => (text, true),
         EngineAnswer::Plain(wire) => (wire_text(&wire)?, false),
     };
+    let format = if sealed && is_epictx(&answer) {
+        SlateWire::Native
+    } else {
+        SlateWire::Legacy
+    };
     Ok(SealedAnswer {
         tx_id: tx_id.0,
         slate_id: slate.id().to_string(),
@@ -340,6 +346,7 @@ fn answer(tx_id: TxId, slate: &Slate, answer: EngineAnswer) -> Result<SealedAnsw
         fee: slate.fee().value(),
         answer,
         sealed,
+        format,
     })
 }
 
@@ -1020,14 +1027,15 @@ impl Session {
         tx_id: u32,
         purpose: Option<SlatePurpose>,
         mode: ContactRelayMode,
-    ) -> Result<(), WalletError> {
+    ) -> Result<SlateWire, WalletError> {
         let id = self::contact_id(contact_id)?;
         let relays = self.contact_relays(mode)?;
-        Ok(self
+        let format = self
             .engine
             .contact_book()
             .contact_post_slate(&relays, id, TxId(tx_id), purpose.map(engine_purpose))
-            .await?)
+            .await?;
+        Ok(slate_wire(format))
     }
 
     /// Pays a contact through its mailbox, as the engine's `contact_send` describes.
@@ -1252,7 +1260,7 @@ impl Session {
             .policy
             .pay_request(amount, minimum_confirmations, message, options)?;
         let relays = self.contact_relays(mode)?;
-        let paid = self
+        let (paid, format) = self
             .engine
             .contact_book()
             .contact_pay_invoice(&relays, slate_id, request)
@@ -1262,6 +1270,7 @@ impl Session {
             slate_id: paid.slate.id().to_string(),
             amount: paid.slate.amount().value(),
             fee: paid.slate.fee().value(),
+            format: slate_wire(format),
         })
     }
 
@@ -1307,13 +1316,14 @@ impl Session {
         &self,
         id: u64,
         mode: ContactRelayMode,
-    ) -> Result<(), WalletError> {
+    ) -> Result<SlateWire, WalletError> {
         let relays = self.contact_relays(mode)?;
-        Ok(self
+        let format = self
             .engine
             .contact_book()
             .contact_outbox_resend(&relays, ContactOutboxId(id))
-            .await?)
+            .await?;
+        Ok(slate_wire(format))
     }
 
     pub(crate) async fn contact_post_payload(

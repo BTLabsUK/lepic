@@ -14,6 +14,7 @@ use crate::api::error::{WalletError, WalletErrorKind};
 use crate::api::types::{
     ContactRelayMode, Epic1AnswerView, Epic1Attempt, Epic1Host, Epic1Link, Epic1LinkKind,
     Epic1LinkRead, Epic1LinkView, Epic1Paid, EpictxView, HostClassView, SendOptions,
+    SlateWire,
 };
 
 /// The longest link text taken from the app; a link carries at most three relays and short
@@ -86,6 +87,7 @@ fn paid(paid: lepic_wallet_contacts::Epic1Paid) -> Epic1Paid {
         posted: paid
             .posted
             .map(|index| u32::try_from(index).unwrap_or(u32::MAX)),
+        format: SlateWire::Native,
     }
 }
 
@@ -269,14 +271,15 @@ impl Session {
         slate: &str,
         relay_ok: bool,
         mode: ContactRelayMode,
-    ) -> Result<(), WalletError> {
+    ) -> Result<SlateWire, WalletError> {
         let id = slate_id(slate)?;
         let relays = self.contact_relays(mode)?;
-        Ok(self
-            .engine
+        self.engine
             .contact_book()
             .epic1_post_answer(&relays, id, relay_ok)
-            .await?)
+            .await?;
+        // An epic1 answer is always `lepic.v1`.
+        Ok(SlateWire::Native)
     }
 
     pub(crate) async fn epic1_restore(&self, mode: ContactRelayMode) -> Result<u32, WalletError> {

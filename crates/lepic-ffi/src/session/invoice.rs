@@ -13,7 +13,7 @@ use lepic_wallet::slate::WireSlate;
 
 use super::{DEFAULT_ACCOUNT, ScratchFile, Session, invalid, transport_error};
 use crate::api::error::{WalletError, WalletErrorKind};
-use crate::api::types::{InvoiceSweep, IssuedInvoice, PaidInvoiceSlate, SendOptions, Slate};
+use crate::api::types::{InvoiceSweep, IssuedInvoice, PaidInvoiceSlate, SendOptions, Slate, SlateWire};
 
 impl Session {
     pub(crate) async fn sweep_invoices(
@@ -145,5 +145,6 @@ fn paid_invoice_slate(paid: &PaidInvoice) -> Result<PaidInvoiceSlate, WalletErro
         amount: paid.slate.amount().value(),
         fee: paid.slate.fee().value(),
         json,
+        format: SlateWire::Legacy,
     })
 }

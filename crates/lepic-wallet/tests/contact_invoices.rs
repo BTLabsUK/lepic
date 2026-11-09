@@ -114,6 +114,7 @@ impl World {
             pay_request(),
         ))
         .unwrap()
+        .0
     }
 
     fn tx_state(&self, party: &Party, tx_id: lepic_store::TxId) -> TxState {

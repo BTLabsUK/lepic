@@ -25,7 +25,7 @@
 use crate::api::error::WalletError;
 use crate::api::types::{
     ContactRelayMode, Epic1AnswerView, Epic1Link, Epic1LinkKind, Epic1LinkRead, Epic1LinkView,
-    Epic1Paid, EpictxView, SendOptions,
+    Epic1Paid, EpictxView, SendOptions, SlateWire,
 };
 use crate::api::wallet::EpicWallet;
 
@@ -177,12 +177,14 @@ impl EpicWallet {
     ///
     /// Fails with `RelayNotConfirmed` when `relay_ok` is false, `Epic1NotFound` when no answer
     /// is stored, and `TransportFailed` when the post failed.
+    ///
+    /// Returns the format the answer went out in, always `Native`.
     pub async fn epic1_post_answer(
         &self,
         slate_id: String,
         relay_ok: bool,
         relay_mode: ContactRelayMode,
-    ) -> Result<(), WalletError> {
+    ) -> Result<SlateWire, WalletError> {
         self.run("epic1_post_answer", |session| async move {
             session
                 .epic1_post_answer(&slate_id, relay_ok, relay_mode)

@@ -873,7 +873,7 @@ async fn pay_invoice<N: lepic_node::NodeApi + 'static>(
         .find(|invoice| invoice.slate_id == slate_id)
         .map(|invoice| invoice.contact_id.to_string())
         .unwrap_or_default();
-    let paid = wallet
+    let (paid, _) = wallet
         .contact_book()
         .contact_pay_invoice(relays, slate_id, request)
         .await?;

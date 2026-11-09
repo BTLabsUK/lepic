@@ -244,6 +244,7 @@ fn pay(world: &World, issued: &IssuedInvoice) -> TxId {
             pay_request(),
         ))
         .unwrap()
+        .0
         .tx_id
 }
 

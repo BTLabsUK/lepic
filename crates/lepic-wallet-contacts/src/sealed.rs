@@ -354,6 +354,8 @@ where
     /// may be reached. The answer comes back to our mailbox and is taken by collecting. A
     /// mailbox carries only sealed envelopes, so the contact's seal switch does not apply.
     ///
+    /// Returns the format the slate was sealed in.
+    ///
     /// Fails as [`Wallet::contact_seal_slate`] does, except that [`ContactError::SealOff`] means
     /// only that the contact's card says it cannot open sealed slates.
     #[instrument(skip_all, fields(wallet = %self.wallet.config().name, tx_id = %tx_id))]
@@ -363,10 +365,9 @@ where
         contact_id: ContactId,
         tx_id: TxId,
         purpose: Option<Purpose>,
-    ) -> Result<(), ContactError> {
+    ) -> Result<SlateFormat, ContactError> {
         self.post_stored_slate(relays, contact_id, tx_id, purpose)
             .await
-            .map(drop)
     }
 
     /// Posts as [`Wallet::contact_post_slate`] does, with the format the slate was sealed in.

@@ -234,6 +234,8 @@ pub struct ReceivedSlate {
     /// `json` the reply it stored, byte for byte. Nothing was stored this time; show it as
     /// already answered, not as a second payment.
     pub repeated: bool,
+    /// How the reply is written: `Legacy`, the JSON in `json`.
+    pub format: SlateWire,
 }
 
 /// A send that was stored and handed to its transport.
@@ -916,6 +918,8 @@ pub struct PaidInvoice {
     pub slate_id: String,
     pub amount: u64,
     pub fee: u64,
+    /// How the I2 was sealed for the contact: `Native` when the invoice came as a native slate.
+    pub format: SlateWire,
 }
 
 /// An invoice paid by file, from `EpicWallet::pay_invoice_slate` and
@@ -930,6 +934,8 @@ pub struct PaidInvoiceSlate {
     pub fee: u64,
     /// The I2 for the issuer.
     pub json: String,
+    /// How the I2 is written: `Legacy`, the JSON in `json`.
+    pub format: SlateWire,
 }
 
 /// What one `EpicWallet::sweep_invoices` did.
@@ -1465,6 +1471,8 @@ pub struct SealedAnswer {
     /// Armored sealed text when `sealed`, else plain slate JSON.
     pub answer: String,
     pub sealed: bool,
+    /// `Native` when `answer` is a native slate (`BEGINEPICTX.`), else `Legacy`.
+    pub format: SlateWire,
 }
 
 /// An invoice a contact sent, waiting for the user to pay or decline it, from
@@ -1962,6 +1970,9 @@ pub struct InPersonCode {
     /// `domain:port` of the reply mailbox the code names; `None` when it names none and the
     /// answer comes back by scan.
     pub mailbox: Option<String>,
+    /// How the code is written: always `Native`, a raw `lepic.v1` slate, whatever
+    /// `EpicWallet::set_native_direct` says.
+    pub format: SlateWire,
 }
 
 /// A scanned in-person code, read by `EpicWallet::in_person_read`. Nothing is stored.
@@ -1996,6 +2007,8 @@ pub struct InPersonReply {
     /// Four digits to show: the other party finalizes the answer that shows the same.
     pub check_code: String,
     pub mailbox: Option<InPersonHost>,
+    /// How the answer is written: always `Native`, a sealed `lepic.v1` slate.
+    pub format: SlateWire,
 }
 
 /// An answer taken for a code this wallet showed.
@@ -2167,6 +2180,8 @@ pub struct Epic1Paid {
     pub attempts: Vec<Epic1Attempt>,
     /// The transport, from 0, the payment was posted to.
     pub posted: Option<u32>,
+    /// How the payment is written: always `Native`, a sealed `lepic.v1` slate.
+    pub format: SlateWire,
 }
 
 /// An answer this wallet made for a payment taken at one of its link mailboxes, as

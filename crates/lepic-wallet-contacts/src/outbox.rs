@@ -24,6 +24,7 @@ use super::{ContactError, ContactRelays};
 use crate::ContactBook;
 use lepic_primitives::error_chain::ErrorChain;
 use lepic_wallet::event::{Event, OutboxNews};
+use lepic_wallet::SlateFormat;
 use lepic_wallet::ports::{SecretVault, StoreOpener};
 
 /// Waits before the next try, one step per failed try; the last repeats.
@@ -333,7 +334,7 @@ where
         &self,
         relays: &ContactRelays,
         id: ContactOutboxId,
-    ) -> Result<(), ContactError> {
+    ) -> Result<SlateFormat, ContactError> {
         check_online(relays)?;
         let _turn = self.wallet.contact_turn().await;
         let session = self.wallet.session()?;
@@ -361,6 +362,11 @@ where
             .ok_or(ContactError::UnknownTransaction)?
         };
         self.post_outbox_entry(relays, &stored.entry).await?;
+        let format = if super::sealed::is_epictx(&stored.entry.payload) {
+            SlateFormat::Native
+        } else {
+            SlateFormat::Legacy
+        };
         let mut entry = stored.entry;
         let now = self.wallet.ports().clock.now();
         entry.attempts = entry.attempts.saturating_add(1);
@@ -373,7 +379,7 @@ where
         })
         .await?;
         info!("outbox entry sent again");
-        Ok(())
+        Ok(format)
     }
 
     /// The contact's outbox entries, by id.

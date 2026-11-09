@@ -67,7 +67,7 @@ use crate::api::types::{
     LegacyImportStatus, ListenerEvent, ListenerEventKind, ListingRef, NodeRoute, NodeTip,
     OutputCategory, OutputStatus, PeerCompat, ReceivedSlate, ScanFound, ScanProgress, ScanResult,
     SelfInputs, SelfOutputs, SelfSendRequest, SelfSentTx, SendOptions, SentTx, Slate, SlateMessage,
-    SlateStage, TransactionDetails, TransportConnection, TransportState, TxOrigin, TxStatus,
+    SlateStage, SlateWire, TransactionDetails, TransportConnection, TransportState, TxOrigin, TxStatus,
     WalletConfig, WalletEvent, WalletEventKind, WalletOutput, WalletSummary,
 };
 use crate::boundary::InFlight;
@@ -1746,7 +1746,7 @@ impl Session {
         Ok(sent_tx(&sent))
     }
 
-    pub(crate) async fn resend_epicbox(&self, tx_id: u32) -> Result<(), WalletError> {
+    pub(crate) async fn resend_epicbox(&self, tx_id: u32) -> Result<SlateWire, WalletError> {
         let epicbox = self.epicbox()?;
         let method = self.epicbox_method()?;
         let details = self.engine.transaction_details(TxId(tx_id)).await?;
@@ -1757,10 +1757,11 @@ impl Session {
             })
             .ok_or_else(|| invalid("transaction is not a send over epicbox"))?;
         epicbox.attach_wallet(&self.engine)?;
-        Ok(self
+        let format = self
             .engine
             .resend(method, TxId(tx_id), Delivery::Deliver { to })
-            .await?)
+            .await?;
+        Ok(http::slate_wire(format))
     }
 
     pub(crate) async fn drain_epicbox(&self) -> Result<InboxReport, WalletError> {
@@ -2460,6 +2461,7 @@ fn received_slate(received: &Received) -> Result<ReceivedSlate, WalletError> {
         slate_id: received.slate.id().to_string(),
         json,
         repeated: received.repeated,
+        format: SlateWire::Legacy,
     })
 }
 

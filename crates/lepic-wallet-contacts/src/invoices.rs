@@ -34,6 +34,7 @@ use lepic_primitives::error_chain::ErrorChain;
 use lepic_wallet::event::{ContactInvoiceEvent, ContactSlateEvent, Event};
 use lepic_wallet::invoice::{InvoiceError, InvoiceRequest, IssuedInvoice, PaidInvoice, PayRequest};
 use lepic_wallet::notice::{Notice, NoticeKind, Payload, classify_text};
+use lepic_wallet::SlateFormat;
 use lepic_wallet::ports::{SecretVault, StoreOpener};
 use lepic_wallet::receive::{ReceiveError, ReceiveRequest, legacy_codecs};
 
@@ -399,14 +400,14 @@ where
     /// Fails with [`ContactError::Invoice`] carrying [`InvoiceError::NotParked`] when no invoice
     /// from a contact with that id waits, [`ContactError::NotVerified`] when its contact is no
     /// longer verified with invoices allowed (nothing is paid), and as [`Wallet::pay_invoice`]
-    /// does.
+    /// does. Returns the format the I2 went out in, that of the I1 it answers.
     #[instrument(skip_all, fields(wallet = %self.wallet.config().name, slate_id = %slate_id))]
     pub async fn contact_pay_invoice(
         &self,
         relays: &ContactRelays,
         slate_id: SlateId,
         request: PayRequest,
-    ) -> Result<PaidInvoice, ContactError> {
+    ) -> Result<(PaidInvoice, SlateFormat), ContactError> {
         let network = self.wallet.config().network;
         let session = self.wallet.session()?;
         let slate_uuid = uuid(slate_id);
@@ -467,7 +468,12 @@ where
         drop(turn);
         self.deliver_soon(relays).await;
         info!(tx_id = %paid.tx_id, "contact invoice paid");
-        Ok(paid)
+        let format = if native {
+            SlateFormat::Native
+        } else {
+            SlateFormat::Legacy
+        };
+        Ok((paid, format))
     }
 
     /// Links the slate and the transaction to the contact, seals `reply` to it, signed, and

@@ -235,6 +235,15 @@ pub(super) const fn slate_wire(format: SlateFormat) -> SlateWire {
     }
 }
 
+/// How the S1 of a direct send went out: a native exchange stores its S1 as a legacy slate, so
+/// its format is the dialect's.
+pub(super) const fn direct_wire(dialect: Dialect, stored: SlateFormat) -> SlateWire {
+    match dialect {
+        Dialect::Native => SlateWire::Native,
+        Dialect::Legacy => slate_wire(stored),
+    }
+}
+
 /// The report of a direct send of `sent` in `dialect`. A native exchange stores its S1 as a
 /// legacy slate, so its format is the dialect's.
 pub(super) fn http_sent(
@@ -243,10 +252,7 @@ pub(super) fn http_sent(
     slate_id: String,
     posted: bool,
 ) -> HttpSentTx {
-    let format = match dialect {
-        Dialect::Native => SlateWire::Native,
-        Dialect::Legacy => slate_wire(sent.format),
-    };
+    let format = direct_wire(dialect, sent.format);
     HttpSentTx {
         tx_id: sent.tx_id.0,
         slate_id,
@@ -379,6 +385,7 @@ impl Session {
             slate_id,
             posted,
             dialect: send_dialect(direct.dialect),
+            format: direct_wire(direct.dialect, direct.sent),
         })
     }
 

@@ -1219,9 +1219,10 @@ where
     }
 
     /// Delivers the stored S1 of a transaction whose delivery failed, through `delivery`, which
-    /// may name another transport than the first attempt. For an invoice payment, delivers its
-    /// stored I2 as it was first encoded; the payment of a parked invoice goes to the recorded
-    /// allowed address, whatever domain `delivery` names for its key.
+    /// may name another transport than the first attempt, and returns the format it went out
+    /// in. For an invoice payment, delivers its stored I2 as it was first encoded; the payment
+    /// of a parked invoice goes to the recorded allowed address, whatever domain `delivery`
+    /// names for its key.
     ///
     /// Fails with [`SendError::Wallet`] carrying [`WalletError::UnknownTransaction`],
     /// [`SendError::NotResendable`] when the
@@ -1241,7 +1242,7 @@ where
         method: &Arc<dyn Method>,
         tx_id: TxId,
         delivery: Delivery,
-    ) -> Result<(), SendError> {
+    ) -> Result<SlateFormat, SendError> {
         let session = self.session()?;
         check_delivery(&**method, &delivery)?;
         let target = delivery.clone();
@@ -1274,7 +1275,8 @@ where
             Some(to) => Delivery::Deliver { to: to.clone() },
             None => delivery,
         };
-        self.deliver(&**method, &stored, &delivery).await
+        self.deliver(&**method, &stored, &delivery).await?;
+        Ok(stored.format)
     }
 
     /// Hands the wire slate to `method`, then records the attempt in the outbox. A store

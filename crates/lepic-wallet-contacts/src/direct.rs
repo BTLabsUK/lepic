@@ -42,7 +42,7 @@ use lepic_transport::transport::{
 };
 use lepic_wallet::ports::{SecretVault, SharedRng, StoreOpener};
 use lepic_wallet::send::{Delivery, SendError, SendRequest, SentSlate};
-use lepic_wallet::{PinOutcome, ProofKey, ReceiveRequest, WalletError};
+use lepic_wallet::{PinOutcome, ProofKey, ReceiveRequest, SlateFormat, WalletError};
 use thiserror::Error;
 use tracing::{info, instrument, warn};
 
@@ -225,7 +225,7 @@ where
         tx_id: TxId,
         to: Destination,
         legacy: bool,
-    ) -> Result<DirectSent<()>, DirectError> {
+    ) -> Result<DirectSent<SlateFormat>, DirectError> {
         let session = self.wallet.session()?;
         let entry = session
             .store
@@ -235,17 +235,19 @@ where
         let delivery = Delivery::Deliver { to: to.clone() };
         let (probe, advert) = match self.route(peer, entry.account, &to, legacy).await? {
             Route::Legacy => {
-                self.wallet
+                let format = self
+                    .wallet
                     .resend(method, tx_id, delivery)
                     .await
                     .map_err(DirectError::Send)?;
-                return Ok(legacy_sent(()));
+                return Ok(legacy_sent(format));
             }
             Route::Native(native) => *native,
         };
         let capture = Arc::new(Capture::new(Arc::clone(method)));
         let carrier: Arc<dyn Method> = capture.clone();
-        self.wallet
+        let format = self
+            .wallet
             .resend(&carrier, tx_id, delivery)
             .await
             .map_err(DirectError::Send)?;
@@ -264,7 +266,7 @@ where
                 source,
             })?;
         Ok(DirectSent {
-            sent: (),
+            sent: format,
             dialect: Dialect::Native,
             reply: Some(reply),
         })
