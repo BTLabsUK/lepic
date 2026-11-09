@@ -255,6 +255,11 @@ pub enum CliError {
     },
     #[error("{} is over 64 KiB", path.display())]
     ApiClientsTooLarge { path: std::path::PathBuf },
+    #[error(
+        "{} is in a saved_txs directory, which another Epic wallet keeps: write elsewhere",
+        path.display()
+    )]
+    SavedTxsDir { path: std::path::PathBuf },
 }
 
 impl From<DirectError> for CliError {
@@ -312,6 +317,7 @@ impl CliError {
             | Self::ApiClientName
             | Self::ApiClientCertificate { .. }
             | Self::ApiClientListed { .. }
+            | Self::SavedTxsDir { .. }
             | Self::TorBinaryNeeded => ErrorKind::Usage,
             Self::Contact(error) => contact_kind(error),
             Self::Direct(error) => direct_kind(error),
@@ -447,7 +453,9 @@ fn contact_kind(error: &ContactError) -> ErrorKind {
         | ContactError::Words(_)
         | ContactError::Domain(_)
         | ContactError::NoDomainConfigured
-        | ContactError::TooLarge { .. } => ErrorKind::Usage,
+        | ContactError::TooLarge { .. }
+        | ContactError::SavedTransaction
+        | ContactError::NotPaymentFile => ErrorKind::Usage,
         ContactError::UnknownContact
         | ContactError::UnknownPairing
         | ContactError::UnknownTransaction

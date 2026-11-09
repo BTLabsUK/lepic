@@ -10,9 +10,10 @@ use std::time::Duration;
 use jiff::Timestamp;
 use lepic_contact::{
     Capabilities, ContactCard, Content, EncPublicKey, EncSecretKey, Hint, HintKey, HintRule,
-    MessageType, Opened, Purpose, SealedEnvelope, armor, dearmor, seal,
+    MessageType, Opened, PaymentFile, Purpose, SealedEnvelope, armor, classify, dearmor, seal,
 };
 use lepic_node::{NodeApi, Propagation};
+use lepic_seal::{ArmorMarker, ClassifyError, dearmor_marked};
 use lepic_slate::codec::{MediaType, WireSlate};
 use lepic_slate::stage::Stage;
 use lepic_store::{
@@ -58,7 +59,8 @@ pub struct SealedSlate {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SealedAnswer {
     /// Armored text, sealed to the contact and signed, or sealed anonymously to the reply key
-    /// of the slate's marker. Save it as `.epicsealed` or paste it back.
+    /// of the slate's marker. Save it as `.epictx` when [`is_epictx`] says so, else as
+    /// `.epicsealed`, or paste it back.
     Sealed(String),
     /// The plain slate, for a sender that cannot open sealed text.
     Plain(WireSlate),
@@ -112,6 +114,25 @@ fn wire_text(bytes: Vec<u8>) -> Result<WireSlate, ContactError> {
     Ok(WireSlate::text(MediaType::JSON, text))
 }
 
+/// What a payment file or paste holds, by its content (RFC 0003 5.12): armored text of either
+/// marker pair, or a JSON slate.
+///
+/// Fails with [`ContactError::SavedTransaction`] for hex digits only, which another Epic
+/// wallet keeps in its `saved_txs` directory, and [`ContactError::NotPaymentFile`] for
+/// anything else.
+pub fn payment_file(data: &[u8]) -> Result<PaymentFile, ContactError> {
+    classify(data).map_err(|error| match error {
+        ClassifyError::StockSavedTx => ContactError::SavedTransaction,
+        ClassifyError::NotPaymentFile => ContactError::NotPaymentFile,
+    })
+}
+
+/// Whether `text` is armored with the `BEGINEPICTX.` marker pair: a native slate, whose
+/// answer is written as `.epictx`.
+pub fn is_epictx(text: &str) -> bool {
+    matches!(dearmor_marked(text), Ok((_, ArmorMarker::Tx)))
+}
+
 /// How a sealed slate leaves for a contact.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Channel {
@@ -161,7 +182,9 @@ where
 {
     /// Seals the slate this wallet last wrote for `tx_id` (its S1, I1, S2 or I2) to the paired
     /// contact `contact_id`, signed, with our current card (RFC 0002 9.1). Returns armored text
-    /// for a `.epicsealed` file or a paste. `purpose` defaults to a payment for an S1 and a
+    /// for a file or a paste: an S1 or I1 goes native, `BEGINEPICTX.` for a `.epictx` file, when
+    /// the host set `native_direct` and the contact claims native slates; anything else is
+    /// `BEGINEPICSEALED.` for a `.epicsealed` file. `purpose` defaults to a payment for an S1 and a
     /// request for an I1. The transaction is remembered as the contact's, for
     /// [`Wallet::contact_plain_fallback`].
     ///
@@ -264,10 +287,10 @@ where
                         sent_at: super::collect::send_time(ports.clock.now()),
                         ..Content::new(MessageType::Slate, stored.bytes)
                     };
-                    // A new slate through the mailbox goes native when both sides take it; an
-                    // answer posted here answers a request that came as text, in its format.
-                    let native = channel == Channel::Mailbox
-                        && matches!(stage, SlateStage::Standard1 | SlateStage::Invoice1)
+                    // A new slate goes native when both sides take it. An answer sealed here
+                    // answers a request whose format is not stored, so it goes as V3, which
+                    // every LEPIC build reads; one made by opening the request takes its format.
+                    let native = matches!(stage, SlateStage::Standard1 | SlateStage::Invoice1)
                         && super::native::wants_native(native_direct, &record);
                     let mut guard = ports.rng.lock();
                     let mut rng = LockedRng(&mut **guard);
@@ -413,15 +436,22 @@ where
     /// envelope is attributed to the contact whose recorded key signed it; a newer card in it
     /// refreshes the contact. Nothing else is stored.
     ///
-    /// Fails with [`ContactError::Decode`] for text that is not sealed, damaged or for the other
-    /// network, [`ContactError::NotForThisInstall`] when no key of this wallet matches, or the
+    /// Fails with [`ContactError::SavedTransaction`] or [`ContactError::NotPaymentFile`] as
+    /// [`payment_file`] does, [`ContactError::Decode`] for text that is not sealed, damaged or
+    /// for the other network, [`ContactError::NotForThisInstall`] when no key of this wallet matches, or the
     /// signer is not the contact of the key that opened it (sealed for another wallet or
     /// install), [`ContactError::CannotOpen`], and [`ContactError::NotASlate`] for an envelope
     /// that holds no slate.
     #[instrument(skip_all, fields(wallet = %self.wallet.config().name))]
     pub async fn sealed_open(&self, text: &str) -> Result<SealedSlate, ContactError> {
+        Ok(self.open_text(text).await?.0)
+    }
+
+    /// [`Wallet::sealed_open`], and whether the slate came native.
+    async fn open_text(&self, text: &str) -> Result<(SealedSlate, bool), ContactError> {
         let network = self.wallet.config().network;
         let net = contact_network(network);
+        payment_file(text.as_bytes())?;
         let envelope = dearmor(text).map_err(ContactError::Decode)?;
         let sealed = SealedEnvelope::decode(&envelope, net).map_err(ContactError::Decode)?;
         let hint = sealed.hint();
@@ -493,7 +523,7 @@ where
             self.mark_sealed_in(contact_id).await?;
         }
         info!("sealed slate opened");
-        Ok(SealedSlate {
+        let opened = SealedSlate {
             contact_id: contact,
             stage: slate.stage(),
             wire,
@@ -503,7 +533,8 @@ where
                 .map(|reference| reference.as_str().to_owned()),
             expires: content.expires,
             messages: lepic_wallet::details::verified_messages(&slate),
-        })
+        };
+        Ok((opened, native))
     }
 
     /// Receives the S1 in sealed text as [`Wallet::receive`] receives one by file, and answers
@@ -518,7 +549,7 @@ where
         text: &str,
         request: ReceiveRequest,
     ) -> Result<SealedReceived, ContactError> {
-        let opened = self.sealed_open(text).await?;
+        let (opened, native) = self.open_text(text).await?;
         if opened.stage != Stage::S1 {
             return Err(ContactError::Stage(opened.stage));
         }
@@ -533,6 +564,7 @@ where
                 received.tx_id,
                 &opened.wire,
                 &received.reply,
+                native,
             )
             .await?;
         Ok(SealedReceived { received, answer })
@@ -550,7 +582,7 @@ where
         text: &str,
         request: PayRequest,
     ) -> Result<SealedPayment, ContactError> {
-        let opened = self.sealed_open(text).await?;
+        let (opened, native) = self.open_text(text).await?;
         if opened.stage != Stage::I1 {
             return Err(ContactError::Stage(opened.stage));
         }
@@ -560,7 +592,13 @@ where
             .await
             .map_err(ContactError::Invoice)?;
         let answer = self
-            .sealed_answer(opened.contact_id, paid.tx_id, &opened.wire, &paid.reply)
+            .sealed_answer(
+                opened.contact_id,
+                paid.tx_id,
+                &opened.wire,
+                &paid.reply,
+                native,
+            )
             .await?;
         Ok(SealedPayment { paid, answer })
     }
@@ -650,13 +688,15 @@ where
             .await
     }
 
-    /// Seals `reply`, the answer to `incoming`, for the channel `incoming` came by.
+    /// Seals `reply`, the answer to `incoming`, for the channel `incoming` came by and in its
+    /// format: `native` for a request that came as `lepic.v1`.
     async fn sealed_answer(
         &self,
         contact: Option<ContactId>,
         tx_id: TxId,
         incoming: &WireSlate,
         reply: &WireSlate,
+        native: bool,
     ) -> Result<SealedAnswer, ContactError> {
         if let Some(contact_id) = contact {
             let network = self.wallet.config().network;
@@ -686,17 +726,30 @@ where
                             sent_at: super::collect::send_time(ports.clock.now()),
                             ..Content::new(MessageType::Slate, body)
                         };
-                        let envelope = seal(
-                            net,
-                            card.enc_key(),
-                            card.hint_rule(),
-                            &content,
-                            Some(&signing_key(&keys)),
-                            &mut LockedRng(&mut **ports.rng.lock()),
-                        )
-                        .map_err(ContactError::Encode)?;
+                        let mut guard = ports.rng.lock();
+                        let mut rng = LockedRng(&mut **guard);
+                        let envelope = if native {
+                            super::native::seal_native(
+                                network,
+                                &card,
+                                content,
+                                &signing_key(&keys),
+                                &mut rng,
+                            )?
+                        } else {
+                            seal(
+                                net,
+                                card.enc_key(),
+                                card.hint_rule(),
+                                &content,
+                                Some(&signing_key(&keys)),
+                                &mut rng,
+                            )
+                            .map_err(ContactError::Encode)?
+                        };
+                        drop(guard);
                         link_tx(repos, tx_id, contact_id)?;
-                        Ok(armor(&envelope))
+                        Ok(super::native::armor_slate(&envelope, native))
                     })
                 })
                 .await?;

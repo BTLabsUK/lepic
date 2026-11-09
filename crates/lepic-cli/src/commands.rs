@@ -1239,6 +1239,7 @@ impl<H: Host> Run<'_, H> {
     }
 
     async fn receive(&mut self, args: ReceiveArgs) -> Result<Report, CliError> {
+        check_payment_file(&args.slate.file)?;
         let opened = self.open().await?;
         let files = FileTransport::new();
         let wire = files
@@ -1251,6 +1252,7 @@ impl<H: Host> Run<'_, H> {
             .reply
             .reply_file
             .unwrap_or_else(|| response_path(&args.slate.file));
+        refuse_saved_txs(&reply)?;
         files
             .export(&received.reply, &Location::File(reply.clone()))
             .await
@@ -1265,6 +1267,7 @@ impl<H: Host> Run<'_, H> {
     }
 
     async fn finalize(&mut self, args: &FinalizeArgs) -> Result<Report, CliError> {
+        check_payment_file(&args.slate.file)?;
         let opened = self.open().await?;
         let wire = FileTransport::new()
             .import(&Location::File(args.slate.file.clone()))
@@ -1395,6 +1398,7 @@ impl<H: Host> Run<'_, H> {
         let opened = self.open().await?;
         let account = opened.wallet.account(&args.account.account)?;
         let file = PathBuf::from(&args.invoice);
+        check_payment_file(&file)?;
         let files = FileTransport::new();
         let wire = files
             .import(&Location::File(file.clone()))
@@ -1409,6 +1413,7 @@ impl<H: Host> Run<'_, H> {
             .reply
             .reply_file
             .unwrap_or_else(|| response_path(&file));
+        refuse_saved_txs(&reply)?;
         files
             .export(&paid.reply, &Location::File(reply.clone()))
             .await
@@ -2051,6 +2056,35 @@ impl<N: NodeApi + 'static> ReceiveHost for CliHost<N> {
 
     fn refused(&self, _refusal: Refusal) {
         self.counts.count_refused();
+    }
+}
+
+/// Refuses a path in a `saved_txs` directory: another Epic wallet keeps its saved
+/// transactions there and reads what it finds there as its own.
+pub(crate) fn refuse_saved_txs(path: &Path) -> Result<(), CliError> {
+    if path
+        .parent()
+        .is_some_and(|dir| dir.components().any(|part| part.as_os_str() == "saved_txs"))
+    {
+        return Err(CliError::SavedTxsDir {
+            path: path.to_owned(),
+        });
+    }
+    Ok(())
+}
+
+/// Reads at most the first 64 KiB of the slate file `path` and refuses it unless the
+/// classifier of payment files (RFC 0003 5.12) says it is one.
+fn check_payment_file(path: &Path) -> Result<(), CliError> {
+    use std::io::Read as _;
+    let mut data = Vec::new();
+    std::fs::File::open(path)
+        .and_then(|file| file.take(64 * 1024).read_to_end(&mut data))
+        .map_err(CliError::io("read the slate file"))?;
+    match lepic_wallet_contacts::payment_file(&data) {
+        // A prefix of a long JSON slate may end in the middle; only its first byte counts.
+        Ok(_) => Ok(()),
+        Err(error) => Err(CliError::Contact(error)),
     }
 }
 

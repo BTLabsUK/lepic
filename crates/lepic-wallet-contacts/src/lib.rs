@@ -68,6 +68,7 @@ pub use key_schedule::{
     SLOT_COUNT, contact_root, key_check_tag, pairing_mailbox_keys,
 };
 pub use keycheck::{KEY_CHECK_WINDOW, KeyCheckStart, KeysDecision};
+pub use lepic_contact::PaymentFile;
 /// The contact formats a host names in these calls.
 pub use lepic_contact::{
     ContactKind, DomainName, Network as ContactNetwork, PairingClass, Purpose, Refusal, SasSymbol,
@@ -89,7 +90,9 @@ pub use payload::{
 pub use quarantine::{QuarantineReason, QuarantineRetry, QuarantinedMessage};
 pub use relay::{MAX_MEETING_RELAYS, meeting_host, meeting_relays};
 pub use requests::{MAX_LIVE_REQUESTS, MAX_SETTLED_REQUESTS, PairRequestView, REQUEST_EXPIRY};
-pub use sealed::{SEAL_LAPSE, SealedAnswer, SealedPayment, SealedReceived, SealedSlate};
+pub use sealed::{
+    SEAL_LAPSE, SealedAnswer, SealedPayment, SealedReceived, SealedSlate, is_epictx, payment_file,
+};
 pub use status::{
     NEVER_FINISHED_AFTER, PairingStatus, STATUS_NOTICES, STATUS_RETRY_FOR, status_of,
 };
@@ -454,6 +457,13 @@ pub enum ContactError {
     /// An in-person code or answer was refused.
     #[error("in-person slate refused: {0}")]
     InPerson(InPersonRefusal),
+    /// Hex digits only: a saved transaction another Epic wallet keeps in its `saved_txs`
+    /// directory, never a slate (RFC 0003 5.12).
+    #[error("not a payment file: a record another Epic wallet keeps")]
+    SavedTransaction,
+    /// Neither armored text nor a JSON slate (RFC 0003 5.12).
+    #[error("not a payment file")]
+    NotPaymentFile,
 }
 
 impl From<StoreError> for ContactError {

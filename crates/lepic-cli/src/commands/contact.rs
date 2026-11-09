@@ -271,30 +271,49 @@ pub(super) async fn contact_of<N: lepic_node::NodeApi + 'static>(
 /// The longest sealed text read from a file or standard input.
 const MAX_SEALED_TEXT: u64 = 4 * 1024 * 1024;
 
-fn read_sealed(input: &str) -> Result<String, CliError> {
+/// Reads sealed text from a file or standard input (`-`), refused unless the classifier of
+/// payment files (RFC 0003 5.12) says it is a payment file.
+pub(super) fn read_sealed(input: &str) -> Result<String, CliError> {
     use std::io::Read as _;
-    let mut text = String::new();
+    let mut data = Vec::new();
     if input == "-" {
         std::io::stdin()
             .lock()
             .take(MAX_SEALED_TEXT)
-            .read_to_string(&mut text)
+            .read_to_end(&mut data)
             .map_err(CliError::io("read sealed text from standard input"))?;
     } else {
         std::fs::File::open(input)
-            .and_then(|file| file.take(MAX_SEALED_TEXT).read_to_string(&mut text))
+            .and_then(|file| file.take(MAX_SEALED_TEXT).read_to_end(&mut data))
             .map_err(CliError::io("read the sealed file"))?;
     }
-    Ok(text)
+    lepic_wallet_contacts::payment_file(&data)?;
+    String::from_utf8(data)
+        .map_err(|_| CliError::Contact(lepic_wallet_contacts::ContactError::NotPaymentFile))
+}
+
+/// The file the answer to the sealed text `text` read from `input` goes to: `<stem>-reply.epictx`
+/// next to a native request, else `<input>.response`.
+fn answer_path(input: &Path, text: &str) -> PathBuf {
+    if lepic_wallet_contacts::is_epictx(text) {
+        let stem = input
+            .file_stem()
+            .map(|stem| stem.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        input.with_file_name(format!("{stem}-reply.epictx"))
+    } else {
+        response_path(input)
+    }
 }
 
 /// Writes `text` to `out`, or returns it to print.
-fn write_or_print(
+pub(super) fn write_or_print(
     out: Option<std::path::PathBuf>,
     text: String,
 ) -> Result<(Option<String>, Option<String>), CliError> {
     match out {
         Some(path) => {
+            super::refuse_saved_txs(&path)?;
             lepic_store::file::write_owner_only_atomic(&path, text.as_bytes())
                 .map_err(CliError::io("write the slate file"))?;
             Ok((Some(path.display().to_string()), None))
@@ -1159,7 +1178,7 @@ async fn open_sealed<N: lepic_node::NodeApi + 'static>(
     let answer_to = args
         .answer_file
         .clone()
-        .or_else(|| (args.input != "-").then(|| response_path(std::path::Path::new(&args.input))));
+        .or_else(|| (args.input != "-").then(|| answer_path(Path::new(&args.input), &text)));
     let (action, tx_id, slate, answer) = match sealed.stage {
         Stage::S1 => {
             let done = wallet
