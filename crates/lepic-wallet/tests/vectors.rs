@@ -525,6 +525,40 @@ fn epic1_proof_keys_are_the_vectors() {
     }
 }
 
+/// `testdata/vectors/pairing/seal_keys.json`, from the pairing kit: the seal key of each
+/// account, network and address kind is the kit's X25519 key.
+#[test]
+fn seal_keys_are_the_vectors() {
+    use lepic_wallet::namespace::{SealKeyKind, seal_key};
+    let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../testdata/vectors/pairing/seal_keys.json");
+    let file: Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+    let cases = file["vectors"].as_array().unwrap();
+    assert!(!cases.is_empty());
+    for case in cases {
+        let seed =
+            lepic_keychain::Seed::from_entropy(&hex_bytes(case["seed"].as_str().unwrap())).unwrap();
+        let kind = match case["kind_name"].as_str().unwrap() {
+            "epic1" => SealKeyKind::Epic1,
+            "onion" => SealKeyKind::Onion,
+            "web" => SealKeyKind::Web,
+            other => panic!("unknown seal key kind {other}"),
+        };
+        assert_eq!(u64::from(kind.byte()), case["kind"].as_u64().unwrap());
+        let key = seal_key(&seed, account_of(case), network_of(case), kind).unwrap();
+        assert_eq!(
+            key.expose_bytes().as_slice(),
+            hex_bytes(case["seal_sk"].as_str().unwrap()),
+            "{case}"
+        );
+        assert_eq!(
+            key.public_key().as_bytes().as_slice(),
+            hex_bytes(case["seal_pk"].as_str().unwrap()),
+            "{case}"
+        );
+    }
+}
+
 /// `testdata/vectors/keys/reply_mailbox_*.json`, `post_key_*.json` and `link_mailbox_*.json`:
 /// every Epicbox mailbox key is the generator's first valid secp256k1 key.
 #[test]
