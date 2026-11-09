@@ -120,6 +120,9 @@ wallets_settled() {
     done
 }
 
+# Lepic alone: the payer's data directory belongs to its listener while one runs.
+lepic_settled() { lepic wallet info | jq -e '.accounts[0] | .total == .spendable' >/dev/null; }
+
 balances_are() { [[ "$(lepic_balance total)" == "$1" && "$(payer_balance total)" == "$2" ]]; }
 
 # Starts a step: both wallets settled, and at the balances the earlier steps left.
@@ -232,14 +235,16 @@ native_epicbox() {
     drain_until finalized 1 120 >/dev/null || fail "lepic finalized nothing after the first send" || return 1
     wait_until "the native claim" 30 jq -e '.native_slates == true' <(lepic epicbox peer "${payer_address}") ||
         fail "epicbox peer shows no native claim: $(lepic epicbox peer "${payer_address}")" || return 1
+    wait_until "lepic settled" 180 lepic_settled || fail "lepic did not settle" || return 1
     second="$(lepic tx send 0.2 --to "${payer_address}")" || fail "the second send failed" || return 1
     [[ "$(jq -r .format <<<"${second}")" == native ]] || fail "the second send's format is not native: ${second}" || return 1
-    drain_until finalized 2 120 >/dev/null || fail "lepic finalized nothing after the second send" || return 1
+    drain_until finalized 1 120 >/dev/null || fail "lepic finalized nothing after the second send" || return 1
+    wait_until "lepic settled" 180 lepic_settled || fail "lepic did not settle" || return 1
     third_send="$(NATIVE_DIRECT="" lepic tx send 0.1 --to "${payer_address}")" ||
         fail "the third send failed" || return 1
     [[ "$(jq -r .format <<<"${third_send}")" == legacy ]] ||
         fail "the send with native_direct off is not legacy: ${third_send}" || return 1
-    drain_until finalized 3 120 >/dev/null || fail "lepic finalized nothing after the third send" || return 1
+    drain_until finalized 1 120 >/dev/null || fail "lepic finalized nothing after the third send" || return 1
     native_stop_listener
     local sent fee=0 slate_id
     for sent in "${first}" "${second}" "${third_send}"; do
