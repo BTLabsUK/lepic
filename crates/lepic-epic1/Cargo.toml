@@ -1,0 +1,21 @@
+[package]
+name = "lepic-epic1"
+description = "The epic1 address and the epic1 payment link: pure codes, no network or storage."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+lepic-contact.workspace = true
+lepic-crypto.workspace = true
+lepic-epicbox.workspace = true
+lepic-primitives.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+serde_json = { workspace = true, features = ["std"] }
+
+[lints]
+workspace = true

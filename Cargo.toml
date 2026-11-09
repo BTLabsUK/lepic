@@ -21,6 +21,7 @@ lepic-node = { path = "crates/lepic-node" }
 lepic-store = { path = "crates/lepic-store" }
 lepic-transport = { path = "crates/lepic-transport" }
 lepic-epicbox = { path = "crates/lepic-epicbox" }
+lepic-epic1 = { path = "crates/lepic-epic1" }
 lepic-legacy-rpc = { path = "crates/lepic-legacy-rpc" }
 lepic-tor = { path = "crates/lepic-tor" }
 lepic-wallet = { path = "crates/lepic-wallet" }

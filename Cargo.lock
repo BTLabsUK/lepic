@@ -1225,6 +1225,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "lepic-epic1"
+version = "0.3.1"
+dependencies = [
+ "lepic-contact",
+ "lepic-crypto",
+ "lepic-epicbox",
+ "lepic-primitives",
+ "serde_json",
+ "thiserror",
+]
+
+[[package]]
 name = "lepic-epicbox"
 version = "0.3.1"
 dependencies = [

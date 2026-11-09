@@ -18,6 +18,7 @@ between crates are fixed below and checked by `cargo xtask deps-check`.
 | `lepic-slate` | Slate domain model, stages and roles, codec trait, codec registry, the `ur:epic-slate` QR form of slate text (ADR 0025). | none |
 | `lepic-legacy-slate` | The V2 and V3 JSON slate codecs `epic-wallet` speaks, and the marked codecs that add the LEPIC marker to them (ADR 0052). | none |
 | `lepic-contact` | Contact pairing formats (RFC 0002): the sealed envelope (HPKE to a contact's X25519 key, signed with its Ed25519 key) and its armor, contact cards, invites, pairing replies and confirms, the SAS. | none |
+| `lepic-epic1` | The epic1 address (bech32m, RFC 0003 §5.13) and the epic1 payment link with its Epicbox transport entries (RFC 0003 §5.14): pure text codes over the contact and Epicbox address types. | none |
 | `lepic-node` | Node JSON-RPC client for the foreign API, with strict response validation and bounded sizes. | network |
 | `lepic-store` | SQLite storage behind repository traits, migrations, encryption of private transaction context, the database file encrypted at rest (ADR 0032). | disk |
 | `lepic-transport` | Transport traits, the method port and the registry's lookup, the LEPIC marker's feature bits, format policy; with its default `legacy` feature the shared legacy codec registries and the file transport. | disk |
@@ -67,6 +68,7 @@ lepic-store       -> lepic-primitives
 lepic-legacy-slate -> lepic-slate, lepic-crypto, lepic-primitives
 lepic-transport   -> lepic-legacy-slate, lepic-slate, lepic-primitives, lepic-crypto
 lepic-epicbox     -> lepic-transport, lepic-slate, lepic-crypto, lepic-primitives
+lepic-epic1       -> lepic-contact, lepic-epicbox, lepic-crypto, lepic-primitives
 lepic-legacy-rpc  -> lepic-transport, lepic-slate
 lepic-tor         -> lepic-legacy-rpc
 lepic-wallet      -> lepic-contact, lepic-store, lepic-node, lepic-transport, lepic-legacy-slate, lepic-slate, lepic-keychain, lepic-crypto, lepic-primitives

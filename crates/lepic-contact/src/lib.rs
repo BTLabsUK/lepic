@@ -40,7 +40,7 @@ pub use keycheck::{
     open_contact_update, open_key_check, open_key_check_answer, seal_contact_update,
     seal_contact_update_with, seal_found, seal_key_check, seal_not_found, seal_restored,
 };
-pub use keys::{EncPublicKey, EncSecretKey, HintKey};
+pub use keys::{EncPublicKey, EncSecretKey, HintKey, verifying_key};
 pub use network::Network;
 pub use pairing::{
     Commitment, Confirm, ConfirmBody, ConfirmCode, InviteId, MAX_PAIRING_ENVELOPE_LEN, Nonce,

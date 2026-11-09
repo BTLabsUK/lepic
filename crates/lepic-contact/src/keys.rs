@@ -86,7 +86,7 @@ impl fmt::Debug for HintKey {
 /// An Ed25519 public key read from input (RFC 0002 3.3, 6.1): the canonical encoding of a point
 /// that is not of small order. Signatures under a small-order key can be forged, and the kit
 /// refuses non-canonical encodings, so both are refused before any verification.
-pub(crate) fn verifying_key(bytes: &[u8; 32]) -> Result<VerifyingKey, KeyError> {
+pub fn verifying_key(bytes: &[u8; 32]) -> Result<VerifyingKey, KeyError> {
     let key = VerifyingKey::from_bytes(bytes).map_err(|_| KeyError::InvalidVerifyingKey)?;
     if key.is_weak() || key.to_edwards().compress().as_bytes() != bytes {
         return Err(KeyError::InvalidVerifyingKey);
