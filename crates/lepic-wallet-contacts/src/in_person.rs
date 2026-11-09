@@ -68,6 +68,10 @@ use crate::{ContactBook, file_method, hex};
 /// LEPIC refuses one at or under [`INVOICE_TTL_MARGIN_BLOCKS`].
 pub const IN_PERSON_TTL_BLOCKS: u64 = 30;
 
+/// How many different answers a code keeps. Anyone who saw the code can seal an answer to its
+/// reply key, so the answers past this many are dropped.
+pub const MAX_ANSWERS_PER_CODE: usize = 16;
+
 /// The state of a code this wallet showed, by slate id.
 const CODE_PREFIX: &str = "inperson.code.";
 
@@ -117,6 +121,9 @@ pub enum InPersonRefusal {
     /// The answer names a reply mailbox (tag 09): an answer names none.
     #[error("the answer names a reply mailbox")]
     ReplyMailboxTag,
+    /// The code already holds [`MAX_ANSWERS_PER_CODE`] answers; one more is dropped.
+    #[error("the code already holds all the answers it keeps")]
+    TooManyAnswers,
     /// This wallet holds no in-person code or answer for the slate.
     #[error("no in-person code for this slate")]
     NoCode,
@@ -376,7 +383,9 @@ fn code_for_hint(
 
 /// Records the answer `body`, hex, with the check code `code` for the code of `slate_id`, and
 /// closes the code. Returns the answer's number, whether an earlier answer had the same check
-/// code, and whether this answer was recorded before, when nothing changes.
+/// code, and whether this answer was recorded before, when nothing changes. Fails with
+/// [`InPersonRefusal::TooManyAnswers`] for a new answer when the code holds
+/// [`MAX_ANSWERS_PER_CODE`].
 fn record_answer(
     repos: &mut dyn Repositories,
     slate_id: SlateId,
@@ -387,6 +396,9 @@ fn record_answer(
     let mut state = load_code(repos, slate_id)?;
     if let Some(earlier) = state.answers.iter().find(|answer| answer.body == body) {
         return Ok((earlier.number, earlier.same_code, true));
+    }
+    if state.answers.len() >= MAX_ANSWERS_PER_CODE {
+        return Err(refused(InPersonRefusal::TooManyAnswers));
     }
     let same_code = state.answers.iter().any(|answer| answer.check_code == code);
     let number = u32::try_from(state.answers.len())
@@ -1085,13 +1097,25 @@ where
         let session = self.wallet.session()?;
         let body = hex::encode(&body);
         let code = check.clone();
-        let (number, same_code, duplicate) = self
+        let recorded = self
             .contact_work(move |_, _| {
                 session
                     .store
                     .write(|repos| record_answer(repos, slate_id, body, code, now))
             })
-            .await?;
+            .await;
+        if matches!(
+            recorded,
+            Err(ContactError::InPerson(InPersonRefusal::TooManyAnswers))
+        ) {
+            info!(
+                tx_id = state.tx_id,
+                count = MAX_ANSWERS_PER_CODE,
+                reason = "answer cap reached",
+                "in-person answer dropped"
+            );
+        }
+        let (number, same_code, duplicate) = recorded?;
         let tx_id = TxId(state.tx_id);
         let stage = state.kind.answer();
         if duplicate {
@@ -1373,4 +1397,51 @@ mod tests {
 
     #[derive(Debug, PartialEq, Eq)]
     struct RefusedOrAddress;
+
+    #[test]
+    fn a_code_keeps_a_bounded_number_of_answers() {
+        use lepic_store::StoreKeys;
+        use lepic_store::{MemoryStore, WalletStore};
+
+        let store = MemoryStore::new(StoreKeys::from_bytes([1; 32], [1; 32]));
+        let slate_id = SlateId::from_bytes([7; 16]);
+        let state = CodeState {
+            tx_id: 1,
+            account: 0,
+            kind: CodeKind::Invoice,
+            ttl_cutoff: 100,
+            mailbox: None,
+            closed: false,
+            finalized: None,
+            answers: Vec::new(),
+        };
+        store
+            .write(|repos| {
+                repos.put_setting(&code_key(slate_id), &to_text(&state, "in-person code")?)
+            })
+            .unwrap();
+        let now = Timestamp::from_second(1).unwrap();
+        let record = |body: &str| -> Result<(u32, bool, bool), ContactError> {
+            store.write(|repos| record_answer(repos, slate_id, body.to_owned(), "1234".into(), now))
+        };
+
+        for number in 1..=MAX_ANSWERS_PER_CODE {
+            let (taken, _, duplicate) = record(&format!("{number:02x}")).unwrap();
+            assert_eq!(taken as usize, number);
+            assert!(!duplicate);
+        }
+        // A new answer past the cap is dropped and the stored ones stay as they were.
+        assert!(matches!(
+            record("ff"),
+            Err(ContactError::InPerson(InPersonRefusal::TooManyAnswers))
+        ));
+        let kept = store
+            .read(|repos| load_code(repos, slate_id))
+            .unwrap()
+            .answers;
+        assert_eq!(kept.len(), MAX_ANSWERS_PER_CODE);
+        assert!(kept.iter().all(|answer| answer.body != "ff"));
+        // An answer already taken is still known past the cap.
+        assert_eq!(record("01").unwrap(), (1, false, true));
+    }
 }
