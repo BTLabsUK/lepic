@@ -97,7 +97,7 @@ pub(crate) mod foreign {
     #[utoipa::path(
         post,
         path = "/v2/foreign",
-        tag = "payments",
+        tag = "legacy",
         security(()),
         request_body = ForeignRequest,
         responses((status = 200, body = ForeignResponse)),

@@ -67,6 +67,13 @@ macro_rules! api {
                 license(name = "Apache-2.0"),
             ),
             paths(openapi::foreign::foreign, $(routes::$route),*),
+            tags(
+                (
+                    name = "legacy",
+                    description = "Receiving V2 and V3 slates from Epic wallets over the \
+                        JSON-RPC foreign API (ADR 0052).",
+                ),
+            ),
             components(schemas(Problem)),
             modifiers(&Problems, &Security),
         )]

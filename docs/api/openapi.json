@@ -1913,7 +1913,7 @@
     "/v2/foreign": {
       "post": {
         "tags": [
-          "payments"
+          "legacy"
         ],
         "summary": "The payment endpoint",
         "description": "JSON-RPC 2.0 as other Epic wallets post it, answered by the listener `serve --http`\nadds, with its own limits and no authentication. `build_coinbase` is answered only\nwith `--coinbase`. The wire format is the network's.",
@@ -4791,6 +4791,12 @@
     {},
     {
       "ownerTls": []
+    }
+  ],
+  "tags": [
+    {
+      "name": "legacy",
+      "description": "Receiving V2 and V3 slates from Epic wallets over the JSON-RPC foreign API (ADR 0052)."
     }
   ]
 }
