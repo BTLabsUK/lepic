@@ -501,7 +501,10 @@ fn raw_codes_are_read_only_from_a_scan() {
             .contact_book()
             .sealed_open(&String::from_utf8_lossy(&code.bytes)),
     );
-    assert!(matches!(pasted, Err(ContactError::Decode(_))), "{pasted:?}");
+    assert!(
+        matches!(pasted, Err(ContactError::NotPaymentFile)),
+        "{pasted:?}"
+    );
     let taken = world.block_on(
         world
             .issuer

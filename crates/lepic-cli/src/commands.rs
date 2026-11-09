@@ -2077,13 +2077,16 @@ pub(crate) fn refuse_saved_txs(path: &Path) -> Result<(), CliError> {
 }
 
 /// Reads at most the first 64 KiB of the slate file `path` and refuses it unless the
-/// classifier of payment files (RFC 0003 5.12) says it is one.
+/// classifier of payment files (RFC 0003 5.12) says it is one. A file that cannot be read is
+/// left to the slate reader, whose error names it.
 fn check_payment_file(path: &Path) -> Result<(), CliError> {
     use std::io::Read as _;
     let mut data = Vec::new();
-    std::fs::File::open(path)
-        .and_then(|file| file.take(64 * 1024).read_to_end(&mut data))
-        .map_err(CliError::io("read the slate file"))?;
+    let read =
+        std::fs::File::open(path).and_then(|file| file.take(64 * 1024).read_to_end(&mut data));
+    if read.is_err() {
+        return Ok(());
+    }
     match lepic_wallet_contacts::payment_file(&data) {
         // A prefix of a long JSON slate may end in the middle; only its first byte counts.
         Ok(_) => Ok(()),
