@@ -457,11 +457,18 @@ native_in_person_ttl() {
         fail "past the TTL, read exited ${read_status}: ${read_out}" || return 1
     [[ "$(payer tx list | jq '.transactions | length')" == "${payer_count}" ]] ||
         fail "a refused code left a transaction in the payer's wallet" || return 1
-    wait_until "the send code to expire" 120 tx_state_in lepic "${send_tx}" cancelled expired ||
+    # A refresh expires the send once the chain is past its TTL; `tx show` only reads.
+    wait_until "the send code to expire" 120 refreshed_tx_state_in lepic "${send_tx}" cancelled expired ||
         fail "the unanswered send is $(lepic_tx_state "${send_tx}")" || return 1
     wait_until "the inputs unlocked" 60 lepic_unlocked || fail "the expired send left $(lepic_locked) units locked" || return 1
     expect_totals "${L0}" "${P0}" || return 1
     DETAIL="past TTL ${send_cutoff}: read shows cutoff ${cutoff}, pay exited ${pay_status}, receive ${receive_status}, nothing stored; the unanswered send is $(lepic_tx_state "${send_tx}"), inputs unlocked, balance back"
+}
+
+# Like tx_state_in, after a refresh from the node.
+refreshed_tx_state_in() {
+    "$1" wallet info >/dev/null || return 1
+    tx_state_in "$@"
 }
 
 lepic_unlocked() { (($(lepic_locked) == 0)); }
