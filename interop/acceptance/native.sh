@@ -352,16 +352,16 @@ native_epictx_files() {
 
 # One offline in-person exchange: lepic shows a code, the payer answers it, lepic takes the
 # answer and finalizes. $1 invoice|send, $2 amount in EPIC. The payer pays an invoice, lepic
-# sends in a send.
+# sends in a send. The code's TTL is 120 blocks: the default 15 pass in under a minute on this chain.
 in_person_exchange() {
     local direction="$1" amount="$2" flags=(--offline) code answer shown read paid
     code="${NATIVE_DIR}/ip-${direction}.code"
     answer="${NATIVE_DIR}/ip-${direction}.answer"
     native_ready || return 1
     if [[ "${direction}" == invoice ]]; then
-        shown="$(lepic in-person invoice "${amount}" --out "${code}" "${flags[@]}")"
+        shown="$(lepic in-person invoice "${amount}" --ttl-blocks 120 --out "${code}" "${flags[@]}")"
     else
-        shown="$(lepic in-person send "${amount}" --out "${code}" "${flags[@]}")"
+        shown="$(lepic in-person send "${amount}" --ttl-blocks 120 --out "${code}" "${flags[@]}")"
     fi || fail "in-person ${direction} failed" || return 1
     local slate_id lepic_tx
     slate_id="$(jq -r .slate_id <<<"${shown}")"
