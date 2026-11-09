@@ -20,7 +20,9 @@ use hyper::{Method as HttpMethod, Request, StatusCode};
 use hyper_util::rt::TokioIo;
 use lepic_legacy_rpc::error::RpcError;
 use lepic_legacy_rpc::rpc::{self, VersionInfo};
-use lepic_peer::{PeerClient, PeerClientError, PeerDialFuture, PeerDialer, PeerStream, PeerTarget};
+use lepic_peer::{
+    Origin, PeerClient, PeerClientError, PeerDialFuture, PeerDialer, PeerStream, PeerTarget,
+};
 use lepic_slate::codec::WireSlate;
 use lepic_transport::error::TransportError;
 use lepic_transport::method::{Carries, Method};
@@ -427,6 +429,11 @@ impl TorPeer {
 }
 
 impl DirectPeer for TorPeer {
+    fn origin(&self, to: &Destination) -> Result<Origin, ProbeError> {
+        let onion = OnionAddress::parse(to.as_str()).map_err(TorSendError::from)?;
+        Ok(Origin::new(WebScheme::Http, &onion.host(), ONION_PORT)?)
+    }
+
     fn probe<'a>(&'a self, to: &'a Destination) -> BoxFuture<'a, Result<Probe, ProbeError>> {
         Box::pin(self.tor.probe(to))
     }

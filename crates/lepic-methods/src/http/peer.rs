@@ -74,6 +74,10 @@ pub enum ProbeError {
 
 /// A method's way to a listener's native endpoint.
 pub trait DirectPeer: Send + Sync {
+    /// The origin of the listener at `to`, read from the address alone: the one a pin of its
+    /// key is kept under.
+    fn origin(&self, to: &Destination) -> Result<Origin, ProbeError>;
+
     /// The listener's `check_version` answer at `to`, an address of the method.
     fn probe<'a>(&'a self, to: &'a Destination) -> BoxFuture<'a, Result<Probe, ProbeError>>;
 
@@ -104,18 +108,35 @@ impl HttpPeer {
 impl Http {
     /// The `check_version` answer of the listener at `to`, as a send's first call reads it.
     pub async fn probe(&self, to: &Destination) -> Result<Probe, ProbeError> {
-        // As for a send, the destination already carries the user's plain-HTTP choice.
-        let url = ListenerUrl::parse(to.as_str(), PlainHttp::Allowed).map_err(ClientError::from)?;
+        let url = listener_url(to)?;
         let version = self.client.check_version(&url).await?;
-        let scheme = match url.scheme() {
-            Scheme::Http => WebScheme::Http,
-            Scheme::Https => WebScheme::Https,
-        };
-        Ok(Probe::new(scheme, url.host(), url.port(), version.lepic)?)
+        Ok(Probe::new(
+            web_scheme(&url),
+            url.host(),
+            url.port(),
+            version.lepic,
+        )?)
+    }
+}
+
+fn listener_url(to: &Destination) -> Result<ListenerUrl, ProbeError> {
+    // As for a send, the destination already carries the user's plain-HTTP choice.
+    Ok(ListenerUrl::parse(to.as_str(), PlainHttp::Allowed).map_err(ClientError::from)?)
+}
+
+const fn web_scheme(url: &ListenerUrl) -> WebScheme {
+    match url.scheme() {
+        Scheme::Http => WebScheme::Http,
+        Scheme::Https => WebScheme::Https,
     }
 }
 
 impl DirectPeer for HttpPeer {
+    fn origin(&self, to: &Destination) -> Result<Origin, ProbeError> {
+        let url = listener_url(to)?;
+        Ok(Origin::new(web_scheme(&url), url.host(), url.port())?)
+    }
+
     fn probe<'a>(&'a self, to: &'a Destination) -> BoxFuture<'a, Result<Probe, ProbeError>> {
         Box::pin(self.http.probe(to))
     }
