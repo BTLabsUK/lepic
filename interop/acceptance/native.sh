@@ -262,20 +262,22 @@ native_epicbox() {
     DETAIL="first send legacy, peer claim native after the answer, second native, third with native_direct off legacy; three payments finalized, posted and confirmed on both sides; the sender's kernel recorded, the receiver's blank or equal"
 }
 
-# 2. A contact that did not claim native slates gets V3 from a native_direct wallet.
+# 2. With lepic's native_direct off a contact payment is V3 whatever the contact claims, and a
+# native_direct payer answers it. Every LEPIC contact claims native slates in its pairing card,
+# so the sender's own switch decides.
 native_mixed_contact() {
     native_ready || return 1
-    [[ "$(native_slates_to lepic "${MX_L}")" == false ]] ||
-        fail "native_slates towards the mixed contact: $(lepic contact list)" || return 1
+    [[ "$(NATIVE_DIRECT="" native_slates_to lepic "${MX_L}")" == false ]] ||
+        fail "native_slates towards the mixed contact: $(NATIVE_DIRECT="" lepic contact list)" || return 1
     local sent slate_id
-    sent="$(lepic tx send 0.2 --to-contact "${MX_L}")" || fail "the contact payment failed: ${sent}" || return 1
+    sent="$(NATIVE_DIRECT="" lepic tx send 0.2 --to-contact "${MX_L}")" || fail "the contact payment failed: ${sent}" || return 1
     slate_id="$(jq -r .slate_id <<<"${sent}")"
-    local PAYER_SWITCH=""
-    collect_both 120 '[[ -n "$(side_tx payer "${slate_id}")" ]] && tx_state_in lepic "$(side_tx lepic "${slate_id}")" posted confirmed' ||
+    local PAYER_SWITCH=true
+    NATIVE_DIRECT="" collect_both 120 '[[ -n "$(side_tx payer "${slate_id}")" ]] && tx_state_in lepic "$(side_tx lepic "${slate_id}")" posted confirmed' ||
         fail "the payment never completed: lepic tx is $(lepic_tx_by_slate "${slate_id}")" || return 1
     confirm_pair "${slate_id}" || return 1
     expect_transfer lepic "$(to_units 0.2)" "$(tx_fee lepic "$(side_tx lepic "${slate_id}")")" || return 1
-    DETAIL="native_slates false towards the contact whose card did not claim it; the payment went through the mailbox, ${slate_id} finalized, posted, confirmed"
+    DETAIL="native_slates false towards the contact with native_direct off; the payment went through the mailbox to a native_direct payer, ${slate_id} finalized, posted, confirmed"
 }
 
 # The first line of a sealed file.
@@ -303,8 +305,6 @@ native_epictx_files() {
     local lepic_count payer_count opened
     lepic_count="$(lepic_tx_count)"
     payer_count="$(payer tx list | jq '.transactions | length')"
-    opened="$(lepic epictx open "${file}")" || fail "epictx open failed" || return 1
-    jq -e '.native == true' <<<"${opened}" >/dev/null || fail "epictx open: ${opened}" || return 1
     opened="$(payer epictx open "${file}")" || fail "the payer's epictx open failed" || return 1
     jq -e '.native == true' <<<"${opened}" >/dev/null || fail "the payer's epictx open: ${opened}" || return 1
     [[ "$(lepic_tx_count)" == "${lepic_count}" && "$(payer tx list | jq '.transactions | length')" == "${payer_count}" ]] ||
@@ -320,20 +320,22 @@ native_epictx_files() {
     confirm_pair "${slate_id}" || return 1
     expect_transfer lepic "$(to_units 0.25)" "$(tx_fee lepic "${tx_id}")" || return 1
 
-    # With lepic's switch off, or towards a contact that never claimed native slates, the file
-    # is the V3 sealed text.
+    # With lepic's switch off the file is the V3 sealed text, which a native_direct payer opens
+    # and answers.
     local v3_tx mixed_tx v3_file="${NATIVE_DIR}/off.epicsealed" mixed_file="${NATIVE_DIR}/mixed.epicsealed"
     v3_tx="$(NATIVE_DIRECT="" native_seal "${NC_L}" "${v3_file}" 0.1)" ||
         fail "sealing with native_direct off failed" || return 1
     [[ "$(sealed_header "${v3_file}")" == BEGINEPICSEALED.* ]] ||
         fail "with native_direct off the file starts $(sealed_header "${v3_file}")" || return 1
     lepic tx cancel "${v3_tx}" >/dev/null || fail "tx cancel failed" || return 1
-    mixed_tx="$(native_seal "${MX_L}" "${mixed_file}" 0.15)" || fail "sealing for the mixed contact failed" || return 1
+    mixed_tx="$(NATIVE_DIRECT="" native_seal "${MX_L}" "${mixed_file}" 0.15)" ||
+        fail "sealing for the mixed contact failed" || return 1
     [[ "$(sealed_header "${mixed_file}")" == BEGINEPICSEALED.* ]] ||
         fail "the file for the mixed contact starts $(sealed_header "${mixed_file}")" || return 1
-    jq -e '.native == false' <<<"$(lepic epictx open "${mixed_file}")" >/dev/null ||
-        fail "epictx open of the V3 file shows a native slate" || return 1
-    NATIVE_DIRECT="" payer contact open-sealed "${mixed_file}" --answer-file "${mixed_file}.reply" >/dev/null ||
+    opened="$(payer epictx open "${mixed_file}")" || fail "the payer's epictx open of the V3 file failed" || return 1
+    jq -e '.native == false' <<<"${opened}" >/dev/null ||
+        fail "epictx open of the V3 file: ${opened}" || return 1
+    payer contact open-sealed "${mixed_file}" --answer-file "${mixed_file}.reply" >/dev/null ||
         fail "the payer could not open the V3 file" || return 1
     lepic contact open-sealed "${mixed_file}.reply" >/dev/null || fail "lepic could not open the V3 answer" || return 1
     local mixed_slate
@@ -345,7 +347,7 @@ native_epictx_files() {
     L0="${EXPECTED_TOTAL}"
     P0="${PAYER_TOTAL}"
     expect_transfer lepic "$(to_units 0.15)" "$(tx_fee lepic "${mixed_tx}")" || return 1
-    DETAIL="native file ${slate_id}: BEGINEPICTX., epictx open shows a native slate and stores nothing, answered, finalized, confirmed; V3 sealed form with native_direct off and for the mixed contact, the latter paid ${mixed_slate}"
+    DETAIL="native file ${slate_id}: BEGINEPICTX., the payer's epictx open shows a native slate and stores nothing, answered, finalized, confirmed; V3 sealed form with lepic's native_direct off, the second one paid and answered by a native_direct payer, ${mixed_slate}"
 }
 
 # One offline in-person exchange: lepic shows a code, the payer answers it, lepic takes the
@@ -652,7 +654,7 @@ step_native_http() { native_scope native_http; }
 step_native_cancel() { native_scope native_cancel; }
 
 NATIVE_STEPS=(
-    "native wallets on the second relay, pairings:step_native_setup"
+    "native wallets, pairings:step_native_setup"
     "native Epicbox payments address:step_native_epicbox"
     "native contact that did not claim native:step_native_mixed_contact"
     "native .epictx files between contacts:step_native_epictx_files"
