@@ -93,8 +93,19 @@ where
         stage: SlateStage,
         envelope: &[u8],
     ) -> Result<ContactOutboxId, ContactError> {
+        self.enqueue_armored(contact_id, slate_id, stage, armor(envelope))
+            .await
+    }
+
+    /// [`Self::enqueue_for_contact`] for an envelope already armored as `payload`.
+    pub(crate) async fn enqueue_armored(
+        &self,
+        contact_id: ContactId,
+        slate_id: Uuid,
+        stage: SlateStage,
+        payload: String,
+    ) -> Result<ContactOutboxId, ContactError> {
         let session = self.wallet.session()?;
-        let payload = armor(envelope);
         self.contact_work(move |ports, _| {
             let now = ports.clock.now();
             session.store.write(|repos| {

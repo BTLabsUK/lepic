@@ -292,7 +292,7 @@ where
                     };
                     drop(guard);
                     link_tx(repos, tx_id, contact_id)?;
-                    Ok(armor(&envelope))
+                    Ok(super::native::armor_slate(&envelope, native))
                 })
             })
             .await?;
@@ -319,7 +319,6 @@ where
         let armored = self
             .seal_stored_slate(contact_id, tx_id, purpose, Channel::Mailbox)
             .await?;
-        let envelope = dearmor(&armored).map_err(ContactError::StoredData)?;
         let session = self.wallet.session()?;
         let (slate_id, stage) = self
             .contact_work(move |_, _| {
@@ -338,7 +337,7 @@ where
                 })
             })
             .await?;
-        self.enqueue_for_contact(contact_id, slate_id, stage, &envelope)
+        self.enqueue_armored(contact_id, slate_id, stage, armored)
             .await?;
         self.deliver_soon(relays).await;
         Ok(())

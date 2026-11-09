@@ -11,7 +11,7 @@
 
 use lepic_contact::{
     ContactCard, Content, DecodeError, EncSecretKey, KeyClass, MessageType, Opened, SealedEnvelope,
-    SigningKey, TxContent, TxKey, TxOpened, VerifyingKey, seal_tx,
+    SigningKey, TxContent, TxKey, TxOpened, VerifyingKey, armor, armor_tx, seal_tx,
 };
 use lepic_legacy_slate::v3_json::LEGACY_V3_JSON;
 use lepic_native_slate::{NativeSlate, Tail};
@@ -47,6 +47,16 @@ fn native_body(network: Network, v3: &[u8]) -> Result<Vec<u8>, ContactError> {
         .map_err(|_| ContactError::NotASlate)?;
     let native = NativeSlate::new(slate, Tail::empty()).map_err(|_| ContactError::NotASlate)?;
     Ok(native.encode(network))
+}
+
+/// The armored text of a slate envelope: `BEGINEPICTX.` for a native one, `BEGINEPICSEALED.`
+/// for a V3 one, which every LEPIC build reads (RFC 0003 5.11).
+pub(crate) fn armor_slate(envelope: &[u8], native: bool) -> String {
+    if native {
+        armor_tx(envelope)
+    } else {
+        armor(envelope)
+    }
 }
 
 /// `content`, a slate as V3 JSON, sealed to `card` as `lepic.v1` in a type `0A` envelope and

@@ -313,8 +313,13 @@ where
             })?)
         })
         .await?;
-        self.enqueue_for_contact(contact_id, slate_uuid, SlateStage::Invoice1, &envelope)
-            .await?;
+        self.enqueue_armored(
+            contact_id,
+            slate_uuid,
+            SlateStage::Invoice1,
+            super::native::armor_slate(&envelope, native),
+        )
+        .await?;
         self.deliver_soon(relays).await;
         info!(tx_id = %tx_id, "invoice issued to a contact");
         Ok(IssuedInvoice {
@@ -528,8 +533,13 @@ where
                 native,
             )
             .await?;
-        self.enqueue_for_contact(contact_id, slate_id, stage, &envelope)
-            .await?;
+        self.enqueue_armored(
+            contact_id,
+            slate_id,
+            stage,
+            super::native::armor_slate(&envelope, native),
+        )
+        .await?;
         Ok(())
     }
 

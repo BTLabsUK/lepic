@@ -9,7 +9,9 @@ use std::time::Duration;
 use blake2::Blake2b256;
 use blake2::digest::Digest;
 use jiff::Timestamp;
-use lepic_contact::{ContactCard, MessageType, Opened, SealedEnvelope, dearmor, looks_sealed};
+use lepic_contact::{
+    ContactCard, MessageType, Opened, PaymentFile, SealedEnvelope, classify, dearmor,
+};
 use lepic_epicbox::{
     EpicboxAddress, Handled, Identity, MAX_MAILBOXES_PER_DRAIN, MailboxContent, MailboxEnd,
     MailboxError, MailboxHandler, MailboxMessage, RelayEndpoint,
@@ -1934,7 +1936,8 @@ where
                 return Handled::Stored;
             };
             let text = received.plaintext.expose_str();
-            if !looks_sealed(text) {
+            // Armored text of either marker pair; the envelope's type says what it holds.
+            if classify(text.as_bytes()) != Ok(PaymentFile::Armour) {
                 debug!("plain payload in a pairing or contact mailbox dropped");
                 return Handled::Stored;
             }
