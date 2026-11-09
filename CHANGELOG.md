@@ -90,6 +90,18 @@ Conventional Commit messages at release time.
   comes from the participants' public excesses, so an answer without the proposal's body
   finalizes. The contact report and `lepic contact list` gain `native_slates`. The binding sets
   `native_direct` to `false`.
+- Native slates over Epicbox payments addresses (RFC 0003 §5.15, step 11), off by default with
+  `native_direct`. Each account has an Epicbox seal key (seal key kind `03`, `KeyClass::Epicbox`,
+  `TxKey::Epicbox`), separate from the epic1 seal key. With `native_direct` on, every marked
+  Epicbox slate claims native slates (marker bit 7) and carries that key in the marker's `reply`
+  field; with it off the marker is unchanged. The wallet keeps a peer's claimed key in its
+  capability row (record version 2, written only when `native_direct` is on), and sends an S1 as a
+  type `0A` envelope armored `BEGINEPICTX.` once the peer is LEPIC lately and its latest marked
+  slate claimed the bit with a valid key; otherwise it sends JSON as before. A wallet always opens
+  such a slate with its Epicbox seal key and answers it sealed to the request's reply key. A slate
+  that does not open, and a native invoice to a payments address, are refused with nothing stored.
+  `lepic tx send` reports `format` (`legacy` or `native`) and `lepic epicbox peer` reports
+  `native_slates`.
 - Local quarantine and an early-notice buffer, both off by default (ADR 0049).
   `quarantine_max_bytes` keeps contact messages that opened and could not be taken, with
   `contact_quarantine`, `contact_quarantine_retry`, `contact_quarantine_discard` and

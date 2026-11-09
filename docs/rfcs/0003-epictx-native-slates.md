@@ -311,8 +311,8 @@ seal_sk = BLAKE2b-256(key = seed, msg = "lepic-wallet seal key v1" || be32(accou
 seal_pk = X25519(seal_sk, 9)
 ```
 
-- `kind` (u8): `00` the epic1 address, `01` the onion listener, `02` the plain web listener. Other
-  values are reserved. The context is fixed-width (6 bytes), so ADR 0033 rule 4 holds.
+- `kind` (u8): `00` the epic1 address, `01` the onion listener, `02` the plain web listener, `03`
+  the Epicbox payments address (5.15) **[Specified]**. Other values are reserved. The context is fixed-width (6 bytes), so ADR 0033 rule 4 holds.
 - `net` is in the context so that one seed shows different seal keys on mainnet and floonet, as
   the contact root does (`info = "root" || net`). **[Reasoning]** HPKE `info` already separates the
   networks cryptographically; the byte is there for unlinkability across networks.
@@ -321,6 +321,9 @@ seal_pk = X25519(seal_sk, 9)
 - One epic1 seal key per account and network (D5); one listener seal key per listener
   kind, account and network (D1). The listener that accepted a connection decides which
   key is advertised and used (5.15).
+- One Epicbox seal key per account and network. It is separate from the epic1 seal key (`00`),
+  so a peer that holds both keys cannot tell that a payments address and an epic1 belong to one
+  wallet.
 - Vectors under `testdata/vectors/keys/` (rule 8) before any code uses the key.
 
 **epic1 proof key** — **[Decided]** (O-8, 2026-11-08); context **[Specified]**:
@@ -478,6 +481,7 @@ document publishes or uses index 0 (O-8).
 | Contact keys, one-time reply keys, pairing keys, any body type | `"epic-seal/1" \|\| net \|\| suite` (13 bytes) | **[Shipped]** |
 | epic1 seal key | `"epic-tx/1" \|\| net \|\| suite \|\| 00` (12 bytes) | **[Specified]** |
 | Listener seal key (onion or web) | `"epic-tx/1" \|\| net \|\| suite \|\| 01` (12 bytes) | **[Specified]** |
+| Epicbox seal key (kind `03`, 5.15) | `"epic-tx/1" \|\| net \|\| suite \|\| 02` (12 bytes) | **[Specified]** |
 
   The opener knows the class of each candidate key (5.9), so it never guesses an `info`.
   `"epic-tx/1"` is a new label because ADR 0033 rule 3 wants new HPKE `info` labels prefix-free,
@@ -513,6 +517,7 @@ version and is **[Open]**.
 | Pairing reply | `invite_id = H("epic-pair/1 id" || code)[0..8]` | RFC 0002 §2.4, §3.2 |
 | epic1 seal key | `00 00 00 00 00 00 00 00` | **[Decided]**, not built |
 | Listener seal key (advert) | `00 00 00 00 00 00 00 00` | **[Specified]** (draft 2): one rule for both new classes, no new hint rule |
+| Epicbox seal key | `00 00 00 00 00 00 00 00` | **[Specified]** (5.15): the same rule |
 
 A recipient computes candidate hints for its live keys and opens only with matching keys
 (RFC 0002 §3.4 step 2). A zero hint means "try the epic1 seal key, or the seal key of the listener
@@ -791,8 +796,8 @@ the kernel features and the header version as fields, and unknown tail records a
 **Pack** — dropped, **[Decided]** (O-7). RFC 0001 §5's pack (magic `89 45 50 4B`) and the
 `BEGINEPICSLATE.` armour are not built. A native slate travels inside an envelope, or raw in an
 in-person code (5.18): the slate's own bytes, nothing around them. Whatever only old wallets need
-stays in the legacy code. How native slates travel to Epicbox payments addresses (step 11)
-is decided at that step. Reason: with
+stays in the legacy code. Native slates to Epicbox payments addresses
+(step 11) travel in an envelope too (5.15) **[Specified]**. Reason: with
 the network byte in the slate, the pack's only remaining field was the mode, always `00`, and every
 carrier this specification defines is an envelope.
 
@@ -1151,8 +1156,34 @@ Pinning (D1 as revised; **[Decided]**, O-10: always ask the user; the asking is 
 Epicbox (step 11): marker bit `NATIVE_SLATES` (bit 7, a claim like bits 0–6). A native
 slate goes to a payments address only when the peer claimed the bit and is "LEPIC lately"
 (ADR 0016), because a stock listener acknowledges only payloads that parse as a slate and can lose
-its queue to one (ADR 0052, "Discovery" 3). The carrier at that step is decided then; it is an
-envelope, since the plain pack is dropped (O-7).
+its queue to one (ADR 0052, "Discovery" 3).
+
+The carrier **[Specified]** (step 11):
+
+- A wallet with native slates on puts bit 7 in the marker of every legacy slate it sends over
+  Epicbox, and the public key of its Epicbox seal key (5.2, kind `03`) in the marker's `reply`
+  field. With native slates off, the marker is as before: no bit 7 and no `reply`.
+- A wallet with native slates on keeps the claim and the key per address from the latest marked
+  slate. A later marked slate without the claim, or a claim whose key does not decode (5.4),
+  clears it.
+- A send goes native only when native slates are on, the peer is "LEPIC lately" and its latest
+  marked slate claimed bit 7 with a valid key. The S1 is an envelope of type `0A` with the zero
+  hint, sealed to that key under the Epicbox `info` (5.4), with tag `03` naming a reply key for
+  this slate. It is armoured `BEGINEPICTX.` and posted to the payments address. Every other send is
+  V2 or V3 JSON as before.
+- A receiver always tries its Epicbox seal key on a `BEGINEPICTX.` text at its payments address.
+  The S2 is a type `0A` envelope sealed to the request's tag `03` key and posted to the sender's
+  payments address.
+- Refused, with nothing stored: an envelope that does not open, a tampered envelope, and a native
+  I1 to a payments address (invoices need a pairing, 6.10).
+
+**[Reasoning]** Why this carrier:
+
+- An envelope, because the plain pack is dropped (O-7).
+- The key travels in a field the marker already has (`reply`, 5.16), so the marker gains no field
+  and stock wallets ignore it as they ignore the rest of the marker.
+- The key is kind `03`, separate from the epic1 seal key (`00`), so a payments address and an epic1
+  of one wallet cannot be linked through a shared key.
 
 ### 5.16 LEPIC marker on legacy slates — **[Shipped]** (RFC 0002 §5), `crates/lepic-epicbox/src/marker/` on `main` (moved to `crates/lepic-transport/src/marker/` **[Unmerged]**)
 
@@ -1527,7 +1558,7 @@ before finalizing.
 No invoice is pushed to an address the customer shows: draft 5's invoice window is removed
 (6.10).
 
-### 6.9 Payment code or link over Epicbox — **[Shipped]**; native carrier at step 11
+### 6.9 Payment code or link over Epicbox — **[Shipped]**; native carrier **[Specified]** (5.15)
 
 1. B's receive screen shows the plain Epicbox link (3.1, 5.14), with an amount and a message if B
    set them.
@@ -1832,7 +1863,6 @@ Owner items O-1 … O-18 and their answers. All are decided or withdrawn; O-18 w
 - **Pin expiry** and how a user clears a pin (5.15).
 - **Stack Wallet and Epic Pay** on an epic1 link: assumed to refuse it as an unknown address, not
   tested (5.14).
-- **Native slates over Epicbox payments addresses** (step 11): the carrier (5.15, O-7).
 - **The frame count** at which an in-person I2 offers fewer coins (5.17).
 - **Retiring a shared link**: how a user retires a printed or shared code, beyond "watched until
   retired" (5.2, 6.3).
@@ -1884,7 +1914,7 @@ Seed-keyed labels, `BLAKE2b-256(key = seed, label ‖ context)`:
 
 | Label ‖ context | Type | Purpose | Owner | First | Status | Vector |
 |---|---|---|---|---|---|---|
-| `lepic-wallet seal key v1` ‖ be32(account) ‖ net ‖ kind | X25519 | Opens envelopes sealed to the epic1 (`kind` 00), the onion listener (01) or the plain web listener (02) (5.2) | `lepic-wallet::namespace` | none | proposed | `keys/seal_key_*` (to write) |
+| `lepic-wallet seal key v1` ‖ be32(account) ‖ net ‖ kind | X25519 | Opens envelopes sealed to the epic1 (`kind` 00), the onion listener (01), the plain web listener (02) or the Epicbox payments address (03) (5.2, 5.15) | `lepic-wallet::namespace` | none | proposed | `keys/seal_key_*` (to write) |
 | `lepic-wallet epic1 proof key v1` ‖ be32(account) ‖ net | Ed25519 (the 32 bytes are the seed) | The proof key in the epic1; signs payment proofs for slates that came to it (O-8, 5.2) | `lepic-wallet::namespace` | none | proposed | `keys/epic1_proof_key_*` (to write) |
 | `lepic-wallet reply mailbox v1` ‖ be32(account) ‖ net ‖ slate_id(16) ‖ ctr | secp256k1 | Throwaway Epicbox mailbox for the answer to one slate; its address goes with the reply key (5.2, 5.6 tag `09`, 5.10 record `02`). Exception class "Epicbox mailbox key" | `lepic-wallet::namespace` | none | proposed | `keys/reply_mailbox_*` (to write) |
 | `lepic-wallet post key v1` ‖ be32(account) ‖ net ‖ slate_id(16) ‖ role ‖ ctr | secp256k1 | Epicbox `from` key of every post to another party's mailbox for one slate; `role` 00 initiator, 01 responder. Nothing is received at it. Exception class "Epicbox mailbox key" | `lepic-wallet::namespace` | none | proposed | `keys/post_key_*` (to write) |
@@ -1897,7 +1927,7 @@ Tags and domains:
 
 | Tag | Used with | Covers | Owner | First | Status | Vector |
 |---|---|---|---|---|---|---|
-| `epic-tx/1` ‖ net ‖ suite ‖ `00` or `01` (HPKE info) | HPKE | Envelopes sealed to an epic1 seal key (`00`) or a listener seal key (`01`) (5.4) | `lepic-contact` | none | proposed | `envelopes/epictx_*` (to write) |
+| `epic-tx/1` ‖ net ‖ suite ‖ `00`, `01` or `02` (HPKE info) | HPKE | Envelopes sealed to an epic1 seal key (`00`), a listener seal key (`01`) or an Epicbox seal key (`02`) (5.4) | `lepic-contact` | none | proposed | `envelopes/epictx_*` (to write) |
 | `epic-check/1` | SHA-256 over tag ‖ the receiver's public excess | The check code: the receiver's phone shows it after it posts; LEPIC reports it with every answer to an in-person code, and the payer's app asks the payer to confirm it before finalizing (O-16 as rewritten, 6.7) | `lepic-wallet` | none | proposed (O-16 decided) | none yet |
 
 Recorded exception to add, beside "index 0" and "the listing key". **[Decided]** (owner,
