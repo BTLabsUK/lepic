@@ -18,8 +18,8 @@ pub enum OnionTarget {
 /// The socket's name in tor's folder.
 pub const ONION_SOCKET: &str = "onion.sock";
 
-/// The name of the socket behind the previous onion, the one LEPIC 0.3.1 and earlier published
-/// (ADR 0044), in tor's folder.
+/// The name of the socket behind the previous onion, the one whose key is the payment-proof
+/// key (ADR 0044), in tor's folder.
 pub const PREVIOUS_ONION_SOCKET: &str = "previous-onion.sock";
 
 /// The longest socket path used: a Unix socket address holds 104 bytes on macOS and 108 on
