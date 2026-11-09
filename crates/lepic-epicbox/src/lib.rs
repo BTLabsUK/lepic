@@ -1,5 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Epicbox addresses, message crypto, protocol frames and the relay client.
+//! The Epicbox relay protocol as `epic-wallet` speaks it (ADR 0004): addresses, message crypto,
+//! protocol frames, and the client that sends, listens and drains mailboxes.
+//!
+//! The crate's `README.md` describes the message format, the frames and the subscriptions.
 
 mod address;
 mod address_signature;

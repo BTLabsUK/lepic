@@ -234,7 +234,7 @@ pub(crate) fn peer_card(card: &ContactCard) -> PeerCard {
 }
 
 /// Whether `card` carries the sig, enc and hint keys of the stored peer card. A contact's keys
-/// never change by a card: only [`Wallet::contact_keys_resolve`] with `UseNew` moves a contact
+/// never change by a card: only [`ContactBook::contact_keys_resolve`] with `UseNew` moves a contact
 /// to other keys.
 pub(crate) fn same_keys(stored: &PeerCard, card: &ContactCard) -> bool {
     let fresh = peer_card(card);
@@ -380,8 +380,8 @@ where
     /// Makes an invite to pair with a contact (RFC 0002 7.1). Its home relay, where the reply
     /// mailbox and later both contact mailboxes live, is the request's or else the relay of
     /// `relays`; another relay is reached over TLS through the wallet's connector. The pending
-    /// pairing is stored; [`Wallet::contacts_collect`] takes the reply. Without words nothing is
-    /// sent.
+    /// pairing is stored; [`ContactBook::contacts_collect`] takes the reply. Without words nothing
+    /// is sent.
     ///
     /// With `offer_words` the invite lasts 10 minutes and is also posted, sealed with five
     /// pairing words, to a rendezvous mailbox on each meeting relay (RFC 0002 7.7), whatever
@@ -502,11 +502,11 @@ where
     }
 
     /// Answers an invite (RFC 0002 7.2): stores the pending pairing first, so a reply that was
-    /// posted is never lost to a closed app, then posts the reply to the invite's reply mailbox
-    /// or service inbox unless `by_hand` is set. The reply link is returned either way, for
-    /// "Send by hand" and for a post that failed. [`Wallet::contacts_collect`] takes the confirm.
+    /// posted is never lost to a closed app, then posts the reply to the invite's reply mailbox or
+    /// service inbox unless `by_hand` is set. The reply link is returned either way, for "Send by
+    /// hand" and for a post that failed. [`ContactBook::contacts_collect`] takes the confirm.
     ///
-    /// Fails as [`Wallet::pairing_preview`] does, with [`ContactError::AlreadyPaired`] for an
+    /// Fails as [`ContactBook::pairing_preview`] does, with [`ContactError::AlreadyPaired`] for an
     /// invite this wallet made or answered already, and as the store does.
     #[instrument(skip_all, fields(wallet = %self.wallet.config().name))]
     pub async fn pairing_accept(
@@ -587,10 +587,10 @@ where
     }
 
     /// Shows a card to pair in person (RFC 0002 7.4): a fresh slot whose mailbox is on the
-    /// request's home relay or else the relay of `relays`. [`Wallet::pairing_scan_card`] finishes the pairing with the other phone's
-    /// card. Nothing is sent, so this works offline.
+    /// request's home relay or else the relay of `relays`. [`ContactBook::pairing_scan_card`]
+    /// finishes the pairing with the other phone's card. Nothing is sent, so this works offline.
     ///
-    /// Fails as [`Wallet::pairing_invite`] does.
+    /// Fails as [`ContactBook::pairing_invite`] does.
     #[instrument(skip_all, fields(wallet = %self.wallet.config().name))]
     pub async fn pairing_show_card(
         &self,
@@ -648,7 +648,7 @@ where
 
     /// Finishes an in-person pairing with the card the other phone shows (RFC 0002 7.4): both
     /// nonces are zero and the cards are ordered by sig key for the SAS. The contact is paired,
-    /// not verified, until [`Wallet::pairing_sas`] confirms the check.
+    /// not verified, until [`ContactBook::pairing_sas`] confirms the check.
     ///
     /// Fails with [`ContactError::UnknownContact`] when `contact_id` is not a card this wallet
     /// shows, [`ContactError::Decode`] for a link that is not a card on the wallet's network,
@@ -861,7 +861,7 @@ where
     /// [`Refusal::CancelledByInviter`] and the replier learns it; its nonce is dropped, so
     /// nothing can pair with it any more. At most [`lepic_store::MAX_CANCELLED_PAIRINGS`] are
     /// kept, the oldest dropped. Any other pairing in progress, and our answer to an invite,
-    /// are removed as [`Wallet::contact_remove`] removes them. Returns whether anything was
+    /// are removed as [`ContactBook::contact_remove`] removes them. Returns whether anything was
     /// cancelled.
     #[instrument(skip_all, fields(wallet = %self.wallet.config().name))]
     pub async fn pairing_cancel(&self, contact_id: ContactId) -> Result<bool, ContactError> {

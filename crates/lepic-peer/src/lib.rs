@@ -1,10 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
-//! The native direct endpoint (ADR 0052): the `/v1/peer` routes a LEPIC listener serves on the
-//! same socket as the foreign API, the advert its `check_version` answer carries, and the client
-//! that reads a listener's endpoint and posts an envelope to it.
+//! The native direct endpoint between LEPIC wallets (ADR 0052): the `/v1/peer` routes a
+//! listener serves next to the foreign API, the advert in its `check_version` answer, and the
+//! client that posts an envelope to them. The crate moves envelope bytes only.
 //!
-//! The crate moves envelope bytes only. Opening and sealing them is the [`SlateHandler`]'s, on
-//! the listener side, and the caller's on the sending side.
+//! The crate's `README.md` describes the routes, the advert and the problem codes.
 
 pub mod client;
 pub mod error;

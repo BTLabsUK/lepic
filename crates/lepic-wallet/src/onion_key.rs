@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 //! The keys of the wallet's onion service (ADR 0044). The onion's own key is a key of the LEPIC
 //! namespace, so the Epicbox and payment-proof addresses do not give the onion; a restore from
-//! the phrase gives it back. The previous onion, which LEPIC 0.3.1 and earlier published (ADR
-//! 0018), is the payment-proof key of the default account, what `epic-wallet address` prints.
+//! the phrase gives it back. The previous onion is the payment-proof key of the default account,
+//! what `epic-wallet address` prints (ADR 0018); a host keeps it reachable for senders that saved
+//! it.
 
 use std::fmt;
 

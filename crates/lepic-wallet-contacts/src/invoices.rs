@@ -1226,7 +1226,7 @@ where
             .await
     }
 
-    /// [`Wallet::queue_contact_notice`] under the outbox stage `stage` of its slate.
+    /// [`ContactBook::queue_contact_notice`] under the outbox stage `stage` of its slate.
     async fn queue_contact_notice_as(
         &self,
         contact_id: ContactId,

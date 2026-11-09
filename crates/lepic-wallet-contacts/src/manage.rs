@@ -119,7 +119,7 @@ pub const MAX_HOME_DRAIN: std::time::Duration = std::time::Duration::from_secs(3
 /// A pairing still in progress, as the host lists it. Holds no key and no secret.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PendingPairingView {
-    /// The record the pairing completes into; [`Wallet::contact_remove`] cancels it.
+    /// The record the pairing completes into; [`ContactBook::contact_remove`] cancels it.
     pub contact_id: ContactId,
     /// `Inviter`: an invite of ours waits for a reply. `Invitee`: our reply waits for the
     /// confirmation.
@@ -236,8 +236,8 @@ where
 
     /// The pairings still in progress, oldest first: invites waiting for a reply and replies
     /// waiting for the confirmation. A pairing that completed is listed by
-    /// [`Wallet::contacts`] instead. Cancel one with [`Wallet::contact_remove`]. Fails with
-    /// [`lepic_wallet::WalletError::Locked`] and as the store does.
+    /// [`ContactBook::contacts`] instead. Cancel one with [`ContactBook::contact_remove`]. Fails
+    /// with [`lepic_wallet::WalletError::Locked`] and as the store does.
     pub async fn pairings_pending(&self) -> Result<Vec<PendingPairingView>, ContactError> {
         let net = super::keys::contact_network(self.wallet.config().network);
         let session = self.wallet.session()?;
@@ -276,11 +276,11 @@ where
         .await
     }
 
-    /// The private pairings (two wallets of one owner), oldest first, in progress or paired;
-    /// the state tells which. Their words check is mandatory before payloads pass: see
-    /// [`Wallet::pairing_sas`]. Remove one with [`Wallet::contact_remove`] or
-    /// [`Wallet::contact_unpair`]. Fails with [`lepic_wallet::WalletError::Locked`] and as the store
-    /// does.
+    /// The private pairings (two wallets of one owner), oldest first, in progress or paired; the
+    /// state tells which. Their words check is mandatory before payloads pass: see
+    /// [`ContactBook::pairing_sas`]. Remove one with [`ContactBook::contact_remove`] or
+    /// [`ContactBook::contact_unpair`]. Fails with [`lepic_wallet::WalletError::Locked`] and as the
+    /// store does.
     pub async fn private_pairings(&self) -> Result<Vec<ContactView>, ContactError> {
         let session = self.wallet.session()?;
         let network = self.wallet.config().network;
@@ -344,7 +344,7 @@ where
         Ok(removed)
     }
 
-    /// Removes a pairing as [`Wallet::contact_remove`] does, after telling the contact, best
+    /// Removes a pairing as [`ContactBook::contact_remove`] does, after telling the contact, best
     /// effort: a signed unpaired notice goes straight to its mailbox, waiting at most a few
     /// seconds for the relay, so it stops sending through a pairing nobody reads (RFC 0002
     /// 7.6). Nothing is sent Offline, with Epicbox off, for a pairing still in progress, or for
@@ -833,9 +833,9 @@ where
 
     /// Turns invoices from a contact on or off (RFC 0002 11.1). Only a verified contact may send
     /// invoices: turning them on for another fails with [`ContactError::NotVerified`], and with
-    /// [`ContactError::Waiting`] or [`ContactError::Ended`] for a pairing that waits or ended. Turning
-    /// them off deletes the contact's unpaid parked invoices and queues a sealed `declined` for
-    /// each; a paid one finishes. Fails with [`ContactError::UnknownContact`].
+    /// [`ContactError::Waiting`] or [`ContactError::Ended`] for a pairing that waits or ended.
+    /// Turning them off deletes the contact's unpaid parked invoices and queues a sealed `declined`
+    /// for each; a paid one finishes. Fails with [`ContactError::UnknownContact`].
     #[instrument(skip_all, fields(wallet = %self.wallet.config().name))]
     pub async fn contact_set_allow_invoices(
         &self,
@@ -944,7 +944,7 @@ where
         .await
     }
 
-    /// Restores pairing records from a document [`Wallet::contacts_export`] wrote, flagged as
+    /// Restores pairing records from a document [`ContactBook::contacts_export`] wrote, flagged as
     /// possibly living on another device too, and raises the slot counters to the backup's.
     /// Records the store holds already are kept as they are.
     ///

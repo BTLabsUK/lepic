@@ -48,8 +48,8 @@ const REROUTE_GRACE: Duration = Duration::from_secs(30);
 /// is acknowledged again instead of handed out twice.
 const REMEMBERED_ACKNOWLEDGEMENTS: usize = 4096;
 
-/// Received messages and rejections waiting to be handed out. Beyond this a relay that pushes faster than the
-/// wallet consumes gets no acknowledgement, so it keeps the message for later.
+/// Received messages and rejections waiting to be handed out. Beyond this a relay that pushes
+/// faster than the wallet consumes gets no acknowledgement, so it keeps the message for later.
 const MAX_READY: usize = 64;
 
 /// Bytes of received messages waiting to be handed out. A message is admitted while the queue

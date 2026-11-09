@@ -88,7 +88,7 @@ pub const fn notice_lengths_for(sending: &Sending) -> &'static [usize; 3] {
     }
 }
 
-/// The Epicbox policy of ADR 0003, as `epic-wallet` `v4.0.2` speaks it: the V3 and V2 shapes are
+/// The Epicbox policy of ADR 0003, as `epic-wallet` `v4.1.0` speaks it: the V3 and V2 shapes are
 /// accepted, detected by shape with V3 tried first and the header ignored; a new slate goes out
 /// in the V2 shape with the header of a slate created here; a reply goes out in the shape it
 /// answers, with the received header carried through.

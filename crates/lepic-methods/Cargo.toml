@@ -9,7 +9,7 @@ publish.workspace = true
 
 [features]
 default = ["file", "legacy"]
-# The legacy wire formats every method speaks at this step: V2/V3 JSON slates, the marker and
+# The legacy wire formats every method speaks: V2/V3 JSON slates, the marker and
 # the JSON-RPC dialect of the foreign API (ADR 0052). Each method below needs it.
 legacy = ["lepic-transport/legacy", "dep:lepic-legacy-slate"]
 file = ["legacy"]

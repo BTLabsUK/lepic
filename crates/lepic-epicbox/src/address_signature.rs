@@ -12,14 +12,14 @@
 use lepic_crypto::{CryptoError, EcdsaSignature, Message, PublicKey, SecretKey};
 use sha2::{Digest, Sha256};
 
-/// Retired, reserved: the tag of signatures by the payments address key (index 0) over
-/// app-chosen bytes, `lepic/address-signature/v1`. Nothing signs or verifies under it any more;
-/// it stays reserved so no new use takes it.
+/// Reserved: the tag of signatures by the payments address key (index 0) over app-chosen
+/// bytes, `lepic/address-signature/v1`. Nothing signs or verifies under it; it is reserved so
+/// no other use takes it.
 #[cfg(test)]
 const RETIRED_ADDRESS_TAG: &[u8] = b"lepic/address-signature/v1";
 
 /// The tag of signatures by a listing's address key; its SHA-256 holds a byte UTF-8 never uses,
-/// and it is neither the retired address-signature tag nor any other.
+/// and it is neither the reserved address-signature tag nor any other.
 const LISTING_TAG: &[u8] = b"lepic/listing-signature/v1";
 
 /// The longest service domain: its length is one byte in the signed digest.

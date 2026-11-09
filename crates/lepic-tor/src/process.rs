@@ -363,8 +363,8 @@ impl TorProcess {
     }
 
     /// Adds the wallet's onion service, port 80 to `target`, and waits for its first
-    /// descriptor upload. `seed` is the wallet's address secret key; it is expanded in memory
-    /// and never stored. A [`FailureKind::Listener`] or [`FailureKind::Keys`] error leaves tor
+    /// descriptor upload. `seed` is the 32-byte seed of the onion's key; it is expanded in
+    /// memory and never stored. A [`FailureKind::Listener`] or [`FailureKind::Keys`] error leaves tor
     /// running for sending.
     pub async fn publish_onion_to(
         &self,
@@ -402,7 +402,7 @@ impl TorProcess {
     }
 
     /// Adds another onion service of the wallet besides the one [`Self::publish_onion_to`]
-    /// publishes, port 80 to `target`, such as the onion an earlier version published. Tor
+    /// publishes, port 80 to `target`, such as the previous onion (ADR 0044). Tor
     /// publishes it and keeps it while it runs and after a network change; its upload is not
     /// waited for, and [`TorState`] keeps naming the published onion. `seed` is expanded in
     /// memory and never stored. A [`FailureKind::Listener`] or [`FailureKind::Keys`] error

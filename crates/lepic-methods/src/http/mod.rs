@@ -61,7 +61,7 @@ pub fn is_direct(transport: TransportId) -> bool {
 }
 
 /// The policy `epic-wallet` `v4.1.0` speaks over HTTP: V3 and V2 accepted, detected by shape
-/// with V3 tried first; a new slate in the V2 shape every listener since 3.0 takes; a reply in
+/// with V3 tried first; a new slate in the V2 shape every listener from 3.0 on takes; a reply in
 /// the shape it answers.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct HttpPolicy;
