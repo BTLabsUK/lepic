@@ -17,6 +17,9 @@ mod collect;
 mod direct;
 mod domain;
 mod epic1;
+#[cfg(feature = "test-support")]
+#[doc(hidden)]
+pub mod epic1_testing;
 mod hex;
 mod in_person;
 #[cfg(feature = "test-support")]

@@ -25,14 +25,18 @@ use lepic_contact::{
     Purpose, SealedEnvelope, SigningKey, TxContent, TxKey, armor_tx, dearmor, seal_tx,
 };
 use lepic_epicbox::{EpicboxAddress, Identity, MailboxClient, Network as RelayNetwork};
+use lepic_node::Propagation;
 use lepic_primitives::amount::Amount;
 use lepic_store::{ContactId, SlateStage, TxId, TxState, WalletStore};
 use lepic_transport::marker::features::NATIVE_SLATES;
 use lepic_wallet::WalletPolicy;
 use lepic_wallet::invoice::{InvoiceRequest, IssuedInvoice};
+use lepic_wallet::receive::ReceiveRequest;
 use lepic_wallet::selection::SelectionStrategy;
 use lepic_wallet::send::{Delivery, SendRequest};
-use lepic_wallet_contacts::{InvoiceDetails, QuarantineReason, SasDecision, WalletContacts};
+use lepic_wallet_contacts::{
+    InvoiceDetails, QuarantineReason, SasDecision, SealedAnswer, WalletContacts,
+};
 use rand::SeedableRng;
 use world::{ACCOUNT, AMOUNT, FUNDING, Party, World, pay_request};
 
@@ -371,6 +375,66 @@ fn both_wallets_off_send_v3_slates_as_stored() {
 
     assert_eq!(send_flow(&world, shop_side, ben_side), (V3, V3));
     assert_eq!(invoice_flow(&world, shop_side, ben_side), (V3, V3));
+}
+
+/// A contact file holds a type `0A` envelope both ways when both wallets send native slates,
+/// and a type `01` one when they do not.
+#[test]
+fn contact_files_follow_the_native_slate_setting() {
+    for (native, armor) in [(true, TX_ARMOR), (false, SEALED_ARMOR)] {
+        let (world, _, ben_side) = paired((native, native), WalletPolicy::default());
+        world.payer.fund(1, FUNDING);
+        let sent = world
+            .block_on(world.payer.wallet.send(
+                &crate::support::file(),
+                SendRequest {
+                    minimum_confirmations: 1,
+                    strategy: SelectionStrategy::Smallest,
+                    ..SendRequest::new(ACCOUNT, Amount::new(AMOUNT))
+                },
+                Delivery::Export {
+                    to: lepic_transport::transport::Location::File(
+                        tempfile::tempdir().unwrap().keep().join("s1.tx"),
+                    ),
+                },
+            ))
+            .unwrap();
+        let s1 = world
+            .block_on(world.payer.wallet.contact_book().contact_seal_slate(
+                ben_side,
+                sent.tx_id,
+                Some(Purpose::Withdrawal),
+            ))
+            .unwrap();
+        assert!(s1.starts_with(armor), "{native}: {s1}");
+        assert_eq!(lepic_wallet_contacts::is_epictx(&s1), native);
+
+        let received = world
+            .block_on(
+                world
+                    .issuer
+                    .wallet
+                    .contact_book()
+                    .sealed_receive(&s1, ReceiveRequest::default()),
+            )
+            .unwrap();
+        let SealedAnswer::Sealed(s2) = received.answer else {
+            panic!("{native}: a plain answer");
+        };
+        assert!(s2.starts_with(armor), "{native}: {s2}");
+        assert_eq!(lepic_wallet_contacts::is_epictx(&s2), native);
+
+        let finalized = world
+            .block_on(
+                world
+                    .payer
+                    .wallet
+                    .contact_book()
+                    .sealed_finalize(&s2, Propagation::Stem),
+            )
+            .unwrap();
+        assert!(finalized.pushed);
+    }
 }
 
 /// A reply takes the format of its request, whatever its own wallet sends.
