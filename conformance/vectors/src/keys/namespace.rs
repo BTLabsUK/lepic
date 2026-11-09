@@ -16,6 +16,14 @@
 //!   of its RFC 8410 SubjectPublicKeyInfo, the fingerprint clients pin;
 //! - listing signature: ECDSA by the listing key over SHA-256(SHA-256(tag) || SHA-256(tag) ||
 //!   len(domain) (u8) || domain || message), tag "lepic/listing-signature/v1";
+//! - epic1 proof key: Ed25519 from BLAKE2b(key = seed, "lepic-wallet epic1 proof key v1" ||
+//!   account (u32 BE) || net);
+//! - reply mailbox, post key and link mailbox: BLAKE2b(key = seed, label || account (u32 BE) ||
+//!   net || slate_id (16) || counter), with `role` before the counter for a post key, and
+//!   `kind || n (u32 BE)` in place of the slate id for a link mailbox; the counter from 0 up to the
+//!   first valid secp256k1 key, each an ordinary Epicbox address;
+//! - check code: the first 4 bytes of SHA-256("epic-check/1" || public excess (33)), big-endian,
+//!   modulo 10,000, as four digits;
 //! - address proof: K = HKDF-SHA256(salt "lepic/addr-proof/1", ikm = x(ECDH), info = "mac" ||
 //!   net || step), tag = HMAC-SHA256(K, H(prover card) || H(verifier card) || H(invite)), 32 zero
 //!   bytes for a hash a step does not have.
@@ -40,6 +48,11 @@ const API_TLS_KEY_LABEL: &[u8] = b"lepic-wallet api tls v1";
 const ED25519_SPKI_PREFIX: [u8; 12] = [
     0x30, 0x2a, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x03, 0x21, 0x00,
 ];
+const EPIC1_PROOF_KEY_LABEL: &[u8] = b"lepic-wallet epic1 proof key v1";
+const REPLY_MAILBOX_LABEL: &[u8] = b"lepic-wallet reply mailbox v1";
+const POST_KEY_LABEL: &[u8] = b"lepic-wallet post key v1";
+const LINK_MAILBOX_LABEL: &[u8] = b"lepic-wallet link mailbox v1";
+const CHECK_CODE_TAG: &[u8] = b"epic-check/1";
 const LISTING_TAG: &[u8] = b"lepic/listing-signature/v1";
 const ADDRESS_PROOF_SALT: &[u8] = b"lepic/addr-proof/1";
 
@@ -56,6 +69,11 @@ const DOMAINS: [&str; 5] = [
     "epic-dir-hello/1",
 ];
 const MESSAGE: &[u8] = b"lepic listing signature vector";
+const ACCOUNTS: [u32; 2] = [0, 7];
+const SLATE_IDS: [[u8; 16]; 2] = [[0x00; 16], [0x5a; 16]];
+/// Link mailboxes as (kind, n): the ends of the on-screen (00, 0 to 49) and printed (01, 0 to
+/// 31) index spaces.
+const LINK_MAILBOXES: [(u8, u32); 4] = [(0, 0), (0, 49), (1, 0), (1, 31)];
 const TRANSCRIPTS: [&[u8]; 2] = [b"", b"hello transcript"];
 
 pub(super) fn secp() -> Secp256k1 {
@@ -514,6 +532,277 @@ fn address_proofs(pins: &KeysPins<'_>) -> Result<Vec<Rendered>, Error> {
     )?])
 }
 
+/// The network byte of the contact formats: 0 mainnet, 1 floonet.
+fn net_byte(network: Network) -> u8 {
+    match network {
+        Network::Mainnet => 0,
+        Network::Floonet => 1,
+    }
+}
+
+/// The first valid secp256k1 key of `label` and `context` followed by a counter from 0 up.
+fn first_valid_key(
+    secp: &Secp256k1,
+    seed: &[u8],
+    label: &[u8],
+    context: &[u8],
+) -> Result<(u8, SecretKey), Error> {
+    for counter in 0..=u8::MAX {
+        let bytes = keyed(seed, &[label, context, &[counter]]);
+        if let Ok(key) = SecretKey::from_slice(secp, &bytes) {
+            return Ok((counter, key));
+        }
+    }
+    Err(Error::reference("mailbox key")(Inconsistent(
+        "no valid key",
+    )))
+}
+
+#[derive(Serialize)]
+struct Epic1ProofInputs {
+    seed: String,
+    label: &'static str,
+    accounts: Vec<u32>,
+}
+
+#[derive(Serialize)]
+struct Epic1ProofCase {
+    account: u32,
+    network: &'static str,
+    net: u8,
+    ed25519_seed: String,
+    public_key: String,
+}
+
+fn epic1_proof_keys(pins: &KeysPins<'_>) -> Result<Vec<Rendered>, Error> {
+    let mut vectors = Vec::new();
+    for seed in &SEEDS {
+        let mut cases = Vec::new();
+        for account in ACCOUNTS {
+            for network in Network::ALL {
+                let ed_seed = keyed(
+                    seed.entropy,
+                    &[
+                        EPIC1_PROOF_KEY_LABEL,
+                        &account.to_be_bytes(),
+                        &[net_byte(network)],
+                    ],
+                );
+                let pair =
+                    signature::Ed25519KeyPair::from_seed_unchecked(&ed_seed).map_err(|_| {
+                        Error::reference("epic1 proof key")(Inconsistent("key rejected"))
+                    })?;
+                cases.push(Epic1ProofCase {
+                    account,
+                    network: network.name(),
+                    net: net_byte(network),
+                    ed25519_seed: hex(ed_seed),
+                    public_key: hex(signature::KeyPair::public_key(&pair).as_ref()),
+                });
+            }
+        }
+        let inputs = Epic1ProofInputs {
+            seed: hex(seed.entropy),
+            label: "lepic-wallet epic1 proof key v1",
+            accounts: ACCOUNTS.to_vec(),
+        };
+        let name = format!("epic1_proof_key_{}", seed.name);
+        vectors.push(render(AREA, &name, &pins.wallet, inputs, Cases { cases })?);
+    }
+    Ok(vectors)
+}
+
+#[derive(Serialize)]
+struct MailboxInputs {
+    seed: String,
+    label: &'static str,
+    accounts: Vec<u32>,
+}
+
+/// One mailbox key: the context after the account and network, the counter that made the key,
+/// and its Epicbox address on the case's network.
+#[derive(Serialize)]
+struct MailboxCase {
+    account: u32,
+    network: &'static str,
+    net: u8,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    slate_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    role: Option<u8>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    kind: Option<u8>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    n: Option<u32>,
+    counter: u8,
+    secret_key: String,
+    public_key: String,
+    epicbox: super::address::EpicboxForm,
+}
+
+/// What follows the account and network in one mailbox key's context.
+struct MailboxContext {
+    slate_id: Option<[u8; 16]>,
+    role: Option<u8>,
+    link: Option<(u8, u32)>,
+}
+
+impl MailboxContext {
+    fn bytes(&self) -> Vec<u8> {
+        let mut out = Vec::new();
+        if let Some((kind, n)) = self.link {
+            out.push(kind);
+            out.extend_from_slice(&n.to_be_bytes());
+        }
+        if let Some(slate_id) = self.slate_id {
+            out.extend_from_slice(&slate_id);
+        }
+        if let Some(role) = self.role {
+            out.push(role);
+        }
+        out
+    }
+}
+
+fn mailbox_keys(
+    pins: &KeysPins<'_>,
+    prefix: &str,
+    label: &'static [u8],
+    contexts: &[MailboxContext],
+) -> Result<Vec<Rendered>, Error> {
+    let secp = secp();
+    let mut vectors = Vec::new();
+    for seed in &SEEDS {
+        let mut cases = Vec::new();
+        for account in ACCOUNTS {
+            for network in Network::ALL {
+                for context in contexts {
+                    let full = [
+                        &account.to_be_bytes()[..],
+                        &[net_byte(network)],
+                        &context.bytes(),
+                    ]
+                    .concat();
+                    let (counter, key) = first_valid_key(&secp, seed.entropy, label, &full)?;
+                    let public = PublicKey::from_secret_key(&secp, &key)
+                        .map_err(Error::reference("mailbox public key"))?;
+                    cases.push(MailboxCase {
+                        account,
+                        network: network.name(),
+                        net: net_byte(network),
+                        slate_id: context.slate_id.map(hex),
+                        role: context.role,
+                        kind: context.link.map(|(kind, _)| kind),
+                        n: context.link.map(|(_, n)| n),
+                        counter,
+                        secret_key: hex(key.0),
+                        public_key: hex(public.serialize_vec(&secp, true)),
+                        epicbox: epicbox_form(network, public)?,
+                    });
+                }
+            }
+        }
+        let inputs = MailboxInputs {
+            seed: hex(seed.entropy),
+            label: std::str::from_utf8(label)
+                .map_err(|_| Error::reference("label")(Inconsistent("not utf-8")))?,
+            accounts: ACCOUNTS.to_vec(),
+        };
+        let name = format!("{prefix}_{}", seed.name);
+        vectors.push(render(AREA, &name, &pins.wallet, inputs, Cases { cases })?);
+    }
+    Ok(vectors)
+}
+
+fn epicbox_mailbox_keys(pins: &KeysPins<'_>) -> Result<Vec<Rendered>, Error> {
+    let reply: Vec<_> = SLATE_IDS
+        .iter()
+        .map(|slate_id| MailboxContext {
+            slate_id: Some(*slate_id),
+            role: None,
+            link: None,
+        })
+        .collect();
+    let post: Vec<_> = SLATE_IDS
+        .iter()
+        .flat_map(|slate_id| {
+            [0u8, 1].map(|role| MailboxContext {
+                slate_id: Some(*slate_id),
+                role: Some(role),
+                link: None,
+            })
+        })
+        .collect();
+    let link: Vec<_> = LINK_MAILBOXES
+        .iter()
+        .map(|link| MailboxContext {
+            slate_id: None,
+            role: None,
+            link: Some(*link),
+        })
+        .collect();
+    let mut vectors = mailbox_keys(pins, "reply_mailbox", REPLY_MAILBOX_LABEL, &reply)?;
+    vectors.extend(mailbox_keys(pins, "post_key", POST_KEY_LABEL, &post)?);
+    vectors.extend(mailbox_keys(
+        pins,
+        "link_mailbox",
+        LINK_MAILBOX_LABEL,
+        &link,
+    )?);
+    Ok(vectors)
+}
+
+#[derive(Serialize)]
+struct CheckCodeInputs {
+    tag: &'static str,
+}
+
+#[derive(Serialize)]
+struct CheckCodeCase {
+    excess_secret: String,
+    excess: String,
+    digest: String,
+    code: String,
+}
+
+fn check_codes(pins: &KeysPins<'_>) -> Result<Vec<Rendered>, Error> {
+    let secp = secp();
+    let mut cases = Vec::new();
+    for byte in 1..=16u8 {
+        let secret =
+            SecretKey::from_slice(&secp, &[byte; 32]).map_err(Error::reference("excess"))?;
+        let public =
+            PublicKey::from_secret_key(&secp, &secret).map_err(Error::reference("excess"))?;
+        let excess = public.serialize_vec(&secp, true);
+        let digest = sha256(&[CHECK_CODE_TAG, &excess]);
+        let mut first = [0u8; 4];
+        first.copy_from_slice(
+            digest
+                .get(..4)
+                .ok_or(Error::reference("digest")(Inconsistent("short")))?,
+        );
+        let number = u32::from_be_bytes(first)
+            .checked_rem(10_000)
+            .ok_or(Error::reference("check code")(Inconsistent("modulo")))?;
+        cases.push(CheckCodeCase {
+            excess_secret: hex(secret.0),
+            excess: hex(&excess),
+            digest: hex(digest),
+            code: format!("{number:04}"),
+        });
+    }
+    let inputs = CheckCodeInputs {
+        tag: "epic-check/1",
+    };
+    Ok(vec![render(
+        AREA,
+        "check_codes",
+        &pins.wallet,
+        inputs,
+        Cases { cases },
+    )?])
+}
+
 pub(super) fn generate(pins: &KeysPins<'_>) -> Result<Vec<Rendered>, Error> {
     // Each seed is a valid wallet seed upstream.
     for seed in &SEEDS {
@@ -526,5 +815,8 @@ pub(super) fn generate(pins: &KeysPins<'_>) -> Result<Vec<Rendered>, Error> {
     vectors.extend(onion_keys(pins)?);
     vectors.extend(api_tls_keys(pins)?);
     vectors.extend(address_proofs(pins)?);
+    vectors.extend(epic1_proof_keys(pins)?);
+    vectors.extend(epicbox_mailbox_keys(pins)?);
+    vectors.extend(check_codes(pins)?);
     Ok(vectors)
 }

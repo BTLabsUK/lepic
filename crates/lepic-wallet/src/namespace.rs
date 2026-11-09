@@ -9,8 +9,10 @@ use blake2::Blake2bMac;
 use blake2::digest::consts::U32;
 use blake2::digest::{FixedOutput, KeyInit, Update};
 use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
+use lepic_contact::{EncSecretKey, Network};
 use lepic_crypto::{PublicKey, SecretKey};
 use lepic_keychain::Seed;
+use sha2::{Digest, Sha256};
 use zeroize::Zeroizing;
 
 use crate::error::WalletError;
@@ -33,6 +35,106 @@ pub const API_TLS_KEY_LABEL: &[u8] = b"lepic-wallet api tls v1";
 
 /// What device-link signatures are made over: this tag, then the transcript.
 pub const DEVICE_LINK_TAG: &[u8] = b"lepic/device-link/v1";
+
+/// The X25519 key that opens envelopes sealed to one address of an account: context
+/// `account (u32 BE) || net || kind`, 6 bytes ([`SealKeyKind`]).
+pub const SEAL_KEY_LABEL: &[u8] = b"lepic-wallet seal key v1";
+
+/// The Ed25519 seed of the proof key in an account's epic1 address: context
+/// `account (u32 BE) || net`, 5 bytes. It signs the payment proofs of slates that came to the
+/// epic1, as the onion key does for slates that came over the onion (ADR 0044).
+pub const EPIC1_PROOF_KEY_LABEL: &[u8] = b"lepic-wallet epic1 proof key v1";
+
+/// The throwaway Epicbox mailbox for the answer to one slate: context
+/// `account (u32 BE) || net || slate_id (16) || counter (u8)`, 22 bytes.
+pub const REPLY_MAILBOX_LABEL: &[u8] = b"lepic-wallet reply mailbox v1";
+
+/// The Epicbox `from` key of the posts of one slate to another party's mailbox: context
+/// `account (u32 BE) || net || slate_id (16) || role || counter (u8)`, 23 bytes ([`PostRole`]).
+pub const POST_KEY_LABEL: &[u8] = b"lepic-wallet post key v1";
+
+/// The Epicbox mailbox an epic1 link names: context
+/// `account (u32 BE) || net || kind || n (u32 BE) || counter (u8)`, 11 bytes ([`LinkMailbox`]).
+pub const LINK_MAILBOX_LABEL: &[u8] = b"lepic-wallet link mailbox v1";
+
+/// What a check code hashes: this tag, then the receiver's public excess (33 bytes, compressed).
+pub const CHECK_CODE_TAG: &[u8] = b"epic-check/1";
+
+/// Which address of an account a seal key opens envelopes for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum SealKeyKind {
+    /// The account's epic1 address.
+    Epic1,
+    /// The onion listener.
+    Onion,
+    /// The plain web listener.
+    Web,
+}
+
+impl SealKeyKind {
+    /// The byte of the derivation context.
+    pub fn byte(self) -> u8 {
+        match self {
+            Self::Epic1 => 0x00,
+            Self::Onion => 0x01,
+            Self::Web => 0x02,
+        }
+    }
+}
+
+/// Which side of a slate a post key posts for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum PostRole {
+    /// The party that started the slate.
+    Initiator,
+    /// The party that answers it.
+    Responder,
+}
+
+impl PostRole {
+    /// The byte of the derivation context.
+    pub fn byte(self) -> u8 {
+        match self {
+            Self::Initiator => 0x00,
+            Self::Responder => 0x01,
+        }
+    }
+}
+
+/// One link mailbox of an account: a code shown on screen (`n` 0 to 49, a new one per receive
+/// session or share, used in turn) or a printed code (`n` 0 to 31, fixed per code). The two
+/// kinds have index spaces of their own.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct LinkMailbox {
+    kind: u8,
+    n: u32,
+}
+
+impl LinkMailbox {
+    /// How many on-screen link mailboxes an account has.
+    pub const ON_SCREEN: u32 = 50;
+    /// How many printed link mailboxes an account has.
+    pub const PRINTED: u32 = 32;
+
+    /// The on-screen mailbox `n`, or `None` past [`Self::ON_SCREEN`].
+    pub fn on_screen(n: u32) -> Option<Self> {
+        (n < Self::ON_SCREEN).then_some(Self { kind: 0x00, n })
+    }
+
+    /// The printed mailbox `n`, or `None` past [`Self::PRINTED`].
+    pub fn printed(n: u32) -> Option<Self> {
+        (n < Self::PRINTED).then_some(Self { kind: 0x01, n })
+    }
+
+    /// The kind byte of the derivation context: 00 on screen, 01 printed.
+    pub fn kind(&self) -> u8 {
+        self.kind
+    }
+
+    pub fn n(&self) -> u32 {
+        self.n
+    }
+}
 
 /// A listing of this wallet with a name service: the service's key and the generation of the
 /// listing, raised after each leave so a new listing gets a new key.
@@ -148,6 +250,116 @@ pub(crate) fn onion_seed(seed: &Seed) -> Result<Zeroizing<[u8; 32]>, WalletError
 /// The seed of the owner TLS certificate key of the wallet of `seed`.
 pub(crate) fn api_tls_seed(seed: &Seed) -> Result<Zeroizing<[u8; 32]>, WalletError> {
     namespace_hash(seed, API_TLS_KEY_LABEL, &[])
+}
+
+/// The first valid secp256k1 key of `label` and `context`, followed by a counter from 0 up.
+fn first_valid_key(seed: &Seed, label: &[u8], context: &[&[u8]]) -> Result<SecretKey, WalletError> {
+    for counter in 0..=u8::MAX {
+        let counter = [counter];
+        let parts: Vec<&[u8]> = context.iter().copied().chain([&counter[..]]).collect();
+        let bytes = namespace_hash(seed, label, &parts)?;
+        if let Ok(key) = SecretKey::from_array(*bytes) {
+            return Ok(key);
+        }
+    }
+    Err(WalletError::NoValidKey)
+}
+
+/// The seal key of `kind` for `account` on `network`; its public key is X25519 of the secret
+/// and the base point. Not used by the engine yet.
+pub fn seal_key(
+    seed: &Seed,
+    account: u32,
+    network: Network,
+    kind: SealKeyKind,
+) -> Result<EncSecretKey, WalletError> {
+    let bytes = namespace_hash(
+        seed,
+        SEAL_KEY_LABEL,
+        &[&account.to_be_bytes(), &[network.byte()], &[kind.byte()]],
+    )?;
+    Ok(EncSecretKey::from_bytes(*bytes))
+}
+
+/// The epic1 proof key of `account` on `network`. Not used by the engine yet.
+pub fn epic1_proof_key(
+    seed: &Seed,
+    account: u32,
+    network: Network,
+) -> Result<SigningKey, WalletError> {
+    let bytes = namespace_hash(
+        seed,
+        EPIC1_PROOF_KEY_LABEL,
+        &[&account.to_be_bytes(), &[network.byte()]],
+    )?;
+    Ok(SigningKey::from_bytes(&bytes))
+}
+
+/// The reply mailbox key of `account` on `network` for the slate `slate_id`. Not used by the
+/// engine yet.
+pub fn reply_mailbox_key(
+    seed: &Seed,
+    account: u32,
+    network: Network,
+    slate_id: &[u8; 16],
+) -> Result<SecretKey, WalletError> {
+    first_valid_key(
+        seed,
+        REPLY_MAILBOX_LABEL,
+        &[&account.to_be_bytes(), &[network.byte()], slate_id],
+    )
+}
+
+/// The post key of `account` on `network` for the slate `slate_id` in `role`. Not used by the
+/// engine yet.
+pub fn post_key(
+    seed: &Seed,
+    account: u32,
+    network: Network,
+    slate_id: &[u8; 16],
+    role: PostRole,
+) -> Result<SecretKey, WalletError> {
+    first_valid_key(
+        seed,
+        POST_KEY_LABEL,
+        &[
+            &account.to_be_bytes(),
+            &[network.byte()],
+            slate_id,
+            &[role.byte()],
+        ],
+    )
+}
+
+/// The key of `mailbox` of `account` on `network`. Not used by the engine yet.
+pub fn link_mailbox_key(
+    seed: &Seed,
+    account: u32,
+    network: Network,
+    mailbox: LinkMailbox,
+) -> Result<SecretKey, WalletError> {
+    first_valid_key(
+        seed,
+        LINK_MAILBOX_LABEL,
+        &[
+            &account.to_be_bytes(),
+            &[network.byte()],
+            &[mailbox.kind],
+            &mailbox.n.to_be_bytes(),
+        ],
+    )
+}
+
+/// The four-digit check code of an answer: the first 4 bytes of
+/// `SHA-256("epic-check/1" || excess)`, big-endian, modulo 10,000, with leading zeros. `excess`
+/// is the receiver's public excess.
+pub fn check_code(excess: &PublicKey) -> String {
+    let digest = Sha256::new()
+        .chain_update(CHECK_CODE_TAG)
+        .chain_update(excess.to_bytes())
+        .finalize();
+    let first = digest.first_chunk::<4>().copied().unwrap_or_default();
+    format!("{:04}", u32::from_be_bytes(first) % 10_000)
 }
 
 fn device_link_message(transcript: &[u8]) -> Vec<u8> {
@@ -285,5 +497,121 @@ mod tests {
         let expected: [u8; 32] = mac.finalize_fixed().into();
         assert_eq!(*api_tls_seed(&seed(1)).unwrap(), expected);
         assert_ne!(*api_tls_seed(&seed(2)).unwrap(), expected);
+    }
+
+    fn keyed(label: &[u8], context: &[&[u8]]) -> [u8; 32] {
+        let mut mac = <Blake2bMac<U32> as KeyInit>::new_from_slice(&[1; 32]).unwrap();
+        mac.update(label);
+        for part in context {
+            mac.update(part);
+        }
+        mac.finalize_fixed().into()
+    }
+
+    #[test]
+    fn a_seal_key_is_the_keyed_hash_of_its_label_and_context() {
+        let key = seal_key(&seed(1), 7, Network::Floonet, SealKeyKind::Onion).unwrap();
+        let expected = keyed(b"lepic-wallet seal key v1", &[&[0, 0, 0, 7], &[1], &[1]]);
+        assert_eq!(
+            key.public_key(),
+            EncSecretKey::from_bytes(expected).public_key()
+        );
+        let public = |account, network, kind| {
+            *seal_key(&seed(1), account, network, kind)
+                .unwrap()
+                .public_key()
+                .as_bytes()
+        };
+        let base = public(0, Network::Mainnet, SealKeyKind::Epic1);
+        assert_ne!(base, public(1, Network::Mainnet, SealKeyKind::Epic1));
+        assert_ne!(base, public(0, Network::Floonet, SealKeyKind::Epic1));
+        assert_ne!(base, public(0, Network::Mainnet, SealKeyKind::Onion));
+        assert_ne!(base, public(0, Network::Mainnet, SealKeyKind::Web));
+    }
+
+    #[test]
+    fn the_epic1_proof_key_is_the_keyed_hash_of_its_label_and_context() {
+        let key = epic1_proof_key(&seed(1), 2, Network::Mainnet).unwrap();
+        let expected = keyed(b"lepic-wallet epic1 proof key v1", &[&[0, 0, 0, 2], &[0]]);
+        assert_eq!(key.to_bytes(), expected);
+        assert_ne!(
+            epic1_proof_key(&seed(1), 2, Network::Floonet)
+                .unwrap()
+                .to_bytes(),
+            expected
+        );
+    }
+
+    #[test]
+    fn mailbox_keys_are_the_keyed_hash_of_their_label_and_context() {
+        let slate_id = [0x5a; 16];
+        let reply = reply_mailbox_key(&seed(1), 1, Network::Floonet, &slate_id).unwrap();
+        let expected = keyed(
+            b"lepic-wallet reply mailbox v1",
+            &[&[0, 0, 0, 1], &[1], &slate_id, &[0]],
+        );
+        assert_eq!(reply.expose_bytes(), &expected);
+
+        let post = post_key(
+            &seed(1),
+            1,
+            Network::Floonet,
+            &slate_id,
+            PostRole::Responder,
+        )
+        .unwrap();
+        let expected = keyed(
+            b"lepic-wallet post key v1",
+            &[&[0, 0, 0, 1], &[1], &slate_id, &[1], &[0]],
+        );
+        assert_eq!(post.expose_bytes(), &expected);
+
+        let printed = LinkMailbox::printed(31).unwrap();
+        let link = link_mailbox_key(&seed(1), 1, Network::Floonet, printed).unwrap();
+        let expected = keyed(
+            b"lepic-wallet link mailbox v1",
+            &[&[0, 0, 0, 1], &[1], &[1], &[0, 0, 0, 31], &[0]],
+        );
+        assert_eq!(link.expose_bytes(), &expected);
+    }
+
+    #[test]
+    fn link_mailboxes_have_their_own_index_spaces() {
+        assert!(LinkMailbox::on_screen(49).is_some());
+        assert!(LinkMailbox::on_screen(50).is_none());
+        assert!(LinkMailbox::printed(31).is_some());
+        assert!(LinkMailbox::printed(32).is_none());
+        let key = |mailbox| {
+            *link_mailbox_key(&seed(1), 0, Network::Mainnet, mailbox)
+                .unwrap()
+                .expose_bytes()
+        };
+        assert_ne!(
+            key(LinkMailbox::on_screen(3).unwrap()),
+            key(LinkMailbox::printed(3).unwrap())
+        );
+    }
+
+    #[test]
+    fn post_keys_differ_by_role() {
+        let key = |role| {
+            *post_key(&seed(1), 0, Network::Mainnet, &[1; 16], role)
+                .unwrap()
+                .expose_bytes()
+        };
+        assert_ne!(key(PostRole::Initiator), key(PostRole::Responder));
+    }
+
+    #[test]
+    fn a_check_code_is_four_digits_of_the_tagged_hash() {
+        let excess = service_key(9);
+        let digest = Sha256::new()
+            .chain_update(b"epic-check/1")
+            .chain_update(excess.to_bytes())
+            .finalize();
+        let number = u32::from_be_bytes(*digest.first_chunk::<4>().unwrap());
+        let code = check_code(&excess);
+        assert_eq!(code.len(), 4);
+        assert_eq!(code.parse::<u32>().unwrap(), number % 10_000);
     }
 }

@@ -106,6 +106,9 @@ pub enum WalletError {
     /// A listing's service key is not a compressed secp256k1 key.
     #[error("listing rejected")]
     InvalidListing,
+    /// No counter value made a valid secp256k1 key of a namespace label.
+    #[error("no valid key for the namespace label")]
+    NoValidKey,
 }
 
 impl From<SecretVaultError> for WalletError {

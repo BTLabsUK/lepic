@@ -465,3 +465,135 @@ fn device_link_signatures_are_the_vectors() {
         }
     }
 }
+
+fn seed_of(vector: &Value) -> lepic_keychain::Seed {
+    lepic_keychain::Seed::from_entropy(&hex_bytes(vector["inputs"]["seed"].as_str().unwrap()))
+        .unwrap()
+}
+
+fn network_of(case: &Value) -> lepic_contact::Network {
+    lepic_contact::Network::from_byte(u8::try_from(case["net"].as_u64().unwrap()).unwrap()).unwrap()
+}
+
+fn account_of(case: &Value) -> u32 {
+    u32::try_from(case["account"].as_u64().unwrap()).unwrap()
+}
+
+fn slate_id_of(case: &Value) -> [u8; 16] {
+    hex_bytes(case["slate_id"].as_str().unwrap())
+        .try_into()
+        .unwrap()
+}
+
+/// Checks one generated secp256k1 mailbox key against the key LEPIC derives.
+fn assert_mailbox_key(name: &str, case: &Value, key: &lepic_crypto::SecretKey) {
+    assert_eq!(
+        key.expose_bytes().as_slice(),
+        hex_bytes(case["secret_key"].as_str().unwrap()),
+        "{name} {case}"
+    );
+    let public = lepic_crypto::PublicKey::from_secret_key(key).unwrap();
+    assert_eq!(
+        public.to_bytes().as_slice(),
+        hex_bytes(case["public_key"].as_str().unwrap()),
+        "{name} {case}"
+    );
+}
+
+/// `testdata/vectors/keys/epic1_proof_key_*.json`: the epic1 proof key of each account and
+/// network is the generator's Ed25519 key.
+#[test]
+fn epic1_proof_keys_are_the_vectors() {
+    for name in ["epic1_proof_key_seed32", "epic1_proof_key_seed16"] {
+        let vector = keys_vector(name);
+        let seed = seed_of(&vector);
+        for case in vector["expected"]["cases"].as_array().unwrap() {
+            let key =
+                lepic_wallet::namespace::epic1_proof_key(&seed, account_of(case), network_of(case))
+                    .unwrap();
+            assert_eq!(
+                key.to_bytes().as_slice(),
+                hex_bytes(case["ed25519_seed"].as_str().unwrap()),
+                "{name} {case}"
+            );
+            assert_eq!(
+                key.verifying_key().as_bytes().as_slice(),
+                hex_bytes(case["public_key"].as_str().unwrap()),
+                "{name} {case}"
+            );
+        }
+    }
+}
+
+/// `testdata/vectors/keys/reply_mailbox_*.json`, `post_key_*.json` and `link_mailbox_*.json`:
+/// every Epicbox mailbox key is the generator's first valid secp256k1 key.
+#[test]
+fn epicbox_mailbox_keys_are_the_vectors() {
+    use lepic_wallet::namespace::{
+        LinkMailbox, PostRole, link_mailbox_key, post_key, reply_mailbox_key,
+    };
+    for seed_name in ["seed32", "seed16"] {
+        let name = format!("reply_mailbox_{seed_name}");
+        let vector = keys_vector(&name);
+        let seed = seed_of(&vector);
+        for case in vector["expected"]["cases"].as_array().unwrap() {
+            let key = reply_mailbox_key(
+                &seed,
+                account_of(case),
+                network_of(case),
+                &slate_id_of(case),
+            )
+            .unwrap();
+            assert_mailbox_key(&name, case, &key);
+        }
+
+        let name = format!("post_key_{seed_name}");
+        let vector = keys_vector(&name);
+        for case in vector["expected"]["cases"].as_array().unwrap() {
+            let role = match case["role"].as_u64().unwrap() {
+                0 => PostRole::Initiator,
+                1 => PostRole::Responder,
+                other => panic!("role {other}"),
+            };
+            let key = post_key(
+                &seed,
+                account_of(case),
+                network_of(case),
+                &slate_id_of(case),
+                role,
+            )
+            .unwrap();
+            assert_mailbox_key(&name, case, &key);
+        }
+
+        let name = format!("link_mailbox_{seed_name}");
+        let vector = keys_vector(&name);
+        for case in vector["expected"]["cases"].as_array().unwrap() {
+            let n = u32::try_from(case["n"].as_u64().unwrap()).unwrap();
+            let mailbox = match case["kind"].as_u64().unwrap() {
+                0 => LinkMailbox::on_screen(n),
+                1 => LinkMailbox::printed(n),
+                other => panic!("kind {other}"),
+            }
+            .unwrap();
+            let key = link_mailbox_key(&seed, account_of(case), network_of(case), mailbox).unwrap();
+            assert_mailbox_key(&name, case, &key);
+        }
+    }
+}
+
+/// `testdata/vectors/keys/check_codes.json`: the check code of each public excess.
+#[test]
+fn check_codes_are_the_vectors() {
+    let vector = keys_vector("check_codes");
+    for case in vector["expected"]["cases"].as_array().unwrap() {
+        let excess =
+            lepic_crypto::PublicKey::from_bytes(&hex_bytes(case["excess"].as_str().unwrap()))
+                .unwrap();
+        assert_eq!(
+            lepic_wallet::namespace::check_code(&excess),
+            case["code"].as_str().unwrap(),
+            "{case}"
+        );
+    }
+}

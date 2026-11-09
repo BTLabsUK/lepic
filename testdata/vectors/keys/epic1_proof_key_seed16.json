@@ -1,0 +1,50 @@
+{
+  "schema": 1,
+  "area": "keys",
+  "name": "epic1_proof_key_seed16",
+  "generator": "conformance/vectors/keys",
+  "upstream": {
+    "repo": "https://github.com/EpicCash/epic-wallet",
+    "commit": "845b3fcf4df12ed0139929c62157015447a9d063"
+  },
+  "inputs": {
+    "seed": "a55ac33c9669f00f123456789abcdef0",
+    "label": "lepic-wallet epic1 proof key v1",
+    "accounts": [
+      0,
+      7
+    ]
+  },
+  "expected": {
+    "cases": [
+      {
+        "account": 0,
+        "network": "mainnet",
+        "net": 0,
+        "ed25519_seed": "76c72ea0e7860ab83fb9f5aa43ecc442de77deca8821b3472eebbf06d4e2c65a",
+        "public_key": "1fb80447764f8a95f40b99c1d203e1969d5512e4964204b56b3826dbeefa96d0"
+      },
+      {
+        "account": 0,
+        "network": "floonet",
+        "net": 1,
+        "ed25519_seed": "84935c9289c33aa9d9970dea1f2d8574b0088a72de99ec8bbe60002d038788a4",
+        "public_key": "48fa72c1f5141452351625b72f854f0a243e2290faf86dc4104b01e10971fee5"
+      },
+      {
+        "account": 7,
+        "network": "mainnet",
+        "net": 0,
+        "ed25519_seed": "d53b02083eef9dddf0fae1a1abaff4dd55cfa6b8c2339b137967232ab1f97e7a",
+        "public_key": "b2ec3a60ab9ed1c9a356533d992ebdfc5b8e737e6002f6eaf894bc78520af852"
+      },
+      {
+        "account": 7,
+        "network": "floonet",
+        "net": 1,
+        "ed25519_seed": "c1ba768491178747e9b1a322202c135b1dafe44aec0dc42d4abe0e7ff4ad7ed7",
+        "public_key": "b0a04372eba145f67e1b42ee579cf16c708a787b5e6ace3a97de19e7f50ef789"
+      }
+    ]
+  }
+}
