@@ -88,11 +88,12 @@ git tree it ran from; `run.log` with every failed command and its JSON error; an
 
 The EPICTX steps (`native.sh`, listed after the others) run between lepic's wallet and the payer's
 with native slates on: Epicbox payments, contact payments and `.epictx` files, in-person codes
-offline, the code TTL, cancelling, and the direct HTTP endpoint. The product accepts a private
+offline, the code TTL, cancelling, and the direct HTTP endpoint. Every LEPIC contact claims native
+slates, so the V3 case between the two wallets is driven by the sender's `native_direct` switch. The product accepts a private
 address where it refuses loopback for a direct send, so the HTTP step reaches its listener
 through a small forwarder on the docker0 address `172.17.0.1`, never on a wildcard. An in-person
 reply mailbox and an epic1 link need a relay on a non-loopback host, which over plain websocket
-the product does not allow, so those two steps check that the local relay is refused; the full
-flows run on floonet. `ACCEPTANCE_ONLY=<function>[,...]` runs setup and just the listed steps
+the product does not allow, so those two steps check what the local relay gives (a code with no
+mailbox, an epic1 link refused with exit 7); the full flows run on floonet. `ACCEPTANCE_ONLY=<function>[,...]` runs setup and just the listed steps
 (list `step_wallet_init`, `step_receive_by_file` and `step_fund_payer` first), for developing
 one.
