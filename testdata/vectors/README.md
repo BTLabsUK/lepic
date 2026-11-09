@@ -23,7 +23,7 @@ cargo run --manifest-path conformance/Cargo.toml -p vectors -- list
 `list` prints the areas the generator knows: `smoke`, `primitives`, `aggsig`, `keys`, `epicbox`,
 `slates`, `slates_native`, `engine`, `app_data`, `store` and `store_key`.
 
-Generating an area deletes JSON files in its directory that the generator no longer produces.
+Generating an area deletes JSON files in its directory that the generator does not produce.
 After generating, review the diff with `git diff testdata/vectors`. A deterministic area shows no
 diff unless a case or a pin changed.
 
