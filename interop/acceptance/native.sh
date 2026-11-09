@@ -411,23 +411,23 @@ native_in_person_send() {
     DETAIL="send code offline: ${IN_PERSON_DETAIL}"
 }
 
-# 6. An online code names a mailbox on the payee's own relay. The product refuses a loopback relay
-# for it, and a plain websocket relay must be loopback, so the local stack's relay cannot carry
-# the reply mailbox: the code is refused and nothing is created.
+# 6. An online code names a reply mailbox on the payee's own relay. A relay on the same device
+# cannot be reached from the payer's, so the local stack's relay gets no mailbox: the code is
+# made for an offline exchange and the answer is shown back.
 native_in_person_post() {
     native_ready || return 1
-    local count status=0 out
-    count="$(lepic_tx_count)"
-    out="$(lepic in-person invoice 0.2 --out "${NATIVE_DIR}/online.code" 2>&1)" || status=$?
-    ((status != 0)) || fail "an online code on a loopback relay was made: ${out}" || return 1
-    grep -qi "loopback\|local" <<<"${out}" || fail "the refusal does not name the loopback host: ${out}" || return 1
-    [[ "$(lepic_tx_count)" == "${count}" && ! -e "${NATIVE_DIR}/online.code" ]] ||
-        fail "the refused code left a transaction or a file" || return 1
-    lepic_unlocked || fail "the refused code locked $(lepic_locked) units" || return 1
-    DETAIL="online code refused with the local relay (exit ${status}), nothing created; the full flow, invoice and send through the reply mailbox, was run on floonet against wss://epicbox.btlabs.uk"
+    local shown code="${NATIVE_DIR}/online.code" read
+    shown="$(lepic in-person invoice 0.2 --out "${code}")" || fail "the online code failed: ${shown}" || return 1
+    jq -e '.mailbox == null' <<<"${shown}" >/dev/null || fail "the code names a mailbox on a local relay: ${shown}" || return 1
+    [[ -s "${code}" ]] || fail "no code file: ${shown}" || return 1
+    read="$(payer in-person read --file "${code}" --offline)" || fail "the payer could not read the code" || return 1
+    jq -e '.mailbox == null' <<<"${read}" >/dev/null || fail "the payer's read shows a mailbox: ${read}" || return 1
+    lepic tx cancel "$(jq -r .tx_id <<<"${shown}")" >/dev/null || fail "tx cancel failed" || return 1
+    lepic_unlocked || fail "the code locked $(lepic_locked) units" || return 1
+    DETAIL="online code with the relay on this device names no mailbox; the payer reads it, the answer is shown back and taken by hand as in step 4; the reply mailbox flow, invoice and send, was run on floonet against wss://epicbox.btlabs.uk"
 }
 
-# 7. A code past its TTL is refused, and an unanswered send code expires.
+# 7. A code past its TTL is not paid or answered, and an unanswered send code expires.
 native_in_person_ttl() {
     native_ready || return 1
     local shown cutoff status code="${NATIVE_DIR}/ttl-invoice.code" send_code="${NATIVE_DIR}/ttl-send.code"
@@ -446,19 +446,22 @@ native_in_person_ttl() {
     # The stack mines a block every few seconds.
     wait_until "the chain past ${send_cutoff}" 120 node_past "${cutoff}" "${send_cutoff}" ||
         fail "the chain did not pass the TTL cutoff" || return 1
-    local read_status pay_status receive_status
-    read_status="$(payer_status in-person read --file "${code}" --offline)"
+    local read_status=0 pay_status receive_status read_out
+    read_out="$(payer in-person read --file "${code}" --offline)" || read_status=$?
     pay_status="$(payer_status in-person pay 0.2 --file "${code}" --offline)"
     receive_status="$(payer_status in-person receive --file "${send_code}" --offline)"
-    ((read_status != 0 && pay_status != 0 && receive_status != 0)) ||
-        fail "past the TTL, read exited ${read_status}, pay ${pay_status}, receive ${receive_status}" || return 1
+    ((pay_status == 7 && receive_status == 7)) ||
+        fail "past the TTL, pay exited ${pay_status} and receive ${receive_status}, not 7 (rejected)" || return 1
+    # Reading only shows the code, and its cutoff is the one the payee was told.
+    ((read_status == 0)) && jq -e --argjson cutoff "${cutoff}" '.ttl_cutoff == $cutoff' <<<"${read_out}" >/dev/null ||
+        fail "past the TTL, read exited ${read_status}: ${read_out}" || return 1
     [[ "$(payer tx list | jq '.transactions | length')" == "${payer_count}" ]] ||
         fail "a refused code left a transaction in the payer's wallet" || return 1
     wait_until "the send code to expire" 120 tx_state_in lepic "${send_tx}" cancelled expired ||
         fail "the unanswered send is $(lepic_tx_state "${send_tx}")" || return 1
     wait_until "the inputs unlocked" 60 lepic_unlocked || fail "the expired send left $(lepic_locked) units locked" || return 1
     expect_totals "${L0}" "${P0}" || return 1
-    DETAIL="past TTL ${send_cutoff}: read exited ${read_status}, pay ${pay_status}, receive ${receive_status}, nothing stored; the unanswered send is $(lepic_tx_state "${send_tx}"), inputs unlocked, balance back"
+    DETAIL="past TTL ${send_cutoff}: read shows cutoff ${cutoff}, pay exited ${pay_status}, receive ${receive_status}, nothing stored; the unanswered send is $(lepic_tx_state "${send_tx}"), inputs unlocked, balance back"
 }
 
 lepic_unlocked() { (($(lepic_locked) == 0)); }
@@ -467,13 +470,14 @@ lepic_unlocked() { (($(lepic_locked) == 0)); }
 node_past() { (($(tip_height) > $1 && $(tip_height) > $2)); }
 
 # 8. An epic1 link names a mailbox on the wallet's own relay, which the product refuses when it is
-# a loopback host, so the local stack's relay cannot carry link payments: no link is made.
+# on this device, so the local stack's relay cannot carry link payments: no link is made.
 native_epic1() {
     native_ready || return 1
     local status=0 out
     out="$(lepic epic1 link 0.3 2>&1)" || status=$?
-    ((status != 0)) || fail "an epic1 link on a loopback relay was made: ${out}" || return 1
-    grep -qi "loopback\|local" <<<"${out}" || fail "the refusal does not name the loopback host: ${out}" || return 1
+    ((status == 7)) || fail "an epic1 link on a relay on this device exited ${status}: ${out}" || return 1
+    jq -e '.error.kind == "rejected" and (.error.causes | join(" ") | contains("the wallet'"'"'s relay is on this device"))' <<<"${out}" >/dev/null ||
+        fail "the refusal is not a rejection naming the relay on this device: ${out}" || return 1
     [[ "$(lepic epic1 links | jq '.links | length')" == 0 ]] || fail "the refused link was kept: $(lepic epic1 links)" || return 1
     DETAIL="epic1 link refused with the local relay (exit ${status}), none kept; the full flow, pay, answer and finalize, was run on floonet against wss://epicbox.btlabs.uk"
 }
