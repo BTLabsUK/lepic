@@ -1108,7 +1108,7 @@
         "tags": [
           "in-person"
         ],
-        "summary": "Show what a scanned code asks, and where its answer goes, before paying it",
+        "summary": "Show what a scanned code asks, and where its answer goes, before paying or receiving it",
         "operationId": "in_person_read",
         "requestBody": {
           "content": {
@@ -1126,6 +1126,88 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/InPersonReadReport"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error, as RFC 9457 problem details",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/in-person/receive": {
+      "post": {
+        "tags": [
+          "in-person"
+        ],
+        "summary": "Receive a scanned send code",
+        "description": "The sealed answer is in the response as hex and is stored for\n`POST /v1/in-person/{slate_id}/post`.",
+        "operationId": "in_person_receive",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InPersonReceiveBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InPersonPaidReport"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error, as RFC 9457 problem details",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/in-person/sends": {
+      "post": {
+        "tags": [
+          "in-person"
+        ],
+        "summary": "Make a send code to show, for one scan",
+        "description": "The code is in the response as hex. Its inputs stay locked until an answer is finalized by\n`POST /v1/in-person/{slate_id}/finalize`, the TTL passes or the send is cancelled.",
+        "operationId": "in_person_send",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InPersonSendBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InPersonCodeReport"
                 }
               }
             }
@@ -3893,7 +3975,7 @@
       },
       "InPersonReadBody": {
         "type": "object",
-        "description": "A scanned in-person code, to read before paying it.",
+        "description": "A scanned in-person code, to read before paying or receiving it.",
         "required": [
           "code"
         ],
@@ -3978,6 +4060,88 @@
             "minimum": 0
           }
         }
+      },
+      "InPersonReceiveBody": {
+        "type": "object",
+        "description": "A scanned in-person send code to receive.",
+        "required": [
+          "code"
+        ],
+        "properties": {
+          "account": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The account the funds go to; the default account when absent."
+          },
+          "code": {
+            "type": "string",
+            "description": "The code's raw bytes as hex digits."
+          },
+          "message": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A message to the sender, signed with the answer."
+          }
+        },
+        "additionalProperties": false
+      },
+      "InPersonSendBody": {
+        "type": "object",
+        "description": "An in-person send code to make.",
+        "required": [
+          "amount"
+        ],
+        "properties": {
+          "account": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The account label; the default account when absent."
+          },
+          "amount": {
+            "type": "string",
+            "description": "EPIC, as a decimal string; the fee is added."
+          },
+          "change_outputs": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Outputs the change is split into.",
+            "minimum": 0
+          },
+          "message": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A message to the receiver, signed with the code."
+          },
+          "min_confirmations": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Confirmations an output needs before it is spent.",
+            "minimum": 0
+          },
+          "ttl_blocks": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Blocks after which the receiver must refuse the code; 15 when absent.",
+            "minimum": 0
+          }
+        },
+        "additionalProperties": false
       },
       "InPersonTakeBody": {
         "type": "object",

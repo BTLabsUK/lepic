@@ -902,13 +902,24 @@ The code names no payment proof and is refused after its TTL. Online, `lepic con
 takes the answers; offline, the code names no mailbox and the payer shows the answer back for \
 `lepic in-person take`. Nothing is finalized until `lepic in-person finalize`.")]
     Invoice(InPersonInvoiceArgs),
-    /// Show what a scanned code asks, and where its answer goes, before paying it
+    /// Make a send code to show, for one scan; its answer comes to this wallet's relay
+    #[command(after_help = "\
+The code names no payment proof and is refused after its TTL. Its inputs stay locked until an \
+answer is finalized, the TTL passes or the send is cancelled. Answers are taken and finalized \
+as for `lepic in-person invoice`.")]
+    Send(InPersonSendArgs),
+    /// Show what a scanned code asks, and where its answer goes, before paying or receiving it
     Read(InPersonReadArgs),
     /// Pay a scanned invoice code; the sealed answer is printed and stored for posting
     #[command(after_help = "\
 The inputs stay locked until the code's TTL passes or the payment is cancelled. Post the answer \
 with `lepic in-person post`, or show it to the payee to take by hand.")]
     Pay(InPersonPayArgs),
+    /// Receive a scanned send code; the sealed answer is printed and stored for posting
+    #[command(after_help = "\
+Post the answer with `lepic in-person post`, or show it to the sender to take by hand. The \
+sender finalizes the answer whose check code both screens show.")]
+    Receive(InPersonReceiveArgs),
     /// Post the answer to a paid code to the relay the code names
     Post(InPersonPostArgs),
     /// Take an answer shown back by hand, for a code this wallet showed
@@ -964,6 +975,33 @@ pub struct InPersonReadArgs {
 }
 
 #[derive(Debug, Args)]
+pub struct InPersonSendArgs {
+    /// Amount to send, in EPIC; the fee is added
+    #[arg(value_name = "AMOUNT")]
+    pub amount: String,
+    #[command(flatten)]
+    pub account: AccountArg,
+    #[command(flatten)]
+    pub message: MessageArg,
+    #[command(flatten)]
+    pub spend: SpendArgs,
+    #[command(flatten)]
+    pub out: OutFileArg,
+}
+
+#[derive(Debug, Args)]
+pub struct InPersonReceiveArgs {
+    #[command(flatten)]
+    pub code: InPersonCodeArg,
+    #[command(flatten)]
+    pub account: AccountArg,
+    #[command(flatten)]
+    pub message: MessageArg,
+    #[command(flatten)]
+    pub out: OutFileArg,
+}
+
+#[derive(Debug, Args)]
 pub struct InPersonPayArgs {
     /// The amount the invoice asks for, in EPIC
     #[arg(value_name = "AMOUNT")]
@@ -982,7 +1020,7 @@ pub struct InPersonPayArgs {
 
 #[derive(Debug, Args)]
 pub struct InPersonSlateArg {
-    /// Slate id of the code, as `in-person invoice` or `in-person pay` printed it
+    /// Slate id of the code, as `in-person invoice`, `send`, `pay` or `receive` printed it
     #[arg(value_name = "SLATE_ID")]
     pub slate_id: String,
 }

@@ -20,11 +20,12 @@ use crate::cli::{
     ContactRequestArgs, ContactSasArgs, ContactScanArgs, ContactSwitchArgs, DEFAULT_CHANGE_OUTPUTS,
     DEFAULT_CONTACT_NAME, DomainArgs, DomainCommand, EpicboxCommand, FluffArg, HttpReach,
     InPersonArgs, InPersonCodeArg, InPersonCommand, InPersonFinalizeArgs, InPersonInvoiceArgs,
-    InPersonPayArgs, InPersonPostArgs, InPersonReadArgs, InPersonSlateArg, InPersonTakeArgs,
-    InviteExpiryArg, KeysArg, ListArgs, ListingArgs, MAX_DRAIN_DAYS, MessageArg, NodeCommand,
-    OnOffArg, OutFileArg, PeerArgs, PlainHttpArg, PostArgs, ProfileCommand, ProfileSetArgs, SasArg,
-    SelectionArg, SendArgs, SendDestinationArgs, SendSlateIdArg, SpendArgs, TorBinaryArgs,
-    TxCommand, TxIdArgs, TxShowArgs, WalletCommand, WalletScanArgs,
+    InPersonPayArgs, InPersonPostArgs, InPersonReadArgs, InPersonReceiveArgs, InPersonSendArgs,
+    InPersonSlateArg, InPersonTakeArgs, InviteExpiryArg, KeysArg, ListArgs, ListingArgs,
+    MAX_DRAIN_DAYS, MessageArg, NodeCommand, OnOffArg, OutFileArg, PeerArgs, PlainHttpArg,
+    PostArgs, ProfileCommand, ProfileSetArgs, SasArg, SelectionArg, SendArgs, SendDestinationArgs,
+    SendSlateIdArg, SpendArgs, TorBinaryArgs, TxCommand, TxIdArgs, TxShowArgs, WalletCommand,
+    WalletScanArgs,
 };
 use crate::commands::is_onion;
 use crate::output::{
@@ -302,7 +303,37 @@ pub(crate) struct InPersonInvoiceBody {
     ttl_blocks: Option<u64>,
 }
 
-/// A scanned in-person code, to read before paying it.
+/// An in-person send code to make.
+#[derive(Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct InPersonSendBody {
+    /// EPIC, as a decimal string; the fee is added.
+    amount: String,
+    /// The account label; the default account when absent.
+    account: Option<String>,
+    /// A message to the receiver, signed with the code.
+    message: Option<String>,
+    /// Blocks after which the receiver must refuse the code; 15 when absent.
+    ttl_blocks: Option<u64>,
+    /// Confirmations an output needs before it is spent.
+    min_confirmations: Option<u64>,
+    /// Outputs the change is split into.
+    change_outputs: Option<usize>,
+}
+
+/// A scanned in-person send code to receive.
+#[derive(Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct InPersonReceiveBody {
+    /// The code's raw bytes as hex digits.
+    code: String,
+    /// The account the funds go to; the default account when absent.
+    account: Option<String>,
+    /// A message to the sender, signed with the answer.
+    message: Option<String>,
+}
+
+/// A scanned in-person code, to read before paying or receiving it.
 #[derive(Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct InPersonReadBody {
@@ -1336,7 +1367,35 @@ pub(crate) async fn in_person_invoice(api: &Api<'_>, request: Request) -> Answer
     api.run(in_person(InPersonCommand::Invoice(args))).await
 }
 
-/// Show what a scanned code asks, and where its answer goes, before paying it
+/// Make a send code to show, for one scan
+///
+/// The code is in the response as hex. Its inputs stay locked until an answer is finalized by
+/// `POST /v1/in-person/{slate_id}/finalize`, the TTL passes or the send is cancelled.
+#[utoipa::path(
+    post,
+    path = "/v1/in-person/sends",
+    tag = "in-person",
+    request_body = InPersonSendBody,
+    responses((status = 200, body = InPersonCodeReport)),
+)]
+pub(crate) async fn in_person_send(api: &Api<'_>, request: Request) -> Answer {
+    let body: InPersonSendBody = request.json()?;
+    let args = InPersonSendArgs {
+        amount: body.amount,
+        account: account(body.account),
+        message: MessageArg {
+            message: body.message,
+        },
+        spend: SpendArgs {
+            ttl_blocks: body.ttl_blocks,
+            ..spend(body.min_confirmations, body.change_outputs)
+        },
+        out: OutFileArg { out: None },
+    };
+    api.run(in_person(InPersonCommand::Send(args))).await
+}
+
+/// Show what a scanned code asks, and where its answer goes, before paying or receiving it
 #[utoipa::path(
     post,
     path = "/v1/in-person/read",
@@ -1378,6 +1437,30 @@ pub(crate) async fn in_person_pay(api: &Api<'_>, request: Request) -> Answer {
         out: OutFileArg { out: None },
     };
     api.run(in_person(InPersonCommand::Pay(args))).await
+}
+
+/// Receive a scanned send code
+///
+/// The sealed answer is in the response as hex and is stored for
+/// `POST /v1/in-person/{slate_id}/post`.
+#[utoipa::path(
+    post,
+    path = "/v1/in-person/receive",
+    tag = "in-person",
+    request_body = InPersonReceiveBody,
+    responses((status = 200, body = InPersonPaidReport)),
+)]
+pub(crate) async fn in_person_receive(api: &Api<'_>, request: Request) -> Answer {
+    let body: InPersonReceiveBody = request.json()?;
+    let args = InPersonReceiveArgs {
+        code: in_person_code(body.code),
+        account: account(body.account),
+        message: MessageArg {
+            message: body.message,
+        },
+        out: OutFileArg { out: None },
+    };
+    api.run(in_person(InPersonCommand::Receive(args))).await
 }
 
 /// Post the answer to a paid code to the relay the code names

@@ -6,10 +6,12 @@ use std::path::Path;
 
 use lepic_transport::host_rule::{HostClass, HostReport};
 use lepic_wallet::event::SlateId;
+use lepic_wallet::receive::ReceiveRequest;
 use lepic_wallet::selection::SelectionOptions;
 use lepic_wallet::slate::Stage;
 use lepic_wallet_contacts::{
-    ContactRelays, InPersonCodeView, InPersonInvoiceRequest, InPersonTaken, WalletContacts,
+    ContactRelays, InPersonCode, InPersonCodeView, InPersonInvoiceRequest, InPersonPaid,
+    InPersonTaken, WalletContacts,
 };
 
 use super::contact::{from_hex, relays_in_mode, to_hex};
@@ -17,7 +19,7 @@ use super::{Opened, Run, Spend, propagation};
 use crate::amount::{format_amount, format_fee, parse_amount};
 use crate::cli::{
     InPersonArgs, InPersonCodeArg, InPersonCommand, InPersonInvoiceArgs, InPersonPayArgs,
-    InPersonReadArgs, InPersonTakeArgs,
+    InPersonReadArgs, InPersonReceiveArgs, InPersonSendArgs, InPersonTakeArgs,
 };
 use crate::exit::CliError;
 use crate::host::Host;
@@ -57,18 +59,43 @@ impl<H: Host> Run<'_, H> {
                     ttl_blocks,
                 };
                 let code = book.in_person_invoice(&relays, request).await?;
-                let (code_hex, file) = write_or_hex(out.out.as_deref(), &code.bytes)?;
-                Report::InPersonCode(InPersonCodeReport {
-                    tx_id: code.tx_id.0,
-                    slate_id: code.slate_id.to_string(),
-                    code: code_hex,
-                    file,
-                    ttl_cutoff: code.ttl_cutoff,
-                    mailbox: code.mailbox,
-                })
+                code_report(out.out.as_deref(), code)?
+            }
+            InPersonCommand::Send(args) => {
+                let InPersonSendArgs {
+                    amount,
+                    account,
+                    message,
+                    spend,
+                    out,
+                } = args;
+                let request = Spend::from_args(&spend)?.send_request(
+                    wallet.account(&account.account)?.index,
+                    parse_amount(&amount)?,
+                    message.message,
+                );
+                let code = book.in_person_send(&relays, request).await?;
+                code_report(out.out.as_deref(), code)?
             }
             InPersonCommand::Read(args) => read(&opened, &relays, args).await?,
             InPersonCommand::Pay(args) => pay(&opened, &relays, args).await?,
+            InPersonCommand::Receive(args) => {
+                let InPersonReceiveArgs {
+                    code,
+                    account,
+                    message,
+                    out,
+                } = args;
+                let request = ReceiveRequest {
+                    account: Some(account.account),
+                    message: message.message,
+                    ..ReceiveRequest::default()
+                };
+                let paid = book
+                    .in_person_receive(&relays, &code_bytes(&code)?, request)
+                    .await?;
+                paid_report(out.out.as_deref(), paid)?
+            }
             InPersonCommand::Post(args) => {
                 let slate_id = slate_id(&args.slate.slate_id)?;
                 book.in_person_post(&relays, slate_id, args.relay_ok)
@@ -165,7 +192,25 @@ async fn pay<N: lepic_node::NodeApi + 'static>(
         .contact_book()
         .in_person_pay(relays, &bytes, request)
         .await?;
-    let (envelope, file) = write_or_hex(out.out.as_deref(), &paid.envelope)?;
+    paid_report(out.out.as_deref(), paid)
+}
+
+/// Writes the code to show to `out` or prints it.
+fn code_report(out: Option<&Path>, code: InPersonCode) -> Result<Report, CliError> {
+    let (code_hex, file) = write_or_hex(out, &code.bytes)?;
+    Ok(Report::InPersonCode(InPersonCodeReport {
+        tx_id: code.tx_id.0,
+        slate_id: code.slate_id.to_string(),
+        code: code_hex,
+        file,
+        ttl_cutoff: code.ttl_cutoff,
+        mailbox: code.mailbox,
+    }))
+}
+
+/// Writes the sealed answer to `out` or prints it.
+fn paid_report(out: Option<&Path>, paid: InPersonPaid) -> Result<Report, CliError> {
+    let (envelope, file) = write_or_hex(out, &paid.envelope)?;
     Ok(Report::InPersonPaid(InPersonPaidReport {
         tx_id: paid.tx_id.0,
         slate_id: paid.slate_id.to_string(),

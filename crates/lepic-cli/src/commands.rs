@@ -1998,7 +1998,7 @@ fn chain_moved_during(error: &RefreshError) -> bool {
     }
 }
 
-/// The spending options shared by `tx send` and `invoice pay`.
+/// The spending options shared by `tx send`, `invoice pay` and `in-person`.
 struct Spend {
     minimum_confirmations: u64,
     change_outputs: NonZeroUsize,
@@ -2020,6 +2020,22 @@ impl Spend {
             ttl_blocks: self.ttl_blocks,
             message,
             ..PayRequest::new(account, amount)
+        }
+    }
+
+    fn send_request(
+        self,
+        account: lepic_store::AccountIndex,
+        amount: lepic_primitives::amount::Amount,
+        message: Option<String>,
+    ) -> SendRequest {
+        SendRequest {
+            minimum_confirmations: self.minimum_confirmations,
+            change_outputs: self.change_outputs,
+            strategy: self.strategy,
+            ttl_blocks: self.ttl_blocks,
+            message,
+            ..SendRequest::new(account, amount)
         }
     }
 

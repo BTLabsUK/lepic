@@ -564,6 +564,26 @@ fn in_person_routes_refuse_bad_input() {
             400,
             "usage",
         );
+        problem(
+            &http(
+                socket,
+                "POST",
+                "/v1/in-person/sends",
+                Some(r#"{"amount":"1","out":"code.bin"}"#),
+            ),
+            400,
+            "usage",
+        );
+        problem(
+            &http(
+                socket,
+                "POST",
+                "/v1/in-person/receive",
+                Some(r#"{"code":"zz"}"#),
+            ),
+            400,
+            "usage",
+        );
     });
 }
 
