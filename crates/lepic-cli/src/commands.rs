@@ -5,8 +5,8 @@ use std::future::Future;
 use std::io::{Read as _, Write as _};
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, PoisonError};
 
 use jiff::Timestamp;
 use lepic_epicbox::{ClientSettings, EpicboxAddress, Network as RelayNetwork, TRANSPORT_ID};
@@ -2114,15 +2114,22 @@ async fn finalize_slate<N: NodeApi + 'static>(
     }))
 }
 
+/// Taken for the whole of a rekey, so two password changes in one process run one after the
+/// other: the second reads the vault the first wrote, and its current password is checked
+/// against that.
+static REKEY: Mutex<()> = Mutex::new(());
+
 /// Re-encrypts the vault in `data_dir` under `new`. Only the vault file changes: the database key
-/// comes from the seed (ADR 0032). The caller holds the data directory lock. It runs Argon2id
-/// twice, so serve calls it off its runtime thread.
+/// comes from the seed (ADR 0032). The caller holds the data directory lock, which keeps other
+/// processes out; [`REKEY`] keeps the other requests of serve out. It runs Argon2id twice, so
+/// serve calls it off its runtime thread.
 fn rekey(
     kdf: KdfParams,
     data_dir: &Path,
     current: Zeroizing<String>,
     new: Zeroizing<String>,
 ) -> Result<Report, CliError> {
+    let _rekeying = REKEY.lock().unwrap_or_else(PoisonError::into_inner);
     FileVault::new(data_dir, kdf)
         .rekey(&password_from(current), &password_from(new))
         .map_err(WalletError::from)?;

@@ -150,8 +150,8 @@ impl<H: Host> Service<'_, H> {
                 }))
             }
             Call::Finalize { wire, fluff } => finalize_slate(&self.held, &wire, fluff).await,
-            // Serve holds the data directory lock, so the vault cannot change under the rekey.
-            // Argon2id would hold the runtime thread, and every connection with it.
+            // Serve holds the data directory lock, and `rekey` runs one change at a time, so the
+            // vault cannot change under the rekey. Argon2id would hold the runtime thread, and every connection with it.
             Call::Password { current, new } => {
                 if new.is_empty() {
                     return Err(SecretError::EmptyNew.into());
