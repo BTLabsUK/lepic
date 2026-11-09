@@ -1,18 +1,14 @@
 // SPDX-License-Identifier: Apache-2.0
-//! flutter_rust_bridge API over the LEPIC wallet engine for the app (ADR 0007, ADR 0023).
+//! The LEPIC wallet engine for Flutter apps, through flutter_rust_bridge (ADR 0007, ADR 0023).
 //!
-//! `api` is what the app sees. The binding's own repository, `lepic-flutter`, generates
-//! `frb_generated.rs` here and the matching package there in one run, and records in
-//! `bridge.sha256` what it generated from; `cargo xtask repo-lint` fails when `api` or the
-//! generated module changes without a new run. Everything else is glue between the engine's ports
-//! and the app.
+//! `api` is what the app calls. The binding's repository, lepic-flutter, generates
+//! `frb_generated.rs` here and the Dart package there in one run and records their fingerprint
+//! in `bridge.sha256`; `cargo xtask repo-lint` fails when `api` or the generated module changes
+//! without a new run. The other modules connect the engine's ports to the app's runtime and
+//! secret store.
 //!
-//! # The app's secret store
-//!
-//! LEPIC writes these keys to the store the app passes in: `lepic.vault`, the seed encrypted under
-//! the wallet password; `lepic.vault-next` while a password change runs; `lepic.pin-failures` after
-//! a failed password or PIN attempt; and for a PIN wallet `lepic.pin-key` and, while a PIN change
-//! is pending, `lepic.pin-key-pending`.
+//! See `README.md` in this crate and `docs/ffi.md` for the session model, the store keys, the
+//! secrets that cross into Dart and the error codes.
 
 pub mod api;
 mod boundary;
