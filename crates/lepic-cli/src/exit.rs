@@ -15,7 +15,7 @@ use lepic_wallet::scan::ScanError;
 use lepic_wallet::selection::SelectionError;
 use lepic_wallet::send::SendError;
 use lepic_wallet::{AccountError, ReceiveError, WalletError};
-use lepic_wallet_contacts::ContactError;
+use lepic_wallet_contacts::{ContactError, InPersonRefusal};
 use thiserror::Error;
 
 use crate::amount::AmountError;
@@ -444,6 +444,11 @@ fn contact_kind(error: &ContactError) -> ErrorKind {
         | ContactError::AddressProofMissing
         | ContactError::NoDomainClaim
         | ContactError::RelayMoveNotRequested => ErrorKind::Rejected,
+        ContactError::Native(_) => ErrorKind::Usage,
+        ContactError::InPerson(InPersonRefusal::NoCode | InPersonRefusal::NoAnswer) => {
+            ErrorKind::NotFound
+        }
+        ContactError::InPerson(_) => ErrorKind::Rejected,
         ContactError::Post(_) => ErrorKind::Transport,
         ContactError::NotCancelled { cause, .. } => contact_kind(cause),
         _ => ErrorKind::Internal,

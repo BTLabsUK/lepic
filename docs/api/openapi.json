@@ -1021,6 +1021,311 @@
         }
       }
     },
+    "/v1/in-person/invoices": {
+      "post": {
+        "tags": [
+          "in-person"
+        ],
+        "summary": "Make an invoice code to show, for one scan",
+        "description": "The code is in the response as hex. Nothing is finalized until\n`POST /v1/in-person/{slate_id}/finalize`.",
+        "operationId": "in_person_invoice",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InPersonInvoiceBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InPersonCodeReport"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error, as RFC 9457 problem details",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/in-person/pay": {
+      "post": {
+        "tags": [
+          "in-person"
+        ],
+        "summary": "Pay a scanned invoice code",
+        "description": "The sealed answer is in the response as hex and is stored for\n`POST /v1/in-person/{slate_id}/post`.",
+        "operationId": "in_person_pay",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InPersonPayBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InPersonPaidReport"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error, as RFC 9457 problem details",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/in-person/read": {
+      "post": {
+        "tags": [
+          "in-person"
+        ],
+        "summary": "Show what a scanned code asks, and where its answer goes, before paying it",
+        "operationId": "in_person_read",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InPersonReadBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InPersonReadReport"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error, as RFC 9457 problem details",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/in-person/take": {
+      "post": {
+        "tags": [
+          "in-person"
+        ],
+        "summary": "Take an answer shown back by hand, for a code this wallet showed",
+        "operationId": "in_person_take",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InPersonTakeBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InPersonTakenReport"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error, as RFC 9457 problem details",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/in-person/{slate_id}/answers": {
+      "get": {
+        "tags": [
+          "in-person"
+        ],
+        "summary": "The answers to a code this wallet showed, with their check codes",
+        "operationId": "in_person_answers",
+        "parameters": [
+          {
+            "name": "slate_id",
+            "in": "path",
+            "description": "The code's slate id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InPersonAnswersReport"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error, as RFC 9457 problem details",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/in-person/{slate_id}/finalize": {
+      "post": {
+        "tags": [
+          "in-person"
+        ],
+        "summary": "Finalize one answer to a code this wallet showed and post the transaction",
+        "operationId": "in_person_finalize",
+        "parameters": [
+          {
+            "name": "slate_id",
+            "in": "path",
+            "description": "The code's slate id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InPersonFinalizeBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FinalizeReport"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error, as RFC 9457 problem details",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/in-person/{slate_id}/post": {
+      "post": {
+        "tags": [
+          "in-person"
+        ],
+        "summary": "Post the answer to a paid code to the relay the code names",
+        "operationId": "in_person_post",
+        "parameters": [
+          {
+            "name": "slate_id",
+            "in": "path",
+            "description": "The code's slate id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InPersonPostBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InPersonPostReport"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error, as RFC 9457 problem details",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/methods": {
       "get": {
         "tags": [
@@ -3246,6 +3551,483 @@
             "minimum": 0
           },
           "source_id": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          }
+        }
+      },
+      "InPersonAnswerReport": {
+        "type": "object",
+        "description": "One answer to a code this wallet showed.",
+        "required": [
+          "number",
+          "check_code",
+          "same_code",
+          "received_at"
+        ],
+        "properties": {
+          "check_code": {
+            "type": "string"
+          },
+          "number": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "received_at": {
+            "type": "string"
+          },
+          "same_code": {
+            "type": "boolean"
+          }
+        }
+      },
+      "InPersonAnswersReport": {
+        "type": "object",
+        "description": "A code this wallet showed and its answers, from `in-person answers`.",
+        "required": [
+          "tx_id",
+          "slate_id",
+          "stage",
+          "ttl_cutoff",
+          "closed",
+          "answers"
+        ],
+        "properties": {
+          "answers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/InPersonAnswerReport"
+            }
+          },
+          "closed": {
+            "type": "boolean",
+            "description": "An answer that checks arrived: the code is no longer shown."
+          },
+          "finalized": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The answer that was finalized.",
+            "minimum": 0
+          },
+          "mailbox": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "slate_id": {
+            "type": "string"
+          },
+          "stage": {
+            "type": "string"
+          },
+          "ttl_cutoff": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "tx_id": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          }
+        }
+      },
+      "InPersonCodeReport": {
+        "type": "object",
+        "description": "A code to show as a QR code, from `in-person invoice`.",
+        "required": [
+          "tx_id",
+          "slate_id",
+          "ttl_cutoff"
+        ],
+        "properties": {
+          "code": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The raw `lepic.v1` bytes as hex, when they were not written to a file."
+          },
+          "file": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "mailbox": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The relay of the code's reply mailbox, `domain[:port]`; absent when the answer comes\nback by hand."
+          },
+          "slate_id": {
+            "type": "string"
+          },
+          "ttl_cutoff": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The height from which the code is refused.",
+            "minimum": 0
+          },
+          "tx_id": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          }
+        }
+      },
+      "InPersonFinalizeBody": {
+        "type": "object",
+        "description": "The answer to finalize.",
+        "required": [
+          "answer"
+        ],
+        "properties": {
+          "answer": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The answer's number, as `GET /v1/in-person/{slate_id}/answers` lists it.",
+            "minimum": 0
+          },
+          "fluff": {
+            "type": "boolean",
+            "description": "Broadcast to all peers at once instead of through the stem phase."
+          }
+        },
+        "additionalProperties": false
+      },
+      "InPersonHostReport": {
+        "type": "object",
+        "description": "The relay a code names for its answer, as it is shown before posting.",
+        "required": [
+          "host",
+          "port",
+          "in_relay_list",
+          "host_rule"
+        ],
+        "properties": {
+          "host": {
+            "type": "string"
+          },
+          "host_rule": {
+            "type": "string",
+            "description": "`public` or `local_network`."
+          },
+          "in_relay_list": {
+            "type": "boolean",
+            "description": "The host is this wallet's relay or one of its meeting relays."
+          },
+          "port": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          }
+        }
+      },
+      "InPersonInvoiceBody": {
+        "type": "object",
+        "description": "An in-person invoice code to make.",
+        "required": [
+          "amount"
+        ],
+        "properties": {
+          "account": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The account the payment goes to; the default account when absent."
+          },
+          "amount": {
+            "type": "string",
+            "description": "EPIC, as a decimal string; the payer adds the fee."
+          },
+          "message": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A message to the payer, signed with the code."
+          },
+          "ttl_blocks": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Blocks after which the payer must refuse the code; 15 when absent.",
+            "minimum": 0
+          }
+        },
+        "additionalProperties": false
+      },
+      "InPersonPaidReport": {
+        "type": "object",
+        "description": "An answer to a scanned code, from `in-person pay`.",
+        "required": [
+          "tx_id",
+          "slate_id",
+          "check_code"
+        ],
+        "properties": {
+          "check_code": {
+            "type": "string",
+            "description": "The check code the other screen shows for this answer."
+          },
+          "envelope": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The sealed answer as hex, when it was not written to a file."
+          },
+          "file": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "mailbox": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/InPersonHostReport"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "slate_id": {
+            "type": "string"
+          },
+          "tx_id": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          }
+        }
+      },
+      "InPersonPayBody": {
+        "type": "object",
+        "description": "A scanned in-person invoice code to pay.",
+        "required": [
+          "amount",
+          "code"
+        ],
+        "properties": {
+          "account": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The account label; the default account when absent."
+          },
+          "amount": {
+            "type": "string",
+            "description": "The amount the code asks for, in EPIC, as a decimal string: the payer's confirmation."
+          },
+          "change_outputs": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Outputs the change is split into.",
+            "minimum": 0
+          },
+          "code": {
+            "type": "string",
+            "description": "The code's raw bytes as hex digits."
+          },
+          "message": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A message to the payee, signed with the answer."
+          },
+          "min_confirmations": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Confirmations an output needs before it is spent.",
+            "minimum": 0
+          }
+        },
+        "additionalProperties": false
+      },
+      "InPersonPostBody": {
+        "type": "object",
+        "description": "The consent to post an answer to the relay a code names.",
+        "properties": {
+          "relay_ok": {
+            "type": "boolean",
+            "description": "The relay `POST /v1/in-person/read` showed for the code was checked and may be used."
+          }
+        },
+        "additionalProperties": false
+      },
+      "InPersonPostReport": {
+        "type": "object",
+        "description": "An answer posted to the relay its code names, from `in-person post`.",
+        "required": [
+          "slate_id",
+          "posted"
+        ],
+        "properties": {
+          "posted": {
+            "type": "boolean"
+          },
+          "slate_id": {
+            "type": "string"
+          }
+        }
+      },
+      "InPersonReadBody": {
+        "type": "object",
+        "description": "A scanned in-person code, to read before paying it.",
+        "required": [
+          "code"
+        ],
+        "properties": {
+          "account": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The account the fee estimate spends from; the default account when absent."
+          },
+          "change_outputs": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Outputs the change is split into.",
+            "minimum": 0
+          },
+          "code": {
+            "type": "string",
+            "description": "The code's raw bytes as hex digits."
+          },
+          "min_confirmations": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Confirmations an output needs before it is spent.",
+            "minimum": 0
+          }
+        },
+        "additionalProperties": false
+      },
+      "InPersonReadReport": {
+        "type": "object",
+        "description": "What a scanned code asks, from `in-person read`.",
+        "required": [
+          "slate_id",
+          "stage",
+          "amount",
+          "ttl_cutoff"
+        ],
+        "properties": {
+          "amount": {
+            "type": "string"
+          },
+          "fee": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The fee this wallet would pay, when it can tell now."
+          },
+          "mailbox": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/InPersonHostReport"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "message": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "slate_id": {
+            "type": "string"
+          },
+          "stage": {
+            "type": "string",
+            "description": "`invoice` for an I1, `send` for an S1."
+          },
+          "ttl_cutoff": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
+      "InPersonTakeBody": {
+        "type": "object",
+        "description": "An answer shown back by hand.",
+        "required": [
+          "answer"
+        ],
+        "properties": {
+          "answer": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The answer: its sealed bytes as hex digits, its armoured text, or its UR parts."
+          }
+        },
+        "additionalProperties": false
+      },
+      "InPersonTakenReport": {
+        "type": "object",
+        "description": "An answer taken for a code this wallet showed, from `in-person take`.",
+        "required": [
+          "tx_id",
+          "slate_id",
+          "answer",
+          "check_code",
+          "same_code",
+          "duplicate"
+        ],
+        "properties": {
+          "answer": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "check_code": {
+            "type": "string"
+          },
+          "duplicate": {
+            "type": "boolean",
+            "description": "The same answer was taken before; nothing changed."
+          },
+          "same_code": {
+            "type": "boolean",
+            "description": "An earlier answer had the same check code."
+          },
+          "slate_id": {
+            "type": "string"
+          },
+          "tx_id": {
             "type": "integer",
             "format": "int32",
             "minimum": 0

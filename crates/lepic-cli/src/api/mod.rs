@@ -138,6 +138,13 @@ api!(
     payload_post,
     payloads,
     payload_ack,
+    in_person_invoice,
+    in_person_read,
+    in_person_pay,
+    in_person_post,
+    in_person_take,
+    in_person_answers,
+    in_person_finalize,
 );
 
 /// The operation extension that keeps a route off the TLS listener.

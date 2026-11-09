@@ -83,6 +83,12 @@ pub enum Report {
     ApiClientAdd(ApiClientReport),
     ApiClientList(ApiClientListReport),
     ApiClientRemove(ApiClientReport),
+    InPersonCode(InPersonCodeReport),
+    InPersonRead(InPersonReadReport),
+    InPersonPaid(InPersonPaidReport),
+    InPersonPost(InPersonPostReport),
+    InPersonTaken(InPersonTakenReport),
+    InPersonAnswers(InPersonAnswersReport),
 }
 
 #[derive(Serialize)]
@@ -469,6 +475,107 @@ pub struct ContactInviteReport {
     /// The five pairing words as `emoji name`, when they were offered.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub words: Vec<String>,
+}
+
+/// A code to show as a QR code, from `in-person invoice`.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct InPersonCodeReport {
+    pub tx_id: u32,
+    pub slate_id: String,
+    /// The raw `lepic.v1` bytes as hex, when they were not written to a file.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub code: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub file: Option<String>,
+    /// The height from which the code is refused.
+    pub ttl_cutoff: u64,
+    /// The relay of the code's reply mailbox, `domain[:port]`; absent when the answer comes
+    /// back by hand.
+    pub mailbox: Option<String>,
+}
+
+/// The relay a code names for its answer, as it is shown before posting.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct InPersonHostReport {
+    pub host: String,
+    pub port: u16,
+    /// The host is this wallet's relay or one of its meeting relays.
+    pub in_relay_list: bool,
+    /// `public` or `local_network`.
+    pub host_rule: &'static str,
+}
+
+/// What a scanned code asks, from `in-person read`.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct InPersonReadReport {
+    pub slate_id: String,
+    /// `invoice` for an I1, `send` for an S1.
+    pub stage: &'static str,
+    pub amount: String,
+    /// The fee this wallet would pay, when it can tell now.
+    pub fee: Option<String>,
+    pub message: Option<String>,
+    pub ttl_cutoff: u64,
+    pub mailbox: Option<InPersonHostReport>,
+}
+
+/// An answer to a scanned code, from `in-person pay`.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct InPersonPaidReport {
+    pub tx_id: u32,
+    pub slate_id: String,
+    /// The sealed answer as hex, when it was not written to a file.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub envelope: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub file: Option<String>,
+    /// The check code the other screen shows for this answer.
+    pub check_code: String,
+    pub mailbox: Option<InPersonHostReport>,
+}
+
+/// An answer posted to the relay its code names, from `in-person post`.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct InPersonPostReport {
+    pub slate_id: String,
+    pub posted: bool,
+}
+
+/// An answer taken for a code this wallet showed, from `in-person take`.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct InPersonTakenReport {
+    pub tx_id: u32,
+    pub slate_id: String,
+    pub answer: u32,
+    pub check_code: String,
+    /// An earlier answer had the same check code.
+    pub same_code: bool,
+    /// The same answer was taken before; nothing changed.
+    pub duplicate: bool,
+}
+
+/// One answer to a code this wallet showed.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct InPersonAnswerReport {
+    pub number: u32,
+    pub check_code: String,
+    pub same_code: bool,
+    pub received_at: String,
+}
+
+/// A code this wallet showed and its answers, from `in-person answers`.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct InPersonAnswersReport {
+    pub tx_id: u32,
+    pub slate_id: String,
+    pub stage: &'static str,
+    pub ttl_cutoff: u64,
+    pub mailbox: Option<String>,
+    /// An answer that checks arrived: the code is no longer shown.
+    pub closed: bool,
+    /// The answer that was finalized.
+    pub finalized: Option<u32>,
+    pub answers: Vec<InPersonAnswerReport>,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -1301,6 +1408,12 @@ fn write_human(out: &mut Vec<u8>, report: &Report) -> std::io::Result<()> {
         | Report::ContactPayloadList(_)
         | Report::ContactPayloadAck(_)
         | Report::ContactQuarantine(_) => write_contact_human(out, report),
+        Report::InPersonCode(_)
+        | Report::InPersonRead(_)
+        | Report::InPersonPaid(_)
+        | Report::InPersonPost(_)
+        | Report::InPersonTaken(_)
+        | Report::InPersonAnswers(_) => write_in_person_human(out, report),
         Report::ApiClientAdd(r) => writeln!(out, "Client {} added: {}", r.name, r.fingerprint),
         Report::ApiClientRemove(r) => writeln!(out, "Client {} removed.", r.name),
         Report::ApiClientList(r) if r.clients.is_empty() => writeln!(out, "No clients."),
@@ -1948,7 +2061,117 @@ fn write_move_home(out: &mut Vec<u8>, r: &ContactMoveHomeReport) -> std::io::Res
     }
 }
 
-/// A report on paired contacts. Writes nothing for any other.
+/// An in-person report. Writes nothing for any other.
+fn write_in_person_human(out: &mut Vec<u8>, report: &Report) -> std::io::Result<()> {
+    match report {
+        Report::InPersonCode(r) => {
+            match (&r.code, &r.file) {
+                (_, Some(file)) => writeln!(out, "Code {} written to {file}.", r.slate_id)?,
+                (Some(code), None) => writeln!(out, "Code {}: {code}", r.slate_id)?,
+                (None, None) => {}
+            }
+            match &r.mailbox {
+                Some(mailbox) => writeln!(
+                    out,
+                    "Answers come to {mailbox} until block {}; `lepic contact collect` takes them.",
+                    r.ttl_cutoff
+                ),
+                None => writeln!(
+                    out,
+                    "Answers come back by hand until block {}: `lepic in-person take`.",
+                    r.ttl_cutoff
+                ),
+            }
+        }
+        Report::InPersonRead(r) => write_in_person_read(out, r),
+        Report::InPersonPaid(r) => {
+            match (&r.envelope, &r.file) {
+                (_, Some(file)) => writeln!(out, "Answer written to {file}.")?,
+                (Some(envelope), None) => writeln!(out, "Answer: {envelope}")?,
+                (None, None) => {}
+            }
+            writeln!(out, "Check code {}; transaction {}.", r.check_code, r.tx_id)
+        }
+        Report::InPersonPost(r) => writeln!(out, "Answer to {} posted.", r.slate_id),
+        Report::InPersonTaken(r) if r.duplicate => writeln!(
+            out,
+            "Answer {} to {} was taken before.",
+            r.answer, r.slate_id
+        ),
+        Report::InPersonTaken(r) => writeln!(
+            out,
+            "Answer {} to {}, check code {}{}.",
+            r.answer,
+            r.slate_id,
+            r.check_code,
+            if r.same_code {
+                ", the same as an earlier answer"
+            } else {
+                ""
+            }
+        ),
+        Report::InPersonAnswers(r) => {
+            writeln!(
+                out,
+                "Code {} ({}), {} until block {}.",
+                r.slate_id,
+                r.stage,
+                if r.closed { "closed" } else { "open" },
+                r.ttl_cutoff
+            )?;
+            if r.answers.is_empty() {
+                return writeln!(out, "No answers.");
+            }
+            r.answers.iter().try_for_each(|answer| {
+                writeln!(
+                    out,
+                    "{}  {}  {}{}{}",
+                    answer.number,
+                    answer.check_code,
+                    short_time(&answer.received_at),
+                    if answer.same_code { "  same code" } else { "" },
+                    if r.finalized == Some(answer.number) {
+                        "  finalized"
+                    } else {
+                        ""
+                    }
+                )
+            })
+        }
+        _ => Ok(()),
+    }
+}
+
+/// What a scanned in-person code asks for.
+fn write_in_person_read(out: &mut Vec<u8>, r: &InPersonReadReport) -> std::io::Result<()> {
+    writeln!(
+        out,
+        "{} {} until block {}.",
+        r.stage, r.amount, r.ttl_cutoff
+    )?;
+    if let Some(fee) = &r.fee {
+        writeln!(out, "Fee {fee}.")?;
+    }
+    if let Some(message) = &r.message {
+        writeln!(out, "Message: {}", printable(message))?;
+    }
+    match &r.mailbox {
+        Some(host) => writeln!(
+            out,
+            "The answer goes to {}:{} ({}{}).",
+            host.host,
+            host.port,
+            host.host_rule,
+            if host.in_relay_list {
+                ", a known relay"
+            } else {
+                ""
+            }
+        ),
+        None => writeln!(out, "The answer is shown back by hand."),
+    }
+}
+
 fn write_contact_human(out: &mut Vec<u8>, report: &Report) -> std::io::Result<()> {
     match report {
         Report::Contact(r) => write_contact(out, r),

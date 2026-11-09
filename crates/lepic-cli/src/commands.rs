@@ -85,6 +85,7 @@ use crate::vault::{FileVault, VAULT_FILE};
 
 mod api_client;
 mod contact;
+mod in_person;
 mod profile;
 #[cfg(unix)]
 mod serve;
@@ -238,6 +239,7 @@ impl<H: Host> Run<'_, H> {
             Command::Tor(TorCommand::Listen(args)) => self.tor_listen(args).await,
             Command::Node(NodeCommand::Status) => self.node_status().await,
             Command::Contact(args) => self.contact(args).await,
+            Command::InPerson(args) => self.in_person(args).await,
             Command::Profile(command) => self.profile(command).await,
             Command::Serve(args) => self.serve(args).await,
             Command::Api(ApiCommand::Client(command)) => self.api_client(command),

@@ -514,6 +514,60 @@ fn contact_routes_pair_back_up_and_refuse_bad_input() {
 }
 
 #[test]
+fn in_person_routes_refuse_bad_input() {
+    let (host, wallet) = funded();
+
+    serving(host, &wallet, |socket, _| {
+        let unknown = "/v1/in-person/2f4a6c1e-5b3d-4e8f-9a0b-1c2d3e4f5a6b";
+        problem(
+            &http(socket, "GET", &format!("{unknown}/answers"), None),
+            404,
+            "not_found",
+        );
+        problem(
+            &http(
+                socket,
+                "POST",
+                &format!("{unknown}/finalize"),
+                Some(r#"{"answer":1}"#),
+            ),
+            404,
+            "not_found",
+        );
+        problem(
+            &http(
+                socket,
+                "POST",
+                "/v1/in-person/read",
+                Some(r#"{"code":"zz"}"#),
+            ),
+            400,
+            "usage",
+        );
+        problem(
+            &http(
+                socket,
+                "POST",
+                "/v1/in-person/take",
+                Some(r#"{"answer":[]}"#),
+            ),
+            400,
+            "usage",
+        );
+        problem(
+            &http(
+                socket,
+                "POST",
+                "/v1/in-person/invoices",
+                Some(r#"{"amount":"1","out":"code.bin"}"#),
+            ),
+            400,
+            "usage",
+        );
+    });
+}
+
+#[test]
 fn payload_routes_list_and_refuse_bad_input() {
     let (host, wallet) = funded();
 

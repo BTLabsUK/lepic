@@ -286,6 +286,11 @@ impl From<&Event> for EventReport {
             Event::ContactPayloadsParked(news) => {
                 Self::contact("contact_payloads_parked", news.contact_id.to_string())
             }
+            Event::InPersonAnswer(answer) => payment(
+                "in_person_answer",
+                Some(answer.tx_id.0),
+                answer.slate_id.to_string(),
+            ),
             _ => Self::of("other"),
         }
     }

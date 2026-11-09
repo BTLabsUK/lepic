@@ -189,9 +189,19 @@ fn relays<N: lepic_node::NodeApi + 'static>(
     args: &ContactArgs,
     meeting: &[lepic_epicbox::RelayEndpoint],
 ) -> ContactRelays {
-    let mode = if args.offline {
+    relays_in_mode(opened, args.offline, args.epicbox_off, meeting)
+}
+
+/// The relays `--offline` and `--epicbox-off` leave a command.
+pub(super) fn relays_in_mode<N: lepic_node::NodeApi + 'static>(
+    opened: &Opened<N>,
+    offline: bool,
+    epicbox_off: bool,
+    meeting: &[lepic_epicbox::RelayEndpoint],
+) -> ContactRelays {
+    let mode = if offline {
         RelayMode::Offline
-    } else if args.epicbox_off {
+    } else if epicbox_off {
         RelayMode::EpicboxOff
     } else {
         RelayMode::Online
@@ -1019,7 +1029,7 @@ fn payload_bytes(args: &ContactPayloadPostArgs) -> Result<Vec<u8>, CliError> {
     from_hex(args.hex.as_deref().unwrap_or_default())
 }
 
-fn from_hex(text: &str) -> Result<Vec<u8>, CliError> {
+pub(super) fn from_hex(text: &str) -> Result<Vec<u8>, CliError> {
     let text = text.trim();
     if !text.len().is_multiple_of(2) || !text.bytes().all(|byte| byte.is_ascii_hexdigit()) {
         return Err(CliError::PayloadHex);
@@ -1035,7 +1045,7 @@ fn from_hex(text: &str) -> Result<Vec<u8>, CliError> {
         .collect()
 }
 
-fn to_hex(bytes: &[u8]) -> String {
+pub(super) fn to_hex(bytes: &[u8]) -> String {
     bytes.iter().fold(String::new(), |mut text, byte| {
         use std::fmt::Write as _;
         let _ = write!(text, "{byte:02x}");

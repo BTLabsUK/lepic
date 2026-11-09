@@ -140,6 +140,9 @@ pub enum Command {
     Node(NodeCommand),
     /// Pair with contacts, and exchange invoices and slates with them through their mailboxes
     Contact(ContactArgs),
+    /// Ask for or make a payment face to face, through a code scanned once
+    #[command(name = "in-person")]
+    InPerson(InPersonArgs),
     /// Show or change what this wallet tells its paired contacts about the host
     #[command(subcommand)]
     Profile(ProfileCommand),
@@ -877,6 +880,142 @@ pub struct ContactArgs {
     /// Treat Epicbox as switched off: no relay connections, contact mailboxes pause
     #[arg(long, global = true, conflicts_with = "offline")]
     pub epicbox_off: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct InPersonArgs {
+    #[command(subcommand)]
+    pub command: InPersonCommand,
+    /// Reach no relay at all: pairing by hand or in person and sealed files still work
+    #[arg(long, global = true)]
+    pub offline: bool,
+    /// Treat Epicbox as switched off: no relay connections, contact mailboxes pause
+    #[arg(long, global = true, conflicts_with = "offline")]
+    pub epicbox_off: bool,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum InPersonCommand {
+    /// Make an invoice code to show, for one scan; its answer comes to this wallet's relay
+    #[command(after_help = "\
+The code names no payment proof and is refused after its TTL. Online, `lepic contact collect` \
+takes the answers; offline, the code names no mailbox and the payer shows the answer back for \
+`lepic in-person take`. Nothing is finalized until `lepic in-person finalize`.")]
+    Invoice(InPersonInvoiceArgs),
+    /// Show what a scanned code asks, and where its answer goes, before paying it
+    Read(InPersonReadArgs),
+    /// Pay a scanned invoice code; the sealed answer is printed and stored for posting
+    #[command(after_help = "\
+The inputs stay locked until the code's TTL passes or the payment is cancelled. Post the answer \
+with `lepic in-person post`, or show it to the payee to take by hand.")]
+    Pay(InPersonPayArgs),
+    /// Post the answer to a paid code to the relay the code names
+    Post(InPersonPostArgs),
+    /// Take an answer shown back by hand, for a code this wallet showed
+    #[command(after_help = "\
+An answer is its sealed bytes as hex, its armoured BEGINEPICTX. text, or its UR parts in any \
+order.")]
+    Take(InPersonTakeArgs),
+    /// List the answers to a code this wallet showed, with their check codes
+    Answers(InPersonSlateArg),
+    /// Finalize one answer to a code this wallet showed and post the transaction
+    #[command(after_help = "\
+Pick the answer whose check code the other screen shows. A later answer with the same check \
+code is flagged by `lepic in-person answers`.")]
+    Finalize(InPersonFinalizeArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct InPersonInvoiceArgs {
+    /// Amount to ask for, in EPIC; the payer adds the fee
+    #[arg(value_name = "AMOUNT")]
+    pub amount: String,
+    #[command(flatten)]
+    pub account: AccountArg,
+    #[command(flatten)]
+    pub message: MessageArg,
+    /// Blocks after which the other party must refuse the slate
+    #[arg(long, value_name = "BLOCKS")]
+    pub ttl_blocks: Option<u64>,
+    #[command(flatten)]
+    pub out: OutFileArg,
+}
+
+/// A scanned code: its raw bytes as hex, or a file holding them.
+#[derive(Debug, Args)]
+#[command(group(clap::ArgGroup::new("bytes").required(true).args(["hex", "file"])))]
+pub struct InPersonCodeArg {
+    /// The payload as hex digits
+    #[arg(long, value_name = "HEX")]
+    pub hex: Option<String>,
+    /// A file whose bytes are the payload
+    #[arg(long, value_name = "FILE")]
+    pub file: Option<PathBuf>,
+}
+
+#[derive(Debug, Args)]
+pub struct InPersonReadArgs {
+    #[command(flatten)]
+    pub code: InPersonCodeArg,
+    #[command(flatten)]
+    pub account: AccountArg,
+    #[command(flatten)]
+    pub spend: SpendArgs,
+}
+
+#[derive(Debug, Args)]
+pub struct InPersonPayArgs {
+    /// The amount the invoice asks for, in EPIC
+    #[arg(value_name = "AMOUNT")]
+    pub amount: String,
+    #[command(flatten)]
+    pub code: InPersonCodeArg,
+    #[command(flatten)]
+    pub account: AccountArg,
+    #[command(flatten)]
+    pub message: MessageArg,
+    #[command(flatten)]
+    pub spend: SpendArgs,
+    #[command(flatten)]
+    pub out: OutFileArg,
+}
+
+#[derive(Debug, Args)]
+pub struct InPersonSlateArg {
+    /// Slate id of the code, as `in-person invoice` or `in-person pay` printed it
+    #[arg(value_name = "SLATE_ID")]
+    pub slate_id: String,
+}
+
+#[derive(Debug, Args)]
+pub struct InPersonPostArgs {
+    #[command(flatten)]
+    pub slate: InPersonSlateArg,
+    /// The relay `in-person read` showed for the code was checked and may be used
+    #[arg(long)]
+    pub relay_ok: bool,
+}
+
+#[derive(Debug, Args)]
+#[command(group(clap::ArgGroup::new("answer").required(true).args(["input", "file"])))]
+pub struct InPersonTakeArgs {
+    /// The answer: hex digits, armoured text, or its UR parts
+    #[arg(value_name = "ANSWER", num_args = 1..)]
+    pub input: Vec<String>,
+    /// A file whose bytes are the payload
+    #[arg(long, value_name = "FILE")]
+    pub file: Option<PathBuf>,
+}
+
+#[derive(Debug, Args)]
+pub struct InPersonFinalizeArgs {
+    #[command(flatten)]
+    pub slate: InPersonSlateArg,
+    /// The answer's number, as `in-person answers` lists it
+    #[arg(value_name = "ANSWER")]
+    pub answer: u32,
+    #[command(flatten)]
+    pub fluff: FluffArg,
 }
 
 #[derive(Debug, Subcommand)]

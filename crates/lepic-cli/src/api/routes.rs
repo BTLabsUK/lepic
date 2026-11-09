@@ -19,8 +19,10 @@ use crate::cli::{
     ContactPayloadAckArgs, ContactPayloadArgs, ContactPayloadCommand, ContactPayloadPostArgs,
     ContactRequestArgs, ContactSasArgs, ContactScanArgs, ContactSwitchArgs, DEFAULT_CHANGE_OUTPUTS,
     DEFAULT_CONTACT_NAME, DomainArgs, DomainCommand, EpicboxCommand, FluffArg, HttpReach,
+    InPersonArgs, InPersonCodeArg, InPersonCommand, InPersonFinalizeArgs, InPersonInvoiceArgs,
+    InPersonPayArgs, InPersonPostArgs, InPersonReadArgs, InPersonSlateArg, InPersonTakeArgs,
     InviteExpiryArg, KeysArg, ListArgs, ListingArgs, MAX_DRAIN_DAYS, MessageArg, NodeCommand,
-    OnOffArg, PeerArgs, PlainHttpArg, PostArgs, ProfileCommand, ProfileSetArgs, SasArg,
+    OnOffArg, OutFileArg, PeerArgs, PlainHttpArg, PostArgs, ProfileCommand, ProfileSetArgs, SasArg,
     SelectionArg, SendArgs, SendDestinationArgs, SendSlateIdArg, SpendArgs, TorBinaryArgs,
     TxCommand, TxIdArgs, TxShowArgs, WalletCommand, WalletScanArgs,
 };
@@ -31,11 +33,12 @@ use crate::output::{
     ContactKeyCheckReport, ContactLinkReport, ContactListReport, ContactMoveHomeReport,
     ContactPayloadAckReport, ContactPayloadListReport, ContactPayloadPostReport,
     ContactPreviewReport, ContactQuarantineReport, ContactRemoveReport, ContactReport,
-    EpicboxStatusReport, FinalizeReport, InfoReport, MethodsReport, NodeStatusReport,
-    OutputsReport, PasswordReport, PeerReport, PostReport, ProfileDomainAttachReport,
-    ProfileDomainDocumentReport, ProfileDomainShowReport, ProfileSetReport, ProfileShowReport,
-    Report, SendReport, ServeStatusReport, SlateReceiveReport, TxListReport, TxReport,
-    TxStateReport, WalletScanReport,
+    EpicboxStatusReport, FinalizeReport, InPersonAnswersReport, InPersonCodeReport,
+    InPersonPaidReport, InPersonPostReport, InPersonReadReport, InPersonTakenReport, InfoReport,
+    MethodsReport, NodeStatusReport, OutputsReport, PasswordReport, PeerReport, PostReport,
+    ProfileDomainAttachReport, ProfileDomainDocumentReport, ProfileDomainShowReport,
+    ProfileSetReport, ProfileShowReport, Report, SendReport, ServeStatusReport, SlateReceiveReport,
+    TxListReport, TxReport, TxStateReport, WalletScanReport,
 };
 
 type Answer = Result<Response<Body>, Problem>;
@@ -283,6 +286,80 @@ pub(crate) struct ImportBody {
 pub(crate) struct PayloadBody {
     /// The payload as hex digits.
     payload: String,
+}
+
+/// An in-person invoice code to make.
+#[derive(Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct InPersonInvoiceBody {
+    /// EPIC, as a decimal string; the payer adds the fee.
+    amount: String,
+    /// The account the payment goes to; the default account when absent.
+    account: Option<String>,
+    /// A message to the payer, signed with the code.
+    message: Option<String>,
+    /// Blocks after which the payer must refuse the code; 15 when absent.
+    ttl_blocks: Option<u64>,
+}
+
+/// A scanned in-person code, to read before paying it.
+#[derive(Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct InPersonReadBody {
+    /// The code's raw bytes as hex digits.
+    code: String,
+    /// The account the fee estimate spends from; the default account when absent.
+    account: Option<String>,
+    /// Confirmations an output needs before it is spent.
+    min_confirmations: Option<u64>,
+    /// Outputs the change is split into.
+    change_outputs: Option<usize>,
+}
+
+/// A scanned in-person invoice code to pay.
+#[derive(Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct InPersonPayBody {
+    /// The amount the code asks for, in EPIC, as a decimal string: the payer's confirmation.
+    amount: String,
+    /// The code's raw bytes as hex digits.
+    code: String,
+    /// The account label; the default account when absent.
+    account: Option<String>,
+    /// A message to the payee, signed with the answer.
+    message: Option<String>,
+    /// Confirmations an output needs before it is spent.
+    min_confirmations: Option<u64>,
+    /// Outputs the change is split into.
+    change_outputs: Option<usize>,
+}
+
+/// The consent to post an answer to the relay a code names.
+#[derive(Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct InPersonPostBody {
+    /// The relay `POST /v1/in-person/read` showed for the code was checked and may be used.
+    #[serde(default)]
+    relay_ok: bool,
+}
+
+/// An answer shown back by hand.
+#[derive(Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct InPersonTakeBody {
+    /// The answer: its sealed bytes as hex digits, its armoured text, or its UR parts.
+    answer: Vec<String>,
+}
+
+/// The answer to finalize.
+#[derive(Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct InPersonFinalizeBody {
+    /// The answer's number, as `GET /v1/in-person/{slate_id}/answers` lists it.
+    answer: u32,
+    /// Broadcast to all peers at once instead of through the stem phase.
+    #[serde(default)]
+    fluff: bool,
 }
 
 fn secret<'de, D: serde::Deserializer<'de>>(
@@ -1234,6 +1311,147 @@ pub(crate) async fn payload_ack(api: &Api<'_>, request: Request) -> Answer {
     api.run(payload(ContactPayloadCommand::Ack(args))).await
 }
 
+/// Make an invoice code to show, for one scan
+///
+/// The code is in the response as hex. Nothing is finalized until
+/// `POST /v1/in-person/{slate_id}/finalize`.
+#[utoipa::path(
+    post,
+    path = "/v1/in-person/invoices",
+    tag = "in-person",
+    request_body = InPersonInvoiceBody,
+    responses((status = 200, body = InPersonCodeReport)),
+)]
+pub(crate) async fn in_person_invoice(api: &Api<'_>, request: Request) -> Answer {
+    let body: InPersonInvoiceBody = request.json()?;
+    let args = InPersonInvoiceArgs {
+        amount: body.amount,
+        account: account(body.account),
+        message: MessageArg {
+            message: body.message,
+        },
+        ttl_blocks: body.ttl_blocks,
+        out: OutFileArg { out: None },
+    };
+    api.run(in_person(InPersonCommand::Invoice(args))).await
+}
+
+/// Show what a scanned code asks, and where its answer goes, before paying it
+#[utoipa::path(
+    post,
+    path = "/v1/in-person/read",
+    tag = "in-person",
+    request_body = InPersonReadBody,
+    responses((status = 200, body = InPersonReadReport)),
+)]
+pub(crate) async fn in_person_read(api: &Api<'_>, request: Request) -> Answer {
+    let body: InPersonReadBody = request.json()?;
+    let args = InPersonReadArgs {
+        code: in_person_code(body.code),
+        account: account(body.account),
+        spend: spend(body.min_confirmations, body.change_outputs),
+    };
+    api.run(in_person(InPersonCommand::Read(args))).await
+}
+
+/// Pay a scanned invoice code
+///
+/// The sealed answer is in the response as hex and is stored for
+/// `POST /v1/in-person/{slate_id}/post`.
+#[utoipa::path(
+    post,
+    path = "/v1/in-person/pay",
+    tag = "in-person",
+    request_body = InPersonPayBody,
+    responses((status = 200, body = InPersonPaidReport)),
+)]
+pub(crate) async fn in_person_pay(api: &Api<'_>, request: Request) -> Answer {
+    let body: InPersonPayBody = request.json()?;
+    let args = InPersonPayArgs {
+        amount: body.amount,
+        code: in_person_code(body.code),
+        account: account(body.account),
+        message: MessageArg {
+            message: body.message,
+        },
+        spend: spend(body.min_confirmations, body.change_outputs),
+        out: OutFileArg { out: None },
+    };
+    api.run(in_person(InPersonCommand::Pay(args))).await
+}
+
+/// Post the answer to a paid code to the relay the code names
+#[utoipa::path(
+    post,
+    path = "/v1/in-person/{slate_id}/post",
+    tag = "in-person",
+    params(("slate_id" = String, Path, description = "The code's slate id")),
+    request_body = InPersonPostBody,
+    responses((status = 200, body = InPersonPostReport)),
+)]
+pub(crate) async fn in_person_post(api: &Api<'_>, request: Request) -> Answer {
+    let body: InPersonPostBody = request.json()?;
+    let args = InPersonPostArgs {
+        slate: in_person_slate(&request)?,
+        relay_ok: body.relay_ok,
+    };
+    api.run(in_person(InPersonCommand::Post(args))).await
+}
+
+/// Take an answer shown back by hand, for a code this wallet showed
+#[utoipa::path(
+    post,
+    path = "/v1/in-person/take",
+    tag = "in-person",
+    request_body = InPersonTakeBody,
+    responses((status = 200, body = InPersonTakenReport)),
+)]
+pub(crate) async fn in_person_take(api: &Api<'_>, request: Request) -> Answer {
+    let body: InPersonTakeBody = request.json()?;
+    if body.answer.is_empty() {
+        return Err(Problem::usage(
+            "answer holds the answer's text or its UR parts",
+        ));
+    }
+    let args = InPersonTakeArgs {
+        input: body.answer,
+        file: None,
+    };
+    api.run(in_person(InPersonCommand::Take(args))).await
+}
+
+/// The answers to a code this wallet showed, with their check codes
+#[utoipa::path(
+    get,
+    path = "/v1/in-person/{slate_id}/answers",
+    tag = "in-person",
+    params(("slate_id" = String, Path, description = "The code's slate id")),
+    responses((status = 200, body = InPersonAnswersReport)),
+)]
+pub(crate) async fn in_person_answers(api: &Api<'_>, request: Request) -> Answer {
+    let args = in_person_slate(&request)?;
+    api.run(in_person(InPersonCommand::Answers(args))).await
+}
+
+/// Finalize one answer to a code this wallet showed and post the transaction
+#[utoipa::path(
+    post,
+    path = "/v1/in-person/{slate_id}/finalize",
+    tag = "in-person",
+    params(("slate_id" = String, Path, description = "The code's slate id")),
+    request_body = InPersonFinalizeBody,
+    responses((status = 200, body = FinalizeReport)),
+)]
+pub(crate) async fn in_person_finalize(api: &Api<'_>, request: Request) -> Answer {
+    let body: InPersonFinalizeBody = request.json()?;
+    let args = InPersonFinalizeArgs {
+        slate: in_person_slate(&request)?,
+        answer: body.answer,
+        fluff: FluffArg { fluff: body.fluff },
+    };
+    api.run(in_person(InPersonCommand::Finalize(args))).await
+}
+
 fn tx_id(request: &Request) -> Result<TxIdArgs, Problem> {
     let tx_id = request
         .param("tx_id")?
@@ -1268,6 +1486,37 @@ fn contact(command: ContactCommand) -> Call {
 
 fn payload(command: ContactPayloadCommand) -> Call {
     contact(ContactCommand::Payload(ContactPayloadArgs { command }))
+}
+
+fn in_person(command: InPersonCommand) -> Call {
+    Call::Command(Command::InPerson(InPersonArgs {
+        command,
+        offline: false,
+        epicbox_off: false,
+    }))
+}
+
+fn in_person_code(hex: String) -> InPersonCodeArg {
+    InPersonCodeArg {
+        hex: Some(hex),
+        file: None,
+    }
+}
+
+fn in_person_slate(request: &Request) -> Result<InPersonSlateArg, Problem> {
+    Ok(InPersonSlateArg {
+        slate_id: request.param("slate_id")?.to_owned(),
+    })
+}
+
+fn spend(min_confirmations: Option<u64>, change_outputs: Option<usize>) -> SpendArgs {
+    SpendArgs {
+        min_confirmations: min_confirmations
+            .unwrap_or(SelectionOptions::DEFAULT_MINIMUM_CONFIRMATIONS),
+        change_outputs: change_outputs.unwrap_or(DEFAULT_CHANGE_OUTPUTS),
+        selection: SelectionArg::Smallest,
+        ttl_blocks: None,
+    }
 }
 
 fn domain(command: DomainCommand) -> Call {
