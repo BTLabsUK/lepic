@@ -16,6 +16,7 @@ mod check;
 mod collect;
 mod direct;
 mod domain;
+mod epic1;
 mod hex;
 mod in_person;
 #[cfg(feature = "test-support")]
@@ -58,6 +59,11 @@ use thiserror::Error;
 pub use collect::{CollectReport, CollectTrigger};
 pub use direct::{Dialect, DirectError, DirectHandler, DirectSent, NativeFailure};
 pub use domain::{DOMAIN_FILE_MAX, DomainFile, DomainRefused, DomainSigner, DomainVerdict, verify};
+pub use epic1::{
+    EPIC1_TTL_BLOCKS, Epic1AnswerView, Epic1Attempt, Epic1LinkIssued, Epic1LinkKind,
+    Epic1LinkRequest, Epic1LinkView, Epic1Paid, Epic1PayRequest, Epic1Read, Epic1Refusal,
+    ON_SCREEN_LIVE_FOR,
+};
 pub use in_person::{
     IN_PERSON_TTL_BLOCKS, InPersonAnswerView, InPersonCode, InPersonCodeView,
     InPersonInvoiceRequest, InPersonPaid, InPersonRead, InPersonRefusal, InPersonTaken,
@@ -457,6 +463,12 @@ pub enum ContactError {
     /// An in-person code or answer was refused.
     #[error("in-person slate refused: {0}")]
     InPerson(InPersonRefusal),
+    /// A payment to an epic1 address, or a link to one, was refused.
+    #[error("epic1 payment refused: {0}")]
+    Epic1(Epic1Refusal),
+    /// The text is not an epic1 link.
+    #[error("not an epic1 link")]
+    Epic1Link(#[source] lepic_epic1::LinkError),
     /// Hex digits only: a saved transaction another Epic wallet keeps in its `saved_txs`
     /// directory, never a slate (RFC 0003 5.12).
     #[error("not a payment file: a record another Epic wallet keeps")]

@@ -1622,6 +1622,7 @@ dependencies = [
  "jiff",
  "lepic-contact",
  "lepic-crypto",
+ "lepic-epic1",
  "lepic-epicbox",
  "lepic-keychain",
  "lepic-legacy-slate",

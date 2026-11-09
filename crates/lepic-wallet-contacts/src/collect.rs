@@ -99,6 +99,8 @@ pub struct CollectReport {
     pub buffered: usize,
     /// Answers taken from the reply mailboxes of in-person codes.
     pub in_person: usize,
+    /// Payments taken at epic1 link mailboxes and answers to epic1 payments finalized.
+    pub epic1: usize,
 }
 
 /// Relays that keep failing wait this long before the next try, one step per failure.
@@ -540,6 +542,12 @@ where
             Ok(taken) => report.in_person = taken,
             Err(error) => {
                 warn!(error = %ErrorChain(&error), "in-person reply mailboxes not collected");
+            }
+        }
+        match self.collect_epic1(relays).await {
+            Ok(taken) => report.epic1 = taken,
+            Err(error) => {
+                warn!(error = %ErrorChain(&error), "epic1 mailboxes not collected");
             }
         }
         if let Err(error) = self.repost_replies(relays).await {

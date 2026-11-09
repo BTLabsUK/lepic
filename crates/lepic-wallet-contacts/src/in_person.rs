@@ -291,18 +291,18 @@ fn native_error(error: NativeError) -> ContactError {
     }
 }
 
-fn corrupt(field: &'static str) -> StoreError {
+pub(crate) fn corrupt(field: &'static str) -> StoreError {
     StoreError::Corrupt {
         record: lepic_store::Record::Setting,
         field,
     }
 }
 
-fn to_text<T: Serialize>(value: &T, field: &'static str) -> Result<String, StoreError> {
+pub(crate) fn to_text<T: Serialize>(value: &T, field: &'static str) -> Result<String, StoreError> {
     serde_json::to_string(value).map_err(|_| corrupt(field))
 }
 
-fn from_text<T: for<'de> Deserialize<'de>>(
+pub(crate) fn from_text<T: for<'de> Deserialize<'de>>(
     text: &str,
     field: &'static str,
 ) -> Result<T, StoreError> {
@@ -384,7 +384,7 @@ fn record_answer(
 }
 
 /// The reply key of the slate `slate_id` of `account`: answers to its code are sealed to it.
-fn reply_secret(
+pub(crate) fn reply_secret(
     keychain: &Keychain,
     network: Network,
     account: AccountIndex,
@@ -408,7 +408,7 @@ fn answering_excess(slate: &Slate) -> Result<PublicKey, ContactError> {
 }
 
 /// An identity on `relay` with the key `secret`.
-fn identity(
+pub(crate) fn identity(
     secret: lepic_crypto::SecretKey,
     network: Network,
     relay: &RelayEndpoint,
@@ -427,7 +427,7 @@ fn identity(
 /// shown about it. A relay the wallet knows, its own or a meeting relay, is reached as the
 /// wallet reaches it; any other over TLS. A loopback or unspecified host is refused, a known
 /// one too; an address on a local network is allowed and reported as such.
-fn mailbox_endpoint(
+pub(crate) fn mailbox_endpoint(
     host: &str,
     relays: &ContactRelays,
 ) -> Result<(RelayEndpoint, HostReport), ContactError> {
@@ -449,7 +449,7 @@ fn mailbox_endpoint(
     Ok((endpoint, report))
 }
 
-fn known_endpoint(
+pub(crate) fn known_endpoint(
     relays: &ContactRelays,
     domain: &lepic_epicbox::Domain,
     port: Option<u16>,
@@ -462,7 +462,11 @@ fn known_endpoint(
 
 /// A client on `endpoint`: the wallet's own client for a relay it knows, one that checks the
 /// host before connecting for any other.
-fn client_for(relays: &ContactRelays, endpoint: RelayEndpoint, known: bool) -> MailboxClient {
+pub(crate) fn client_for(
+    relays: &ContactRelays,
+    endpoint: RelayEndpoint,
+    known: bool,
+) -> MailboxClient {
     if known {
         return mailbox_client(relays, endpoint, None);
     }
