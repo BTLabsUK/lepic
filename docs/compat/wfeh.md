@@ -1,12 +1,12 @@
 # App data files (`WFEH` version 1)
 
-BT Wallet encrypts its history backups (`.wfeh` files) in this format, and LEPIC seals
-and opens it so that files written before the app moved to LEPIC still open, with no key crossing
-the binding (ADR 0014). The format is frozen: a change is a new version byte, never an edit here.
+BT Wallet encrypts its history backups (`.wfeh` files) in this format. LEPIC seals and opens
+it in `lepic-keychain` (`src/app_data.rs`), so no key crosses the binding (ADR 0014). The format
+is frozen: a change is a new version byte, never an edit of version 1.
 
-The root secret is derived as `epic-wallet` `v4.0.2` derives it (`impls/src/backends/lmdb.rs`,
-`set_keychain` and `keychain`) with the Epic node `v4.0.4` keychain
-(`keychain/src/keychain.rs`). Vectors: `testdata/vectors/app_data`.
+The root secret is derived as `epic-wallet` v4.1.0 derives it (`impls/src/backends/lmdb.rs`,
+`set_keychain`) with the node keychain of the same release (`keychain/src/keychain.rs`).
+Vectors: `testdata/vectors/app_data`.
 
 ## Root secret
 
@@ -43,13 +43,15 @@ All integers are single bytes. The first 50 bytes are the header.
 
 Checks run in this order, each with its own error:
 
-1. Shorter than 50 bytes, or magic not `WFEH`: not an app data file.
-2. Version not `1` or kdf not `1`: unsupported version.
-3. `check` differs from the one this wallet derives with the file's salt: another wallet's file.
-   A changed salt or check byte also lands here.
-4. Tag does not verify, or fewer than 16 bytes follow the header: damaged.
+1. More than `MAX_FILE_LEN` bytes (the payload limit plus the 50-byte header and the 16-byte
+   tag): too long. Nothing is derived or allocated first.
+2. Shorter than 50 bytes, or magic not `WFEH`: not an app data file.
+3. Version not `1` or kdf not `1`: unsupported version.
+4. `check` differs from the one this wallet derives with the file's salt: another wallet's file.
+   A changed salt or check byte also lands here. The comparison takes the same time wherever
+   the bytes differ.
+5. Tag does not verify, or fewer than 16 bytes follow the header: damaged.
 
-LEPIC seals and opens payloads up to 32 MiB, the largest file the app reads. The app's own
-implementation uses `ring`; LEPIC uses the RustCrypto `hmac`, `sha2` and `chacha20poly1305`
-crates, and the vectors, sealed with `ring` by the conformance generator, show both agree byte
-for byte.
+`seal` and `open` take payloads up to `MAX_PAYLOAD_LEN`, 32 MiB. The app's own implementation
+uses `ring`; LEPIC uses the RustCrypto `hkdf`, `sha2` and `chacha20poly1305` crates. The vectors
+are sealed with `ring` by the conformance generator and show both agree byte for byte.
