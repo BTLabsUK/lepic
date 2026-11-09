@@ -36,6 +36,7 @@ pub use lepic_legacy_rpc::{
 };
 #[cfg(unix)]
 pub use lepic_legacy_rpc::{listen_unix, listen_unix_with};
+pub use lepic_peer::{Origin, OriginError, PeerEndpoint, WebScheme};
 pub use receiver::{Counts, Host, Receiver, coinbase_answer, coinbase_request, refuse};
 
 /// The transport id of the HTTP method, stored with its transactions.

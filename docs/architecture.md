@@ -78,7 +78,7 @@ lepic-peer        -> lepic-primitives
 lepic-legacy-rpc  -> lepic-peer, lepic-transport, lepic-slate
 lepic-tor         -> lepic-legacy-rpc
 lepic-wallet      -> lepic-contact, lepic-store, lepic-node, lepic-transport, lepic-legacy-slate, lepic-slate, lepic-keychain, lepic-crypto, lepic-primitives
-lepic-methods     -> lepic-wallet, lepic-transport, lepic-epicbox, lepic-legacy-rpc, lepic-legacy-slate, lepic-tor, lepic-node, lepic-slate, lepic-keychain, lepic-crypto, lepic-primitives
+lepic-methods     -> lepic-wallet, lepic-transport, lepic-epicbox, lepic-legacy-rpc, lepic-peer, lepic-legacy-slate, lepic-tor, lepic-node, lepic-slate, lepic-keychain, lepic-crypto, lepic-primitives
 lepic-wallet-contacts -> all crates above
 lepic-telemetry   -> (external only)
 lepic-cli         -> lepic-wallet, lepic-wallet-contacts, lepic-methods, lepic-telemetry, lepic-epicbox, lepic-transport, lepic-node, lepic-store, lepic-keychain, lepic-primitives

@@ -32,6 +32,7 @@ http = [
     "legacy",
     "dep:lepic-keychain",
     "dep:lepic-legacy-rpc",
+    "dep:lepic-peer",
     "dep:lepic-primitives",
     "dep:lepic-slate",
     "dep:lepic-wallet",
@@ -59,6 +60,7 @@ lepic-crypto = { workspace = true, optional = true }
 lepic-epicbox = { workspace = true, optional = true }
 lepic-keychain = { workspace = true, optional = true }
 lepic-legacy-rpc = { workspace = true, optional = true }
+lepic-peer = { workspace = true, optional = true }
 lepic-legacy-slate = { workspace = true, optional = true }
 lepic-node = { workspace = true, optional = true }
 lepic-primitives = { workspace = true, optional = true }
