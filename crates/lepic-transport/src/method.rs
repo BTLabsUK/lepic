@@ -35,6 +35,37 @@ impl Carries {
     }
 }
 
+/// The formats a receiver's native endpoint says it reads (EPICTX 5.15): the `formats` of its
+/// advert, as the codecs that write them.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct PeerFormats {
+    formats: [Option<CodecId>; PeerFormats::MAX],
+}
+
+impl PeerFormats {
+    /// The most formats kept; an advert names fewer.
+    pub const MAX: usize = 4;
+
+    /// The formats of `codecs`, in order; past [`PeerFormats::MAX`] they are not kept.
+    pub fn new(codecs: &[CodecId]) -> Self {
+        let mut formats = [None; Self::MAX];
+        for (slot, codec) in formats.iter_mut().zip(codecs) {
+            *slot = Some(*codec);
+        }
+        Self { formats }
+    }
+
+    /// Whether the receiver reads `codec`.
+    pub fn reads(&self, codec: CodecId) -> bool {
+        self.iter().any(|format| format == codec)
+    }
+
+    /// The formats, in the order the advert named them.
+    pub fn iter(&self) -> impl Iterator<Item = CodecId> + '_ {
+        self.formats.iter().flatten().copied()
+    }
+}
+
 /// What the engine knows when it encodes a slate it built.
 #[derive(Debug, Clone, Copy)]
 #[non_exhaustive]
@@ -45,16 +76,27 @@ pub struct Sending {
     pub features: u32,
     /// Derived only when [`Carries::reply_key`] is set.
     pub reply_key: Option<[u8; 32]>,
+    /// The formats the receiver's native endpoint reads, when the method found one; `None`
+    /// sends in the legacy formats.
+    pub peer: Option<PeerFormats>,
 }
 
 impl Sending {
-    /// What the engine knows when it encodes, from each fact.
+    /// What the engine knows when it encodes, from each fact; no native endpoint.
     pub const fn new(network: Network, features: u32, reply_key: Option<[u8; 32]>) -> Self {
         Self {
             network,
             features,
             reply_key,
+            peer: None,
         }
+    }
+
+    /// The same, with the formats of the receiver's native endpoint.
+    #[must_use]
+    pub const fn with_peer(mut self, peer: Option<PeerFormats>) -> Self {
+        self.peer = peer;
+        self
     }
 }
 
@@ -68,16 +110,27 @@ pub struct SenderFacts {
     pub features: Option<u32>,
     /// The key the sender asks to be answered under.
     pub reply_key: Option<[u8; 32]>,
+    /// The codec of the wire's format, when the method read it in a native format; `None`
+    /// for a legacy wire.
+    pub format: Option<CodecId>,
 }
 
 impl SenderFacts {
-    /// What a wire says about its sender, from each fact.
+    /// What a wire says about its sender, from each fact; a legacy wire.
     pub const fn new(marked: bool, features: Option<u32>, reply_key: Option<[u8; 32]>) -> Self {
         Self {
             marked,
             features,
             reply_key,
+            format: None,
         }
+    }
+
+    /// The same, read in the format of `format`.
+    #[must_use]
+    pub const fn with_format(mut self, format: Option<CodecId>) -> Self {
+        self.format = format;
+        self
     }
 }
 
@@ -193,5 +246,37 @@ pub trait MethodLookup: Send + Sync {
     /// The method registered under `id`.
     fn method(&self, id: &TransportId) -> Option<Arc<dyn Method>> {
         self.method_named(id.as_str())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const NATIVE: CodecId = CodecId::new("lepic.v1");
+    const OTHER: CodecId = CodecId::new("other");
+
+    #[test]
+    fn peer_formats_keep_the_advert_order_up_to_the_most() {
+        let formats = PeerFormats::new(&[NATIVE, OTHER]);
+        assert!(formats.reads(NATIVE) && formats.reads(OTHER));
+        assert!(!PeerFormats::new(&[OTHER]).reads(NATIVE));
+        assert!(!PeerFormats::default().reads(NATIVE));
+        assert_eq!(formats.iter().collect::<Vec<_>>(), [NATIVE, OTHER]);
+        let many = PeerFormats::new(&[OTHER; 5]);
+        assert_eq!(many.iter().count(), PeerFormats::MAX);
+    }
+
+    #[test]
+    fn the_setters_leave_the_other_facts() {
+        let sending = Sending::new(Network::Floonet, 1, Some([7; 32]))
+            .with_peer(Some(PeerFormats::new(&[NATIVE])));
+        assert_eq!(sending.peer, Some(PeerFormats::new(&[NATIVE])));
+        assert_eq!(sending.reply_key, Some([7; 32]));
+        assert_eq!(Sending::new(Network::Floonet, 1, None).peer, None);
+        let facts = SenderFacts::new(true, Some(1), None).with_format(Some(NATIVE));
+        assert_eq!(facts.format, Some(NATIVE));
+        assert!(facts.marked);
+        assert_eq!(SenderFacts::new(true, None, None).format, None);
     }
 }
