@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
-//! The product SQLite store, with a handle the CLI keeps to read history that the engine has no
-//! query for yet.
+//! The product SQLite store, with a handle the CLI keeps to read the history the engine offers no
+//! query for.
 
 use std::path::Path;
 use std::sync::{Arc, Mutex, PoisonError};
