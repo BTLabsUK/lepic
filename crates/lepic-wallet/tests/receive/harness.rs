@@ -252,6 +252,7 @@ impl Receiver {
             host_features: 0,
             profile: 0,
             domain: None,
+            native_direct: false,
         };
         let wallet = Wallet::new(config, ports).unwrap();
         runtime

@@ -75,6 +75,7 @@ Each setting comes from, in order: a flag, its environment variable, the config 
 | `log_format` | `LEPIC_LOG_FORMAT` | `--log-format` | `compact` |
 | `refuse_unsolicited_payments` | `LEPIC_REFUSE_UNSOLICITED_PAYMENTS` | | `false` |
 | `refuse_unsolicited_invoices` | `LEPIC_REFUSE_UNSOLICITED_INVOICES` | | `false` |
+| `native_direct` | `LEPIC_NATIVE_DIRECT` | | `false` |
 | `invoice_expiry_hours` | `LEPIC_INVOICE_EXPIRY_HOURS` | | `24` |
 | `host_features` | `LEPIC_HOST_FEATURES` | | none |
 | `profile` | `LEPIC_PROFILE` | `--profile`, `--profile-bits` | `0` |
@@ -131,6 +132,17 @@ A refused sender learns of it where it can:
 - A contact gets the `declined` notice in its mailbox.
 
 A self-send to the wallet's own address is refused too while the switch is on.
+
+#### Native slates to contacts
+
+`native_direct = true` makes the wallet send `lepic.v1` slates (envelope type `0A`, ADR 0052) to
+the paired contacts whose pairing features claim native slates (bit 7), through their mailboxes.
+It is `true` or `false`, off by default: the wallet then sends V3 JSON (type `01`), as before. A
+contact without the claim always gets V3 JSON. Sealed text for a file or a paste is V3 JSON
+either way.
+
+The wallet takes native slates from its contacts whatever the switch says, and answers a slate
+in the format it came in.
 
 #### Domain
 

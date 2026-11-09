@@ -147,6 +147,11 @@ pub struct WalletConfig {
     /// Values the host chooses; [`WalletPolicy::default`] is what LEPIC did before they were
     /// parameters.
     pub policy: WalletPolicy,
+    /// Send `lepic.v1` slates (envelope type 0A) to the paired contacts that claim
+    /// [`lepic_transport::marker::features::NATIVE_SLATES`], through their mailboxes. A value the
+    /// host chooses (ADR 0036), `false` for what LEPIC did before: type 01 with V3 JSON. Answers
+    /// take the format of their request whatever it says, and native slates are always taken.
+    pub native_direct: bool,
 }
 
 /// How many receipts nobody asked for a wallet keeps open, the confirmations a wallet counts as
@@ -448,6 +453,7 @@ mod tests {
             profile: 0,
             domain: None,
             policy: WalletPolicy::default(),
+            native_direct: false,
         };
         assert_eq!(config(0).claimed_features(), LEPIC_FEATURES);
         assert_eq!(
@@ -469,6 +475,7 @@ mod tests {
             profile: 3,
             domain: None,
             policy: WalletPolicy::default(),
+            native_direct: false,
         };
         assert_eq!(config.claimed_features() & HOST_PROFILE, 0);
         assert_eq!(config.claimed_features() & NATIVE_SLATES, 0);

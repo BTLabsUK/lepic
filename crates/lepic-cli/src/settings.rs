@@ -84,6 +84,11 @@ pub const SETTINGS: &[(&str, &str, &str)] = &[
         "true to refuse invoices from contacts instead of keeping them to pay",
     ),
     (
+        "native_direct",
+        "LEPIC_NATIVE_DIRECT",
+        "true to send lepic.v1 slates to the paired contacts that take them",
+    ),
+    (
         "invoice_expiry_hours",
         "LEPIC_INVOICE_EXPIRY_HOURS",
         "hours an unpaid invoice is kept, 1 to 48",
@@ -287,6 +292,8 @@ pub struct Settings {
     pub refuse_unsolicited_payments: bool,
     /// Refuse a contact's invoice instead of parking it, answered `declined`. Off unless set.
     pub refuse_unsolicited_invoices: bool,
+    /// Send `lepic.v1` slates to the paired contacts that claim them (ADR 0052). Off unless set.
+    pub native_direct: bool,
     /// How long an unpaid invoice is kept, on either side.
     pub invoice_expiry: InvoiceExpiry,
     /// The host bits the wallet's marker claims (ADR 0034), only bits of
@@ -408,6 +415,7 @@ impl Settings {
             node_over_tor,
             refuse_unsolicited_payments: lookup.switch("refuse_unsolicited_payments")?,
             refuse_unsolicited_invoices: lookup.switch("refuse_unsolicited_invoices")?,
+            native_direct: lookup.switch("native_direct")?,
             invoice_expiry,
             host_features,
             profile: profile(args, &lookup)?,
@@ -988,6 +996,22 @@ mod tests {
             resolve(&[("LEPIC_REFUSE_UNSOLICITED_PAYMENTS", "yes")]),
             Err(SettingsError::InvalidValue {
                 key: "refuse_unsolicited_payments",
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn native_direct_is_off_unless_set() {
+        let none = resolve(&[]).unwrap();
+        assert!(!none.native_direct);
+        let native = resolve(&[("LEPIC_NATIVE_DIRECT", "true")]).unwrap();
+        assert!(native.native_direct);
+        assert!(!native.refuse_unsolicited_payments);
+        assert!(matches!(
+            resolve(&[("LEPIC_NATIVE_DIRECT", "1")]),
+            Err(SettingsError::InvalidValue {
+                key: "native_direct",
                 ..
             })
         ));

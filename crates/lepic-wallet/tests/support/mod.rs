@@ -484,6 +484,7 @@ impl Harness {
             host_features: 0,
             profile: 0,
             domain: None,
+            native_direct: false,
         }
     }
 

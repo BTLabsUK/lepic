@@ -1497,6 +1497,7 @@ impl<H: Host> Run<'_, H> {
             host_features: self.settings.host_features,
             profile: self.settings.profile,
             domain: self.settings.domain.clone(),
+            native_direct: self.settings.native_direct,
         };
         let wallet = Wallet::new(config, ports)?;
         lepic_wallet_contacts::install(&wallet);

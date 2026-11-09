@@ -530,6 +530,7 @@ fn engine(
         profile: config.profile,
         domain: config.domain.clone(),
         policy: policy.wallet,
+        native_direct: false,
     };
     let ports = Ports {
         node,

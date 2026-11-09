@@ -437,6 +437,7 @@ impl Party {
             host_features: 0,
             profile,
             domain: domain.map(str::to_owned),
+            native_direct: false,
         };
         let wallet = Wallet::new(config, ports).unwrap();
         lepic_wallet_contacts::install(&wallet);
