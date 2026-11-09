@@ -567,7 +567,7 @@ Outcomes:
 | Field | Notes |
 |---|---|
 | `contact_id` | A local id, 16 random bytes. Never sent, never used to derive keys |
-| `slot`, `box_salt` | Ours; derive our keys for the contact (2.2) |
+| `slot`, `box_salt` | This wallet's; derive its keys for the contact (2.2) |
 | peer card | The latest verified card. Absent while the pairing is pending |
 | `sas` | The four SAS bytes, kept so the check can be shown again |
 | `verified_at` | When the SAS was confirmed |
@@ -785,7 +785,7 @@ After pairing, each side's messages for the relationship go to the other side's 
   fixed hint (3.2).
 - The mailbox carries sealed invoices and their I2, sealed withdrawals and their S2, notices,
   contact updates and checks (8.5), app payloads, and sealed slates between people. Messages are
-  posted from our `box_sk` for that contact, so the relay sees two per-contact keys and neither
+  posted from the wallet's `box_sk` for that contact, so the relay sees two per-contact keys and neither
   wallet's own address.
 - Delivery targets the home relay whatever relay either wallet is connected to. A user who
   switches relays changes nothing for paired contacts, and no message is sent about it.
@@ -890,7 +890,7 @@ Epicbox relay, home relays included, and behaves as Offline (C-10):
 
 When the recipient is a paired contact with `seal` on and caps bit 0, the file and paste methods
 write an envelope: type `01` with the marked V3 slate as body (or type `0A`, a native slate, per
-[RFC 0003 §6.1](0003-epictx-native-slates.md#61-paired-contact)), the purpose, our card when its
+[RFC 0003 §6.1](0003-epictx-native-slates.md#61-paired-contact)), the purpose, the wallet's card when its
 `seq` is newer than what the contact last saw, signed.
 
 Over Epicbox the host picks the route. A send through the contact mailbox posts the envelope there.
@@ -923,7 +923,7 @@ contact sets `seal` back to `on`.
 
 #### 9.4 Hint lapse
 
-A contact with no opened envelope for 90 days gets sealed slates as before, and the send screen
+A contact with no opened envelope for 90 days still gets sealed slates, and the send screen
 adds that the contact's wallet has not been heard in 90 days, with the plain option one tap away.
 Identity, verification and invoice trust do not lapse.
 
@@ -1002,7 +1002,7 @@ contacts on this device?"; the first device should then be removed.
 | `OutboxDelivered`, `OutboxStuck` | An outbox entry reached its relay, or has not after 24 hours |
 | `ContactPaymentFinalized` | A contact's answer to a send through its mailbox (9.1) |
 | `ContactRelayMoveRequested` | A contact's card names another relay (8.5) |
-| `InvoiceFinalized` | A contact paid our invoice |
+| `InvoiceFinalized` | A contact paid the wallet's invoice |
 
 Event fields carry ids and labels, never keys or secrets. A collect also returns the pairings that
 ended and why.
@@ -1082,9 +1082,9 @@ contact. A signed `withdrawn` for a paid invoice cancels the payment and release
 There is no allowlist of invoice senders and no separate invoice address. Settings › Wallet ›
 Invoices lists the paired contacts with their "Allow invoices" switch and offers "Pair with a shop
 or exchange". Issuing an invoice over Epicbox to someone requires a pairing in which they allow
-our invoices; issuing by file is unchanged. The engine and the CLI can issue to an Epicbox address
-for interoperability tests, and no address-based payer path can list, pay or decline a contact's
-invoice.
+the wallet's invoices; issuing by file needs no pairing. The engine and the CLI can issue to an
+Epicbox address for interoperability tests, and no address-based payer path can list, pay or
+decline a contact's invoice.
 
 ### 12 Worked example: exchange deposits and withdrawals
 

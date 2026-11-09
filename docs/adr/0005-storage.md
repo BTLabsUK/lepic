@@ -36,8 +36,8 @@ mnemonic and possibly a `wallet.seed` file.
   bits, sealed under the private context key and found by a keyed hash of the key, so the table
   names no peer. The hash is authenticated with the sealed bytes, so a row copied under another
   peer's hash does not open.
-- The invoice address of earlier builds is retired. The store keeps its single index row, which
-  is never 0, so older stores read as before; nothing new writes it.
+- The store keeps an `invoice_address` table with a single index row, which is never 0. No code
+  path writes it.
 - Seeds go through a `SecretStore` port in `lepic-keychain` (`put`, `get`, `delete` by name). On
   mobile the host app implements it with Android Keystore or the iOS Keychain. On desktop,
   `lepic-keychain` provides a vault, one file of named secrets sealed with XChaCha20-Poly1305
