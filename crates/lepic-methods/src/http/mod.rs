@@ -38,8 +38,8 @@ pub use lepic_legacy_rpc::{
 #[cfg(unix)]
 pub use lepic_legacy_rpc::{listen_unix, listen_unix_with};
 pub use lepic_peer::{
-    Advert, Origin, OriginError, PeerClient, PeerClientError, PeerClientSettings, PeerEndpoint,
-    PeerTarget, WebScheme,
+    AddressClass, Advert, Origin, OriginError, PeerClient, PeerClientError, PeerClientSettings,
+    PeerDialFuture, PeerDialer, PeerEndpoint, PeerStream, PeerTarget, WebScheme,
 };
 pub use peer::{DirectPeer, HttpPeer, Probe, ProbeError};
 pub use receiver::{Counts, Host, Receiver, coinbase_answer, coinbase_request, refuse};
