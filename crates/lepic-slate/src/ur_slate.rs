@@ -10,7 +10,7 @@
 //!
 //! Payload version 2 (RFC 0003 §5.18) carries a native `lepic.v1` slate or an envelope as bytes,
 //! nothing compressed: [`encode_ur_binary`] writes it and [`decode_ur_parts`] reads either
-//! version. [`encode_ur_slate`] and [`decode_ur_slate`] are version 1 only and unchanged.
+//! version. [`encode_ur_slate`] and [`decode_ur_slate`] handle version 1 only.
 
 use minicbor::data::Type;
 use thiserror::Error;
