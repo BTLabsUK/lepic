@@ -1,5 +1,5 @@
 ---
-source: crates/lepic-slate/tests/v2_json.rs
+source: crates/lepic-legacy-slate/tests/v2_json.rs
 expression: pretty(&encode(&slate))
 ---
 {
@@ -36,8 +36,8 @@ expression: pretty(&encode(&slate))
           "features": "Plain",
           "fee": "800000",
           "lock_height": "0",
-          "excess": "000000000000000000000000000000000000000000000000000000000000000000",
-          "excess_sig": "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+          "excess": "08c3439307c2ba683a553246a393cad2c4f6c4fcc2d5ada7c54df51d4e64e67986",
+          "excess_sig": "66074d25a751c4743342c90ad8ead9454daa00d9b9aed29bca321036d16c4b4dc1f8ab2b1c2b6701bc510b4306a46b4ab0913f27cab036bb5488dc17fd67defa"
         }
       ]
     }
@@ -51,7 +51,7 @@ expression: pretty(&encode(&slate))
       "id": "1",
       "public_blind_excess": "02304604a743171614ddfbd485da20fa3eb8d7514763014212f9d452b1f9cc78a4",
       "public_nonce": "031b84c5567b126440995d3ed5aaba0565d71e1834604819ff9c17f5e9d5dd078f",
-      "part_sig": null,
+      "part_sig": "8f07ddd5e9f5179cff19486034181ed76505baaad53e5d994064127b56c5841ba886f3d6f8d822c6fc7299f79ee82cf519ce8d58096ded65883a82c590284ffc",
       "message": "lepic vector: receiver message",
       "message_sig": "8f07ddd5e9f5179cff19486034181ed76505baaad53e5d994064127b56c5841b79c488573a565714e795c50393d08850be5b9b38842cfb2e32e38a62ac4832b5"
     },

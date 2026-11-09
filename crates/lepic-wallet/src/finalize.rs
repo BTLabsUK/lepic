@@ -25,6 +25,7 @@ use lepic_crypto::aggsig::{
 };
 use lepic_crypto::{Commitment, CryptoError, Message, PublicKey};
 use lepic_keychain::{Keychain, KeychainError};
+use lepic_legacy_slate::v3_json::{LEGACY_V3_JSON, V3JsonCodec};
 use lepic_node::{NodeApi, NodeError, NodeRejection, Propagation, RejectionKind};
 use lepic_primitives::amount::{Fee, Height};
 use lepic_primitives::committed::{KernelSumError, sum_commitments};
@@ -34,7 +35,6 @@ use lepic_primitives::hash::blake2b_256;
 use lepic_primitives::params::Network;
 use lepic_primitives::tx::{Transaction, TransactionBody};
 use lepic_primitives::validate::ValidationError;
-use lepic_slate::codec::legacy::v3_json::{LEGACY_V3_JSON, V3JsonCodec};
 use lepic_slate::codec::{Codec, EncodeContext, MediaType, WireSlate};
 use lepic_slate::error::{DecodeError, EncodeError, RegistryError, SlateError};
 use lepic_slate::model::{FinalKernel, ParticipantMessage, PaymentProof, Slate, SlateId};

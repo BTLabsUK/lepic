@@ -19,7 +19,7 @@ mod support;
 mod world;
 
 use lepic_epicbox::EpicboxClient;
-use lepic_slate::codec::legacy::v3_json::V3JsonCodec;
+use lepic_legacy_slate::v3_json::V3JsonCodec;
 use lepic_slate::codec::{Codec, EncodeContext};
 use lepic_slate::model::SlateId;
 use lepic_store::{PendingInvoiceStatus, TxDirection, TxState};

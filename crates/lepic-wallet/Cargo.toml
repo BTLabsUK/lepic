@@ -15,6 +15,7 @@ jiff.workspace = true
 lepic-contact.workspace = true
 lepic-crypto.workspace = true
 lepic-keychain.workspace = true
+lepic-legacy-slate.workspace = true
 lepic-node.workspace = true
 lepic-primitives.workspace = true
 lepic-slate.workspace = true

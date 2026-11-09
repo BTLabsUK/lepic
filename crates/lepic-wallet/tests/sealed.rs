@@ -23,9 +23,9 @@ use helpers::HOUR;
 use lepic_contact::{
     ContactCard, Content, MessageType, Network as ContactNetwork, Purpose, SigningKey, armor, seal,
 };
+use lepic_legacy_slate::v3_json::V3JsonCodec;
 use lepic_node::Propagation;
 use lepic_primitives::amount::Amount;
-use lepic_slate::codec::legacy::v3_json::V3JsonCodec;
 use lepic_slate::codec::{Codec, EncodeContext, MediaType, WireSlate};
 use lepic_slate::stage::Stage;
 use lepic_store::{SealMode, SlateStage, TxId};

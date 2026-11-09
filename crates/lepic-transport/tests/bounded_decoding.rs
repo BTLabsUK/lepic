@@ -10,8 +10,8 @@
 // Tests may unwrap, panic and use plain arithmetic (docs/rules.md).
 #![allow(clippy::unwrap_used, clippy::panic, clippy::arithmetic_side_effects)]
 
-use lepic_slate::codec::legacy::v2_json::V2JsonCodec;
-use lepic_slate::codec::legacy::v3_json::V3JsonCodec;
+use lepic_legacy_slate::v2_json::V2JsonCodec;
+use lepic_legacy_slate::v3_json::V3JsonCodec;
 use lepic_slate::codec::{MAX_WIRE_SLATE_LEN, MediaType, WireSlate};
 use lepic_slate::registry::CodecRegistry;
 use lepic_transport::file::FileTransport;

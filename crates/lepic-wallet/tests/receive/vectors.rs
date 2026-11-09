@@ -2,9 +2,9 @@
 //! Receive against the G-03 slate vectors: each S1 received with the recorded randomness yields
 //! the recorded S2 in every encoding.
 
+use lepic_legacy_slate::v2_json::V2JsonCodec;
+use lepic_legacy_slate::v3_json::V3JsonCodec;
 use lepic_primitives::params::Network;
-use lepic_slate::codec::legacy::v2_json::V2JsonCodec;
-use lepic_slate::codec::legacy::v3_json::V3JsonCodec;
 use lepic_slate::error::{EncodeError, Unrepresentable};
 use lepic_slate::stage::Stage;
 use lepic_store::WalletStore;

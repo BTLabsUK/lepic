@@ -1235,6 +1235,7 @@ dependencies = [
  "insta",
  "lepic-crypto",
  "lepic-epicbox",
+ "lepic-legacy-slate",
  "lepic-primitives",
  "lepic-slate",
  "lepic-telemetry",
@@ -1334,6 +1335,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "lepic-legacy-slate"
+version = "0.3.1"
+dependencies = [
+ "insta",
+ "lepic-crypto",
+ "lepic-primitives",
+ "lepic-slate",
+ "proptest",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "lepic-methods"
 version = "0.3.1"
 dependencies = [
@@ -1346,6 +1360,7 @@ dependencies = [
  "lepic-epicbox",
  "lepic-keychain",
  "lepic-legacy-rpc",
+ "lepic-legacy-slate",
  "lepic-node",
  "lepic-primitives",
  "lepic-slate",
@@ -1482,6 +1497,7 @@ name = "lepic-transport"
 version = "0.3.1"
 dependencies = [
  "lepic-crypto",
+ "lepic-legacy-slate",
  "lepic-primitives",
  "lepic-slate",
  "serde",
@@ -1504,6 +1520,7 @@ dependencies = [
  "lepic-crypto",
  "lepic-epicbox",
  "lepic-keychain",
+ "lepic-legacy-slate",
  "lepic-methods",
  "lepic-node",
  "lepic-primitives",
@@ -1540,6 +1557,7 @@ dependencies = [
  "lepic-crypto",
  "lepic-epicbox",
  "lepic-keychain",
+ "lepic-legacy-slate",
  "lepic-methods",
  "lepic-node",
  "lepic-primitives",

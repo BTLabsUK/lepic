@@ -1,6 +1,6 @@
 [package]
 name = "lepic-slate"
-description = "Slate domain model, slate codecs and the codec registry."
+description = "Slate domain model, the codec trait and the codec registry."
 version.workspace = true
 edition.workspace = true
 license.workspace = true

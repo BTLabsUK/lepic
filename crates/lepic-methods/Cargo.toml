@@ -12,6 +12,7 @@ default = ["file"]
 file = []
 epicbox = [
     "dep:lepic-epicbox",
+    "dep:lepic-legacy-slate",
     "dep:lepic-primitives",
     "dep:lepic-slate",
 ]
@@ -25,8 +26,9 @@ epicbox-wallet = [
     "dep:tracing",
 ]
 http = [
-    "dep:lepic-legacy-rpc",
     "dep:lepic-keychain",
+    "dep:lepic-legacy-rpc",
+    "dep:lepic-legacy-slate",
     "dep:lepic-primitives",
     "dep:lepic-slate",
     "dep:lepic-wallet",
@@ -52,8 +54,9 @@ hyper-util = { workspace = true, optional = true, features = ["tokio"] }
 jiff = { workspace = true, optional = true }
 lepic-crypto = { workspace = true, optional = true }
 lepic-epicbox = { workspace = true, optional = true }
-lepic-legacy-rpc = { workspace = true, optional = true }
 lepic-keychain = { workspace = true, optional = true }
+lepic-legacy-rpc = { workspace = true, optional = true }
+lepic-legacy-slate = { workspace = true, optional = true }
 lepic-node = { workspace = true, optional = true }
 lepic-primitives = { workspace = true, optional = true }
 lepic-slate = { workspace = true, optional = true }

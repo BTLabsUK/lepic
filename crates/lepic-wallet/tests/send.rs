@@ -16,10 +16,10 @@ mod support;
 
 use std::sync::{Arc, Mutex};
 
+use lepic_legacy_slate::v3_json::LEGACY_V3_JSON;
 use lepic_primitives::amount::{Amount, Height};
 use lepic_primitives::output::OutputFeatures;
 use lepic_slate::codec::WireSlate;
-use lepic_slate::codec::legacy::v3_json::LEGACY_V3_JSON;
 use lepic_slate::error::{EncodeError, Unrepresentable};
 use lepic_slate::model::{ProofAddress, SlateId};
 use lepic_slate::stage::Stage;

@@ -20,6 +20,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use lepic_crypto::{Commitment, RangeProof};
+use lepic_legacy_slate::v3_json::LEGACY_V3_JSON;
 use lepic_node::mock::{ChainOutput, MockNode};
 use lepic_node::{
     BlockHeaderInfo, CallPolicy, LocatedKernel, NodeApi, NodeClient, NodeError, NodeVersion,
@@ -28,7 +29,6 @@ use lepic_node::{
 };
 use lepic_primitives::amount::{Amount, Fee, Height};
 use lepic_primitives::tx::Transaction;
-use lepic_slate::codec::legacy::v3_json::LEGACY_V3_JSON;
 use lepic_slate::codec::{MediaType, WireSlate};
 use lepic_store::{
     OutputRecord, OutputStatus, SlateStage, StoredSlate, TransactionEntry, TxDirection, TxId,

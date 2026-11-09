@@ -3,10 +3,10 @@
 //! panicked itself, or a decoded value that breaks a property the decoder promises.
 
 use lepic_crypto::Commitment;
+use lepic_legacy_slate::v2_json::V2JsonCodec;
+use lepic_legacy_slate::v3_json::V3JsonCodec;
 use lepic_primitives::amount::Fee;
 use lepic_primitives::params::Network;
-use lepic_slate::codec::legacy::v2_json::V2JsonCodec;
-use lepic_slate::codec::legacy::v3_json::V3JsonCodec;
 use lepic_slate::codec::{Codec, EncodeContext, MediaType, WireSlate};
 use lepic_slate::model::Slate;
 use lepic_slate::registry::CodecRegistry;

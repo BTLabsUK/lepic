@@ -27,6 +27,7 @@ use lepic_epicbox::{
     Network as RelayNetwork, Nonce, RelayEndpoint, Salt, Security, SignedMessage, TRANSPORT_ID,
 };
 use lepic_keychain::{Identifier, Keychain, Seed, SwitchCommitment};
+use lepic_legacy_slate::v3_json::V3JsonCodec;
 use lepic_methods::epicbox::Epicbox;
 use lepic_node::mock::{ChainState, MockNode};
 use lepic_node::{NodeClient, NodeVersion, Tip};
@@ -34,7 +35,6 @@ use lepic_primitives::amount::{Amount, Height};
 use lepic_primitives::hash::Hash;
 use lepic_primitives::output::{OutputFeatures, OutputIdentifier};
 use lepic_primitives::params::Network;
-use lepic_slate::codec::legacy::v3_json::V3JsonCodec;
 use lepic_slate::codec::{Codec, WireSlate};
 use lepic_slate::error::DecodeError;
 use lepic_slate::model::Slate;

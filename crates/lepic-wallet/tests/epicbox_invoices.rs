@@ -19,9 +19,9 @@ mod world;
 use std::time::Duration;
 
 use lepic_epicbox::EpicboxClient;
+use lepic_legacy_slate::v3_json::V3JsonCodec;
 use lepic_node::Propagation;
 use lepic_primitives::amount::{Amount, Height};
-use lepic_slate::codec::legacy::v3_json::V3JsonCodec;
 use lepic_slate::codec::{Codec, EncodeContext};
 use lepic_slate::stage::Stage;
 use lepic_store::{OutputStatus, PendingInvoiceStatus, SlateStage, TxDirection, TxState};

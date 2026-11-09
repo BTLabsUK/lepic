@@ -9,8 +9,8 @@
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex, PoisonError};
 
-use lepic_slate::codec::legacy::v2_json::LEGACY_V2_JSON;
-use lepic_slate::codec::legacy::v3_json::LEGACY_V3_JSON;
+use lepic_legacy_slate::v2_json::LEGACY_V2_JSON;
+use lepic_legacy_slate::v3_json::LEGACY_V3_JSON;
 use lepic_slate::codec::{CodecId, EncodeContext, WireSlate};
 use lepic_slate::error::DecodeError;
 use lepic_slate::model::Slate;

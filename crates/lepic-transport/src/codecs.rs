@@ -2,10 +2,10 @@
 //! The codec registries legacy slates are read and written with: a V3 codec and a V2 codec,
 //! plain or carrying the LEPIC marker.
 
+use lepic_legacy_slate::v2_json::V2JsonCodec;
+use lepic_legacy_slate::v3_json::V3JsonCodec;
 use lepic_primitives::amount::Fee;
 use lepic_slate::codec::Codec;
-use lepic_slate::codec::legacy::v2_json::V2JsonCodec;
-use lepic_slate::codec::legacy::v3_json::V3JsonCodec;
 use lepic_slate::registry::CodecRegistry;
 
 /// The plain legacy codecs.
@@ -29,8 +29,8 @@ pub fn legacy_with(v3: Box<dyn Codec>, v2: Box<dyn Codec>) -> CodecRegistry {
 
 #[cfg(test)]
 mod tests {
-    use lepic_slate::codec::legacy::v2_json::LEGACY_V2_JSON;
-    use lepic_slate::codec::legacy::v3_json::LEGACY_V3_JSON;
+    use lepic_legacy_slate::v2_json::LEGACY_V2_JSON;
+    use lepic_legacy_slate::v3_json::LEGACY_V3_JSON;
 
     use super::*;
 

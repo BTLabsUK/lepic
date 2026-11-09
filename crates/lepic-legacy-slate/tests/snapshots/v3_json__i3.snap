@@ -1,10 +1,10 @@
 ---
-source: crates/lepic-slate/tests/v2_json.rs
+source: crates/lepic-legacy-slate/tests/v3_json.rs
 expression: pretty(&encode(&slate))
 ---
 {
   "version_info": {
-    "version": 2,
+    "version": 3,
     "orig_version": 2,
     "block_header_version": 6
   },
@@ -46,6 +46,7 @@ expression: pretty(&encode(&slate))
   "fee": "800000",
   "height": "4",
   "lock_height": "0",
+  "ttl_cutoff_height": null,
   "participant_data": [
     {
       "id": "1",
@@ -63,5 +64,6 @@ expression: pretty(&encode(&slate))
       "message": "lepic vector: sender message",
       "message_sig": "8f07ddd5e9f5179cff19486034181ed76505baaad53e5d994064127b56c5841b4d553433b66b6977ec4457f977015fe7987bdfed65d3508faa2ffef8e46a10b7"
     }
-  ]
+  ],
+  "payment_proof": null
 }

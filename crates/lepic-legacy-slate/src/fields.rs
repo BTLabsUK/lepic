@@ -11,8 +11,8 @@ use std::fmt;
 use serde::Deserialize;
 use serde::de::{self, Deserializer, IgnoredAny, MapAccess, SeqAccess, Visitor};
 
-use crate::error::{DecodeError, FieldProblem};
-use crate::validate::encode_hex;
+use lepic_slate::error::{DecodeError, FieldProblem};
+use lepic_slate::validate::encode_hex;
 
 /// A JSON value where a legacy format expects a scalar. Reading accepts any JSON value, so a value
 /// of the wrong type becomes a typed field error rather than a syntax error, and an absent key is

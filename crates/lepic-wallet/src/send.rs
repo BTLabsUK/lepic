@@ -30,6 +30,7 @@ use lepic_keychain::{
     Identifier, IdentifierError, Keychain, KeychainError, ProofBuilder, ProofError,
     SwitchCommitment,
 };
+use lepic_legacy_slate::v3_json::{LEGACY_V3_JSON, V3JsonCodec};
 use lepic_node::{NodeApi, NodeError};
 use lepic_primitives::amount::{Amount, ArithmeticError, Fee, Height};
 use lepic_primitives::crypto_ser::BlindingFactor;
@@ -37,7 +38,6 @@ use lepic_primitives::input::Input;
 use lepic_primitives::output::{OutputFeatures, OutputIdentifier};
 use lepic_primitives::params::Network;
 use lepic_primitives::tx::TransactionBody;
-use lepic_slate::codec::legacy::v3_json::{LEGACY_V3_JSON, V3JsonCodec};
 use lepic_slate::codec::{Codec, CodecId, EncodeContext, MediaType, WireSlate};
 use lepic_slate::error::{DecodeError, EncodeError, ProofAddressError, SlateError};
 use lepic_slate::model::{
@@ -1218,7 +1218,7 @@ where
 mod tests {
     use super::*;
 
-    use lepic_slate::codec::legacy::v2_json::V2JsonCodec;
+    use lepic_legacy_slate::v2_json::V2JsonCodec;
     use lepic_transport::marker::v3::{carries_lepic_marker, lepic_marker_features};
 
     fn key(byte: u8) -> SecretKey {

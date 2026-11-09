@@ -16,6 +16,7 @@ mod support;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+use lepic_legacy_slate::v3_json::V3JsonCodec;
 use lepic_node::mock::{MockFailure, MockNode};
 use lepic_node::{
     CallPolicy, LocatedKernel, NodeClient, NodeError, Propagation, RejectionKind, RetryPolicy,
@@ -24,7 +25,6 @@ use lepic_node::{
 use lepic_primitives::amount::{Amount, Height};
 use lepic_primitives::output::OutputFeatures;
 use lepic_primitives::params::Network;
-use lepic_slate::codec::legacy::v3_json::V3JsonCodec;
 use lepic_slate::codec::{Codec as _, MediaType, WireSlate};
 use lepic_store::{AccountRecord, SlateStage, StoreError, TxId, TxState, WalletStore};
 use lepic_transport::file::FILE;

@@ -10,10 +10,10 @@
 // Tests may unwrap, panic and use plain arithmetic (docs/rules.md).
 #![allow(clippy::unwrap_used, clippy::panic, clippy::arithmetic_side_effects)]
 
+use lepic_legacy_slate::v2_json::V2JsonCodec;
+use lepic_legacy_slate::v3_json::V3JsonCodec;
 use lepic_primitives::amount::Fee;
 use lepic_primitives::params::Network;
-use lepic_slate::codec::legacy::v2_json::V2JsonCodec;
-use lepic_slate::codec::legacy::v3_json::V3JsonCodec;
 use lepic_slate::codec::{Codec, MAX_WIRE_SLATE_LEN, MediaType, WireSlate};
 
 const BASE_FEE: Fee = Network::Floonet.params().default_base_fee();

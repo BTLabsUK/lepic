@@ -11,8 +11,8 @@ use lepic_primitives::params::{BLOCK_INPUT_WEIGHT, BLOCK_OUTPUT_WEIGHT, MAX_TX_W
 use serde::Deserialize;
 use serde::de::{self, Deserializer, IgnoredAny, SeqAccess, Visitor};
 
-use crate::error::ValidationError;
-use crate::validate::{LEGACY_PARTICIPANTS, check_participant_ids, single_kernel};
+use lepic_slate::error::ValidationError;
+use lepic_slate::validate::{LEGACY_PARTICIPANTS, check_participant_ids, single_kernel};
 
 /// The elements of a JSON array up to a cap, and how many the array had.
 pub(crate) struct Bounded<T> {

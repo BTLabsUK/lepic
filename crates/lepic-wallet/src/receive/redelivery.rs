@@ -141,9 +141,9 @@ mod tests {
     #![allow(clippy::unwrap_used, clippy::indexing_slicing)]
 
     use jiff::Timestamp;
+    use lepic_legacy_slate::v3_json::{LEGACY_V3_JSON, V3JsonCodec};
     use lepic_primitives::amount::{Amount, Fee};
     use lepic_slate::codec::Codec;
-    use lepic_slate::codec::legacy::v3_json::{LEGACY_V3_JSON, V3JsonCodec};
     use lepic_store::{
         AccountIndex, CONTEXT_KEY_LEN, MemoryStore, StoreKeys, StoredSlate, TransactionEntry,
         TxState, WalletStore,

@@ -17,19 +17,21 @@ use lepic_primitives::output::{Output, OutputFeatures};
 use lepic_primitives::params::MAX_TX_WEIGHT;
 use serde::Deserialize;
 
-use super::bounded::{self, Bounded, check_participants, only_kernel};
-use super::fields::{
+use crate::bounded::{self, Bounded, check_participants, only_kernel};
+use crate::fields::{
     ObjectWriter, Scalar, field_error, integer, missing, number, optional_integer, optional_parsed,
     optional_text, parsed, text, write_array, write_hex, write_integer_string, write_null,
     write_number, write_string,
 };
-use crate::codec::{Codec, CodecId, EncodeContext, MediaType, WireSlate};
-use crate::error::{DecodeError, EncodeError, FieldProblem, SlateError, ValidationError};
-use crate::model::{KernelLock, Participant, ParticipantMessage, PaymentProof, Slate, SlateParts};
-use crate::origin::{LegacyHeader, WireOrigin};
-use crate::role::Role;
-use crate::stage::Stage;
-use crate::validate::{
+use lepic_slate::codec::{Codec, CodecId, EncodeContext, MediaType, WireSlate};
+use lepic_slate::error::{DecodeError, EncodeError, FieldProblem, SlateError, ValidationError};
+use lepic_slate::model::{
+    KernelLock, Participant, ParticipantMessage, PaymentProof, Slate, SlateParts,
+};
+use lepic_slate::origin::{LegacyHeader, WireOrigin};
+use lepic_slate::role::Role;
+use lepic_slate::stage::Stage;
+use lepic_slate::validate::{
     KERNEL_PLACEHOLDER, LEGACY_PARTICIPANTS, check_kernel_features, check_minimum_fee, check_size,
     decode_hex_array, kernel_from_wire, legacy_participant_id, legacy_stage, parse_commitment,
     parse_offset, parse_proof_address, parse_proof_signature, parse_public_key, parse_range_proof,
@@ -56,7 +58,7 @@ impl V3JsonCodec {
         Self { base_fee }
     }
 
-    const fn syntax(position: Option<crate::error::TextPosition>) -> DecodeError {
+    const fn syntax(position: Option<lepic_slate::error::TextPosition>) -> DecodeError {
         DecodeError::Syntax {
             codec: LEGACY_V3_JSON,
             position,
@@ -77,10 +79,12 @@ impl Codec for V3JsonCodec {
         check_size(wire)?;
         let text = wire.as_text().ok_or(Self::syntax(None))?;
         let slate: SlateV3 = serde_json::from_str(text).map_err(|error| {
-            Self::syntax((error.line() > 0).then(|| crate::error::TextPosition {
-                line: error.line(),
-                column: error.column(),
-            }))
+            Self::syntax(
+                (error.line() > 0).then(|| lepic_slate::error::TextPosition {
+                    line: error.line(),
+                    column: error.column(),
+                }),
+            )
         })?;
         // Upstream tells the shapes apart by this key alone; without it the slate is V2.
         if matches!(slate.ttl_cutoff_height, Scalar::Absent) {

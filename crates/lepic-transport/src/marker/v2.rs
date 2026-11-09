@@ -10,7 +10,7 @@
 //! shares the id `legacy-v2`, because on the wire it is a V2 slate; a registry holds either it
 //! or [`V2JsonCodec`].
 
-use lepic_slate::codec::legacy::v2_json::V2JsonCodec;
+use lepic_legacy_slate::v2_json::V2JsonCodec;
 use lepic_slate::codec::{Codec, CodecId, EncodeContext, MediaType, WireSlate};
 use lepic_slate::error::{DecodeError, EncodeError};
 use lepic_slate::model::Slate;
@@ -73,7 +73,7 @@ mod tests {
 
     use super::*;
     use crate::marker::v3::carries_lepic_marker;
-    use lepic_slate::codec::legacy::v3_json::V3JsonCodec;
+    use lepic_legacy_slate::v3_json::V3JsonCodec;
 
     const VECTORS: [&str; 3] = [
         include_str!("../../../../testdata/vectors/slates/send_epicbox_plain_s1_v2.json"),

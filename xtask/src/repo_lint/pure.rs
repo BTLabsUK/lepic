@@ -9,11 +9,12 @@ use crate::deps_check::PURE_CRATES;
 use crate::sources::{SourceFile, code_only, is_ident_char, line_of, word_offsets};
 
 /// The library sources of every pure crate. Tests and benches may read files and clocks.
-pub(crate) const SOURCE_PATHSPECS: [&str; 5] = [
+pub(crate) const SOURCE_PATHSPECS: [&str; 6] = [
     "crates/lepic-crypto/src/*.rs",
     "crates/lepic-primitives/src/*.rs",
     "crates/lepic-keychain/src/*.rs",
     "crates/lepic-slate/src/*.rs",
+    "crates/lepic-legacy-slate/src/*.rs",
     "crates/lepic-contact/src/*.rs",
 ];
 

@@ -4,7 +4,7 @@
 #![no_main]
 
 use lepic_fuzz::{BASE_FEE, assert_round_trips};
-use lepic_slate::codec::legacy::v3_json::V3JsonCodec;
+use lepic_legacy_slate::v3_json::V3JsonCodec;
 use lepic_slate::codec::{Codec, MediaType, WireSlate};
 use libfuzzer_sys::fuzz_target;
 

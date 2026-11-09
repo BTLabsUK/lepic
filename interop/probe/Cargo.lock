@@ -449,6 +449,7 @@ dependencies = [
  "getrandom 0.4.3",
  "lepic-crypto",
  "lepic-epicbox",
+ "lepic-legacy-slate",
  "lepic-methods",
  "lepic-primitives",
  "lepic-slate",
@@ -459,10 +460,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "lepic-legacy-slate"
+version = "0.3.1"
+dependencies = [
+ "lepic-crypto",
+ "lepic-primitives",
+ "lepic-slate",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "lepic-methods"
 version = "0.3.1"
 dependencies = [
  "lepic-epicbox",
+ "lepic-legacy-slate",
  "lepic-primitives",
  "lepic-slate",
  "lepic-transport",
@@ -500,6 +513,7 @@ name = "lepic-transport"
 version = "0.3.1"
 dependencies = [
  "lepic-crypto",
+ "lepic-legacy-slate",
  "lepic-primitives",
  "lepic-slate",
  "serde",

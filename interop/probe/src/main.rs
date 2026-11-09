@@ -29,9 +29,9 @@ use lepic_epicbox::{
     ClientFrame, Domain, EpicboxAddress, Network, Nonce, ReceivedMessage, RelayFrame,
     RelayMessageId, SignedMessage, SlateFrame, WalletMode,
 };
+use lepic_legacy_slate::v2_json::V2JsonCodec;
+use lepic_legacy_slate::v3_json::V3JsonCodec;
 use lepic_methods::epicbox::EpicboxPolicy;
-use lepic_slate::codec::legacy::v2_json::V2JsonCodec;
-use lepic_slate::codec::legacy::v3_json::V3JsonCodec;
 use lepic_slate::codec::{MediaType, WireSlate};
 use lepic_slate::origin::WireOrigin;
 use lepic_slate::registry::CodecRegistry;

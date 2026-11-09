@@ -1009,7 +1009,7 @@ where
                         sender_address: mailbox.peer_mailbox,
                         received_at: now,
                         status: PendingInvoiceStatus::Parked,
-                        codec: lepic_slate::codec::legacy::v3_json::LEGACY_V3_JSON
+                        codec: lepic_legacy_slate::v3_json::LEGACY_V3_JSON
                             .as_str()
                             .to_owned(),
                         bytes,

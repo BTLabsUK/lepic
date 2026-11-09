@@ -903,9 +903,9 @@ mod policy {
     //! The Epicbox format policy against the G-03 Epicbox payloads: what upstream's Epicbox
     //! sender and receiver put on the wire.
 
+    use lepic_legacy_slate::v2_json::LEGACY_V2_JSON;
+    use lepic_legacy_slate::v3_json::LEGACY_V3_JSON;
     use lepic_methods::epicbox::EpicboxPolicy;
-    use lepic_slate::codec::legacy::v2_json::LEGACY_V2_JSON;
-    use lepic_slate::codec::legacy::v3_json::LEGACY_V3_JSON;
     use lepic_slate::codec::{EncodeContext, MediaType, WireSlate};
     use lepic_slate::model::Slate;
     use lepic_slate::origin::{LegacyHeader, WireOrigin};

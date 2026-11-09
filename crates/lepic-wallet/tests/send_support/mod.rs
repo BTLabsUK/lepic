@@ -9,11 +9,11 @@
 use std::sync::Arc;
 
 use lepic_keychain::{Identifier, Keychain, Seed, SwitchCommitment};
+use lepic_legacy_slate::v2_json::{LEGACY_V2_JSON, V2JsonCodec};
+use lepic_legacy_slate::v3_json::V3JsonCodec;
 use lepic_primitives::amount::{Amount, Height};
 use lepic_primitives::output::{OutputFeatures, OutputIdentifier};
 use lepic_primitives::params::Network;
-use lepic_slate::codec::legacy::v2_json::{LEGACY_V2_JSON, V2JsonCodec};
-use lepic_slate::codec::legacy::v3_json::V3JsonCodec;
 use lepic_slate::codec::{CodecId, EncodeContext, WireSlate};
 use lepic_slate::model::Slate;
 use lepic_slate::registry::CodecRegistry;

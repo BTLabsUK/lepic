@@ -81,8 +81,8 @@ pub mod method {
 /// What a host needs to decode a slate without a wallet, for example to show it to the user
 /// before receiving or finalizing it.
 pub mod slate {
-    pub use lepic_slate::codec::legacy::v2_json::V2JsonCodec;
-    pub use lepic_slate::codec::legacy::v3_json::V3JsonCodec;
+    pub use lepic_legacy_slate::v2_json::V2JsonCodec;
+    pub use lepic_legacy_slate::v3_json::V3JsonCodec;
     pub use lepic_slate::codec::{MediaType, WireSlate};
     pub use lepic_slate::error::DecodeError;
     pub use lepic_slate::model::Slate;

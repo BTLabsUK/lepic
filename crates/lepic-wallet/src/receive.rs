@@ -19,6 +19,7 @@ use lepic_keychain::proof::create_output;
 use lepic_keychain::{
     Identifier, Keychain, KeychainError, ProofBuilder, ProofError, SwitchCommitment,
 };
+use lepic_legacy_slate::v3_json::{LEGACY_V3_JSON, V3JsonCodec};
 use lepic_node::{NodeApi, NodeError};
 use lepic_primitives::amount::{Amount, Fee, Height};
 use lepic_primitives::committed::{KernelSumError, sum_commitments};
@@ -29,7 +30,6 @@ use lepic_primitives::output::Output;
 use lepic_primitives::params::Network;
 use lepic_primitives::tx::TransactionBody;
 use lepic_slate::codec::WireSlate;
-use lepic_slate::codec::legacy::v3_json::{LEGACY_V3_JSON, V3JsonCodec};
 use lepic_slate::codec::{Codec as _, EncodeContext};
 use lepic_slate::error::{DecodeError, RegistryError, SlateError};
 use lepic_slate::model::{

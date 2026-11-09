@@ -218,28 +218,28 @@ upstream.paths = ["libwallet/src/slate.rs"]
 upstream.commit = "845b3fcf4df12ed0139929c62157015447a9d063"
 
 [[module]]
-path = "crates/lepic-slate/src/codec/legacy/mod"
+path = "crates/lepic-legacy-slate/src/lib"
 task = "S-02"
 upstream.repo = "https://github.com/EpicCash/epic-wallet"
 upstream.paths = ["libwallet/src/slate_versions/mod.rs"]
 upstream.commit = "845b3fcf4df12ed0139929c62157015447a9d063"
 
 [[module]]
-path = "crates/lepic-slate/src/codec/legacy/fields"
+path = "crates/lepic-legacy-slate/src/fields"
 task = "S-02"
 upstream.repo = "https://github.com/EpicCash/epic-wallet"
 upstream.paths = ["libwallet/src/slate_versions/ser.rs"]
 upstream.commit = "845b3fcf4df12ed0139929c62157015447a9d063"
 
 [[module]]
-path = "crates/lepic-slate/src/codec/legacy/v3_json"
+path = "crates/lepic-legacy-slate/src/v3_json"
 task = "S-02"
 upstream.repo = "https://github.com/EpicCash/epic-wallet"
 upstream.paths = ["libwallet/src/slate_versions/v3.rs"]
 upstream.commit = "845b3fcf4df12ed0139929c62157015447a9d063"
 
 [[module]]
-path = "crates/lepic-slate/src/codec/legacy/v2_json"
+path = "crates/lepic-legacy-slate/src/v2_json"
 task = "S-03"
 upstream.repo = "https://github.com/EpicCash/epic-wallet"
 upstream.paths = ["libwallet/src/slate_versions/v2.rs"]

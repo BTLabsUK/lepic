@@ -16,11 +16,11 @@ mod send_support;
 mod support;
 
 use lepic_crypto::RangeProof;
+use lepic_legacy_slate::v3_json::LEGACY_V3_JSON;
 use lepic_node::LocatedKernel;
 use lepic_node::mock::{ChainOutput, MockFailure};
 use lepic_primitives::amount::{Amount, Fee, Height};
 use lepic_primitives::output::OutputFeatures;
-use lepic_slate::codec::legacy::v3_json::LEGACY_V3_JSON;
 use lepic_slate::codec::{MediaType, WireSlate};
 use lepic_store::WalletStore;
 use lepic_store::{

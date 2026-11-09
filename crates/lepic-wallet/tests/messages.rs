@@ -12,10 +12,10 @@ mod receive_harness;
 mod send_support;
 mod support;
 
+use lepic_legacy_slate::v3_json::LEGACY_V3_JSON;
 use lepic_node::Propagation;
 use lepic_primitives::amount::Amount;
 use lepic_slate::codec::WireSlate;
-use lepic_slate::codec::legacy::v3_json::LEGACY_V3_JSON;
 use lepic_slate::model::MAX_MESSAGE_LEN;
 use lepic_slate::role::Role;
 use lepic_store::{SlateStage, StoredSlate, TxId, WalletStore};

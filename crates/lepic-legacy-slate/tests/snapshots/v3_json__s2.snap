@@ -1,5 +1,5 @@
 ---
-source: crates/lepic-slate/tests/v3_json.rs
+source: crates/lepic-legacy-slate/tests/v3_json.rs
 expression: pretty(&encode(&slate))
 ---
 {

@@ -8,6 +8,8 @@ use std::num::NonZeroUsize;
 
 use lepic_crypto::SecretKey;
 use lepic_keychain::{Identifier, Keychain, SwitchCommitment};
+use lepic_legacy_slate::v2_json::{LEGACY_V2_JSON, V2JsonCodec};
+use lepic_legacy_slate::v3_json::{LEGACY_V3_JSON, V3JsonCodec};
 use lepic_node::mock::{ChainState, MockNode};
 use lepic_node::{NodeVersion, Tip};
 use lepic_primitives::amount::{Amount, Fee, Height, MILLI_EPIC};
@@ -15,8 +17,6 @@ use lepic_primitives::hash::Hash;
 use lepic_primitives::output::{OutputFeatures, OutputIdentifier};
 use lepic_primitives::params::Network;
 use lepic_primitives::ser::{ProtocolVersion, ser_vec};
-use lepic_slate::codec::legacy::v2_json::{LEGACY_V2_JSON, V2JsonCodec};
-use lepic_slate::codec::legacy::v3_json::{LEGACY_V3_JSON, V3JsonCodec};
 use lepic_slate::codec::{CodecId, EncodeContext, WireSlate};
 use lepic_slate::error::{EncodeError, Unrepresentable};
 use lepic_slate::model::{Slate, SlateId};

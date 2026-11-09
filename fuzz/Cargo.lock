@@ -1072,26 +1072,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "lepic-foreign"
-version = "0.3.1"
-dependencies = [
- "http-body-util",
- "hyper",
- "hyper-rustls",
- "hyper-util",
- "lepic-slate",
- "lepic-transport",
- "rustls",
- "serde",
- "serde_json",
- "thiserror",
- "tokio",
- "tower-service",
- "tracing",
- "webpki-roots",
-]
-
-[[package]]
 name = "lepic-fuzz"
 version = "0.0.0"
 dependencies = [
@@ -1100,8 +1080,9 @@ dependencies = [
  "lepic-crypto",
  "lepic-epicbox",
  "lepic-ffi",
- "lepic-foreign",
  "lepic-keychain",
+ "lepic-legacy-rpc",
+ "lepic-legacy-slate",
  "lepic-methods",
  "lepic-node",
  "lepic-primitives",
@@ -1140,6 +1121,37 @@ dependencies = [
 ]
 
 [[package]]
+name = "lepic-legacy-rpc"
+version = "0.3.1"
+dependencies = [
+ "http-body-util",
+ "hyper",
+ "hyper-rustls",
+ "hyper-util",
+ "lepic-slate",
+ "lepic-transport",
+ "rustls",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tokio",
+ "tower-service",
+ "tracing",
+ "webpki-roots",
+]
+
+[[package]]
+name = "lepic-legacy-slate"
+version = "0.3.1"
+dependencies = [
+ "lepic-crypto",
+ "lepic-primitives",
+ "lepic-slate",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "lepic-methods"
 version = "0.3.1"
 dependencies = [
@@ -1149,8 +1161,9 @@ dependencies = [
  "jiff",
  "lepic-crypto",
  "lepic-epicbox",
- "lepic-foreign",
  "lepic-keychain",
+ "lepic-legacy-rpc",
+ "lepic-legacy-slate",
  "lepic-node",
  "lepic-primitives",
  "lepic-slate",
@@ -1258,7 +1271,7 @@ dependencies = [
  "http-body-util",
  "hyper",
  "hyper-util",
- "lepic-foreign",
+ "lepic-legacy-rpc",
  "serde",
  "serde_json",
  "sha2",
@@ -1274,6 +1287,7 @@ name = "lepic-transport"
 version = "0.3.1"
 dependencies = [
  "lepic-crypto",
+ "lepic-legacy-slate",
  "lepic-primitives",
  "lepic-slate",
  "serde",
@@ -1293,6 +1307,7 @@ dependencies = [
  "lepic-contact",
  "lepic-crypto",
  "lepic-keychain",
+ "lepic-legacy-slate",
  "lepic-node",
  "lepic-primitives",
  "lepic-slate",
@@ -1322,6 +1337,7 @@ dependencies = [
  "lepic-crypto",
  "lepic-epicbox",
  "lepic-keychain",
+ "lepic-legacy-slate",
  "lepic-methods",
  "lepic-node",
  "lepic-primitives",

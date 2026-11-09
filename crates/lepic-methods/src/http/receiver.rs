@@ -245,7 +245,7 @@ mod tests {
             ),
             (
                 ReceiveError::Encode(lepic_transport::error::FormatError::CodecNotRegistered {
-                    codec: lepic_slate::codec::legacy::v2_json::LEGACY_V2_JSON,
+                    codec: lepic_legacy_slate::v2_json::LEGACY_V2_JSON,
                 }),
                 Refusal::Rejected,
             ),

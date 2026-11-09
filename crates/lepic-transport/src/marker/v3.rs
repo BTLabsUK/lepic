@@ -16,7 +16,7 @@
 use lepic_crypto::hex;
 use serde::Deserialize;
 
-use lepic_slate::codec::legacy::v3_json::V3JsonCodec;
+use lepic_legacy_slate::v3_json::V3JsonCodec;
 use lepic_slate::codec::{Codec, CodecId, EncodeContext, MediaType, WireSlate};
 use lepic_slate::error::{DecodeError, EncodeError};
 use lepic_slate::model::Slate;

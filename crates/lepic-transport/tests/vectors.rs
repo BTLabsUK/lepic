@@ -14,8 +14,8 @@
 
 use std::path::PathBuf;
 
-use lepic_slate::codec::legacy::v2_json::{LEGACY_V2_JSON, V2JsonCodec};
-use lepic_slate::codec::legacy::v3_json::{LEGACY_V3_JSON, V3JsonCodec};
+use lepic_legacy_slate::v2_json::{LEGACY_V2_JSON, V2JsonCodec};
+use lepic_legacy_slate::v3_json::{LEGACY_V3_JSON, V3JsonCodec};
 use lepic_slate::codec::{CodecId, EncodeContext, MediaType, WireSlate};
 use lepic_slate::error::DecodeError;
 use lepic_slate::origin::LegacyHeader;

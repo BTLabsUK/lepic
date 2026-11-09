@@ -19,22 +19,22 @@ use lepic_primitives::output::{Output, OutputFeatures};
 use lepic_primitives::params::MAX_TX_WEIGHT;
 use serde::Deserialize;
 
-use super::bounded::{self, Bounded, check_participants, only_kernel};
-use super::fields::{
+use crate::bounded::{self, Bounded, check_participants, only_kernel};
+use crate::fields::{
     ObjectWriter, Scalar, field_error, integer, missing, number, optional_parsed, optional_text,
     parsed, text, write_array, write_hex, write_integer_string, write_null, write_number,
     write_string,
 };
-use crate::codec::{Codec, CodecId, EncodeContext, MediaType, WireSlate};
-use crate::error::{
+use lepic_slate::codec::{Codec, CodecId, EncodeContext, MediaType, WireSlate};
+use lepic_slate::error::{
     DecodeError, EncodeError, FieldProblem, SlateError, TextPosition, Unrepresentable,
     ValidationError,
 };
-use crate::model::{KernelLock, Participant, ParticipantMessage, Slate, SlateParts};
-use crate::origin::{LegacyHeader, WireOrigin};
-use crate::role::Role;
-use crate::stage::Stage;
-use crate::validate::{
+use lepic_slate::model::{KernelLock, Participant, ParticipantMessage, Slate, SlateParts};
+use lepic_slate::origin::{LegacyHeader, WireOrigin};
+use lepic_slate::role::Role;
+use lepic_slate::stage::Stage;
+use lepic_slate::validate::{
     KERNEL_PLACEHOLDER, LEGACY_PARTICIPANTS, check_kernel_features, check_minimum_fee, check_size,
     decode_hex_array, kernel_from_wire, legacy_participant_id, legacy_stage, parse_commitment,
     parse_offset, parse_public_key, parse_range_proof, parse_signature, parse_slate_id,

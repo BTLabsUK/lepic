@@ -15,11 +15,11 @@
 use std::path::PathBuf;
 
 use lepic_crypto::CryptoError;
+use lepic_legacy_slate::v2_json::{LEGACY_V2_JSON, V2JsonCodec};
+use lepic_legacy_slate::v3_json::V3JsonCodec;
 use lepic_primitives::amount::{Amount, Fee, Height};
 use lepic_primitives::kernel::KernelFeatures;
 use lepic_primitives::params::{MAX_TX_WEIGHT, Network};
-use lepic_slate::codec::legacy::v2_json::{LEGACY_V2_JSON, V2JsonCodec};
-use lepic_slate::codec::legacy::v3_json::V3JsonCodec;
 use lepic_slate::codec::{Codec, EncodeContext, MAX_WIRE_SLATE_LEN, MediaType, WireSlate};
 use lepic_slate::error::{
     DecodeError, EncodeError, FieldProblem, HexError, SlateError, TextPosition, Unrepresentable,

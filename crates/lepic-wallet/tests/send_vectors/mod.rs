@@ -8,11 +8,11 @@ use std::path::PathBuf;
 
 use lepic_crypto::SecretKey;
 use lepic_keychain::{Identifier, Keychain, SwitchCommitment};
+use lepic_legacy_slate::v2_json::V2JsonCodec;
+use lepic_legacy_slate::v3_json::V3JsonCodec;
 use lepic_primitives::amount::{Amount, Fee, Height, MILLI_EPIC};
 use lepic_primitives::output::{OutputFeatures, OutputIdentifier};
 use lepic_primitives::params::Network;
-use lepic_slate::codec::legacy::v2_json::V2JsonCodec;
-use lepic_slate::codec::legacy::v3_json::V3JsonCodec;
 use lepic_slate::codec::{Codec, EncodeContext};
 use lepic_slate::error::EncodeError;
 use lepic_slate::model::{KernelLock, ProofAddress, Slate, SlateId};

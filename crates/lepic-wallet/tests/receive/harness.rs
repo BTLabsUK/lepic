@@ -16,13 +16,13 @@ use crate::support::{
     FixedClock, TestStore, TestStores, TestVault, complete_restore_scan, fixed_time, password,
 };
 use lepic_keychain::{Identifier, Seed};
+use lepic_legacy_slate::v2_json::LEGACY_V2_JSON;
+use lepic_legacy_slate::v3_json::LEGACY_V3_JSON;
 use lepic_node::mock::{ChainState, MockNode};
 use lepic_node::{NodeClient, NodeVersion, Tip};
 use lepic_primitives::amount::Height;
 use lepic_primitives::hash::Hash;
 use lepic_primitives::params::Network;
-use lepic_slate::codec::legacy::v2_json::LEGACY_V2_JSON;
-use lepic_slate::codec::legacy::v3_json::LEGACY_V3_JSON;
 use lepic_slate::codec::{Codec, CodecId, EncodeContext, MediaType, WireSlate};
 use lepic_slate::error::EncodeError;
 use lepic_slate::model::Slate;

@@ -4,8 +4,8 @@
 
 use std::path::Path;
 
-use lepic_slate::codec::legacy::v2_json::LEGACY_V2_JSON;
-use lepic_slate::codec::legacy::v3_json::LEGACY_V3_JSON;
+use lepic_legacy_slate::v2_json::LEGACY_V2_JSON;
+use lepic_legacy_slate::v3_json::LEGACY_V3_JSON;
 use lepic_slate::codec::{MAX_WIRE_SLATE_LEN, MediaType, WireSlate};
 use lepic_transport::error::{FileError, FileOperation, TransportError};
 use lepic_transport::file::{FILE, FileTransport};
