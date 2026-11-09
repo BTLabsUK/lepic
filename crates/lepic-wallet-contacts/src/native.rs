@@ -223,6 +223,20 @@ fn completed(answer: Slate, request: &Slate) -> Option<Slate> {
     Slate::from_parts(parts).ok()
 }
 
+/// The engine's hook for native slates over Epicbox: the conversions native slates between
+/// contacts use.
+pub(crate) struct EpicboxNativeSlates;
+
+impl lepic_wallet::extension::NativeSlates for EpicboxNativeSlates {
+    fn body(&self, network: Network, v3: &[u8]) -> Option<Vec<u8>> {
+        native_body(network, v3).ok()
+    }
+
+    fn v3(&self, network: Network, body: &[u8], request: Option<&[u8]>) -> Option<Vec<u8>> {
+        v3_of_native(network, decode_native(network, body)?, request)
+    }
+}
+
 impl<N, S, V> ContactBook<'_, N, S, V>
 where
     N: NodeApi + 'static,

@@ -6,6 +6,7 @@
 //! [`Session`]: crate::lifecycle::Session
 
 use futures_util::future::BoxFuture;
+use lepic_contact::EncSecretKey;
 use lepic_keychain::Keychain;
 use lepic_primitives::params::Network;
 use lepic_store::{AccountIndex, ContactId};
@@ -27,6 +28,32 @@ pub trait ReplyKeys: Send + Sync {
         account: AccountIndex,
         slate_id: [u8; 16],
     ) -> Option<[u8; 32]>;
+
+    /// The secret of [`Self::reply_public_key`], which opens the native answer to the slate
+    /// (RFC 0003 11.1), or `None` when none can be derived.
+    fn reply_secret_key(
+        &self,
+        _keychain: &Keychain,
+        _network: Network,
+        _account: AccountIndex,
+        _slate_id: [u8; 16],
+    ) -> Option<EncSecretKey> {
+        None
+    }
+}
+
+/// Converts slates between the V3 JSON the engine stores and `lepic.v1`, the body of a native
+/// slate over Epicbox (RFC 0003 11.1). Without a hook installed with
+/// [`crate::Wallet::set_native_slates`] every slate goes over Epicbox as V2 or V3 JSON and a
+/// native one that comes in is refused.
+pub trait NativeSlates: Send + Sync {
+    /// The `lepic.v1` body of the slate stored as V3 JSON `v3`, or `None` when it has none.
+    fn body(&self, network: Network, v3: &[u8]) -> Option<Vec<u8>>;
+
+    /// The V3 JSON of the `lepic.v1` body `body`: a proposal as it came, with no `request`, or
+    /// an answer completed from `request`, the stored V3 JSON of the proposal it answers.
+    /// `None` when the body does not decode or does not fit.
+    fn v3(&self, network: Network, body: &[u8], request: Option<&[u8]>) -> Option<Vec<u8>>;
 }
 
 /// Seals a notice about a slate exchanged with a paired contact into that contact's mailbox,

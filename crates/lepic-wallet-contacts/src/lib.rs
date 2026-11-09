@@ -113,7 +113,8 @@ impl<N, S: StoreOpener, V> WalletContacts<N, S, V> for Wallet<N, S, V> {
 }
 
 /// Gives `wallet` what the engine takes from the contact engine: the reply key a file or
-/// paste S1 and an I1 carry, so a LEPIC peer can answer them sealed. Call it once for each
+/// paste S1 and an I1 carry, so a LEPIC peer can answer them sealed, and the `lepic.v1`
+/// conversions of native slates over Epicbox. Call it once for each
 /// wallet handle, before its first send.
 pub fn install<N, S, V>(wallet: &Wallet<N, S, V>)
 where
@@ -122,6 +123,7 @@ where
     V: SecretVault + 'static,
 {
     wallet.set_reply_keys(Arc::new(keys::ContactReplyKeys));
+    wallet.set_native_slates(Arc::new(native::EpicboxNativeSlates));
     wallet.set_contact_notices(Arc::new(SealedNotices));
     requests::install_requests(wallet);
 }

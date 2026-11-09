@@ -39,6 +39,7 @@ use std::error::Error as StdError;
 use std::sync::Arc;
 use std::time::Duration;
 
+use lepic_contact::{EncPublicKey, HintRule, TxKey};
 use lepic_crypto::SecretKey;
 use lepic_node::{NodeApi, Propagation};
 use lepic_primitives::error_chain::ErrorChain;
@@ -50,7 +51,7 @@ use lepic_store::{
     WalletStore,
 };
 use lepic_transport::error::TransportError;
-use lepic_transport::method::Method;
+use lepic_transport::method::{Method, SenderFacts};
 use lepic_transport::transport::{Destination, Envelope, TransportId};
 use thiserror::Error;
 use tokio::sync::watch;
@@ -63,7 +64,9 @@ use crate::event::{Event, FinalizedInvoice, SlateId, UndeliveredReply, UnknownSl
 use crate::finalize::{Answerer, FinalizeError};
 use crate::invoice::InvoiceError;
 use crate::namespace::{self, Listing};
+use crate::native_epicbox::{self, Arrived, Claim, NativeRefusal, Opening, Sealing};
 use crate::notice::{self, Payload};
+use crate::peer_compat::Shown;
 use crate::ports::{SecretVault, StoreOpener};
 use crate::receipt_cap::{NoRoom, Sender};
 use crate::receive::{ReceiveError, ReceiveRequest};
@@ -323,6 +326,8 @@ pub(crate) enum Refusal {
     OpenReceiptsUnchecked(#[source] WalletError),
     #[error("this wallet refuses payments nobody asked for")]
     Unsolicited,
+    #[error("native slate refused")]
+    Native(#[source] NativeRefusal),
 }
 
 /// A failure that leaves the message for the relay to deliver again.
@@ -729,6 +734,18 @@ where
     ) -> Result<Handled, Settlement> {
         let reply_to = envelope.reply_to().ok_or(Refusal::NoReplyAddress)?;
         let network = self.config().network;
+        // A native slate is opened, and refused with nothing stored when it does not open
+        // to an S1 for the payments address or the S2 of a send of this wallet; then it goes
+        // on as the marked V3 JSON it holds.
+        let arrived = if native_epicbox::is_native(envelope.wire()) {
+            Some(self.open_native(envelope).await?)
+        } else {
+            None
+        };
+        let (envelope, native) = match &arrived {
+            Some(arrived) => (&arrived.envelope, Some(arrived)),
+            None => (envelope, None),
+        };
         match notice::classify(envelope.wire()) {
             Payload::Slate => {}
             Payload::Notice(notice) => {
@@ -768,11 +785,13 @@ where
             .map_err(Refusal::Decode)?;
         match slate.stage() {
             Stage::S1 => {
-                self.answer(method, msg_id, attempt, envelope, &slate, reply_to, None)
-                    .await
+                self.answer(
+                    method, msg_id, attempt, envelope, &slate, reply_to, None, native,
+                )
+                .await
             }
             Stage::S2 => {
-                self.complete(method, msg_id, attempt, envelope, &slate, reply_to)
+                self.complete(method, msg_id, attempt, envelope, &slate, reply_to, native)
                     .await
             }
             Stage::I1 => match self.bounced_invoice(method, &slate, reply_to).await? {
@@ -805,7 +824,8 @@ where
         reply_to: &Destination,
     ) -> Result<Handled, Settlement> {
         let facts = method.sender_facts(envelope.wire());
-        let (marked, features) = (facts.marked, facts.features);
+        let shown = Shown::of(&facts, self.config().native_direct);
+        let marked = shown.marked;
         let session = self.session().map_err(Hold::from)?;
         let slate_id = Uuid::from_bytes(*payment.id().as_bytes());
         let finalized_before = self
@@ -823,7 +843,7 @@ where
         {
             Ok(finalized) => {
                 // Recorded before the notice is decided, so an unmarked payment holds it back.
-                self.record_paying_peer(method, finalized.tx_id, reply_to, marked, features)
+                self.record_paying_peer(method, finalized.tx_id, reply_to, shown)
                     .await;
                 if let Some(kernel) = finalized.slate.kernel() {
                     self.notify_posted_over(
@@ -839,7 +859,7 @@ where
             }
             Err(InvoiceError::NotPosted { tx_id, source }) => {
                 warn!(tx_id = %tx_id, error = %ErrorChain(&source), "finalized transaction not posted");
-                self.record_paying_peer(method, tx_id, reply_to, marked, features)
+                self.record_paying_peer(method, tx_id, reply_to, shown)
                     .await;
                 Ok(self.invoice_finalized(tx_id, payment, finalized_before))
             }
@@ -888,7 +908,7 @@ where
                     state: TxState::Cancelled,
                 },
             ) => {
-                self.record_paying_peer(method, tx_id, reply_to, false, None)
+                self.record_paying_peer(method, tx_id, reply_to, Shown::UNMARKED)
                     .await;
                 Err(Refusal::Invoice(error).into())
             }
@@ -1059,13 +1079,14 @@ where
         proposal: &Slate,
         reply_to: &Destination,
         listing: Option<Listing>,
+        native: Option<&Arrived>,
     ) -> Result<Handled, Settlement> {
         self.make_room_for(
             method, msg_id, attempt, envelope, proposal, reply_to, listing,
         )
         .await?;
         let facts = method.sender_facts(envelope.wire());
-        let (marked, features) = (facts.marked, facts.features);
+        let shown = Self::shown(&facts, self.config().native_direct, native);
         match self
             .receive_from(
                 method,
@@ -1077,8 +1098,7 @@ where
             .await
         {
             Ok(received) => {
-                self.record_sending_peer(&**method, reply_to, marked, features)
-                    .await;
+                self.record_sending_peer(&**method, reply_to, shown).await;
                 // A notice that came before this S1 applies now, so a payment its sender
                 // cancelled is not answered.
                 self.apply_early_notices_over(method, received.slate.id())
@@ -1099,8 +1119,13 @@ where
                     debug!(tx_id = %received.tx_id, "answer withheld at another address");
                     return Ok(Handled::Repeated);
                 }
+                // A native S1 is answered native, sealed to the key it gave.
+                let answer = match native.and_then(|native| native.reply_key) {
+                    Some(key) => self.native_answer(&received.reply, key).await?,
+                    None => received.reply,
+                };
                 match self
-                    .reply(&**method, reply_to, &received.reply, listing.is_some())
+                    .reply(&**method, reply_to, &answer, listing.is_some())
                     .await
                 {
                     Ok(()) => {}
@@ -1135,6 +1160,73 @@ where
         }
     }
 
+    /// What a slate showed of its sender. A native slate keeps the sender's stored seal key:
+    /// it gives none of its own.
+    fn shown(facts: &SenderFacts, native_direct: bool, native: Option<&Arrived>) -> Shown {
+        let shown = Shown::of(facts, native_direct);
+        if native.is_some() {
+            shown.keeping_key()
+        } else {
+            shown
+        }
+    }
+
+    /// Opens the native slate of `envelope` (RFC 0003 11.1).
+    async fn open_native(&self, envelope: &Envelope) -> Result<Arrived, Settlement> {
+        let Some(slates) = self.native_slates() else {
+            return Err(Refusal::Native(NativeRefusal::NotInstalled).into());
+        };
+        let session = self.session().map_err(Hold::from)?;
+        let reply_keys = self.reply_keys();
+        let envelope = envelope.clone();
+        let opened = self
+            .blocking(move |_, config| {
+                let opening = Opening {
+                    network: config.network,
+                    seed: &session.seed,
+                    keychain: &session.keychain,
+                    slates: &*slates,
+                    reply_keys: reply_keys.as_deref(),
+                };
+                Ok(session.store.read(|repos| opening.open(repos, &envelope))?)
+            })
+            .await
+            .map_err(Hold::from)?;
+        opened.map_err(|refusal| {
+            warn!(error = %refusal, "native slate refused");
+            Refusal::Native(refusal).into()
+        })
+    }
+
+    /// The answer `reply`, marked V3 JSON, as a native slate sealed to `key`, the reply key of
+    /// the S1 it answers. An answer that cannot be sealed goes as the JSON, which the sender
+    /// reads as well.
+    async fn native_answer(&self, reply: &WireSlate, key: EncPublicKey) -> Result<WireSlate, Hold> {
+        let Some(slates) = self.native_slates() else {
+            return Ok(reply.clone());
+        };
+        let session = self.session()?;
+        let answer = reply.clone();
+        let sealed = self
+            .blocking(move |ports, config| {
+                let features = Claim::of(config, &session.seed).features;
+                let sealing = Sealing {
+                    network: config.network,
+                    slates: &*slates,
+                    rng: &ports.rng,
+                };
+                Ok(sealing.seal(
+                    answer.as_bytes(),
+                    &key,
+                    TxKey::Seal(HintRule::ReplyKey),
+                    None,
+                    features,
+                ))
+            })
+            .await?;
+        Ok(sealed.unwrap_or_else(|| reply.clone()))
+    }
+
     /// Delivers the answer `wire` to `to` through `method`'s outbound, which sends from a
     /// listing's address when the message came in `at_listing`.
     async fn reply(
@@ -1161,6 +1253,7 @@ where
     /// An S2 finalized before, which arrives again when the receiver resent it, counts as
     /// repeated; finalizing it again posts only if the first post did not succeed. A marked S2
     /// of a send cancelled here is answered with a `cancelled` notice and refused.
+    #[allow(clippy::too_many_arguments)]
     async fn complete(
         &self,
         method: &Arc<dyn Method>,
@@ -1169,9 +1262,11 @@ where
         envelope: &Envelope,
         reply: &Slate,
         reply_to: &Destination,
+        native: Option<&Arrived>,
     ) -> Result<Handled, Settlement> {
         let facts = method.sender_facts(envelope.wire());
-        let (marked, features) = (facts.marked, facts.features);
+        let shown = Self::shown(&facts, self.config().native_direct, native);
+        let marked = shown.marked;
         let session = self.session().map_err(Hold::from)?;
         let slate_id = Uuid::from_bytes(*reply.id().as_bytes());
         let finalized_before = self
@@ -1210,7 +1305,7 @@ where
             Err(_) => None,
         };
         if let Some(tx_id) = answered {
-            self.record_receiving_peer(method, tx_id, reply_to, marked, features)
+            self.record_receiving_peer(method, tx_id, reply_to, shown)
                 .await;
         }
         match finalized {
@@ -1410,9 +1505,9 @@ where
         reply_to: &Destination,
     ) -> Result<(), Settlement> {
         let facts = method.sender_facts(envelope.wire());
-        let (marked, features) = (facts.marked, facts.features);
-        self.record_sending_peer(&**method, reply_to, marked, features)
-            .await;
+        let shown = Shown::of(&facts, self.config().native_direct);
+        let marked = shown.marked;
+        self.record_sending_peer(&**method, reply_to, shown).await;
         match self
             .decline_unsolicited(method, reply_to, proposal.id(), marked)
             .await

@@ -64,7 +64,7 @@ use crate::account::{self, AccountError, next_output_key};
 use crate::codecs;
 use crate::error::WalletError;
 use crate::extension::ReplyKeys;
-use crate::native_epicbox::Claim;
+use crate::native_epicbox::{Claim, Sealing, SlateFormat, native_s1};
 use crate::ports::{SecretVault, StoreOpener};
 use crate::refresh::with_spend_confirmations;
 use crate::selection::{self, Selection, SelectionError, SelectionOptions, SelectionStrategy};
@@ -253,6 +253,8 @@ pub struct SentSlate {
     pub slate_id: SlateId,
     pub amount: Amount,
     pub fee: Fee,
+    /// How the S1 went out: as legacy JSON, or as a native slate over Epicbox.
+    pub format: SlateFormat,
 }
 
 /// A change output of a send: the key it is derived from and its value.
@@ -535,23 +537,45 @@ fn check_delivery(method: &dyn Method, delivery: &Delivery) -> Result<(), SendEr
     }
 }
 
-/// The S1 as the method sends a new slate.
+/// The S1 as the method sends a new slate, and its format: native when the wallet sends a
+/// native slate to the address (RFC 0003 11.1), legacy JSON otherwise.
 fn encode_for_delivery(
+    repos: &dyn Repositories,
     env: &SendEnvironment<'_>,
+    delivery: &Delivery,
     slate: &Slate,
     account: AccountIndex,
     context: &EncodeContext,
-) -> Result<WireSlate, SendError> {
+) -> Result<(WireSlate, SlateFormat), SendError> {
     // A method that carries a reply key gets one, so a LEPIC receiver can answer sealed
     // (RFC 0002 5).
-    let reply_key = env
-        .reply_keys
-        .filter(|_| env.method.carries().reply_key)
-        .and_then(|keys| {
-            keys.reply_public_key(env.keychain, env.network, account, *slate.id().as_bytes())
-        });
+    // A native slate names the key of its answer whatever the method carries (RFC 0003 11.1).
+    let slate_reply_key = env.reply_keys.and_then(|keys| {
+        keys.reply_public_key(env.keychain, env.network, account, *slate.id().as_bytes())
+    });
+    let reply_key = slate_reply_key.filter(|_| env.method.carries().reply_key);
+    if let (Delivery::Deliver { to }, Some(sealing)) = (delivery, &env.sealing) {
+        let native = native_s1(
+            repos,
+            env.method,
+            sealing,
+            &env.claim,
+            env.native_direct,
+            env.now,
+            to,
+            slate,
+            context,
+            slate_reply_key,
+        )?;
+        if let Some(wire) = native {
+            return Ok((wire, SlateFormat::Native));
+        }
+    }
     let sending = env.claim.sending(env.network, reply_key);
-    Ok(env.method.encode_new(slate, context, &sending)?.wire)
+    Ok((
+        env.method.encode_new(slate, context, &sending)?.wire,
+        SlateFormat::Legacy,
+    ))
 }
 
 /// What the store transaction of a send produced, for the delivery that follows it.
@@ -561,6 +585,7 @@ struct StoredS1 {
     amount: Amount,
     fee: Fee,
     wire: WireSlate,
+    format: SlateFormat,
     outbox: Option<OutboxId>,
     /// Where the slate must go whatever the caller named: the allowed address of a parked
     /// invoice's payment.
@@ -578,6 +603,9 @@ struct SendEnvironment<'a> {
     reply_keys: Option<&'a dyn ReplyKeys>,
     /// What this wallet's marker claims.
     claim: Claim,
+    native_direct: bool,
+    /// How a native S1 is sealed, when the native slates hook is installed.
+    sealing: Option<Sealing<'a>>,
 }
 
 impl SendEnvironment<'_> {
@@ -685,7 +713,14 @@ fn create_s1(
         selection,
         randomness,
     )?;
-    let wire = encode_for_delivery(env, &built.slate, request.account, &built.encode_context)?;
+    let (wire, format) = encode_for_delivery(
+        &*repos,
+        env,
+        delivery,
+        &built.slate,
+        request.account,
+        &built.encode_context,
+    )?;
     record_counterparty(repos, built.tx_id, delivery)?;
     let slate_uuid = Uuid::from_bytes(*built.slate.id().as_bytes());
     let outbox = enqueue_delivery(repos, env.method.id(), delivery, slate_uuid, env.now)?;
@@ -695,6 +730,7 @@ fn create_s1(
         amount: built.plan_amount,
         fee: built.plan_fee,
         wire,
+        format,
         outbox,
         bound_to: None,
         slate: built.slate,
@@ -953,8 +989,10 @@ fn stored_s1_for_delivery(
             |header| header.block_header_version,
         );
     let slate = slate.with_origin(None);
-    let wire = encode_for_delivery(
+    let (wire, format) = encode_for_delivery(
+        &*repos,
         env,
+        delivery,
         &slate,
         entry.account,
         &EncodeContext {
@@ -969,6 +1007,7 @@ fn stored_s1_for_delivery(
         amount: slate.amount(),
         fee: slate.fee(),
         wire,
+        format,
         outbox,
         bound_to: None,
         slate,
@@ -1028,6 +1067,7 @@ fn stored_i2_for_delivery(
         amount: slate.amount(),
         fee: slate.fee(),
         wire,
+        format: SlateFormat::Legacy,
         outbox: None,
         bound_to,
         slate,
@@ -1073,6 +1113,7 @@ where
         let (tip, _) = self.stage_tip(&session, SendError::Node).await?;
         let target = delivery.clone();
         let reply_keys = self.reply_keys();
+        let native_slates = self.native_slates();
         let carrier = Arc::clone(method);
         let stored = self
             .blocking(move |ports, config| {
@@ -1083,6 +1124,12 @@ where
                     now: ports.clock.now(),
                     reply_keys: reply_keys.as_deref(),
                     claim: Claim::of(config, &session.seed),
+                    native_direct: config.native_direct,
+                    sealing: native_slates.as_deref().map(|slates| Sealing {
+                        network: config.network,
+                        slates,
+                        rng: &ports.rng,
+                    }),
                 };
                 let randomness = S1Randomness::draw(&mut **ports.rng.lock());
                 Ok(randomness.map_err(SendError::from).and_then(|randomness| {
@@ -1110,6 +1157,7 @@ where
             slate_id: stored.slate_id,
             amount: stored.amount,
             fee: stored.fee,
+            format: stored.format,
         })
     }
 
@@ -1195,6 +1243,7 @@ where
         check_delivery(&**method, &delivery)?;
         let target = delivery.clone();
         let reply_keys = self.reply_keys();
+        let native_slates = self.native_slates();
         let carrier = Arc::clone(method);
         let stored = self
             .blocking(move |ports, config| {
@@ -1205,6 +1254,12 @@ where
                     now: ports.clock.now(),
                     reply_keys: reply_keys.as_deref(),
                     claim: Claim::of(config, &session.seed),
+                    native_direct: config.native_direct,
+                    sealing: native_slates.as_deref().map(|slates| Sealing {
+                        network: config.network,
+                        slates,
+                        rng: &ports.rng,
+                    }),
                 };
                 Ok(session
                     .store

@@ -15,7 +15,7 @@ use std::time::Duration;
 use jiff::{SignedDuration, Timestamp};
 use lepic_node::NodeApi;
 use lepic_store::{PeerCompat, Repositories, StoreError, WalletStore};
-use lepic_transport::method::Method;
+use lepic_transport::method::{Method, SenderFacts};
 use tracing::instrument;
 
 use crate::error::WalletError;
@@ -93,25 +93,91 @@ pub(crate) fn facts(
     Ok(PeerFacts::derive(repos.peer_compat(key)?, now))
 }
 
+/// What a marked message showed about the key its native slates are sealed to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum NativeKey {
+    /// The marker's claim: the key when it claimed native slates with a valid key, `None` when
+    /// it did not. It replaces the stored key, as a newer claim does.
+    Marker(Option<[u8; 32]>),
+    /// The message carried no marker claim of its own, as a notice or a native slate: the stored
+    /// key stays.
+    Kept,
+}
+
+/// What an authenticated slate from a key showed: marked, with the claim of its marker, or not.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Shown {
+    pub(crate) marked: bool,
+    /// The bits the marker claimed; `None` for a marker that claims none.
+    pub(crate) features: Option<u32>,
+    pub(crate) native: NativeKey,
+}
+
+impl Shown {
+    /// A slate without the marker.
+    pub(crate) const UNMARKED: Self = Self {
+        marked: false,
+        features: None,
+        native: NativeKey::Kept,
+    };
+
+    /// What `facts`, read off a slate's wire, show to a wallet whose `native_direct` is as
+    /// given. A wallet that sends no native slates records no key, so its rows stay as they
+    /// were before native slates over Epicbox.
+    pub(crate) fn of(facts: &SenderFacts, native_direct: bool) -> Self {
+        let key = crate::native_epicbox::claimed_key(facts.features, facts.reply_key)
+            .filter(|_| native_direct);
+        Self {
+            marked: facts.marked,
+            features: facts.features,
+            native: NativeKey::Marker(key),
+        }
+    }
+
+    /// The same facts, keeping the stored native key: for a key that is only shown LEPIC by
+    /// another key's slate, or a slate that came native.
+    pub(crate) const fn keeping_key(self) -> Self {
+        Self {
+            native: NativeKey::Kept,
+            ..self
+        }
+    }
+
+    /// The same marking, with no claim: what the slate shows about a key it did not come from.
+    pub(crate) const fn unclaimed(self) -> Self {
+        Self {
+            marked: self.marked,
+            features: None,
+            native: NativeKey::Kept,
+        }
+    }
+}
+
 /// Records an authenticated message from `key` that carried the LEPIC marker, or a notice from
 /// it this wallet accepted. `features` are the bits the marker claimed, `None` for a marker
 /// that claims none, which is bit 0 alone. A claim without a bit takes the bit from what works.
+/// `native` sets the key native slates go to, or keeps it.
 pub(crate) fn record_marked(
     repos: &mut dyn Repositories,
     key: &str,
     now: Timestamp,
     features: Option<u32>,
+    native: NativeKey,
 ) -> Result<(), StoreError> {
     let mut compat = repos.peer_compat(key)?.unwrap_or_default();
     compat.last_marked_at = Some(now);
     compat.claimed = features.map_or(MARKER_BIT, |bits| bits | MARKER_BIT);
     compat.features_at = features.map(|_| now);
     compat.works = (compat.works | MARKER_BIT) & compat.claimed;
+    if let NativeKey::Marker(native_key) = native {
+        compat.native_key = native_key;
+    }
     repos.put_peer_compat(key, &compat)
 }
 
 /// Records a slate from `key` over Epicbox without the LEPIC marker, or an invoice it sent back
-/// unchanged. The feature bits stay: another install on the same key may still use them.
+/// unchanged. The feature bits and the native key stay: another install on the same key may
+/// still use them.
 pub(crate) fn record_unmarked(
     repos: &mut dyn Repositories,
     key: &str,
@@ -122,20 +188,29 @@ pub(crate) fn record_unmarked(
     repos.put_peer_compat(key, &compat)
 }
 
-/// Records what the authenticated slate from `key` showed: marked, with the `features` its
-/// marker claimed, or not.
+/// Records what the authenticated slate from `key` showed.
 pub(crate) fn record_slate(
     repos: &mut dyn Repositories,
     key: &str,
     now: Timestamp,
-    marked: bool,
-    features: Option<u32>,
+    shown: Shown,
 ) -> Result<(), StoreError> {
-    if marked {
-        record_marked(repos, key, now, features)
+    if shown.marked {
+        record_marked(repos, key, now, shown.features, shown.native)
     } else {
         record_unmarked(repos, key, now)
     }
+}
+
+/// The key native slates to `key` are sealed to, when this wallet sends them there: the
+/// wallet's `native_direct` is on, the key is LEPIC with a marked message within
+/// [`NOTICE_WINDOW`], and its latest marked slate claimed native slates with a valid key
+/// (RFC 0003 11.1).
+pub(crate) fn native_key(facts: &PeerFacts, native_direct: bool) -> Option<[u8; 32]> {
+    if !native_direct || !facts.notices {
+        return None;
+    }
+    facts.stored.and_then(|row| row.native_key)
 }
 
 /// Records the `features` a pairing envelope of `key` claimed, once the pairing proved the
@@ -326,7 +401,7 @@ mod tests {
     fn a_marker_without_bits_claims_and_works_bit_zero_only() {
         let store = store();
         store
-            .write(|repos| record_marked(repos, "key", now(), None))
+            .write(|repos| record_marked(repos, "key", now(), None, NativeKey::Kept))
             .unwrap();
         assert_eq!(
             stored(&store),
@@ -344,7 +419,7 @@ mod tests {
         let store = store();
         store
             .write(|repos| {
-                record_marked(repos, "key", at(90).unwrap(), Some(0b110))?;
+                record_marked(repos, "key", at(90).unwrap(), Some(0b110), NativeKey::Kept)?;
                 let mut compat = repos.peer_compat("key")?.unwrap_or_default();
                 compat.works |= 0b100;
                 repos.put_peer_compat("key", &compat)
@@ -356,7 +431,7 @@ mod tests {
         assert_eq!(first.features_at, at(90));
 
         store
-            .write(|repos| record_marked(repos, "key", now(), Some(0b010)))
+            .write(|repos| record_marked(repos, "key", now(), Some(0b010), NativeKey::Kept))
             .unwrap();
         let later = stored(&store);
         assert_eq!(later.claimed, 0b011);
@@ -372,8 +447,8 @@ mod tests {
         let store = store();
         store
             .write(|repos| {
-                record_marked(repos, "key", at(90).unwrap(), Some(0b10))?;
-                record_slate(repos, "key", now(), false, None)
+                record_marked(repos, "key", at(90).unwrap(), Some(0b10), NativeKey::Kept)?;
+                record_slate(repos, "key", now(), Shown::UNMARKED)
             })
             .unwrap();
         let compat = stored(&store);
@@ -386,7 +461,18 @@ mod tests {
     fn a_marked_slate_records_the_bits_its_marker_claims() {
         let store = store();
         store
-            .write(|repos| record_slate(repos, "key", now(), true, Some(0b1010)))
+            .write(|repos| {
+                record_slate(
+                    repos,
+                    "key",
+                    now(),
+                    Shown {
+                        marked: true,
+                        features: Some(0b1010),
+                        native: NativeKey::Kept,
+                    },
+                )
+            })
             .unwrap();
         let compat = stored(&store);
         assert_eq!((compat.claimed, compat.works), (0b1011, MARKER_BIT));
@@ -398,7 +484,7 @@ mod tests {
         let store = store();
         store
             .write(|repos| {
-                record_marked(repos, "key", now(), Some(0b1000))?;
+                record_marked(repos, "key", now(), Some(0b1000), NativeKey::Kept)?;
                 // Not claimed: never starts working.
                 record_works(repos, "key", 0b0100, true)?;
                 record_works(repos, "key", 0b1000, true)
@@ -416,7 +502,7 @@ mod tests {
         let store = store();
         store
             .write(|repos| {
-                record_marked(repos, "key", at(10).unwrap(), Some(0b1000))?;
+                record_marked(repos, "key", at(10).unwrap(), Some(0b1000), NativeKey::Kept)?;
                 record_works(repos, "key", 0b1000, true)
             })
             .unwrap();
@@ -432,7 +518,7 @@ mod tests {
         let store = store();
         store
             .write(|repos| {
-                record_marked(repos, "key", at(90).unwrap(), Some(0b1010))?;
+                record_marked(repos, "key", at(90).unwrap(), Some(0b1010), NativeKey::Kept)?;
                 record_works(repos, "key", 0b1000, true)?;
                 record_claim(repos, "key", now(), 0b0010)
             })
@@ -485,5 +571,102 @@ mod tests {
         assert_eq!(facts.kind, PeerKind::Lepic);
         assert!(facts.notices && !facts.fresh);
         assert!(derive(Some(99), Some(60)).fresh);
+    }
+
+    /// A valid X25519 public key.
+    fn native() -> [u8; 32] {
+        *lepic_contact::EncSecretKey::from_bytes([9; 32])
+            .public_key()
+            .as_bytes()
+    }
+
+    fn claim(features: u32, reply: Option<[u8; 32]>) -> Shown {
+        Shown::of(&SenderFacts::new(true, Some(features), reply), true)
+    }
+
+    fn eligible(store: &lepic_store::MemoryStore, at: Timestamp, native_direct: bool) -> bool {
+        let facts = store.read(|repos| facts(repos, "key", at)).unwrap();
+        native_key(&facts, native_direct).is_some()
+    }
+
+    #[test]
+    fn a_marker_claiming_native_slates_with_a_valid_key_makes_the_key_eligible() {
+        use lepic_transport::marker::features::NATIVE_SLATES;
+        let store = store();
+        let record = |shown: Shown| {
+            store
+                .write(|repos| record_slate(repos, "key", now(), shown))
+                .unwrap();
+        };
+        record(claim(1 | NATIVE_SLATES, Some(native())));
+        assert_eq!(stored(&store).native_key, Some(native()));
+        assert!(eligible(&store, now(), true));
+        assert!(!eligible(&store, now(), false), "native_direct off");
+
+        // A notice or a native slate keeps the key; a newer marker without the claim drops it.
+        store
+            .write(|repos| record_marked(repos, "key", now(), None, NativeKey::Kept))
+            .unwrap();
+        assert!(eligible(&store, now(), true));
+        record(claim(1, Some(native())));
+        assert_eq!(stored(&store).native_key, None);
+        assert!(!eligible(&store, now(), true));
+
+        // A claim whose key is not a valid public key is no claim.
+        record(claim(1 | NATIVE_SLATES, Some([0; 32])));
+        assert_eq!(stored(&store).native_key, None);
+        record(claim(1 | NATIVE_SLATES, None));
+        assert_eq!(stored(&store).native_key, None);
+    }
+
+    #[test]
+    fn a_key_not_lepic_lately_gets_no_native_slate_whatever_it_claimed() {
+        use lepic_transport::marker::features::NATIVE_SLATES;
+        let store = store();
+        store
+            .write(|repos| {
+                record_slate(
+                    repos,
+                    "key",
+                    at(90).unwrap(),
+                    claim(1 | NATIVE_SLATES, Some(native())),
+                )
+            })
+            .unwrap();
+        assert!(eligible(&store, now(), true));
+        // The marked message is older than thirty days.
+        assert!(!eligible(&store, at(121).unwrap(), true));
+        // A newer unmarked slate keeps the key but makes the peer Epic.
+        store
+            .write(|repos| record_slate(repos, "key", now(), Shown::UNMARKED))
+            .unwrap();
+        assert_eq!(stored(&store).native_key, Some(native()));
+        assert!(!eligible(&store, now(), true));
+    }
+
+    #[test]
+    fn a_wallet_without_native_direct_stores_the_row_it_stored_before() {
+        use lepic_transport::marker::features::NATIVE_SLATES;
+        let claiming = SenderFacts::new(true, Some(1 | NATIVE_SLATES), Some(native()));
+        let store = store();
+        store
+            .write(|repos| record_slate(repos, "key", now(), Shown::of(&claiming, false)))
+            .unwrap();
+        let row = stored(&store);
+        assert_eq!(row.native_key, None);
+        // The row a build without native slates over Epicbox wrote for the same claim.
+        let before = PeerCompat {
+            last_marked_at: Some(now()),
+            last_unmarked_at: None,
+            features_at: Some(now()),
+            claimed: 1 | NATIVE_SLATES,
+            works: MARKER_BIT,
+            native_key: None,
+        };
+        assert_eq!(row, before);
+        // Version 1, 34 bytes, as before.
+        let bytes = lepic_store::peer_vectors::record(&row).unwrap();
+        assert_eq!(bytes, lepic_store::peer_vectors::record(&before).unwrap());
+        assert_eq!((bytes.first(), bytes.len()), (Some(&1), 34));
     }
 }

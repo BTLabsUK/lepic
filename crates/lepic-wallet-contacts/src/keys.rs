@@ -134,14 +134,25 @@ fn reply_public_key(
     account: AccountIndex,
     slate_id: [u8; 16],
 ) -> Option<[u8; 32]> {
-    let root =
-        crate::key_schedule::contact_root(keychain, &parent_key_id(account).ok()?, network).ok()?;
-    let reply = root.reply_key(slate_id).ok()?;
     Some(
-        *EncSecretKey::from_bytes(*reply.expose_x25519_secret())
+        *reply_secret_key(keychain, network, account, slate_id)?
             .public_key()
             .as_bytes(),
     )
+}
+
+/// The one-time reply key for the slate `slate_id` this wallet starts in `account`: the answer
+/// sealed to [`reply_public_key`] opens with it.
+fn reply_secret_key(
+    keychain: &Keychain,
+    network: Network,
+    account: AccountIndex,
+    slate_id: [u8; 16],
+) -> Option<EncSecretKey> {
+    let root =
+        crate::key_schedule::contact_root(keychain, &parent_key_id(account).ok()?, network).ok()?;
+    let reply = root.reply_key(slate_id).ok()?;
+    Some(EncSecretKey::from_bytes(*reply.expose_x25519_secret()))
 }
 
 /// The engine's reply key hook: the key [`reply_public_key`] derives.
@@ -156,5 +167,15 @@ impl lepic_wallet::extension::ReplyKeys for ContactReplyKeys {
         slate_id: [u8; 16],
     ) -> Option<[u8; 32]> {
         reply_public_key(keychain, network, account, slate_id)
+    }
+
+    fn reply_secret_key(
+        &self,
+        keychain: &Keychain,
+        network: Network,
+        account: AccountIndex,
+        slate_id: [u8; 16],
+    ) -> Option<EncSecretKey> {
+        reply_secret_key(keychain, network, account, slate_id)
     }
 }

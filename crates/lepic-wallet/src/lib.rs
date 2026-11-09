@@ -65,6 +65,7 @@ pub use event::{Event, SessionState};
 pub use finalize::{FinalizeError, Finalized};
 pub use in_person_keys::IN_PERSON_REPLY_PREFIX;
 pub use lifecycle::{Password, RecoveryPhrase, WordCount, store_key};
+pub use native_epicbox::{NativeRefusal, SlateFormat};
 pub use notices::ContactNotice;
 pub use onion_key::OnionKey;
 pub use peer_pin::PinOutcome;

@@ -12,7 +12,7 @@ use crate::account::{self, Account, AccountLabel};
 use crate::config::WalletConfig;
 use crate::error::WalletError;
 use crate::event::{EVENT_CAPACITY, Event, SessionState};
-use crate::extension::{ContactNotices, PairRequests, ReplyKeys};
+use crate::extension::{ContactNotices, NativeSlates, PairRequests, ReplyKeys};
 use crate::lifecycle::{
     self, Password, PhraseCheck, RecoveryPhrase, SeedSource, Session, Target, WordCount,
     generate_seed, recovery_phrase,
@@ -33,6 +33,7 @@ pub struct Wallet<N, S: StoreOpener, V> {
     unsolicited: tokio::sync::Mutex<()>,
     contacts: tokio::sync::Mutex<()>,
     reply_keys: OnceLock<Arc<dyn ReplyKeys>>,
+    native_slates: OnceLock<Arc<dyn NativeSlates>>,
     contact_notices: OnceLock<Arc<dyn ContactNotices<N, S, V>>>,
     pair_requests: OnceLock<Arc<dyn PairRequests<N, S, V>>>,
     posting: tokio::sync::Mutex<()>,
@@ -57,6 +58,7 @@ where
             unsolicited: tokio::sync::Mutex::new(()),
             contacts: tokio::sync::Mutex::new(()),
             reply_keys: OnceLock::new(),
+            native_slates: OnceLock::new(),
             contact_notices: OnceLock::new(),
             pair_requests: OnceLock::new(),
             posting: tokio::sync::Mutex::new(()),
@@ -79,6 +81,17 @@ where
 
     pub(crate) fn reply_keys(&self) -> Option<Arc<dyn ReplyKeys>> {
         self.reply_keys.get().cloned()
+    }
+
+    /// Installs the hook that converts slates to and from `lepic.v1` for native slates over
+    /// Epicbox. The first hook installed stays; returns whether this one was.
+    pub fn set_native_slates(&self, slates: Arc<dyn NativeSlates>) -> bool {
+        self.native_slates.set(slates).is_ok()
+    }
+
+    /// The hook installed with [`Self::set_native_slates`], if any.
+    pub fn native_slates(&self) -> Option<Arc<dyn NativeSlates>> {
+        self.native_slates.get().cloned()
     }
 
     /// Installs the hook that seals notices about a paired contact's slates into its mailbox.

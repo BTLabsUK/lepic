@@ -51,7 +51,7 @@ use crate::finalize::answered_excess;
 use crate::inbox::{Handled, Hold};
 use crate::invoice::check_signed_payment;
 use crate::notice::{Notice, NoticeKind};
-use crate::peer_compat::{facts, record_marked, record_slate};
+use crate::peer_compat::{NativeKey, Shown, facts, record_marked, record_slate};
 use crate::ports::{SecretVault, StoreOpener};
 use crate::refresh::{final_kernel, stored_slate};
 use crate::wallet::Wallet;
@@ -256,7 +256,7 @@ fn apply_notice(
     if let NoticeFrom::Peer(key) = from
         && !matches!(effect, Effect::Dropped)
     {
-        record_marked(repos, &key, now, None)?;
+        record_marked(repos, &key, now, None, NativeKey::Kept)?;
     }
     Ok(effect)
 }
@@ -846,27 +846,26 @@ where
         method: &Arc<dyn Method>,
         tx_id: TxId,
         reply_to: &Destination,
-        marked: bool,
-        features: Option<u32>,
+        shown: Shown,
     ) {
         let methods = self.notice_methods(Some(method));
         let from = methods.key_of(&**method, reply_to.as_str());
         let method = Arc::clone(method);
         let recorded = self
             .inbox_write(move |repos, now| {
-                let invoiced = if marked {
+                let invoiced = if shown.marked {
                     methods.counterparty_key(repos, &*method, tx_id)?
                 } else {
                     None
                 };
                 // The claim is the payer's: the key the invoice went to is only shown LEPIC.
                 if let Some(key) = &from {
-                    record_slate(repos, key, now, marked, features)?;
+                    record_slate(repos, key, now, shown)?;
                 }
                 if let Some(key) = &invoiced
                     && Some(key) != from.as_ref()
                 {
-                    record_slate(repos, key, now, marked, None)?;
+                    record_slate(repos, key, now, shown.unclaimed())?;
                 }
                 Ok(())
             })
@@ -882,14 +881,13 @@ where
         &self,
         method: &dyn Method,
         reply_to: &Destination,
-        marked: bool,
-        features: Option<u32>,
+        shown: Shown,
     ) {
         let Ok(from) = method.peer_key(self.config().network, reply_to.as_str()) else {
             return;
         };
         let recorded = self
-            .inbox_write(move |repos, now| record_slate(repos, &from, now, marked, features))
+            .inbox_write(move |repos, now| record_slate(repos, &from, now, shown))
             .await;
         if let Err(error) = recorded {
             warn!(error = %ErrorChain(&error), "peer capability not recorded");
@@ -905,8 +903,7 @@ where
         method: &Arc<dyn Method>,
         tx_id: TxId,
         reply_to: &Destination,
-        marked: bool,
-        features: Option<u32>,
+        shown: Shown,
     ) {
         let methods = self.notice_methods(Some(method));
         let Some(from) = methods.key_of(&**method, reply_to.as_str()) else {
@@ -918,10 +915,10 @@ where
                 if methods.counterparty_key(repos, &*method, tx_id)?.as_deref()
                     == Some(from.as_str())
                 {
-                    record_slate(repos, &from, now, marked, features)?;
+                    record_slate(repos, &from, now, shown)?;
                     let mut marks = repos.tx_marks(tx_id)?;
-                    if marks.answer_marked != marked {
-                        marks.answer_marked = marked;
+                    if marks.answer_marked != shown.marked {
+                        marks.answer_marked = shown.marked;
                         repos.put_tx_marks(tx_id, &marks)?;
                     }
                 }
@@ -1188,7 +1185,7 @@ where
         let due = self.inbox_write(move |repos, now| {
             let due = withdrawn_answer_due(repos, &codecs, tx_id, &payment)?;
             if due && let Some(invoiced) = methods.counterparty_key(repos, &*over, tx_id)? {
-                record_marked(repos, &invoiced, now, None)?;
+                record_marked(repos, &invoiced, now, None, NativeKey::Kept)?;
             }
             Ok(due)
         });
