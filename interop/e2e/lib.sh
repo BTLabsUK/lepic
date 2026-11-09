@@ -179,9 +179,19 @@ balance_units() {
     [[ "${b}" =~ ^[0-9]+(\.[0-9]+)?$ ]] || return 1
     to_units "${b}"
 }
+# Units a send with --min-confirmations E2E_MINCONF can spend: the wallet's own spendable figure
+# waits for 6 confirmations, which on a slow floonet is minutes more than the suite's sends need.
+usable_units() {
+    w "$1" wallet info >/dev/null || return 1
+    w "$1" wallet outputs | jq -r --argjson c "${E2E_MINCONF}" '
+        [.outputs[] | select((.category == "spendable" or .category == "awaiting_confirmation")
+            and .confirmations >= $c) | .value | split(".") | (.[0] | tonumber) * 100000000
+            + ((.[1] // "0") + "00000000" | .[0:8] | tonumber)] | add // 0'
+}
 spendable_at_least() {
     local have
-    have="$(balance_units "$1")" || return 1
+    have="$(usable_units "$1")" || return 1
+    [[ "${have}" =~ ^[0-9]+$ ]] || return 1
     ((have >= $2))
 }
 tip() { w "${E2E_PREFIX}-bank" node status 2>/dev/null | jq -r .height; }
@@ -191,7 +201,7 @@ tip() { w "${E2E_PREFIX}-bank" node status 2>/dev/null | jq -r .height; }
 ensure_funds() {
     local name="$1" amount="$2" outputs="${3:-2}" want have per i sent=0 target_pid target_url out
     want="$(to_units "${amount}")"
-    have="$(balance_units "${name}")" || return 1
+    have="$(usable_units "${name}")" || return 1
     ((have >= want)) && return 0
     per=$(((want - have) / outputs + UNIT / 10))
     log "funding ${name} with ${outputs} x $(from_units "${per}") from the bank"
