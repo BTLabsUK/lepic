@@ -364,7 +364,7 @@ upstream.commit = "845b3fcf4df12ed0139929c62157015447a9d063"
 # Wallet foreign API over HTTP, epic-wallet; v4.1.0 adds a fourth receive_tx parameter (D7, ADR 0017)
 
 [[module]]
-path = "crates/lepic-foreign/src/rpc"
+path = "crates/lepic-legacy-rpc/src/rpc"
 task = "T-04"
 upstream.repo = "https://github.com/EpicCash/epic-wallet"
 upstream.paths = ["api/src/foreign_rpc.rs", "impls/src/adapters/http.rs"]

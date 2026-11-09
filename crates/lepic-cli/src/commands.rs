@@ -14,8 +14,8 @@ use lepic_keychain::KdfParams;
 use lepic_keychain::vault::MAX_WALLET_SEED_FILE_LEN;
 use lepic_methods::epicbox::Epicbox;
 use lepic_methods::http::{
-    CoinbaseAccess, Counts, Exposure, ForeignClient, ForeignUrl, Host as ReceiveHost, Http,
-    ListenSettings, PlainHttp, Receiver, Refusal, refuse, webpki_tls_config,
+    CoinbaseAccess, Counts, Exposure, Host as ReceiveHost, Http, ListenSettings, ListenerUrl,
+    PlainHttp, Receiver, Refusal, RpcClient, refuse, webpki_tls_config,
 };
 use lepic_methods::registry::Methods;
 use lepic_methods::tor::{SocksProxy, Tor, TorProcess, TorSettings, TorState};
@@ -1132,7 +1132,7 @@ impl<H: Host> Run<'_, H> {
                 } else {
                     PlainHttp::LoopbackOnly
                 };
-                let url = ForeignUrl::parse(&address, plain).map_err(CliError::HttpUrl)?;
+                let url = ListenerUrl::parse(&address, plain).map_err(CliError::HttpUrl)?;
                 Ok((
                     lepic_methods::http::TRANSPORT_ID,
                     Delivery::Deliver {
@@ -1445,9 +1445,9 @@ impl<H: Host> Run<'_, H> {
             what: "set up tls for http",
             source: std::io::Error::other(error),
         })?;
-        let http = Http::new(ForeignClient::new(self.settings.tuning.send, tls.clone()));
+        let http = Http::new(RpcClient::new(self.settings.tuning.send, tls.clone()));
         let http_to_other_computers: Arc<dyn Method> = Arc::new(http.through(
-            ForeignClient::to_other_computers(self.settings.tuning.send, tls),
+            RpcClient::to_other_computers(self.settings.tuning.send, tls),
         ));
         let http = Arc::new(http);
         let relay = ClientSettings::new(self.settings.relay.clone(), self.settings.tuning.relay);

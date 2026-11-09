@@ -8,9 +8,9 @@ use std::sync::{Arc, Weak};
 use std::time::Duration;
 
 use lepic_methods::http::{
-    CoinbaseAccess, Exposure, ForeignClient, ForeignDialFuture, ForeignDialer, ForeignStream,
-    ForeignUrl, Host, Http, ListenError, ListenSettings, ListenerHandle, PlainHttp, ReceiveHandler,
-    Receiver, Refusal, TRANSPORT_ID, UrlError, listen, refuse, webpki_tls_config,
+    CoinbaseAccess, Exposure, Host, Http, ListenError, ListenSettings, ListenerHandle, ListenerUrl,
+    PlainHttp, ReceiveHandler, Receiver, Refusal, RpcClient, RpcDialFuture, RpcDialer, RpcStream,
+    TRANSPORT_ID, UrlError, listen, refuse, webpki_tls_config,
 };
 use lepic_node::{Propagation, is_loopback_host};
 use lepic_store::TxId;
@@ -56,11 +56,7 @@ pub(super) fn http_transport(tuning: &Tuning, tor: &Arc<RelayTor>) -> Result<Htt
         tor: Arc::clone(tor),
         connect_timeout: tuning.send.connect_timeout,
     });
-    Ok(Http::new(ForeignClient::with_dialer(
-        tuning.send,
-        tls,
-        dialer,
-    )))
+    Ok(Http::new(RpcClient::with_dialer(tuning.send, tls, dialer)))
 }
 
 /// Opens connections to other wallets through the wallet's tor while it runs or is expected,
@@ -73,7 +69,7 @@ struct SendDialer {
 }
 
 impl SendDialer {
-    async fn connect_directly(&self, host: &str, port: u16) -> io::Result<Box<dyn ForeignStream>> {
+    async fn connect_directly(&self, host: &str, port: u16) -> io::Result<Box<dyn RpcStream>> {
         let stream = tokio::time::timeout(self.connect_timeout, TcpStream::connect((host, port)))
             .await
             .map_err(|_| io::Error::from(io::ErrorKind::TimedOut))??;
@@ -82,14 +78,14 @@ impl SendDialer {
     }
 }
 
-impl ForeignDialer for SendDialer {
-    fn dial<'a>(&'a self, host: &'a str, port: u16) -> ForeignDialFuture<'a> {
+impl RpcDialer for SendDialer {
+    fn dial<'a>(&'a self, host: &'a str, port: u16) -> RpcDialFuture<'a> {
         Box::pin(async move {
             if is_loopback_host(host) {
                 return self.connect_directly(host, port).await;
             }
             match self.tor.open(host, port).await {
-                Ok(stream) => Ok(Box::new(stream) as Box<dyn ForeignStream>),
+                Ok(stream) => Ok(Box::new(stream) as Box<dyn RpcStream>),
                 // An onion has no address to resolve without tor.
                 Err(RelayTorError::Off)
                     if !host
@@ -105,13 +101,13 @@ impl ForeignDialer for SendDialer {
     }
 }
 
-fn foreign_url(url: &str, allow_plain_http: bool) -> Result<ForeignUrl, WalletError> {
+fn foreign_url(url: &str, allow_plain_http: bool) -> Result<ListenerUrl, WalletError> {
     let plain = if allow_plain_http {
         PlainHttp::Allowed
     } else {
         PlainHttp::LoopbackOnly
     };
-    ForeignUrl::parse(url, plain).map_err(|error| {
+    ListenerUrl::parse(url, plain).map_err(|error| {
         let kind = match error {
             UrlError::PlainHttpNotAllowed => WalletErrorKind::PlainHttpNotAllowed,
             _ => WalletErrorKind::HttpUrlInvalid,
@@ -120,7 +116,7 @@ fn foreign_url(url: &str, allow_plain_http: bool) -> Result<ForeignUrl, WalletEr
     })
 }
 
-fn delivery(url: &ForeignUrl) -> Delivery {
+fn delivery(url: &ListenerUrl) -> Delivery {
     Delivery::Deliver {
         to: Destination::new(url.as_uri()),
     }
@@ -632,12 +628,12 @@ mod tests {
         let tor = Arc::new(RelayTor::new(true, Duration::from_secs(75)));
         tor.attach_socks(FixedSocks(socks));
         let tuning = Tuning::check(&crate::tuning::shipped()).unwrap();
-        let client = ForeignClient::with_dialer(
+        let client = RpcClient::with_dialer(
             tuning.send,
             webpki_tls_config().unwrap(),
             Arc::new(dialer(&tor)),
         );
-        let url = ForeignUrl::parse(&url, PlainHttp::LoopbackOnly).unwrap();
+        let url = ListenerUrl::parse(&url, PlainHttp::LoopbackOnly).unwrap();
         let version = client.check_version(&url).await.unwrap();
         println!("v2 {} v3 {}", version.v2, version.v3);
     }

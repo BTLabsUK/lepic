@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-//! The Tor method as a transport: the foreign API exchange of `lepic-foreign` (`check_version`,
+//! The Tor method as a transport: the foreign API exchange of `lepic-legacy-rpc` (`check_version`,
 //! then `receive_tx`) over a SOCKS stream to `<onion>:80`, through the wallet's own tor.
 //!
 //! As over HTTP, the receiver answers `receive_tx` with its S2 in the same exchange. The
@@ -16,8 +16,8 @@ use hyper::body::Bytes;
 use hyper::header::{CONTENT_LENGTH, CONTENT_TYPE, HOST};
 use hyper::{Method as HttpMethod, Request, StatusCode};
 use hyper_util::rt::TokioIo;
-use lepic_foreign::error::RpcError;
-use lepic_foreign::rpc::{self, VersionInfo};
+use lepic_legacy_rpc::error::RpcError;
+use lepic_legacy_rpc::rpc::{self, VersionInfo};
 use lepic_slate::codec::WireSlate;
 use lepic_transport::error::TransportError;
 use lepic_transport::method::{Carries, Method};

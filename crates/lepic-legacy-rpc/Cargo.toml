@@ -1,6 +1,6 @@
 [package]
-name = "lepic-foreign"
-description = "The wallet foreign API over HTTP: send a slate to a listening wallet, and listen."
+name = "lepic-legacy-rpc"
+description = "The Epic wallet foreign API over HTTP (legacy JSON-RPC): send a slate to a listening wallet, and listen."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -31,6 +31,6 @@ tracing = { workspace = true, features = ["std", "attributes"] }
 webpki-roots.workspace = true
 
 [dev-dependencies]
-lepic-foreign = { path = ".", features = ["testing"] }
+lepic-legacy-rpc = { path = ".", features = ["testing"] }
 proptest = { workspace = true, features = ["std"] }
 tokio = { workspace = true, features = ["io-util", "macros", "net", "rt", "rt-multi-thread", "sync", "time"] }

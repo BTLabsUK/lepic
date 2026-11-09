@@ -4,7 +4,7 @@
 
 #![no_main]
 
-use lepic_foreign::rpc::{decode_request, decode_slate_response, decode_version_response};
+use lepic_legacy_rpc::rpc::{decode_request, decode_slate_response, decode_version_response};
 use libfuzzer_sys::fuzz_target;
 
 fuzz_target!(|data: &[u8]| {

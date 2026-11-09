@@ -25,7 +25,7 @@ epicbox-wallet = [
     "dep:tracing",
 ]
 http = [
-    "dep:lepic-foreign",
+    "dep:lepic-legacy-rpc",
     "dep:lepic-keychain",
     "dep:lepic-primitives",
     "dep:lepic-slate",
@@ -52,7 +52,7 @@ hyper-util = { workspace = true, optional = true, features = ["tokio"] }
 jiff = { workspace = true, optional = true }
 lepic-crypto = { workspace = true, optional = true }
 lepic-epicbox = { workspace = true, optional = true }
-lepic-foreign = { workspace = true, optional = true }
+lepic-legacy-rpc = { workspace = true, optional = true }
 lepic-keychain = { workspace = true, optional = true }
 lepic-node = { workspace = true, optional = true }
 lepic-primitives = { workspace = true, optional = true }
@@ -82,7 +82,7 @@ required-features = ["tor"]
 getrandom = { workspace = true, features = ["std"] }
 lepic-crypto.workspace = true
 lepic-epicbox = { workspace = true, features = ["mock-relay"] }
-lepic-foreign = { workspace = true, features = ["testing"] }
+lepic-legacy-rpc = { workspace = true, features = ["testing"] }
 lepic-slate.workspace = true
 lepic-tor = { workspace = true, features = ["testing"] }
 serde_json = { workspace = true, features = ["std"] }

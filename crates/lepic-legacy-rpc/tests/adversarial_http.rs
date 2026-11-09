@@ -12,9 +12,9 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
-use lepic_foreign::{
-    Exposure, ForeignClient, ForeignUrl, ListenSettings, ListenerHandle, PlainHttp, ReceiveHandler,
-    Refusal, listen, webpki_tls_config,
+use lepic_legacy_rpc::{
+    Exposure, ListenSettings, ListenerHandle, ListenerUrl, PlainHttp, ReceiveHandler, Refusal,
+    RpcClient, listen, webpki_tls_config,
 };
 use lepic_slate::codec::{MediaType, WireSlate};
 use lepic_transport::transport::BoxFuture;
@@ -49,7 +49,7 @@ async fn listener(receives_per_minute: u32) -> (ListenerHandle, Arc<Counting>, u
     let mut settings = ListenSettings::new(
         Exposure::LocalOnly,
         0,
-        lepic_foreign::testing::listen_limits(),
+        lepic_legacy_rpc::testing::listen_limits(),
     );
     settings.receives_per_minute = receives_per_minute;
     let handle = listen(settings, wallet.clone()).await.unwrap();
@@ -80,12 +80,12 @@ async fn exchange(port: u16, request: &[u8]) -> String {
 
 /// The listener still takes an honest payment after whatever came before.
 async fn assert_still_serving(port: u16) {
-    let client = ForeignClient::new(
-        lepic_foreign::testing::client_settings(),
+    let client = RpcClient::new(
+        lepic_legacy_rpc::testing::client_settings(),
         webpki_tls_config().unwrap(),
     );
     let url =
-        ForeignUrl::parse(&format!("http://127.0.0.1:{port}"), PlainHttp::LoopbackOnly).unwrap();
+        ListenerUrl::parse(&format!("http://127.0.0.1:{port}"), PlainHttp::LoopbackOnly).unwrap();
     client.check_version(&url).await.unwrap();
 }
 
@@ -294,7 +294,7 @@ async fn paths_that_are_almost_the_endpoint_are_not_found() {
 #[cfg(unix)]
 #[tokio::test]
 async fn a_unix_socket_listener_serves_and_cleans_up() {
-    let path = std::env::temp_dir().join(format!("lepic-foreign-{}.sock", std::process::id()));
+    let path = std::env::temp_dir().join(format!("lepic-legacy-rpc-{}.sock", std::process::id()));
     std::fs::write(&path, b"left by an earlier run").unwrap();
     let wallet = Arc::new(Counting {
         calls: AtomicUsize::new(0),
@@ -302,9 +302,9 @@ async fn a_unix_socket_listener_serves_and_cleans_up() {
     let settings = ListenSettings::new(
         Exposure::LocalOnly,
         0,
-        lepic_foreign::testing::listen_limits(),
+        lepic_legacy_rpc::testing::listen_limits(),
     );
-    let handle = lepic_foreign::listen_unix(&path, settings, wallet.clone())
+    let handle = lepic_legacy_rpc::listen_unix(&path, settings, wallet.clone())
         .await
         .unwrap();
     assert_eq!(handle.socket_path(), Some(path.as_path()));

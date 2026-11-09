@@ -56,7 +56,7 @@ async fn publishes_an_onion_and_reaches_it_over_tor() {
     let listen_settings = ListenSettings::new(
         Exposure::LocalOnly,
         0,
-        lepic_foreign::testing::listen_limits(),
+        lepic_legacy_rpc::testing::listen_limits(),
     );
     let unix = std::env::var("LEPIC_LIVE_ONION_UNIX").as_deref() == Ok("1");
     let (listener, target) = if unix {
@@ -243,7 +243,7 @@ async fn survives_a_left_tor_a_pause_and_a_network_change() {
         ListenSettings::new(
             Exposure::LocalOnly,
             0,
-            lepic_foreign::testing::listen_limits(),
+            lepic_legacy_rpc::testing::listen_limits(),
         ),
         Arc::new(RefusesEverything),
     )
@@ -292,13 +292,13 @@ async fn survives_a_left_tor_a_pause_and_a_network_change() {
 async fn unix_listen(
     path: &std::path::Path,
     settings: ListenSettings,
-) -> lepic_foreign::ListenerHandle {
-    lepic_foreign::listen_unix(path, settings, Arc::new(RefusesEverything))
+) -> lepic_legacy_rpc::ListenerHandle {
+    lepic_legacy_rpc::listen_unix(path, settings, Arc::new(RefusesEverything))
         .await
         .unwrap()
 }
 
 #[cfg(not(unix))]
-async fn unix_listen(_: &std::path::Path, _: ListenSettings) -> lepic_foreign::ListenerHandle {
+async fn unix_listen(_: &std::path::Path, _: ListenSettings) -> lepic_legacy_rpc::ListenerHandle {
     panic!("no Unix sockets here")
 }

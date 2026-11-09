@@ -28,13 +28,13 @@ use tracing::debug;
 mod receiver;
 
 #[cfg(unix)]
-pub use lepic_foreign::listen_unix;
-pub use lepic_foreign::rpc::MAX_BODY_LEN;
-pub use lepic_foreign::{
+pub use lepic_legacy_rpc::listen_unix;
+pub use lepic_legacy_rpc::rpc::MAX_BODY_LEN;
+pub use lepic_legacy_rpc::{
     BlockFees, ClientError, ClientSettings, CoinbaseAccess, CoinbaseAnswer, DEFAULT_LISTEN_PORT,
-    Exposure, ForeignClient, ForeignDialFuture, ForeignDialer, ForeignStream, ForeignUrl,
-    ListenError, ListenLimits, ListenSettings, ListenerHandle, PlainHttp, ReceiveHandler, Refusal,
-    RpcError, Scheme, UrlError, listen, webpki_tls_config,
+    Exposure, ListenError, ListenLimits, ListenSettings, ListenerHandle, ListenerUrl, PlainHttp,
+    ReceiveHandler, Refusal, RpcClient, RpcDialFuture, RpcDialer, RpcError, RpcStream, Scheme,
+    UrlError, listen, webpki_tls_config,
 };
 pub use receiver::{Counts, Host, Receiver, coinbase_answer, coinbase_request, refuse};
 
@@ -100,7 +100,7 @@ impl FormatPolicy for HttpPolicy {
 /// The HTTP method. Clones share the client and the held answers.
 #[derive(Debug, Clone)]
 pub struct Http {
-    client: ForeignClient,
+    client: RpcClient,
     held: Arc<Mutex<VecDeque<Held>>>,
 }
 
@@ -112,7 +112,7 @@ struct Held {
 
 impl Http {
     /// The HTTP method sending through `client`, with no answers held.
-    pub fn new(client: ForeignClient) -> Self {
+    pub fn new(client: RpcClient) -> Self {
         Self {
             client,
             held: Arc::new(Mutex::new(VecDeque::new())),
@@ -121,7 +121,7 @@ impl Http {
 
     /// The HTTP method sending through `client` instead, holding its answers with this one's, so
     /// [`Http::take_reply`] on either finds them.
-    pub fn through(&self, client: ForeignClient) -> Self {
+    pub fn through(&self, client: RpcClient) -> Self {
         Self {
             client,
             held: Arc::clone(&self.held),
@@ -151,7 +151,7 @@ impl Http {
     async fn post(&self, to: &Destination, wire: &WireSlate) -> Result<(), ClientError> {
         // The caller checked the destination with the user's plain-HTTP choice when it was
         // typed; what reaches the transport is already consented to.
-        let url = ForeignUrl::parse(to.as_str(), PlainHttp::Allowed)?;
+        let url = ListenerUrl::parse(to.as_str(), PlainHttp::Allowed)?;
         let slate_id = slate_id_of(wire).ok_or(ClientError::Rpc(RpcError::NotJson))?;
         let version = self.client.check_version(&url).await?;
         if !version.v2 {

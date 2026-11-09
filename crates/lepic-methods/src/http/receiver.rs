@@ -6,8 +6,8 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 
-use lepic_foreign::{BlockFees, CoinbaseAnswer, ReceiveHandler, Refusal};
 use lepic_keychain::Identifier;
+use lepic_legacy_rpc::{BlockFees, CoinbaseAnswer, ReceiveHandler, Refusal};
 use lepic_primitives::amount::{Fee, Height};
 use lepic_slate::codec::WireSlate;
 use lepic_transport::method::Method;

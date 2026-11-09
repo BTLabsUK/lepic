@@ -84,7 +84,7 @@ impl Modify for Security {
     }
 }
 
-/// The payment endpoint's JSON-RPC, described here and answered by lepic-foreign.
+/// The payment endpoint's JSON-RPC, described here and answered by lepic-legacy-rpc.
 #[expect(dead_code, reason = "the types only describe the wire")]
 pub(crate) mod foreign {
     use utoipa::ToSchema;

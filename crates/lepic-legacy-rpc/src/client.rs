@@ -17,12 +17,12 @@ use lepic_slate::codec::WireSlate;
 use rustls::ClientConfig;
 use tracing::debug;
 
-use crate::dial::{ForeignConnector, ForeignDialer, refused_this_computer};
+use crate::dial::{RpcConnector, RpcDialer, refused_this_computer};
 use crate::error::ClientError;
 use crate::rpc::{self, VersionInfo};
-use crate::url::ForeignUrl;
+use crate::url::ListenerUrl;
 
-/// Limits of [`ForeignClient`].
+/// Limits of [`RpcClient`].
 #[derive(Debug, Clone, Copy)]
 pub struct ClientSettings {
     pub connect_timeout: Duration,
@@ -49,51 +49,51 @@ pub fn webpki_tls_config() -> Result<Arc<ClientConfig>, ClientError> {
 
 /// Talks to other wallets' foreign APIs. Cheap to clone; clones share the connection pool.
 #[derive(Clone)]
-pub struct ForeignClient {
-    client: Client<HttpsConnector<ForeignConnector>, Full<Bytes>>,
+pub struct RpcClient {
+    client: Client<HttpsConnector<RpcConnector>, Full<Bytes>>,
     settings: ClientSettings,
 }
 
-impl std::fmt::Debug for ForeignClient {
+impl std::fmt::Debug for RpcClient {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ForeignClient").finish_non_exhaustive()
+        f.debug_struct("RpcClient").finish_non_exhaustive()
     }
 }
 
-impl ForeignClient {
+impl RpcClient {
     /// Construction does no I/O; requests need a Tokio runtime.
     pub fn new(settings: ClientSettings, tls: Arc<ClientConfig>) -> Self {
         let mut http = HttpConnector::new();
         http.enforce_http(false);
         http.set_connect_timeout(Some(settings.connect_timeout));
         http.set_nodelay(true);
-        Self::build(settings, tls, ForeignConnector::Direct(http))
+        Self::build(settings, tls, RpcConnector::Direct(http))
     }
 
-    /// As [`ForeignClient::new`], but it never connects to this computer: a host that is, or
+    /// As [`RpcClient::new`], but it never connects to this computer: a host that is, or
     /// resolves to, a loopback or unspecified address fails with [`ClientError::ThisComputer`].
     /// The check is made on the addresses each connection resolves. Private and link-local
     /// addresses are other computers and are connected to. The client has its own connection
     /// pool, so it never reuses a connection another client opened.
     pub fn to_other_computers(settings: ClientSettings, tls: Arc<ClientConfig>) -> Self {
-        let route = ForeignConnector::OtherComputers {
+        let route = RpcConnector::OtherComputers {
             connect_timeout: settings.connect_timeout,
         };
         Self::build(settings, tls, route)
     }
 
-    /// As [`ForeignClient::new`], but every connection is opened by `dialer`, which the
+    /// As [`RpcClient::new`], but every connection is opened by `dialer`, which the
     /// connect timeout of `settings` does not bound. TLS and the `Host` header still use the
     /// host of the wallet's URL, wherever the dialer connects.
     pub fn with_dialer(
         settings: ClientSettings,
         tls: Arc<ClientConfig>,
-        dialer: Arc<dyn ForeignDialer>,
+        dialer: Arc<dyn RpcDialer>,
     ) -> Self {
-        Self::build(settings, tls, ForeignConnector::Dialed(dialer))
+        Self::build(settings, tls, RpcConnector::Dialed(dialer))
     }
 
-    fn build(settings: ClientSettings, tls: Arc<ClientConfig>, route: ForeignConnector) -> Self {
+    fn build(settings: ClientSettings, tls: Arc<ClientConfig>, route: RpcConnector) -> Self {
         let connector = HttpsConnectorBuilder::new()
             .with_tls_config(Arc::unwrap_or_clone(tls))
             .https_or_http()
@@ -104,7 +104,7 @@ impl ForeignClient {
     }
 
     /// Asks which slate versions the wallet at `url` accepts.
-    pub async fn check_version(&self, url: &ForeignUrl) -> Result<VersionInfo, ClientError> {
+    pub async fn check_version(&self, url: &ListenerUrl) -> Result<VersionInfo, ClientError> {
         let body = self.post(url, rpc::encode_version_request()).await?;
         let info = rpc::decode_version_response(&body)?;
         debug!(v3 = info.v3, v2 = info.v2, "foreign api version checked");
@@ -114,14 +114,14 @@ impl ForeignClient {
     /// Posts the S1 in `slate` to `url` and returns the receiver's S2 as it came.
     pub async fn receive_tx(
         &self,
-        url: &ForeignUrl,
+        url: &ListenerUrl,
         slate: &WireSlate,
     ) -> Result<WireSlate, ClientError> {
         let body = self.post(url, rpc::encode_receive_request(slate)?).await?;
         Ok(rpc::decode_slate_response(&body)?)
     }
 
-    async fn post(&self, url: &ForeignUrl, body: Vec<u8>) -> Result<Vec<u8>, ClientError> {
+    async fn post(&self, url: &ListenerUrl, body: Vec<u8>) -> Result<Vec<u8>, ClientError> {
         let uri: Uri = url
             .as_uri()
             .parse()

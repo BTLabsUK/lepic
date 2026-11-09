@@ -21,7 +21,7 @@ pub enum PlainHttp {
     Allowed,
 }
 
-/// The scheme of a [`ForeignUrl`].
+/// The scheme of a [`ListenerUrl`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Scheme {
     Http,
@@ -30,14 +30,14 @@ pub enum Scheme {
 
 /// A checked foreign API endpoint.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct ForeignUrl {
+pub struct ListenerUrl {
     scheme: Scheme,
     host: String,
     port: u16,
     endpoint: String,
 }
 
-impl ForeignUrl {
+impl ListenerUrl {
     /// Parses what a user typed. The scheme is matched without case (`HTTP://` works, as in the
     /// GUI); a missing scheme is refused, so a typo never sends unencrypted by surprise. A
     /// missing port is 3415 for `http` and 443 for `https`. A path is kept, and `/v2/foreign` is
@@ -92,7 +92,7 @@ impl ForeignUrl {
 
     /// Whether the host is a name or literal address of this computer: `localhost` or a name
     /// under it, or an address [`is_this_computer`] matches. A name that only resolves to one is
-    /// not matched here; [`crate::ForeignClient::to_other_computers`] checks what names resolve
+    /// not matched here; [`crate::RpcClient::to_other_computers`] checks what names resolve
     /// to when it connects.
     pub fn names_this_computer(&self) -> bool {
         let host = self.host.trim_end_matches('.');
@@ -112,7 +112,7 @@ impl ForeignUrl {
     }
 }
 
-impl std::fmt::Display for ForeignUrl {
+impl std::fmt::Display for ListenerUrl {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(&self.as_uri())
     }
@@ -182,7 +182,7 @@ mod tests {
     use super::*;
 
     fn uri(input: &str, plain: PlainHttp) -> String {
-        ForeignUrl::parse(input, plain).unwrap().as_uri()
+        ListenerUrl::parse(input, plain).unwrap().as_uri()
     }
 
     #[test]
@@ -218,18 +218,18 @@ mod tests {
     fn plain_http_needs_consent_except_on_loopback() {
         let loopback = PlainHttp::LoopbackOnly;
         assert_eq!(
-            ForeignUrl::parse("http://203.0.113.7:3415", loopback),
+            ListenerUrl::parse("http://203.0.113.7:3415", loopback),
             Err(UrlError::PlainHttpNotAllowed)
         );
-        assert!(ForeignUrl::parse("http://127.0.0.1:3415", loopback).is_ok());
-        assert!(ForeignUrl::parse("http://localhost", loopback).is_ok());
-        assert!(ForeignUrl::parse("https://203.0.113.7", loopback).is_ok());
+        assert!(ListenerUrl::parse("http://127.0.0.1:3415", loopback).is_ok());
+        assert!(ListenerUrl::parse("http://localhost", loopback).is_ok());
+        assert!(ListenerUrl::parse("https://203.0.113.7", loopback).is_ok());
     }
 
     #[test]
     fn refuses_what_is_not_a_listener_address() {
         let all = PlainHttp::Allowed;
-        let err = |input: &str| ForeignUrl::parse(input, all).unwrap_err();
+        let err = |input: &str| ListenerUrl::parse(input, all).unwrap_err();
         assert_eq!(err("host.example:3415"), UrlError::NotHttp);
         assert_eq!(err("ftp://host"), UrlError::NotHttp);
         assert_eq!(err("http://"), UrlError::NoHost);
@@ -286,7 +286,7 @@ mod tests {
     #[test]
     fn names_this_computer_by_name_or_literal() {
         let names = |input: &str| {
-            ForeignUrl::parse(input, PlainHttp::Allowed)
+            ListenerUrl::parse(input, PlainHttp::Allowed)
                 .unwrap()
                 .names_this_computer()
         };
@@ -318,7 +318,7 @@ mod tests {
     proptest::proptest! {
         #[test]
         fn never_panics(input in "\\PC{0,80}") {
-            let _ = ForeignUrl::parse(&input, PlainHttp::Allowed);
+            let _ = ListenerUrl::parse(&input, PlainHttp::Allowed);
         }
     }
 }

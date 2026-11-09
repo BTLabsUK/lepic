@@ -20,8 +20,8 @@ lepic-contact = { path = "../crates/lepic-contact" }
 lepic-crypto = { path = "../crates/lepic-crypto" }
 lepic-epicbox = { path = "../crates/lepic-epicbox" }
 lepic-ffi = { path = "../crates/lepic-ffi" }
-lepic-foreign = { path = "../crates/lepic-foreign" }
 lepic-keychain = { path = "../crates/lepic-keychain" }
+lepic-legacy-rpc = { path = "../crates/lepic-legacy-rpc" }
 lepic-methods = { path = "../crates/lepic-methods", features = ["epicbox"] }
 lepic-node = { path = "../crates/lepic-node" }
 lepic-primitives = { path = "../crates/lepic-primitives" }

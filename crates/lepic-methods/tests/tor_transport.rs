@@ -155,7 +155,7 @@ async fn sends_an_s1_over_socks_and_holds_the_s2() {
         ListenSettings::new(
             Exposure::LocalOnly,
             0,
-            lepic_foreign::testing::listen_limits(),
+            lepic_legacy_rpc::testing::listen_limits(),
         ),
         Arc::new(Answering),
     )
@@ -343,7 +343,7 @@ async fn an_answer_for_another_slate_is_refused_and_not_held() {
         ListenSettings::new(
             Exposure::LocalOnly,
             0,
-            lepic_foreign::testing::listen_limits(),
+            lepic_legacy_rpc::testing::listen_limits(),
         ),
         Arc::new(Answering),
     )
@@ -357,7 +357,7 @@ async fn an_answer_for_another_slate_is_refused_and_not_held() {
         ListenSettings::new(
             Exposure::LocalOnly,
             0,
-            lepic_foreign::testing::listen_limits(),
+            lepic_legacy_rpc::testing::listen_limits(),
         ),
         Arc::new(AnsweringWith(FORGED_S2)),
     )

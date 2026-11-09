@@ -7,10 +7,10 @@
 
 use std::sync::Arc;
 
-use lepic_foreign::testing::{client_settings, listen_limits};
+use lepic_legacy_rpc::testing::{client_settings, listen_limits};
 use lepic_methods::http::{
-    ClientError, Exposure, ForeignClient, ForeignUrl, Http, ListenSettings, PlainHttp,
-    ReceiveHandler, Refusal, RpcError, listen, webpki_tls_config,
+    ClientError, Exposure, Http, ListenSettings, ListenerUrl, PlainHttp, ReceiveHandler, Refusal,
+    RpcClient, RpcError, listen, webpki_tls_config,
 };
 use lepic_slate::codec::{MediaType, WireSlate};
 use lepic_transport::error::TransportError;
@@ -43,12 +43,12 @@ fn answering(answer: String) -> Arc<Answering> {
     Arc::new(Answering { answer })
 }
 
-fn client() -> ForeignClient {
-    ForeignClient::new(client_settings(), webpki_tls_config().unwrap())
+fn client() -> RpcClient {
+    RpcClient::new(client_settings(), webpki_tls_config().unwrap())
 }
 
-fn url(port: u16) -> ForeignUrl {
-    ForeignUrl::parse(&format!("http://127.0.0.1:{port}"), PlainHttp::LoopbackOnly).unwrap()
+fn url(port: u16) -> ListenerUrl {
+    ListenerUrl::parse(&format!("http://127.0.0.1:{port}"), PlainHttp::LoopbackOnly).unwrap()
 }
 
 fn s1() -> WireSlate {

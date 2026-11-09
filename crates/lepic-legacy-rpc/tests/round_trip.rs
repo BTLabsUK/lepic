@@ -8,9 +8,9 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use lepic_foreign::{
-    BlockFees, ClientError, CoinbaseAccess, CoinbaseAnswer, Exposure, ForeignClient, ForeignUrl,
-    ListenError, ListenSettings, PlainHttp, ReceiveHandler, Refusal, RpcError, listen,
+use lepic_legacy_rpc::{
+    BlockFees, ClientError, CoinbaseAccess, CoinbaseAnswer, Exposure, ListenError, ListenSettings,
+    ListenerUrl, PlainHttp, ReceiveHandler, Refusal, RpcClient, RpcError, listen,
     webpki_tls_config,
 };
 use lepic_slate::codec::{MediaType, WireSlate};
@@ -72,15 +72,15 @@ fn receive_tx_request(slate: &str) -> String {
     )
 }
 
-fn client() -> ForeignClient {
-    ForeignClient::new(
-        lepic_foreign::testing::client_settings(),
+fn client() -> RpcClient {
+    RpcClient::new(
+        lepic_legacy_rpc::testing::client_settings(),
         webpki_tls_config().unwrap(),
     )
 }
 
-fn url(port: u16) -> ForeignUrl {
-    ForeignUrl::parse(&format!("http://127.0.0.1:{port}"), PlainHttp::LoopbackOnly).unwrap()
+fn url(port: u16) -> ListenerUrl {
+    ListenerUrl::parse(&format!("http://127.0.0.1:{port}"), PlainHttp::LoopbackOnly).unwrap()
 }
 
 fn s1() -> WireSlate {
@@ -102,7 +102,7 @@ async fn sends_an_s1_and_gets_the_s2_back() {
         ListenSettings::new(
             Exposure::LocalOnly,
             0,
-            lepic_foreign::testing::listen_limits(),
+            lepic_legacy_rpc::testing::listen_limits(),
         ),
         wallet.clone(),
     )
@@ -124,12 +124,12 @@ struct ToListener {
     asked: std::sync::Mutex<Vec<(String, u16)>>,
 }
 
-impl lepic_foreign::ForeignDialer for ToListener {
-    fn dial<'a>(&'a self, host: &'a str, port: u16) -> lepic_foreign::ForeignDialFuture<'a> {
+impl lepic_legacy_rpc::RpcDialer for ToListener {
+    fn dial<'a>(&'a self, host: &'a str, port: u16) -> lepic_legacy_rpc::RpcDialFuture<'a> {
         Box::pin(async move {
             self.asked.lock().unwrap().push((host.to_owned(), port));
             let stream = TcpStream::connect(("127.0.0.1", self.port)).await?;
-            Ok(Box::new(stream) as Box<dyn lepic_foreign::ForeignStream>)
+            Ok(Box::new(stream) as Box<dyn lepic_legacy_rpc::RpcStream>)
         })
     }
 }
@@ -141,7 +141,7 @@ async fn a_dialer_opens_every_connection_for_the_host_of_the_url() {
         ListenSettings::new(
             Exposure::LocalOnly,
             0,
-            lepic_foreign::testing::listen_limits(),
+            lepic_legacy_rpc::testing::listen_limits(),
         ),
         wallet.clone(),
     )
@@ -151,13 +151,13 @@ async fn a_dialer_opens_every_connection_for_the_host_of_the_url() {
         port: listener.local_addr().port(),
         asked: std::sync::Mutex::default(),
     });
-    let client = ForeignClient::with_dialer(
-        lepic_foreign::testing::client_settings(),
+    let client = RpcClient::with_dialer(
+        lepic_legacy_rpc::testing::client_settings(),
         webpki_tls_config().unwrap(),
         dialer.clone(),
     );
     // Nothing resolves this name: only the dialer can reach the wallet.
-    let url = ForeignUrl::parse("http://wallet.invalid:3415", PlainHttp::Allowed).unwrap();
+    let url = ListenerUrl::parse("http://wallet.invalid:3415", PlainHttp::Allowed).unwrap();
     let reply = client.receive_tx(&url, &s1()).await.unwrap();
     assert_eq!(reply.as_text(), Some(S2));
     assert_eq!(
@@ -173,7 +173,7 @@ async fn a_refusal_reaches_the_sender_as_refused() {
         ListenSettings::new(
             Exposure::LocalOnly,
             0,
-            lepic_foreign::testing::listen_limits(),
+            lepic_legacy_rpc::testing::listen_limits(),
         ),
         handler(Some(Refusal::Rejected)),
     )
@@ -192,7 +192,7 @@ async fn takes_only_so_many_payments_a_minute() {
     let mut settings = ListenSettings::new(
         Exposure::LocalOnly,
         0,
-        lepic_foreign::testing::listen_limits(),
+        lepic_legacy_rpc::testing::listen_limits(),
     );
     settings.receives_per_minute = 2;
     let listener = listen(settings, wallet.clone()).await.unwrap();
@@ -212,7 +212,7 @@ async fn a_slate_that_is_not_an_s1_does_not_spend_the_payment_budget() {
     let mut settings = ListenSettings::new(
         Exposure::LocalOnly,
         0,
-        lepic_foreign::testing::listen_limits(),
+        lepic_legacy_rpc::testing::listen_limits(),
     );
     settings.receives_per_minute = 1;
     let listener = listen(settings, wallet.clone()).await.unwrap();
@@ -233,7 +233,7 @@ async fn takes_only_so_many_requests_a_minute() {
     let mut settings = ListenSettings::new(
         Exposure::LocalOnly,
         0,
-        lepic_foreign::testing::listen_limits(),
+        lepic_legacy_rpc::testing::listen_limits(),
     );
     settings.requests_per_minute = 2;
     let listener = listen(settings, handler(None)).await.unwrap();
@@ -255,7 +255,7 @@ async fn requests_that_are_not_payments_leave_room_for_payments() {
     let mut settings = ListenSettings::new(
         Exposure::LocalOnly,
         0,
-        lepic_foreign::testing::listen_limits(),
+        lepic_legacy_rpc::testing::listen_limits(),
     );
     settings.requests_per_minute = 2;
     settings.receives_per_minute = 2;
@@ -280,7 +280,7 @@ async fn a_flood_of_junk_requests_leaves_room_for_payments() {
     let mut settings = ListenSettings::new(
         Exposure::LocalOnly,
         0,
-        lepic_foreign::testing::listen_limits(),
+        lepic_legacy_rpc::testing::listen_limits(),
     );
     settings.requests_per_minute = 3;
     settings.receives_per_minute = 2;
@@ -306,7 +306,7 @@ async fn past_the_request_budget_only_so_many_payments_are_read() {
     let mut settings = ListenSettings::new(
         Exposure::LocalOnly,
         0,
-        lepic_foreign::testing::listen_limits(),
+        lepic_legacy_rpc::testing::listen_limits(),
     );
     settings.requests_per_minute = 1;
     settings.receives_per_minute = 1;
@@ -327,7 +327,7 @@ async fn a_payment_refused_as_invalid_gives_its_budget_back() {
     let mut settings = ListenSettings::new(
         Exposure::LocalOnly,
         0,
-        lepic_foreign::testing::listen_limits(),
+        lepic_legacy_rpc::testing::listen_limits(),
     );
     settings.receives_per_minute = 1;
     let listener = listen(settings, wallet.clone()).await.unwrap();
@@ -347,7 +347,7 @@ async fn only_so_many_refused_payments_give_their_budget_back() {
     let mut settings = ListenSettings::new(
         Exposure::LocalOnly,
         0,
-        lepic_foreign::testing::listen_limits(),
+        lepic_legacy_rpc::testing::listen_limits(),
     );
     settings.receives_per_minute = 2;
     let listener = listen(settings, wallet.clone()).await.unwrap();
@@ -374,7 +374,7 @@ async fn serves_only_post_to_the_foreign_endpoint() {
         ListenSettings::new(
             Exposure::LocalOnly,
             0,
-            lepic_foreign::testing::listen_limits(),
+            lepic_legacy_rpc::testing::listen_limits(),
         ),
         handler(None),
     )
@@ -410,7 +410,7 @@ async fn a_slow_caller_is_dropped_after_the_header_timeout() {
     let mut settings = ListenSettings::new(
         Exposure::LocalOnly,
         0,
-        lepic_foreign::testing::listen_limits(),
+        lepic_legacy_rpc::testing::listen_limits(),
     );
     settings.header_timeout = std::time::Duration::from_millis(200);
     let listener = listen(settings, handler(None)).await.unwrap();
@@ -433,7 +433,7 @@ async fn a_body_sent_too_slowly_is_answered_408() {
     let mut settings = ListenSettings::new(
         Exposure::LocalOnly,
         0,
-        lepic_foreign::testing::listen_limits(),
+        lepic_legacy_rpc::testing::listen_limits(),
     );
     settings.body_timeout = std::time::Duration::from_millis(200);
     let listener = listen(settings, handler(None)).await.unwrap();
@@ -460,14 +460,14 @@ async fn an_oversized_chunked_body_is_answered_413() {
         ListenSettings::new(
             Exposure::LocalOnly,
             0,
-            lepic_foreign::testing::listen_limits(),
+            lepic_legacy_rpc::testing::listen_limits(),
         ),
         handler(None),
     )
     .await
     .unwrap();
     let mut stream = TcpStream::connect(listener.local_addr()).await.unwrap();
-    let length = lepic_foreign::rpc::MAX_BODY_LEN + 1;
+    let length = lepic_legacy_rpc::rpc::MAX_BODY_LEN + 1;
     stream
         .write_all(
             format!("POST /v2/foreign HTTP/1.1\r\nhost: x\r\ntransfer-encoding: chunked\r\n\r\n{length:x}\r\n")
@@ -509,7 +509,7 @@ async fn a_caller_that_never_takes_its_answer_is_dropped_and_frees_its_slot() {
     let mut settings = ListenSettings::new(
         Exposure::LocalOnly,
         0,
-        lepic_foreign::testing::listen_limits(),
+        lepic_legacy_rpc::testing::listen_limits(),
     );
     settings.max_connections = 1;
     settings.header_timeout = std::time::Duration::from_millis(300);
@@ -537,7 +537,7 @@ async fn one_address_holds_only_its_share_of_the_connections() {
     let mut settings = ListenSettings::new(
         Exposure::LocalOnly,
         0,
-        lepic_foreign::testing::listen_limits(),
+        lepic_legacy_rpc::testing::listen_limits(),
     );
     settings.max_connections_per_address = 2;
     let listener = listen(settings, handler(None)).await.unwrap();
@@ -568,7 +568,7 @@ async fn a_held_port_is_reported_as_in_use() {
         ListenSettings::new(
             Exposure::LocalOnly,
             0,
-            lepic_foreign::testing::listen_limits(),
+            lepic_legacy_rpc::testing::listen_limits(),
         ),
         handler(None),
     )
@@ -579,7 +579,7 @@ async fn a_held_port_is_reported_as_in_use() {
         ListenSettings::new(
             Exposure::LocalOnly,
             port,
-            lepic_foreign::testing::listen_limits(),
+            lepic_legacy_rpc::testing::listen_limits(),
         ),
         handler(None),
     )
@@ -593,7 +593,7 @@ async fn a_stopped_listener_frees_its_port() {
         ListenSettings::new(
             Exposure::LocalOnly,
             0,
-            lepic_foreign::testing::listen_limits(),
+            lepic_legacy_rpc::testing::listen_limits(),
         ),
         handler(None),
     )
@@ -607,7 +607,7 @@ async fn a_stopped_listener_frees_its_port() {
         ListenSettings::new(
             Exposure::LocalOnly,
             port,
-            lepic_foreign::testing::listen_limits(),
+            lepic_legacy_rpc::testing::listen_limits(),
         ),
         handler(None),
     )
@@ -676,7 +676,7 @@ async fn serves_build_coinbase_only_when_turned_on() {
     let settings = ListenSettings::new(
         Exposure::LocalOnly,
         0,
-        lepic_foreign::testing::listen_limits(),
+        lepic_legacy_rpc::testing::listen_limits(),
     );
     let off = listen(settings, Arc::new(Mining)).await.unwrap();
     let answer = raw_exchange(
@@ -721,18 +721,18 @@ async fn only_the_opt_in_serves_a_caller_beyond_loopback() {
     let settings = ListenSettings::new(
         Exposure::LocalOnly,
         0,
-        lepic_foreign::testing::listen_limits(),
+        lepic_legacy_rpc::testing::listen_limits(),
     );
     let request = build_coinbase_request(5);
 
-    let off = lepic_foreign::listen_unix(&path, settings, Arc::new(Mining))
+    let off = lepic_legacy_rpc::listen_unix(&path, settings, Arc::new(Mining))
         .await
         .unwrap();
     let unknown = unix_exchange(&path, request.as_bytes()).await;
     assert_eq!(unknown["error"]["code"], -32601);
     off.shutdown().await;
 
-    let local = lepic_foreign::listen_unix(
+    let local = lepic_legacy_rpc::listen_unix(
         &path,
         settings.with_coinbase(CoinbaseAccess::LocalOnly),
         Arc::new(Mining),
@@ -742,7 +742,7 @@ async fn only_the_opt_in_serves_a_caller_beyond_loopback() {
     assert_eq!(unix_exchange(&path, request.as_bytes()).await, unknown);
     local.shutdown().await;
 
-    let remote = lepic_foreign::listen_unix(
+    let remote = lepic_legacy_rpc::listen_unix(
         &path,
         settings.with_coinbase(CoinbaseAccess::Remote),
         Arc::new(Mining),
@@ -765,7 +765,7 @@ fn check_version_request() -> String {
 /// Past every budget other requests are turned away and the node on this computer is not.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_loopback_node_spends_no_request_budget() {
-    let mut limits = lepic_foreign::testing::listen_limits();
+    let mut limits = lepic_legacy_rpc::testing::listen_limits();
     limits.requests_per_minute = 1;
     limits.receives_per_minute = 1;
     let settings = ListenSettings::new(Exposure::LocalOnly, 0, limits)
@@ -801,7 +801,7 @@ async fn a_loopback_node_is_not_held_back_by_the_connection_cap() {
     let Some(address) = address_beyond_loopback() else {
         return;
     };
-    let mut limits = lepic_foreign::testing::listen_limits();
+    let mut limits = lepic_legacy_rpc::testing::listen_limits();
     limits.max_connections = 1;
     let settings =
         ListenSettings::new(Exposure::Internet, 0, limits).with_coinbase(CoinbaseAccess::LocalOnly);
@@ -832,7 +832,7 @@ async fn a_wallet_without_a_coinbase_builder_refuses() {
     let settings = ListenSettings::new(
         Exposure::LocalOnly,
         0,
-        lepic_foreign::testing::listen_limits(),
+        lepic_legacy_rpc::testing::listen_limits(),
     )
     .with_coinbase(CoinbaseAccess::LocalOnly);
     let listener = listen(settings, wallet).await.unwrap();
@@ -854,19 +854,19 @@ async fn a_client_to_other_computers_does_not_reach_a_wallet_on_this_one() {
         ListenSettings::new(
             Exposure::LocalOnly,
             0,
-            lepic_foreign::testing::listen_limits(),
+            lepic_legacy_rpc::testing::listen_limits(),
         ),
         wallet.clone(),
     )
     .await
     .unwrap();
     let port = listener.local_addr().port();
-    let guarded = ForeignClient::to_other_computers(
-        lepic_foreign::testing::client_settings(),
+    let guarded = RpcClient::to_other_computers(
+        lepic_legacy_rpc::testing::client_settings(),
         webpki_tls_config().unwrap(),
     );
     for host in ["localhost", "127.0.0.1", "127.1", "[::ffff:127.0.0.1]"] {
-        let url = ForeignUrl::parse(&format!("http://{host}:{port}"), PlainHttp::Allowed).unwrap();
+        let url = ListenerUrl::parse(&format!("http://{host}:{port}"), PlainHttp::Allowed).unwrap();
         let refused = guarded.receive_tx(&url, &s1()).await.unwrap_err();
         assert!(
             matches!(refused, ClientError::ThisComputer),

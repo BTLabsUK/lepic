@@ -3,7 +3,7 @@
 //! command runs as `lepic` runs it and its JSON report is the response body.
 
 use hyper::Response;
-use lepic_methods::http::{ForeignUrl, PlainHttp};
+use lepic_methods::http::{ListenerUrl, PlainHttp};
 use lepic_wallet::selection::SelectionOptions;
 use lepic_wallet::slate::{MediaType, WireSlate};
 use serde::Deserialize;
@@ -512,7 +512,7 @@ pub(crate) async fn send(api: &Api<'_>, request: Request) -> Answer {
     };
     if reach == HttpReach::OtherComputers
         && body.method.as_deref() == Some("http")
-        && ForeignUrl::parse(&body.to, PlainHttp::Allowed)
+        && ListenerUrl::parse(&body.to, PlainHttp::Allowed)
             .is_ok_and(|url| url.names_this_computer())
     {
         return Err(Problem::usage(

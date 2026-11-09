@@ -4,7 +4,7 @@
 
 use std::sync::{Arc, Mutex};
 
-use lepic_methods::http::{ForeignClient, ForeignUrl, PlainHttp, webpki_tls_config};
+use lepic_methods::http::{ListenerUrl, PlainHttp, RpcClient, webpki_tls_config};
 use lepic_wallet::slate::{MediaType, WireSlate};
 use zeroize::Zeroizing;
 
@@ -294,8 +294,8 @@ async fn the_same_slate_posted_again_gets_the_same_answer() {
     let events = Events::default();
     let port = listen(&pair.bob, &events).await;
     let slate = pair.alice.create_send_slate(EPIC, 1, None).await.unwrap();
-    let client = ForeignClient::new(shipped().send, webpki_tls_config().unwrap());
-    let to = ForeignUrl::parse(&url(port), PlainHttp::LoopbackOnly).unwrap();
+    let client = RpcClient::new(shipped().send, webpki_tls_config().unwrap());
+    let to = ListenerUrl::parse(&url(port), PlainHttp::LoopbackOnly).unwrap();
     let wire = WireSlate::text(MediaType::JSON, slate.json);
 
     let first = client.receive_tx(&to, &wire).await.unwrap();
@@ -505,8 +505,8 @@ async fn a_payment_over_the_listener_rate_is_reported_refused_as_unavailable() {
     let pair = funded_pair().await;
     let events = Events::default();
     let port = listen(&pair.bob, &events).await;
-    let client = ForeignClient::new(shipped().send, webpki_tls_config().unwrap());
-    let to = ForeignUrl::parse(&url(port), PlainHttp::LoopbackOnly).unwrap();
+    let client = RpcClient::new(shipped().send, webpki_tls_config().unwrap());
+    let to = ListenerUrl::parse(&url(port), PlainHttp::LoopbackOnly).unwrap();
     let budget = shipped().listen.receives_per_minute;
     // Slates the wallet refuses as invalid leave the budget to real payments, as many a
     // minute as the budget.

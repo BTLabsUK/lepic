@@ -32,6 +32,6 @@ pub const fn onion_client_settings() -> OnionClientSettings {
     OnionClientSettings {
         connect_timeout: CONNECT_TIMEOUT,
         request_timeout: Duration::from_secs(120),
-        max_response_bytes: lepic_foreign::rpc::MAX_BODY_LEN,
+        max_response_bytes: lepic_legacy_rpc::rpc::MAX_BODY_LEN,
     }
 }

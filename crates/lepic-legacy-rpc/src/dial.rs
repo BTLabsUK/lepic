@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
-//! How a [`crate::ForeignClient`] opens its byte streams. By default hyper's own connector
-//! resolves the wallet's host and connects; a [`ForeignDialer`] takes that over, so the app can
+//! How a [`crate::RpcClient`] opens its byte streams. By default hyper's own connector
+//! resolves the wallet's host and connects; a [`RpcDialer`] takes that over, so the app can
 //! send the bytes another way, such as through tor. TLS and the `Host` header stay those of the
 //! wallet's URL whatever the dialer connects to.
 
@@ -22,26 +22,26 @@ use tower_service::Service;
 use crate::url::is_this_computer;
 
 /// A byte stream to a wallet, before TLS.
-pub trait ForeignStream: AsyncRead + AsyncWrite + Send + Unpin {}
+pub trait RpcStream: AsyncRead + AsyncWrite + Send + Unpin {}
 
-impl<T: AsyncRead + AsyncWrite + Send + Unpin> ForeignStream for T {}
+impl<T: AsyncRead + AsyncWrite + Send + Unpin> RpcStream for T {}
 
-pub type ForeignDialFuture<'a> =
-    Pin<Box<dyn Future<Output = io::Result<Box<dyn ForeignStream>>> + Send + 'a>>;
+pub type RpcDialFuture<'a> =
+    Pin<Box<dyn Future<Output = io::Result<Box<dyn RpcStream>>> + Send + 'a>>;
 
 /// Opens the stream for each new connection to a wallet. The dialer chooses where the bytes go
 /// and bounds the time it takes; `host` and `port` are those of the wallet's URL.
-pub trait ForeignDialer: Send + Sync {
-    fn dial<'a>(&'a self, host: &'a str, port: u16) -> ForeignDialFuture<'a>;
+pub trait RpcDialer: Send + Sync {
+    fn dial<'a>(&'a self, host: &'a str, port: u16) -> RpcDialFuture<'a>;
 }
 
 /// What hyper-rustls wraps: hyper's own connector, one that connects only to other computers,
-/// or a [`ForeignDialer`].
+/// or a [`RpcDialer`].
 #[derive(Clone)]
-pub(crate) enum ForeignConnector {
+pub(crate) enum RpcConnector {
     Direct(HttpConnector),
     OtherComputers { connect_timeout: Duration },
-    Dialed(Arc<dyn ForeignDialer>),
+    Dialed(Arc<dyn RpcDialer>),
 }
 
 /// The refusal of an address that is this computer's own, carried inside the connector's
@@ -94,7 +94,7 @@ pub(crate) async fn connect_to_other_computer(host: &str, port: u16) -> io::Resu
     }))
 }
 
-pub(crate) struct Dialed(TokioIo<Box<dyn ForeignStream>>);
+pub(crate) struct Dialed(TokioIo<Box<dyn RpcStream>>);
 
 impl Connection for Dialed {
     fn connected(&self) -> Connected {
@@ -130,7 +130,7 @@ impl hyper::rt::Write for Dialed {
     }
 }
 
-impl Service<Uri> for ForeignConnector {
+impl Service<Uri> for RpcConnector {
     type Response = Dialed;
     type Error = io::Error;
     type Future = Pin<Box<dyn Future<Output = io::Result<Dialed>> + Send>>;
@@ -148,9 +148,7 @@ impl Service<Uri> for ForeignConnector {
                 let connecting = http.call(uri);
                 Box::pin(async move {
                     let stream = connecting.await.map_err(io::Error::other)?.into_inner();
-                    Ok(Dialed(TokioIo::new(
-                        Box::new(stream) as Box<dyn ForeignStream>
-                    )))
+                    Ok(Dialed(TokioIo::new(Box::new(stream) as Box<dyn RpcStream>)))
                 })
             }
             Self::OtherComputers { connect_timeout } => {
@@ -165,9 +163,7 @@ impl Service<Uri> for ForeignConnector {
                     .map_err(|_| {
                         io::Error::new(io::ErrorKind::TimedOut, "connecting took too long")
                     })??;
-                    Ok(Dialed(TokioIo::new(
-                        Box::new(stream) as Box<dyn ForeignStream>
-                    )))
+                    Ok(Dialed(TokioIo::new(Box::new(stream) as Box<dyn RpcStream>)))
                 })
             }
             Self::Dialed(dialer) => {

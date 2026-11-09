@@ -3,7 +3,7 @@
 
 use std::path::{Path, PathBuf};
 
-use lepic_foreign::{Exposure, ListenLimits, ListenSettings};
+use lepic_legacy_rpc::{Exposure, ListenLimits, ListenSettings};
 
 /// Where the onion forwards its senders: the listener's port on `127.0.0.1`, or its Unix-domain
 /// socket. Any program on the device (on Android any app) can connect to a loopback port; a
@@ -111,7 +111,7 @@ mod tests {
 
     #[test]
     fn every_sender_shares_only_the_whole_connection_cap() {
-        let limits = lepic_foreign::testing::listen_limits();
+        let limits = lepic_legacy_rpc::testing::listen_limits();
         let settings = listen_settings(limits);
         let plain = ListenSettings::new(Exposure::LocalOnly, 0, limits);
         assert_eq!(settings.exposure, Exposure::LocalOnly);

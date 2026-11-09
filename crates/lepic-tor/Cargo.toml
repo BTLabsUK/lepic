@@ -12,7 +12,7 @@ workspace = true
 
 [features]
 # The settings the app ships, for tests of this crate and the crates above it.
-testing = ["lepic-foreign/testing"]
+testing = ["lepic-legacy-rpc/testing"]
 
 [dependencies]
 base64 = { workspace = true, features = ["alloc"] }
@@ -22,7 +22,7 @@ hmac = { workspace = true, features = ["zeroize"] }
 http-body-util.workspace = true
 hyper = { workspace = true, features = ["client", "http1"] }
 hyper-util = { workspace = true, features = ["tokio"] }
-lepic-foreign.workspace = true
+lepic-legacy-rpc.workspace = true
 serde = { workspace = true, features = ["derive", "std"] }
 serde_json = { workspace = true, features = ["std"] }
 sha2 = { workspace = true, features = ["zeroize"] }
