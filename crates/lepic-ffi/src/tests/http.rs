@@ -15,7 +15,7 @@ use crate::api::http::{HttpCoinbase, HttpExposure, HttpListenerEvent, HttpListen
 use crate::api::runtime::LepicRuntime;
 use crate::api::secret_store::AppSecretStore;
 use crate::api::testing::MockChain;
-use crate::api::types::{Chain, TxStatus, WalletConfig};
+use crate::api::types::{Chain, SendDialect, SlateWire, TxStatus, WalletConfig};
 use crate::api::wallet::EpicWallet;
 use crate::session::{SeedOrigin, Session};
 
@@ -336,7 +336,7 @@ async fn an_undelivered_http_send_is_finalized_by_its_resend() {
     let port = listen(&pair.bob, &events).await;
     let resent = pair
         .alice
-        .resend_http(sent.tx_id, &url(port), false)
+        .resend_http(sent.tx_id, &url(port), false, false)
         .await
         .unwrap();
 
@@ -344,7 +344,10 @@ async fn an_undelivered_http_send_is_finalized_by_its_resend() {
     assert_eq!(Some(resent.slate_id), sent.slate_id);
     assert_eq!(pair.chain.pushed_count(), 1);
     assert_eq!(events.last().kind, HttpListenerEventKind::Received);
-    let again = pair.alice.resend_http(sent.tx_id, &url(port), false).await;
+    let again = pair
+        .alice
+        .resend_http(sent.tx_id, &url(port), false, false)
+        .await;
     assert_eq!(kind(again), WalletErrorKind::InvalidArgument);
 }
 
@@ -629,7 +632,7 @@ async fn lock_during_an_http_delivery_leaves_a_resendable_send_to_a_fresh_handle
     let events = Events::default();
     let port = listen(&pair.bob, &events).await;
     let resent = reopened
-        .resend_http(sent.tx_id, &url(port), false)
+        .resend_http(sent.tx_id, &url(port), false, false)
         .await
         .unwrap();
     assert!(resent.posted);
@@ -640,4 +643,64 @@ async fn lock_during_an_http_delivery_leaves_a_resendable_send_to_a_fresh_handle
 
 fn shipped() -> crate::tuning::Tuning {
     crate::tuning::Tuning::check(&crate::tuning::shipped()).unwrap()
+}
+
+/// Opens a fresh handle on Bob's wallet with native slates set as `native_direct`, so the
+/// setting is in use.
+async fn reopen_bob_native(pair: &Pair, native_direct: bool) -> Arc<Session> {
+    pair.bob.set_native_direct(native_direct).unwrap();
+    EpicWallet::of_session(Arc::clone(&pair.bob)).lock();
+    let fresh = session_on(&pair._runtime, &pair.dirs[1], pair.bob.store().clone()).await;
+    fresh.open(password()).await.unwrap();
+    fresh
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn with_native_slates_off_a_send_is_legacy_and_pins_nothing() {
+    let pair = funded_pair().await;
+    assert!(!pair.alice.native_direct_active());
+    let events = Events::default();
+    let port = listen(&pair.bob, &events).await;
+
+    let sent = pair
+        .alice
+        .send_http(EPIC, 1, &url(port), false, None)
+        .await
+        .unwrap();
+    assert!(sent.posted);
+    assert_eq!(sent.dialect, SendDialect::Legacy);
+    assert_eq!(sent.format, SlateWire::Legacy);
+    assert!(pair.alice.peer_pins().unwrap().is_empty());
+    assert!(!pair.alice.forget_peer_pin(&url(port)).unwrap());
+}
+
+// A native post never goes to this device, so the native exchange to a listener on loopback
+// stops at the post: the advert is read, the send is stored and the error says why.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_native_send_to_this_device_is_refused_and_legacy_can_be_asked_for() {
+    let pair = funded_pair().await;
+    pair.alice.set_native_direct(true).unwrap();
+    EpicWallet::of_session(Arc::clone(&pair.alice)).lock();
+    let alice = reopen_alice(&pair).await;
+    assert!(alice.native_direct_active());
+    let bob = reopen_bob_native(&pair, true).await;
+    let events = Events::default();
+    let port = listen(&bob, &events).await;
+
+    let refused = alice
+        .send_http_with(EPIC, 1, &url(port), false, None, None, false)
+        .await
+        .unwrap_err();
+    assert_eq!(refused.kind, WalletErrorKind::ThisComputer);
+    assert!(refused.tx_id.is_some());
+    assert_eq!(pair.chain.pushed_count(), 0);
+
+    // The stored send goes through the legacy dialect when the user asks for it.
+    let resent = alice
+        .resend_http(refused.tx_id.unwrap(), &url(port), false, true)
+        .await
+        .unwrap();
+    assert!(resent.posted);
+    assert_eq!(resent.dialect, SendDialect::Legacy);
+    assert_eq!(pair.chain.pushed_count(), 1);
 }

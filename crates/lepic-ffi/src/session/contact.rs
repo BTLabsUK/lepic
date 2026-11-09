@@ -282,7 +282,7 @@ pub(super) fn update_event(update: &lepic_wallet::event::ContactUpdate) -> Walle
     }
 }
 
-fn hex(bytes: &[u8]) -> String {
+pub(super) fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
@@ -653,6 +653,7 @@ impl Session {
             quarantine_dropped: count(report.quarantine_dropped),
             buffered: count(report.buffered),
             in_person: count(report.in_person),
+            epic1: count(report.epic1),
             messages: count(report.messages),
             paired: count(report.paired),
             failed: report

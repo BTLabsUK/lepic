@@ -5,6 +5,7 @@ pub mod app_data;
 pub mod at_rest;
 pub mod contact;
 pub mod diagnostics;
+pub mod epic1;
 pub mod error;
 pub mod http;
 pub mod in_person;

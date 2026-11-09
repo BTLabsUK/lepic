@@ -75,6 +75,7 @@ impl Session {
         _to: &str,
         _message: Option<String>,
         _options: Option<SendOptions>,
+        _legacy: bool,
     ) -> Result<HttpSentTx, WalletError> {
         Err(tor_not_built())
     }
@@ -83,6 +84,7 @@ impl Session {
         &self,
         _tx_id: u32,
         _to: &str,
+        _legacy: bool,
     ) -> Result<HttpResentTx, WalletError> {
         Err(tor_not_built())
     }

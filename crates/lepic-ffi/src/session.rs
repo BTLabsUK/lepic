@@ -83,6 +83,7 @@ use crate::{password as password_change, pin};
 
 mod app_data;
 mod contact;
+mod epic1;
 mod http;
 #[cfg(not(feature = "tor"))]
 mod no_tor;
@@ -91,6 +92,7 @@ mod tor;
 
 #[cfg(test)]
 pub(crate) use http::HttpReport;
+pub(crate) use http::ThisDevice;
 #[cfg(all(test, unix))]
 #[cfg(feature = "tor")]
 pub(crate) use tor::TorReport;
@@ -214,11 +216,16 @@ pub(crate) struct Session {
     pub(crate) servers: tokio::sync::RwLock<()>,
     /// Holds the answers of HTTP sends until they are finalized.
     http: lepic_methods::http::Http,
+    /// Reaches the native endpoints of HTTP listeners (ADR 0052).
+    http_peer: lepic_methods::http::HttpPeer,
     http_listener: Mutex<http::HttpListener>,
     http_starts: AtomicU64,
     /// Holds the answers of Tor sends until they are finalized.
     #[cfg(feature = "tor")]
     tor: lepic_methods::tor::Tor,
+    /// Reaches the native endpoints of listeners behind onions.
+    #[cfg(feature = "tor")]
+    tor_peer: lepic_methods::tor::TorPeer,
     #[cfg(feature = "tor")]
     tor_slot: Mutex<tor::TorSlot>,
     #[cfg(feature = "tor")]
@@ -466,8 +473,11 @@ struct SessionTransports {
     methods: Arc<Methods>,
     file: Arc<dyn Method>,
     http: lepic_methods::http::Http,
+    http_peer: lepic_methods::http::HttpPeer,
     #[cfg(feature = "tor")]
     tor: lepic_methods::tor::Tor,
+    #[cfg(feature = "tor")]
+    tor_peer: lepic_methods::tor::TorPeer,
 }
 
 /// Registers the file transport, `epicbox` when the wallet has one, the HTTP transport and,
@@ -487,12 +497,12 @@ fn session_transports(
             .register(Arc::new(epicbox.clone()))
             .map_err(|error| invalid(error.to_string()))?;
     }
-    let http = http::http_transport(tuning, send_tor)?;
+    let (http, http_peer) = http::http_transport(tuning, send_tor)?;
     methods
         .register(Arc::new(http.clone()))
         .map_err(|error| invalid(error.to_string()))?;
     #[cfg(feature = "tor")]
-    let tor = tor::tor_transport(tuning);
+    let (tor, tor_peer) = tor::tor_transport(tuning)?;
     #[cfg(feature = "tor")]
     {
         methods
@@ -503,8 +513,11 @@ fn session_transports(
         methods: Arc::new(methods),
         file,
         http,
+        http_peer,
         #[cfg(feature = "tor")]
         tor,
+        #[cfg(feature = "tor")]
+        tor_peer,
     })
 }
 
@@ -620,10 +633,13 @@ impl Session {
             listen_run: tokio::sync::Mutex::default(),
             servers: tokio::sync::RwLock::default(),
             http: transports.http,
+            http_peer: transports.http_peer,
             http_listener: Mutex::default(),
             http_starts: AtomicU64::new(0),
             #[cfg(feature = "tor")]
             tor: transports.tor,
+            #[cfg(feature = "tor")]
+            tor_peer: transports.tor_peer,
             #[cfg(feature = "tor")]
             tor_slot: Mutex::default(),
             #[cfg(feature = "tor")]
@@ -1583,6 +1599,7 @@ impl Session {
             lepic: facts.kind == PeerKind::Lepic,
             notices: facts.notices,
             fresh: facts.fresh,
+            native_slates: stored.native_key.is_some(),
         })
     }
 
@@ -1983,6 +2000,7 @@ fn sent_tx(sent: &SentSlate) -> SentTx {
         slate_id: sent.slate_id.to_string(),
         amount: sent.amount.value(),
         fee: sent.fee.value(),
+        format: http::slate_wire(sent.format),
     }
 }
 

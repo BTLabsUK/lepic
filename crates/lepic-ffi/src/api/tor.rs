@@ -406,6 +406,10 @@ impl EpicWallet {
     /// stops during the send fails it the same way with `TorNotRunning`. Fails as
     /// [`EpicWallet::send_http`] does when the answer could not be finalized.
     ///
+    /// The dialect is chosen, and pins are read and kept for the onion, as
+    /// [`EpicWallet::send_http`] does, with the same errors; use
+    /// [`EpicWallet::send_tor_dialect`] to ask for the legacy dialect.
+    ///
     /// `options` chooses the inputs and change, `Smallest` with one change output when `None`;
     /// change outputs outside 1..=10 fail with `InvalidArgument`.
     pub async fn send_tor(
@@ -416,9 +420,23 @@ impl EpicWallet {
         message: Option<String>,
         options: Option<SendOptions>,
     ) -> Result<HttpSentTx, WalletError> {
+        self.send_tor_dialect(amount, minimum_confirmations, onion, message, options, false)
+            .await
+    }
+
+    /// As [`EpicWallet::send_tor`]; `legacy` as in [`EpicWallet::send_http_dialect`].
+    pub async fn send_tor_dialect(
+        &self,
+        amount: u64,
+        minimum_confirmations: u64,
+        onion: String,
+        message: Option<String>,
+        options: Option<SendOptions>,
+        legacy: bool,
+    ) -> Result<HttpSentTx, WalletError> {
         self.run("send_tor", |session| async move {
             session
-                .send_tor(amount, minimum_confirmations, &onion, message, options)
+                .send_tor(amount, minimum_confirmations, &onion, message, options, legacy)
                 .await
         })
         .await
@@ -432,8 +450,18 @@ impl EpicWallet {
     /// `InvalidArgument` when `tx_id` is not a send waiting for its answer, and otherwise as
     /// [`EpicWallet::send_tor`].
     pub async fn resend_tor(&self, tx_id: u32, onion: String) -> Result<HttpResentTx, WalletError> {
+        self.resend_tor_dialect(tx_id, onion, false).await
+    }
+
+    /// As [`EpicWallet::resend_tor`]; `legacy` as in [`EpicWallet::send_http_dialect`].
+    pub async fn resend_tor_dialect(
+        &self,
+        tx_id: u32,
+        onion: String,
+        legacy: bool,
+    ) -> Result<HttpResentTx, WalletError> {
         self.run("resend_tor", |session| async move {
-            session.resend_tor(tx_id, &onion).await
+            session.resend_tor(tx_id, &onion, legacy).await
         })
         .await
     }

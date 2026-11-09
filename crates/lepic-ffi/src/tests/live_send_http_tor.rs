@@ -161,7 +161,7 @@ fn live_send_http_through_tor() {
         let sending = Instant::now();
         // An onion just published may not be found by every directory yet.
         let mut sent = session
-            .send_http_with(EPIC, 1, &url, true, None, None)
+            .send_http_with(EPIC, 1, &url, true, None, None, false)
             .await
             .map(|sent| (sent.tx_id, sent.slate_id, sent.posted));
         for _ in 0..6 {
@@ -171,7 +171,7 @@ fn live_send_http_through_tor() {
             tokio::time::sleep(Duration::from_secs(15)).await;
             let tx_id = super::http::sends(&session).await[0].tx_id;
             sent = session
-                .resend_http(tx_id, &url, true)
+                .resend_http(tx_id, &url, true, false)
                 .await
                 .map(|resent| (resent.tx_id, resent.slate_id, resent.posted));
         }

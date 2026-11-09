@@ -243,6 +243,26 @@ pub struct SentTx {
     pub slate_id: String,
     pub amount: u64,
     pub fee: u64,
+    /// How the S1 went out.
+    pub format: SlateWire,
+}
+
+/// How a slate went out: as legacy JSON, or as a native slate (RFC 0003), over Epicbox to a
+/// payments address whose wallet claims native slates or to a listener's native endpoint.
+/// Native only while `EpicWallet::set_native_direct` is on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SlateWire {
+    Legacy,
+    Native,
+}
+
+/// The dialect a send to a listener over HTTP or Tor took: `Native` to the endpoint the
+/// listener advertises, `Legacy` as every Epic wallet listener takes it. Native only while
+/// `EpicWallet::set_native_direct` is on and the listener advertises it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SendDialect {
+    Native,
+    Legacy,
 }
 
 /// A send or issued invoice that was finalized and, unless the session is offline, accepted by
@@ -1011,6 +1031,9 @@ pub struct PeerCompat {
     pub notices: bool,
     /// Derived: `notices`, and no unmarked slate in the last 30 days.
     pub fresh: bool,
+    /// Its latest marked slate claimed native slates (RFC 0003) and gave the key to seal them
+    /// to.
+    pub native_slates: bool,
 }
 
 /// A paired contact, from `EpicWallet::contacts` and `EpicWallet::contact`. Holds no key.
@@ -1377,6 +1400,10 @@ pub struct ContactCollectReport {
     /// `InPersonAnswer`.
     #[frb(default = 0)]
     pub in_person: u32,
+    /// Payments taken at this wallet's epic1 link mailboxes, and answers to its epic1
+    /// payments finalized.
+    #[frb(default = 0)]
+    pub epic1: u32,
 }
 
 /// A pairing in progress that ended with nothing stored.
@@ -2054,4 +2081,121 @@ mod tests {
         assert!(!printed.contains("node-secret-value"));
         assert!(printed.contains("[redacted]"));
     }
+}
+
+/// The kind of an epic1 link this wallet issues.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Epic1LinkKind {
+    /// A link shown on a screen: it takes the next mailbox of a ring of 50, which wraps, and
+    /// its mailbox is drained for seven days after it was issued or last used.
+    OnScreen,
+    /// A link printed or kept: one of 32 mailboxes, held until the link is retired.
+    Printed,
+}
+
+/// An epic1 link issued by `EpicWallet::epic1_link_make`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Epic1Link {
+    /// The link text, `epic:epic1…?epicbox=…`, to show as a QR code or share.
+    pub link: String,
+    /// The epic1 address the link pays.
+    pub address: String,
+    pub kind: Epic1LinkKind,
+    /// The link's number within its kind, from 0.
+    pub n: u32,
+}
+
+/// An epic1 link mailbox in use, as `EpicWallet::epic1_links` lists it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Epic1LinkView {
+    pub kind: Epic1LinkKind,
+    pub n: u32,
+    pub issued_at_ms: i64,
+    /// When a payment last came to the link.
+    pub used_at_ms: Option<i64>,
+    /// The relays the link names its mailbox on, `domain[:port]`.
+    pub relays: Vec<String>,
+}
+
+/// Where a relay host is, as the host rule classifies it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HostClassView {
+    Public,
+    /// An address on the local network rather than the internet.
+    LocalNetwork,
+}
+
+/// A relay an epic1 payment or answer would be posted to: show it before the user confirms.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Epic1Host {
+    pub host: String,
+    pub port: u16,
+    pub class: HostClassView,
+    /// The host is in the wallet's relay list.
+    pub in_relay_list: bool,
+}
+
+/// What an epic1 link asks, from `EpicWallet::epic1_link_read`. Nothing is stored.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Epic1LinkRead {
+    /// The payee: the epic1 address.
+    pub address: String,
+    /// The amount the link asks, in base units; `None` when the payer chooses it.
+    pub amount: Option<u64>,
+    pub message: Option<String>,
+    pub label: Option<String>,
+    /// The relays of the usable transports, in the order a payment tries them.
+    pub hosts: Vec<Epic1Host>,
+}
+
+/// One post of an epic1 payment to a transport of its link.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Epic1Attempt {
+    pub host: String,
+    /// Why the post failed; `None` when it went through.
+    pub error: Option<String>,
+}
+
+/// A payment made to an epic1 link, from `EpicWallet::epic1_pay` or
+/// `EpicWallet::epic1_post_next`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Epic1Paid {
+    pub tx_id: u32,
+    pub slate_id: String,
+    pub address: String,
+    /// The posts made, in order; the last went through when `posted` is set.
+    pub attempts: Vec<Epic1Attempt>,
+    /// The transport, from 0, the payment was posted to.
+    pub posted: Option<u32>,
+}
+
+/// An answer this wallet made for a payment taken at one of its link mailboxes, as
+/// `EpicWallet::epic1_answers` lists it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Epic1AnswerView {
+    pub tx_id: u32,
+    pub slate_id: String,
+    /// The relay of the payer's reply mailbox, as the payment wrote it.
+    pub mailbox: String,
+    /// The relay to show before `EpicWallet::epic1_post_answer`; `None` when it cannot be
+    /// posted to.
+    pub host: Option<Epic1Host>,
+    pub posted: bool,
+}
+
+/// A slate in sealed text as it arrived, from `EpicWallet::epictx_open`. Nothing is stored.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EpictxView {
+    /// The contact whose signature the envelope carries; `None` for an anonymous envelope.
+    pub contact_id: Option<String>,
+    /// The body is a `lepic.v1` slate (RFC 0003).
+    pub native: bool,
+    /// The slate as JSON: the view of a `lepic.v1` slate (RFC 0003 5.10), or the V3 JSON of
+    /// another.
+    pub slate_json: String,
+    pub purpose: Option<SlatePurpose>,
+    /// The sender's own reference, shown and never trusted for crediting.
+    pub reference: Option<String>,
+    /// When the sender stops honouring the slate, in unix seconds; advisory.
+    pub expires: Option<u64>,
 }

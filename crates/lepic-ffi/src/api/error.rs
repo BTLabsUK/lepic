@@ -2,6 +2,7 @@
 //! [`WalletError::kind`] or the stable [`WalletError::code`], never on the message.
 
 use lepic_keychain::AppDataError;
+use lepic_methods::http::PeerClientError;
 use lepic_wallet::error_text::{display_error_chain, display_error_message};
 use lepic_wallet::inbox::InboxError;
 use lepic_wallet::invoice::InvoiceError;
@@ -11,7 +12,9 @@ use lepic_wallet::selection::SelectionError;
 use lepic_wallet::self_send::SelfSendError;
 use lepic_wallet::send::SendError;
 use lepic_wallet::{FinalizeError, ReceiveError};
-use lepic_wallet_contacts::{ContactError, InPersonRefusal};
+use lepic_wallet_contacts::{
+    ContactError, DirectError, Epic1Refusal, InPersonRefusal, NativeFailure,
+};
 
 /// What went wrong, in terms the app can act on. The numbers in [`WalletErrorKind::code`] are
 /// part of the API and never change meaning; the binding's README lists them.
@@ -260,10 +263,55 @@ pub enum WalletErrorKind {
     /// The QR parts scanned do not make a whole code yet: keep scanning and pass every part
     /// scanned so far.
     UrCodeIncomplete,
+    /// The listener's origin (`WalletError::origin`) is pinned and it no longer advertises a
+    /// native endpoint. Nothing was stored; a send that asks for the legacy dialect goes out.
+    PinnedNoAdvert,
+    /// The listener's origin (`WalletError::origin`) shows another key
+    /// (`WalletError::shown_key`) than the pinned one (`WalletError::pinned_key`). Nothing
+    /// was stored. Once the receiver confirms the new key, `EpicWallet::forget_peer_pin`
+    /// takes it at the next send; a send that asks for the legacy dialect goes out as well.
+    PinChanged,
+    /// The listener of a pinned origin (`WalletError::origin`) could not be asked for its
+    /// endpoint. Nothing was stored.
+    PeerProbeFailed,
+    /// The send was stored (`WalletError::tx_id`; its slate is in `transaction`) and its native
+    /// exchange failed; nothing went through the legacy dialect. The inputs stay locked:
+    /// deliver it again, in either dialect, or cancel it.
+    NativeExchangeFailed,
+    /// The native endpoint's address is one of this device's own; a native slate goes only
+    /// to other devices. The send is stored as `NativeExchangeFailed` describes; deliver it
+    /// again in the legacy dialect or cancel it.
+    ThisComputer,
+    /// The text is a record another Epic wallet keeps in its `saved_txs` directory, not a
+    /// payment file.
+    SavedTransaction,
+    /// The epic1 link names no transport this wallet can use.
+    Epic1CannotPay,
+    /// The payment went to every relay of the link: none is left to try.
+    Epic1NoMoreRelays,
+    /// All printed epic1 links are in use: retire one first.
+    PrintedLinksFull,
+    /// No printed link with that number is in use, or the wallet holds no epic1 payment or
+    /// answer for the slate.
+    Epic1NotFound,
+    /// The wallet's relay is on this device, so no other device reaches a link to it.
+    OwnRelayLocal,
+    /// A relay named for a link is not a domain with an optional port, is on this device, or
+    /// there are more than three.
+    Epic1RelayInvalid,
+    /// The message is longer than a link carries or holds control characters.
+    Epic1MessageInvalid,
+    /// The epic1 payment was finalized already.
+    Epic1Finalized,
+    /// The epic1 link or its slate is for another network than the wallet.
+    Epic1WrongNetwork,
+    /// The text is not an epic1 link.
+    NotAnEpic1Link,
 }
 
 impl WalletErrorKind {
     /// The stable number of this kind.
+    #[allow(clippy::too_many_lines)] // One arm per kind.
     pub const fn code(self) -> u32 {
         match self {
             Self::InvalidMnemonic => 1,
@@ -356,6 +404,22 @@ impl WalletErrorKind {
             Self::RelayNotConfirmed => 94,
             Self::InPersonNoMailbox => 95,
             Self::UrCodeIncomplete => 96,
+            Self::PinnedNoAdvert => 97,
+            Self::PinChanged => 98,
+            Self::PeerProbeFailed => 99,
+            Self::NativeExchangeFailed => 100,
+            Self::ThisComputer => 101,
+            Self::SavedTransaction => 102,
+            Self::Epic1CannotPay => 103,
+            Self::Epic1NoMoreRelays => 104,
+            Self::PrintedLinksFull => 105,
+            Self::Epic1NotFound => 106,
+            Self::OwnRelayLocal => 107,
+            Self::Epic1RelayInvalid => 108,
+            Self::Epic1MessageInvalid => 109,
+            Self::Epic1Finalized => 110,
+            Self::Epic1WrongNetwork => 111,
+            Self::NotAnEpic1Link => 112,
         }
     }
 }
@@ -372,6 +436,13 @@ pub struct WalletError {
     /// later step failed or the call's own clean-up cancel failed: cancel it with
     /// `cancel_transaction`, or try its step again. `None` when nothing was left behind.
     pub tx_id: Option<u32>,
+    /// The listener's origin, `scheme://host:port`, for `PinnedNoAdvert`, `PinChanged`,
+    /// `PeerProbeFailed`: the one `EpicWallet::forget_peer_pin` takes.
+    pub origin: Option<String>,
+    /// For `PinChanged`: the pinned key, 64 hex digits.
+    pub pinned_key: Option<String>,
+    /// For `PinChanged`: the key the listener shows, 64 hex digits.
+    pub shown_key: Option<String>,
 }
 
 impl std::fmt::Display for WalletError {
@@ -390,6 +461,9 @@ impl WalletError {
             code: kind.code(),
             message: display_error_message(&message.into()),
             tx_id: None,
+            origin: None,
+            pinned_key: None,
+            shown_key: None,
         }
     }
 
@@ -739,6 +813,11 @@ impl From<ContactError> for WalletError {
                 E::Post(_) => K::TransportFailed,
                 E::Native(_) => K::InvalidSlate,
                 E::InPerson(refusal) => in_person_kind(*refusal),
+                E::Epic1(refusal) => epic1_kind(*refusal),
+                E::Epic1Link(_) => K::NotAnEpic1Link,
+                E::SavedTransaction => K::SavedTransaction,
+                // As the decoder refused such text before the payment-file classifier.
+                E::NotPaymentFile => K::InvalidPairingText,
                 _ => K::Other,
             },
         };
@@ -758,6 +837,102 @@ const fn in_person_kind(refusal: InPersonRefusal) -> WalletErrorKind {
         R::StoredAnswer => K::Other,
         _ => K::InvalidSlate,
     }
+}
+
+/// The kind of an epic1 refusal: a payment or answer refused is an invalid slate.
+const fn epic1_kind(refusal: Epic1Refusal) -> WalletErrorKind {
+    use Epic1Refusal as R;
+    use WalletErrorKind as K;
+    match refusal {
+        R::CannotPay => K::Epic1CannotPay,
+        R::NoMoreEntries => K::Epic1NoMoreRelays,
+        R::PrintedFull => K::PrintedLinksFull,
+        R::NotIssued | R::NoPayment => K::Epic1NotFound,
+        R::RelayNotConfirmed => K::RelayNotConfirmed,
+        R::OwnRelayLocal => K::OwnRelayLocal,
+        R::LinkRelay | R::TooManyRelays => K::Epic1RelayInvalid,
+        R::Message => K::Epic1MessageInvalid,
+        R::Finalized => K::Epic1Finalized,
+        R::WrongNetwork => K::Epic1WrongNetwork,
+        _ => K::InvalidSlate,
+    }
+}
+
+impl From<DirectError> for WalletError {
+    fn from(error: DirectError) -> Self {
+        use WalletErrorKind as K;
+        let kind = match error {
+            DirectError::Wallet(inner) => return inner.into(),
+            DirectError::Send(inner) => return inner.into(),
+            DirectError::PinnedNoAdvert { ref origin } => {
+                let mut mapped = Self::chained(K::PinnedNoAdvert, &error);
+                mapped.origin = Some(origin.clone());
+                return mapped;
+            }
+            DirectError::PinChanged {
+                ref origin,
+                ref pinned,
+                ref shown,
+            } => {
+                let mut mapped = Self::chained(K::PinChanged, &error);
+                mapped.origin = Some(origin.clone());
+                mapped.pinned_key = Some(hex(pinned));
+                mapped.shown_key = Some(hex(shown));
+                return mapped;
+            }
+            DirectError::Probe { ref origin, .. } => {
+                let mut mapped = Self::chained(K::PeerProbeFailed, &error);
+                mapped.origin = Some(origin.clone());
+                return mapped;
+            }
+            DirectError::Native {
+                tx_id, ref source, ..
+            } => {
+                let kind = if native_to_this_computer(source) {
+                    K::ThisComputer
+                } else {
+                    K::NativeExchangeFailed
+                };
+                return Self::chained(kind, &error).with_tx(tx_id.0);
+            }
+            _ => K::Other,
+        };
+        Self::chained(kind, &error)
+    }
+}
+
+/// Whether a native post was refused for reaching this device, by the client's own check or by
+/// the session's dialer.
+fn native_to_this_computer(failure: &NativeFailure) -> bool {
+    let NativeFailure::Post(post) = failure else {
+        return false;
+    };
+    if matches!(post, PeerClientError::ThisComputer { .. }) {
+        return true;
+    }
+    let mut cause: Option<&(dyn std::error::Error + 'static)> = Some(post);
+    while let Some(error) = cause {
+        let refused = error.is::<crate::session::ThisDevice>()
+            || error
+                .downcast_ref::<std::io::Error>()
+                .and_then(std::io::Error::get_ref)
+                .is_some_and(
+                    <dyn std::error::Error + Send + Sync>::is::<crate::session::ThisDevice>,
+                );
+        if refused {
+            return true;
+        }
+        cause = error.source();
+    }
+    false
+}
+
+fn hex(bytes: &[u8]) -> String {
+    use std::fmt::Write as _;
+    bytes.iter().fold(String::new(), |mut text, byte| {
+        let _ = write!(text, "{byte:02x}");
+        text
+    })
 }
 
 impl WalletError {
@@ -804,6 +979,7 @@ mod tests {
 
     /// The codes are API: the binding's README lists them and apps store them.
     #[test]
+    #[allow(clippy::too_many_lines)] // One line per kind.
     fn error_codes_are_stable_and_unique() {
         use WalletErrorKind as K;
         let expected = [
@@ -896,6 +1072,22 @@ mod tests {
             (K::RelayNotConfirmed, 94),
             (K::InPersonNoMailbox, 95),
             (K::UrCodeIncomplete, 96),
+            (K::PinnedNoAdvert, 97),
+            (K::PinChanged, 98),
+            (K::PeerProbeFailed, 99),
+            (K::NativeExchangeFailed, 100),
+            (K::ThisComputer, 101),
+            (K::SavedTransaction, 102),
+            (K::Epic1CannotPay, 103),
+            (K::Epic1NoMoreRelays, 104),
+            (K::PrintedLinksFull, 105),
+            (K::Epic1NotFound, 106),
+            (K::OwnRelayLocal, 107),
+            (K::Epic1RelayInvalid, 108),
+            (K::Epic1MessageInvalid, 109),
+            (K::Epic1Finalized, 110),
+            (K::Epic1WrongNetwork, 111),
+            (K::NotAnEpic1Link, 112),
         ];
         for (kind, code) in expected {
             assert_eq!(kind.code(), code, "{kind:?}");
@@ -1264,5 +1456,89 @@ mod tests {
             assert_eq!(mapped.kind, kind);
             assert_eq!(mapped.code, kind.code());
         }
+    }
+
+    #[test]
+    fn a_pin_refusal_carries_the_origin_and_both_keys() {
+        let origin = "http://wallet.example.org:3415".to_owned();
+        let mapped = WalletError::from(DirectError::PinChanged {
+            origin: origin.clone(),
+            pinned: [0xab; 32],
+            shown: [0x01; 32],
+        });
+        assert_eq!(mapped.kind, WalletErrorKind::PinChanged);
+        assert_eq!(mapped.origin.as_deref(), Some(origin.as_str()));
+        assert_eq!(mapped.pinned_key, Some("ab".repeat(32)));
+        assert_eq!(mapped.shown_key, Some("01".repeat(32)));
+
+        let mapped = WalletError::from(DirectError::PinnedNoAdvert {
+            origin: origin.clone(),
+        });
+        assert_eq!(mapped.kind, WalletErrorKind::PinnedNoAdvert);
+        assert_eq!(mapped.origin, Some(origin));
+        assert_eq!(mapped.pinned_key, None);
+    }
+
+    #[test]
+    fn a_failed_native_exchange_names_its_transaction() {
+        use lepic_methods::http::AddressClass;
+        let slate_id = lepic_wallet::event::SlateId::from_bytes([2; 16]);
+        let native = |source| DirectError::Native {
+            tx_id: lepic_store::TxId(7),
+            slate_id,
+            source,
+        };
+        let mapped = WalletError::from(native(NativeFailure::Post(PeerClientError::Timeout)));
+        assert_eq!(mapped.kind, WalletErrorKind::NativeExchangeFailed);
+        assert_eq!(mapped.tx_id, Some(7));
+
+        let mapped =
+            WalletError::from(native(NativeFailure::Post(PeerClientError::ThisComputer {
+                class: AddressClass::Loopback,
+            })));
+        assert_eq!(mapped.kind, WalletErrorKind::ThisComputer);
+        assert_eq!(mapped.tx_id, Some(7));
+
+        // The session's dialer refuses this device through the connection's I/O error.
+        let refused = PeerClientError::Unreachable(Box::new(std::io::Error::other(
+            crate::session::ThisDevice,
+        )));
+        let mapped = WalletError::from(native(NativeFailure::Post(refused)));
+        assert_eq!(mapped.kind, WalletErrorKind::ThisComputer);
+
+        let mapped = WalletError::from(native(NativeFailure::Reply));
+        assert_eq!(mapped.kind, WalletErrorKind::NativeExchangeFailed);
+    }
+
+    #[test]
+    fn epic1_refusals_have_their_own_kinds() {
+        use Epic1Refusal as R;
+        use WalletErrorKind as K;
+        let cases = [
+            (R::CannotPay, K::Epic1CannotPay),
+            (R::NoMoreEntries, K::Epic1NoMoreRelays),
+            (R::PrintedFull, K::PrintedLinksFull),
+            (R::NotIssued, K::Epic1NotFound),
+            (R::NoPayment, K::Epic1NotFound),
+            (R::RelayNotConfirmed, K::RelayNotConfirmed),
+            (R::OwnRelayLocal, K::OwnRelayLocal),
+            (R::LinkRelay, K::Epic1RelayInvalid),
+            (R::TooManyRelays, K::Epic1RelayInvalid),
+            (R::Message, K::Epic1MessageInvalid),
+            (R::Finalized, K::Epic1Finalized),
+            (R::WrongNetwork, K::Epic1WrongNetwork),
+        ];
+        for (refusal, kind) in cases {
+            let mapped = WalletError::from(ContactError::Epic1(refusal));
+            assert_eq!(mapped.kind, kind);
+        }
+        assert_eq!(
+            WalletError::from(ContactError::SavedTransaction).kind,
+            K::SavedTransaction
+        );
+        assert_eq!(
+            WalletError::from(ContactError::NotPaymentFile).kind,
+            K::InvalidPairingText
+        );
     }
 }

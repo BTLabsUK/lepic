@@ -11,7 +11,7 @@ use std::sync::Arc;
 use flutter_rust_bridge::frb;
 
 use crate::api::error::WalletError;
-use crate::api::types::SendOptions;
+use crate::api::types::{SendDialect, SendOptions, SlateWire};
 use crate::api::wallet::EpicWallet;
 use crate::boundary::end_stream;
 use crate::frb_generated::StreamSink;
@@ -117,6 +117,10 @@ pub struct HttpSentTx {
     /// The node accepted the transaction. When false it is finalized and stored but the node
     /// refused it: post it again with `repost_transaction`.
     pub posted: bool,
+    /// The dialect the send took to the other wallet.
+    pub dialect: SendDialect,
+    /// How the S1 went out: `Native` for the native dialect, else `Legacy`.
+    pub format: SlateWire,
 }
 
 /// A send delivered again over HTTP, answered and finalized.
@@ -126,9 +130,43 @@ pub struct HttpResentTx {
     pub slate_id: String,
     /// As in [`HttpSentTx::posted`].
     pub posted: bool,
+    /// The dialect the resend took to the other wallet.
+    pub dialect: SendDialect,
+}
+
+/// The key a listener's native endpoint showed for an origin, kept once it answered a native
+/// exchange (ADR 0052). Later sends to the origin take the native dialect only under that key.
+#[derive(Debug, Clone)]
+pub struct PeerPinView {
+    /// `scheme://host:port`, or the onion host alone.
+    pub origin: String,
+    /// The pinned seal key, as 64 lowercase hex characters.
+    pub seal_key: String,
+    pub first_seen_ms: i64,
+    pub last_seen_ms: i64,
 }
 
 impl EpicWallet {
+    /// The pins of the wallet's listeners kept by native sends over HTTP and Tor, by origin.
+    ///
+    /// Fails with `Locked` while the wallet is locked.
+    #[frb(sync)]
+    pub fn peer_pins(&self) -> Result<Vec<PeerPinView>, WalletError> {
+        self.boundary()
+            .guard("peer_pins", || self.session.peer_pins())
+    }
+
+    /// Forgets the pin of `origin`, as [`PeerPinView::origin`] names it, so the next native
+    /// send there takes the key the listener shows. Use it once the user confirmed that the
+    /// wallet at the origin changed its key. Returns whether there was a pin.
+    ///
+    /// Fails with `Locked` while the wallet is locked.
+    #[frb(sync)]
+    pub fn forget_peer_pin(&self, origin: String) -> Result<bool, WalletError> {
+        self.boundary()
+            .guard("forget_peer_pin", || self.session.forget_peer_pin(&origin))
+    }
+
     /// Sends `amount` to the wallet listening at `url`, `http(s)://host[:port][/path]`, then
     /// finalizes its answer and posts the transaction. A missing port is 3415 for `http` and
     /// 443 for `https`. `message` is sent as [`EpicWallet::create_send_slate`] sends it.
@@ -143,8 +181,21 @@ impl EpicWallet {
     /// device stays direct. A tor that fails fails the send: it never goes directly instead.
     /// Otherwise the wallet is reached directly.
     ///
+    /// While native slates are on ([`EpicWallet::native_direct_in_use`]), a wallet that
+    /// advertises a native endpoint (ADR 0052) gets the slate sealed to its key there, and the
+    /// key is pinned for the URL's origin once it answered; [`EpicWallet::peer_pins`] lists the
+    /// pins. Every other wallet gets the slate as every Epic wallet takes it.
+    /// [`HttpSentTx::dialect`] says which. A native post never goes to this device. Use
+    /// [`EpicWallet::send_http_dialect`] to ask for the legacy dialect.
+    ///
     /// Fails, storing nothing, with `HttpUrlInvalid` or `PlainHttpNotAllowed` for the URL and
-    /// the errors of [`EpicWallet::estimate_fee`]. Fails with `TransportFailed` when the other
+    /// the errors of [`EpicWallet::estimate_fee`]. For an origin with a pin it fails, storing
+    /// nothing, with `PinnedNoAdvert` when the wallet there advertises no native endpoint,
+    /// `PinChanged` when it advertises another key, and `PeerProbeFailed` when it could not
+    /// be asked; [`WalletError::origin`] names the origin. A native exchange that fails after
+    /// the send was stored fails with `ThisComputer` for a wallet on this device and
+    /// `NativeExchangeFailed` otherwise; [`WalletError::tx_id`] names the send, which waits for
+    /// a resend or a cancel. Fails with `TransportFailed` when the other
     /// wallet could not be reached, refused, or answered with something else than a slate: the
     /// send is then stored as sent with its inputs locked, so deliver it again with
     /// [`EpicWallet::resend_http`] or cancel it with [`EpicWallet::cancel_transaction`]. Fails
@@ -160,6 +211,31 @@ impl EpicWallet {
         message: Option<String>,
         options: Option<SendOptions>,
     ) -> Result<HttpSentTx, WalletError> {
+        self.send_http_dialect(
+            amount,
+            minimum_confirmations,
+            url,
+            allow_plain_http,
+            message,
+            options,
+            false,
+        )
+        .await
+    }
+
+    /// As [`EpicWallet::send_http`]; `legacy` sends the slate as every Epic wallet takes it
+    /// whatever the other wallet advertises, with no pin read or kept.
+    #[allow(clippy::too_many_arguments)] // Each is one input of the send.
+    pub async fn send_http_dialect(
+        &self,
+        amount: u64,
+        minimum_confirmations: u64,
+        url: String,
+        allow_plain_http: bool,
+        message: Option<String>,
+        options: Option<SendOptions>,
+        legacy: bool,
+    ) -> Result<HttpSentTx, WalletError> {
         self.run("send_http", |session| async move {
             session
                 .send_http_with(
@@ -169,6 +245,7 @@ impl EpicWallet {
                     allow_plain_http,
                     message,
                     options,
+                    legacy,
                 )
                 .await
         })
@@ -178,7 +255,8 @@ impl EpicWallet {
     /// Delivers the slate of send `tx_id` again, to the wallet listening at `url`, which may
     /// be another address or method than the first attempt, then finalizes and posts as
     /// [`EpicWallet::send_http`] does. Use it after a delivery failed. A wallet that answered
-    /// the slate before answers it again the same way.
+    /// the slate before answers it again the same way. The dialect is chosen again, as
+    /// [`EpicWallet::send_http`] chooses it.
     ///
     /// Fails with `HttpUrlInvalid` or `PlainHttpNotAllowed` for the URL, `InvalidArgument`
     /// when `tx_id` is not a send waiting for its answer, and otherwise as
@@ -189,8 +267,22 @@ impl EpicWallet {
         url: String,
         allow_plain_http: bool,
     ) -> Result<HttpResentTx, WalletError> {
+        self.resend_http_dialect(tx_id, url, allow_plain_http, false)
+            .await
+    }
+
+    /// As [`EpicWallet::resend_http`]; `legacy` as in [`EpicWallet::send_http_dialect`].
+    pub async fn resend_http_dialect(
+        &self,
+        tx_id: u32,
+        url: String,
+        allow_plain_http: bool,
+        legacy: bool,
+    ) -> Result<HttpResentTx, WalletError> {
         self.run("resend_http", |session| async move {
-            session.resend_http(tx_id, &url, allow_plain_http).await
+            session
+                .resend_http(tx_id, &url, allow_plain_http, legacy)
+                .await
         })
         .await
     }

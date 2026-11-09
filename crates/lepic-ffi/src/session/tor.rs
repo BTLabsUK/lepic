@@ -9,20 +9,22 @@ use std::sync::{Arc, Weak};
 
 use lepic_epicbox::RelayStream;
 use lepic_epicbox::tunnel::Tunnel;
-use lepic_methods::http::ListenerHandle;
+use lepic_methods::http::{ListenerHandle, PeerClient, PeerClientSettings, webpki_tls_config};
 use lepic_methods::tor::{
     FailureKind, OnionAddress, OnionTarget, RelayTor, SendFailure, SocksProxy, TRANSPORT_ID, Tor,
-    TorProcess, TorSendError, TorSettings, TorState,
+    TorPeer, TorProcess, TorSendError, TorSettings, TorState,
 };
 use lepic_store::TxId;
 use lepic_transport::transport::{BoxFuture, Destination};
-use lepic_wallet::send::{Delivery, SendError};
+use lepic_wallet::send::SendError;
+use lepic_wallet_contacts::{DirectError, WalletContacts};
+use lepic_wallet::namespace::SealKeyKind;
 use lepic_wallet::{OnionKey, ProofKey};
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
 use tracing::{debug, info, warn};
 
-use super::http::HttpReport;
+use super::http::{HttpReport, http_sent, send_dialect};
 use super::{DEFAULT_ACCOUNT, Session, invalid, lock};
 use crate::api::error::{WalletError, WalletErrorKind};
 use crate::api::http::{HttpListenerEvent, HttpListenerEventKind, HttpResentTx, HttpSentTx};
@@ -173,8 +175,25 @@ impl Tunnel for RelayTunnel {
     }
 }
 
-pub(super) fn tor_transport(tuning: &Tuning) -> Tor {
-    Tor::new(lepic_methods::tor::OnionClient::new(tuning.onion_client()))
+/// The Tor method of a session, and the native endpoints of listeners behind onions it
+/// reaches.
+pub(super) fn tor_transport(tuning: &Tuning) -> Result<(Tor, TorPeer), WalletError> {
+    let tor = Tor::new(lepic_methods::tor::OnionClient::new(tuning.onion_client()));
+    let tls = webpki_tls_config()
+        .map_err(|error| WalletError::new(WalletErrorKind::Other, error.to_string()))?;
+    let onion = tuning.onion_client();
+    let settings = PeerClientSettings {
+        connect_timeout: onion.connect_timeout,
+        request_timeout: onion.request_timeout,
+        ..PeerClientSettings::default()
+    };
+    let client = PeerClient::with_dialer(
+        settings,
+        tls,
+        tor.peer_dialer(tuning.tor_connect_timeout()),
+    );
+    let peer = TorPeer::new(tor.clone(), client);
+    Ok((tor, peer))
 }
 
 const fn failure_kind(kind: FailureKind) -> TorFailureKind {
@@ -280,9 +299,16 @@ fn onion(text: &str) -> Result<OnionAddress, WalletError> {
         .map_err(|error| WalletError::new(WalletErrorKind::OnionAddressInvalid, error.to_string()))
 }
 
-fn delivery(onion: &OnionAddress) -> Delivery {
-    Delivery::Deliver {
-        to: Destination::new(onion.host()),
+fn destination(onion: &OnionAddress) -> Destination {
+    Destination::new(onion.host())
+}
+
+/// What a failed direct send over Tor means for the app: a failed legacy send as
+/// [`send_error`] reads it, the rest as every direct send reports it.
+fn direct_error(error: DirectError) -> WalletError {
+    match error {
+        DirectError::Send(error) => send_error(error),
+        other => other.into(),
     }
 }
 
@@ -498,6 +524,22 @@ impl Session {
         report: &TorReport,
     ) -> Result<ListenerHandle, lepic_methods::http::ListenError> {
         let receiver = self.http_receiver(listener_report(report), TRANSPORT_ID, proof_key);
+        // The current onion's listener serves the native endpoint under the onion listener
+        // key; the previous onion's keeps answering the foreign API alone.
+        let peer = if proof_key == ProofKey::Onion {
+            self.peer_endpoint(
+                listener_report(report),
+                TRANSPORT_ID,
+                proof_key,
+                SealKeyKind::Onion,
+            )
+            .map_err(|error| lepic_methods::http::ListenError::Bind {
+                port: 0,
+                source: std::io::Error::other(error),
+            })?
+        } else {
+            None
+        };
         let settings = lepic_methods::tor::listen_settings(self.tuning.listen);
         // A socket in tor's folder where the platform and the path allow (not Windows): no
         // other program or app reaches it, where any can reach a loopback port.
@@ -507,11 +549,11 @@ impl Session {
                 std::fs::create_dir_all(dir)
                     .map_err(|source| lepic_methods::http::ListenError::Bind { port: 0, source })?;
             }
-            return lepic_methods::http::listen_unix(&path, settings, receiver).await;
+            return lepic_methods::http::listen_unix_with(&path, settings, receiver, peer).await;
         }
         #[cfg(not(unix))]
         drop(socket);
-        lepic_methods::http::listen(settings, receiver).await
+        lepic_methods::http::listen_with(settings, receiver, peer).await
     }
 
     /// Stops tor, then its listener. `Stopped` is reported once both are down; until then the
@@ -715,6 +757,7 @@ impl Session {
         to: &str,
         message: Option<String>,
         options: Option<SendOptions>,
+        legacy: bool,
     ) -> Result<HttpSentTx, WalletError> {
         let request =
             self.policy
@@ -733,28 +776,24 @@ impl Session {
             })
             .map_err(send_error)?;
         report(TorEvent::of(TorEventKind::Sending));
-        let sent = self
+        let direct = self
             .engine
-            .send(method, request, delivery(&onion))
+            .contact_book()
+            .direct_send(&self.tor_peer, method, request, destination(&onion), legacy)
             .await
-            .map_err(send_error)?;
-        let slate_id = sent.slate_id.to_string();
+            .map_err(direct_error)?;
+        let slate_id = direct.sent.slate_id.to_string();
         let posted = self
-            .finalize_direct_reply(TRANSPORT_ID, self.tor.take_reply(&slate_id))
+            .finalize_sent_reply(TRANSPORT_ID, &slate_id, direct.reply)
             .await?;
-        Ok(HttpSentTx {
-            tx_id: sent.tx_id.0,
-            slate_id,
-            amount: sent.amount.value(),
-            fee: sent.fee.value(),
-            posted,
-        })
+        Ok(http_sent(&direct.sent, direct.dialect, slate_id, posted))
     }
 
     pub(crate) async fn resend_tor(
         &self,
         tx_id: u32,
         to: &str,
+        legacy: bool,
     ) -> Result<HttpResentTx, WalletError> {
         let onion = onion(to)?;
         let details = self.engine.transaction_details(TxId(tx_id)).await?;
@@ -775,17 +814,20 @@ impl Session {
             })
             .map_err(send_error)?;
         report(TorEvent::of(TorEventKind::Sending));
-        self.engine
-            .resend(method, TxId(tx_id), delivery(&onion))
+        let direct = self
+            .engine
+            .contact_book()
+            .direct_resend(&self.tor_peer, method, TxId(tx_id), destination(&onion), legacy)
             .await
-            .map_err(send_error)?;
+            .map_err(direct_error)?;
         let posted = self
-            .finalize_direct_reply(TRANSPORT_ID, self.tor.take_reply(&slate_id))
+            .finalize_sent_reply(TRANSPORT_ID, &slate_id, direct.reply)
             .await?;
         Ok(HttpResentTx {
             tx_id,
             slate_id,
             posted,
+            dialect: send_dialect(direct.dialect),
         })
     }
 

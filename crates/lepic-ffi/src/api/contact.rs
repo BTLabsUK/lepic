@@ -39,6 +39,32 @@ use crate::api::types::{
     SlatePurpose,
 };
 use crate::api::wallet::EpicWallet;
+use crate::boundary::guard;
+
+/// The longest text [`sealed_file_extension`] reads: the largest sealed text the wallet opens.
+const MAX_SEALED_FILE: usize = 4 * 1024 * 1024;
+
+/// The file extension, without the dot, to save armored sealed text under: `epictx` for a
+/// native slate (`BEGINEPICTX.`), `epicsealed` for any other. Use it for the text of
+/// [`EpicWallet::contact_seal_slate`] and for a sealed answer. Fails with `InvalidArgument`
+/// for text over 4 MiB.
+#[frb(sync)]
+pub fn sealed_file_extension(text: String) -> Result<String, WalletError> {
+    guard("sealed_file_extension", move || {
+        if text.len() > MAX_SEALED_FILE {
+            return Err(WalletError::new(
+                crate::api::error::WalletErrorKind::InvalidArgument,
+                "sealed text too long",
+            ));
+        }
+        Ok(if lepic_wallet_contacts::is_epictx(&text) {
+            "epictx"
+        } else {
+            "epicsealed"
+        }
+        .to_owned())
+    })
+}
 
 impl EpicWallet {
     /// Makes an invite to pair, valid for `expiry`, whose messages go through this wallet's
@@ -634,8 +660,10 @@ impl EpicWallet {
     }
 
     /// The slate this wallet last wrote for `tx_id` (its S1, I1, S2 or I2) sealed to the
-    /// contact, as armored text for a `.epicsealed` file or a paste; the app writes the file.
-    /// `purpose` defaults to a payment for an S1 and a request for an I1. Nothing is sent.
+    /// contact, as armored text for a file or a paste; the app writes the file, named as
+    /// [`sealed_file_extension`] says. An S1 or I1 goes as a native slate (`BEGINEPICTX.`, a
+    /// `.epictx` file) when `set_native_direct` is on and the contact claims native slates;
+    /// anything else is `BEGINEPICSEALED.`, a `.epicsealed` file. `purpose` defaults to a payment for an S1 and a request for an I1. Nothing is sent.
     ///
     /// Fails with `ContactNotFound` for a contact that is not paired or whose keys changed,
     /// `SealingOff` when sealing is off for it or it cannot open sealed text, and

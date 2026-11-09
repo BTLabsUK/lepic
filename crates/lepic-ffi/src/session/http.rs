@@ -2,34 +2,42 @@
 //! Direct transactions over HTTP (ADR 0017): sends answered in the same exchange, and the
 //! listener that answers payments sent to this wallet.
 
+use std::fmt;
 use std::io;
+use std::net::SocketAddr;
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Weak};
 use std::time::Duration;
 
 use lepic_methods::http::{
-    CoinbaseAccess, Exposure, Host, Http, ListenError, ListenSettings, ListenerHandle, ListenerUrl,
-    PlainHttp, ReceiveHandler, Receiver, Refusal, RpcClient, RpcDialFuture, RpcDialer, RpcStream,
-    TRANSPORT_ID, UrlError, listen, refuse, webpki_tls_config,
+    AddressClass, CoinbaseAccess, Exposure, Host, Http, HttpPeer, ListenError, ListenSettings,
+    ListenerHandle, ListenerUrl, PeerClient, PeerClientSettings, PeerDialFuture, PeerDialer,
+    PeerEndpoint, PeerStream, PlainHttp, ReceiveHandler, Receiver, Refusal, RpcClient,
+    RpcDialFuture, RpcDialer, RpcStream, TRANSPORT_ID, UrlError, listen_with, refuse,
+    webpki_tls_config,
 };
 use lepic_node::{Propagation, is_loopback_host};
 use lepic_store::TxId;
 use lepic_transport::method::Method;
 use lepic_transport::transport::{BoxFuture, Destination, TransportId};
 use lepic_wallet::coinbase::{Coinbase, CoinbaseRequest};
-use lepic_wallet::send::{Delivery, SendError};
+use lepic_wallet::namespace::SealKeyKind;
+use lepic_wallet::ports::SharedRng;
+use lepic_wallet::send::{SendError, SentSlate};
 use lepic_wallet::slate::WireSlate;
-use lepic_wallet::{FinalizeError, ProofKey, ReceiveError, ReceiveRequest, Received};
+use lepic_wallet::{FinalizeError, ProofKey, ReceiveError, ReceiveRequest, Received, SlateFormat};
+use lepic_wallet_contacts::{Dialect, DirectHandler, WalletContacts};
 use tokio::net::TcpStream;
 use tracing::{debug, warn};
 
-use super::{DEFAULT_ACCOUNT, Session, invalid, lock};
+use super::contact::hex;
+use super::{DEFAULT_ACCOUNT, Session, invalid, lock, os_rng};
 use crate::api::error::{WalletError, WalletErrorKind};
 use crate::api::http::{
     HttpCoinbase, HttpExposure, HttpListenerEvent, HttpListenerEventKind, HttpListenerInfo,
-    HttpRefusal, HttpResentTx, HttpSentTx,
+    HttpRefusal, HttpResentTx, HttpSentTx, PeerPinView,
 };
-use crate::api::types::SendOptions;
+use crate::api::types::{SendDialect, SendOptions, SlateWire};
 use crate::node::{RelayTor, RelayTorError};
 use crate::tuning::Tuning;
 
@@ -49,14 +57,110 @@ pub(super) enum HttpListener {
     },
 }
 
-pub(super) fn http_transport(tuning: &Tuning, tor: &Arc<RelayTor>) -> Result<Http, WalletError> {
+/// The HTTP method of a session, and the native endpoints of listeners it reaches.
+pub(super) fn http_transport(
+    tuning: &Tuning,
+    tor: &Arc<RelayTor>,
+) -> Result<(Http, HttpPeer), WalletError> {
     let tls = webpki_tls_config()
         .map_err(|error| WalletError::new(WalletErrorKind::Other, error.to_string()))?;
     let dialer = Arc::new(SendDialer {
         tor: Arc::clone(tor),
         connect_timeout: tuning.send.connect_timeout,
     });
-    Ok(Http::new(RpcClient::with_dialer(tuning.send, tls, dialer)))
+    let http = Http::new(RpcClient::with_dialer(
+        tuning.send,
+        Arc::clone(&tls),
+        dialer,
+    ));
+    let settings = PeerClientSettings {
+        connect_timeout: tuning.send.connect_timeout,
+        request_timeout: tuning.send.request_timeout,
+        ..PeerClientSettings::default()
+    };
+    let native = Arc::new(NativeDialer {
+        tor: Arc::clone(tor),
+        connect_timeout: tuning.send.connect_timeout,
+    });
+    let peer = HttpPeer::new(http.clone(), PeerClient::with_dialer(settings, tls, native));
+    Ok((http, peer))
+}
+
+fn is_onion_host(host: &str) -> bool {
+    host.rsplit('.')
+        .next()
+        .is_some_and(|label| label.eq_ignore_ascii_case("onion"))
+}
+
+/// The refusal of a native post that would reach this device. A native post goes to the host
+/// the user named, so it only ever reaches other computers.
+#[derive(Debug)]
+pub(crate) struct ThisDevice;
+
+impl fmt::Display for ThisDevice {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("the address is one of this device's own")
+    }
+}
+
+impl std::error::Error for ThisDevice {}
+
+/// Opens the connections of native posts as [`SendDialer`] does, except that it never
+/// connects to this device: a loopback host is refused, and a host reached directly is
+/// connected at the first of its addresses that is not this device's own.
+struct NativeDialer {
+    tor: Arc<RelayTor>,
+    connect_timeout: Duration,
+}
+
+impl NativeDialer {
+    async fn connect_to_other_computer(
+        &self,
+        host: &str,
+        port: u16,
+    ) -> io::Result<Box<dyn PeerStream>> {
+        let connect = async {
+            let others: Vec<SocketAddr> = tokio::net::lookup_host((host, port))
+                .await?
+                .filter(|address| AddressClass::of_this_computer(address.ip()).is_none())
+                .collect();
+            if others.is_empty() {
+                return Err(io::Error::other(ThisDevice));
+            }
+            let mut last = None;
+            for address in others {
+                match TcpStream::connect(address).await {
+                    Ok(stream) => {
+                        stream.set_nodelay(true)?;
+                        return Ok(Box::new(stream) as Box<dyn PeerStream>);
+                    }
+                    Err(error) => last = Some(error),
+                }
+            }
+            Err(last.unwrap_or_else(|| io::Error::from(io::ErrorKind::NotFound)))
+        };
+        tokio::time::timeout(self.connect_timeout, connect)
+            .await
+            .map_err(|_| io::Error::from(io::ErrorKind::TimedOut))?
+    }
+}
+
+impl PeerDialer for NativeDialer {
+    fn dial<'a>(&'a self, host: &'a str, port: u16) -> PeerDialFuture<'a> {
+        Box::pin(async move {
+            if is_loopback_host(host) {
+                return Err(io::Error::other(ThisDevice));
+            }
+            match self.tor.open(host, port).await {
+                Ok(stream) => Ok(Box::new(stream) as Box<dyn PeerStream>),
+                // An onion has no address to resolve without tor.
+                Err(RelayTorError::Off) if !is_onion_host(host) => {
+                    self.connect_to_other_computer(host, port).await
+                }
+                Err(error) => Err(io::Error::other(error)),
+            }
+        })
+    }
 }
 
 /// Opens connections to other wallets through the wallet's tor while it runs or is expected,
@@ -87,12 +191,7 @@ impl RpcDialer for SendDialer {
             match self.tor.open(host, port).await {
                 Ok(stream) => Ok(Box::new(stream) as Box<dyn RpcStream>),
                 // An onion has no address to resolve without tor.
-                Err(RelayTorError::Off)
-                    if !host
-                        .rsplit('.')
-                        .next()
-                        .is_some_and(|label| label.eq_ignore_ascii_case("onion")) =>
-                {
+                Err(RelayTorError::Off) if !is_onion_host(host) => {
                     self.connect_directly(host, port).await
                 }
                 Err(error) => Err(io::Error::other(error)),
@@ -116,9 +215,46 @@ fn foreign_url(url: &str, allow_plain_http: bool) -> Result<ListenerUrl, WalletE
     })
 }
 
-fn delivery(url: &ListenerUrl) -> Delivery {
-    Delivery::Deliver {
-        to: Destination::new(url.as_uri()),
+fn destination(url: &ListenerUrl) -> Destination {
+    Destination::new(url.as_uri())
+}
+
+/// The dialect a direct send took, as the binding reports it.
+pub(super) const fn send_dialect(dialect: Dialect) -> SendDialect {
+    match dialect {
+        Dialect::Native => SendDialect::Native,
+        Dialect::Legacy => SendDialect::Legacy,
+    }
+}
+
+/// How a slate went out, as the binding reports it.
+pub(super) const fn slate_wire(format: SlateFormat) -> SlateWire {
+    match format {
+        SlateFormat::Native => SlateWire::Native,
+        SlateFormat::Legacy => SlateWire::Legacy,
+    }
+}
+
+/// The report of a direct send of `sent` in `dialect`. A native exchange stores its S1 as a
+/// legacy slate, so its format is the dialect's.
+pub(super) fn http_sent(
+    sent: &SentSlate,
+    dialect: Dialect,
+    slate_id: String,
+    posted: bool,
+) -> HttpSentTx {
+    let format = match dialect {
+        Dialect::Native => SlateWire::Native,
+        Dialect::Legacy => slate_wire(sent.format),
+    };
+    HttpSentTx {
+        tx_id: sent.tx_id.0,
+        slate_id,
+        amount: sent.amount.value(),
+        fee: sent.fee.value(),
+        posted,
+        dialect: send_dialect(dialect),
+        format,
     }
 }
 
@@ -164,10 +300,12 @@ impl Session {
             allow_plain_http,
             message,
             None,
+            false,
         )
         .await
     }
 
+    #[allow(clippy::too_many_arguments)] // The app's send form, one value per field.
     pub(crate) async fn send_http_with(
         &self,
         amount: u64,
@@ -176,6 +314,7 @@ impl Session {
         allow_plain_http: bool,
         message: Option<String>,
         options: Option<SendOptions>,
+        legacy: bool,
     ) -> Result<HttpSentTx, WalletError> {
         let request =
             self.policy
@@ -186,16 +325,16 @@ impl Session {
             .ok_or(SendError::UnknownTransport {
                 transport: TRANSPORT_ID,
             })?;
-        let sent = self.engine.send(method, request, delivery(&url)).await?;
-        let slate_id = sent.slate_id.to_string();
-        let posted = self.finalize_http_reply(&slate_id).await?;
-        Ok(HttpSentTx {
-            tx_id: sent.tx_id.0,
-            slate_id,
-            amount: sent.amount.value(),
-            fee: sent.fee.value(),
-            posted,
-        })
+        let direct = self
+            .engine
+            .contact_book()
+            .direct_send(&self.http_peer, method, request, destination(&url), legacy)
+            .await?;
+        let slate_id = direct.sent.slate_id.to_string();
+        let posted = self
+            .finalize_sent_reply(TRANSPORT_ID, &slate_id, direct.reply)
+            .await?;
+        Ok(http_sent(&direct.sent, direct.dialect, slate_id, posted))
     }
 
     pub(crate) async fn resend_http(
@@ -203,6 +342,7 @@ impl Session {
         tx_id: u32,
         url: &str,
         allow_plain_http: bool,
+        legacy: bool,
     ) -> Result<HttpResentTx, WalletError> {
         let url = foreign_url(url, allow_plain_http)?;
         let details = self.engine.transaction_details(TxId(tx_id)).await?;
@@ -220,22 +360,54 @@ impl Session {
             .ok_or(SendError::UnknownTransport {
                 transport: TRANSPORT_ID,
             })?;
-        self.engine
-            .resend(method, TxId(tx_id), delivery(&url))
+        let direct = self
+            .engine
+            .contact_book()
+            .direct_resend(
+                &self.http_peer,
+                method,
+                TxId(tx_id),
+                destination(&url),
+                legacy,
+            )
             .await?;
-        let posted = self.finalize_http_reply(&slate_id).await?;
+        let posted = self
+            .finalize_sent_reply(TRANSPORT_ID, &slate_id, direct.reply)
+            .await?;
         Ok(HttpResentTx {
             tx_id,
             slate_id,
             posted,
+            dialect: send_dialect(direct.dialect),
         })
     }
 
-    /// Finalizes the answer the HTTP transport kept for `slate_id` and posts it. Returns
-    /// whether the node accepted the transaction.
-    async fn finalize_http_reply(&self, slate_id: &str) -> Result<bool, WalletError> {
-        self.finalize_direct_reply(TRANSPORT_ID, self.http.take_reply(slate_id))
-            .await
+    /// Finalizes the answer of the direct send of `slate_id` over `transport` and posts it:
+    /// `reply`, the answer a native exchange brought back, or else the one the method kept
+    /// from a legacy exchange. Returns whether the node accepted the transaction.
+    pub(super) async fn finalize_sent_reply(
+        &self,
+        transport: TransportId,
+        slate_id: &str,
+        reply: Option<WireSlate>,
+    ) -> Result<bool, WalletError> {
+        let reply = match reply {
+            Some(reply) => Some(reply),
+            None => self.kept_reply(transport, slate_id),
+        };
+        self.finalize_direct_reply(transport, reply).await
+    }
+
+    /// The answer the method of `transport` kept for `slate_id` from a legacy exchange.
+    fn kept_reply(&self, transport: TransportId, slate_id: &str) -> Option<WireSlate> {
+        #[cfg(feature = "tor")]
+        if transport == lepic_methods::tor::TRANSPORT_ID {
+            return self.tor.take_reply(slate_id);
+        }
+        if transport == TRANSPORT_ID {
+            return self.http.take_reply(slate_id);
+        }
+        None
     }
 
     /// Finalizes `reply`, the answer a direct send over `transport` kept, and posts it.
@@ -282,6 +454,12 @@ impl Session {
         report: HttpReport,
     ) -> Result<(), WalletError> {
         self.ensure_unlocked()?;
+        let peer = self.peer_endpoint(
+            Arc::clone(&report),
+            TRANSPORT_ID,
+            ProofKey::Payments,
+            SealKeyKind::Web,
+        )?;
         let generation = self.http_starts.fetch_add(1, Ordering::Relaxed);
         {
             let mut slot = lock(&self.http_listener);
@@ -301,7 +479,7 @@ impl Session {
         let receiver = self.http_receiver(Arc::clone(&report), TRANSPORT_ID, ProofKey::Payments);
         let settings = ListenSettings::new(self::exposure(exposure), port, self.tuning.listen)
             .with_coinbase(self::coinbase_access(coinbase));
-        let listening = listen(settings, receiver).await;
+        let listening = listen_with(settings, receiver, peer).await;
         let handle = match listening {
             Ok(handle) => handle,
             Err(error) => {
@@ -362,11 +540,73 @@ impl Session {
             report,
             transport,
         });
-        let method = self
-            .method(transport)
+        Arc::new(Receiver::new(
+            host,
+            self.receiving_method(transport),
+            proof_key,
+        ))
+    }
+
+    /// The native endpoint (ADR 0052) of a listener socket: payments in envelopes sealed to the
+    /// wallet's listener key of `kind`, received over `transport` as [`Session::http_receiver`]
+    /// receives them, with payment proofs signed by `proof_key`. None while native slates are
+    /// off, so the socket answers as it does without them: no advert, no native routes.
+    pub(crate) fn peer_endpoint(
+        self: &Arc<Self>,
+        report: HttpReport,
+        transport: TransportId,
+        proof_key: ProofKey,
+        kind: SealKeyKind,
+    ) -> Result<Option<Arc<PeerEndpoint>>, WalletError> {
+        if !self.native_direct_active() {
+            return Ok(None);
+        }
+        let key = self.engine.listener_seal_key(kind)?;
+        let seal = *key.public_key().as_bytes();
+        let network = self.engine.config().network;
+        let host = Arc::new(SessionHost {
+            session: Arc::downgrade(self),
+            report,
+            transport,
+        });
+        let handler = DirectHandler::new(
+            host,
+            self.receiving_method(transport),
+            proof_key,
+            key,
+            network,
+            SharedRng::new(os_rng()?),
+        );
+        Ok(Some(Arc::new(PeerEndpoint::new(
+            Arc::new(handler),
+            seal,
+            network,
+        ))))
+    }
+
+    /// The method receipts over `transport` are recorded as.
+    fn receiving_method(&self, transport: TransportId) -> Arc<dyn Method> {
+        self.method(transport)
             .cloned()
-            .unwrap_or_else(|| Arc::new(self.http.clone()));
-        Arc::new(Receiver::new(host, method, proof_key))
+            .unwrap_or_else(|| Arc::new(self.http.clone()))
+    }
+
+    pub(crate) fn peer_pins(&self) -> Result<Vec<PeerPinView>, WalletError> {
+        Ok(self
+            .engine
+            .peer_pins(DEFAULT_ACCOUNT)?
+            .into_iter()
+            .map(|pin| PeerPinView {
+                origin: pin.origin,
+                seal_key: hex(&pin.seal_key),
+                first_seen_ms: pin.first_seen.as_millisecond(),
+                last_seen_ms: pin.last_seen.as_millisecond(),
+            })
+            .collect())
+    }
+
+    pub(crate) fn forget_peer_pin(&self, origin: &str) -> Result<bool, WalletError> {
+        Ok(self.engine.forget_peer_pin(DEFAULT_ACCOUNT, origin)?)
     }
 
     /// Stops the HTTP listener. `Stopped` is reported once its port is free.
