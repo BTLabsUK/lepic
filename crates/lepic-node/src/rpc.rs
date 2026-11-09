@@ -7,6 +7,7 @@
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
+use tracing::warn;
 
 use crate::error::{NodeError, NodeRejection, RejectionKind};
 
@@ -68,10 +69,15 @@ pub(crate) fn decode_response<T: DeserializeOwned>(
     }
     match (envelope.result, envelope.error) {
         (Some(HandlerResult::Ok(value)), _) => Ok(value),
-        (Some(HandlerResult::Err(error)), _) => Err(NodeError::Rejected {
-            method,
-            rejection: rejection_from(&error),
-        }),
+        (Some(HandlerResult::Err(error)), _) => {
+            let rejection = rejection_from(&error);
+            // The node's own text is not part of the error's message; the log keeps it, quoted,
+            // so a rejected push can be traced. A bare rejection such as `NotFound` is not logged.
+            if let Some(text) = &rejection.message {
+                warn!(method, kind = %rejection.kind, text = ?text, "node rejected the call");
+            }
+            Err(NodeError::Rejected { method, rejection })
+        }
         (None, Some(error)) => Err(NodeError::Rpc {
             method,
             code: error.code,
