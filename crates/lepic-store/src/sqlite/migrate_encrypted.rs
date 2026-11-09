@@ -15,10 +15,10 @@
 //! | `wallet.sqlite3.damaged-<unix>` (`-wal`) | a damaged plain database, set aside |
 //!
 //! The copy never writes the plain file, and its schema is never migrated before the switch:
-//! an older build must still read it. Every step can be interrupted and the next open
+//! an older build must be able to read it. Every step can be interrupted and the next open
 //! continues: before the rename of the copy nothing but the copy has changed and the copy
 //! starts again; after it, the encrypted database is complete and checked, and a plain file
-//! still beside it is recognised by the record of its contents and set aside.
+//! left beside it is recognised by the record of its contents and set aside.
 //!
 //! Callers hold the data directory's claim (`.lepic.lock`) across every function here.
 

@@ -9,7 +9,7 @@
 //! The marker's `version` stays 1 and carries no build version.
 //!
 //! The marked V2 and V3 codecs live in `lepic-legacy-slate` with the codecs they wrap
-//! (ADR 0052); the feature bits stay here, since pairing and contacts use them too.
+//! (ADR 0052); the feature bits are here, because pairing and contacts use them too.
 
 pub mod features;
 

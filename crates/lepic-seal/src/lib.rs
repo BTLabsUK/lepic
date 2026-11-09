@@ -5,8 +5,7 @@
 //! claims, names and addresses, the invite id. Pure: callers pass keys, the RNG and the time in.
 //!
 //! The format lives apart from the pairing flows of `lepic-contact`, so the direct endpoint and
-//! epic1 seal and open envelopes without them. `lepic-contact` re-exports every item here at the
-//! path it had before the split.
+//! epic1 seal and open envelopes without them. `lepic-contact` re-exports most items here.
 
 mod armor;
 mod card;

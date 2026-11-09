@@ -4,7 +4,7 @@
 //!
 //! The sealed envelope, its armor, contact cards and the other formats the envelope carries
 //! live in `lepic-seal`, so the direct endpoint and epic1 use them without the pairing flows.
-//! They are re-exported here at the paths they always had.
+//! Most of them are re-exported here.
 
 mod error;
 mod invite;
