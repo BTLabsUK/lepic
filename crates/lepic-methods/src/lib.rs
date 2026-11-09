@@ -1,8 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Transaction methods: the registry a consumer builds its methods into, and one module per
-//! method, each behind a feature of the same name.
+//! method, each behind a feature of the same name. Every method speaks the legacy wire formats,
+//! so each needs the `legacy` feature; without it only the registry is built and no method is
+//! found in it.
 
-pub use lepic_transport::{codecs, error, method, policy, transport};
+#[cfg(feature = "legacy")]
+pub use lepic_transport::codecs;
+pub use lepic_transport::{error, method, policy, transport};
 
 pub mod registry;
 

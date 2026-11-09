@@ -8,11 +8,14 @@ rust-version.workspace = true
 publish.workspace = true
 
 [features]
-default = ["file"]
-file = []
+default = ["file", "legacy"]
+# The legacy wire formats every method speaks at this step: V2/V3 JSON slates, the marker and
+# the JSON-RPC dialect of the foreign API (ADR 0052). Each method below needs it.
+legacy = ["lepic-transport/legacy", "dep:lepic-legacy-slate"]
+file = ["legacy"]
 epicbox = [
+    "legacy",
     "dep:lepic-epicbox",
-    "dep:lepic-legacy-slate",
     "dep:lepic-primitives",
     "dep:lepic-slate",
 ]
@@ -26,9 +29,9 @@ epicbox-wallet = [
     "dep:tracing",
 ]
 http = [
+    "legacy",
     "dep:lepic-keychain",
     "dep:lepic-legacy-rpc",
-    "dep:lepic-legacy-slate",
     "dep:lepic-primitives",
     "dep:lepic-slate",
     "dep:lepic-wallet",
@@ -61,7 +64,7 @@ lepic-node = { workspace = true, optional = true }
 lepic-primitives = { workspace = true, optional = true }
 lepic-slate = { workspace = true, optional = true }
 lepic-tor = { workspace = true, optional = true }
-lepic-transport.workspace = true
+lepic-transport = { workspace = true, default-features = false }
 lepic-wallet = { workspace = true, optional = true, default-features = false }
 serde = { workspace = true, optional = true, features = ["derive", "std"] }
 serde_json = { workspace = true, optional = true, features = ["std"] }
@@ -86,6 +89,7 @@ getrandom = { workspace = true, features = ["std"] }
 lepic-crypto.workspace = true
 lepic-epicbox = { workspace = true, features = ["mock-relay"] }
 lepic-legacy-rpc = { workspace = true, features = ["testing"] }
+lepic-primitives.workspace = true
 lepic-slate.workspace = true
 lepic-tor = { workspace = true, features = ["testing"] }
 serde_json = { workspace = true, features = ["std"] }

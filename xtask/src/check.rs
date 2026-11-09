@@ -3,7 +3,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result, bail};
 
-use crate::{cargo, ci_lint, deps_check, lockfiles, repo_lint, vectors};
+use crate::{cargo, ci_lint, deps_check, lockfiles, no_legacy, repo_lint, vectors};
 
 const STEPS: &[(&str, &[&str])] = &[
     // Run from the workspace root, `cargo fmt` checks every member; `--all` would also check the
@@ -61,6 +61,7 @@ pub(crate) fn run(root: &Path) -> Result<()> {
         ("repo-lint", repo_lint::run),
         ("lockfiles", lockfiles::run),
         ("vectors verify", vectors::verify),
+        ("no-legacy", no_legacy::run),
     ];
     for (name, gate) in gates {
         eprintln!("xtask check: {name}");

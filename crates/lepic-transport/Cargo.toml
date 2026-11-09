@@ -8,18 +8,34 @@ rust-version.workspace = true
 publish.workspace = true
 
 [features]
+default = ["legacy"]
+# The legacy slate formats: the plain and marked V2/V3 JSON codecs and the file transport
+# (ADR 0052). Without it the crate holds only the traits, the method port and format policy.
+legacy = ["dep:lepic-legacy-slate", "dep:serde", "dep:serde_json", "dep:tokio"]
 # An in-memory transport pair for engine tests.
 loopback = []
 
 [dependencies]
 lepic-crypto.workspace = true
-lepic-legacy-slate.workspace = true
+lepic-legacy-slate = { workspace = true, optional = true }
 lepic-primitives.workspace = true
 lepic-slate.workspace = true
-serde = { workspace = true, features = ["derive"] }
-serde_json = { workspace = true, features = ["std", "raw_value"] }
+serde = { workspace = true, optional = true, features = ["derive"] }
+serde_json = { workspace = true, optional = true, features = ["std", "raw_value"] }
 thiserror.workspace = true
-tokio = { workspace = true, features = ["fs", "io-util"] }
+tokio = { workspace = true, optional = true, features = ["fs", "io-util"] }
+
+[[test]]
+name = "bounded_decoding"
+required-features = ["legacy"]
+
+[[test]]
+name = "file"
+required-features = ["legacy"]
+
+[[test]]
+name = "vectors"
+required-features = ["legacy"]
 
 [dev-dependencies]
 tempfile.workspace = true

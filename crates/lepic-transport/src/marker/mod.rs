@@ -13,4 +13,5 @@
 
 pub mod features;
 
+#[cfg(feature = "legacy")]
 pub use lepic_legacy_slate::marker::{v2, v3};

@@ -11,7 +11,9 @@ pub use lepic_slate::codec::EncodeContext;
 use lepic_slate::codec::{CodecId, WireSlate};
 use lepic_slate::error::DecodeError;
 use lepic_slate::model::Slate;
+use lepic_slate::registry::CodecRegistry;
 
+#[cfg(feature = "legacy")]
 use crate::codecs;
 use crate::error::{FormatError, TransportError};
 use crate::policy::encode_with;
@@ -88,6 +90,19 @@ pub struct Encoded {
     pub codec: CodecId,
 }
 
+/// The codecs the [`Method`] defaults use: the plain legacy codecs at the network's base fee.
+#[cfg(feature = "legacy")]
+fn default_codecs(network: Network) -> CodecRegistry {
+    codecs::legacy(network.params().default_base_fee())
+}
+
+/// Without the legacy formats the defaults hold no codec: decoding reports an unknown format
+/// and encoding a codec that is not registered.
+#[cfg(not(feature = "legacy"))]
+fn default_codecs(_network: Network) -> CodecRegistry {
+    CodecRegistry::new()
+}
+
 /// The method's side of a slate. The defaults speak plain legacy slates through the method's
 /// format policy; a method with marker codecs overrides the encoders.
 pub trait Method: Transport {
@@ -96,8 +111,7 @@ pub trait Method: Transport {
 
     /// Decodes `wire` with the method's detection order at the network's base fee.
     fn decode(&self, network: Network, wire: &WireSlate) -> Result<Slate, DecodeError> {
-        self.policy()
-            .decode(&codecs::legacy(network.params().default_base_fee()), wire)
+        self.policy().decode(&default_codecs(network), wire)
     }
 
     /// What `wire` says about its sender.
@@ -112,7 +126,7 @@ pub trait Method: Transport {
         context: &EncodeContext,
         sending: &Sending,
     ) -> Result<Encoded, FormatError> {
-        let codecs = codecs::legacy(sending.network.params().default_base_fee());
+        let codecs = default_codecs(sending.network);
         let encoding = self.policy().for_new_slate(slate, context);
         let wire = encode_with(&codecs, encoding, slate, context)?;
         Ok(Encoded {
@@ -129,7 +143,7 @@ pub trait Method: Transport {
         sending: &Sending,
         _from: &SenderFacts,
     ) -> Result<Encoded, FormatError> {
-        let codecs = codecs::legacy(sending.network.params().default_base_fee());
+        let codecs = default_codecs(sending.network);
         let encoding = self.policy().for_reply(slate, context);
         let wire = encode_with(&codecs, encoding, slate, context)?;
         Ok(Encoded {

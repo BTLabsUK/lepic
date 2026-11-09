@@ -11,6 +11,7 @@ mod fuzz;
 mod install;
 mod lockfiles;
 mod mobile;
+mod no_legacy;
 mod repo_lint;
 mod soak;
 mod sources;
@@ -28,7 +29,7 @@ const USAGE: &str = "usage: cargo xtask <command>
 commands:
   budget      [--measurements <file.json>]: size, restore and drain against docs/budgets.md
   check       fmt, clippy, tests, cargo deny, deps-check, ci-lint, repo-lint, the conformance
-              and fuzz lockfiles, and vectors verify
+              and fuzz lockfiles, vectors verify and no-legacy
   ci-lint     workflow pins, read-only token permissions and checkout credentials
   deps-check  crate edges and banned crates against docs/architecture.md
   fuzz        (--smoke | --full) [--target <name>]... [--jobs <n>]: seed and run the fuzz targets
@@ -38,6 +39,8 @@ commands:
               lepic-ffi into <dir>/<triple>/ with a SHA256SUMS, default dist/native; --mock adds
               the scripted node and relay, default dist/native-mock; --no-tor leaves the
               wallet's tor out (ADR 0026), default dist/native-no-tor
+  no-legacy   the crates that build without the legacy formats (ADR 0052), each checked
+              without default features, and the method registry's unit tests
   repo-lint   workspace lints and unsafe code, pure crates, the vendored secp256k1-zkp, the bridge
               fingerprint in crates/lepic-ffi/bridge.sha256, interop images
   soak        --iterations <n> [--seed <s>] [--jobs <j>]: randomized differential soak
@@ -73,6 +76,7 @@ fn run() -> Result<()> {
         "fuzz" => fuzz::run(&root, rest),
         "install" => install::run(&root, rest),
         "mobile" => mobile::run(&root, rest),
+        "no-legacy" => no_legacy::run(&root),
         "repo-lint" => repo_lint::run(&root),
         "soak" => soak::run(&root, rest),
         "upstream-drift" => upstream::run(&root),

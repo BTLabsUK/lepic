@@ -72,38 +72,91 @@ mod tests {
     // Tests may unwrap (docs/rules.md).
     #![allow(clippy::unwrap_used)]
 
-    use lepic_transport::file::{FILE, FileTransport};
+    use lepic_slate::codec::{CodecId, EncodeContext};
+    use lepic_slate::model::Slate;
+    use lepic_transport::method::Carries;
+    use lepic_transport::policy::{Encoding, FormatPolicy};
 
     use super::*;
+
+    const STUB: TransportId = TransportId::new("stub");
+
+    /// A method with no codecs of its own, so the registry is tested without any wire format.
+    struct Stub;
+
+    impl FormatPolicy for Stub {
+        fn accepted(&self) -> &[CodecId] {
+            &[]
+        }
+
+        fn for_new_slate(&self, _slate: &Slate, _context: &EncodeContext) -> Encoding {
+            Encoding {
+                codec: CodecId::new("stub"),
+                legacy_header: None,
+            }
+        }
+
+        fn for_reply(&self, slate: &Slate, context: &EncodeContext) -> Encoding {
+            self.for_new_slate(slate, context)
+        }
+    }
+
+    impl lepic_transport::transport::Transport for Stub {
+        fn id(&self) -> TransportId {
+            STUB
+        }
+
+        fn policy(&self) -> &dyn FormatPolicy {
+            self
+        }
+    }
+
+    impl Method for Stub {
+        fn carries(&self) -> Carries {
+            Carries::default()
+        }
+
+        fn notice_lengths(&self) -> &'static [usize] {
+            &[]
+        }
+    }
 
     #[test]
     fn a_registered_method_is_found_by_id() {
         let mut methods = Methods::new();
-        methods
-            .register(Arc::new(FileTransport::default()))
-            .unwrap();
-        assert_eq!(methods.get(FILE).map(|method| method.id()), Some(FILE));
-        assert_eq!(methods.ids(), [FILE]);
+        methods.register(Arc::new(Stub)).unwrap();
+        assert_eq!(methods.get(STUB).map(|method| method.id()), Some(STUB));
+        assert_eq!(methods.ids(), [STUB]);
         assert_eq!(methods.iter().count(), 1);
     }
 
     #[test]
     fn an_unknown_id_is_absent() {
         let methods = Methods::new();
-        assert!(methods.get(FILE).is_none());
+        assert!(methods.get(STUB).is_none());
         assert!(methods.ids().is_empty());
     }
 
     #[test]
     fn a_duplicate_id_is_refused() {
         let mut methods = Methods::new();
-        methods
-            .register(Arc::new(FileTransport::default()))
-            .unwrap();
-        let error = methods
-            .register(Arc::new(FileTransport::default()))
-            .unwrap_err();
-        assert_eq!(error, RegistryError::DuplicateTransport { transport: FILE });
-        assert_eq!(methods.ids(), [FILE]);
+        methods.register(Arc::new(Stub)).unwrap();
+        let error = methods.register(Arc::new(Stub)).unwrap_err();
+        assert_eq!(error, RegistryError::DuplicateTransport { transport: STUB });
+        assert_eq!(methods.ids(), [STUB]);
+    }
+
+    /// Without the legacy formats the method defaults know no codec: a slate is refused as an
+    /// unknown format rather than decoded.
+    #[cfg(not(feature = "legacy"))]
+    #[test]
+    fn without_legacy_the_defaults_decode_nothing() {
+        use lepic_primitives::params::Network;
+        use lepic_slate::codec::{MediaType, WireSlate};
+        use lepic_slate::error::DecodeError;
+
+        let wire = WireSlate::text(MediaType::JSON, "{}".to_owned());
+        let decoded = Method::decode(&Stub, Network::Mainnet, &wire);
+        assert!(matches!(decoded, Err(DecodeError::UnknownFormat)));
     }
 }

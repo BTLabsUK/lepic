@@ -192,6 +192,7 @@ impl Mailbox {
 }
 
 #[cfg(test)]
+#[cfg(feature = "legacy")]
 mod tests {
     use lepic_slate::codec::MediaType;
 
