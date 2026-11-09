@@ -290,8 +290,8 @@ account, amount, destination or transport differ. `lepic tx show --slate-id UUID
 | `tx list [-a LABEL]` | Lists an account's transactions |
 | `tx show TX_ID` or `tx show --slate-id UUID` | Shows one transaction |
 
-`tx release` works once a refresh 1440 blocks after the send was finalized still finds its kernel
-nowhere on chain; `tx show` says when. The node is asked once more first, and the release is
+`tx release` works once a refresh at least 1440 blocks after the send was finalized finds its
+kernel nowhere on chain; `tx show` says when. The node is asked once more first, and the release is
 refused while the node's chain or pool holds the transaction. If another node mines it later, a
 refresh within 10080 blocks of the release finds it and shows it `confirmed`.
 
