@@ -3,8 +3,8 @@
 // Ported from EpicCash/epic-wallet impls/src/adapters/file.rs (Apache-2.0); see NOTICE and
 // upstream.toml.
 
-//! The file method: the user carries a slate file between wallets. Reads files as the file
-//! method of `epic-wallet` `v4.0.2` does (`docs/compat/legacy-slates.md`) and writes V3 (ADR 0015).
+//! The file method: the user carries a slate file between wallets. Reads the files the file
+//! method of `epic-wallet` writes (`docs/compat/legacy-slates.md`) and writes V3 (ADR 0015).
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
