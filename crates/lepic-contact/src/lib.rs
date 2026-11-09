@@ -32,7 +32,7 @@ pub use lepic_seal::{
     MAX_NAME_LEN, MAX_REFERENCE_LEN, MailboxAddress, MessageType, NATIVE_SLATE, Network, Opened,
     PaymentFile, Purpose, Reference, RelayHost, SEALED_FILE_EXTENSION, SUITE, SealedEnvelope,
     SigningKey, TxContent, TxKey, TxOpened, VerifyingKey, armor, armor_tx, classify, dearmor,
-    decode_content, looks_sealed, seal, seal_psk, seal_tx,
+    decode_content, looks_sealed, seal, seal_padded, seal_psk, seal_psk_padded, seal_tx,
 };
 pub use pairing::{
     Commitment, Confirm, ConfirmBody, ConfirmCode, InviteId, MAX_PAIRING_ENVELOPE_LEN, Nonce,

@@ -8,7 +8,7 @@ use lepic_wallet::contact_link::{link_slate, slate_contact, tx_contact};
 use std::time::Duration;
 
 use jiff::Timestamp;
-use lepic_contact::{Capabilities, ContactCard, Content, MessageType, Purpose, seal};
+use lepic_contact::{Capabilities, ContactCard, Content, MessageType, Purpose};
 use lepic_node::{NodeApi, Propagation};
 use lepic_primitives::amount::Amount;
 use lepic_slate::codec::{MediaType, WireSlate};
@@ -164,7 +164,8 @@ fn contact_sender_key(contact_id: ContactId) -> String {
 
 /// `content` with our current card, sealed at `now` and signed to the contact of `record` of
 /// `class`. With `native`, `content` is a slate as V3 JSON and goes as `lepic.v1` in a type
-/// `0A` envelope; a private pairing never carries one.
+/// `0A` envelope; a private pairing never carries one. `padded` pads a type 01 slate, as
+/// [`super::native::seal_v1`] does.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn seal_to_record(
     keychain: &lepic_keychain::Keychain,
@@ -173,6 +174,7 @@ pub(crate) fn seal_to_record(
     class: &super::private::RecordClass,
     content: Content,
     native: bool,
+    padded: bool,
     now: Timestamp,
     rng: &mut LockedRng<'_>,
 ) -> Result<Vec<u8>, ContactError> {
@@ -193,32 +195,47 @@ pub(crate) fn seal_to_record(
             };
             return super::native::seal_native(network, &card, content, &signing_key(&keys), rng);
         }
-        None => seal(
-            net,
-            card.enc_key(),
-            card.hint_rule(),
-            &Content {
+        None => {
+            let content = Content {
                 card: Some(own),
                 ..content
-            },
-            Some(&signing_key(&keys)),
-            rng,
-        ),
+            };
+            return super::native::seal_v1(
+                padded,
+                network,
+                &card,
+                &content,
+                Some(&signing_key(&keys)),
+                rng,
+            );
+        }
         // A private pairing's card never changes through its channel.
         Some(secrets) => {
             let channel = secrets
                 .channel
                 .as_ref()
                 .ok_or(ContactError::UnknownContact)?;
-            lepic_contact::seal_psk(
-                net,
-                card.enc_key(),
-                card.hint_rule(),
-                &content,
-                Some(&signing_key(&keys)),
-                channel,
-                rng,
-            )
+            if padded {
+                lepic_contact::seal_psk_padded(
+                    net,
+                    card.enc_key(),
+                    card.hint_rule(),
+                    &content,
+                    Some(&signing_key(&keys)),
+                    channel,
+                    rng,
+                )
+            } else {
+                lepic_contact::seal_psk(
+                    net,
+                    card.enc_key(),
+                    card.hint_rule(),
+                    &content,
+                    Some(&signing_key(&keys)),
+                    channel,
+                    rng,
+                )
+            }
         }
     }
     .map_err(ContactError::Encode)
@@ -587,6 +604,7 @@ where
             &class,
             content,
             native,
+            self.wallet.config().native_direct,
             now,
             &mut rng,
         )

@@ -34,7 +34,8 @@ pub use ed25519_dalek::{SigningKey, VerifyingKey};
 pub use envelope::{
     Content, ENVELOPE_VERSION, HEADER_LEN, KeyClass, MAGIC, MAX_BODY_LEN, MAX_ENVELOPE_LEN,
     MessageType, NATIVE_SLATE, Opened, PADDING_FLOOR, Purpose, SUITE, SealedEnvelope,
-    decode_content, decode_tx_content, pad_target, padme, seal, seal_psk,
+    decode_content, decode_tx_content, pad_target, padme, seal, seal_padded, seal_psk,
+    seal_psk_padded,
 };
 pub use error::{DecodeError, EncodeError, KeyError, Malformed, TextError};
 pub use hint::{Hint, HintRule};

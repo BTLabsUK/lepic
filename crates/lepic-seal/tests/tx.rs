@@ -17,7 +17,7 @@ use lepic_seal::{
     ArmorMarker, Content, DecodeError, EncPublicKey, EncSecretKey, EncodeError, HEADER_LEN,
     HintKey, HintRule, KeyClass, MAX_BODY_LEN, Malformed, MessageType, Network, PADDING_FLOOR,
     ReplyMailbox, SealedEnvelope, SigningKey, TxContent, TxKey, armor, armor_tx, dearmor_marked,
-    pad_target, seal, seal_tx,
+    pad_target, seal, seal_padded, seal_tx,
 };
 
 const NET: Network = Network::Floonet;
@@ -122,7 +122,7 @@ fn padding_near_the_limit_never_refuses_a_body_within_it() {
 #[test]
 fn small_slates_pad_to_the_floor_and_open_with_the_rfc_0002_reader() {
     let slate = Content::new(MessageType::Slate, b"{}".to_vec());
-    let envelope = seal(
+    let envelope = seal_padded(
         NET,
         &recipient().public_key(),
         HintRule::ReplyKey,
@@ -140,7 +140,7 @@ fn small_slates_pad_to_the_floor_and_open_with_the_rfc_0002_reader() {
 
     // Other types are not padded.
     let notice = Content::new(MessageType::Notice, b"{}".to_vec());
-    let envelope = seal(
+    let envelope = seal_padded(
         NET,
         &recipient().public_key(),
         HintRule::ReplyKey,
@@ -150,6 +150,36 @@ fn small_slates_pad_to_the_floor_and_open_with_the_rfc_0002_reader() {
     )
     .unwrap();
     assert!(envelope.len() < PADDING_FLOOR);
+}
+
+/// With native slates off a slate is sealed as RFC 0002 wrote it: no padding field, so its
+/// length follows the body, and the padded form of a build with them on opens the same.
+#[test]
+fn a_slate_sealed_with_seal_has_no_padding_and_the_padded_one_opens_alike() {
+    let slate = Content::new(MessageType::Slate, b"{}".to_vec());
+    let seal_with = |padded: bool| {
+        let mut rng = ScriptedRng::seeded(1);
+        let to = recipient().public_key();
+        if padded {
+            seal_padded(NET, &to, HintRule::ReplyKey, &slate, None, &mut rng)
+        } else {
+            seal(NET, &to, HintRule::ReplyKey, &slate, None, &mut rng)
+        }
+        .unwrap()
+    };
+    let plain = seal_with(false);
+    let padded = seal_with(true);
+    // Type 01 field (4) and body (3 + 2) only.
+    assert_eq!(plain.len(), OVERHEAD + 4 + 3 + 2);
+    assert_eq!(padded.len(), PADDING_FLOOR + OVERHEAD);
+    for envelope in [&plain, &padded] {
+        let opened = SealedEnvelope::decode(envelope, NET)
+            .unwrap()
+            .open(&recipient())
+            .unwrap();
+        assert_eq!(opened.content.kind, MessageType::Slate);
+        assert_eq!(opened.content.body, b"{}");
+    }
 }
 
 #[test]

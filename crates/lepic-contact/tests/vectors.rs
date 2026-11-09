@@ -239,11 +239,8 @@ fn envelopes_open_and_seal_byte_for_byte() {
             "invite_id" => continue,
             other => panic!("unknown hint kind {other}"),
         };
-        // A slate is sealed padded now (RFC 0003 5.7); these vectors hold unpadded slates, and
+        // These vectors hold the unpadded slates `seal` writes with native slates off;
         // `lepic-seal` reseals the padded ones of `epictx_envelopes.json`.
-        if opened.content.kind == MessageType::Slate {
-            continue;
-        }
         // Fields from 0x80 up are read and ignored; this crate never writes them.
         if !vector["opened"]["ignored_extra"]
             .as_array()

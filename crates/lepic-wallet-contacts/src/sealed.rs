@@ -10,7 +10,7 @@ use std::time::Duration;
 use jiff::Timestamp;
 use lepic_contact::{
     Capabilities, ContactCard, Content, EncPublicKey, EncSecretKey, Hint, HintKey, HintRule,
-    MessageType, Opened, PaymentFile, Purpose, SealedEnvelope, armor, classify, dearmor, seal,
+    MessageType, Opened, PaymentFile, Purpose, SealedEnvelope, armor, classify, dearmor, seal, seal_padded,
 };
 use lepic_native_slate::{NativeSlate, SlateView};
 use lepic_node::{NodeApi, Propagation};
@@ -323,15 +323,14 @@ where
                             &mut rng,
                         )?
                     } else {
-                        seal(
-                            net,
-                            card.enc_key(),
-                            card.hint_rule(),
+                        super::native::seal_v1(
+                            native_direct,
+                            network,
+                            &card,
                             &content,
                             Some(&signing_key(&keys)),
                             &mut rng,
-                        )
-                        .map_err(ContactError::Encode)?
+                        )?
                     };
                     drop(guard);
                     link_tx(repos, tx_id, contact_id)?;
@@ -784,6 +783,7 @@ where
         if let Some(contact_id) = contact {
             let network = self.wallet.config().network;
             let net = contact_network(network);
+            let native_direct = self.wallet.config().native_direct;
             let session = self.wallet.session()?;
             let body = reply.as_bytes().to_vec();
             let armored = self
@@ -820,15 +820,14 @@ where
                                 &mut rng,
                             )?
                         } else {
-                            seal(
-                                net,
-                                card.enc_key(),
-                                card.hint_rule(),
+                            super::native::seal_v1(
+                                native_direct,
+                                network,
+                                &card,
                                 &content,
                                 Some(&signing_key(&keys)),
                                 &mut rng,
-                            )
-                            .map_err(ContactError::Encode)?
+                            )?
                         };
                         drop(guard);
                         link_tx(repos, tx_id, contact_id)?;
@@ -856,14 +855,14 @@ where
         let Ok(key) = EncPublicKey::from_bytes(key) else {
             return Ok(None);
         };
-        let envelope = seal(
-            contact_network(self.wallet.config().network),
-            &key,
-            HintRule::ReplyKey,
-            &Content::new(MessageType::Slate, reply.as_bytes().to_vec()),
-            None,
-            &mut LockedRng(&mut **self.wallet.ports().rng.lock()),
-        )
+        let net = contact_network(self.wallet.config().network);
+        let content = Content::new(MessageType::Slate, reply.as_bytes().to_vec());
+        let rng = &mut LockedRng(&mut **self.wallet.ports().rng.lock());
+        let envelope = if self.wallet.config().native_direct {
+            seal_padded(net, &key, HintRule::ReplyKey, &content, None, rng)
+        } else {
+            seal(net, &key, HintRule::ReplyKey, &content, None, rng)
+        }
         .map_err(ContactError::Encode)?;
         Ok(Some(armor(&envelope)))
     }

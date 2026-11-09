@@ -24,7 +24,7 @@ use lepic_seal::{
     ArmorMarker, ClassifyError, DecodeError, EncSecretKey, EncodeError, HintKey, HintRule,
     KeyClass, MAX_BODY_LEN, Malformed, MessageType, NATIVE_SLATE, Network, PaymentFile,
     ReplyMailbox, SUITE, SealedEnvelope, SigningKey, TxContent, TxKey, TxOpened, armor, armor_tx,
-    classify, dearmor, dearmor_marked, pad_target, padme, seal, seal_tx,
+    classify, dearmor, dearmor_marked, pad_target, padme, seal_padded, seal_tx,
 };
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -363,7 +363,8 @@ fn reseal(
         seal_tx(net, &recipient_pk, key, &content, signer.as_ref(), &mut rng).unwrap()
     } else {
         let content = sealed.open(recipient).unwrap().content;
-        seal(
+        // The kit's slates are the padded form of RFC 0003 5.7.
+        seal_padded(
             net,
             &recipient_pk,
             rule.unwrap(),

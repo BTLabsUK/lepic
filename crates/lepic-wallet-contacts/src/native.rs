@@ -11,7 +11,7 @@
 
 use lepic_contact::{
     ContactCard, Content, DecodeError, EncSecretKey, KeyClass, MessageType, Opened, SealedEnvelope,
-    SigningKey, TxContent, TxKey, TxOpened, VerifyingKey, armor, armor_tx, seal_tx,
+    SigningKey, TxContent, TxKey, TxOpened, VerifyingKey, armor, armor_tx, seal, seal_padded, seal_tx,
 };
 use lepic_legacy_slate::v3_json::LEGACY_V3_JSON;
 use lepic_native_slate::{NativeSlate, Tail};
@@ -57,6 +57,26 @@ pub(crate) fn armor_slate(envelope: &[u8], native: bool) -> String {
     } else {
         armor(envelope)
     }
+}
+
+/// `content` sealed to `card` in a type 01 envelope, as RFC 0002 wrote it. With `padded`, which
+/// the host sets when it sends native slates, a slate gets the padding field of RFC 0003 5.7;
+/// with native slates off the bytes are those of a build without them.
+pub(crate) fn seal_v1(
+    padded: bool,
+    network: Network,
+    card: &ContactCard,
+    content: &Content,
+    signer: Option<&SigningKey>,
+    rng: &mut LockedRng<'_>,
+) -> Result<Vec<u8>, ContactError> {
+    let net = super::keys::contact_network(network);
+    if padded {
+        seal_padded(net, card.enc_key(), card.hint_rule(), content, signer, rng)
+    } else {
+        seal(net, card.enc_key(), card.hint_rule(), content, signer, rng)
+    }
+    .map_err(ContactError::Encode)
 }
 
 /// `content`, a slate as V3 JSON, sealed to `card` as `lepic.v1` in a type `0A` envelope and

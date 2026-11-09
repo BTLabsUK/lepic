@@ -332,7 +332,8 @@ fn signing_input(header: &[u8; HEADER_LEN], recipient: &EncPublicKey, fields: &[
 
 /// Seals `content` to `recipient`. With `signer` the envelope is signed (tags 08 and FF), and a
 /// card in it must carry the signer's key; without, it is anonymous. Encapsulation randomness
-/// comes from `rng`.
+/// comes from `rng`. A slate goes out as RFC 0002 wrote it, with no padding field; see
+/// [`seal_padded`].
 pub fn seal<R: CryptoRng>(
     network: Network,
     recipient: &EncPublicKey,
@@ -341,7 +342,25 @@ pub fn seal<R: CryptoRng>(
     signer: Option<&SigningKey>,
     rng: &mut R,
 ) -> Result<Vec<u8>, EncodeError> {
-    seal_with(network, recipient, hint_rule, content, signer, None, rng)
+    seal_with(
+        network, recipient, hint_rule, content, signer, None, false, rng,
+    )
+}
+
+/// Seals as [`seal`] does, and pads a slate (type 01) as RFC 0003 5.7 says. A host calls it
+/// with native slates on and [`seal`] with them off, so that the bytes with them off stay those
+/// of a build without them. Readers take both. Any other type is sealed as by [`seal`].
+pub fn seal_padded<R: CryptoRng>(
+    network: Network,
+    recipient: &EncPublicKey,
+    hint_rule: HintRule<'_>,
+    content: &Content,
+    signer: Option<&SigningKey>,
+    rng: &mut R,
+) -> Result<Vec<u8>, EncodeError> {
+    seal_with(
+        network, recipient, hint_rule, content, signer, None, true, rng,
+    )
 }
 
 /// Seals as [`seal`] does, in HPKE PSK mode under `psk`, with suite
@@ -363,10 +382,34 @@ pub fn seal_psk<R: CryptoRng>(
         content,
         signer,
         Some(psk.psk_bytes()),
+        false,
         rng,
     )
 }
 
+/// Seals as [`seal_psk`] does, and pads a slate as [`seal_padded`] does.
+pub fn seal_psk_padded<R: CryptoRng>(
+    network: Network,
+    recipient: &EncPublicKey,
+    hint_rule: HintRule<'_>,
+    content: &Content,
+    signer: Option<&SigningKey>,
+    psk: &(impl PresharedKey + ?Sized),
+    rng: &mut R,
+) -> Result<Vec<u8>, EncodeError> {
+    seal_with(
+        network,
+        recipient,
+        hint_rule,
+        content,
+        signer,
+        Some(psk.psk_bytes()),
+        true,
+        rng,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
 fn seal_with<R: CryptoRng>(
     network: Network,
     recipient: &EncPublicKey,
@@ -374,6 +417,7 @@ fn seal_with<R: CryptoRng>(
     content: &Content,
     signer: Option<&SigningKey>,
     psk: Option<&[u8; 32]>,
+    pad_slate: bool,
     rng: &mut R,
 ) -> Result<Vec<u8>, EncodeError> {
     let inner = Inner {
@@ -389,7 +433,7 @@ fn seal_with<R: CryptoRng>(
         address_proof: content.address_proof.as_ref(),
         features: content.features,
         domain: content.domain.as_ref(),
-        pad: content.kind == MessageType::Slate,
+        pad: pad_slate && content.kind == MessageType::Slate,
     };
     seal_inner(
         network,
@@ -418,7 +462,8 @@ pub(crate) struct Inner<'c> {
     pub address_proof: Option<&'c [u8; 32]>,
     pub features: Option<u32>,
     pub domain: Option<&'c DomainClaim>,
-    /// Whether to write the padding field: always for a slate.
+    /// Whether to write the padding field: for a `0A` slate envelope always, for a type 01 one
+    /// when the host asks for it.
     pub pad: bool,
 }
 
