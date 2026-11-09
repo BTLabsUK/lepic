@@ -415,6 +415,8 @@ pub struct SendArgs {
     pub spend: SpendArgs,
     #[command(flatten)]
     pub slate_id: SendSlateIdArg,
+    #[command(flatten)]
+    pub legacy: LegacyArg,
     /// Which computers an HTTP send may reach; set by the API, never on the command line.
     #[arg(skip)]
     pub reach: HttpReach,
@@ -474,6 +476,8 @@ pub struct ResendArgs {
     pub tor: TorBinaryArgs,
     #[command(flatten)]
     pub fluff: FluffArg,
+    #[command(flatten)]
+    pub legacy: LegacyArg,
 }
 
 #[derive(Debug, Args)]
@@ -571,6 +575,14 @@ pub struct FinalizeArgs {
     pub slate: SlateFileArg,
     #[command(flatten)]
     pub fluff: FluffArg,
+}
+
+#[derive(Debug, Args)]
+pub struct LegacyArg {
+    /// Send an http(s):// or onion payee the V2 or V3 slate every wallet takes, even when its
+    /// listener offers native slates
+    #[arg(long)]
+    pub legacy: bool,
 }
 
 #[derive(Debug, Args)]

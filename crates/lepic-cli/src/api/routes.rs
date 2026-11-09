@@ -21,7 +21,7 @@ use crate::cli::{
     DEFAULT_CONTACT_NAME, DomainArgs, DomainCommand, EpicboxCommand, FluffArg, HttpReach,
     InPersonArgs, InPersonCodeArg, InPersonCommand, InPersonFinalizeArgs, InPersonInvoiceArgs,
     InPersonPayArgs, InPersonPostArgs, InPersonReadArgs, InPersonReceiveArgs, InPersonSendArgs,
-    InPersonSlateArg, InPersonTakeArgs, InviteExpiryArg, KeysArg, ListArgs, ListingArgs,
+    InPersonSlateArg, InPersonTakeArgs, InviteExpiryArg, KeysArg, LegacyArg, ListArgs, ListingArgs,
     MAX_DRAIN_DAYS, MessageArg, NodeCommand, OnOffArg, OutFileArg, PeerArgs, PeerCommand,
     PeerForgetArgs, PlainHttpArg, PostArgs, ProfileCommand, ProfileSetArgs, SasArg, SelectionArg,
     SendArgs, SendDestinationArgs, SendSlateIdArg, SpendArgs, TorBinaryArgs, TxCommand, TxIdArgs,
@@ -74,6 +74,10 @@ pub(crate) struct SendBody {
     min_confirmations: Option<u64>,
     /// Outputs the change is split into.
     change_outputs: Option<usize>,
+    /// For an `http` send: the V2 or V3 slate every wallet takes, even when the listener offers
+    /// native slates.
+    #[serde(default)]
+    legacy: bool,
 }
 
 /// A slate a sender gave this wallet.
@@ -589,6 +593,11 @@ pub(crate) async fn transaction(api: &Api<'_>, request: Request) -> Answer {
 /// Over the owner TLS listener an `http` send goes to other computers only: a URL whose host is
 /// `localhost`, a loopback address or an unspecified address is refused with a usage problem,
 /// and a host that resolves only to such addresses fails to connect.
+/// With `native_direct` on, an `http` send to a listener that advertises a native endpoint goes
+/// there as a native slate, and the listener's key is pinned for the account; a pinned listener
+/// that shows another key, or no endpoint, stops the send before anything is stored. A native
+/// post always goes to other computers only. `legacy` sends the V2 or V3 slate instead, and
+/// `dialect` in the report says which went.
 #[utoipa::path(
     post,
     path = "/v1/transactions",
@@ -658,6 +667,9 @@ pub(crate) async fn send(api: &Api<'_>, request: Request) -> Answer {
         },
         slate_id: SendSlateIdArg {
             slate_id: body.slate_id,
+        },
+        legacy: LegacyArg {
+            legacy: body.legacy,
         },
         reach,
     };

@@ -2141,7 +2141,7 @@
           "transactions"
         ],
         "summary": "Send a slate",
-        "description": "The slate goes to the address or URL in `to` over the method named in `method`, Epicbox\nwhen absent. The API sends over `epicbox` and `http`. With a `slate_id`, a repeated request is safe: it reports the first send.\nOver the owner TLS listener an `http` send goes to other computers only: a URL whose host is\n`localhost`, a loopback address or an unspecified address is refused with a usage problem,\nand a host that resolves only to such addresses fails to connect.",
+        "description": "The slate goes to the address or URL in `to` over the method named in `method`, Epicbox\nwhen absent. The API sends over `epicbox` and `http`. With a `slate_id`, a repeated request is safe: it reports the first send.\nOver the owner TLS listener an `http` send goes to other computers only: a URL whose host is\n`localhost`, a loopback address or an unspecified address is refused with a usage problem,\nand a host that resolves only to such addresses fails to connect.\nWith `native_direct` on, an `http` send to a listener that advertises a native endpoint goes\nthere as a native slate, and the listener's key is pinned for the account; a pinned listener\nthat shows another key, or no endpoint, stops the send before anything is stored. A native\npost always goes to other computers only. `legacy` sends the V2 or V3 slate instead, and\n`dialect` in the report says which went.",
         "operationId": "send",
         "requestBody": {
           "content": {
@@ -5609,6 +5609,10 @@
             "description": "Outputs the change is split into.",
             "minimum": 0
           },
+          "legacy": {
+            "type": "boolean",
+            "description": "For an `http` send: the V2 or V3 slate every wallet takes, even when the listener offers\nnative slates."
+          },
           "message": {
             "type": [
               "string",
@@ -5670,6 +5674,13 @@
           "destination": {
             "type": "string",
             "description": "The Epicbox address, the file path or the HTTP endpoint the slate went to."
+          },
+          "dialect": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "How the slate went to an HTTP or Tor listener: `native` through its `/v1/peer/slates`,\nor `legacy` through its foreign API. Absent for other transports and for a repeat."
           },
           "fee": {
             "type": "string"

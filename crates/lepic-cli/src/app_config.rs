@@ -10,7 +10,7 @@ use std::time::Duration;
 
 use lepic_epicbox::tunnel::{OnionRoute, TunnelTimings};
 use lepic_epicbox::{Backoff, ClientTimings, Domain};
-use lepic_methods::http::ListenLimits;
+use lepic_methods::http::{ListenLimits, PeerClientSettings};
 use lepic_methods::tor::{OnionClientSettings, TorNetworkTimings, TorTimings};
 use lepic_node::{CallPolicy, HttpSettings, MAX_RESPONSE_BYTES, RetryPolicy};
 use lepic_wallet::NodeEndpoint;
@@ -97,6 +97,24 @@ impl Tuning {
             connect_timeout: self.tor_connect,
             request_timeout: self.tor_request,
             max_response_bytes: lepic_methods::http::MAX_BODY_LEN,
+        }
+    }
+
+    /// The limits of posts to native endpoints over HTTP: the timeouts of an HTTP send.
+    pub fn http_peer(&self) -> PeerClientSettings {
+        PeerClientSettings {
+            connect_timeout: self.send.connect_timeout,
+            request_timeout: self.send.request_timeout,
+            ..PeerClientSettings::default()
+        }
+    }
+
+    /// The limits of posts to native endpoints behind onions: the timeouts of a Tor send.
+    pub fn tor_peer(&self) -> PeerClientSettings {
+        PeerClientSettings {
+            connect_timeout: self.tor_connect,
+            request_timeout: self.tor_request,
+            ..PeerClientSettings::default()
         }
     }
 }

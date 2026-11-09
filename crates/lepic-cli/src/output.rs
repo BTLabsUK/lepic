@@ -227,6 +227,10 @@ pub struct SendReport {
     /// Whether a delivery attempt got the slate to the other party. Only a repeat can report
     /// `false`; `tx resend` delivers it.
     pub delivered: bool,
+    /// How the slate went to an HTTP or Tor listener: `native` through its `/v1/peer/slates`,
+    /// or `legacy` through its foreign API. Absent for other transports and for a repeat.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dialect: Option<&'static str>,
 }
 
 #[derive(Debug, Serialize)]
@@ -237,6 +241,9 @@ pub struct ResendReport {
     pub destination: String,
     /// As in [`SendReport::state`].
     pub state: &'static str,
+    /// As in [`SendReport::dialect`].
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dialect: Option<&'static str>,
 }
 
 #[derive(Debug, Serialize)]
@@ -2566,6 +2573,7 @@ mod tests {
                     state: "sent",
                     repeated: false,
                     delivered: true,
+                    dialect: None,
                 }),
                 vec![
                     "amount",
@@ -2585,6 +2593,7 @@ mod tests {
                     transport: text("epicbox"),
                     destination: text("a"),
                     state: "sent",
+                    dialect: None,
                 }),
                 vec!["destination", "state", "transport", "tx_id"],
             ),

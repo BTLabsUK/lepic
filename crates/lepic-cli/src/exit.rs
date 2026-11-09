@@ -15,7 +15,7 @@ use lepic_wallet::scan::ScanError;
 use lepic_wallet::selection::SelectionError;
 use lepic_wallet::send::SendError;
 use lepic_wallet::{AccountError, ReceiveError, WalletError};
-use lepic_wallet_contacts::{ContactError, InPersonRefusal};
+use lepic_wallet_contacts::{ContactError, DirectError, InPersonRefusal};
 use thiserror::Error;
 
 use crate::amount::AmountError;
@@ -205,6 +205,9 @@ pub enum CliError {
     Tor(#[from] lepic_methods::tor::TorFailure),
     #[error("contact failed")]
     Contact(#[from] ContactError),
+    /// A send to a listener stopped by its native endpoint's rules.
+    #[error("the send to the listener stopped")]
+    Direct(#[source] DirectError),
     #[error("a pairing's sas is not in the sas table")]
     SasTable,
     #[error("contact id is not 32 hex digits")]
@@ -254,6 +257,17 @@ pub enum CliError {
     ApiClientsTooLarge { path: std::path::PathBuf },
 }
 
+impl From<DirectError> for CliError {
+    // The legacy send's failures keep their own variants, and with them their kinds and hints.
+    fn from(error: DirectError) -> Self {
+        match error {
+            DirectError::Wallet(error) => Self::Wallet(error),
+            DirectError::Send(error) => Self::Send(error),
+            error => Self::Direct(error),
+        }
+    }
+}
+
 impl CliError {
     pub fn io(what: &'static str) -> impl FnOnce(std::io::Error) -> Self {
         move |source| Self::Io { what, source }
@@ -300,6 +314,7 @@ impl CliError {
             | Self::ApiClientListed { .. }
             | Self::TorBinaryNeeded => ErrorKind::Usage,
             Self::Contact(error) => contact_kind(error),
+            Self::Direct(error) => direct_kind(error),
             Self::Tor(failure) if failure.kind == lepic_methods::tor::FailureKind::Missing => {
                 ErrorKind::Config
             }
@@ -349,6 +364,7 @@ impl CliError {
             Self::SendInterrupted { tx_id }
             | Self::SlateIdReused { tx_id }
             | Self::HttpReplyLost { tx_id } => Some(*tx_id),
+            Self::Direct(DirectError::Native { tx_id, .. }) => Some(tx_id.0),
             _ => None,
         }
     }
@@ -399,6 +415,17 @@ fn send_kind(error: &SendError) -> ErrorKind {
         | SendError::CannotDeliver { .. }
         | SendError::CannotExport { .. } => ErrorKind::Transport,
         SendError::Undelivered { .. } => ErrorKind::Incomplete,
+        _ => ErrorKind::Internal,
+    }
+}
+
+fn direct_kind(error: &DirectError) -> ErrorKind {
+    match error {
+        DirectError::Wallet(error) => wallet_kind(error),
+        DirectError::Send(error) => send_kind(error),
+        DirectError::Probe { .. } => ErrorKind::Transport,
+        DirectError::PinnedNoAdvert { .. } | DirectError::PinChanged { .. } => ErrorKind::Rejected,
+        DirectError::Native { .. } => ErrorKind::Incomplete,
         _ => ErrorKind::Internal,
     }
 }

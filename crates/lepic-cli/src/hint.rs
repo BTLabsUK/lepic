@@ -16,8 +16,10 @@ use lepic_wallet::scan::ScanError;
 use lepic_wallet::selection::SelectionError;
 use lepic_wallet::send::SendError;
 use lepic_wallet::{ReceiveError, WalletError};
+use lepic_wallet_contacts::DirectError;
 
 use crate::amount::format_amount;
+use crate::commands::peer::to_hex;
 use crate::exit::{CliError, ErrorKind};
 use crate::settings::Settings;
 
@@ -98,6 +100,7 @@ pub fn hint(error: &CliError, settings: Option<&Settings>) -> Option<String> {
         CliError::SocketPathTaken { .. } => {
             return Some("remove the file or give another path with --socket".to_owned());
         }
+        CliError::Direct(direct) => return direct_hint(direct),
         CliError::SharedDataDir => {
             return settings.map(|settings| {
                 format!(
@@ -112,6 +115,38 @@ pub fn hint(error: &CliError, settings: Option<&Settings>) -> Option<String> {
         return settings.map(|settings| node_hint(error, settings));
     }
     None
+}
+
+fn direct_hint(error: &DirectError) -> Option<String> {
+    match error {
+        DirectError::PinChanged {
+            origin,
+            pinned,
+            shown,
+        } => Some(format!(
+            "the pinned key is {} and the listener shows {}; nothing was sent. Once the \
+             receiver confirms the new key, `lepic peer forget {origin}` takes it at the next \
+             send, and --legacy sends this slate without the native endpoint",
+            to_hex(pinned),
+            to_hex(shown)
+        )),
+        DirectError::PinnedNoAdvert { .. } => Some(
+            "the listener no longer offers native slates; nothing was sent. --legacy sends the \
+             slate without the native endpoint"
+                .to_owned(),
+        ),
+        DirectError::Probe { .. } => Some(
+            "nothing was sent; check that the listener is running and reachable, or give \
+             --legacy to send without the native endpoint"
+                .to_owned(),
+        ),
+        DirectError::Native { tx_id, .. } => Some(format!(
+            "the inputs stay locked; deliver it again with `lepic tx resend {tx_id} --to \
+             <ADDRESS>`, add --legacy to deliver it without the native endpoint, or give up \
+             with `lepic tx cancel {tx_id}`"
+        )),
+        _ => None,
+    }
 }
 
 fn invoice_hint(error: &InvoiceError) -> Option<String> {

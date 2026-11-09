@@ -228,3 +228,83 @@ fn serve_with_http_answers_the_foreign_api() {
     assert_eq!(report["http"]["refused"], 0, "{report}");
     assert_eq!(keys(&report), ["http", "inbox", "requests", "socket"]);
 }
+
+/// Runs `serve --http` with `native_direct` as given and hands `ask` the listener's port.
+fn with_listener(native_direct: bool, ask: impl FnOnce(u16)) {
+    let mut host = TestHost::new();
+    let wallet = Instance::new("serving password");
+    wallet.run(&host, &["wallet", "init"]).ok();
+    let mut env = wallet.env();
+    if native_direct {
+        env.push(("LEPIC_NATIVE_DIRECT".to_owned(), "true".to_owned()));
+    }
+    let stop = Arc::new(AtomicBool::new(false));
+    let signal = Arc::clone(&stop);
+    host.interrupt_when = Some(Arc::new(move || signal.load(Ordering::SeqCst)));
+    let dir = tempfile::tempdir().unwrap();
+    let socket = dir.path().join("s.sock");
+    let socket_arg = socket.to_str().unwrap();
+    let args = ["serve", "--socket", socket_arg, "--http", "--port", "0"];
+    let served = std::thread::scope(|scope| {
+        let server = scope.spawn(|| wallet.run_with(&host, &args, env, ""));
+        wait_for_socket(&socket);
+        let status = http(&socket, "GET", "/v1/status", None).ok();
+        ask(u16::try_from(status["http"]["port"].as_u64().unwrap()).unwrap());
+        stop.store(true, Ordering::SeqCst);
+        server.join().unwrap()
+    });
+    served.ok();
+}
+
+/// The status line and the body of a request to the listener at `port`.
+fn ask_listener(port: u16, method: &str, path: &str, body: &str) -> (String, Vec<u8>) {
+    let mut stream = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
+    write!(
+        stream,
+        "{method} {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\n\
+         Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    )
+    .unwrap();
+    let mut answer = Vec::new();
+    std::io::Read::read_to_end(&mut stream, &mut answer).unwrap();
+    let split = answer.windows(4).position(|w| w == b"\r\n\r\n").unwrap();
+    let head = String::from_utf8(answer[..split].to_vec()).unwrap();
+    let status = head.lines().next().unwrap().to_owned();
+    (status, answer[split + 4..].to_vec())
+}
+
+const CHECK_VERSION: &str = r#"{"jsonrpc":"2.0","id":1,"method":"check_version","params":[]}"#;
+
+/// Without `native_direct` the listener answers as it always has: `check_version` byte for byte
+/// without the `lepic` key, and the native routes as any unknown path.
+#[test]
+fn a_listener_without_native_direct_answers_as_before() {
+    with_listener(false, |port| {
+        let (status, body) = ask_listener(port, "POST", "/v2/foreign", CHECK_VERSION);
+        assert!(status.starts_with("HTTP/1.1 200"), "{status}");
+        assert_eq!(
+            String::from_utf8(body).unwrap(),
+            r#"{"id":1,"jsonrpc":"2.0","result":{"Ok":{"foreign_api_version":2,"supported_slate_versions":["V3","V2"]}}}"#
+        );
+        let unknown = ask_listener(port, "POST", "/v1/unknown", "{}");
+        assert!(unknown.0.starts_with("HTTP/1.1 404"), "{unknown:?}");
+        for (method, path) in [("POST", "/v1/peer/slates"), ("GET", "/v1/peer")] {
+            assert_eq!(ask_listener(port, method, path, "{}"), unknown, "{path}");
+        }
+    });
+}
+
+/// With `native_direct` on, the listener advertises its native endpoint and serves it.
+#[test]
+fn a_listener_with_native_direct_offers_its_native_endpoint() {
+    with_listener(true, |port| {
+        let (status, body) = ask_listener(port, "POST", "/v2/foreign", CHECK_VERSION);
+        assert!(status.starts_with("HTTP/1.1 200"), "{status}");
+        let version: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let advert = &version["result"]["Ok"]["lepic"];
+        assert!(advert.is_object(), "{version}");
+        let (status, _) = ask_listener(port, "GET", "/v1/peer", "");
+        assert!(status.starts_with("HTTP/1.1 200"), "{status}");
+    });
+}

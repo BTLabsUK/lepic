@@ -14,11 +14,12 @@ use lepic_keychain::KdfParams;
 use lepic_keychain::vault::MAX_WALLET_SEED_FILE_LEN;
 use lepic_methods::epicbox::Epicbox;
 use lepic_methods::http::{
-    CoinbaseAccess, Counts, Exposure, Host as ReceiveHost, Http, ListenSettings, ListenerUrl,
-    PlainHttp, Receiver, Refusal, RpcClient, refuse, webpki_tls_config,
+    CoinbaseAccess, Counts, DirectPeer, Exposure, Host as ReceiveHost, Http, HttpPeer,
+    ListenSettings, ListenerHandle, ListenerUrl, PeerClient, PeerEndpoint, PlainHttp, Receiver,
+    Refusal, RpcClient, refuse, webpki_tls_config,
 };
 use lepic_methods::registry::Methods;
-use lepic_methods::tor::{SocksProxy, Tor, TorProcess, TorSettings, TorState};
+use lepic_methods::tor::{SocksProxy, Tor, TorPeer, TorProcess, TorSettings, TorState};
 use lepic_node::{NodeApi, NodeClient, Propagation, RpcTransport};
 use lepic_primitives::amount::Height;
 use lepic_primitives::params::Network;
@@ -41,6 +42,7 @@ use lepic_wallet::inbox::{InboxSummary, ListenHandle};
 use lepic_wallet::invoice::{InvoiceError, InvoiceRequest, PayRequest};
 use lepic_wallet::legacy_history::{ImportWorkDir, LegacyImportStatus, TxOrigin};
 use lepic_wallet::method::{Method, MethodLookup};
+use lepic_wallet::namespace::SealKeyKind;
 use lepic_wallet::refresh::{BalanceCategory, OutputDetails, RefreshError, RefreshOutcome};
 use lepic_wallet::scan::{ScanCancel, ScanOptions, ScanStart, ScanSummary};
 use lepic_wallet::selection::SelectionStrategy;
@@ -51,6 +53,7 @@ use lepic_wallet::{
     Clock, Event, Password, Ports, ProofKey, ReceiveRequest, Received, SharedRng, Wallet,
     WalletConfig, WalletError, WalletName, WordCount,
 };
+use lepic_wallet_contacts::{Dialect, DirectHandler, WalletContacts as _};
 use rand::Rng as _;
 use rand::SeedableRng as _;
 use rand::rngs::{StdRng, SysRng};
@@ -86,7 +89,7 @@ use crate::vault::{FileVault, VAULT_FILE};
 mod api_client;
 mod contact;
 mod in_person;
-mod peer;
+pub(crate) mod peer;
 mod profile;
 #[cfg(unix)]
 mod serve;
@@ -119,8 +122,14 @@ struct Opened<N: NodeApi + 'static> {
     /// The HTTP method for sends that may not reach this computer, with its own connection
     /// pool; it holds its answers with [`Self::http`].
     http_to_other_computers: Arc<dyn Method>,
+    /// The native endpoints of HTTP listeners, their adverts read through [`Self::http`].
+    http_peer: HttpPeer,
+    /// As [`Self::http_peer`], the adverts read through [`Self::http_to_other_computers`].
+    http_peer_to_other_computers: HttpPeer,
     /// Holds the answers of Tor sends until they are finalized.
     tor: Arc<Tor>,
+    /// The native endpoints of listeners behind onions, reached through [`Self::tor`].
+    tor_peer: TorPeer,
     /// Taken by a send over Tor for as long as its tor is attached to [`Self::tor`], which only
     /// one send at a time can use.
     tor_gate: Arc<tokio::sync::Mutex<()>>,
@@ -156,25 +165,106 @@ impl<N: NodeApi + 'static> Opened<N> {
             .ok_or(SendError::UnknownTransport { transport })
     }
 
+    /// The method and native endpoints of a send over `transport`, over HTTP only to the
+    /// computers `reach` allows.
+    fn route(&self, transport: TransportId, reach: HttpReach) -> Result<Route<'_>, SendError> {
+        if transport == lepic_methods::http::TRANSPORT_ID {
+            return Ok(match reach {
+                HttpReach::OtherComputers => (
+                    &self.http_to_other_computers,
+                    Some(&self.http_peer_to_other_computers),
+                ),
+                HttpReach::Any => (self.send_method(transport)?, Some(&self.http_peer)),
+            });
+        }
+        let peer: Option<&dyn DirectPeer> = if transport == lepic_methods::tor::TRANSPORT_ID {
+            Some(&self.tor_peer)
+        } else {
+            None
+        };
+        Ok((self.send_method(transport)?, peer))
+    }
+
     /// Sends over `transport` to the payee `delivery` names, over HTTP only to the computers
-    /// `reach` allows.
+    /// `reach` allows. A send to a listener takes its native endpoint unless `legacy` asks
+    /// for the legacy dialect, under the rules of [`lepic_wallet_contacts::DirectError`].
     async fn send(
         &self,
         transport: TransportId,
         reach: HttpReach,
         request: SendRequest,
         delivery: Delivery,
-    ) -> Result<SentSlate, SendError> {
-        let method = if transport == lepic_methods::http::TRANSPORT_ID
-            && reach == HttpReach::OtherComputers
-        {
-            &self.http_to_other_computers
-        } else {
-            self.send_method(transport)?
-        };
-        self.wallet.send(method, request, delivery).await
+        legacy: bool,
+    ) -> Result<Sent, CliError> {
+        let (method, peer) = self.route(transport, reach)?;
+        match (peer, delivery) {
+            (Some(peer), Delivery::Deliver { to }) => {
+                let direct = self
+                    .wallet
+                    .contact_book()
+                    .direct_send(peer, method, request, to, legacy)
+                    .await?;
+                Ok(Sent {
+                    sent: direct.sent,
+                    dialect: Some(direct.dialect),
+                    reply: direct.reply,
+                })
+            }
+            (_, delivery) => Ok(Sent::plain(
+                self.wallet.send(method, request, delivery).await?,
+            )),
+        }
+    }
+
+    /// Sends the stored S1 of `tx_id` again over `transport`, choosing the dialect of a
+    /// listener as [`Self::send`] does. Returns the dialect, `None` for a transport that is
+    /// not direct, and the answer a native exchange brought back.
+    async fn resend(
+        &self,
+        transport: TransportId,
+        tx_id: TxId,
+        delivery: Delivery,
+        legacy: bool,
+    ) -> Result<(Option<Dialect>, Option<WireSlate>), CliError> {
+        let (method, peer) = self.route(transport, HttpReach::Any)?;
+        match (peer, delivery) {
+            (Some(peer), Delivery::Deliver { to }) => {
+                let direct = self
+                    .wallet
+                    .contact_book()
+                    .direct_resend(peer, method, tx_id, to, legacy)
+                    .await?;
+                Ok((Some(direct.dialect), direct.reply))
+            }
+            (_, delivery) => {
+                self.wallet.resend(method, tx_id, delivery).await?;
+                Ok((None, None))
+            }
+        }
     }
 }
+
+/// A send that went out, the dialect it took to a listener, and the answer a native exchange
+/// brought back.
+struct Sent {
+    sent: SentSlate,
+    dialect: Option<Dialect>,
+    reply: Option<WireSlate>,
+}
+
+impl Sent {
+    /// A send over a transport that is not direct.
+    const fn plain(sent: SentSlate) -> Self {
+        Self {
+            sent,
+            dialect: None,
+            reply: None,
+        }
+    }
+}
+
+/// The method a send goes through, and the native endpoints it can reach.
+type Route<'a> = (&'a Arc<dyn Method>, Option<&'a dyn DirectPeer>);
 
 struct Run<'a, H: Host> {
     host: &'a H,
@@ -751,16 +841,7 @@ impl<H: Host> Run<'_, H> {
             .transpose()?;
         let opened = self.open().await?;
         let account = opened.wallet.account(&args.account.account)?;
-        let repeat = |destination| {
-            repeat_of(
-                &opened,
-                slate_id,
-                account.index,
-                amount,
-                &payee,
-                destination,
-            )
-        };
+        let repeat = |to| repeat_of(&opened, slate_id, account.index, amount, &payee, to);
         if let Some(report) = repeat(destination.clone()).await? {
             return Ok(report);
         }
@@ -768,15 +849,11 @@ impl<H: Host> Run<'_, H> {
         if transport == TRANSPORT_ID {
             opened.epicbox.attach_wallet(&opened.wallet)?;
         }
+        // Drawn here when the caller gave none, so an interrupted send can still be found.
+        let drawn = slate_id.map_or_else(drawn_slate_id, Ok)?;
         let request = SendRequest {
-            minimum_confirmations: spend.minimum_confirmations,
-            change_outputs: spend.change_outputs,
-            strategy: spend.strategy,
-            ttl_blocks: spend.ttl_blocks,
-            message: args.message.message,
-            // Drawn here when the caller gave none, so an interrupted send can still be found.
-            slate_id: Some(slate_id.map_or_else(drawn_slate_id, Ok)?),
-            ..SendRequest::new(account.index, amount)
+            slate_id: Some(drawn),
+            ..spend.send_request(account.index, amount, args.message.message)
         };
         if transport == lepic_methods::tor::TRANSPORT_ID {
             // The checks the send makes before it stores anything, before tor takes its time
@@ -798,22 +875,29 @@ impl<H: Host> Run<'_, H> {
             let sent = match &payee {
                 Payee::Delivery(_, delivery) => {
                     opened
-                        .send(transport, args.reach, request, delivery.clone())
+                        .send(
+                            transport,
+                            args.reach,
+                            request,
+                            delivery.clone(),
+                            args.legacy.legacy,
+                        )
                         .await?
                 }
-                Payee::Contact(id) => {
-                    contact::send_to_contact(&opened, *id, request, purpose, data_dir).await?
-                }
+                Payee::Contact(id) => Sent::plain(
+                    contact::send_to_contact(&opened, *id, request, purpose, data_dir).await?,
+                ),
             };
             let state = finalize_direct_reply(
                 &opened,
                 transport,
-                sent.tx_id,
-                &sent.slate_id.to_string(),
+                sent.sent.tx_id,
+                &sent.sent.slate_id.to_string(),
+                sent.reply,
                 args.fluff.fluff,
             )
             .await?;
-            Ok::<_, CliError>((sent, state))
+            Ok::<_, CliError>((sent.sent, sent.dialect, state))
         };
         let sending = tokio::select! {
             result = sending => Some(result),
@@ -831,7 +915,7 @@ impl<H: Host> Run<'_, H> {
             ) => return repeat(destination).await?.ok_or(error),
             (sending, _) => sending,
         };
-        let (sent, state) = sending?;
+        let (sent, dialect, state) = sending?;
         Ok(Report::Send(SendReport {
             tx_id: sent.tx_id.0,
             slate_id: sent.slate_id.to_string(),
@@ -842,6 +926,7 @@ impl<H: Host> Run<'_, H> {
             state,
             repeated: false,
             delivered: true,
+            dialect: dialect.map(Dialect::as_str),
         }))
     }
 
@@ -855,12 +940,11 @@ impl<H: Host> Run<'_, H> {
         let tx_id = TxId(args.tx.tx_id);
         let tor = self.tor_for(transport, &args.tor, &opened).await?;
         let resending = async {
-            opened
-                .wallet
-                .resend(opened.send_method(transport)?, tx_id, delivery)
+            let (dialect, reply) = opened
+                .resend(transport, tx_id, delivery, args.legacy.legacy)
                 .await?;
             if !lepic_methods::http::is_direct(transport) {
-                return Ok("sent");
+                return Ok(("sent", dialect));
             }
             let details = opened.wallet.transaction_details(tx_id).await?;
             let slate_id = details
@@ -868,23 +952,26 @@ impl<H: Host> Run<'_, H> {
                 .entry
                 .slate_id
                 .ok_or(CliError::HttpReplyLost { tx_id: tx_id.0 })?;
-            finalize_direct_reply(
+            let state = finalize_direct_reply(
                 &opened,
                 transport,
                 tx_id,
                 &slate_id.to_string(),
+                reply,
                 args.fluff.fluff,
             )
-            .await
+            .await?;
+            Ok::<_, CliError>((state, dialect))
         }
         .await;
         stop_tor(&opened, tor).await;
-        let state = resending?;
+        let (state, dialect) = resending?;
         Ok(Report::Resend(ResendReport {
             tx_id: tx_id.0,
             transport: transport.to_string(),
             destination,
             state,
+            dialect: dialect.map(Dialect::as_str),
         }))
     }
 
@@ -1009,27 +1096,8 @@ impl<H: Host> Run<'_, H> {
             opened: Arc::clone(&opened),
             counts: Arc::clone(&counts),
         });
-        let receiver = |proof_key| {
-            Arc::new(Receiver::new(
-                Arc::clone(&host),
-                Arc::clone(&opened.tor) as Arc<dyn Method>,
-                proof_key,
-            ))
-        };
-        let settings = lepic_methods::tor::listen_settings(self.settings.tuning.listen);
-        let handle = lepic_methods::http::listen(settings, receiver(ProofKey::Onion)).await?;
-        let previous_handle = match previous_key {
-            Some(_) => {
-                match lepic_methods::http::listen(settings, receiver(ProofKey::Payments)).await {
-                    Ok(handle) => Some(handle),
-                    Err(error) => {
-                        handle.shutdown().await;
-                        return Err(error.into());
-                    }
-                }
-            }
-            None => None,
-        };
+        let (handle, previous_handle) =
+            onion_listeners(&opened, self.settings, &host, previous_key.is_some()).await?;
         let tor = self.start_tor(&args.tor)?;
         let published = async {
             self.wait_for_tor(&tor).await?;
@@ -1450,9 +1518,17 @@ impl<H: Host> Run<'_, H> {
             source: std::io::Error::other(error),
         })?;
         let http = Http::new(RpcClient::new(self.settings.tuning.send, tls.clone()));
-        let http_to_other_computers: Arc<dyn Method> = Arc::new(http.through(
-            RpcClient::to_other_computers(self.settings.tuning.send, tls),
+        let other_computers = http.through(RpcClient::to_other_computers(
+            self.settings.tuning.send,
+            tls.clone(),
         ));
+        // A native post goes to the host the user named, so it never reaches this computer,
+        // whatever the legacy send to the same address may reach.
+        let native_post =
+            PeerClient::to_other_computers(self.settings.tuning.http_peer(), tls.clone());
+        let http_peer = HttpPeer::new(http.clone(), native_post.clone());
+        let http_peer_to_other_computers = HttpPeer::new(other_computers.clone(), native_post);
+        let http_to_other_computers: Arc<dyn Method> = Arc::new(other_computers);
         let http = Arc::new(http);
         let relay = ClientSettings::new(self.settings.relay.clone(), self.settings.tuning.relay);
         let epicbox = Arc::new(Epicbox::new(
@@ -1463,6 +1539,14 @@ impl<H: Host> Run<'_, H> {
         let tor = Arc::new(Tor::new(lepic_methods::tor::OnionClient::new(
             self.settings.tuning.onion_client(),
         )));
+        let tor_peer = TorPeer::new(
+            Tor::clone(&tor),
+            PeerClient::with_dialer(
+                self.settings.tuning.tor_peer(),
+                tls,
+                tor.peer_dialer(self.settings.tuning.tor_connect),
+            ),
+        );
         let file: Arc<dyn Method> = Arc::new(FileTransport::new());
         let mut methods = Methods::new();
         for method in [
@@ -1474,16 +1558,13 @@ impl<H: Host> Run<'_, H> {
             methods.register(method)?;
         }
         let methods = Arc::new(methods);
-        let rng = StdRng::try_from_rng(&mut SysRng).map_err(|error| CliError::Io {
-            what: "seed the random number generator",
-            source: std::io::Error::other(error),
-        })?;
+        let rng = system_rng()?;
         let ports = Ports {
             node: self.host.node(self.settings)?,
             stores: CliStores::default(),
             secrets: FileVault::new(&self.settings.data_dir, self.host.vault_kdf()),
             clock: Arc::new(SystemClock),
-            rng: SharedRng::new(rng),
+            rng,
             runtime: tokio::runtime::Handle::current(),
             methods: Some(Arc::clone(&methods) as Arc<dyn MethodLookup>),
         };
@@ -1512,7 +1593,10 @@ impl<H: Host> Run<'_, H> {
             epicbox,
             http,
             http_to_other_computers,
+            http_peer,
+            http_peer_to_other_computers,
             tor,
+            tor_peer,
             tor_gate: Arc::new(tokio::sync::Mutex::new(())),
             _lock: lock,
         })
@@ -1553,6 +1637,15 @@ fn start_from_confirmed_tip<T: RpcTransport + Clone + 'static>(
 /// A random version-4 slate id, drawn as the engine draws one.
 fn drawn_slate_id() -> Result<SlateId, CliError> {
     random_bytes().map(SlateId::from_random_bytes)
+}
+
+/// A generator seeded from the system's random source.
+fn system_rng() -> Result<SharedRng, CliError> {
+    let rng = StdRng::try_from_rng(&mut SysRng).map_err(|error| CliError::Io {
+        what: "seed the random number generator",
+        source: std::io::Error::other(error),
+    })?;
+    Ok(SharedRng::new(rng))
 }
 
 /// Bytes from the system's random source.
@@ -1683,6 +1776,7 @@ fn repeated_send(
         state: state_name(entry.state),
         repeated: true,
         delivered: !first.undelivered,
+        dialect: None,
     }))
 }
 
@@ -1692,16 +1786,20 @@ pub(crate) fn is_onion(address: &str) -> bool {
         || address.to_ascii_lowercase().contains(".onion")
 }
 
-/// Finalizes the answer a direct transport kept for the send and posts it. Returns the state
-/// the send is reported in: `sent` for a transport whose answer comes later.
+/// Finalizes the answer of a direct send and posts it: `native`, the answer a native exchange
+/// brought back, or else the one the transport kept. Returns the state the send is reported
+/// in: `sent` for a transport whose answer comes later.
 async fn finalize_direct_reply<N: NodeApi + 'static>(
     opened: &Opened<N>,
     transport: TransportId,
     tx_id: TxId,
     slate_id: &str,
+    native: Option<WireSlate>,
     fluff: bool,
 ) -> Result<&'static str, CliError> {
-    let reply = if transport == lepic_methods::http::TRANSPORT_ID {
+    let reply = if native.is_some() {
+        native
+    } else if transport == lepic_methods::http::TRANSPORT_ID {
         opened.http.take_reply(slate_id)
     } else if transport == lepic_methods::tor::TRANSPORT_ID {
         opened.tor.take_reply(slate_id)
@@ -1732,7 +1830,7 @@ async fn stop_tor<N: NodeApi + 'static>(opened: &Opened<N>, tor: Option<SendTor>
 
 /// The HTTP payment listener of `http listen` and `serve --http`.
 struct HttpListener {
-    handle: lepic_methods::http::ListenerHandle,
+    handle: ListenerHandle,
     counts: Arc<Counts>,
     port: u16,
     exposure: Exposure,
@@ -1756,20 +1854,26 @@ impl HttpListener {
             opened: Arc::clone(opened),
             counts: Arc::clone(&counts),
         });
-        let receiver = Arc::new(Receiver::new(
-            host,
-            Arc::clone(&opened.http) as Arc<dyn Method>,
+        let method = Arc::clone(&opened.http) as Arc<dyn Method>;
+        let peer = peer_endpoint(
+            opened,
+            settings,
+            Arc::clone(&host),
+            Arc::clone(&method),
             ProofKey::Payments,
-        ));
+            SealKeyKind::Web,
+        )?;
+        let receiver = Arc::new(Receiver::new(host, method, ProofKey::Payments));
         let port = args.port.unwrap_or(settings.tuning.listen_port);
         let coinbase = match (args.coinbase, args.coinbase_remote) {
             (_, true) => CoinbaseAccess::Remote,
             (true, false) => CoinbaseAccess::LocalOnly,
             (false, false) => CoinbaseAccess::Off,
         };
-        let handle = lepic_methods::http::listen(
+        let handle = lepic_methods::http::listen_with(
             ListenSettings::new(exposure, port, settings.tuning.listen).with_coinbase(coinbase),
             receiver,
+            peer,
         )
         .await?;
         Ok(Self {
@@ -1801,6 +1905,73 @@ fn counted(port: u16, exposure: Exposure, counts: &Counts) -> HttpListenReport {
         repeated: counts.repeated(),
         refused: counts.refused(),
     }
+}
+
+/// The listeners of `tor listen`: the current onion's, which serves the native endpoint under
+/// the wallet's onion listener key as `cli` allows, and with `previous` the previous onion's,
+/// which keeps answering the foreign API alone.
+async fn onion_listeners<N: NodeApi + 'static>(
+    opened: &Arc<Opened<N>>,
+    cli: &Settings,
+    host: &Arc<CliHost<N>>,
+    previous: bool,
+) -> Result<(ListenerHandle, Option<ListenerHandle>), CliError> {
+    let settings = lepic_methods::tor::listen_settings(cli.tuning.listen);
+    let method = Arc::clone(&opened.tor) as Arc<dyn Method>;
+    let receiver = |proof_key| {
+        Arc::new(Receiver::new(
+            Arc::clone(host),
+            Arc::clone(&method),
+            proof_key,
+        ))
+    };
+    let peer = peer_endpoint(
+        opened,
+        cli,
+        Arc::clone(host),
+        Arc::clone(&method),
+        ProofKey::Onion,
+        SealKeyKind::Onion,
+    )?;
+    let handle =
+        lepic_methods::http::listen_with(settings, receiver(ProofKey::Onion), peer).await?;
+    if !previous {
+        return Ok((handle, None));
+    }
+    match lepic_methods::http::listen(settings, receiver(ProofKey::Payments)).await {
+        Ok(previous) => Ok((handle, Some(previous))),
+        Err(error) => {
+            handle.shutdown().await;
+            Err(error.into())
+        }
+    }
+}
+
+/// The native endpoint (ADR 0052) of a listener socket: payments in envelopes sealed to the
+/// wallet's listener key of `kind`, received through `host` over `method` as the socket's
+/// foreign API receives them, with payment proofs signed by `proof_key`. None unless
+/// `native_direct` is set, so the socket answers as a listener without it does: no advert,
+/// no native routes.
+fn peer_endpoint<N: NodeApi + 'static>(
+    opened: &Opened<N>,
+    settings: &Settings,
+    host: Arc<CliHost<N>>,
+    method: Arc<dyn Method>,
+    proof_key: ProofKey,
+    kind: SealKeyKind,
+) -> Result<Option<Arc<PeerEndpoint>>, CliError> {
+    if !settings.native_direct {
+        return Ok(None);
+    }
+    let key = opened.wallet.listener_seal_key(kind)?;
+    let seal = *key.public_key().as_bytes();
+    let network = opened.wallet.config().network;
+    let handler = DirectHandler::new(host, method, proof_key, key, network, system_rng()?);
+    Ok(Some(Arc::new(PeerEndpoint::new(
+        Arc::new(handler),
+        seal,
+        network,
+    ))))
 }
 
 /// The wallet behind `http listen` and `tor listen`. Receipts reach the user as the wallet's
