@@ -1,0 +1,149 @@
+{
+  "meta": {
+    "generator": "epic-pairing-kit",
+    "kit_version": "0.5.0",
+    "git_commit": "d032e26c7aa5f9d3cd8ca141efe7dd7148a79115",
+    "rfc": "0003-epictx",
+    "file": "epictx_padding.json"
+  },
+  "vectors": [
+    {
+      "length": 1,
+      "padme": 1,
+      "target": 768,
+      "padding_length": 767
+    },
+    {
+      "length": 100,
+      "padme": 104,
+      "target": 768,
+      "padding_length": 668
+    },
+    {
+      "length": 767,
+      "padme": 768,
+      "target": 768,
+      "padding_length": 1
+    },
+    {
+      "length": 768,
+      "padme": 768,
+      "target": 768,
+      "padding_length": 0
+    },
+    {
+      "length": 769,
+      "padme": 800,
+      "target": 800,
+      "padding_length": 31
+    },
+    {
+      "length": 800,
+      "padme": 800,
+      "target": 800,
+      "padding_length": 0
+    },
+    {
+      "length": 801,
+      "padme": 832,
+      "target": 832,
+      "padding_length": 31
+    },
+    {
+      "length": 1023,
+      "padme": 1024,
+      "target": 1024,
+      "padding_length": 1
+    },
+    {
+      "length": 1024,
+      "padme": 1024,
+      "target": 1024,
+      "padding_length": 0
+    },
+    {
+      "length": 1025,
+      "padme": 1088,
+      "target": 1088,
+      "padding_length": 63
+    },
+    {
+      "length": 1088,
+      "padme": 1088,
+      "target": 1088,
+      "padding_length": 0
+    },
+    {
+      "length": 1089,
+      "padme": 1152,
+      "target": 1152,
+      "padding_length": 63
+    },
+    {
+      "length": 1152,
+      "padme": 1152,
+      "target": 1152,
+      "padding_length": 0
+    },
+    {
+      "length": 1153,
+      "padme": 1216,
+      "target": 1216,
+      "padding_length": 63
+    },
+    {
+      "length": 2048,
+      "padme": 2048,
+      "target": 2048,
+      "padding_length": 0
+    },
+    {
+      "length": 2049,
+      "padme": 2176,
+      "target": 2176,
+      "padding_length": 127
+    },
+    {
+      "length": 4096,
+      "padme": 4096,
+      "target": 4096,
+      "padding_length": 0
+    },
+    {
+      "length": 4097,
+      "padme": 4352,
+      "target": 4352,
+      "padding_length": 255
+    },
+    {
+      "length": 65535,
+      "padme": 65536,
+      "target": 65536,
+      "padding_length": 1
+    },
+    {
+      "length": 65580,
+      "padme": 67584,
+      "target": 67584,
+      "padding_length": 2004
+    },
+    {
+      "length": 65647,
+      "padme": 67584,
+      "target": 67584,
+      "padding_length": 1937
+    },
+    {
+      "length": 67584,
+      "padme": 67584,
+      "target": 67584,
+      "padding_length": 0
+    },
+    {
+      "length": 67585,
+      "padme": 69632,
+      "target": 69632,
+      "padding_length": 2047
+    }
+  ]
+}

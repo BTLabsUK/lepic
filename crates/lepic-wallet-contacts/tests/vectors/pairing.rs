@@ -12,8 +12,8 @@ use x25519_dalek::{X25519_BASEPOINT_BYTES, x25519};
 use super::{bytes, hex};
 
 pub(crate) const KIT_GENERATOR: &str = "epic-pairing-kit";
-pub(crate) const KIT_VERSION: &str = "0.4.0";
-pub(crate) const KIT_COMMIT: &str = "faae1e09ce1d8f48dadeb3b7f74781291e8f9b2c";
+pub(crate) const KIT_VERSION: &str = "0.5.0";
+pub(crate) const KIT_COMMIT: &str = "d032e26c7aa5f9d3cd8ca141efe7dd7148a79115";
 
 fn vectors(file: &str) -> Vec<Value> {
     let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))

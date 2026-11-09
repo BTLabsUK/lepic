@@ -1,0 +1,203 @@
+{
+  "meta": {
+    "generator": "epic-pairing-kit",
+    "kit_version": "0.5.0",
+    "git_commit": "d032e26c7aa5f9d3cd8ca141efe7dd7148a79115",
+    "rfc": "0003-epictx",
+    "file": "epictx_reply_mailbox.json"
+  },
+  "vectors": [
+    {
+      "name": "relay_plain",
+      "value": "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f8179865706963626f782e65706963636173682e636f6d",
+      "length": 53,
+      "valid": true
+    },
+    {
+      "name": "prefix_03",
+      "value": "0379be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f8179865706963626f782e65706963636173682e636f6d",
+      "length": 53,
+      "valid": true
+    },
+    {
+      "name": "port_443",
+      "value": "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f8179865706963626f782e65706963636173682e636f6d3a343433",
+      "length": 57,
+      "valid": true
+    },
+    {
+      "name": "port_65535",
+      "value": "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f8179865706963626f782e65706963636173682e636f6d3a3635353335",
+      "length": 59,
+      "valid": true
+    },
+    {
+      "name": "port_leading_zero",
+      "value": "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f8179865706963626f782e65706963636173682e636f6d3a30343433",
+      "length": 58,
+      "valid": true
+    },
+    {
+      "name": "hyphen_inside_label",
+      "value": "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798657069632d626f782e6578616d706c65",
+      "length": 49,
+      "valid": true
+    },
+    {
+      "name": "uppercase",
+      "value": "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f8179845504943424f582e4578616d706c652e434f4d",
+      "length": 52,
+      "valid": true
+    },
+    {
+      "name": "single_label",
+      "value": "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f817986c6f63616c686f7374",
+      "length": 42,
+      "valid": true
+    },
+    {
+      "name": "ipv4_digits",
+      "value": "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f817983139322e302e322e313a37303730",
+      "length": 47,
+      "valid": true
+    },
+    {
+      "name": "one_char_relay",
+      "value": "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f8179861",
+      "length": 34,
+      "valid": true
+    },
+    {
+      "name": "relay_128_bytes",
+      "value": "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f817986161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161612e62626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262622e63",
+      "length": 161,
+      "valid": true
+    },
+    {
+      "name": "key_only",
+      "value": "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798",
+      "length": 33,
+      "valid": false
+    },
+    {
+      "name": "relay_129_bytes",
+      "value": "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f817986161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161612e62626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262622e6363",
+      "length": 162,
+      "valid": false
+    },
+    {
+      "name": "prefix_04",
+      "value": "0479be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f8179865706963626f782e65706963636173682e636f6d",
+      "length": 53,
+      "valid": false
+    },
+    {
+      "name": "prefix_00",
+      "value": "0079be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f8179865706963626f782e65706963636173682e636f6d",
+      "length": 53,
+      "valid": false
+    },
+    {
+      "name": "short_key",
+      "value": "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f817",
+      "length": 32,
+      "valid": false
+    },
+    {
+      "name": "leading_hyphen",
+      "value": "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f817982d65706963626f782e6578616d706c65",
+      "length": 49,
+      "valid": false
+    },
+    {
+      "name": "trailing_hyphen",
+      "value": "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f8179865706963626f782d2e6578616d706c65",
+      "length": 49,
+      "valid": false
+    },
+    {
+      "name": "empty_label",
+      "value": "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f8179865706963626f782e2e6578616d706c65",
+      "length": 49,
+      "valid": false
+    },
+    {
+      "name": "leading_dot",
+      "value": "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f817982e65706963626f782e6578616d706c65",
+      "length": 49,
+      "valid": false
+    },
+    {
+      "name": "trailing_dot",
+      "value": "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f8179865706963626f782e6578616d706c652e",
+      "length": 49,
+      "valid": false
+    },
+    {
+      "name": "underscore",
+      "value": "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798657069635f626f782e6578616d706c65",
+      "length": 49,
+      "valid": false
+    },
+    {
+      "name": "space",
+      "value": "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f817986570696320626f782e6578616d706c65",
+      "length": 49,
+      "valid": false
+    },
+    {
+      "name": "port_0",
+      "value": "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f8179865706963626f782e65706963636173682e636f6d3a30",
+      "length": 55,
+      "valid": false
+    },
+    {
+      "name": "port_65536",
+      "value": "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f8179865706963626f782e65706963636173682e636f6d3a3635353336",
+      "length": 59,
+      "valid": false
+    },
+    {
+      "name": "port_six_digits",
+      "value": "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f8179865706963626f782e65706963636173682e636f6d3a303030343433",
+      "length": 60,
+      "valid": false
+    },
+    {
+      "name": "port_empty",
+      "value": "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f8179865706963626f782e65706963636173682e636f6d3a",
+      "length": 54,
+      "valid": false
+    },
+    {
+      "name": "port_sign",
+      "value": "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f8179865706963626f782e65706963636173682e636f6d3a2b343433",
+      "length": 58,
+      "valid": false
+    },
+    {
+      "name": "two_ports",
+      "value": "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f8179865706963626f782e65706963636173682e636f6d3a313a32",
+      "length": 57,
+      "valid": false
+    },
+    {
+      "name": "port_only",
+      "value": "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f817983a343433",
+      "length": 37,
+      "valid": false
+    },
+    {
+      "name": "non_ascii",
+      "value": "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798c3a97069632e6578616d706c65",
+      "length": 46,
+      "valid": false
+    },
+    {
+      "name": "nul_byte",
+      "value": "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f817986570696300626f782e6578616d706c65",
+      "length": 49,
+      "valid": false
+    }
+  ]
+}

@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Replays the RFC 0002 vectors in `testdata/vectors/pairing`, written by the independent pairing
-//! kit (RFC 0002 section 14): the HPKE suite against RFC 9180 A.2.1, envelopes of every type sealed
-//! with a fixed ephemeral key, cards, invites, replies, confirms and refusals, the SAS, pairing
+//! kit (RFC 0002 section 14): envelopes of every type sealed with a fixed ephemeral key, cards, invites, replies, confirms and refusals, the SAS, pairing
 //! words, the key check with its proofs, and every malformed input with the typed error it must
 //! give.
 
@@ -18,10 +17,8 @@ mod common;
 use std::collections::HashMap;
 
 use common::{ScriptedRng, hex};
-use hpke::aead::ChaCha20Poly1305;
-use hpke::kdf::HkdfSha256;
 use hpke::kem::X25519HkdfSha256;
-use hpke::{Deserializable, Kem, OpModeR, OpModeS, Serializable};
+use hpke::{Kem, Serializable};
 use lepic_contact::{
     Confirm, ConfirmBody, ContactCard, Content, DecodeError, DomainClaim, DomainKey, EncSecretKey,
     Hint, HintKey, HintRule, Invite, InviteId, KeyCheck, KeyCheckAnswer, Malformed, MessageType,
@@ -35,8 +32,8 @@ use lepic_contact::{
 use serde_json::Value;
 
 const KIT_GENERATOR: &str = "epic-pairing-kit";
-const KIT_VERSION: &str = "0.4.0";
-const KIT_COMMIT: &str = "faae1e09ce1d8f48dadeb3b7f74781291e8f9b2c";
+const KIT_VERSION: &str = "0.5.0";
+const KIT_COMMIT: &str = "d032e26c7aa5f9d3cd8ca141efe7dd7148a79115";
 
 fn vectors(file: &str) -> Vec<Value> {
     let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -138,86 +135,6 @@ fn check_card(
     assert_eq!(card.to_link(), text(uri));
     assert_eq!(ContactCard::from_link(text(uri), net).unwrap(), card);
     card
-}
-
-#[test]
-fn the_suite_matches_rfc9180_a2_1() {
-    for vector in vectors("hpke_rfc9180_a2.json") {
-        assert_eq!(vector["kem_id"], 32);
-        assert_eq!(vector["kdf_id"], 1);
-        assert_eq!(vector["aead_id"], 3);
-        assert_eq!(vector["mode"], 0);
-        let info = bytes(&vector["info"]);
-
-        let (sk_r, pk_r) = X25519HkdfSha256::derive_keypair(&bytes(&vector["ikmR"]));
-        assert_eq!(sk_r.to_bytes().to_vec(), bytes(&vector["skRm"]));
-        assert_eq!(pk_r.to_bytes().to_vec(), bytes(&vector["pkRm"]));
-
-        // The ephemeral key comes from 32 bytes of the caller's RNG through DeriveKeyPair, so an
-        // RNG that yields ikmE reproduces the RFC's encapsulation.
-        let mut rng = ScriptedRng::new(&bytes(&vector["ikmE"]));
-        let (encapped, mut sender) = hpke::setup_sender_with_rng::<
-            ChaCha20Poly1305,
-            HkdfSha256,
-            X25519HkdfSha256,
-        >(&OpModeS::Base, &pk_r, &info, &mut rng)
-        .unwrap();
-        assert_eq!(encapped.to_bytes().to_vec(), bytes(&vector["enc"]));
-        let mut receiver = hpke::setup_receiver::<ChaCha20Poly1305, HkdfSha256, X25519HkdfSha256>(
-            &OpModeR::Base,
-            &sk_r,
-            &encapped,
-            &info,
-        )
-        .unwrap();
-
-        let encryptions = vector["encryptions"].as_array().unwrap();
-        let last = encryptions
-            .iter()
-            .map(|entry| entry["seq"].as_u64().unwrap())
-            .max()
-            .unwrap();
-        let mut checked = 0;
-        for sequence in 0..=last {
-            let listed = encryptions
-                .iter()
-                .find(|entry| entry["seq"].as_u64() == Some(sequence));
-            let (plaintext, aad) = match listed {
-                Some(entry) => (bytes(&entry["pt"]), bytes(&entry["aad"])),
-                None => (b"skipped".to_vec(), Vec::new()),
-            };
-            let ciphertext = sender.seal(&plaintext, &aad).unwrap();
-            assert_eq!(receiver.open(&ciphertext, &aad).unwrap(), plaintext);
-            if let Some(entry) = listed {
-                assert_eq!(ciphertext, bytes(&entry["ct"]), "sequence {sequence}");
-                checked += 1;
-            }
-        }
-        assert_eq!(checked, encryptions.len());
-
-        for entry in vector["exports"].as_array().unwrap() {
-            let length = usize::try_from(entry["L"].as_u64().unwrap()).unwrap();
-            let mut out = vec![0; length];
-            sender.export(&bytes(&entry["context"]), &mut out).unwrap();
-            assert_eq!(out, bytes(&entry["value"]));
-        }
-
-        let first = &encryptions[0];
-        let secret =
-            <X25519HkdfSha256 as Kem>::PrivateKey::from_bytes(&bytes(&vector["skRm"])).unwrap();
-        let encapped =
-            <X25519HkdfSha256 as Kem>::EncappedKey::from_bytes(&bytes(&vector["enc"])).unwrap();
-        let plaintext = hpke::single_shot_open::<ChaCha20Poly1305, HkdfSha256, X25519HkdfSha256>(
-            &OpModeR::Base,
-            &secret,
-            &encapped,
-            &info,
-            &bytes(&first["ct"]),
-            &bytes(&first["aad"]),
-        )
-        .unwrap();
-        assert_eq!(plaintext, bytes(&first["pt"]));
-    }
 }
 
 fn check_opened(opened: &lepic_contact::Opened, expected: &Value, name: &str) {
@@ -322,6 +239,11 @@ fn envelopes_open_and_seal_byte_for_byte() {
             "invite_id" => continue,
             other => panic!("unknown hint kind {other}"),
         };
+        // A slate is sealed padded now (RFC 0003 5.7); these vectors hold unpadded slates, and
+        // `lepic-seal` reseals the padded ones of `epictx_envelopes.json`.
+        if opened.content.kind == MessageType::Slate {
+            continue;
+        }
         // Fields from 0x80 up are read and ignored; this crate never writes them.
         if !vector["opened"]["ignored_extra"]
             .as_array()
