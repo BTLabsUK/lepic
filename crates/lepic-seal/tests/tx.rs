@@ -159,6 +159,7 @@ fn each_key_class_opens_only_its_own_envelopes() {
         (TxKey::Seal(HintRule::Contact(&hint)), KeyClass::Seal),
         (TxKey::Epic1, KeyClass::Epic1),
         (TxKey::Listener, KeyClass::Listener),
+        (TxKey::Epicbox, KeyClass::Epicbox),
     ];
     for (key, class) in keys {
         let envelope = seal_tx(
@@ -174,7 +175,12 @@ fn each_key_class_opens_only_its_own_envelopes() {
         if class != KeyClass::Seal {
             assert_eq!(sealed.hint().as_bytes(), &[0; 8]);
         }
-        for other in [KeyClass::Seal, KeyClass::Epic1, KeyClass::Listener] {
+        for other in [
+            KeyClass::Seal,
+            KeyClass::Epic1,
+            KeyClass::Listener,
+            KeyClass::Epicbox,
+        ] {
             let result = sealed.open_tx(&recipient(), other);
             if other == class {
                 assert_eq!(result.unwrap().content, content(10));

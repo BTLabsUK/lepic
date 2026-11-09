@@ -31,7 +31,7 @@ use sha2::{Digest, Sha256};
 
 const KIT_GENERATOR: &str = "epic-pairing-kit";
 const KIT_VERSION: &str = "0.5.0";
-const KIT_COMMIT: &str = "d032e26c7aa5f9d3cd8ca141efe7dd7148a79115";
+const KIT_COMMIT: &str = "67d94e7a4fe1bf619b16e8c7f44ef9ced2e51fef";
 
 fn vectors(file: &str) -> Vec<Value> {
     let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -73,6 +73,7 @@ fn key_class(value: &Value) -> KeyClass {
         "seal" => KeyClass::Seal,
         "epic1" => KeyClass::Epic1,
         "listener" => KeyClass::Listener,
+        "epicbox" => KeyClass::Epicbox,
         other => panic!("unknown key class {other}"),
     }
 }
@@ -241,6 +242,7 @@ fn tx_key(class: KeyClass, rule: Option<HintRule<'_>>) -> TxKey<'_> {
     match class {
         KeyClass::Epic1 => TxKey::Epic1,
         KeyClass::Listener => TxKey::Listener,
+        KeyClass::Epicbox => TxKey::Epicbox,
         KeyClass::Seal => TxKey::Seal(rule.unwrap()),
     }
 }
@@ -445,7 +447,7 @@ fn epictx_envelopes_open_and_seal_byte_for_byte() {
             resealed += 1;
         }
     }
-    assert_eq!(opened_count, 27);
+    assert_eq!(opened_count, 29);
     assert!(resealed > 20);
 }
 

@@ -188,6 +188,8 @@ pub enum TxKey<'a> {
     Epic1,
     /// A listener's seal key; the hint is zero.
     Listener,
+    /// An Epicbox payments address's seal key; the hint is zero.
+    Epicbox,
 }
 
 impl TxKey<'_> {
@@ -196,6 +198,7 @@ impl TxKey<'_> {
             Self::Seal(_) => KeyClass::Seal,
             Self::Epic1 => KeyClass::Epic1,
             Self::Listener => KeyClass::Listener,
+            Self::Epicbox => KeyClass::Epicbox,
         }
     }
 }
@@ -232,7 +235,7 @@ pub fn seal_tx<R: CryptoRng>(
         key.class(),
         |enc| match key {
             TxKey::Seal(rule) => rule.hint(recipient, enc),
-            TxKey::Epic1 | TxKey::Listener => Hint::from_bytes([0; 8]),
+            TxKey::Epic1 | TxKey::Listener | TxKey::Epicbox => Hint::from_bytes([0; 8]),
         },
         &inner,
         signer,

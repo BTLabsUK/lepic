@@ -86,6 +86,8 @@ pub enum KeyClass {
     Epic1,
     /// The seal key of a listener, onion or web: `"epic-tx/1" || net || suite || 01`.
     Listener,
+    /// The seal key of an Epicbox payments address: `"epic-tx/1" || net || suite || 02`.
+    Epicbox,
 }
 
 impl KeyClass {
@@ -104,6 +106,10 @@ impl KeyClass {
             Self::Listener => {
                 info.extend_from_slice(TX_INFO_DOMAIN);
                 info.extend_from_slice(&[network.byte(), suite, 0x01]);
+            }
+            Self::Epicbox => {
+                info.extend_from_slice(TX_INFO_DOMAIN);
+                info.extend_from_slice(&[network.byte(), suite, 0x02]);
             }
         }
         info

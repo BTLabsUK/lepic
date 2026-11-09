@@ -2,7 +2,7 @@
   "meta": {
     "generator": "epic-pairing-kit",
     "kit_version": "0.5.0",
-    "git_commit": "d032e26c7aa5f9d3cd8ca141efe7dd7148a79115",
+    "git_commit": "67d94e7a4fe1bf619b16e8c7f44ef9ced2e51fef",
     "rfc": "0003-epictx",
     "file": "epictx_reply_mailbox.json"
   },

@@ -542,6 +542,7 @@ fn seal_keys_are_the_vectors() {
             "epic1" => SealKeyKind::Epic1,
             "onion" => SealKeyKind::Onion,
             "web" => SealKeyKind::Web,
+            "epicbox" => SealKeyKind::Epicbox,
             other => panic!("unknown seal key kind {other}"),
         };
         assert_eq!(u64::from(kind.byte()), case["kind"].as_u64().unwrap());

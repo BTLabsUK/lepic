@@ -2,7 +2,7 @@
   "meta": {
     "generator": "epic-pairing-kit",
     "kit_version": "0.5.0",
-    "git_commit": "d032e26c7aa5f9d3cd8ca141efe7dd7148a79115",
+    "git_commit": "67d94e7a4fe1bf619b16e8c7f44ef9ced2e51fef",
     "rfc": "0003-epictx",
     "file": "seal_keys.json"
   },
@@ -40,6 +40,16 @@
     {
       "seed": "a55ac33c9669f00f123456789abcdef0",
       "account": 0,
+      "net": 0,
+      "kind": 3,
+      "kind_name": "epicbox",
+      "message": "6c657069632d77616c6c6574207365616c206b6579207631000000000003",
+      "seal_sk": "d8dd5d26ad89c7ef85d3f9ab3f036c89420d6725d114fc16f34549de375de97d",
+      "seal_pk": "db0931f808d543469d942572f2c66f9e23fef5daa265fa5fd59abea978ffb109"
+    },
+    {
+      "seed": "a55ac33c9669f00f123456789abcdef0",
+      "account": 0,
       "net": 1,
       "kind": 0,
       "kind_name": "epic1",
@@ -66,6 +76,16 @@
       "message": "6c657069632d77616c6c6574207365616c206b6579207631000000000102",
       "seal_sk": "fd1f01cb66348f48ad0abd698919db45720ea8136bba5ffb8d227df4b0180948",
       "seal_pk": "ba656b12139fa679cd2afba7e3fe822a289c4e351079f0b3c53d633c726a8737"
+    },
+    {
+      "seed": "a55ac33c9669f00f123456789abcdef0",
+      "account": 0,
+      "net": 1,
+      "kind": 3,
+      "kind_name": "epicbox",
+      "message": "6c657069632d77616c6c6574207365616c206b6579207631000000000103",
+      "seal_sk": "68074888a9e4939e5c3b3027be98fbc415d3562c34e663bdcb7563c35a2e749a",
+      "seal_pk": "813d77535508cc8e0872bc511cbd954d3aa10d85983b3cafc4d593468072950e"
     },
     {
       "seed": "a55ac33c9669f00f123456789abcdef0",
@@ -100,6 +120,16 @@
     {
       "seed": "a55ac33c9669f00f123456789abcdef0",
       "account": 7,
+      "net": 0,
+      "kind": 3,
+      "kind_name": "epicbox",
+      "message": "6c657069632d77616c6c6574207365616c206b6579207631000000070003",
+      "seal_sk": "22adb8a05c906fa09c7d86b5616c0d0eb4f3679e2f0d7631e17d7a2ac9884403",
+      "seal_pk": "2987609c6fd1c9f1a2bd51131f1e5d8f9acc91f1caa397fbb42be0660a2fd121"
+    },
+    {
+      "seed": "a55ac33c9669f00f123456789abcdef0",
+      "account": 7,
       "net": 1,
       "kind": 0,
       "kind_name": "epic1",
@@ -126,6 +156,16 @@
       "message": "6c657069632d77616c6c6574207365616c206b6579207631000000070102",
       "seal_sk": "08bc77b84828b2008cfb8950c21fabbb5f8d22c260f43c87740181e63aecaf4f",
       "seal_pk": "99e8894548b35edbac1a7db6e8ff6f91818360316315d906c520a9f98a299926"
+    },
+    {
+      "seed": "a55ac33c9669f00f123456789abcdef0",
+      "account": 7,
+      "net": 1,
+      "kind": 3,
+      "kind_name": "epicbox",
+      "message": "6c657069632d77616c6c6574207365616c206b6579207631000000070103",
+      "seal_sk": "71b7fdddaea1d39911481a01cc0cae901b6ece643b55d77b603db9a3087f4844",
+      "seal_pk": "166c7768e8ec8bd69931cb2607e1b024e9705706533ab9c417ec5847b936ae53"
     },
     {
       "seed": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
@@ -160,6 +200,16 @@
     {
       "seed": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
       "account": 0,
+      "net": 0,
+      "kind": 3,
+      "kind_name": "epicbox",
+      "message": "6c657069632d77616c6c6574207365616c206b6579207631000000000003",
+      "seal_sk": "a06d57aaf0c0c75942d8e2fa8ee5635c625a96d6412911fea9daea393a9f9072",
+      "seal_pk": "fda7dbce7cee2f27d049e6f1efd0604335d6ee4c1ca24486e4b95a1c9bc1fa1b"
+    },
+    {
+      "seed": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      "account": 0,
       "net": 1,
       "kind": 0,
       "kind_name": "epic1",
@@ -186,6 +236,16 @@
       "message": "6c657069632d77616c6c6574207365616c206b6579207631000000000102",
       "seal_sk": "06aa45a9d24c169120ef8d131bdd39b6f59be0a4cefd45c22a80aaaa07dda295",
       "seal_pk": "09d221f55db2544e16afd134ab8892be396193986804d87819780a5985d7e053"
+    },
+    {
+      "seed": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      "account": 0,
+      "net": 1,
+      "kind": 3,
+      "kind_name": "epicbox",
+      "message": "6c657069632d77616c6c6574207365616c206b6579207631000000000103",
+      "seal_sk": "8f439536b70ae8cdab4ee53464e336dd73838ecc0b6932473d4e57d13857ee68",
+      "seal_pk": "5e3ac1a6aa2f6d597caa92e9766d51bb2008dd1b4ca163496b3cb3c5a2189c24"
     },
     {
       "seed": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
@@ -220,6 +280,16 @@
     {
       "seed": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
       "account": 7,
+      "net": 0,
+      "kind": 3,
+      "kind_name": "epicbox",
+      "message": "6c657069632d77616c6c6574207365616c206b6579207631000000070003",
+      "seal_sk": "d71455983daa8f91037b3993328cf4e2917762c722063ee68a81c0797d417b91",
+      "seal_pk": "915cc9872741fad1a882c09c765495d960a0ff7f8bb443cce9136b70ed9a555f"
+    },
+    {
+      "seed": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      "account": 7,
       "net": 1,
       "kind": 0,
       "kind_name": "epic1",
@@ -246,6 +316,16 @@
       "message": "6c657069632d77616c6c6574207365616c206b6579207631000000070102",
       "seal_sk": "23327e01abda8c6b35f4f0a25f7adf126bc1ecfdbfd132ffaa2b9a900f9593d2",
       "seal_pk": "4d8f00a95390fe7c74c9b2d883f1b0451593ac9d2e52aa932662c34d9740bf67"
+    },
+    {
+      "seed": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      "account": 7,
+      "net": 1,
+      "kind": 3,
+      "kind_name": "epicbox",
+      "message": "6c657069632d77616c6c6574207365616c206b6579207631000000070103",
+      "seal_sk": "882e9b7e4c33d1a02d9aa0caed4ff74e0d6b34fbb11b8cb8ee17a0663c1aa29c",
+      "seal_pk": "265c3d118fbfcce058d18b6c6c3d6bb6e8ba63ea2086268f3e26387874e20150"
     }
   ]
 }

@@ -69,6 +69,9 @@ pub enum SealKeyKind {
     Onion,
     /// The plain web listener.
     Web,
+    /// The account's Epicbox payments address: its marker advertises the public key, which is
+    /// not the epic1's, so the two addresses are not linkable.
+    Epicbox,
 }
 
 impl SealKeyKind {
@@ -78,6 +81,7 @@ impl SealKeyKind {
             Self::Epic1 => 0x00,
             Self::Onion => 0x01,
             Self::Web => 0x02,
+            Self::Epicbox => 0x03,
         }
     }
 }
@@ -527,6 +531,7 @@ mod tests {
         assert_ne!(base, public(0, Network::Floonet, SealKeyKind::Epic1));
         assert_ne!(base, public(0, Network::Mainnet, SealKeyKind::Onion));
         assert_ne!(base, public(0, Network::Mainnet, SealKeyKind::Web));
+        assert_ne!(base, public(0, Network::Mainnet, SealKeyKind::Epicbox));
     }
 
     #[test]
