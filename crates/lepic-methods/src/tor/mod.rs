@@ -8,8 +8,10 @@
 //! payments to this wallet reach the listener behind the onion.
 
 use std::collections::VecDeque;
+use std::io;
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex, PoisonError, RwLock};
+use std::time::Duration;
 
 use http_body_util::{BodyExt, Full, LengthLimitError, Limited};
 use hyper::body::Bytes;
@@ -18,6 +20,7 @@ use hyper::{Method as HttpMethod, Request, StatusCode};
 use hyper_util::rt::TokioIo;
 use lepic_legacy_rpc::error::RpcError;
 use lepic_legacy_rpc::rpc::{self, VersionInfo};
+use lepic_peer::{PeerClient, PeerClientError, PeerDialFuture, PeerDialer, PeerStream, PeerTarget};
 use lepic_slate::codec::WireSlate;
 use lepic_transport::error::TransportError;
 use lepic_transport::method::{Carries, Method};
@@ -30,7 +33,7 @@ use tracing::debug;
 
 use lepic_tor::socks::{self, SocksCredentials};
 
-use crate::http::{HttpPolicy, slate_id_of};
+use crate::http::{DirectPeer, HttpPolicy, Probe, ProbeError, WebScheme, slate_id_of};
 
 pub use lepic_tor::{
     ControlError, FailureKind, FixedSocks, MAX_STREAMS_PER_CIRCUIT, ONION_NAME_LEN, ONION_SOCKET,
@@ -313,15 +316,15 @@ impl Tor {
         held.push_back(Held { slate_id, wire });
     }
 
-    /// `check_version`, then `receive_tx` on the same circuit; the S2 is held for the caller
-    /// under the S1's slate id. An answer for another slate is refused as malformed and not
-    /// held.
-    pub async fn send(&self, to: &str, wire: &WireSlate) -> Result<(), TorSendError> {
-        let onion = OnionAddress::parse(to)?;
-        let slate_id = slate_id_of(wire).ok_or(TorSendError::Rpc(RpcError::NotJson))?;
-        let proxy = self.socks_address().ok_or(TorSendError::NotRunning)?;
-        let mut credentials = SocksCredentials::random()?;
-        let version = match self.client.check_version(proxy, &onion, &credentials).await {
+    /// `check_version` at `onion`, tried once more on a new circuit when the first one timed
+    /// out, and the credentials of the circuit that answered.
+    async fn versions(
+        &self,
+        proxy: SocketAddr,
+        onion: &OnionAddress,
+    ) -> Result<(VersionInfo, SocksCredentials), TorSendError> {
+        let credentials = SocksCredentials::random()?;
+        match self.client.check_version(proxy, onion, &credentials).await {
             // The first circuit to an onion can take much longer than the next one.
             Err(TorSendError::Socks(SocksError::Timeout)) => {
                 debug!(
@@ -329,13 +332,48 @@ impl Tor {
                     attempt = 2,
                     "onion connect timed out, retrying"
                 );
-                credentials = SocksCredentials::random()?;
-                self.client
-                    .check_version(proxy, &onion, &credentials)
-                    .await?
+                let credentials = SocksCredentials::random()?;
+                let version = self
+                    .client
+                    .check_version(proxy, onion, &credentials)
+                    .await?;
+                Ok((version, credentials))
             }
-            other => other?,
-        };
+            other => Ok((other?, credentials)),
+        }
+    }
+
+    /// The `check_version` answer of the wallet at the onion `to`, as a send's first call
+    /// reads it.
+    pub async fn probe(&self, to: &Destination) -> Result<Probe, ProbeError> {
+        let onion = OnionAddress::parse(to.as_str()).map_err(TorSendError::from)?;
+        let proxy = self.socks_address().ok_or(TorSendError::NotRunning)?;
+        let (version, _) = self.versions(proxy, &onion).await?;
+        Ok(Probe::new(
+            WebScheme::Http,
+            &onion.host(),
+            ONION_PORT,
+            version.lepic,
+        )?)
+    }
+
+    /// A dialer that opens each connection of a [`PeerClient`] through the attached tor, on a
+    /// circuit of its own, waiting at most `connect_timeout` for it.
+    pub fn peer_dialer(&self, connect_timeout: Duration) -> Arc<dyn PeerDialer> {
+        Arc::new(OnionDialer {
+            tor: self.clone(),
+            connect_timeout,
+        })
+    }
+
+    /// `check_version`, then `receive_tx` on the same circuit; the S2 is held for the caller
+    /// under the S1's slate id. An answer for another slate is refused as malformed and not
+    /// held.
+    pub async fn send(&self, to: &str, wire: &WireSlate) -> Result<(), TorSendError> {
+        let onion = OnionAddress::parse(to)?;
+        let slate_id = slate_id_of(wire).ok_or(TorSendError::Rpc(RpcError::NotJson))?;
+        let proxy = self.socks_address().ok_or(TorSendError::NotRunning)?;
+        let (version, credentials) = self.versions(proxy, &onion).await?;
         if !version.v2 {
             return Err(TorSendError::NoCommonVersion);
         }
@@ -349,6 +387,56 @@ impl Tor {
         debug!(transport = "tor", %slate_id, "answer received");
         self.hold(slate_id, reply);
         Ok(())
+    }
+}
+
+/// Opens a [`PeerClient`]'s connections through a [`Tor`] method's tor.
+struct OnionDialer {
+    tor: Tor,
+    connect_timeout: Duration,
+}
+
+impl PeerDialer for OnionDialer {
+    fn dial<'a>(&'a self, host: &'a str, port: u16) -> PeerDialFuture<'a> {
+        Box::pin(async move {
+            let proxy = self.tor.socks_address().ok_or_else(|| {
+                io::Error::new(io::ErrorKind::NotConnected, TorSendError::NotRunning)
+            })?;
+            let credentials = SocksCredentials::random().map_err(io::Error::other)?;
+            let stream = socks::connect(proxy, host, port, &credentials, self.connect_timeout)
+                .await
+                .map_err(io::Error::other)?;
+            Ok(Box::new(stream) as Box<dyn PeerStream>)
+        })
+    }
+}
+
+/// The native endpoints of wallets behind onions: the advert read through a [`Tor`] method,
+/// the envelope posted through a [`PeerClient`] dialing with [`Tor::peer_dialer`].
+#[derive(Debug, Clone)]
+pub struct TorPeer {
+    tor: Tor,
+    client: PeerClient,
+}
+
+impl TorPeer {
+    /// Reads adverts through `tor` and posts through `client`.
+    pub fn new(tor: Tor, client: PeerClient) -> Self {
+        Self { tor, client }
+    }
+}
+
+impl DirectPeer for TorPeer {
+    fn probe<'a>(&'a self, to: &'a Destination) -> BoxFuture<'a, Result<Probe, ProbeError>> {
+        Box::pin(self.tor.probe(to))
+    }
+
+    fn post<'a>(
+        &'a self,
+        target: &'a PeerTarget,
+        envelope: &'a [u8],
+    ) -> BoxFuture<'a, Result<Vec<u8>, PeerClientError>> {
+        Box::pin(self.client.post_slate(target, envelope))
     }
 }
 
