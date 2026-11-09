@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 //! The sealed envelope (RFC 0002 section 3): HPKE base mode to the recipient's X25519 key,
 //! optionally signed with the sender's Ed25519 key for this contact. The signature is tag 0xFF,
-//! so optional fields from 0x80 up sit before it and are signed too.
+//! so optional fields from 0x80 up sit before it and are signed too. Slate envelopes carry the
+//! padding field 0xFE (RFC 0003 5.7) before the signature, so they are signed with it.
 
 use std::fmt;
 
@@ -21,7 +22,8 @@ use crate::keys::{EncPublicKey, EncSecretKey, sig_key};
 use crate::network::Network;
 use crate::psk::{PSK_ID, PresharedKey, SUITE_PSK};
 use crate::text::Reference;
-use crate::tlv::{Fields, Writer};
+use crate::tlv::{Fields, TAG_PADDING, Writer};
+use crate::tx::{ReplyMailbox, TxContent, TxOpened};
 
 pub const MAGIC: [u8; 4] = [0x89, 0x45, 0x53, 0x45];
 /// The highest envelope version this crate reads and the one it writes.
@@ -30,12 +32,20 @@ pub const ENVELOPE_VERSION: u8 = 1;
 pub const SUITE: u8 = 1;
 pub const MAX_ENVELOPE_LEN: usize = 1024 * 1024;
 
+/// The most bytes a body holds: a field's `u16` length. The binding size of a sealed slate.
+pub const MAX_BODY_LEN: usize = 65_535;
+/// The least inner content a padded envelope carries (RFC 0003 5.7).
+pub const PADDING_FLOOR: usize = 768;
+
 pub const HEADER_LEN: usize = 16;
 const ENC_LEN: usize = 32;
 const AEAD_TAG_LEN: usize = 16;
 const MIN_ENVELOPE_LEN: usize = HEADER_LEN + ENC_LEN + AEAD_TAG_LEN;
+const FIELD_HEADER_LEN: usize = 3;
+const SIGNATURE_FIELD_LEN: usize = FIELD_HEADER_LEN + 64;
 
 const INFO_DOMAIN: &[u8] = b"epic-seal/1";
+const TX_INFO_DOMAIN: &[u8] = b"epic-tx/1";
 const SIGNATURE_DOMAIN: &[u8] = b"epic-seal/1 sig";
 
 const TAG_TYPE: u8 = 0x01;
@@ -46,6 +56,8 @@ const TAG_REFERENCE: u8 = 0x05;
 const TAG_EXPIRES: u8 = 0x06;
 const TAG_CARD: u8 = 0x07;
 const TAG_SENDER_KEY: u8 = 0x08;
+/// The reply mailbox of a `lepic.v1` slate (RFC 0003 5.6); unknown to the RFC 0002 reader.
+const TAG_REPLY_MAILBOX: u8 = 0x09;
 /// An extension, so readers that predate it skip it; signed like every field before 0xFF. A
 /// value that is not eight bytes is skipped like any extension this reader does not know.
 const TAG_SENT_AT: u8 = 0x80;
@@ -60,6 +72,61 @@ const TAG_DOMAIN: u8 = 0x83;
 const TAG_SIGNATURE: u8 = 0xff;
 
 type SealKem = X25519HkdfSha256;
+
+/// The type byte of a `lepic.v1` slate (RFC 0003 5.6). Only [`SealedEnvelope::open_tx`] reads
+/// it; the RFC 0002 reader refuses it.
+pub const NATIVE_SLATE: u8 = 0x0a;
+
+/// Which kind of key an envelope is sealed to, which sets the HPKE `info` (RFC 0003 5.4).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum KeyClass {
+    /// A contact, one-time reply or pairing key: `"epic-seal/1" || net || suite`.
+    Seal,
+    /// The seal key of an epic1 address: `"epic-tx/1" || net || suite || 00`.
+    Epic1,
+    /// The seal key of a listener, onion or web: `"epic-tx/1" || net || suite || 01`.
+    Listener,
+}
+
+impl KeyClass {
+    /// The HPKE `info` of this class on `network` with `suite`.
+    pub fn info(self, network: Network, suite: u8) -> Vec<u8> {
+        let mut info = Vec::with_capacity(INFO_DOMAIN.len().saturating_add(3));
+        match self {
+            Self::Seal => {
+                info.extend_from_slice(INFO_DOMAIN);
+                info.extend_from_slice(&[network.byte(), suite]);
+            }
+            Self::Epic1 => {
+                info.extend_from_slice(TX_INFO_DOMAIN);
+                info.extend_from_slice(&[network.byte(), suite, 0x00]);
+            }
+            Self::Listener => {
+                info.extend_from_slice(TX_INFO_DOMAIN);
+                info.extend_from_slice(&[network.byte(), suite, 0x01]);
+            }
+        }
+        info
+    }
+}
+
+/// Padmé (RFC 0003 5.7): `length` rounded up so that only its top bits vary.
+pub fn padme(length: usize) -> usize {
+    if length < 2 {
+        return length;
+    }
+    let exponent = length.ilog2();
+    let shift = exponent.saturating_sub(exponent.ilog2().saturating_add(1));
+    let mask = usize::MAX
+        .checked_shr(usize::BITS.saturating_sub(shift))
+        .unwrap_or(0);
+    length.saturating_add(mask) & !mask
+}
+
+/// The padded length of inner content of `length` bytes: Padmé, at least [`PADDING_FLOOR`].
+pub fn pad_target(length: usize) -> usize {
+    padme(length).max(PADDING_FLOOR)
+}
 
 /// What the body of an envelope is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -219,17 +286,6 @@ pub struct Opened {
     pub sender: Option<VerifyingKey>,
 }
 
-fn info(network: Network, suite: u8) -> [u8; 13] {
-    let mut info = [0u8; 13];
-    let (domain, rest) = info.split_at_mut(INFO_DOMAIN.len());
-    domain.copy_from_slice(INFO_DOMAIN);
-    if let [net, suite_byte] = rest {
-        *net = network.byte();
-        *suite_byte = suite;
-    }
-    info
-}
-
 fn header(network: Network, suite: u8, hint: &Hint) -> [u8; HEADER_LEN] {
     let [m0, m1, m2, m3] = MAGIC;
     let [h0, h1, h2, h3, h4, h5, h6, h7] = *hint.as_bytes();
@@ -314,7 +370,75 @@ fn seal_with<R: CryptoRng>(
     psk: Option<&[u8; 32]>,
     rng: &mut R,
 ) -> Result<Vec<u8>, EncodeError> {
-    if let Some(card) = &content.card {
+    let inner = Inner {
+        kind: content.kind.byte(),
+        body: &content.body,
+        reply_key: content.reply_key.as_ref(),
+        purpose: content.purpose,
+        reference: content.reference.as_ref(),
+        expires: content.expires,
+        card: content.card.as_ref(),
+        reply_mailbox: None,
+        sent_at: content.sent_at,
+        address_proof: content.address_proof.as_ref(),
+        features: content.features,
+        domain: content.domain.as_ref(),
+        pad: content.kind == MessageType::Slate,
+    };
+    seal_inner(
+        network,
+        recipient,
+        KeyClass::Seal,
+        |enc| hint_rule.hint(recipient, enc),
+        &inner,
+        signer,
+        psk,
+        rng,
+    )
+}
+
+/// The fields of inner content to seal, borrowed from a [`Content`] or a
+/// [`crate::TxContent`].
+pub(crate) struct Inner<'c> {
+    pub kind: u8,
+    pub body: &'c [u8],
+    pub reply_key: Option<&'c EncPublicKey>,
+    pub purpose: Option<Purpose>,
+    pub reference: Option<&'c Reference>,
+    pub expires: Option<u64>,
+    pub card: Option<&'c ContactCard>,
+    pub reply_mailbox: Option<&'c ReplyMailbox>,
+    pub sent_at: Option<u64>,
+    pub address_proof: Option<&'c [u8; 32]>,
+    pub features: Option<u32>,
+    pub domain: Option<&'c DomainClaim>,
+    /// Whether to write the padding field: always for a slate.
+    pub pad: bool,
+}
+
+/// Seals `inner` to `recipient` with the `info` of `class` and the hint `hint` computes from
+/// `enc`.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn seal_inner<R: CryptoRng>(
+    network: Network,
+    recipient: &EncPublicKey,
+    class: KeyClass,
+    hint: impl FnOnce(&[u8; ENC_LEN]) -> Hint,
+    inner: &Inner<'_>,
+    signer: Option<&SigningKey>,
+    psk: Option<&[u8; 32]>,
+    rng: &mut R,
+) -> Result<Vec<u8>, EncodeError> {
+    if inner.body.len() > MAX_BODY_LEN {
+        return Err(EncodeError::BodyTooLarge {
+            limit: MAX_BODY_LEN,
+            found: inner.body.len(),
+        });
+    }
+    if inner.reply_mailbox.is_some() && (inner.reply_key.is_none() || signer.is_some()) {
+        return Err(EncodeError::ReplyMailbox);
+    }
+    if let Some(card) = inner.card {
         if card.network() != network {
             return Err(EncodeError::WrongNetwork);
         }
@@ -335,15 +459,15 @@ fn seal_with<R: CryptoRng>(
         ChaCha20Poly1305,
         HkdfSha256,
         SealKem,
-    >(&mode, &public, &info(network, suite), rng)
+    >(&mode, &public, &class.info(network, suite), rng)
     .map_err(|_| EncodeError::Encapsulation)?;
     let enc: [u8; ENC_LEN] = encapped
         .to_bytes()
         .as_slice()
         .try_into()
         .map_err(|_| EncodeError::Encapsulation)?;
-    let header = header(network, suite, &hint_rule.hint(recipient, &enc));
-    let inner = Zeroizing::new(encode_content(content, &header, recipient, signer)?);
+    let header = header(network, suite, &hint(&enc));
+    let inner = Zeroizing::new(encode_inner(inner, &header, recipient, signer)?);
     let ciphertext = context
         .seal(&inner, &header)
         .map_err(|_| EncodeError::Encryption)?;
@@ -364,22 +488,22 @@ fn seal_with<R: CryptoRng>(
     Ok(envelope)
 }
 
-fn encode_content(
-    content: &Content,
+fn encode_inner(
+    inner: &Inner<'_>,
     header: &[u8; HEADER_LEN],
     recipient: &EncPublicKey,
     signer: Option<&SigningKey>,
 ) -> Result<Vec<u8>, EncodeError> {
     let mut writer = Writer::default();
-    writer.field(TAG_TYPE, &[content.kind.byte()])?;
-    writer.field(TAG_BODY, &content.body)?;
+    writer.field(TAG_TYPE, &[inner.kind])?;
+    writer.field(TAG_BODY, inner.body)?;
     writer.optional(
         TAG_REPLY_KEY,
-        content.reply_key.as_ref().map(|key| &key.as_bytes()[..]),
+        inner.reply_key.map(|key| &key.as_bytes()[..]),
     )?;
     writer.optional(
         TAG_PURPOSE,
-        content
+        inner
             .purpose
             .map(|purpose| [purpose.byte()])
             .as_ref()
@@ -387,26 +511,29 @@ fn encode_content(
     )?;
     writer.optional(
         TAG_REFERENCE,
-        content
+        inner
             .reference
-            .as_ref()
             .map(|reference| reference.as_str().as_bytes()),
     )?;
     writer.optional(
         TAG_EXPIRES,
-        content
+        inner
             .expires
             .map(u64::to_be_bytes)
             .as_ref()
             .map(|bytes| &bytes[..]),
     )?;
-    writer.optional(TAG_CARD, content.card.as_ref().map(ContactCard::as_bytes))?;
+    writer.optional(TAG_CARD, inner.card.map(ContactCard::as_bytes))?;
     if let Some(signer) = signer {
         writer.field(TAG_SENDER_KEY, signer.verifying_key().as_bytes())?;
     }
     writer.optional(
+        TAG_REPLY_MAILBOX,
+        inner.reply_mailbox.map(ReplyMailbox::to_bytes).as_deref(),
+    )?;
+    writer.optional(
         TAG_SENT_AT,
-        content
+        inner
             .sent_at
             .map(u64::to_be_bytes)
             .as_ref()
@@ -414,11 +541,11 @@ fn encode_content(
     )?;
     writer.optional(
         TAG_ADDRESS_PROOF,
-        content.address_proof.as_ref().map(|proof| &proof[..]),
+        inner.address_proof.map(|proof| &proof[..]),
     )?;
     writer.optional(
         TAG_FEATURES,
-        content
+        inner
             .features
             .map(u32::to_be_bytes)
             .as_ref()
@@ -426,12 +553,24 @@ fn encode_content(
     )?;
     writer.optional(
         TAG_DOMAIN,
-        content
-            .domain
-            .as_ref()
-            .map(DomainClaim::to_bytes)
-            .as_deref(),
+        inner.domain.map(DomainClaim::to_bytes).as_deref(),
     )?;
+    if inner.pad {
+        // L counts every field, the padding field's header and the signature field to come.
+        let length = writer
+            .as_bytes()
+            .len()
+            .saturating_add(FIELD_HEADER_LEN)
+            .saturating_add(if signer.is_some() {
+                SIGNATURE_FIELD_LEN
+            } else {
+                0
+            });
+        writer.field(
+            TAG_PADDING,
+            &vec![0; pad_target(length).saturating_sub(length)],
+        )?;
+    }
     if let Some(signer) = signer {
         let signature = signer.sign(&signing_input(header, recipient, writer.as_bytes()));
         writer.field(TAG_SIGNATURE, &signature.to_bytes())?;
@@ -451,7 +590,8 @@ pub struct SealedEnvelope<'a> {
 }
 
 impl<'a> SealedEnvelope<'a> {
-    /// Checks the bounds and the header: version, network, suite and flags, in that order.
+    /// Checks the bounds and the header: magic, version, network, suite and flags, in that
+    /// order. `enc` is split after the suite, whose KEM sets its length.
     pub fn decode(bytes: &'a [u8], network: Network) -> Result<Self, DecodeError> {
         if bytes.len() > MAX_ENVELOPE_LEN {
             return Err(DecodeError::Oversized {
@@ -459,11 +599,11 @@ impl<'a> SealedEnvelope<'a> {
                 found: bytes.len(),
             });
         }
+        if bytes.len() < MIN_ENVELOPE_LEN {
+            return Err(Malformed::Truncated.into());
+        }
         let (header, rest) = bytes
             .split_first_chunk::<HEADER_LEN>()
-            .ok_or(Malformed::Truncated)?;
-        let (enc, ciphertext) = rest
-            .split_first_chunk::<ENC_LEN>()
             .ok_or(Malformed::Truncated)?;
         let [
             m0,
@@ -499,6 +639,10 @@ impl<'a> SealedEnvelope<'a> {
         if flags != 0 {
             return Err(Malformed::Flags { flags }.into());
         }
+        // Both suites use DHKEM(X25519), whose `enc` is 32 bytes.
+        let (enc, ciphertext) = rest
+            .split_first_chunk::<ENC_LEN>()
+            .ok_or(Malformed::Truncated)?;
         if ciphertext.len() < AEAD_TAG_LEN {
             return Err(Malformed::Truncated.into());
         }
@@ -551,7 +695,18 @@ impl<'a> SealedEnvelope<'a> {
         if self.suite != SUITE {
             return Err(DecodeError::CannotOpen);
         }
-        self.open_mode(key, &OpModeR::Base)
+        let inner = self.open_bytes(key, &OpModeR::Base, KeyClass::Seal)?;
+        decode_content(&inner, self.network, self.header, &key.public_key())
+    }
+
+    /// Opens a `lepic.v1` slate (type [`NATIVE_SLATE`]) with one candidate key of `class`. Its
+    /// errors are those of [`Self::open`]; content of any other type is refused.
+    pub fn open_tx(&self, key: &EncSecretKey, class: KeyClass) -> Result<TxOpened, DecodeError> {
+        if self.suite != SUITE {
+            return Err(DecodeError::CannotOpen);
+        }
+        let inner = self.open_bytes(key, &OpModeR::Base, class)?;
+        decode_tx_content(&inner, self.network, self.header, &key.public_key())
     }
 
     /// Opens an envelope of a private pairing with one candidate key and the pairing's `psk`.
@@ -566,7 +721,8 @@ impl<'a> SealedEnvelope<'a> {
         }
         let bundle =
             PskBundle::new(psk.psk_bytes(), PSK_ID).map_err(|_| DecodeError::CannotOpen)?;
-        self.open_mode(key, &OpModeR::Psk(bundle))
+        let inner = self.open_bytes(key, &OpModeR::Psk(bundle), KeyClass::Seal)?;
+        decode_content(&inner, self.network, self.header, &key.public_key())
     }
 
     /// [`Self::open_psk`] for a pairing whose recorded sig key is `expected`, as
@@ -588,27 +744,27 @@ impl<'a> SealedEnvelope<'a> {
         Ok(opened)
     }
 
-    fn open_mode(
+    fn open_bytes(
         &self,
         key: &EncSecretKey,
         mode: &OpModeR<'_, SealKem>,
-    ) -> Result<Opened, DecodeError> {
+        class: KeyClass,
+    ) -> Result<Zeroizing<Vec<u8>>, DecodeError> {
         let secret = <SealKem as Kem>::PrivateKey::from_bytes(key.expose_bytes())
             .map_err(|_| DecodeError::CannotOpen)?;
         let encapped = <SealKem as Kem>::EncappedKey::from_bytes(self.enc)
             .map_err(|_| DecodeError::CannotOpen)?;
-        let inner = Zeroizing::new(
+        Ok(Zeroizing::new(
             hpke::single_shot_open::<ChaCha20Poly1305, HkdfSha256, SealKem>(
                 mode,
                 &secret,
                 &encapped,
-                &info(self.network, self.suite),
+                &class.info(self.network, self.suite),
                 self.ciphertext,
                 self.header,
             )
             .map_err(|_| DecodeError::CannotOpen)?,
-        );
-        decode_content(&inner, self.network, self.header, &key.public_key())
+        ))
     }
 
     /// Whether the envelope was sealed for a private pairing.
@@ -626,9 +782,153 @@ pub fn decode_content(
     header: &[u8; HEADER_LEN],
     recipient: &EncPublicKey,
 ) -> Result<Opened, DecodeError> {
-    let fields = Fields::parse(bytes, TAG_SENDER_KEY, Some(TAG_SIGNATURE))?;
-    let kind = MessageType::from_byte(fields.require_u8(TAG_TYPE)?)
-        .ok_or(Malformed::FieldValue { tag: TAG_TYPE })?;
+    let decoded = decode_inner(bytes, network, header, recipient, Reader::Rfc0002)?;
+    let kind =
+        MessageType::from_byte(decoded.kind).ok_or(Malformed::FieldValue { tag: TAG_TYPE })?;
+    Ok(Opened {
+        content: Content {
+            kind,
+            body: decoded.body,
+            reply_key: decoded.reply_key,
+            purpose: decoded.purpose,
+            reference: decoded.reference,
+            expires: decoded.expires,
+            card: decoded.card,
+            sent_at: decoded.sent_at,
+            address_proof: decoded.address_proof,
+            features: decoded.features,
+            domain: decoded.domain,
+        },
+        sender: decoded.sender,
+    })
+}
+
+/// The inner fields of a `lepic.v1` slate envelope, as [`SealedEnvelope::open_tx`] reads them;
+/// the pure decode entry point for fuzzing. Returns the content, the verified sender, and the
+/// length of the padding field when there is one.
+pub fn decode_tx_content(
+    bytes: &[u8],
+    network: Network,
+    header: &[u8; HEADER_LEN],
+    recipient: &EncPublicKey,
+) -> Result<TxOpened, DecodeError> {
+    let decoded = decode_inner(bytes, network, header, recipient, Reader::Tx)?;
+    Ok(TxOpened {
+        content: TxContent {
+            body: decoded.body,
+            reply_key: decoded.reply_key,
+            reply_mailbox: decoded.reply_mailbox,
+            purpose: decoded.purpose,
+            reference: decoded.reference,
+            expires: decoded.expires,
+            card: decoded.card,
+            sent_at: decoded.sent_at,
+            address_proof: decoded.address_proof,
+            features: decoded.features,
+            domain: decoded.domain,
+        },
+        sender: decoded.sender,
+        padding: decoded.padding,
+        inner_len: bytes.len(),
+    })
+}
+
+/// Which reader decodes inner content.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Reader {
+    /// RFC 0002: the types of [`MessageType`]; tag 09 is unknown.
+    Rfc0002,
+    /// RFC 0003: type [`NATIVE_SLATE`] only, with tag 09.
+    Tx,
+}
+
+struct Decoded {
+    kind: u8,
+    body: Vec<u8>,
+    reply_key: Option<EncPublicKey>,
+    purpose: Option<Purpose>,
+    reference: Option<Reference>,
+    expires: Option<u64>,
+    card: Option<ContactCard>,
+    reply_mailbox: Option<ReplyMailbox>,
+    sent_at: Option<u64>,
+    address_proof: Option<[u8; 32]>,
+    features: Option<u32>,
+    domain: Option<DomainClaim>,
+    padding: Option<usize>,
+    sender: Option<VerifyingKey>,
+}
+
+/// Refuses a type the reader does not know, and tag 09 outside type 0A.
+fn check_kind(fields: &Fields<'_>, kind: u8, reader: Reader) -> Result<(), DecodeError> {
+    let known = MessageType::from_byte(kind).is_some();
+    match reader {
+        Reader::Rfc0002 if !known => return Err(Malformed::FieldValue { tag: TAG_TYPE }.into()),
+        Reader::Rfc0002 => {}
+        Reader::Tx => {
+            if !known && kind != NATIVE_SLATE {
+                return Err(Malformed::FieldValue { tag: TAG_TYPE }.into());
+            }
+            // Tag 09 belongs to type 0A alone; in any other type it is the unknown tag every
+            // RFC 0002 reader refuses.
+            if kind != NATIVE_SLATE && fields.get(TAG_REPLY_MAILBOX).is_some() {
+                return Err(Malformed::UnknownField {
+                    tag: TAG_REPLY_MAILBOX,
+                }
+                .into());
+            }
+            if kind != NATIVE_SLATE {
+                return Err(Malformed::FieldValue { tag: TAG_TYPE }.into());
+            }
+        }
+    }
+    Ok(())
+}
+
+/// The reply mailbox, valid only beside a reply key in an anonymous envelope.
+fn reply_mailbox(
+    fields: &Fields<'_>,
+    has_reply_key: bool,
+) -> Result<Option<ReplyMailbox>, Malformed> {
+    let Some(bytes) = fields.get(TAG_REPLY_MAILBOX) else {
+        return Ok(None);
+    };
+    if !has_reply_key || fields.signature().is_some() {
+        return Err(Malformed::FieldValue {
+            tag: TAG_REPLY_MAILBOX,
+        });
+    }
+    ReplyMailbox::from_bytes(bytes).map(Some)
+}
+
+/// The length of the padding field, whose bytes must all be zero.
+fn padding_len(fields: &Fields<'_>) -> Result<Option<usize>, Malformed> {
+    fields
+        .padding()
+        .map(|value| {
+            if value.iter().any(|byte| *byte != 0) {
+                Err(Malformed::FieldValue { tag: TAG_PADDING })
+            } else {
+                Ok(value.len())
+            }
+        })
+        .transpose()
+}
+
+fn decode_inner(
+    bytes: &[u8],
+    network: Network,
+    header: &[u8; HEADER_LEN],
+    recipient: &EncPublicKey,
+    reader: Reader,
+) -> Result<Decoded, DecodeError> {
+    let last_known = match reader {
+        Reader::Rfc0002 => TAG_SENDER_KEY,
+        Reader::Tx => TAG_REPLY_MAILBOX,
+    };
+    let fields = Fields::parse(bytes, last_known, Some(TAG_SIGNATURE))?;
+    let kind = fields.require_u8(TAG_TYPE)?;
+    check_kind(&fields, kind, reader)?;
     let body = fields.require(TAG_BODY)?.to_vec();
     let reply_key = fields
         .optional_array(TAG_REPLY_KEY)?
@@ -652,6 +952,7 @@ pub fn decode_content(
         .get(TAG_CARD)
         .map(|bytes| ContactCard::decode(bytes, network))
         .transpose()?;
+    let reply_mailbox = reply_mailbox(&fields, reply_key.is_some())?;
     let sent_at = fields
         .extension(TAG_SENT_AT)
         .and_then(|bytes| <[u8; 8]>::try_from(bytes).ok())
@@ -666,6 +967,7 @@ pub fn decode_content(
     let domain = fields
         .extension(TAG_DOMAIN)
         .and_then(|bytes| DomainClaim::from_bytes(bytes).ok());
+    let padding = padding_len(&fields)?;
 
     let sender = match (
         fields.optional_array::<32>(TAG_SENDER_KEY)?,
@@ -699,20 +1001,20 @@ pub fn decode_content(
         return Err(Malformed::FieldValue { tag: TAG_CARD }.into());
     }
 
-    Ok(Opened {
-        content: Content {
-            kind,
-            body,
-            reply_key,
-            purpose,
-            reference,
-            expires,
-            card,
-            sent_at,
-            address_proof,
-            features,
-            domain,
-        },
+    Ok(Decoded {
+        kind,
+        body,
+        reply_key,
+        purpose,
+        reference,
+        expires,
+        card,
+        reply_mailbox,
+        sent_at,
+        address_proof,
+        features,
+        domain,
+        padding,
         sender,
     })
 }

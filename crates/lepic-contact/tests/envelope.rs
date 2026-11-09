@@ -196,7 +196,10 @@ fn seal_refuses_a_body_longer_than_a_field() {
             None,
             &mut ScriptedRng::seeded(1)
         ),
-        Err(EncodeError::FieldTooLong { tag: 0x02 })
+        Err(EncodeError::BodyTooLarge {
+            limit: 65_535,
+            found: 65_536
+        })
     );
 }
 

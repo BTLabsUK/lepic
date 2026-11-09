@@ -14,11 +14,16 @@ const KNOWN_TAG_SLOTS: usize = 16;
 /// How many extensions a list keeps for its reader; any after them are skipped unread.
 const EXTENSION_SLOTS: usize = 8;
 
+/// The padding field (RFC 0003 5.6), kept in a slot of its own so that it is found whatever
+/// number of extensions come before it.
+pub const TAG_PADDING: u8 = 0xfe;
+
 /// The fields of one decoded list, borrowed from the input.
 pub struct Fields<'a> {
     values: [Option<&'a [u8]>; KNOWN_TAG_SLOTS],
     /// The first extension fields, from 0x80 up, that a reader may know, in tag order.
     extensions: [Option<(u8, &'a [u8])>; EXTENSION_SLOTS],
+    padding: Option<&'a [u8]>,
     signature: Option<&'a [u8]>,
     /// The encoded bytes before the signature field: what the signature covers.
     signed_prefix: &'a [u8],
@@ -36,6 +41,7 @@ impl<'a> Fields<'a> {
         let mut values = [None; KNOWN_TAG_SLOTS];
         let mut signature_value = None;
         let mut extensions = [None; EXTENSION_SLOTS];
+        let mut padding = None;
         let mut signed_prefix = bytes;
         let mut previous: Option<u8> = None;
         let mut rest = bytes;
@@ -61,6 +67,8 @@ impl<'a> Fields<'a> {
                     .get_mut(usize::from(tag))
                     .ok_or(Malformed::UnknownField { tag })?;
                 *slot = Some(value);
+            } else if tag == TAG_PADDING {
+                padding = Some(value);
             } else if let Some(slot) = extensions.iter_mut().find(|slot| slot.is_none()) {
                 *slot = Some((tag, value));
             }
@@ -73,6 +81,7 @@ impl<'a> Fields<'a> {
         Ok(Self {
             values,
             extensions,
+            padding,
             signature: signature_value,
             signed_prefix,
         })
@@ -95,6 +104,11 @@ impl<'a> Fields<'a> {
             .flatten()
             .find(|(found, _)| *found == tag)
             .map(|(_, value)| *value)
+    }
+
+    /// The value of the padding field, when the list has one.
+    pub fn padding(&self) -> Option<&'a [u8]> {
+        self.padding
     }
 
     /// The value of the signature field, when the list has one.
@@ -235,6 +249,19 @@ mod tests {
             parse(&[0x00, 0, 0]).err(),
             Some(Malformed::UnknownField { tag: 0x00 }.into())
         );
+    }
+
+    #[test]
+    fn padding_is_found_after_every_extension_slot() {
+        let mut bytes = vec![0x01, 0, 1, 7];
+        for tag in 0x80..0x8a {
+            bytes.extend_from_slice(&[tag, 0, 0]);
+        }
+        bytes.extend_from_slice(&[0xfe, 0, 2, 0, 0]);
+        let fields = parse(&bytes).unwrap();
+        assert_eq!(fields.padding(), Some(&[0, 0][..]));
+        assert_eq!(fields.extension(0xfe), None);
+        assert_eq!(fields.extension(0x89), None);
     }
 
     #[test]

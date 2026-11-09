@@ -22,14 +22,19 @@ mod pairing_id;
 mod psk;
 mod text;
 mod tlv;
+mod tx;
 
-pub use armor::{MAX_ARMOR_LEN, SEALED_FILE_EXTENSION, armor, dearmor, looks_sealed};
+pub use armor::{
+    ArmorMarker, ClassifyError, MAX_ARMOR_LEN, PaymentFile, SEALED_FILE_EXTENSION, armor, armor_tx,
+    classify, dearmor, dearmor_marked, looks_sealed,
+};
 pub use card::{CARD_FORMAT, Capabilities, CardFields, ContactCard, ContactKind, MAX_CARD_LEN};
 pub use domain::{DOMAIN_TAG, DomainClaim, DomainError, DomainKey, DomainName, MAX_DOMAIN_LEN};
 pub use ed25519_dalek::{SigningKey, VerifyingKey};
 pub use envelope::{
-    Content, ENVELOPE_VERSION, HEADER_LEN, MAGIC, MAX_ENVELOPE_LEN, MessageType, Opened, Purpose,
-    SUITE, SealedEnvelope, decode_content, seal, seal_psk,
+    Content, ENVELOPE_VERSION, HEADER_LEN, KeyClass, MAGIC, MAX_BODY_LEN, MAX_ENVELOPE_LEN,
+    MessageType, NATIVE_SLATE, Opened, PADDING_FLOOR, Purpose, SUITE, SealedEnvelope,
+    decode_content, decode_tx_content, pad_target, padme, seal, seal_psk,
 };
 pub use error::{DecodeError, EncodeError, KeyError, Malformed, TextError};
 pub use hint::{Hint, HintRule};
@@ -41,6 +46,7 @@ pub use text::{
     ContactName, MAX_HOST_LEN, MAX_MAILBOX_LEN, MAX_NAME_LEN, MAX_REFERENCE_LEN, MailboxAddress,
     Reference, RelayHost,
 };
+pub use tx::{ReplyMailbox, TxContent, TxKey, TxOpened, seal_tx};
 
 /// The building blocks of the formats above, for the formats `lepic-contact` builds on the
 /// envelope: hashes, the TLV reader and writer, the checked base64 of links, key checks.

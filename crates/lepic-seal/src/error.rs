@@ -43,7 +43,7 @@ pub enum Malformed {
     Version { found: u8 },
     #[error("unknown envelope flags {flags}")]
     Flags { flags: u8 },
-    #[error("armor framing is not BEGINEPICSEALED. payload. ENDEPICSEALED.")]
+    #[error("armor framing is not BEGIN marker. payload. matching END marker.")]
     Framing,
     #[error("link does not start with the expected epiccash prefix")]
     LinkPrefix,
@@ -74,6 +74,12 @@ pub enum Malformed {
 pub enum EncodeError {
     #[error("field {tag} is longer than a field can hold")]
     FieldTooLong { tag: u8 },
+    /// A body over 65,535 bytes, the most a field holds: the binding size of a sealed slate.
+    #[error("body of {found} bytes is over the limit of {limit}")]
+    BodyTooLarge { limit: usize, found: usize },
+    /// A reply mailbox goes only beside a reply key, in an anonymous envelope.
+    #[error("a reply mailbox needs a reply key and an anonymous envelope")]
+    ReplyMailbox,
     #[error("encoded size {found} is over the limit of {limit}")]
     Oversized { limit: usize, found: usize },
     #[error("the card is for the other network")]
