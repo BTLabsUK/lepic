@@ -1549,7 +1549,7 @@
           "transactions"
         ],
         "summary": "Send a slate",
-        "description": "The slate goes to the address or URL in `to` over the method named in `method`, Epicbox\nwhen absent. The API sends over `epicbox` and `http`. With a `slate_id`, a repeated request is safe: it reports the first send.",
+        "description": "The slate goes to the address or URL in `to` over the method named in `method`, Epicbox\nwhen absent. The API sends over `epicbox` and `http`. With a `slate_id`, a repeated request is safe: it reports the first send.\nOver the owner TLS listener an `http` send goes to other computers only: a URL whose host is\n`localhost`, a loopback address or an unspecified address is refused with a usage problem,\nand a host that resolves only to such addresses fails to connect.",
         "operationId": "send",
         "requestBody": {
           "content": {

@@ -3,6 +3,7 @@
 //! command runs as `lepic` runs it and its JSON report is the response body.
 
 use hyper::Response;
+use lepic_methods::http::{ForeignUrl, PlainHttp};
 use lepic_wallet::selection::SelectionOptions;
 use lepic_wallet::slate::{MediaType, WireSlate};
 use serde::Deserialize;
@@ -17,11 +18,11 @@ use crate::cli::{
     ContactLabelArgs, ContactLinkArg, ContactMoveArgs, ContactMoveHomeArgs, ContactNameArg,
     ContactPayloadAckArgs, ContactPayloadArgs, ContactPayloadCommand, ContactPayloadPostArgs,
     ContactRequestArgs, ContactSasArgs, ContactScanArgs, ContactSwitchArgs, DEFAULT_CHANGE_OUTPUTS,
-    DEFAULT_CONTACT_NAME, DomainArgs, DomainCommand, EpicboxCommand, FluffArg, InviteExpiryArg,
-    KeysArg, ListArgs, ListingArgs, MAX_DRAIN_DAYS, MessageArg, NodeCommand, OnOffArg, PeerArgs,
-    PlainHttpArg, PostArgs, ProfileCommand, ProfileSetArgs, SasArg, SelectionArg, SendArgs,
-    SendDestinationArgs, SendSlateIdArg, SpendArgs, TorBinaryArgs, TxCommand, TxIdArgs, TxShowArgs,
-    WalletCommand, WalletScanArgs,
+    DEFAULT_CONTACT_NAME, DomainArgs, DomainCommand, EpicboxCommand, FluffArg, HttpReach,
+    InviteExpiryArg, KeysArg, ListArgs, ListingArgs, MAX_DRAIN_DAYS, MessageArg, NodeCommand,
+    OnOffArg, PeerArgs, PlainHttpArg, PostArgs, ProfileCommand, ProfileSetArgs, SasArg,
+    SelectionArg, SendArgs, SendDestinationArgs, SendSlateIdArg, SpendArgs, TorBinaryArgs,
+    TxCommand, TxIdArgs, TxShowArgs, WalletCommand, WalletScanArgs,
 };
 use crate::commands::is_onion;
 use crate::output::{
@@ -476,6 +477,9 @@ pub(crate) async fn transaction(api: &Api<'_>, request: Request) -> Answer {
 ///
 /// The slate goes to the address or URL in `to` over the method named in `method`, Epicbox
 /// when absent. The API sends over `epicbox` and `http`. With a `slate_id`, a repeated request is safe: it reports the first send.
+/// Over the owner TLS listener an `http` send goes to other computers only: a URL whose host is
+/// `localhost`, a loopback address or an unspecified address is refused with a usage problem,
+/// and a host that resolves only to such addresses fails to connect.
 #[utoipa::path(
     post,
     path = "/v1/transactions",
@@ -497,6 +501,23 @@ pub(crate) async fn send(api: &Api<'_>, request: Request) -> Answer {
             }
         }
         Some(id) => send_method(api, id, &body.to).await?,
+    }
+    // Over the TLS listener an HTTP send reaches other computers only. A host this computer
+    // answers to is refused here, before anything is stored; a name that resolves to one of
+    // its addresses is refused when the send connects.
+    let reach = if request.listener == Listener::Tls {
+        HttpReach::OtherComputers
+    } else {
+        HttpReach::Any
+    };
+    if reach == HttpReach::OtherComputers
+        && body.method.as_deref() == Some("http")
+        && ForeignUrl::parse(&body.to, PlainHttp::Allowed)
+            .is_ok_and(|url| url.names_this_computer())
+    {
+        return Err(Problem::usage(
+            "the owner TLS listener does not send to this computer's own addresses",
+        ));
     }
     let args = SendArgs {
         amount: body.amount,
@@ -529,6 +550,7 @@ pub(crate) async fn send(api: &Api<'_>, request: Request) -> Answer {
         slate_id: SendSlateIdArg {
             slate_id: body.slate_id,
         },
+        reach,
     };
     api.run(Call::Command(Command::Tx(TxCommand::Send(args))))
         .await

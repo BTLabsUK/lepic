@@ -61,10 +61,10 @@ use crate::Console;
 use crate::amount::{format_amount, format_fee, format_units, parse_amount};
 use crate::cli::{
     ApiCommand, Command, DestinationArgs, EpicboxCommand, FinalizeArgs, HttpCommand,
-    HttpListenArgs, ImportHistoryArgs, ImportSeedArgs, InitArgs, InvoiceCommand, IssueArgs,
-    ListingArgs, NodeCommand, PayArgs, PostArgs, ReceiveArgs, ResendArgs, RestoreArgs, ScanArgs,
-    SelectionArg, SendArgs, SendDestinationArgs, SpendArgs, TorAddressArgs, TorBinaryArgs,
-    TorCommand, TorListenArgs, TxCommand, WalletCommand, WalletScanArgs, WordsArg,
+    HttpListenArgs, HttpReach, ImportHistoryArgs, ImportSeedArgs, InitArgs, InvoiceCommand,
+    IssueArgs, ListingArgs, NodeCommand, PayArgs, PostArgs, ReceiveArgs, ResendArgs, RestoreArgs,
+    ScanArgs, SelectionArg, SendArgs, SendDestinationArgs, SpendArgs, TorAddressArgs,
+    TorBinaryArgs, TorCommand, TorListenArgs, TxCommand, WalletCommand, WalletScanArgs, WordsArg,
 };
 use crate::exit::CliError;
 use crate::host::{Host, HostNode};
@@ -114,6 +114,9 @@ struct Opened<N: NodeApi + 'static> {
     epicbox: Arc<Epicbox>,
     /// Holds the answers of HTTP sends until they are finalized.
     http: Arc<Http>,
+    /// The HTTP method for sends that may not reach this computer, with its own connection
+    /// pool; it holds its answers with [`Self::http`].
+    http_to_other_computers: Arc<dyn Method>,
     /// Holds the answers of Tor sends until they are finalized.
     tor: Arc<Tor>,
     /// Taken by a send over Tor for as long as its tor is attached to [`Self::tor`], which only
@@ -151,14 +154,22 @@ impl<N: NodeApi + 'static> Opened<N> {
             .ok_or(SendError::UnknownTransport { transport })
     }
 
-    /// Sends over `transport` to the payee `delivery` names.
+    /// Sends over `transport` to the payee `delivery` names, over HTTP only to the computers
+    /// `reach` allows.
     async fn send(
         &self,
         transport: TransportId,
+        reach: HttpReach,
         request: SendRequest,
         delivery: Delivery,
     ) -> Result<SentSlate, SendError> {
-        let method = self.send_method(transport)?;
+        let method = if transport == lepic_methods::http::TRANSPORT_ID
+            && reach == HttpReach::OtherComputers
+        {
+            &self.http_to_other_computers
+        } else {
+            self.send_method(transport)?
+        };
         self.wallet.send(method, request, delivery).await
     }
 }
@@ -782,7 +793,9 @@ impl<H: Host> Run<'_, H> {
         let sending = async {
             let sent = match &payee {
                 Payee::Delivery(_, delivery) => {
-                    opened.send(transport, request, delivery.clone()).await?
+                    opened
+                        .send(transport, args.reach, request, delivery.clone())
+                        .await?
                 }
                 Payee::Contact(id) => {
                     contact::send_to_contact(&opened, *id, request, purpose, data_dir).await?
@@ -1432,10 +1445,11 @@ impl<H: Host> Run<'_, H> {
             what: "set up tls for http",
             source: std::io::Error::other(error),
         })?;
-        let http = Arc::new(Http::new(ForeignClient::new(
-            self.settings.tuning.send,
-            tls,
-        )));
+        let http = Http::new(ForeignClient::new(self.settings.tuning.send, tls.clone()));
+        let http_to_other_computers: Arc<dyn Method> = Arc::new(http.through(
+            ForeignClient::to_other_computers(self.settings.tuning.send, tls),
+        ));
+        let http = Arc::new(http);
         let relay = ClientSettings::new(self.settings.relay.clone(), self.settings.tuning.relay);
         let epicbox = Arc::new(Epicbox::new(
             relay,
@@ -1492,6 +1506,7 @@ impl<H: Host> Run<'_, H> {
             file,
             epicbox,
             http,
+            http_to_other_computers,
             tor,
             tor_gate: Arc::new(tokio::sync::Mutex::new(())),
             _lock: lock,

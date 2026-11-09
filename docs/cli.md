@@ -975,7 +975,7 @@ when `serve` stops.
 | `GET /v1/node` | `node status` |
 | `GET /v1/transactions?account=` | `tx list` |
 | `GET /v1/transactions/{tx_id}` | `tx show` |
-| `POST /v1/transactions` | `tx send`: `amount`, `to`, and optionally `method` (one of `GET /v1/methods`; Epicbox when absent; the API sends over `epicbox` and `http`), `slate_id`, `account`, `message`, `min_confirmations` and `change_outputs` |
+| `POST /v1/transactions` | `tx send`: `amount`, `to`, and optionally `method` (one of `GET /v1/methods`; Epicbox when absent; the API sends over `epicbox` and `http`), `slate_id`, `account`, `message`, `min_confirmations` and `change_outputs`. Over TLS an `http` send goes to other computers only: a `to` naming `localhost`, a loopback or an unspecified address is a 400 `usage` problem and stores nothing, and a host that resolves only to such addresses fails to connect, leaving the send stored and undelivered |
 | `POST /v1/slates/receive` | `tx receive`, with the `slate` text; the reply slate is in the report |
 | `POST /v1/slates/finalize` | `tx finalize`, with the `slate` text and `fluff` |
 | `POST /v1/transactions/{tx_id}/cancel` | `tx cancel` |

@@ -409,6 +409,20 @@ pub struct SendArgs {
     pub spend: SpendArgs,
     #[command(flatten)]
     pub slate_id: SendSlateIdArg,
+    /// Which computers an HTTP send may reach; set by the API, never on the command line.
+    #[arg(skip)]
+    pub reach: HttpReach,
+}
+
+/// Which computers an HTTP send may connect to.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum HttpReach {
+    /// Any computer, this one included.
+    #[default]
+    Any,
+    /// Only other computers: every address the receiver's name resolves to that belongs to this
+    /// computer is skipped when connecting.
+    OtherComputers,
 }
 
 /// The slate id a caller gives a send so that sending again cannot pay twice.

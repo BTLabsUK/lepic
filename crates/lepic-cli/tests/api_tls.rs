@@ -505,6 +505,100 @@ fn a_send_over_tls_needs_a_slate_id() {
     });
 }
 
+/// The sends of `serve`'s wallet, read over the socket.
+fn sends(serve: &Serving<'_>) -> Vec<Value> {
+    let list = http(serve.socket, "GET", "/v1/transactions", None).ok();
+    let all = list["transactions"].as_array().unwrap();
+    all.iter()
+        .filter(|tx| tx["direction"] == "outgoing")
+        .cloned()
+        .collect()
+}
+
+#[test]
+fn an_http_send_over_tls_does_not_reach_this_computer() {
+    let host = TestHost::new();
+    let wallet = funded_wallet(&host);
+    let laptop = client_key(&wallet, "laptop");
+    // Stands for a wallet on this computer; nothing may connect to it.
+    let target = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    target.set_nonblocking(true).unwrap();
+    let port = target.local_addr().unwrap().port();
+
+    serving(host, &wallet, |serve| {
+        serve.client(&["add", "laptop", laptop.pem.to_str().unwrap()]);
+        let send = |to: &str, slate_id: &str| {
+            let body =
+                format!(r#"{{"amount":"1","to":"{to}","method":"http","slate_id":"{slate_id}"}}"#);
+            serve
+                .request(Some(&laptop), "POST", "/v1/transactions", &body)
+                .unwrap()
+        };
+        for (to, slate_id) in [
+            (
+                format!("http://127.0.0.1:{port}"),
+                "0b6c1f3e-5a2d-4e8b-9c7a-1d3f5b7e9a20",
+            ),
+            (
+                format!("http://localhost:{port}"),
+                "0b6c1f3e-5a2d-4e8b-9c7a-1d3f5b7e9a21",
+            ),
+            (
+                format!("https://[::1]:{port}"),
+                "0b6c1f3e-5a2d-4e8b-9c7a-1d3f5b7e9a22",
+            ),
+        ] {
+            let refused = send(&to, slate_id);
+            assert_eq!(refused.status, 400, "{to}: {refused:?}");
+            assert_eq!(refused.json()["code"], "usage", "{to}: {refused:?}");
+            assert!(
+                refused.json()["detail"]
+                    .as_str()
+                    .unwrap()
+                    .contains("does not send to this computer's own addresses"),
+                "{to}: {refused:?}"
+            );
+        }
+        assert_eq!(sends(serve), Vec::<Value>::new());
+    });
+    assert_eq!(
+        target.accept().unwrap_err().kind(),
+        std::io::ErrorKind::WouldBlock,
+        "a send connected to this computer"
+    );
+}
+
+#[test]
+fn an_http_send_over_the_socket_may_reach_this_computer() {
+    let host = TestHost::new();
+    let wallet = funded_wallet(&host);
+    let target = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    target.set_nonblocking(true).unwrap();
+    let port = target.local_addr().unwrap().port();
+
+    serving(host, &wallet, |serve| {
+        std::thread::scope(|scope| {
+            let body = format!(
+                r#"{{"amount":"1","to":"http://127.0.0.1:{port}","method":"http","slate_id":"0b6c1f3e-5a2d-4e8b-9c7a-1d3f5b7e9a24"}}"#
+            );
+            let sending =
+                scope.spawn(move || http(serve.socket, "POST", "/v1/transactions", Some(&body)));
+            // Takes the connection and closes it unanswered, so the send fails at once.
+            wait_until("the send connects", || target.accept().map(drop).is_ok());
+            let sent = sending.join().unwrap();
+            assert_eq!(sent.status, 502, "{sent:?}");
+            assert_eq!(sent.json()["code"], "incomplete", "{sent:?}");
+            assert!(
+                !sent.json()["detail"]
+                    .as_str()
+                    .unwrap()
+                    .contains("this computer's own"),
+                "{sent:?}"
+            );
+        });
+    });
+}
+
 #[test]
 fn one_seed_serves_the_same_certificate_every_time() {
     let fingerprint = |wallet: &Instance, host: TestHost| {
