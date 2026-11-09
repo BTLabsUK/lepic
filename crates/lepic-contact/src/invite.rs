@@ -5,15 +5,15 @@ use std::fmt;
 
 use zeroize::{Zeroize, Zeroizing};
 
-use crate::card::ContactKind;
 use crate::error::{DecodeError, EncodeError, Malformed};
-use crate::keys::EncPublicKey;
-use crate::link::{LinkKind, decode_link, encode_link};
-use crate::network::Network;
 use crate::pairing::{Commitment, InviteId, PairingCode};
 use crate::private::{PairingClass, PrivateSecret};
-use crate::text::{ContactName, MailboxAddress, RelayHost};
-use crate::tlv::{Fields, Writer, check_format};
+use lepic_seal::ContactKind;
+use lepic_seal::EncPublicKey;
+use lepic_seal::Network;
+use lepic_seal::wire::{Fields, Writer, check_format};
+use lepic_seal::wire::{LinkKind, decode_link, encode_link};
+use lepic_seal::{ContactName, MailboxAddress, RelayHost};
 
 pub const MAX_INVITE_LEN: usize = 1024;
 pub const INVITE_FORMAT: u8 = 1;

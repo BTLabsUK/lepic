@@ -7,19 +7,19 @@ use ed25519_dalek::SigningKey;
 use rand_core::CryptoRng;
 use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
-use crate::card::ContactCard;
-use crate::domain::DomainClaim;
-use crate::envelope::{Content, MessageType, Opened, SealedEnvelope, seal, seal_psk};
 use crate::error::{DecodeError, EncodeError, Malformed};
-use crate::hash::{first8, sha256};
-use crate::hint::HintRule;
 use crate::invite::Invite;
-use crate::keys::EncSecretKey;
-use crate::link::{LinkKind, decode_link, encode_link};
-use crate::network::Network;
 use crate::private::ChannelKey;
+use lepic_seal::ContactCard;
+use lepic_seal::DomainClaim;
+use lepic_seal::EncSecretKey;
+use lepic_seal::HintRule;
+use lepic_seal::Network;
+use lepic_seal::wire::sha256;
+use lepic_seal::wire::{LinkKind, decode_link, encode_link};
+use lepic_seal::{Content, MessageType, Opened, SealedEnvelope, seal, seal_psk};
+pub use lepic_seal::{InviteId, PairingCode};
 
-const ID_DOMAIN: &[u8] = b"epic-pair/1 id";
 const COMMIT_DOMAIN: &[u8] = b"epic-pair/1 commit";
 
 /// A reply or confirm envelope is a card and a few fixed fields; this bounds its link.
@@ -48,7 +48,6 @@ macro_rules! secret_bytes {
     };
 }
 
-secret_bytes!(PairingCode, 16);
 secret_bytes!(Nonce, 16);
 secret_bytes!(ConfirmCode, 16);
 
@@ -56,20 +55,6 @@ impl Nonce {
     /// The nonce both sides use for an in-person pairing.
     pub fn zero() -> Self {
         Self([0; 16])
-    }
-}
-
-/// `H("epic-pair/1 id" || code)[0..8]`: names an invite and is the hint of its replies.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct InviteId([u8; 8]);
-
-impl InviteId {
-    pub fn from_code(code: &PairingCode) -> Self {
-        Self(first8(&sha256(&[ID_DOMAIN, code.expose_bytes()])))
-    }
-
-    pub fn as_bytes(&self) -> &[u8; 8] {
-        &self.0
     }
 }
 

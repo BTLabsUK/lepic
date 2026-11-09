@@ -11,13 +11,13 @@
 use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
 use rand_core::CryptoRng;
 
-use crate::card::ContactCard;
-use crate::envelope::{Content, MessageType, SealedEnvelope, seal};
 use crate::error::{DecodeError, EncodeError, Malformed};
-use crate::hash::sha256;
-use crate::keys::{EncSecretKey, HintKey};
-use crate::network::Network;
 use crate::pairing::PairingExtras;
+use lepic_seal::ContactCard;
+use lepic_seal::Network;
+use lepic_seal::wire::sha256;
+use lepic_seal::{Content, MessageType, SealedEnvelope, seal};
+use lepic_seal::{EncSecretKey, HintKey};
 
 const TAG_DOMAIN: &[u8] = b"epic-pair/1 keycheck";
 const FOUND_DOMAIN: &[u8] = b"epic-pair/1 keycheck found";

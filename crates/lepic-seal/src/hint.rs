@@ -3,7 +3,7 @@
 
 use crate::hash::{first8, hmac_sha256, sha256};
 use crate::keys::{EncPublicKey, HintKey};
-use crate::pairing::InviteId;
+use crate::pairing_id::InviteId;
 
 const FIXED_DOMAIN: &[u8] = b"epic-seal/1 fixed";
 const REPLY_DOMAIN: &[u8] = b"epic-seal/1 reply";
@@ -56,7 +56,7 @@ pub enum HintRule<'a> {
 }
 
 impl HintRule<'_> {
-    pub(crate) fn hint(&self, recipient: &EncPublicKey, enc: &[u8; 32]) -> Hint {
+    pub fn hint(&self, recipient: &EncPublicKey, enc: &[u8; 32]) -> Hint {
         match self {
             Self::Contact(key) => Hint::contact(key, enc),
             Self::FixedContact(key) => Hint::fixed(key),

@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
 //! The short authentication string both screens show after pairing (RFC 0002 7.5).
 
-use crate::card::ContactCard;
 use crate::error::SasTableError;
-use crate::hash::sha256;
-use crate::network::Network;
 use crate::pairing::Nonce;
+use lepic_seal::ContactCard;
+use lepic_seal::Network;
+use lepic_seal::wire::sha256;
 
 const SAS_DOMAIN: &[u8] = b"epic-pair/1 sas";
 

@@ -3,7 +3,7 @@ use hmac::{Hmac, KeyInit, Mac};
 use sha2::{Digest, Sha256};
 
 /// SHA-256 over the concatenation of `parts`.
-pub(crate) fn sha256(parts: &[&[u8]]) -> [u8; 32] {
+pub fn sha256(parts: &[&[u8]]) -> [u8; 32] {
     let mut hasher = Sha256::new();
     for part in parts {
         hasher.update(part);
@@ -12,13 +12,13 @@ pub(crate) fn sha256(parts: &[&[u8]]) -> [u8; 32] {
 }
 
 /// The first four bytes of SHA-256(SHA-256(bytes)), the checksum of every text form.
-pub(crate) fn checksum(bytes: &[u8]) -> [u8; 4] {
+pub fn checksum(bytes: &[u8]) -> [u8; 4] {
     let [a, b, c, d, ..] = sha256(&[&sha256(&[bytes])]);
     [a, b, c, d]
 }
 
 /// HMAC-SHA256 with a 32-byte key.
-pub(crate) fn hmac_sha256(key: &[u8; 32], message: &[u8]) -> [u8; 32] {
+pub fn hmac_sha256(key: &[u8; 32], message: &[u8]) -> [u8; 32] {
     // HMAC pads a key shorter than the block with zeros, so passing the padded block is the same
     // MAC as passing the 32-byte key, and needs no fallible length check.
     let mut block = [0u8; 64];
@@ -31,7 +31,7 @@ pub(crate) fn hmac_sha256(key: &[u8; 32], message: &[u8]) -> [u8; 32] {
 }
 
 /// The first eight bytes of a digest.
-pub(crate) fn first8(digest: &[u8; 32]) -> [u8; 8] {
+pub fn first8(digest: &[u8; 32]) -> [u8; 8] {
     let [a, b, c, d, e, f, g, h, ..] = *digest;
     [a, b, c, d, e, f, g, h]
 }

@@ -52,7 +52,7 @@ impl EncSecretKey {
         EncPublicKey(x25519(self.0, X25519_BASEPOINT_BYTES))
     }
 
-    pub(crate) fn expose_bytes(&self) -> &[u8; 32] {
+    pub fn expose_bytes(&self) -> &[u8; 32] {
         &self.0
     }
 }
@@ -95,7 +95,7 @@ pub fn verifying_key(bytes: &[u8; 32]) -> Result<VerifyingKey, KeyError> {
 }
 
 /// A sig key read from a card, an envelope or a key check proof.
-pub(crate) fn sig_key(bytes: &[u8; 32]) -> Result<VerifyingKey, DecodeError> {
+pub fn sig_key(bytes: &[u8; 32]) -> Result<VerifyingKey, DecodeError> {
     verifying_key(bytes).map_err(|_| DecodeError::WeakSigKey)
 }
 

@@ -15,7 +15,7 @@ fn encoded_len(bytes: usize) -> usize {
     bytes.saturating_mul(4).div_ceil(3)
 }
 
-pub(crate) fn encode_checked(bytes: &[u8]) -> String {
+pub fn encode_checked(bytes: &[u8]) -> String {
     let mut payload = Vec::with_capacity(bytes.len().saturating_add(4));
     payload.extend_from_slice(bytes);
     payload.extend_from_slice(&checksum(bytes));
@@ -24,7 +24,7 @@ pub(crate) fn encode_checked(bytes: &[u8]) -> String {
 
 /// Decodes a checksummed payload whose bytes may be at most `max_bytes` long; the text length is
 /// checked first, so nothing larger than the input is allocated.
-pub(crate) fn decode_checked(text: &str, max_bytes: usize) -> Result<Vec<u8>, DecodeError> {
+pub fn decode_checked(text: &str, max_bytes: usize) -> Result<Vec<u8>, DecodeError> {
     let limit = encoded_len(max_bytes.saturating_add(4));
     if text.len() > limit {
         return Err(DecodeError::Oversized {
@@ -69,7 +69,7 @@ impl LinkKind {
 
 const LINK_VERSION: u8 = 1;
 
-pub(crate) fn encode_link(kind: LinkKind, bytes: &[u8]) -> String {
+pub fn encode_link(kind: LinkKind, bytes: &[u8]) -> String {
     format!(
         "{SCHEME}{}/{LINK_VERSION}/{}",
         kind.path(),
@@ -79,11 +79,7 @@ pub(crate) fn encode_link(kind: LinkKind, bytes: &[u8]) -> String {
 
 /// Reads a link of `kind`. Surrounding whitespace is ignored and the scheme matches in any case,
 /// as URI schemes do; a higher version than this crate writes is "made by a newer wallet".
-pub(crate) fn decode_link(
-    text: &str,
-    kind: LinkKind,
-    max_bytes: usize,
-) -> Result<Vec<u8>, DecodeError> {
+pub fn decode_link(text: &str, kind: LinkKind, max_bytes: usize) -> Result<Vec<u8>, DecodeError> {
     let text = text.trim();
     let scheme = text
         .get(..SCHEME.len())

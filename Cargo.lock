@@ -1203,6 +1203,7 @@ dependencies = [
  "hmac",
  "hpke",
  "insta",
+ "lepic-seal",
  "proptest",
  "rand_core 0.10.1",
  "serde",
@@ -1436,6 +1437,25 @@ dependencies = [
  "proptest",
  "serde_json",
  "thiserror",
+ "zeroize",
+]
+
+[[package]]
+name = "lepic-seal"
+version = "0.3.1"
+dependencies = [
+ "base64",
+ "ed25519-dalek",
+ "hmac",
+ "hpke",
+ "insta",
+ "proptest",
+ "rand_core 0.10.1",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror",
+ "x25519-dalek",
  "zeroize",
 ]
 

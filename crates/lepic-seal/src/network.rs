@@ -25,7 +25,7 @@ impl Network {
     }
 
     /// Checks a network byte read from input against the network the reader expects.
-    pub(crate) fn expect_byte(self, byte: u8) -> Result<(), DecodeError> {
+    pub fn expect_byte(self, byte: u8) -> Result<(), DecodeError> {
         match Self::from_byte(byte) {
             Some(found) if found == self => Ok(()),
             Some(_) => Err(DecodeError::WrongNetwork),

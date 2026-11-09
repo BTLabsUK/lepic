@@ -12,29 +12,26 @@
 
 use std::fmt;
 
+use lepic_seal::PresharedKey;
 use rand_core::CryptoRng;
 use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
-use crate::card::ContactCard;
-use crate::envelope::{Content, MessageType, SealedEnvelope, seal_psk};
 use crate::error::{DecodeError, EncodeError, Malformed};
-use crate::hash::{hmac_sha256, sha256};
-use crate::hint::HintRule;
 use crate::invite::Invite;
-use crate::keys::EncSecretKey;
-use crate::network::Network;
 use crate::pairing::{Nonce, ReplyBody};
 use crate::sas::Sas;
+use lepic_seal::ContactCard;
+use lepic_seal::EncSecretKey;
+use lepic_seal::HintRule;
+use lepic_seal::Network;
+use lepic_seal::wire::{hmac_sha256, sha256};
+use lepic_seal::{Content, MessageType, SealedEnvelope, seal_psk};
 
-/// The HPKE suite of a private pairing's envelopes: the suite of [`crate::SUITE`] in PSK mode.
-/// RFC 0002's kit keeps suite 2 as an unknown suite, so this one lies apart.
-pub const SUITE_PSK: u8 = 0x41;
+pub use lepic_seal::SUITE_PSK;
 
 const REPLY_DOMAIN: &[u8] = b"epic-private/1 reply";
 const CHANNEL_DOMAIN: &[u8] = b"epic-private/1 channel";
 const SAS_DOMAIN: &[u8] = b"epic-private/1 sas";
-/// The HPKE PSK id of every private pairing key.
-pub(crate) const PSK_ID: &[u8] = b"epic-private/1";
 
 /// Which kind of pairing an invite makes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -103,6 +100,12 @@ impl ChannelKey {
     }
 
     pub fn expose_bytes(&self) -> &[u8; 32] {
+        &self.0
+    }
+}
+
+impl PresharedKey for ChannelKey {
+    fn psk_bytes(&self) -> &[u8; 32] {
         &self.0
     }
 }
@@ -210,6 +213,7 @@ mod tests {
     )]
 
     use super::*;
+    use lepic_seal::wire::PSK_ID;
 
     fn unhex(text: &str) -> Vec<u8> {
         (0..text.len())

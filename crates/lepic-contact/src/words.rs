@@ -13,10 +13,10 @@ use rand_core::CryptoRng;
 use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
 use crate::error::{SasTableError, WordsError};
-use crate::hash::hmac_sha256;
 use crate::invite::Invite;
-use crate::network::Network;
 use crate::sas::{SasSymbol, symbol};
+use lepic_seal::Network;
+use lepic_seal::wire::hmac_sha256;
 
 pub const WORD_COUNT: usize = 5;
 /// The longest posted text that is opened; an invite is far shorter.

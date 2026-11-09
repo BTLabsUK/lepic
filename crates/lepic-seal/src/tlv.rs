@@ -15,7 +15,7 @@ const KNOWN_TAG_SLOTS: usize = 16;
 const EXTENSION_SLOTS: usize = 8;
 
 /// The fields of one decoded list, borrowed from the input.
-pub(crate) struct Fields<'a> {
+pub struct Fields<'a> {
     values: [Option<&'a [u8]>; KNOWN_TAG_SLOTS],
     /// The first extension fields, from 0x80 up, that a reader may know, in tag order.
     extensions: [Option<(u8, &'a [u8])>; EXTENSION_SLOTS],
@@ -28,7 +28,7 @@ impl<'a> Fields<'a> {
     /// Splits `bytes` into fields. `last_known` is the highest non-signature tag of the format
     /// below 0x80; `signature` is its signature tag, which must then be the last field when
     /// present.
-    pub(crate) fn parse(
+    pub fn parse(
         bytes: &'a [u8],
         last_known: u8,
         signature: Option<u8>,
@@ -78,18 +78,18 @@ impl<'a> Fields<'a> {
         })
     }
 
-    pub(crate) fn get(&self, tag: u8) -> Option<&'a [u8]> {
+    pub fn get(&self, tag: u8) -> Option<&'a [u8]> {
         self.values.get(usize::from(tag)).copied().flatten()
     }
 
-    pub(crate) fn require(&self, tag: u8) -> Result<&'a [u8], DecodeError> {
+    pub fn require(&self, tag: u8) -> Result<&'a [u8], DecodeError> {
         self.get(tag)
             .ok_or_else(|| Malformed::MissingField { tag }.into())
     }
 
     /// The value of extension `tag`, from 0x80 up, when it is among the list's first
     /// extensions.
-    pub(crate) fn extension(&self, tag: u8) -> Option<&'a [u8]> {
+    pub fn extension(&self, tag: u8) -> Option<&'a [u8]> {
         self.extensions
             .iter()
             .flatten()
@@ -98,54 +98,51 @@ impl<'a> Fields<'a> {
     }
 
     /// The value of the signature field, when the list has one.
-    pub(crate) fn signature(&self) -> Option<&'a [u8]> {
+    pub fn signature(&self) -> Option<&'a [u8]> {
         self.signature
     }
 
-    pub(crate) fn signed_prefix(&self) -> &'a [u8] {
+    pub fn signed_prefix(&self) -> &'a [u8] {
         self.signed_prefix
     }
 
-    pub(crate) fn require_array<const N: usize>(&self, tag: u8) -> Result<[u8; N], DecodeError> {
+    pub fn require_array<const N: usize>(&self, tag: u8) -> Result<[u8; N], DecodeError> {
         array(tag, self.require(tag)?)
     }
 
-    pub(crate) fn optional_array<const N: usize>(
-        &self,
-        tag: u8,
-    ) -> Result<Option<[u8; N]>, DecodeError> {
+    pub fn optional_array<const N: usize>(&self, tag: u8) -> Result<Option<[u8; N]>, DecodeError> {
         self.get(tag).map(|value| array(tag, value)).transpose()
     }
 
-    pub(crate) fn require_u8(&self, tag: u8) -> Result<u8, DecodeError> {
+    pub fn require_u8(&self, tag: u8) -> Result<u8, DecodeError> {
         let [byte] = self.require_array::<1>(tag)?;
         Ok(byte)
     }
 
-    pub(crate) fn require_u16(&self, tag: u8) -> Result<u16, DecodeError> {
+    pub fn require_u16(&self, tag: u8) -> Result<u16, DecodeError> {
         Ok(u16::from_be_bytes(self.require_array(tag)?))
     }
 
-    pub(crate) fn require_u32(&self, tag: u8) -> Result<u32, DecodeError> {
+    pub fn require_u32(&self, tag: u8) -> Result<u32, DecodeError> {
         Ok(u32::from_be_bytes(self.require_array(tag)?))
     }
 
-    pub(crate) fn require_u64(&self, tag: u8) -> Result<u64, DecodeError> {
+    pub fn require_u64(&self, tag: u8) -> Result<u64, DecodeError> {
         Ok(u64::from_be_bytes(self.require_array(tag)?))
     }
 
-    pub(crate) fn optional_u8(&self, tag: u8) -> Result<Option<u8>, DecodeError> {
+    pub fn optional_u8(&self, tag: u8) -> Result<Option<u8>, DecodeError> {
         Ok(self.optional_array::<1>(tag)?.map(|[byte]| byte))
     }
 
-    pub(crate) fn optional_u64(&self, tag: u8) -> Result<Option<u64>, DecodeError> {
+    pub fn optional_u64(&self, tag: u8) -> Result<Option<u64>, DecodeError> {
         Ok(self.optional_array(tag)?.map(u64::from_be_bytes))
     }
 }
 
 /// Refuses a list whose first field is a format byte above `known`, before the list is parsed:
 /// a newer format may use tags this reader would reject as unknown.
-pub(crate) fn check_format(bytes: &[u8], format_tag: u8, known: u8) -> Result<(), DecodeError> {
+pub fn check_format(bytes: &[u8], format_tag: u8, known: u8) -> Result<(), DecodeError> {
     match bytes {
         [tag, 0, 1, format, ..] if *tag == format_tag && *format > known => {
             Err(DecodeError::NewerVersion { found: *format })
@@ -163,12 +160,12 @@ fn array<const N: usize>(tag: u8, value: &[u8]) -> Result<[u8; N], DecodeError> 
 
 /// Builds a field list; the caller adds fields in increasing tag order.
 #[derive(Default)]
-pub(crate) struct Writer {
+pub struct Writer {
     bytes: Vec<u8>,
 }
 
 impl Writer {
-    pub(crate) fn field(&mut self, tag: u8, value: &[u8]) -> Result<(), EncodeError> {
+    pub fn field(&mut self, tag: u8, value: &[u8]) -> Result<(), EncodeError> {
         let length = u16::try_from(value.len()).map_err(|_| EncodeError::FieldTooLong { tag })?;
         self.bytes.push(tag);
         self.bytes.extend_from_slice(&length.to_be_bytes());
@@ -176,18 +173,18 @@ impl Writer {
         Ok(())
     }
 
-    pub(crate) fn optional(&mut self, tag: u8, value: Option<&[u8]>) -> Result<(), EncodeError> {
+    pub fn optional(&mut self, tag: u8, value: Option<&[u8]>) -> Result<(), EncodeError> {
         match value {
             Some(value) => self.field(tag, value),
             None => Ok(()),
         }
     }
 
-    pub(crate) fn as_bytes(&self) -> &[u8] {
+    pub fn as_bytes(&self) -> &[u8] {
         &self.bytes
     }
 
-    pub(crate) fn into_bytes(self) -> Vec<u8> {
+    pub fn into_bytes(self) -> Vec<u8> {
         self.bytes
     }
 }

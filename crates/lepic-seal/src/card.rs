@@ -45,7 +45,7 @@ pub enum ContactKind {
 }
 
 impl ContactKind {
-    pub(crate) fn byte(self) -> u8 {
+    pub fn byte(self) -> u8 {
         match self {
             Self::Person => 0x01,
             Self::Shop => 0x02,
@@ -53,7 +53,7 @@ impl ContactKind {
         }
     }
 
-    pub(crate) fn from_byte(byte: u8) -> Option<Self> {
+    pub fn from_byte(byte: u8) -> Option<Self> {
         Some(match byte {
             0x01 => Self::Person,
             0x02 => Self::Shop,

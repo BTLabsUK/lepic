@@ -19,7 +19,7 @@ use crate::error::{DecodeError, EncodeError, Malformed};
 use crate::hint::{Hint, HintRule};
 use crate::keys::{EncPublicKey, EncSecretKey, sig_key};
 use crate::network::Network;
-use crate::private::{ChannelKey, PSK_ID, SUITE_PSK};
+use crate::psk::{PSK_ID, PresharedKey, SUITE_PSK};
 use crate::text::Reference;
 use crate::tlv::{Fields, Writer};
 
@@ -83,7 +83,7 @@ pub enum MessageType {
 }
 
 impl MessageType {
-    pub(crate) fn byte(self) -> u8 {
+    pub fn byte(self) -> u8 {
         match self {
             Self::Slate => 0x01,
             Self::Notice => 0x02,
@@ -283,7 +283,7 @@ pub fn seal<R: CryptoRng>(
 }
 
 /// Seals as [`seal`] does, in HPKE PSK mode under `psk`, with suite
-/// [`crate::private::SUITE_PSK`]: only a holder of `psk` opens it, with
+/// [`crate::SUITE_PSK`]: only a holder of `psk` opens it, with
 /// [`SealedEnvelope::open_psk`].
 pub fn seal_psk<R: CryptoRng>(
     network: Network,
@@ -291,7 +291,7 @@ pub fn seal_psk<R: CryptoRng>(
     hint_rule: HintRule<'_>,
     content: &Content,
     signer: Option<&SigningKey>,
-    psk: &ChannelKey,
+    psk: &(impl PresharedKey + ?Sized),
     rng: &mut R,
 ) -> Result<Vec<u8>, EncodeError> {
     seal_with(
@@ -300,7 +300,7 @@ pub fn seal_psk<R: CryptoRng>(
         hint_rule,
         content,
         signer,
-        Some(psk),
+        Some(psk.psk_bytes()),
         rng,
     )
 }
@@ -311,7 +311,7 @@ fn seal_with<R: CryptoRng>(
     hint_rule: HintRule<'_>,
     content: &Content,
     signer: Option<&SigningKey>,
-    psk: Option<&ChannelKey>,
+    psk: Option<&[u8; 32]>,
     rng: &mut R,
 ) -> Result<Vec<u8>, EncodeError> {
     if let Some(card) = &content.card {
@@ -327,10 +327,7 @@ fn seal_with<R: CryptoRng>(
     let (mode, suite) = match psk {
         None => (OpModeS::Base, SUITE),
         Some(psk) => (
-            OpModeS::Psk(
-                PskBundle::new(psk.expose_bytes(), PSK_ID)
-                    .map_err(|_| EncodeError::Encapsulation)?,
-            ),
+            OpModeS::Psk(PskBundle::new(psk, PSK_ID).map_err(|_| EncodeError::Encapsulation)?),
             SUITE_PSK,
         ),
     };
@@ -549,7 +546,7 @@ impl<'a> SealedEnvelope<'a> {
 
     /// Opens with one candidate key. Any failure of HPKE is [`DecodeError::CannotOpen`], whatever
     /// step failed; content that opens but is malformed or badly signed has its own error. An
-    /// envelope of a private pairing ([`crate::private::SUITE_PSK`]) never opens here.
+    /// envelope of a private pairing ([`crate::SUITE_PSK`]) never opens here.
     pub fn open(&self, key: &EncSecretKey) -> Result<Opened, DecodeError> {
         if self.suite != SUITE {
             return Err(DecodeError::CannotOpen);
@@ -559,12 +556,16 @@ impl<'a> SealedEnvelope<'a> {
 
     /// Opens an envelope of a private pairing with one candidate key and the pairing's `psk`.
     /// A base-mode envelope never opens here, so nobody without the key writes to the pairing.
-    pub fn open_psk(&self, key: &EncSecretKey, psk: &ChannelKey) -> Result<Opened, DecodeError> {
+    pub fn open_psk(
+        &self,
+        key: &EncSecretKey,
+        psk: &(impl PresharedKey + ?Sized),
+    ) -> Result<Opened, DecodeError> {
         if self.suite != SUITE_PSK {
             return Err(DecodeError::CannotOpen);
         }
         let bundle =
-            PskBundle::new(psk.expose_bytes(), PSK_ID).map_err(|_| DecodeError::CannotOpen)?;
+            PskBundle::new(psk.psk_bytes(), PSK_ID).map_err(|_| DecodeError::CannotOpen)?;
         self.open_mode(key, &OpModeR::Psk(bundle))
     }
 
@@ -574,7 +575,7 @@ impl<'a> SealedEnvelope<'a> {
         &self,
         key: &EncSecretKey,
         expected: &VerifyingKey,
-        psk: &ChannelKey,
+        psk: &(impl PresharedKey + ?Sized),
     ) -> Result<Opened, DecodeError> {
         let opened = self.open_psk(key, psk)?;
         if opened
