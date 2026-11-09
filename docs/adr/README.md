@@ -41,7 +41,7 @@ they were written, and the file names do not change.
 | [0024](0024-contact-pairing-and-invoice-trust.md) | Contact pairing, sealed slates and invoice trust on paired contacts | proposed |
 | [0025](0025-animated-qr-slates.md) | Slates as animated QR codes in `ur:epic-slate` | accepted |
 | [0026](0026-tor-as-a-build-feature.md) | Tor is a build feature of the binding | accepted |
-| [0027](0027-minimum-confirmations.md) | Minimum confirmations is a per-wallet setting, 1 to 30, default 6 | accepted |
+| [0027](0027-minimum-confirmations.md) | Minimum confirmations is a per-wallet setting, default 6 | accepted; upper bound superseded by 0036 |
 | [0028](0028-transaction-records-in-tables.md) | Per-transaction state lives in tables that cascade with the transaction | accepted |
 | [0029](0029-contacts-on-the-engine.md) | Contacts are a crate, `lepic-wallet-contacts`, on top of the engine | accepted |
 | [0030](0030-all-configuration-in-settings-toml.md) | All configuration is in `settings.toml` and a shipped config, none in code | accepted |
@@ -52,7 +52,7 @@ they were written, and the file names do not change.
 | [0035](0035-restore-from-a-start-height.md) | A restore may start its scan at a height the caller picks | accepted |
 | [0036](0036-policy-values-are-host-parameters.md) | Policy values are host parameters | accepted |
 | [0037](0037-one-send-to-self.md) | One send-to-self primitive | accepted |
-| [0038](0038-reference-node-4-1-2.md) | Reference node moves to epic v4.1.2 | accepted |
+| [0038](0038-reference-node-4-1-2.md) | The interop stacks run the Epic node at v4.1.2 | accepted |
 | [0039](0039-the-host-applies-a-relay-move.md) | The host applies a contact's relay move | accepted |
 | [0040](0040-contact-check-and-own-relay-move.md) | The contact check, and moving one's own home relay | accepted |
 | [0041](0041-the-owners-profile-in-the-feature-word.md) | The owner's profile is the upper half of the feature word | accepted |
@@ -60,7 +60,7 @@ they were written, and the file names do not change.
 | [0043](0043-domain-proof-for-paired-contacts.md) | Domain proof for paired contacts | accepted |
 | [0044](0044-the-onion-has-its-own-key.md) | The onion has its own key | accepted |
 | [0045](0045-refusing-slates-nobody-asked-for.md) | Refusing slates nobody asked for | proposed |
-| [0046](0046-a-wallet-for-a-mining-node.md) | A wallet for a mining node | accepted |
+| [0046](0046-a-wallet-for-a-mining-node.md) | A wallet for a mining node | accepted; who is served and how many candidates are kept superseded by 0048 |
 | [0047](0047-the-mailbox-is-the-default-between-paired-contacts.md) | The mailbox is the default route between paired contacts | accepted |
 | [0048](0048-block-rewards-for-this-computer.md) | Block rewards are served to this computer unless the host opens them | accepted |
 | [0049](0049-keeping-messages-that-cannot-be-taken-yet.md) | Keeping messages that cannot be taken yet | accepted |
