@@ -8,7 +8,7 @@ callers pass in keys, the random number generator and the time.
 
 - Depends on no other LEPIC crate. It builds on `hpke`, `ed25519-dalek`, `x25519-dalek`,
   `sha2`, `hmac` and `base64`.
-- Used by `lepic-contact`, which re-exports every item here and adds the pairing flows, and by
+- Used by `lepic-contact`, which re-exports most items here and adds the pairing flows, and by
   `lepic-wallet-contacts`.
 - No features.
 - Holds the format only. Which key a wallet seals to, and what it does with an opened envelope,
