@@ -36,6 +36,7 @@ use crate::cancel::pool_holds;
 use crate::codecs;
 use crate::error::WalletError;
 use crate::event::{BouncedInvoice, Event, ExpiredInvoice};
+use crate::in_person_keys::IN_PERSON_REPLY_PREFIX;
 use crate::inbox::{Hold, InboxError};
 use crate::invoice::{InvoiceError, PaidInvoice, PayRequest, payer_release_height};
 use crate::peer_compat::PeerKind;
@@ -607,7 +608,10 @@ pub(crate) fn epicbox_invoice_payment(
         return Ok(None);
     };
     if (entry.transport.as_deref() != Some(EPICBOX)
-        && crate::contact_link::slate_contact(repos, slate_uuid)?.is_none())
+        && crate::contact_link::slate_contact(repos, slate_uuid)?.is_none()
+        && repos
+            .setting(&format!("{IN_PERSON_REPLY_PREFIX}{slate_uuid}"))?
+            .is_none())
         || repos.slate(slate_uuid, SlateStage::Invoice2)?.is_none()
     {
         return Ok(None);

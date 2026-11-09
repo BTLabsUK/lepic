@@ -295,8 +295,7 @@ pub fn epic1_proof_key(
     Ok(SigningKey::from_bytes(&bytes))
 }
 
-/// The reply mailbox key of `account` on `network` for the slate `slate_id`. Not used by the
-/// engine yet.
+/// The reply mailbox key of `account` on `network` for the slate `slate_id`.
 pub fn reply_mailbox_key(
     seed: &Seed,
     account: u32,
@@ -310,8 +309,7 @@ pub fn reply_mailbox_key(
     )
 }
 
-/// The post key of `account` on `network` for the slate `slate_id` in `role`. Not used by the
-/// engine yet.
+/// The post key of `account` on `network` for the slate `slate_id` in `role`.
 pub fn post_key(
     seed: &Seed,
     account: u32,
@@ -352,7 +350,8 @@ pub fn link_mailbox_key(
 
 /// The four-digit check code of an answer: the first 4 bytes of
 /// `SHA-256("epic-check/1" || excess)`, big-endian, modulo 10,000, with leading zeros. `excess`
-/// is the receiver's public excess.
+/// is the 33-byte public excess of the party that answered: the payer's in an I2, the
+/// receiver's in an S2.
 pub fn check_code(excess: &PublicKey) -> String {
     let digest = Sha256::new()
         .chain_update(CHECK_CODE_TAG)

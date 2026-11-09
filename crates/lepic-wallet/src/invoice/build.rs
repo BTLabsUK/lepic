@@ -487,6 +487,41 @@ fn check_payment(i1: &Slate, i2: &Slate) -> Result<(), InvoiceError> {
     Ok(())
 }
 
+/// Puts back into `answer` what a compact format such as `lepic.v1` leaves out of an answer:
+/// the initiator's own inputs and outputs, and its message, taken from the initiator's stored
+/// slate `initiator`. What the answer carries stays. An initiator whose keys differ from the
+/// stored ones stays as the answer has it, for the checks that follow to refuse.
+pub(crate) fn complete_answer(answer: Slate, initiator: &Slate) -> Result<Slate, SlateError> {
+    let role = match initiator.stage() {
+        Stage::S1 => Role::Sender,
+        Stage::I1 => Role::Receiver,
+        _ => return Ok(answer),
+    };
+    let mut parts = answer.into_parts();
+    for input in initiator.inputs() {
+        if !parts.inputs.contains(input) {
+            parts.inputs.push(*input);
+        }
+    }
+    for output in initiator.outputs() {
+        if !parts.outputs.contains(output) {
+            parts.outputs.push(output.clone());
+        }
+    }
+    let answered = match role {
+        Role::Sender => parts.sender.as_mut(),
+        Role::Receiver => parts.receiver.as_mut(),
+    };
+    if let (Some(answered), Some(kept)) = (answered, initiator.participant(role))
+        && answered.message.is_none()
+        && answered.public_blind_excess == kept.public_blind_excess
+        && answered.public_nonce == kept.public_nonce
+    {
+        answered.message.clone_from(&kept.message);
+    }
+    Slate::from_parts(parts)
+}
+
 /// Participant messages are signed over their BLAKE2b-256 hash, with the signer's public
 /// excess as both the key and the challenge key.
 fn message_digest(text: &str) -> Message {

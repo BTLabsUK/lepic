@@ -179,6 +179,26 @@ pub enum Event {
     /// answer or an invoice payment; a push the node refused because inputs were spent
     /// ends the transaction instead and raises no such event.
     NotPosted(NotPosted),
+    /// An answer to a code this wallet showed in person (RFC 0003 §9) arrived in the code's
+    /// reply mailbox and checks: an I2 to an in-person invoice, or an S2 to an in-person send.
+    /// Nothing was finalized: the host shows the answer with its check code and the user picks
+    /// the one to finalize. Raised once per answer that checks.
+    InPersonAnswer(InPersonAnswerEvent),
+}
+
+/// An answer to an in-person code.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InPersonAnswerEvent {
+    pub tx_id: TxId,
+    pub slate_id: SlateId,
+    pub stage: Stage,
+    /// The answer's number among the answers to this code, from 1.
+    pub answer: u32,
+    /// The four digits the answering party's wallet shows for the same answer.
+    pub check_code: String,
+    /// An earlier answer to this code had the same check code: the user cannot tell the two
+    /// apart by it.
+    pub same_code: bool,
 }
 
 /// An invoice a contact sent, with what the contact says about it.

@@ -73,7 +73,7 @@ use crate::send::{
 use crate::state::{StateChange, apply_transition, state_name};
 use crate::wallet::Wallet;
 pub(crate) use build::check_signed_payment;
-use build::{IssuerContext, final_transaction, verify_message};
+use build::{IssuerContext, complete_answer, final_transaction, verify_message};
 
 /// The issuer's private context is stored under the participant id legacy slates give the
 /// receiver, which the issuer is.
@@ -838,6 +838,7 @@ fn finalize_stored(
     repos: &mut dyn Repositories,
     env: &InvoiceEnvironment<'_>,
     i2: &Slate,
+    compact: bool,
 ) -> Result<StoredI3, InvoiceError> {
     let slate_id = i2.id();
     let slate_uuid = uuid(slate_id);
@@ -849,6 +850,13 @@ fn finalize_stored(
         .slate(slate_uuid, SlateStage::Invoice1)?
         .filter(|stored| stored.codec == LEGACY_V3_JSON.as_str())
         .ok_or(InvoiceError::UnknownSlate { slate_id })?;
+    let completed;
+    let i2 = if compact {
+        completed = completed_answer(env, &issued, i2)?;
+        &completed
+    } else {
+        i2
+    };
     match entry.entry.state {
         TxState::Received => {}
         state @ (TxState::Finalized | TxState::Posted) => {
@@ -884,21 +892,7 @@ fn finalize_stored(
             return Err(InvoiceError::NotFinalizable { tx_id, state });
         }
     }
-    // The payer may drop or move the cutoff in its I2: a version 2 header loses it, and
-    // upstream's payer replaces it with its own. The one this wallet issued still holds.
-    let issued = env.decode_stored(issued)?.with_origin(None);
-    check_margin_ttl(
-        earliest_cutoff(i2.ttl_cutoff_height(), issued.ttl_cutoff_height()),
-        env.tip,
-    )?;
-    let context = repos
-        .context(slate_uuid, ISSUER_CONTEXT)?
-        .ok_or(InvoiceError::MissingContext { slate_id })?;
-    let i1 = BuiltI1 {
-        slate: issued,
-        context: IssuerContext::from_private(&context)?,
-    };
-    let finalized = build_i3(env.base_fee(), &i1, i2)?;
+    let finalized = build_from_stored(&*repos, env, issued, i2)?;
 
     let stored = env.stored(&finalized.slate)?;
     repos.insert_slate(&StoredSlate {
@@ -916,6 +910,77 @@ fn finalize_stored(
         change,
         state: TxState::Finalized,
     })
+}
+
+/// Builds the I3 of `i2` against the stored I1 `issued` and the issuer context, without
+/// storing anything.
+fn build_from_stored(
+    repos: &dyn Repositories,
+    env: &InvoiceEnvironment<'_>,
+    issued: StoredSlate,
+    i2: &Slate,
+) -> Result<FinalizedSlate, InvoiceError> {
+    let slate_id = i2.id();
+    // The payer may drop or move the cutoff in its I2: a version 2 header loses it, and
+    // upstream's payer replaces it with its own. The one this wallet issued still holds.
+    let issued = env.decode_stored(issued)?.with_origin(None);
+    check_margin_ttl(
+        earliest_cutoff(i2.ttl_cutoff_height(), issued.ttl_cutoff_height()),
+        env.tip,
+    )?;
+    let context = repos
+        .context(uuid(slate_id), ISSUER_CONTEXT)?
+        .ok_or(InvoiceError::MissingContext { slate_id })?;
+    let i1 = BuiltI1 {
+        slate: issued,
+        context: IssuerContext::from_private(&context)?,
+    };
+    build_i3(env.base_fee(), &i1, i2)
+}
+
+/// Checks that `i2` would finalize against the stored I1 of a transaction still `received`,
+/// as [`finalize_stored`] would, and stores nothing.
+fn check_stored(
+    repos: &dyn Repositories,
+    env: &InvoiceEnvironment<'_>,
+    i2: &Slate,
+) -> Result<(), InvoiceError> {
+    let slate_id = i2.id();
+    let slate_uuid = uuid(slate_id);
+    let entry = repos
+        .transaction_by_slate(slate_uuid, TxDirection::Incoming)?
+        .ok_or(InvoiceError::UnknownSlate { slate_id })?;
+    let issued = repos
+        .slate(slate_uuid, SlateStage::Invoice1)?
+        .filter(|stored| stored.codec == LEGACY_V3_JSON.as_str())
+        .ok_or(InvoiceError::UnknownSlate { slate_id })?;
+    match entry.entry.state {
+        TxState::Received => {}
+        TxState::Finalized | TxState::Posted => {
+            return Err(InvoiceError::AlreadyFinalized {
+                slate_id,
+                tx_id: entry.id,
+            });
+        }
+        state @ (TxState::Sent | TxState::Confirmed | TxState::Cancelled | TxState::Expired) => {
+            return Err(InvoiceError::NotFinalizable {
+                tx_id: entry.id,
+                state,
+            });
+        }
+    }
+    let i2 = completed_answer(env, &issued, i2)?;
+    build_from_stored(repos, env, issued, &i2).map(|_| ())
+}
+
+/// `i2` with what a compact answer leaves out put back from the stored I1 `issued`.
+fn completed_answer(
+    env: &InvoiceEnvironment<'_>,
+    issued: &StoredSlate,
+    i2: &Slate,
+) -> Result<Slate, InvoiceError> {
+    let issued = env.decode_stored(issued.clone())?;
+    complete_answer(i2.clone(), &issued).map_err(InvoiceError::Slate)
 }
 
 impl<N, S, V> Wallet<N, S, V>
@@ -1165,9 +1230,64 @@ where
         wire: &WireSlate,
         propagation: Propagation,
     ) -> Result<Finalized, InvoiceError> {
+        self.session()?;
+        let i2 = method
+            .decode(self.config().network, wire)
+            .map_err(InvoiceError::Decode)?;
+        self.finalize_invoice_slate(i2, propagation, false).await
+    }
+
+    /// As [`Wallet::finalize_invoice`], for an I2 the caller decoded from a compact format
+    /// such as `lepic.v1`, which leaves out this wallet's own output and message: they are
+    /// taken from the stored I1.
+    #[instrument(skip_all, fields(
+        wallet = %self.config().name,
+        slate_id = Empty,
+        stage = Empty,
+        tx_id = Empty,
+    ))]
+    pub async fn finalize_invoice_decoded(
+        &self,
+        i2: Slate,
+        propagation: Propagation,
+    ) -> Result<Finalized, InvoiceError> {
+        self.finalize_invoice_slate(i2, propagation, true).await
+    }
+
+    /// Checks that the I2 `i2` answers an invoice this wallet issued and would finalize, as
+    /// [`Wallet::finalize_invoice_decoded`] checks it, without storing or posting anything.
+    /// Several answers to one invoice can each be checked; one of them is finalized later.
+    ///
+    /// Fails as [`Wallet::finalize_invoice_decoded`] fails before it stores.
+    pub async fn check_invoice_answer(&self, i2: Slate) -> Result<(), InvoiceError> {
         let session = self.session()?;
         let network = self.config().network;
-        let i2 = method.decode(network, wire).map_err(InvoiceError::Decode)?;
+        if i2.stage() != Stage::I2 {
+            return Err(InvoiceError::WrongStage { stage: i2.stage() });
+        }
+        let (tip, _) = self.stage_tip(&session, InvoiceError::Node).await?;
+        self.blocking(move |ports, config| {
+            let env = InvoiceEnvironment {
+                keychain: &session.keychain,
+                network,
+                tip,
+                now: ports.clock.now(),
+                reply_keys: None,
+                features: config.claimed_features(),
+            };
+            Ok(session.store.read(|repos| check_stored(repos, &env, &i2)))
+        })
+        .await?
+    }
+
+    async fn finalize_invoice_slate(
+        &self,
+        i2: Slate,
+        propagation: Propagation,
+        compact: bool,
+    ) -> Result<Finalized, InvoiceError> {
+        let session = self.session()?;
+        let network = self.config().network;
         let span = Span::current();
         span.record("slate_id", tracing::field::display(i2.id()));
         span.record("stage", i2.stage().as_str());
@@ -1187,7 +1307,7 @@ where
                 };
                 Ok(session
                     .store
-                    .write(|repos| finalize_stored(repos, &env, &i2)))
+                    .write(|repos| finalize_stored(repos, &env, &i2, compact)))
             })
             .await??;
         span.record("tx_id", stored.tx_id.0);

@@ -28,6 +28,7 @@ pub mod event;
 pub mod extension;
 pub mod finalize;
 mod finished;
+mod in_person_keys;
 pub mod inbox;
 pub mod invoice;
 pub mod legacy_history;
@@ -60,6 +61,7 @@ pub use config::{ConfigError, NodeEndpoint, WalletConfig, WalletName, WalletPoli
 pub use error::WalletError;
 pub use event::{Event, SessionState};
 pub use finalize::{FinalizeError, Finalized};
+pub use in_person_keys::IN_PERSON_REPLY_PREFIX;
 pub use lifecycle::{Password, RecoveryPhrase, WordCount, store_key};
 pub use notices::ContactNotice;
 pub use onion_key::OnionKey;
