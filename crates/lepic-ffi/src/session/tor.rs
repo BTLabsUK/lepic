@@ -16,10 +16,10 @@ use lepic_methods::tor::{
 };
 use lepic_store::TxId;
 use lepic_transport::transport::{BoxFuture, Destination};
-use lepic_wallet::send::SendError;
-use lepic_wallet_contacts::{DirectError, WalletContacts};
 use lepic_wallet::namespace::SealKeyKind;
+use lepic_wallet::send::SendError;
 use lepic_wallet::{OnionKey, ProofKey};
+use lepic_wallet_contacts::{DirectError, WalletContacts};
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
 use tracing::{debug, info, warn};
@@ -187,11 +187,8 @@ pub(super) fn tor_transport(tuning: &Tuning) -> Result<(Tor, TorPeer), WalletErr
         request_timeout: onion.request_timeout,
         ..PeerClientSettings::default()
     };
-    let client = PeerClient::with_dialer(
-        settings,
-        tls,
-        tor.peer_dialer(tuning.tor_connect_timeout()),
-    );
+    let client =
+        PeerClient::with_dialer(settings, tls, tor.peer_dialer(tuning.tor_connect_timeout()));
     let peer = TorPeer::new(tor.clone(), client);
     Ok((tor, peer))
 }
@@ -817,7 +814,13 @@ impl Session {
         let direct = self
             .engine
             .contact_book()
-            .direct_resend(&self.tor_peer, method, TxId(tx_id), destination(&onion), legacy)
+            .direct_resend(
+                &self.tor_peer,
+                method,
+                TxId(tx_id),
+                destination(&onion),
+                legacy,
+            )
             .await
             .map_err(direct_error)?;
         let posted = self

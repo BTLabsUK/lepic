@@ -216,9 +216,15 @@ pub enum Unrepresentable {
     PaymentProof,
     Flow(crate::stage::Flow),
     /// A block header version other than the one a format derives from the slate's height.
-    BlockHeaderVersion { given: u16, expected: u16 },
+    BlockHeaderVersion {
+        given: u16,
+        expected: u16,
+    },
     /// A range proof of a length other than the one a format writes without a length field.
-    RangeProofLength { len: usize, expected: usize },
+    RangeProofLength {
+        len: usize,
+        expected: usize,
+    },
 }
 
 impl std::fmt::Display for Unrepresentable {
@@ -232,7 +238,10 @@ impl std::fmt::Display for Unrepresentable {
                 "block header version {given} at a height that takes {expected}"
             ),
             Self::RangeProofLength { len, expected } => {
-                write!(f, "a {len}-byte range proof where {expected} bytes are written")
+                write!(
+                    f,
+                    "a {len}-byte range proof where {expected} bytes are written"
+                )
             }
         }
     }

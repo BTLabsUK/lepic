@@ -122,9 +122,9 @@ fn marked_s1_with_features_is_written_as_the_vector() {
         );
         let features = u32::try_from(vector["inputs"]["features"].as_u64().unwrap()).unwrap();
         let slate = codec.decode(&plain).unwrap();
-        let reply = vector["inputs"].get("reply").map(|reply| {
-            lepic_crypto::hex::decode_array::<32>(text(reply)).unwrap()
-        });
+        let reply = vector["inputs"]
+            .get("reply")
+            .map(|reply| lepic_crypto::hex::decode_array::<32>(text(reply)).unwrap());
         let marker = MarkedV2JsonCodec::new(codec);
         let marker = match reply {
             Some(key) => marker.with_native_claim(features, key),

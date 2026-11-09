@@ -29,11 +29,11 @@ use lepic_node::Propagation;
 use lepic_primitives::amount::Amount;
 use lepic_store::{ContactId, SlateStage, TxId, TxState, WalletStore};
 use lepic_transport::marker::features::NATIVE_SLATES;
-use lepic_wallet::{SlateFormat, WalletPolicy};
 use lepic_wallet::invoice::{InvoiceRequest, IssuedInvoice};
 use lepic_wallet::receive::ReceiveRequest;
 use lepic_wallet::selection::SelectionStrategy;
 use lepic_wallet::send::{Delivery, SendRequest};
+use lepic_wallet::{SlateFormat, WalletPolicy};
 use lepic_wallet_contacts::{
     InvoiceDetails, QuarantineReason, SasDecision, SealedAnswer, WalletContacts,
 };

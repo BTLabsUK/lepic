@@ -33,9 +33,10 @@ impl EpicWallet {
     /// The epic1 address of the default account: its seal key and its epic1 proof key on the
     /// wallet's network.
     pub async fn epic1_address(&self) -> Result<String, WalletError> {
-        self.run("epic1_address", |session| async move {
-            session.epic1_address()
-        })
+        self.run(
+            "epic1_address",
+            |session| async move { session.epic1_address() },
+        )
         .await
     }
 

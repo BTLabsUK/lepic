@@ -420,8 +420,15 @@ impl EpicWallet {
         message: Option<String>,
         options: Option<SendOptions>,
     ) -> Result<HttpSentTx, WalletError> {
-        self.send_tor_dialect(amount, minimum_confirmations, onion, message, options, false)
-            .await
+        self.send_tor_dialect(
+            amount,
+            minimum_confirmations,
+            onion,
+            message,
+            options,
+            false,
+        )
+        .await
     }
 
     /// As [`EpicWallet::send_tor`]; `legacy` as in [`EpicWallet::send_http_dialect`].
@@ -436,7 +443,14 @@ impl EpicWallet {
     ) -> Result<HttpSentTx, WalletError> {
         self.run("send_tor", |session| async move {
             session
-                .send_tor(amount, minimum_confirmations, &onion, message, options, legacy)
+                .send_tor(
+                    amount,
+                    minimum_confirmations,
+                    &onion,
+                    message,
+                    options,
+                    legacy,
+                )
                 .await
         })
         .await
