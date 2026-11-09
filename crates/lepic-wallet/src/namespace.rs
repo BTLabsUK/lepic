@@ -266,7 +266,8 @@ fn first_valid_key(seed: &Seed, label: &[u8], context: &[&[u8]]) -> Result<Secre
 }
 
 /// The seal key of `kind` for `account` on `network`; its public key is X25519 of the secret
-/// and the base point. Not used by the engine yet.
+/// and the base point. The listener sockets show theirs through
+/// [`crate::Wallet::listener_seal_key`].
 pub fn seal_key(
     seed: &Seed,
     account: u32,

@@ -4,13 +4,19 @@
 //! seen date, and another key is reported, never stored: the user forgets the pin to take it.
 
 use jiff::Timestamp;
+use lepic_contact::EncSecretKey;
 use lepic_node::NodeApi;
+use lepic_primitives::params::Network;
 use lepic_store::{AccountIndex, PIN_KEY_LEN, PeerPin, Repositories, StoreError, WalletStore};
 use tracing::instrument;
 
 use crate::error::WalletError;
+use crate::namespace::{self, SealKeyKind};
 use crate::ports::{SecretVault, StoreOpener};
 use crate::wallet::Wallet;
+
+// The account whose seal keys the listener sockets show.
+const LISTENER_ACCOUNT: u32 = 0;
 
 /// What [`Wallet::pin_peer`] found.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -57,6 +63,19 @@ where
     S: StoreOpener + 'static,
     V: SecretVault + 'static,
 {
+    /// The seal key of the listener socket of `kind` ([`SealKeyKind::Onion`] or
+    /// [`SealKeyKind::Web`]): the key a native endpoint on that socket advertises and opens
+    /// envelopes with. A listener serves the wallet, not one account, so the key is account 0's.
+    /// Fails with [`WalletError::Locked`] while the wallet is locked.
+    pub fn listener_seal_key(&self, kind: SealKeyKind) -> Result<EncSecretKey, WalletError> {
+        let session = self.session()?;
+        let network = match self.config().network {
+            Network::Mainnet => lepic_contact::Network::Mainnet,
+            Network::Floonet => lepic_contact::Network::Floonet,
+        };
+        namespace::seal_key(&session.seed, LISTENER_ACCOUNT, network, kind)
+    }
+
     /// Every pin of `account`, in origin order. Fails with [`WalletError::Locked`].
     #[instrument(skip_all, fields(wallet = %self.config().name, account = %account))]
     pub fn peer_pins(&self, account: AccountIndex) -> Result<Vec<PeerPin>, WalletError> {
