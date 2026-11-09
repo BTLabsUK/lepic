@@ -506,12 +506,26 @@ ALTER TABLE outputs ADD COLUMN touched INTEGER NOT NULL DEFAULT 0;
 CREATE INDEX outputs_touched ON outputs (touched);
 ";
 
+/// The seal key each native endpoint showed the first time this wallet sent to it, kept under
+/// the account that sent and the endpoint's origin (EPICTX 5.15): a later key for the same
+/// origin is not taken in silence.
+const V16: &str = "
+CREATE TABLE peer_pins (
+    account INTEGER NOT NULL CHECK (account BETWEEN 0 AND 4294967295),
+    origin TEXT NOT NULL CHECK (length(origin) BETWEEN 1 AND 300),
+    seal_key BLOB NOT NULL CHECK (length(seal_key) = 32),
+    first_seen INTEGER NOT NULL,
+    last_seen INTEGER NOT NULL,
+    PRIMARY KEY (account, origin)
+) WITHOUT ROWID;
+";
+
 pub(crate) const MIGRATIONS: &[&str] = &[
-    V1, V2, V3, V4, V5, V6, V7, V8, V9, V10, V11, V12, V13, V14, V15,
+    V1, V2, V3, V4, V5, V6, V7, V8, V9, V10, V11, V12, V13, V14, V15, V16,
 ];
 
 /// The version this build writes.
-pub const SCHEMA_VERSION: u32 = 15;
+pub const SCHEMA_VERSION: u32 = 16;
 
 /// The schema version stored in the database; 0 for a database without a schema.
 pub(crate) fn stored_version(conn: &Connection) -> Result<u32, StoreError> {
