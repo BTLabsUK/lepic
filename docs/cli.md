@@ -709,6 +709,52 @@ It writes `invoice.slate.response` for the issuer, and takes the spending option
 `invoice pay` reads its first argument as a parked invoice's slate id when it is one, so a file
 whose name is a slate id is given with its directory, as in `./<SLATE_ID>`.
 
+### In person
+
+Face to face, the payee shows a code for one scan and the payer answers it, with no pairing.
+The code is a raw `lepic.v1` I1 (RFC 0003 §9): it names no payment proof, and the payer refuses
+it after its TTL, 15 blocks unless `--ttl-blocks` says otherwise. Online, it also names a
+mailbox on the payee's own relay for the answer.
+
+```
+$ lepic in-person invoice 0.8 --out code.bin
+```
+
+The payer reads the code first, then pays it, typing the amount again:
+
+```
+$ lepic in-person read --file code.bin
+$ lepic in-person pay 0.8 --file code.bin --out answer.bin
+$ lepic in-person post <SLATE_ID> --relay-ok
+```
+
+`read` shows the amount, the message, the TTL, a fee estimate and, when the code names a
+mailbox, its `host`, `port`, `in_relay_list` (this wallet's own or a meeting relay) and
+`host_rule`. `post` sends the sealed answer to that mailbox, only with `--relay-ok`, from a key
+used for this slate only, over Tor when Epicbox goes over Tor. A loopback or unspecified host is
+refused: connecting directly, every address the name resolves to is checked and the connection
+goes to the addresses checked; through Tor the exit resolves the name, so the name is checked.
+The answer never goes to the Epicbox sender of anything. Offline, the payer shows the answer
+back and the payee takes it by hand, as hex, armoured `BEGINEPICTX.` text or UR parts:
+
+```
+$ lepic in-person take --file answer.bin
+```
+
+The payer's inputs stay locked until the payment is posted or cancelled; past the code's TTL
+`epicbox drain` names it as cancellable, as for an Epicbox invoice.
+
+The payee's `contact collect` watches each open code's mailbox until its TTL. It takes only an
+I2 to its own I1, sealed to the code's reply key, and drops anything else with a reason. Nothing
+is finalized on its own: each answer that checks is listed with its check code, four digits of
+the payer's public excess, which the payer's screen shows too. A later answer with the same
+check code is flagged. Finalize the answer whose check code the other screen shows:
+
+```
+$ lepic in-person answers <SLATE_ID>
+$ lepic in-person finalize <SLATE_ID> 1
+```
+
 ## Contacts
 
 Pairing (RFC 0002) ties this wallet to another wallet or a service with keys of their own, so
@@ -1027,6 +1073,13 @@ when `serve` stops.
 | `POST /v1/contacts/{id}/payloads` | `contact payload post` |
 | `GET /v1/payloads` | `contact payload list` |
 | `POST /v1/payloads/{id}/ack` | `contact payload ack` |
+| `POST /v1/in-person/invoices` | `in-person invoice`, with `amount`, `account`, `message` and `ttl_blocks`; the code is `code`, as hex |
+| `POST /v1/in-person/read` | `in-person read`, with the scanned `code` as hex |
+| `POST /v1/in-person/pay` | `in-person pay`, with `amount` and the scanned `code` as hex; the sealed answer is `envelope`, as hex |
+| `POST /v1/in-person/{slate_id}/post` | `in-person post`, with `relay_ok` |
+| `POST /v1/in-person/take` | `in-person take`, with `answer`: the hex digits, the armoured text, or the UR parts |
+| `GET /v1/in-person/{slate_id}/answers` | `in-person answers` |
+| `POST /v1/in-person/{slate_id}/finalize` | `in-person finalize`, with `answer` and `fluff` |
 
 A response body is the command's `--output json` report. Amounts are strings with eight
 decimals. An error is RFC 9457 problem details (`application/problem+json`): `type`

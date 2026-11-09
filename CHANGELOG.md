@@ -34,6 +34,16 @@ Conventional Commit messages at release time.
 
 ### Added
 
+- `lepic in-person` and `/v1/in-person/…`: invoices made face to face (RFC 0003 §9). The payee
+  shows a raw `lepic.v1` I1 for one scan, with no payment proof, a TTL of 15 blocks unless set,
+  the reply key and, online, a mailbox on its own relay. The payer reads it, pays it, and seals
+  the I2 to the reply key in an anonymous type `0A` envelope, posted to the mailbox with
+  `--relay-ok` or shown back for `in-person take`. `contact collect` watches each open code's
+  mailbox until its TTL. Nothing is finalized on its own: each answer that checks is listed with
+  its check code, from the payer's public excess, a later answer with the same code is flagged,
+  and `in-person finalize` finalizes the one picked. A host from a code is reported with its
+  address class and relay-list flag, and a loopback or unspecified host is refused, on the
+  resolved addresses when connecting directly and by name through Tor.
 - `lepic-epic1`: the epic1 address (bech32m, hrp `epic` and `tepic`, proof key and seal key) and
   the epic1 payment link with up to three Epicbox transport entries, amount, message and label
   (RFC 0003 §5.13, §5.14). An Epicbox link is not read as an epic1 link. A link with no usable
