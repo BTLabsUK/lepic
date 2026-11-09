@@ -166,7 +166,7 @@ confirm_pair() {
         fail "the payer's tx ${ptx} is $(payer tx show "${ptx}" | jq -r .state), not confirmed" || return 1
     lk="$(tx_field lepic "${ltx}" kernel_excess)"
     pk="$(tx_field payer "${ptx}" kernel_excess)"
-    # Over Epicbox the receiver is answered S2 and never sees the finalized slate, so its record
+    # The receiver of an S1 answers S2 and never sees the finalized slate, so its record
     # carries no kernel; receiver_blank accepts that for the payer wallet, never a mismatch.
     if [[ "${2:-}" == receiver_blank && -z "${pk}" ]]; then
         [[ -n "${lk}" ]] || fail "lepic has no kernel excess for ${slate_id}" || return 1
@@ -275,7 +275,7 @@ native_mixed_contact() {
     local PAYER_SWITCH=true
     NATIVE_DIRECT="" collect_both 120 '[[ -n "$(side_tx payer "${slate_id}")" ]] && tx_state_in lepic "$(side_tx lepic "${slate_id}")" posted confirmed' ||
         fail "the payment never completed: lepic tx is $(lepic_tx_by_slate "${slate_id}")" || return 1
-    confirm_pair "${slate_id}" || return 1
+    confirm_pair "${slate_id}" receiver_blank || return 1
     expect_transfer lepic "$(to_units 0.2)" "$(tx_fee lepic "$(side_tx lepic "${slate_id}")")" || return 1
     DETAIL="native_slates false towards the contact with native_direct off; the payment went through the mailbox to a native_direct payer, ${slate_id} finalized, posted, confirmed"
 }
@@ -317,7 +317,7 @@ native_epictx_files() {
     if tx_state_in lepic "${tx_id}" finalized; then
         lepic tx post "${tx_id}" >/dev/null || fail "tx post failed" || return 1
     fi
-    confirm_pair "${slate_id}" || return 1
+    confirm_pair "${slate_id}" receiver_blank || return 1
     expect_transfer lepic "$(to_units 0.25)" "$(tx_fee lepic "${tx_id}")" || return 1
 
     # With lepic's switch off the file is the V3 sealed text, which a native_direct payer opens
@@ -343,7 +343,7 @@ native_epictx_files() {
     if tx_state_in lepic "${mixed_tx}" finalized; then
         lepic tx post "${mixed_tx}" >/dev/null || fail "tx post failed" || return 1
     fi
-    confirm_pair "${mixed_slate}" || return 1
+    confirm_pair "${mixed_slate}" receiver_blank || return 1
     L0="${EXPECTED_TOTAL}"
     P0="${PAYER_TOTAL}"
     expect_transfer lepic "$(to_units 0.15)" "$(tx_fee lepic "${mixed_tx}")" || return 1
@@ -390,7 +390,7 @@ in_person_exchange() {
         fail "tx ${lepic_tx} is $(lepic_tx_state "${lepic_tx}") before in-person finalize" || return 1
     fi
     lepic in-person finalize "${slate_id}" 1 "${flags[@]}" >/dev/null || fail "in-person finalize failed" || return 1
-    confirm_pair "${slate_id}" || return 1
+    confirm_pair "${slate_id}" receiver_blank || return 1
     if [[ "${direction}" == invoice ]]; then
         expect_transfer payer "$(to_units "${amount}")" "$(tx_fee payer "${payer_tx}")"
     else
@@ -583,7 +583,7 @@ native_http() {
     local sent fee=0 payer_credit=0 slate_id
     for sent in "${first}" "${second}" "${off}"; do
         slate_id="$(jq -r .slate_id <<<"${sent}")"
-        confirm_pair "${slate_id}" || return 1
+        confirm_pair "${slate_id}" receiver_blank || return 1
         fee=$((fee + $(to_units "$(jq -r .fee <<<"${sent}")")))
         payer_credit=$((payer_credit + $(to_units "$(jq -r .amount <<<"${sent}")")))
     done
