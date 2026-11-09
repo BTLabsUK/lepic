@@ -428,24 +428,31 @@ native_in_person_post() {
     DETAIL="online code with the relay on this device names no mailbox; the payer reads it, the answer is shown back and taken by hand as in step 4; the reply mailbox flow, invoice and send, was run on floonet against wss://epicbox.btlabs.uk"
 }
 
-# 7. A code past its TTL is not paid or answered, and an unanswered send code expires.
+# 7. A TTL of the margin or less is refused; a code past its TTL is not paid or answered, and an
+# unanswered send code expires.
 native_in_person_ttl() {
     native_ready || return 1
     local shown cutoff status code="${NATIVE_DIR}/ttl-invoice.code" send_code="${NATIVE_DIR}/ttl-send.code"
     local payer_count
     payer_count="$(payer tx list | jq '.transactions | length')"
-    shown="$(lepic in-person invoice 0.2 --ttl-blocks 3 --offline --out "${code}")" ||
+    # A TTL of the 10-block margin or less is refused as a usage error; 11 is the shortest.
+    local short_invoice short_send
+    short_invoice="$(lepic_status in-person invoice 0.2 --ttl-blocks 10 --offline --out "${code}")"
+    short_send="$(lepic_status in-person send 0.2 --ttl-blocks 10 --offline --out "${send_code}")"
+    ((short_invoice == 2 && short_send == 2)) ||
+        fail "a 10-block TTL: invoice exited ${short_invoice} and send ${short_send}, not 2 (usage)" || return 1
+    shown="$(lepic in-person invoice 0.2 --ttl-blocks 11 --offline --out "${code}")" ||
         fail "in-person invoice with a TTL failed" || return 1
     cutoff="$(jq -r .ttl_cutoff <<<"${shown}")"
     local send_tx
-    shown="$(lepic in-person send 0.2 --ttl-blocks 3 --offline --out "${send_code}")" ||
+    shown="$(lepic in-person send 0.2 --ttl-blocks 11 --offline --out "${send_code}")" ||
         fail "in-person send with a TTL failed" || return 1
     send_tx="$(jq -r .tx_id <<<"${shown}")"
     local send_cutoff
     send_cutoff="$(jq -r .ttl_cutoff <<<"${shown}")"
     (($(lepic_locked) > 0)) || fail "the send code locked nothing" || return 1
     # The stack mines a block every few seconds.
-    wait_until "the chain past ${send_cutoff}" 120 node_past "${cutoff}" "${send_cutoff}" ||
+    wait_until "the chain past ${send_cutoff}" 300 node_past "${cutoff}" "${send_cutoff}" ||
         fail "the chain did not pass the TTL cutoff" || return 1
     local read_status=0 pay_status receive_status read_out
     read_out="$(payer in-person read --file "${code}" --offline)" || read_status=$?
@@ -463,7 +470,7 @@ native_in_person_ttl() {
         fail "the unanswered send is $(lepic_tx_state "${send_tx}")" || return 1
     wait_until "the inputs unlocked" 60 lepic_unlocked || fail "the expired send left $(lepic_locked) units locked" || return 1
     expect_totals "${L0}" "${P0}" || return 1
-    DETAIL="past TTL ${send_cutoff}: read shows cutoff ${cutoff}, pay exited ${pay_status}, receive ${receive_status}, nothing stored; the unanswered send is $(lepic_tx_state "${send_tx}"), inputs unlocked, balance back"
+    DETAIL="10-block TTL refused (2) for invoice and send; past TTL ${send_cutoff}: read shows cutoff ${cutoff}, pay exited ${pay_status}, receive ${receive_status}, nothing stored; the unanswered send is $(lepic_tx_state "${send_tx}"), inputs unlocked, balance back"
 }
 
 # Like tx_state_in, after a refresh from the node.
