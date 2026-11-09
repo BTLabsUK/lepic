@@ -166,6 +166,12 @@ confirm_pair() {
         fail "the payer's tx ${ptx} is $(payer tx show "${ptx}" | jq -r .state), not confirmed" || return 1
     lk="$(tx_field lepic "${ltx}" kernel_excess)"
     pk="$(tx_field payer "${ptx}" kernel_excess)"
+    # Over Epicbox the receiver is answered S2 and never sees the finalized slate, so its record
+    # carries no kernel; receiver_blank accepts that for the payer wallet, never a mismatch.
+    if [[ "${2:-}" == receiver_blank && -z "${pk}" ]]; then
+        [[ -n "${lk}" ]] || fail "lepic has no kernel excess for ${slate_id}" || return 1
+        return 0
+    fi
     [[ -n "${lk}" && "${lk}" == "${pk}" ]] ||
         fail "kernel excess differs for ${slate_id}: lepic '${lk}', payer '${pk}'" || return 1
 }
@@ -249,11 +255,11 @@ native_epicbox() {
     local sent fee=0 slate_id
     for sent in "${first}" "${second}" "${third_send}"; do
         slate_id="$(jq -r .slate_id <<<"${sent}")"
-        confirm_pair "${slate_id}" || return 1
+        confirm_pair "${slate_id}" receiver_blank || return 1
         fee=$((fee + $(to_units "$(jq -r .fee <<<"${sent}")")))
     done
     expect_totals $((L0 - $(to_units 0.6) - fee)) $((P0 + $(to_units 0.6))) || return 1
-    DETAIL="first send legacy, peer claim native after the answer, second native, third with native_direct off legacy; three payments finalized, posted, confirmed, one kernel each"
+    DETAIL="first send legacy, peer claim native after the answer, second native, third with native_direct off legacy; three payments finalized, posted and confirmed on both sides; the sender's kernel recorded, the receiver's blank or equal"
 }
 
 # 2. A contact that did not claim native slates gets V3 from a native_direct wallet.
