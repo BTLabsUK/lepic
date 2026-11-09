@@ -91,7 +91,7 @@ reports what it found and the consumer asks. LEPIC never finalizes an in-person 
 ## 4 Design summary
 
 - **Legacy at the edge.** A wallet that is not LEPIC never receives a native slate, an envelope or
-  an epic1. LEPIC reads and writes V2 and V3 JSON for them as before.
+  an epic1. LEPIC reads and writes V2 and V3 JSON for them.
 - **One envelope.** Native slates reuse the RFC 0002 envelope with a type of their own (`0A`), so
   one reader handles contacts and payments.
 - **Key classes.** An envelope sealed to an epic1, listener or Epicbox seal key uses an HPKE `info`

@@ -127,7 +127,7 @@ The exchange deposit and withdrawal timings are in RFC 0002 section 12.6.
 - **User sees.** What the host shows for the request.
 - **Test.** engine: an update naming another relay leaves the mailbox in use, stores the card and
   raises the request once, for a person and a service alike; applying it moves the mailbox, queues
-  our new card and keeps the old mailbox 7 days; applying another relay, or with no request, is
+  its new card and keeps the old mailbox 7 days; applying another relay, or with no request, is
   refused. engine: with the update dropped by the mock relay, the card in the next envelope does
   not move the mailbox, and a new `05` with a higher `seq` is reported.
 
