@@ -30,6 +30,7 @@ use super::keys::{contact_keys, contact_network, enc_secret, signing_key};
 use super::{ContactError, LockedRng};
 use crate::{ContactBook, file_method};
 use lepic_wallet::finalize::Finalized;
+use lepic_wallet::SlateFormat;
 use lepic_wallet::invoice::{PaidInvoice, PayRequest};
 use lepic_wallet::ports::{SecretVault, StoreOpener};
 use lepic_wallet::receive::{ReceiveRequest, Received, legacy_codecs};
@@ -217,8 +218,10 @@ where
         tx_id: TxId,
         purpose: Option<Purpose>,
     ) -> Result<String, ContactError> {
-        self.seal_stored_slate(contact_id, tx_id, purpose, Channel::Text)
-            .await
+        Ok(self
+            .seal_stored_slate(contact_id, tx_id, purpose, Channel::Text)
+            .await?
+            .0)
     }
 
     /// Checks that a slate can go to the contact `contact_id` through its mailbox, as
@@ -253,14 +256,14 @@ where
     }
 
     /// Seals the slate this wallet last wrote for `tx_id` to the contact for `channel`, as
-    /// [`Wallet::contact_seal_slate`] describes.
+    /// [`Wallet::contact_seal_slate`] describes, with the format it was sealed in.
     async fn seal_stored_slate(
         &self,
         contact_id: ContactId,
         tx_id: TxId,
         purpose: Option<Purpose>,
         channel: Channel,
-    ) -> Result<String, ContactError> {
+    ) -> Result<(String, SlateFormat), ContactError> {
         let network = self.wallet.config().network;
         let native_direct = self.wallet.config().native_direct;
         let net = contact_network(network);
@@ -332,7 +335,12 @@ where
                     };
                     drop(guard);
                     link_tx(repos, tx_id, contact_id)?;
-                    Ok(super::native::armor_slate(&envelope, native))
+                    let format = if native {
+                        SlateFormat::Native
+                    } else {
+                        SlateFormat::Legacy
+                    };
+                    Ok((super::native::armor_slate(&envelope, native), format))
                 })
             })
             .await?;
@@ -356,7 +364,20 @@ where
         tx_id: TxId,
         purpose: Option<Purpose>,
     ) -> Result<(), ContactError> {
-        let armored = self
+        self.post_stored_slate(relays, contact_id, tx_id, purpose)
+            .await
+            .map(drop)
+    }
+
+    /// Posts as [`Wallet::contact_post_slate`] does, with the format the slate was sealed in.
+    async fn post_stored_slate(
+        &self,
+        relays: &super::ContactRelays,
+        contact_id: ContactId,
+        tx_id: TxId,
+        purpose: Option<Purpose>,
+    ) -> Result<SlateFormat, ContactError> {
+        let (armored, format) = self
             .seal_stored_slate(contact_id, tx_id, purpose, Channel::Mailbox)
             .await?;
         let session = self.wallet.session()?;
@@ -380,7 +401,7 @@ where
         self.enqueue_armored(contact_id, slate_id, stage, armored)
             .await?;
         self.deliver_soon(relays).await;
-        Ok(())
+        Ok(format)
     }
 
     /// Pays the contact `contact_id` through its mailbox. The contact is checked as
@@ -416,13 +437,14 @@ where
             Err(error) => return Err(ContactError::Send(error)),
         };
         let tx_id = sent.tx_id;
-        if let Err(error) = self
-            .contact_post_slate(relays, contact_id, tx_id, purpose)
+        match self
+            .post_stored_slate(relays, contact_id, tx_id, purpose)
             .await
         {
-            return Err(self.give_up_send(tx_id, error).await);
+            // The slate file is legacy JSON; what went to the contact is what was sealed.
+            Ok(format) => Ok(SentSlate { format, ..sent }),
+            Err(error) => Err(self.give_up_send(tx_id, error).await),
         }
-        Ok(sent)
     }
 
     /// Cancels the stored send `tx_id` after `cause` stopped it. A cancel that fails is logged

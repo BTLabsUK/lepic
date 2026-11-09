@@ -29,7 +29,7 @@ use lepic_node::Propagation;
 use lepic_primitives::amount::Amount;
 use lepic_store::{ContactId, SlateStage, TxId, TxState, WalletStore};
 use lepic_transport::marker::features::NATIVE_SLATES;
-use lepic_wallet::WalletPolicy;
+use lepic_wallet::{SlateFormat, WalletPolicy};
 use lepic_wallet::invoice::{InvoiceRequest, IssuedInvoice};
 use lepic_wallet::receive::ReceiveRequest;
 use lepic_wallet::selection::SelectionStrategy;
@@ -360,6 +360,32 @@ fn both_wallets_on_exchange_native_slates_in_both_flows() {
     });
     assert!(!stages.is_empty());
     assert!(stages.iter().all(|codec| codec == "legacy-v3"));
+}
+
+/// A send to a contact reports the format it was sealed in, not the slate file's.
+#[test]
+fn a_contact_send_reports_the_format_it_sealed() {
+    for (native, expected) in [
+        ((true, true), SlateFormat::Native),
+        ((false, false), SlateFormat::Legacy),
+    ] {
+        let (world, _, ben_side) = paired(native, WalletPolicy::default());
+        world.payer.fund(1, FUNDING);
+        let sent = world
+            .block_on(world.payer.wallet.contact_book().contact_send(
+                &relays(&world.payer),
+                ben_side,
+                SendRequest {
+                    minimum_confirmations: 1,
+                    strategy: SelectionStrategy::Smallest,
+                    ..SendRequest::new(ACCOUNT, Amount::new(AMOUNT))
+                },
+                tempfile::tempdir().unwrap().keep().join("s1.tx"),
+                Some(Purpose::Payment),
+            ))
+            .unwrap();
+        assert_eq!(sent.format, expected);
+    }
 }
 
 /// Off by default: V3 envelopes as before, though each contact claims native slates.

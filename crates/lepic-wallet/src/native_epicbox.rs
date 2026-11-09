@@ -119,13 +119,14 @@ pub(crate) fn claimed_key(features: Option<u32>, reply: Option<[u8; 32]>) -> Opt
     EncPublicKey::from_bytes(key).ok().map(|_| key)
 }
 
-/// How a slate went out over a method.
+/// How a slate went out over a method or to a contact.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum SlateFormat {
-    /// As the method's legacy JSON: V2 or V3, marked or not.
+    /// As the method's legacy JSON: V2 or V3, marked or not; to a contact, sealed V3.
     #[default]
     Legacy,
-    /// As a `lepic.v1` slate in an anonymous type `0A` envelope, armored `BEGINEPICTX.`.
+    /// As a `lepic.v1` slate in a type `0A` envelope, armored `BEGINEPICTX.`: anonymous over
+    /// Epicbox, signed to a contact.
     Native,
 }
 

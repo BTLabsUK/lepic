@@ -253,7 +253,7 @@ pub struct SentSlate {
     pub slate_id: SlateId,
     pub amount: Amount,
     pub fee: Fee,
-    /// How the S1 went out: as legacy JSON, or as a native slate over Epicbox.
+    /// How the S1 went out: as legacy JSON, or as a native slate over Epicbox or to a contact.
     pub format: SlateFormat,
 }
 
