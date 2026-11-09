@@ -589,6 +589,12 @@ native_http() {
     local to_third
     to_third="$(lepic "${send[@]}" 0.1)" || fail "the send to the third wallet after peer forget failed: ${to_third}" || return 1
     jq -e '.format == "native"' <<<"${to_third}" >/dev/null || fail "the third wallet's send reports ${to_third}" || return 1
+    # The next push must not land while a block mines this send: the node checks a new
+    # transaction together with its pool, and a pool transaction just mined fails that check.
+    local to_third_tx
+    to_third_tx="$(jq -r .tx_id <<<"${to_third}")"
+    wait_until "lepic tx ${to_third_tx} confirmed" 180 lepic_tx_confirmed "${to_third_tx}" ||
+        fail "lepic's send to the third wallet (tx ${to_third_tx}) did not confirm" || return 1
 
     # The payer answers again with native_direct off: no native endpoint, so a send is V2/V3.
     lepic peer forget "${origin}" >/dev/null || fail "the second peer forget failed" || return 1
