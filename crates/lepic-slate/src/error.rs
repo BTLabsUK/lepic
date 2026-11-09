@@ -215,6 +215,10 @@ pub enum Unrepresentable {
     TimeToLive,
     PaymentProof,
     Flow(crate::stage::Flow),
+    /// A block header version other than the one a format derives from the slate's height.
+    BlockHeaderVersion { given: u16, expected: u16 },
+    /// A range proof of a length other than the one a format writes without a length field.
+    RangeProofLength { len: usize, expected: usize },
 }
 
 impl std::fmt::Display for Unrepresentable {
@@ -223,6 +227,13 @@ impl std::fmt::Display for Unrepresentable {
             Self::TimeToLive => f.write_str("a ttl cutoff height"),
             Self::PaymentProof => f.write_str("a payment proof"),
             Self::Flow(flow) => write!(f, "the {flow} flow"),
+            Self::BlockHeaderVersion { given, expected } => write!(
+                f,
+                "block header version {given} at a height that takes {expected}"
+            ),
+            Self::RangeProofLength { len, expected } => {
+                write!(f, "a {len}-byte range proof where {expected} bytes are written")
+            }
         }
     }
 }
