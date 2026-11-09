@@ -554,6 +554,8 @@ pub struct ContactReport {
     pub peer_features: u32,
     /// The profile the contact told (ADR 0041), the upper half of its feature word; 0 when none.
     pub peer_profile: u32,
+    /// New slates to the contact go as native slates (`native_direct` set and claimed).
+    pub native_slates: bool,
     /// `mismatch`, `peer-mismatch`, `unpaired` or `never-finished`, once the pairing ended.
     pub ended_reason: Option<&'static str>,
     pub ended_at: Option<String>,
@@ -2648,6 +2650,7 @@ mod tests {
                     peer_verified_at: None,
                     peer_features: 0,
                     peer_profile: 0,
+                    native_slates: false,
                     ended_reason: None,
                     ended_at: None,
                     allow_invoices: false,
@@ -2668,6 +2671,7 @@ mod tests {
                     "label",
                     "lapsed",
                     "last_heard",
+                    "native_slates",
                     "peer_features",
                     "peer_heard_at",
                     "peer_profile",

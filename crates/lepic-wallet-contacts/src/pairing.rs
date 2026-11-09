@@ -661,6 +661,7 @@ where
         link: &str,
     ) -> Result<ContactView, ContactError> {
         let network = self.wallet.config().network;
+        let native_direct = self.wallet.config().native_direct;
         let peer =
             ContactCard::from_link(link, contact_network(network)).map_err(ContactError::Decode)?;
         let peer_relay = mailbox_relay(&peer, relays)?;
@@ -713,7 +714,13 @@ where
                     // A card QR is seen by anyone nearby: the first collect moves our mailbox.
                     repos.put_setting(&super::collect::in_person_key(contact_id), "1")?;
                     debug!(peer_relay = %peer_relay, "in-person pairing stored");
-                    Ok(super::manage::view(&record, Some(&mailbox), network, now))
+                    Ok(super::manage::view(
+                        &record,
+                        Some(&mailbox),
+                        network,
+                        native_direct,
+                        now,
+                    ))
                 })
             })
             .await?;

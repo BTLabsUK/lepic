@@ -757,7 +757,9 @@ collect` takes the answer, and `contact list` shows when the contact was last he
 In JSON, each contact also carries what a host service needs to follow a pairing: `status`
 (`waiting`, `paired`, `verified`, `keys-changed` or `ended`), `sas_indexes` (the four SAS table
 indexes, in the order of `sas`; empty without a SAS), `peer_heard_at` and `peer_verified_at`
-(RFC 3339, or null), `peer_features` (the feature bits the contact claimed, 0 when none) and,
+(RFC 3339, or null), `peer_features` (the feature bits the contact claimed, 0 when none),
+`native_slates` (true when new slates to the contact go as native slates: `native_direct` is
+set and the contact claims them) and,
 once the pairing ended, `ended_reason` (`mismatch`, `peer-mismatch`, `unpaired` or
 `never-finished`) and `ended_at`.
 A wallet answers at most 1 check an hour and 3 a day per contact; more are taken and dropped. A

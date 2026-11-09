@@ -164,6 +164,14 @@ fn slate_json(bytes: &[u8]) -> serde_json::Value {
     value
 }
 
+/// Whether `party` sends new slates to `contact` as native slates, as its contact view says.
+fn native_slates(world: &World, party: &Party, contact: ContactId) -> bool {
+    world
+        .block_on(party.wallet.contact_book().contact(contact))
+        .unwrap()
+        .native_slates
+}
+
 fn slate_id_of(party: &Party, tx_id: TxId) -> uuid::Uuid {
     party
         .read(|repos| repos.transaction(tx_id))
@@ -324,6 +332,8 @@ const V3: Format = Format::V3(Vec::new());
 fn both_wallets_on_exchange_native_slates_in_both_flows() {
     let (world, shop_side, ben_side) = paired((true, true), WalletPolicy::default());
     world.payer.fund(1, FUNDING);
+    assert!(native_slates(&world, &world.issuer, shop_side));
+    assert!(native_slates(&world, &world.payer, ben_side));
 
     assert_eq!(
         send_flow(&world, shop_side, ben_side),
@@ -356,6 +366,7 @@ fn both_wallets_off_send_v3_slates_as_stored() {
     for (party, contact) in [(&world.payer, ben_side), (&world.issuer, shop_side)] {
         let record = party.read(|repos| repos.contact(contact)).unwrap();
         assert_ne!(record.facts.peer_features & NATIVE_SLATES, 0);
+        assert!(!native_slates(&world, party, contact));
     }
 
     assert_eq!(send_flow(&world, shop_side, ben_side), (V3, V3));
@@ -396,6 +407,7 @@ fn a_contact_that_does_not_claim_native_slates_gets_v3() {
             .unwrap();
     }
     world.payer.fund(1, FUNDING);
+    assert!(!native_slates(&world, &world.issuer, shop_side));
 
     assert_eq!(send_flow(&world, shop_side, ben_side), (V3, V3));
     assert_eq!(invoice_flow(&world, shop_side, ben_side), (V3, V3));

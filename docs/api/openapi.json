@@ -2733,6 +2733,7 @@
           "status",
           "peer_features",
           "peer_profile",
+          "native_slates",
           "allow_invoices",
           "seal",
           "lapsed"
@@ -2787,6 +2788,10 @@
               "null"
             ],
             "description": "When an envelope from the contact was last opened, if ever."
+          },
+          "native_slates": {
+            "type": "boolean",
+            "description": "New slates to the contact go as native slates (`native_direct` set and claimed)."
           },
           "peer_features": {
             "type": "integer",

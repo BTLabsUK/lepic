@@ -266,6 +266,9 @@ pub struct ContactView {
     /// The profile the contact sent: `peer_features` from bit 16 up, moved down. LEPIC never
     /// reads a bit of it; the host names them.
     pub peer_profile: u32,
+    /// New slates to the contact go as native slates (type `0A`, RFC 0003): the host set
+    /// `native_direct`, the contact claims native slates and the pairing is not private.
+    pub native_slates: bool,
     /// The domain the contact claimed in this pairing, unverified: the host proves it with
     /// `domain_verify` against the domain's well-known file.
     pub peer_domain: Option<String>,

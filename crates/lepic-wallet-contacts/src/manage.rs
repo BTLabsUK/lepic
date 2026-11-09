@@ -27,6 +27,7 @@ pub(crate) fn view(
     record: &ContactRecord,
     mailbox: Option<&lepic_store::ContactMailbox>,
     network: lepic_primitives::params::Network,
+    native_direct: bool,
     now: jiff::Timestamp,
 ) -> ContactView {
     let facts = &record.facts;
@@ -63,6 +64,7 @@ pub(crate) fn view(
             .filter(|_| record.sas.as_ref().map(super::status::verdict_hash) == facts.peer_verdict),
         peer_features: facts.peer_features,
         peer_profile: facts.peer_features >> lepic_transport::marker::features::PROFILE_SHIFT,
+        native_slates: super::native::wants_native(native_direct, record),
         peer_domain: facts.peer_domain.as_ref().map(|claim| claim.domain.clone()),
         peer_domain_attestation: facts
             .peer_domain
@@ -214,6 +216,7 @@ where
     pub async fn contacts(&self) -> Result<Vec<ContactView>, ContactError> {
         let session = self.wallet.session()?;
         let network = self.wallet.config().network;
+        let native_direct = self.wallet.config().native_direct;
         self.contact_work(move |ports, _| {
             let now = ports.clock.now();
             Ok(session.store.read(|repos| {
@@ -223,7 +226,7 @@ where
                         continue;
                     }
                     let mailbox = repos.contact_mailbox(record.contact_id)?;
-                    views.push(view(&record, mailbox.as_ref(), network, now));
+                    views.push(view(&record, mailbox.as_ref(), network, native_direct, now));
                 }
                 Ok::<_, StoreError>(views)
             })?)
@@ -281,6 +284,7 @@ where
     pub async fn private_pairings(&self) -> Result<Vec<ContactView>, ContactError> {
         let session = self.wallet.session()?;
         let network = self.wallet.config().network;
+        let native_direct = self.wallet.config().native_direct;
         self.contact_work(move |ports, _| {
             let now = ports.clock.now();
             Ok(session.store.read(|repos| {
@@ -290,7 +294,7 @@ where
                         continue;
                     }
                     let mailbox = repos.contact_mailbox(record.contact_id)?;
-                    views.push(view(&record, mailbox.as_ref(), network, now));
+                    views.push(view(&record, mailbox.as_ref(), network, native_direct, now));
                 }
                 Ok::<_, StoreError>(views)
             })?)
@@ -302,12 +306,13 @@ where
     pub async fn contact(&self, contact_id: ContactId) -> Result<ContactView, ContactError> {
         let session = self.wallet.session()?;
         let network = self.wallet.config().network;
+        let native_direct = self.wallet.config().native_direct;
         self.contact_work(move |ports, _| {
             let now = ports.clock.now();
             session.store.read(|repos| {
                 let record = paired(repos, contact_id)?;
                 let mailbox = repos.contact_mailbox(contact_id)?;
-                Ok(view(&record, mailbox.as_ref(), network, now))
+                Ok(view(&record, mailbox.as_ref(), network, native_direct, now))
             })
         })
         .await
