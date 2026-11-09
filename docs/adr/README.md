@@ -57,6 +57,7 @@ record that supersedes the old one; accepted records are not rewritten.
 | [0049](0049-keeping-messages-that-cannot-be-taken-yet.md) | Keeping messages that cannot be taken yet | accepted |
 | [0050](0050-one-wallet-api.md) | One wallet API, served by `lepic serve` | proposed |
 | [0051](0051-transaction-methods-in-one-crate.md) | Transaction methods in one crate, outside the engine | proposed |
+| [0052](0052-legacy-at-the-edge-native-between-lepic-wallets.md) | Epic compatibility at the edge, a native protocol between LEPIC wallets | accepted |
 
 Template:
 
