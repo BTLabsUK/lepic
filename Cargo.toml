@@ -16,6 +16,7 @@ lepic-primitives = { path = "crates/lepic-primitives" }
 lepic-keychain = { path = "crates/lepic-keychain" }
 lepic-slate = { path = "crates/lepic-slate" }
 lepic-legacy-slate = { path = "crates/lepic-legacy-slate" }
+lepic-native-slate = { path = "crates/lepic-native-slate" }
 lepic-contact = { path = "crates/lepic-contact" }
 lepic-node = { path = "crates/lepic-node" }
 lepic-store = { path = "crates/lepic-store" }
