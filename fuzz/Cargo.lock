@@ -1143,6 +1143,7 @@ dependencies = [
  "hyper",
  "hyper-rustls",
  "hyper-util",
+ "lepic-peer",
  "lepic-slate",
  "lepic-transport",
  "rustls",
@@ -1180,6 +1181,7 @@ dependencies = [
  "lepic-legacy-rpc",
  "lepic-legacy-slate",
  "lepic-node",
+ "lepic-peer",
  "lepic-primitives",
  "lepic-slate",
  "lepic-tor",
@@ -1226,6 +1228,25 @@ dependencies = [
  "tracing",
  "webpki-roots",
  "zeroize",
+]
+
+[[package]]
+name = "lepic-peer"
+version = "0.3.1"
+dependencies = [
+ "http-body-util",
+ "hyper",
+ "hyper-rustls",
+ "hyper-util",
+ "lepic-primitives",
+ "rustls",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror",
+ "tokio",
+ "tower-service",
+ "tracing",
 ]
 
 [[package]]
@@ -1377,12 +1398,16 @@ dependencies = [
  "jiff",
  "lepic-contact",
  "lepic-crypto",
+ "lepic-epic1",
  "lepic-epicbox",
  "lepic-keychain",
  "lepic-legacy-slate",
  "lepic-methods",
+ "lepic-native-slate",
  "lepic-node",
+ "lepic-peer",
  "lepic-primitives",
+ "lepic-seal",
  "lepic-slate",
  "lepic-store",
  "lepic-transport",
