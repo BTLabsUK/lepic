@@ -226,10 +226,9 @@ pub struct WalletPolicy {
 }
 
 impl WalletPolicy {
-    /// The values every wallet used before they were parameters: 10 and 100 receipts, 6
-    /// confirmations, a contact's checks answered once an hour and three times a day, a
-    /// failing contact message kept 3 times within 3 minutes, and payments and invoices nobody
-    /// asked for taken.
+    /// LEPIC's defaults: 10 and 100 receipts, 6 confirmations, a contact's checks answered once
+    /// an hour and three times a day, a failing contact message kept 3 times within 3 minutes,
+    /// and payments and invoices nobody asked for taken.
     pub const DEFAULT: Self = Self {
         max_open_receipts_per_sender: 10,
         max_open_receipts: 100,
