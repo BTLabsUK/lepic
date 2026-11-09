@@ -5,12 +5,15 @@
 //! The payee shows an I1 as raw `lepic.v1` bytes. Its tail names the reply key (record 01),
 //! derived from the slate id, and, when the wallet is online, a reply mailbox on the wallet's
 //! own relay (record 02). The payer scans it, pays it, and seals the I2 to the reply key in an
-//! anonymous type 0A envelope; the envelope is posted to the reply mailbox or shown back.
+//! anonymous type 0A envelope; the envelope is posted to the reply mailbox or shown back. A
+//! sender shows an S1 the same way, and the receiver answers it with a sealed S2; the S1's
+//! inputs stay locked until an answer is finalized or the TTL passes.
 //!
 //! Nothing here finalizes by itself. Each answer that checks is stored with its check code and
 //! told with [`Event::InPersonAnswer`]; the user picks the answer to finalize. The check code
-//! is four digits of the answering party's public excess, the payer's for an I2: both screens
-//! show the same digits for the same answer, and two answers with the same digits are flagged.
+//! is four digits of the answering party's public excess, the payer's for an I2 and the
+//! receiver's for an S2: both screens show the same digits for the same answer, and two
+//! answers with the same digits are flagged.
 //!
 //! Raw `lepic.v1` is read only here, from a scan: file and paste paths keep refusing it.
 
@@ -41,14 +44,15 @@ use lepic_store::{AccountIndex, Repositories, StoreError, TxId, TxState, WalletS
 use lepic_transport::host_rule::{self, HostReport};
 use lepic_transport::method::SenderFacts;
 use lepic_transport::transport::{BoxFuture, Location};
-use lepic_wallet::account::parent_key_id;
+use lepic_wallet::account::{DEFAULT_ACCOUNT_LABEL, parent_key_id};
 use lepic_wallet::event::{Event, InPersonAnswerEvent};
 use lepic_wallet::finalize::Finalized;
 use lepic_wallet::invoice::{InvoiceRequest, PayRequest};
 use lepic_wallet::namespace::{PostRole, check_code};
 use lepic_wallet::ports::{SecretVault, StoreOpener};
+use lepic_wallet::receive::ReceiveRequest;
 use lepic_wallet::selection::SelectionOptions;
-use lepic_wallet::send::Delivery;
+use lepic_wallet::send::{Delivery, SendRequest};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tracing::{debug, info, instrument, warn};
@@ -212,18 +216,21 @@ pub struct InPersonTaken {
 #[serde(rename_all = "lowercase")]
 enum CodeKind {
     Invoice,
+    Send,
 }
 
 impl CodeKind {
     const fn proposal(self) -> Stage {
         match self {
             Self::Invoice => Stage::I1,
+            Self::Send => Stage::S1,
         }
     }
 
     const fn answer(self) -> Stage {
         match self {
             Self::Invoice => Stage::I2,
+            Self::Send => Stage::S2,
         }
     }
 }
@@ -467,15 +474,23 @@ fn client_for(relays: &ContactRelays, endpoint: RelayEndpoint, known: bool) -> M
     )
 }
 
-/// The code in `bytes` for `network`, refused unless it is a proposal with a reply key and a
-/// TTL and without a payment proof.
-fn read_code(network: Network, bytes: &[u8]) -> Result<NativeSlate, ContactError> {
+/// The code in `bytes` for `network`, refused unless it is a proposal, an I1 or an S1 or only
+/// the one of `kind`, with a reply key and a TTL and without a payment proof.
+fn read_code(
+    network: Network,
+    bytes: &[u8],
+    kind: Option<CodeKind>,
+) -> Result<NativeSlate, ContactError> {
     let native = NativeSlate::decode(network, bytes).map_err(native_error)?;
     let slate = native.slate();
     if slate.payment_proof().is_some() {
         return Err(refused(InPersonRefusal::Proof));
     }
-    if slate.stage() != Stage::I1 {
+    let proposal = match kind {
+        Some(kind) => slate.stage() == kind.proposal(),
+        None => matches!(slate.stage(), Stage::I1 | Stage::S1),
+    };
+    if !proposal {
         return Err(refused(InPersonRefusal::WrongStage));
     }
     if native.tail().reply_key().is_none() {
@@ -485,6 +500,36 @@ fn read_code(network: Network, bytes: &[u8]) -> Result<NativeSlate, ContactError
         return Err(refused(InPersonRefusal::NoTtl));
     }
     Ok(native)
+}
+
+/// A reply mailbox an answer is posted to: the mailbox key in hex, the relay and the report
+/// on it.
+type AnswerMailbox = (String, String, HostReport);
+
+/// Where an answer to `native` goes: the reply mailbox it names and the reply key the answer
+/// is sealed to.
+fn answer_route(
+    native: &NativeSlate,
+    relays: &ContactRelays,
+) -> Result<(Option<AnswerMailbox>, EncPublicKey), ContactError> {
+    let mailbox = match native.tail().reply_mailbox() {
+        Some(mailbox) => {
+            let (_, report) = mailbox_endpoint(mailbox.address(), relays)?;
+            Some((
+                hex::encode(&mailbox.key().to_bytes()),
+                mailbox.address().to_owned(),
+                report,
+            ))
+        }
+        None => None,
+    };
+    let reply_to = native
+        .tail()
+        .reply_key()
+        .map(|key| EncPublicKey::from_bytes(*key.as_bytes()))
+        .and_then(Result::ok)
+        .ok_or(refused(InPersonRefusal::NoReplyKey))?;
+    Ok((mailbox, reply_to))
 }
 
 impl<N, S, V> ContactBook<'_, N, S, V>
@@ -531,6 +576,48 @@ where
         {
             Ok(code) => Ok(code),
             Err(error) => Err(self.give_up_send(tx_id, error).await),
+        }
+    }
+
+    /// Makes an in-person send: an S1 to show as raw `lepic.v1`, as
+    /// [`ContactBook::in_person_invoice`] makes an invoice. The send is stored and its inputs
+    /// stay locked until an answer is finalized, the TTL passes or it is cancelled.
+    ///
+    /// Fails with [`ContactError::InPerson`] when `request` asks for a payment proof, and with
+    /// [`ContactError::Send`] as [`lepic_wallet::Wallet::send`] fails before it delivers.
+    #[instrument(skip_all, fields(wallet = %self.wallet.config().name))]
+    pub async fn in_person_send(
+        &self,
+        relays: &ContactRelays,
+        request: SendRequest,
+    ) -> Result<InPersonCode, ContactError> {
+        if request.payment_proof_recipient.is_some() {
+            return Err(refused(InPersonRefusal::Proof));
+        }
+        self.check_contact_network(relays)?;
+        let account = request.account;
+        let request = SendRequest {
+            ttl_blocks: Some(request.ttl_blocks.unwrap_or(IN_PERSON_TTL_BLOCKS)),
+            ..request
+        };
+        let (sent, slate) = self
+            .wallet
+            .send_unsent(
+                &file_method(),
+                request,
+                // Never exported, as for an in-person invoice.
+                Delivery::Export {
+                    to: Location::File(PathBuf::new()),
+                },
+            )
+            .await
+            .map_err(ContactError::Send)?;
+        match self
+            .store_code(relays, sent.tx_id, account, slate, CodeKind::Send)
+            .await
+        {
+            Ok(code) => Ok(code),
+            Err(error) => Err(self.give_up_send(sent.tx_id, error).await),
         }
     }
 
@@ -622,7 +709,7 @@ where
         bytes: &[u8],
     ) -> Result<InPersonRead, ContactError> {
         let network = self.wallet.config().network;
-        let native = read_code(network, bytes)?;
+        let native = read_code(network, bytes, None)?;
         let mailbox = native
             .tail()
             .reply_mailbox()
@@ -670,24 +757,8 @@ where
         request: PayRequest,
     ) -> Result<InPersonPaid, ContactError> {
         let network = self.wallet.config().network;
-        let native = read_code(network, bytes)?;
-        let mailbox = match native.tail().reply_mailbox() {
-            Some(mailbox) => {
-                let (_, report) = mailbox_endpoint(mailbox.address(), relays)?;
-                Some((
-                    hex::encode(&mailbox.key().to_bytes()),
-                    mailbox.address().to_owned(),
-                    report,
-                ))
-            }
-            None => None,
-        };
-        let reply_to = native
-            .tail()
-            .reply_key()
-            .map(|key| EncPublicKey::from_bytes(*key.as_bytes()))
-            .and_then(Result::ok)
-            .ok_or(refused(InPersonRefusal::NoReplyKey))?;
+        let native = read_code(network, bytes, Some(CodeKind::Invoice))?;
+        let (mailbox, reply_to) = answer_route(&native, relays)?;
         let (i1, _) = native.into_parts();
         let account = request.account;
         let paid = self
@@ -712,13 +783,58 @@ where
         }
     }
 
+    /// Receives a scanned in-person send as [`lepic_wallet::Wallet::receive`] receives an S1,
+    /// and seals the S2 to the code's reply key in an anonymous, padded envelope. The
+    /// transaction and the envelope are stored. Post the envelope with
+    /// [`ContactBook::in_person_post`] or show it; the sender finalizes the answer it picks by
+    /// the check code returned.
+    ///
+    /// Fails as [`ContactBook::in_person_read`] does, and with [`ContactError::Receive`] as
+    /// receiving fails.
+    #[instrument(skip_all, fields(wallet = %self.wallet.config().name))]
+    pub async fn in_person_receive(
+        &self,
+        relays: &ContactRelays,
+        bytes: &[u8],
+        request: ReceiveRequest,
+    ) -> Result<InPersonPaid, ContactError> {
+        let network = self.wallet.config().network;
+        let native = read_code(network, bytes, Some(CodeKind::Send))?;
+        let (mailbox, reply_to) = answer_route(&native, relays)?;
+        let (s1, _) = native.into_parts();
+        let account = self
+            .wallet
+            .account(request.account.as_deref().unwrap_or(DEFAULT_ACCOUNT_LABEL))?
+            .index;
+        let received = self
+            .wallet
+            .receive_decoded(&file_method(), s1, request)
+            .await
+            .map_err(ContactError::Receive)?;
+        let tx_id = received.tx_id;
+        match self
+            .store_answer(
+                received.slate,
+                tx_id,
+                account,
+                &reply_to,
+                mailbox,
+                CodeKind::Send,
+            )
+            .await
+        {
+            Ok(paid) => Ok(paid),
+            Err(error) => Err(self.give_up_send(tx_id, error).await),
+        }
+    }
+
     async fn store_answer(
         &self,
         answer: Slate,
         tx_id: TxId,
         account: AccountIndex,
         reply_to: &EncPublicKey,
-        mailbox: Option<(String, String, HostReport)>,
+        mailbox: Option<AnswerMailbox>,
         kind: CodeKind,
     ) -> Result<InPersonPaid, ContactError> {
         let network = self.wallet.config().network;
@@ -929,6 +1045,11 @@ where
                 .check_invoice_answer(answer)
                 .await
                 .map_err(ContactError::Invoice)?,
+            CodeKind::Send => self
+                .wallet
+                .check_send_answer(answer)
+                .await
+                .map_err(ContactError::Finalize)?,
         }
         let now = self.wallet.ports().clock.now();
         let session = self.wallet.session()?;
@@ -1033,6 +1154,11 @@ where
                 .finalize_invoice_decoded(slate, propagation)
                 .await
                 .map_err(ContactError::Invoice)?,
+            CodeKind::Send => self
+                .wallet
+                .finalize_decoded(slate, propagation)
+                .await
+                .map_err(ContactError::Finalize)?,
         };
         let session = self.wallet.session()?;
         self.contact_work(move |_, _| {

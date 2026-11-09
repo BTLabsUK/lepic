@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
-//! In-person invoices (RFC 0003 §9): a code shown as raw `lepic.v1`, paid by a scan, answered
-//! through the code's reply mailbox or shown back, and finalized only when the payee picks the
-//! answer by its check code.
+//! In-person invoices and sends (RFC 0003 §9): a code shown as raw `lepic.v1`, paid or received
+//! by a scan, answered through the code's reply mailbox or shown back, and finalized only when
+//! the wallet that showed it picks the answer by its check code.
 
 // Tests may unwrap, index and panic (docs/rules.md), including in helpers that clippy does not
 // treat as test code.
@@ -23,11 +23,13 @@ use std::sync::Arc;
 
 use helpers::{events, relays};
 use lepic_epicbox::{Domain, Network as RelayNetwork, RelayEndpoint, Security};
+use lepic_keychain::Identifier;
 use lepic_methods::epicbox::Epicbox;
 use lepic_node::Propagation;
 use lepic_primitives::amount::{Amount, Height};
 use lepic_primitives::params::Network;
 use lepic_slate::codec::{MediaType, WireSlate};
+use lepic_slate::model::ProofAddress;
 use lepic_slate::stage::Stage;
 use lepic_slate::ur_slate::{BINARY_FRAGMENT_LEN, encode_ur_binary};
 use lepic_store::TxState;
@@ -36,13 +38,15 @@ use lepic_transport::method::Method;
 use lepic_wallet::Event;
 use lepic_wallet::epicbox_invoice::InvoiceExpiry;
 use lepic_wallet::invoice::{INVOICE_TTL_MARGIN_BLOCKS, InvoiceError};
-use lepic_wallet::selection::SelectionOptions;
+use lepic_wallet::receive::ReceiveRequest;
+use lepic_wallet::selection::{SelectionOptions, SelectionStrategy};
+use lepic_wallet::send::SendRequest;
 use lepic_wallet_contacts::in_person_testing::{
     armored, for_network, sealed_to_code, with_mailbox_host, with_proof, without_tail,
 };
 use lepic_wallet_contacts::{
     CollectTrigger, ContactError, ContactRelays, IN_PERSON_TTL_BLOCKS, InPersonCode,
-    InPersonInvoiceRequest, InPersonRefusal, RelayMode, WalletContacts,
+    InPersonInvoiceRequest, InPersonPaid, InPersonRefusal, RelayMode, WalletContacts,
 };
 use rand::SeedableRng;
 use world::{ACCOUNT, AMOUNT, FUNDING, Party, TIP, World, pay_request};
@@ -92,6 +96,26 @@ impl World {
         .unwrap()
     }
 
+    /// The payer shows an in-person send code to the issuer.
+    fn show_send(&self, relays: &ContactRelays) -> InPersonCode {
+        self.block_on(
+            self.payer
+                .wallet
+                .contact_book()
+                .in_person_send(relays, send_request()),
+        )
+        .unwrap()
+    }
+
+    fn receive_with(&self, party: &Party, code: &InPersonCode) -> InPersonPaid {
+        self.block_on(party.wallet.contact_book().in_person_receive(
+            &relays(party),
+            &code.bytes,
+            ReceiveRequest::default(),
+        ))
+        .unwrap()
+    }
+
     fn collect_with(&self, party: &Party, relays: &ContactRelays) -> usize {
         self.block_on(
             party
@@ -101,6 +125,15 @@ impl World {
         )
         .unwrap()
         .in_person
+    }
+}
+
+fn send_request() -> SendRequest {
+    SendRequest {
+        minimum_confirmations: 1,
+        strategy: SelectionStrategy::Smallest,
+        message: Some("change".to_owned()),
+        ..SendRequest::new(ACCOUNT, Amount::new(AMOUNT))
     }
 }
 
@@ -622,4 +655,362 @@ fn a_payment_past_the_ttl_frees_its_inputs_when_cancelled_and_the_code_is_forgot
         ),
         InPersonRefusal::NoCode
     );
+}
+
+#[test]
+fn a_send_code_received_face_to_face_is_answered_through_its_mailbox_and_finalized_when_picked() {
+    let world = World::new();
+    let mut payer_events = world.payer.wallet.subscribe();
+    let code = world.show_send(&relays(&world.payer));
+    assert!(code.mailbox.is_some());
+    assert_eq!(code.ttl_cutoff, TIP + IN_PERSON_TTL_BLOCKS);
+    // The send is stored and its inputs locked from the moment the code is shown.
+    let sent = world
+        .payer
+        .read(|repos| repos.transaction(code.tx_id))
+        .unwrap();
+    assert_eq!(sent.state, TxState::Sent);
+    assert!(world.payer.wallet.balance(ACCOUNT).unwrap().locked > Amount::ZERO);
+
+    let read = world
+        .block_on(world.issuer.wallet.contact_book().in_person_read(
+            &relays(&world.issuer),
+            options(),
+            &code.bytes,
+        ))
+        .unwrap();
+    assert_eq!(read.slate_id, code.slate_id);
+    assert_eq!(read.stage, Stage::S1);
+    assert_eq!(read.amount, Amount::new(AMOUNT));
+    assert_eq!(read.message.as_deref(), Some("change"));
+    assert_eq!(read.ttl_cutoff, code.ttl_cutoff);
+    assert!(
+        read.fee
+            .is_some_and(|fee| fee > lepic_primitives::amount::Fee::ZERO)
+    );
+    let mailbox = read.mailbox.unwrap();
+    assert_eq!(mailbox.host, "relay.test");
+    assert!(mailbox.in_relay_list);
+
+    let received = world.receive_with(&world.issuer, &code);
+    assert_eq!(received.slate_id, code.slate_id);
+    assert_eq!(received.check_code.len(), 4);
+    // Receiving the same code again gives the same answer back.
+    let again = world.receive_with(&world.issuer, &code);
+    assert_eq!(again.tx_id, received.tx_id);
+    assert_eq!(again.check_code, received.check_code);
+    assert_eq!(
+        refusal(
+            world.block_on(world.issuer.wallet.contact_book().in_person_post(
+                &relays(&world.issuer),
+                received.slate_id,
+                false,
+            ))
+        ),
+        InPersonRefusal::RelayNotConfirmed
+    );
+    world
+        .block_on(world.issuer.wallet.contact_book().in_person_post(
+            &relays(&world.issuer),
+            received.slate_id,
+            true,
+        ))
+        .unwrap();
+
+    assert_eq!(world.collect_with(&world.payer, &relays(&world.payer)), 1);
+    let answered: Vec<_> = events(&mut payer_events)
+        .into_iter()
+        .filter_map(|event| match event {
+            Event::InPersonAnswer(answer) => Some(answer),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(answered.len(), 1);
+    assert_eq!(answered[0].slate_id, code.slate_id);
+    assert_eq!(answered[0].stage, Stage::S2);
+    assert_eq!(answered[0].answer, 1);
+    assert_eq!(answered[0].check_code, received.check_code);
+    assert!(!answered[0].same_code);
+    // Nothing is finalized until the sender picks the answer.
+    assert!(world.node.pushed_transactions().is_empty());
+
+    let finalized = world
+        .block_on(world.payer.wallet.contact_book().in_person_finalize(
+            code.slate_id,
+            1,
+            Propagation::Stem,
+        ))
+        .unwrap();
+
+    assert!(finalized.pushed);
+    assert_eq!(finalized.tx_id, code.tx_id);
+    assert_eq!(world.node.pushed_transactions().len(), 1);
+    let view = world
+        .block_on(
+            world
+                .payer
+                .wallet
+                .contact_book()
+                .in_person_answers(code.slate_id),
+        )
+        .unwrap();
+    assert_eq!(view.stage, Stage::S1);
+    assert_eq!(view.finalized, Some(1));
+    assert_eq!(world.collect_with(&world.payer, &relays(&world.payer)), 0);
+}
+
+#[test]
+fn a_send_code_shown_offline_takes_the_answer_shown_back() {
+    let world = World::new();
+    let code = world.show_send(&offline(&world.payer));
+    assert_eq!(code.mailbox, None);
+    let received = world.receive_with(&world.issuer, &code);
+    assert_eq!(
+        refusal(
+            world.block_on(world.issuer.wallet.contact_book().in_person_post(
+                &relays(&world.issuer),
+                received.slate_id,
+                true,
+            ))
+        ),
+        InPersonRefusal::NoMailbox
+    );
+
+    let taken = world
+        .block_on(
+            world
+                .payer
+                .wallet
+                .contact_book()
+                .in_person_take(&received.envelope),
+        )
+        .unwrap();
+    assert_eq!(taken.tx_id, code.tx_id);
+    assert_eq!(taken.stage, Stage::S2);
+    assert_eq!(taken.answer, 1);
+    assert_eq!(taken.check_code, received.check_code);
+    assert!(!taken.duplicate);
+    let armoured = world
+        .block_on(
+            world
+                .payer
+                .wallet
+                .contact_book()
+                .in_person_take(armored(&received.envelope).as_bytes()),
+        )
+        .unwrap();
+    assert!(armoured.duplicate);
+
+    world
+        .block_on(world.payer.wallet.contact_book().in_person_finalize(
+            code.slate_id,
+            1,
+            Propagation::Stem,
+        ))
+        .unwrap();
+    assert_eq!(world.node.pushed_transactions().len(), 1);
+    let sent = world
+        .payer
+        .read(|repos| repos.transaction(code.tx_id))
+        .unwrap();
+    assert_eq!(sent.state, TxState::Posted);
+}
+
+#[test]
+fn a_second_answer_to_a_send_with_the_same_check_code_is_flagged_and_the_sender_picks_one() {
+    let world = World::new();
+    let mut payer_events = world.payer.wallet.subscribe();
+    let code = world.show_send(&relays(&world.payer));
+    // A second install of the issuer's wallet, its key counter where the issuer's is, receives
+    // into the same output: its answer has the issuer's public excess, so the same check code,
+    // and another signature.
+    let twin = world.issuer_twin();
+    let next_child = world
+        .issuer
+        .read(|repos| repos.account(ACCOUNT))
+        .unwrap()
+        .next_child;
+    twin.write(|repos| {
+        let mut account = repos.account(ACCOUNT)?.unwrap();
+        account.next_child = next_child;
+        repos.put_account(&account)
+    });
+    let mut received = Vec::new();
+    for party in [&world.issuer, &twin] {
+        let answer = world.receive_with(party, &code);
+        world
+            .block_on(party.wallet.contact_book().in_person_post(
+                &relays(party),
+                answer.slate_id,
+                true,
+            ))
+            .unwrap();
+        received.push(answer);
+    }
+    assert_eq!(received[0].check_code, received[1].check_code);
+    assert_ne!(received[0].envelope, received[1].envelope);
+
+    assert_eq!(world.collect_with(&world.payer, &relays(&world.payer)), 2);
+    let flags: Vec<_> = events(&mut payer_events)
+        .into_iter()
+        .filter_map(|event| match event {
+            Event::InPersonAnswer(answer) => Some((answer.answer, answer.same_code)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(flags, vec![(1, false), (2, true)]);
+    assert!(world.node.pushed_transactions().is_empty());
+    assert_eq!(
+        refusal(
+            world.block_on(world.payer.wallet.contact_book().in_person_finalize(
+                code.slate_id,
+                3,
+                Propagation::Stem,
+            ))
+        ),
+        InPersonRefusal::NoAnswer
+    );
+
+    world
+        .block_on(world.payer.wallet.contact_book().in_person_finalize(
+            code.slate_id,
+            2,
+            Propagation::Stem,
+        ))
+        .unwrap();
+    assert_eq!(world.node.pushed_transactions().len(), 1);
+    // The other answer can no longer be finalized.
+    let other = world.block_on(world.payer.wallet.contact_book().in_person_finalize(
+        code.slate_id,
+        1,
+        Propagation::Stem,
+    ));
+    assert!(other.is_err(), "{other:?}");
+    assert_eq!(world.node.pushed_transactions().len(), 1);
+}
+
+#[test]
+fn send_codes_and_invoice_codes_are_answered_only_as_what_they_are() {
+    let world = World::new();
+    let send = world.show_send(&relays(&world.payer));
+    let invoice = world.show(&relays(&world.issuer));
+    let stranger = world.stranger();
+
+    // An S1 is not paid, nor an I1 received.
+    assert_eq!(
+        refusal(world.block_on(stranger.wallet.contact_book().in_person_pay(
+            &relays(&stranger),
+            &send.bytes,
+            pay_request(),
+        ))),
+        InPersonRefusal::WrongStage
+    );
+    assert_eq!(
+        refusal(
+            world.block_on(world.payer.wallet.contact_book().in_person_receive(
+                &relays(&world.payer),
+                &invoice.bytes,
+                ReceiveRequest::default(),
+            ))
+        ),
+        InPersonRefusal::WrongStage
+    );
+    // A send code flagged for a payment proof, without a reply key, or with a loopback mailbox.
+    let book = world.issuer.wallet.contact_book();
+    let receive = |bytes: &[u8]| {
+        world.block_on(book.in_person_receive(
+            &relays(&world.issuer),
+            bytes,
+            ReceiveRequest::default(),
+        ))
+    };
+    // An S1 with the proof flag and no proof does not decode.
+    let proved = receive(&with_proof(&send.bytes));
+    assert!(matches!(proved, Err(ContactError::Native(_))), "{proved:?}");
+    let keyless = without_tail(Network::Floonet, &send.bytes).unwrap();
+    assert_eq!(refusal(receive(&keyless)), InPersonRefusal::NoReplyKey);
+    let looped = with_mailbox_host(Network::Floonet, &send.bytes, "127.0.0.1:7000").unwrap();
+    assert_eq!(refusal(receive(&looped)), InPersonRefusal::Loopback);
+    // Nothing refused was received.
+    let open = world
+        .issuer
+        .read(|repos| repos.transactions(ACCOUNT))
+        .into_iter()
+        .filter(|tx| tx.entry.slate_id.map(|id| *id.as_bytes()) == Some(*send.slate_id.as_bytes()))
+        .count();
+    assert_eq!(open, 0);
+
+    // The S1 sealed to its own reply key is not an answer.
+    let sealed = sealed_to(Network::Floonet, &send.bytes, send.bytes.clone(), false);
+    assert_eq!(
+        refusal(world.block_on(world.payer.wallet.contact_book().in_person_take(&sealed))),
+        InPersonRefusal::WrongStage
+    );
+
+    // A send code never asks for a payment proof.
+    let key = world
+        .payer
+        .keychain()
+        .payment_proof_key(&Identifier::new(2, [0, 0, 0, 0]).unwrap(), 0)
+        .unwrap();
+    let proved = world.block_on(world.payer.wallet.contact_book().in_person_send(
+        &relays(&world.payer),
+        SendRequest {
+            payment_proof_recipient: Some(ProofAddress::from_bytes(key.public_key()).unwrap()),
+            ..send_request()
+        },
+    ));
+    assert_eq!(refusal(proved), InPersonRefusal::Proof);
+}
+
+#[test]
+fn a_send_code_past_its_ttl_expires_at_refresh_and_frees_its_inputs() {
+    let world = World::new();
+    let code = world.show_send(&relays(&world.payer));
+    let received = world.receive_with(&world.issuer, &code);
+    assert!(world.payer.wallet.balance(ACCOUNT).unwrap().locked > Amount::ZERO);
+
+    world
+        .node
+        .update_chain(|chain| chain.tip.height = Height::new(code.ttl_cutoff));
+    world.block_on(world.payer.wallet.refresh()).unwrap();
+    world.block_on(world.issuer.wallet.refresh()).unwrap();
+
+    let sent = world
+        .payer
+        .read(|repos| repos.transaction(code.tx_id))
+        .unwrap();
+    assert_eq!(sent.state, TxState::Expired);
+    assert_eq!(
+        world.payer.wallet.balance(ACCOUNT).unwrap().locked,
+        Amount::ZERO
+    );
+    let answer = world
+        .issuer
+        .read(|repos| repos.transaction(received.tx_id))
+        .unwrap();
+    assert_eq!(answer.state, TxState::Expired);
+
+    // The expired code is forgotten, and an answer to it is not taken.
+    assert_eq!(world.collect_with(&world.payer, &relays(&world.payer)), 0);
+    assert_eq!(
+        refusal(
+            world.block_on(
+                world
+                    .payer
+                    .wallet
+                    .contact_book()
+                    .in_person_answers(code.slate_id)
+            )
+        ),
+        InPersonRefusal::NoCode
+    );
+    let late = world.block_on(
+        world
+            .payer
+            .wallet
+            .contact_book()
+            .in_person_take(&received.envelope),
+    );
+    assert!(late.is_err(), "{late:?}");
 }
