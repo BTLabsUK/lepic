@@ -55,7 +55,7 @@ use uuid::Uuid;
 use crate::account;
 use crate::codecs;
 use crate::error::WalletError;
-use crate::invoice::earliest_cutoff;
+use crate::invoice::{complete_answer, earliest_cutoff};
 use crate::lifecycle::Session;
 use crate::ports::{SecretVault, StoreOpener};
 use crate::refresh::{KernelAt, RefreshError, final_kernel, stored_slate};
@@ -615,13 +615,15 @@ fn finalized_from(s3: &Slate, s2: &Slate) -> bool {
 
 /// Finalizes `s2` against the stored S1 and context in the caller's store transaction: stores
 /// S3, drops the context and moves the transaction to `finalized`. A transaction already
-/// finalized from the same S2 is returned as stored.
+/// finalized from the same S2 is returned as stored. A `compact` S2 has what it leaves out
+/// put back from the stored S1 first.
 fn finalize_stored(
     repos: &mut dyn Repositories,
     keychain: &Keychain,
     env: &FinalizeEnvironment<'_>,
     s2: &Slate,
     answerer: &Answerer,
+    compact: bool,
 ) -> Result<StoredS3, FinalizeError> {
     let slate_id = s2.id();
     let slate_uuid = uuid(slate_id);
@@ -631,6 +633,13 @@ fn finalize_stored(
         .ok_or(FinalizeError::UnknownSlate { slate_id })?;
     let tx_id = entry.id;
     check_answerer(repos, env.method, env.network, tx_id, answerer)?;
+    let completed;
+    let s2 = if compact {
+        completed = completed_answer(repos, base_fee, s2)?;
+        &completed
+    } else {
+        s2
+    };
     match entry.entry.state {
         TxState::Sent => {}
         state @ (TxState::Finalized | TxState::Posted | TxState::Confirmed) => {
@@ -660,21 +669,7 @@ fn finalize_stored(
         }
     }
 
-    let s1 = repos
-        .slate(slate_uuid, SlateStage::Standard1)?
-        .filter(|stored| stored.codec == LEGACY_V3_JSON.as_str())
-        .ok_or(FinalizeError::UnknownSlate { slate_id })?;
-    let s1 = decode_stored(base_fee, s1)?.with_origin(None);
-    check_cutoff(repos, tx_id, &s1, env.tip)?;
-    let context = repos
-        .context(slate_uuid, SENDER_CONTEXT)?
-        .ok_or(FinalizeError::MissingContext { slate_id })?;
-    let built = BuiltS1 {
-        slate: s1,
-        context: SenderContext::from_private(&context)
-            .map_err(|_| FinalizeError::MalformedContext)?,
-    };
-    let finalized = build_s3(keychain, base_fee, &built, s2)?;
+    let finalized = build_from_stored(&*repos, keychain, env, tx_id, s2)?;
 
     let block_header_version = s2.origin().and_then(WireOrigin::legacy_header).map_or_else(
         || block_header_version(env.network, s2.height()),
@@ -704,6 +699,79 @@ fn finalize_stored(
         change,
         state: TxState::Finalized,
     })
+}
+
+/// The stored S1 of `slate_id`.
+fn stored_s1(
+    repos: &dyn Repositories,
+    base_fee: Fee,
+    slate_id: SlateId,
+) -> Result<Slate, FinalizeError> {
+    let s1 = repos
+        .slate(uuid(slate_id), SlateStage::Standard1)?
+        .filter(|stored| stored.codec == LEGACY_V3_JSON.as_str())
+        .ok_or(FinalizeError::UnknownSlate { slate_id })?;
+    Ok(decode_stored(base_fee, s1)?.with_origin(None))
+}
+
+/// `s2` with what a compact answer leaves out put back from the stored S1.
+fn completed_answer(
+    repos: &dyn Repositories,
+    base_fee: Fee,
+    s2: &Slate,
+) -> Result<Slate, FinalizeError> {
+    let s1 = stored_s1(repos, base_fee, s2.id())?;
+    complete_answer(s2.clone(), &s1).map_err(FinalizeError::Slate)
+}
+
+/// Builds the S3 of `s2` for `tx_id` against the stored S1 and sender context, without storing
+/// anything.
+fn build_from_stored(
+    repos: &dyn Repositories,
+    keychain: &Keychain,
+    env: &FinalizeEnvironment<'_>,
+    tx_id: TxId,
+    s2: &Slate,
+) -> Result<FinalizedSlate, FinalizeError> {
+    let slate_id = s2.id();
+    let base_fee = env.base_fee();
+    let s1 = stored_s1(repos, base_fee, slate_id)?;
+    check_cutoff(repos, tx_id, &s1, env.tip)?;
+    let context = repos
+        .context(uuid(slate_id), SENDER_CONTEXT)?
+        .ok_or(FinalizeError::MissingContext { slate_id })?;
+    let built = BuiltS1 {
+        slate: s1,
+        context: SenderContext::from_private(&context)
+            .map_err(|_| FinalizeError::MalformedContext)?,
+    };
+    build_s3(keychain, base_fee, &built, s2)
+}
+
+/// Checks that the compact `s2` would finalize against the stored S1 of a transaction still
+/// `sent`, as [`finalize_stored`] would, and stores nothing.
+fn check_stored(
+    repos: &dyn Repositories,
+    keychain: &Keychain,
+    env: &FinalizeEnvironment<'_>,
+    s2: &Slate,
+) -> Result<(), FinalizeError> {
+    let slate_id = s2.id();
+    let entry = repos
+        .transaction_by_slate(uuid(slate_id), TxDirection::Outgoing)?
+        .ok_or(FinalizeError::UnknownSlate { slate_id })?;
+    let tx_id = entry.id;
+    match entry.entry.state {
+        TxState::Sent => {}
+        TxState::Finalized | TxState::Posted | TxState::Confirmed => {
+            return Err(FinalizeError::AlreadyFinalized { slate_id, tx_id });
+        }
+        state @ (TxState::Received | TxState::Cancelled | TxState::Expired) => {
+            return Err(FinalizeError::NotFinalizable { tx_id, state });
+        }
+    }
+    let s2 = completed_answer(repos, env.base_fee(), s2)?;
+    build_from_stored(repos, keychain, env, tx_id, &s2).map(|_| ())
 }
 
 /// Refuses with [`FinalizeError::Expired`] once `tip` reaches the transaction's cutoff: the
@@ -748,6 +816,7 @@ pub(crate) fn finalize_own(
         },
         s2,
         &Answerer::Imported,
+        false,
     )?;
     Ok(FinalizedOwn {
         tx_id: stored.tx_id,
@@ -966,11 +1035,68 @@ where
         propagation: Propagation,
         answerer: Answerer,
     ) -> Result<Finalized, FinalizeError> {
+        self.session()?;
+        let s2 = method
+            .decode(self.config().network, wire)
+            .map_err(FinalizeError::Decode)?;
+        self.finalize_slate(Some(Arc::clone(method)), s2, propagation, answerer, false)
+            .await
+    }
+
+    /// As [`Wallet::finalize`], for an S2 the caller decoded from a compact format such as
+    /// `lepic.v1`, which leaves out this wallet's own inputs, change and message: they are
+    /// taken from the stored S1.
+    #[instrument(skip_all, fields(
+        wallet = %self.config().name,
+        slate_id = Empty,
+        stage = Empty,
+        tx_id = Empty,
+    ))]
+    pub async fn finalize_decoded(
+        &self,
+        s2: Slate,
+        propagation: Propagation,
+    ) -> Result<Finalized, FinalizeError> {
+        self.finalize_slate(None, s2, propagation, Answerer::Imported, true)
+            .await
+    }
+
+    /// Checks that the S2 `s2` answers a send of this wallet and would finalize, as
+    /// [`Wallet::finalize_decoded`] checks it, without storing or posting anything. Several
+    /// answers to one send can each be checked; one of them is finalized later.
+    ///
+    /// Fails as [`Wallet::finalize_decoded`] fails before it stores.
+    pub async fn check_send_answer(&self, s2: Slate) -> Result<(), FinalizeError> {
         let session = self.session()?;
         let network = self.config().network;
-        let s2 = method
-            .decode(network, wire)
-            .map_err(FinalizeError::Decode)?;
+        if s2.stage() != Stage::S2 {
+            return Err(FinalizeError::WrongStage { stage: s2.stage() });
+        }
+        let (tip, _) = self.stage_tip(&session, FinalizeError::Node).await?;
+        self.blocking(move |ports, _| {
+            let env = FinalizeEnvironment {
+                method: None,
+                network,
+                tip,
+                now: ports.clock.now(),
+            };
+            Ok(session
+                .store
+                .read(|repos| check_stored(repos, &session.keychain, &env, &s2)))
+        })
+        .await?
+    }
+
+    async fn finalize_slate(
+        &self,
+        method: Option<Arc<dyn Method>>,
+        s2: Slate,
+        propagation: Propagation,
+        answerer: Answerer,
+        compact: bool,
+    ) -> Result<Finalized, FinalizeError> {
+        let session = self.session()?;
+        let network = self.config().network;
         let span = Span::current();
         span.record("slate_id", tracing::field::display(s2.id()));
         span.record("stage", s2.stage().as_str());
@@ -978,18 +1104,17 @@ where
             return Err(FinalizeError::WrongStage { stage: s2.stage() });
         }
         let (tip, _) = self.stage_tip(&session, FinalizeError::Node).await?;
-        let method = Arc::clone(method);
         let stored = self
             .blocking(move |ports, _| {
                 let env = FinalizeEnvironment {
-                    method: Some(&*method),
+                    method: method.as_deref(),
                     network,
                     tip,
                     now: ports.clock.now(),
                 };
-                Ok(session
-                    .store
-                    .write(|repos| finalize_stored(repos, &session.keychain, &env, &s2, &answerer)))
+                Ok(session.store.write(|repos| {
+                    finalize_stored(repos, &session.keychain, &env, &s2, &answerer, compact)
+                }))
             })
             .await??;
         span.record("tx_id", stored.tx_id.0);

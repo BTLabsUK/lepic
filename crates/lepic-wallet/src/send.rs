@@ -564,6 +564,8 @@ struct StoredS1 {
     /// Where the slate must go whatever the caller named: the allowed address of a parked
     /// invoice's payment.
     bound_to: Option<Destination>,
+    /// The S1 as stored.
+    slate: Slate,
 }
 
 /// What the store transaction of a send or resend runs with, so it needs no `Ports`.
@@ -694,6 +696,7 @@ fn create_s1(
         wire,
         outbox,
         bound_to: None,
+        slate: built.slate,
     })
 }
 
@@ -967,6 +970,7 @@ fn stored_s1_for_delivery(
         wire,
         outbox,
         bound_to: None,
+        slate,
     })
 }
 
@@ -1025,6 +1029,7 @@ fn stored_i2_for_delivery(
         wire,
         outbox: None,
         bound_to,
+        slate,
     })
 }
 
@@ -1105,6 +1110,60 @@ where
             amount: stored.amount,
             fee: stored.fee,
         })
+    }
+
+    /// Builds and stores a send as [`Wallet::send`] does, encoded for `method` and recording
+    /// the destination of `delivery`, without delivering it: the caller carries the S1, which
+    /// is returned with what was stored.
+    ///
+    /// Fails as [`Wallet::send`] fails before it delivers.
+    pub async fn send_unsent(
+        &self,
+        method: &Arc<dyn Method>,
+        request: SendRequest,
+        delivery: Delivery,
+    ) -> Result<(SentSlate, Slate), SendError> {
+        let session = self.session()?;
+        check_delivery(&**method, &delivery)?;
+        let (tip, _) = self.stage_tip(&session, SendError::Node).await?;
+        let reply_keys = self.reply_keys();
+        let carrier = Arc::clone(method);
+        let stored = self
+            .blocking(move |ports, config| {
+                let env = SendEnvironment {
+                    method: &*carrier,
+                    keychain: &session.keychain,
+                    network: config.network,
+                    now: ports.clock.now(),
+                    reply_keys: reply_keys.as_deref(),
+                    features: config.claimed_features(),
+                };
+                let randomness = S1Randomness::draw(&mut **ports.rng.lock());
+                Ok(randomness.map_err(SendError::from).and_then(|randomness| {
+                    session.store.write(|repos| {
+                        create_s1(
+                            repos,
+                            &env,
+                            &session.keychain,
+                            tip,
+                            &request,
+                            &delivery,
+                            randomness,
+                        )
+                    })
+                }))
+            })
+            .await??;
+        info!(tx_id = %stored.tx_id, slate_id = %stored.slate_id, "slate created");
+        Ok((
+            SentSlate {
+                tx_id: stored.tx_id,
+                slate_id: stored.slate_id,
+                amount: stored.amount,
+                fee: stored.fee,
+            },
+            stored.slate,
+        ))
     }
 
     /// Delivers the stored S1 of a transaction whose delivery failed, through `delivery`, which

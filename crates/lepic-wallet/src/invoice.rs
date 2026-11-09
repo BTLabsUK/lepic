@@ -72,8 +72,8 @@ use crate::send::{
 };
 use crate::state::{StateChange, apply_transition, state_name};
 use crate::wallet::Wallet;
-pub(crate) use build::check_signed_payment;
-use build::{IssuerContext, complete_answer, final_transaction, verify_message};
+use build::{IssuerContext, final_transaction, verify_message};
+pub(crate) use build::{check_signed_payment, complete_answer};
 
 /// The issuer's private context is stored under the participant id legacy slates give the
 /// receiver, which the issuer is.

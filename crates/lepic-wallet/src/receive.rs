@@ -227,10 +227,44 @@ where
         counterparty: Option<Destination>,
         listing: Option<Listing>,
     ) -> Result<Received, ReceiveError> {
+        let slate = method
+            .decode(self.config().network, wire)
+            .map_err(ReceiveError::Decode)?;
+        let from = method.sender_facts(wire);
+        self.receive_slate(method, slate, from, request, counterparty, listing)
+            .await
+    }
+
+    /// [`Wallet::receive`] of an S1 the caller decoded from a compact format such as
+    /// `lepic.v1`, which carries no wire facts about its sender. The S2 is stored as `method`
+    /// encodes it, and returned for the caller to carry back.
+    #[instrument(
+        name = "receive",
+        skip_all,
+        fields(wallet = %self.config().name, transport = %method.id(), slate_id, stage)
+    )]
+    pub async fn receive_decoded(
+        &self,
+        method: &Arc<dyn Method>,
+        slate: Slate,
+        request: ReceiveRequest,
+    ) -> Result<Received, ReceiveError> {
+        self.receive_slate(method, slate, SenderFacts::default(), request, None, None)
+            .await
+    }
+
+    async fn receive_slate(
+        &self,
+        method: &Arc<dyn Method>,
+        slate: Slate,
+        from: SenderFacts,
+        request: ReceiveRequest,
+        counterparty: Option<Destination>,
+        listing: Option<Listing>,
+    ) -> Result<Received, ReceiveError> {
         let session = self.session()?;
         let network = self.config().network;
         let transport = method.id();
-        let slate = method.decode(network, wire).map_err(ReceiveError::Decode)?;
         let span = Span::current();
         span.record("slate_id", tracing::field::display(slate.id()));
         span.record("stage", slate.stage().as_str());
@@ -242,7 +276,6 @@ where
         check_ttl(&slate, tip)?;
         check_height(&slate, limit)?;
         let context = self.encode_context(&slate).await?;
-        let from = method.sender_facts(wire);
         let features = self.config().claimed_features();
         debug!(height = tip.value(), "slate checked");
 
