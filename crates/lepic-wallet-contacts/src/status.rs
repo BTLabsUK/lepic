@@ -224,8 +224,10 @@ pub(crate) fn learn_from_pairing(
     let Some(key) = proven_key(record, network) else {
         return Ok(());
     };
-    if record.facts.peer_features != 0 {
-        lepic_wallet::peer_compat::record_claim(repos, &key, now, record.facts.peer_features)?;
+    // Native slates in contact mailboxes are no claim about the payments address.
+    let claim = record.facts.peer_features & !lepic_transport::marker::features::NATIVE_SLATES;
+    if claim != 0 {
+        lepic_wallet::peer_compat::record_claim(repos, &key, now, claim)?;
     }
     lepic_wallet::peer_compat::record_works(
         repos,

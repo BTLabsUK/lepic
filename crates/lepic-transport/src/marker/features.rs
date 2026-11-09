@@ -18,6 +18,9 @@ pub const DEVICE_FORWARDING: u32 = 1 << 4;
 pub const NAME_SERVICE: u32 = 1 << 5;
 /// Keeping app payloads that arrive over a pairing until the host acknowledges them.
 pub const APP_PAYLOADS: u32 = 1 << 6;
+/// `lepic.v1` slates (envelope type `0A`) in paired-contact mailboxes. Claimed only in the
+/// pairing feature word, never in the marker of a legacy slate.
+pub const NATIVE_SLATES: u32 = 1 << 7;
 
 /// The bits the host app may claim; it passes them as one constant of its build.
 pub const HOST_FEATURES: u32 = DEVICE_FORWARDING | NAME_SERVICE;
@@ -67,6 +70,13 @@ mod tests {
     fn lepic_never_claims_a_host_bit_itself() {
         assert_eq!(LEPIC_FEATURES & HOST_FEATURES, 0);
         assert_ne!(LEPIC_FEATURES & MARKER, 0);
+    }
+
+    #[test]
+    fn native_slates_is_no_marker_bit() {
+        assert_eq!(LEPIC_FEATURES & NATIVE_SLATES, 0);
+        assert_eq!(claimed(u32::MAX) & NATIVE_SLATES, 0);
+        assert_eq!(HOST_PROFILE & NATIVE_SLATES, 0);
     }
 
     #[test]

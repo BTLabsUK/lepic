@@ -415,8 +415,10 @@ impl WalletConfig {
         lepic_transport::marker::features::claimed(self.host_features)
     }
 
-    /// The feature word of a pairing envelope or a contact update: the claimed bits and the
-    /// profile in bits 16 to 31. A plain-send marker uses [`Self::claimed_features`] alone.
+    /// The feature word of a pairing envelope or a contact update: the claimed bits,
+    /// [`lepic_transport::marker::features::NATIVE_SLATES`], which every wallet of this build
+    /// takes from its contacts, and the profile in bits 16 to 31. A plain-send marker uses
+    /// [`Self::claimed_features`] alone.
     pub fn pairing_features(&self) -> u32 {
         self.pairing_features_with(self.profile)
     }
@@ -424,6 +426,7 @@ impl WalletConfig {
     /// [`Self::pairing_features`] with `profile` in place of the configured one.
     pub fn pairing_features_with(&self, profile: u16) -> u32 {
         self.claimed_features()
+            | lepic_transport::marker::features::NATIVE_SLATES
             | (u32::from(profile) << lepic_transport::marker::features::PROFILE_SHIFT)
     }
 }
@@ -455,7 +458,7 @@ mod tests {
 
     #[test]
     fn the_profile_rides_the_pairing_word_and_never_the_claimed_one() {
-        use lepic_transport::marker::features::{HOST_PROFILE, LEPIC_FEATURES};
+        use lepic_transport::marker::features::{HOST_PROFILE, LEPIC_FEATURES, NATIVE_SLATES};
         let config = WalletConfig {
             name: WalletName::new("w").unwrap(),
             network: Network::Floonet,
@@ -468,11 +471,18 @@ mod tests {
             policy: WalletPolicy::default(),
         };
         assert_eq!(config.claimed_features() & HOST_PROFILE, 0);
-        assert_eq!(config.pairing_features(), LEPIC_FEATURES | 3 << 16);
-        assert_eq!(config.pairing_features_with(0), LEPIC_FEATURES);
+        assert_eq!(config.claimed_features() & NATIVE_SLATES, 0);
+        assert_eq!(
+            config.pairing_features(),
+            LEPIC_FEATURES | NATIVE_SLATES | 3 << 16
+        );
+        assert_eq!(
+            config.pairing_features_with(0),
+            LEPIC_FEATURES | NATIVE_SLATES
+        );
         assert_eq!(
             config.pairing_features_with(u16::MAX),
-            LEPIC_FEATURES | HOST_PROFILE
+            LEPIC_FEATURES | NATIVE_SLATES | HOST_PROFILE
         );
     }
 
