@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-//! The OpenAPI document: the owner routes, the payment endpoint `serve --http` answers, and the
+//! The OpenAPI document: the owner routes, the payment endpoints `serve --http` answers, and the
 //! problem every owner route may answer with.
 
 use hyper::body::Bytes;
@@ -20,7 +20,8 @@ pub(crate) fn rendered() -> Bytes {
     text.into()
 }
 
-/// Adds the problem response to every owner operation.
+/// Adds the problem response to every owner operation. The payment endpoints, tagged `legacy`,
+/// describe their own.
 pub(crate) struct Problems;
 
 impl Modify for Problems {
@@ -45,7 +46,10 @@ impl Modify for Problems {
                 &mut item.delete,
                 &mut item.patch,
             ];
-            for operation in operations.into_iter().flatten() {
+            let owned = |operation: &&mut utoipa::openapi::path::Operation| {
+                !operation.tags.iter().flatten().any(|tag| tag == LEGACY_TAG)
+            };
+            for operation in operations.into_iter().flatten().filter(owned) {
                 operation
                     .responses
                     .responses
@@ -54,6 +58,9 @@ impl Modify for Problems {
         }
     }
 }
+
+/// The tag of the payment endpoints the listener of `serve --http` answers.
+const LEGACY_TAG: &str = "legacy";
 
 /// The name of the owner TLS listener's security scheme.
 const OWNER_TLS: &str = "ownerTls";
@@ -228,6 +235,21 @@ pub(crate) mod foreign {
         foreign_api_version: u16,
         /// For example `["V3", "V2"]`.
         supported_slate_versions: Vec<String>,
+        /// Present when the listener also answers the native endpoint at `GET /v1/peer`.
+        lepic: Option<Advert>,
+    }
+
+    /// The native endpoint a LEPIC listener offers on the same origin.
+    #[derive(ToSchema)]
+    struct Advert {
+        /// `1`.
+        protocol: u32,
+        /// The envelope formats it reads, for example `["lepic.v1"]`.
+        formats: Vec<String>,
+        /// The endpoint's path, `/v1/peer`.
+        path: String,
+        /// The seal key of the listener, 64 hex digits.
+        seal: String,
     }
 
     /// `build_coinbase`.
@@ -274,6 +296,91 @@ pub(crate) mod foreign {
     struct RpcError {
         code: i32,
         message: String,
+    }
+}
+
+/// The native endpoint, described here and answered by lepic-peer on the listener of
+/// `serve --http`.
+#[expect(dead_code, reason = "the types only describe the wire")]
+pub(crate) mod peer {
+    use utoipa::ToSchema;
+
+    /// The native endpoint
+    ///
+    /// What a LEPIC wallet's listener reads: the protocol, the envelope formats, the network
+    /// and the seal key envelopes are sealed to. Answered with the limits of `/v2/foreign` and
+    /// no authentication.
+    #[utoipa::path(
+        get,
+        path = "/v1/peer",
+        tag = "legacy",
+        security(()),
+        responses(
+            (status = 200, body = PeerInfo),
+            (status = 429, description = "Over the listener's budget", body = PeerProblem, content_type = "application/problem+json"),
+        ),
+    )]
+    pub(crate) fn peer_info() {}
+
+    /// Pay over the native endpoint
+    ///
+    /// The body is one envelope, sealed to the key `GET /v1/peer` shows, at most 69,632 bytes.
+    /// The answer is the reply envelope; the same envelope posted again gets the same reply.
+    /// Only payments are taken.
+    #[utoipa::path(
+        post,
+        path = "/v1/peer/slates",
+        tag = "legacy",
+        security(()),
+        request_body(
+            description = "A slate envelope",
+            content_type = "application/vnd.lepic.epictx",
+        ),
+        responses(
+            (status = 200, description = "The reply envelope", content_type = "application/vnd.lepic.epictx"),
+            (status = 408, description = "The body did not arrive in time"),
+            (status = 413, description = "`too_large`", body = PeerProblem, content_type = "application/problem+json"),
+            (status = 415, description = "`unsupported_format`", body = PeerProblem, content_type = "application/problem+json"),
+            (status = 422, description = "`refused`", body = PeerProblem, content_type = "application/problem+json"),
+            (status = 429, description = "`rate_limited`, with `Retry-After`", body = PeerProblem, content_type = "application/problem+json"),
+            (status = 503, description = "`not_ready`, with `Retry-After`", body = PeerProblem, content_type = "application/problem+json"),
+        ),
+    )]
+    pub(crate) fn peer_slates() {}
+
+    /// `GET /v1/peer`.
+    #[derive(ToSchema)]
+    struct PeerInfo {
+        /// `1`.
+        protocol: u32,
+        /// For example `["lepic.v1"]`.
+        formats: Vec<String>,
+        /// `mainnet` or `floonet`.
+        network: String,
+        /// The listener's seal key, 64 hex digits.
+        key: String,
+    }
+
+    /// A refusal of the native endpoint, as RFC 9457 problem details.
+    #[derive(ToSchema)]
+    struct PeerProblem {
+        /// `about:blank`.
+        #[schema(rename = "type")]
+        kind: String,
+        title: String,
+        status: u16,
+        code: PeerProblemCode,
+        detail: Option<String>,
+    }
+
+    #[derive(ToSchema)]
+    #[schema(rename_all = "snake_case")]
+    enum PeerProblemCode {
+        NotReady,
+        Refused,
+        TooLarge,
+        RateLimited,
+        UnsupportedFormat,
     }
 }
 

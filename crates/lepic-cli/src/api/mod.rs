@@ -66,12 +66,18 @@ macro_rules! api {
                     `x-socket-only` is refused over TLS.",
                 license(name = "Apache-2.0"),
             ),
-            paths(openapi::foreign::foreign, $(routes::$route),*),
+            paths(
+                openapi::foreign::foreign,
+                openapi::peer::peer_info,
+                openapi::peer::peer_slates,
+                $(routes::$route),*
+            ),
             tags(
                 (
                     name = "legacy",
                     description = "Receiving V2 and V3 slates from Epic wallets over the \
-                        JSON-RPC foreign API (ADR 0052).",
+                        JSON-RPC foreign API (ADR 0052), and slate envelopes from LEPIC wallets \
+                        at the native endpoint.",
                 ),
             ),
             components(schemas(Problem)),
@@ -109,6 +115,8 @@ api!(
     wallet_scan,
     epicbox_status,
     epicbox_peer,
+    peer_pins,
+    peer_pin_forget,
     profile_show,
     profile_set,
     profile_domain,
@@ -628,7 +636,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn every_handler_has_a_route_and_only_the_payment_endpoint_has_none() {
+    fn every_handler_has_a_route_and_only_the_payment_endpoints_have_none() {
         let document = openapi::document();
         let router = Router::new(&document);
         for (name, _) in HANDLERS {
@@ -655,7 +663,7 @@ mod tests {
                     .is_err_and(|p| p.status() == StatusCode::NOT_FOUND)
             })
             .collect();
-        assert_eq!(unrouted, ["/v2/foreign"]);
+        assert_eq!(unrouted, ["/v1/peer", "/v1/peer/slates", "/v2/foreign"]);
     }
 
     #[test]

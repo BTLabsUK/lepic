@@ -617,6 +617,21 @@ wallet that is not online takes up to about two and a half minutes to fail; the 
 with code 11 and the inputs stay locked, so `lepic tx resend <ID> --to <ONION> --tor-binary ...`
 tries again later, or `lepic tx cancel <ID>` gives up.
 
+### Pinned keys
+
+A LEPIC wallet listening over HTTP or Tor also offers its native endpoint, `/v1/peer`, with a
+seal key. A send to it pins that key under the address's origin: `http://host:port`,
+`https://host:port`, or the onion name alone. A later send to the origin stops when the wallet
+there shows another key, and names both keys. Once the change is confirmed with the payee,
+forget the pin; the next send pins the key it is shown.
+
+```
+$ lepic peer pins
+https://wallet.example:443  4f1c...9a2e  pinned 2026-11-09T10:12:03Z, last seen 2026-11-09T10:12:03Z
+$ lepic peer forget https://wallet.example:443
+Forgot the key of https://wallet.example:443.
+```
+
 ## Invoices
 
 An invoice asks the payer for an amount: the issuer builds I1, the payer answers with I2 and the
@@ -1064,6 +1079,8 @@ when `serve` stops.
 | `POST /v1/wallet/scan` | `wallet scan`, with `start_height` or `reset_chain` |
 | `GET /v1/epicbox` | `epicbox status` |
 | `GET /v1/epicbox/peers/{address}` | `epicbox peer` |
+| `GET /v1/peer-pins?account=` | `peer pins` |
+| `DELETE /v1/peer-pins?origin=&account=` | `peer forget`; `forgotten` is false when no key was pinned |
 | `GET /v1/profile` | `profile show` |
 | `PATCH /v1/profile` | `profile set`, with `names` or `bits` |
 | `GET /v1/profile/domain` | `profile domain show` |

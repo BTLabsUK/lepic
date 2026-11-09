@@ -1608,6 +1608,211 @@
         }
       }
     },
+    "/v1/peer": {
+      "get": {
+        "tags": [
+          "legacy"
+        ],
+        "summary": "The native endpoint",
+        "description": "What a LEPIC wallet's listener reads: the protocol, the envelope formats, the network\nand the seal key envelopes are sealed to. Answered with the limits of `/v2/foreign` and\nno authentication.",
+        "operationId": "peer_info",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PeerInfo"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Over the listener's budget",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PeerProblem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {}
+        ]
+      }
+    },
+    "/v1/peer-pins": {
+      "get": {
+        "tags": [
+          "peer"
+        ],
+        "summary": "The pinned seal keys of the LEPIC wallets the account paid directly",
+        "description": "In origin order. A send to an origin whose wallet shows another key stops until the pin is\nforgotten.",
+        "operationId": "peer_pins",
+        "parameters": [
+          {
+            "name": "account",
+            "in": "query",
+            "description": "Account label; the default account when absent",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PeerPinListReport"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error, as RFC 9457 problem details",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "peer"
+        ],
+        "summary": "Forget the pinned seal key of an origin",
+        "description": "The next send to the origin pins the key its wallet shows. `forgotten` is false when no key\nwas pinned.",
+        "operationId": "peer_pin_forget",
+        "parameters": [
+          {
+            "name": "origin",
+            "in": "query",
+            "description": "`http://host:port`, `https://host:port` or an onion name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "account",
+            "in": "query",
+            "description": "Account label; the default account when absent",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PeerForgetReport"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error, as RFC 9457 problem details",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/peer/slates": {
+      "post": {
+        "tags": [
+          "legacy"
+        ],
+        "summary": "Pay over the native endpoint",
+        "description": "The body is one envelope, sealed to the key `GET /v1/peer` shows, at most 69,632 bytes.\nThe answer is the reply envelope; the same envelope posted again gets the same reply.\nOnly payments are taken.",
+        "operationId": "peer_slates",
+        "requestBody": {
+          "description": "A slate envelope",
+          "content": {
+            "application/vnd.lepic.epictx": {}
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The reply envelope",
+            "content": {
+              "application/vnd.lepic.epictx": {}
+            }
+          },
+          "408": {
+            "description": "The body did not arrive in time"
+          },
+          "413": {
+            "description": "`too_large`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PeerProblem"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "`unsupported_format`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PeerProblem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`refused`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PeerProblem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`rate_limited`, with `Retry-After`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PeerProblem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "`not_ready`, with `Retry-After`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PeerProblem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {}
+        ]
+      }
+    },
     "/v1/profile": {
       "get": {
         "tags": [
@@ -2420,6 +2625,39 @@
         "properties": {
           "address": {
             "type": "string"
+          }
+        }
+      },
+      "Advert": {
+        "type": "object",
+        "description": "The native endpoint a LEPIC listener offers on the same origin.",
+        "required": [
+          "protocol",
+          "formats",
+          "path",
+          "seal"
+        ],
+        "properties": {
+          "formats": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The envelope formats it reads, for example `[\"lepic.v1\"]`."
+          },
+          "path": {
+            "type": "string",
+            "description": "The endpoint's path, `/v1/peer`."
+          },
+          "protocol": {
+            "type": "integer",
+            "format": "int32",
+            "description": "`1`.",
+            "minimum": 0
+          },
+          "seal": {
+            "type": "string",
+            "description": "The seal key of the listener, 64 hex digits."
           }
         }
       },
@@ -4659,6 +4897,145 @@
         },
         "additionalProperties": false
       },
+      "PeerForgetReport": {
+        "type": "object",
+        "required": [
+          "origin",
+          "forgotten"
+        ],
+        "properties": {
+          "forgotten": {
+            "type": "boolean",
+            "description": "False when no key was pinned for the origin."
+          },
+          "origin": {
+            "type": "string"
+          }
+        }
+      },
+      "PeerInfo": {
+        "type": "object",
+        "description": "`GET /v1/peer`.",
+        "required": [
+          "protocol",
+          "formats",
+          "network",
+          "key"
+        ],
+        "properties": {
+          "formats": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "For example `[\"lepic.v1\"]`."
+          },
+          "key": {
+            "type": "string",
+            "description": "The listener's seal key, 64 hex digits."
+          },
+          "network": {
+            "type": "string",
+            "description": "`mainnet` or `floonet`."
+          },
+          "protocol": {
+            "type": "integer",
+            "format": "int32",
+            "description": "`1`.",
+            "minimum": 0
+          }
+        }
+      },
+      "PeerPinListReport": {
+        "type": "object",
+        "description": "The seal keys pinned for an account's direct payees, in origin order.",
+        "required": [
+          "account",
+          "pins"
+        ],
+        "properties": {
+          "account": {
+            "type": "string"
+          },
+          "pins": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PeerPinReport"
+            }
+          }
+        }
+      },
+      "PeerPinReport": {
+        "type": "object",
+        "description": "The seal key a LEPIC wallet showed at an origin.",
+        "required": [
+          "origin",
+          "seal_key",
+          "first_seen",
+          "last_seen"
+        ],
+        "properties": {
+          "first_seen": {
+            "type": "string",
+            "description": "When the key was pinned."
+          },
+          "last_seen": {
+            "type": "string",
+            "description": "The last exchange that showed the key."
+          },
+          "origin": {
+            "type": "string",
+            "description": "`http://host:port`, `https://host:port`, or the onion name alone."
+          },
+          "seal_key": {
+            "type": "string",
+            "description": "The pinned key, 64 hex digits."
+          }
+        }
+      },
+      "PeerProblem": {
+        "type": "object",
+        "description": "A refusal of the native endpoint, as RFC 9457 problem details.",
+        "required": [
+          "type",
+          "title",
+          "status",
+          "code"
+        ],
+        "properties": {
+          "code": {
+            "$ref": "#/components/schemas/PeerProblemCode"
+          },
+          "detail": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "title": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string",
+            "description": "`about:blank`."
+          }
+        }
+      },
+      "PeerProblemCode": {
+        "type": "string",
+        "enum": [
+          "not_ready",
+          "refused",
+          "too_large",
+          "rate_limited",
+          "unsupported_format"
+        ]
+      },
       "PeerReport": {
         "type": "object",
         "required": [
@@ -5661,6 +6038,17 @@
             "format": "int32",
             "minimum": 0
           },
+          "lepic": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Advert",
+                "description": "Present when the listener also answers the native endpoint at `GET /v1/peer`."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "supported_slate_versions": {
             "type": "array",
             "items": {
@@ -5747,7 +6135,7 @@
   "tags": [
     {
       "name": "legacy",
-      "description": "Receiving V2 and V3 slates from Epic wallets over the JSON-RPC foreign API (ADR 0052)."
+      "description": "Receiving V2 and V3 slates from Epic wallets over the JSON-RPC foreign API (ADR 0052), and slate envelopes from LEPIC wallets at the native endpoint."
     }
   ]
 }

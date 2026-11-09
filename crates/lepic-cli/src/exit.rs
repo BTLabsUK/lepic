@@ -197,6 +197,8 @@ pub enum CliError {
     HttpReplyLost { tx_id: u32 },
     #[error("onion address rejected")]
     OnionAddress(#[source] lepic_methods::tor::OnionError),
+    #[error("the origin is not http://host:port, https://host:port or an onion name")]
+    PeerOrigin(#[source] lepic_methods::http::OriginError),
     #[error("give --tor-binary to use tor")]
     TorBinaryNeeded,
     #[error("tor is not working")]
@@ -283,6 +285,7 @@ impl CliError {
             | Self::HttpUrl(_)
             | Self::InvoiceOverHttp
             | Self::OnionAddress(_)
+            | Self::PeerOrigin(_)
             | Self::ContactId
             | Self::PayloadId
             | Self::PayloadHex
@@ -729,6 +732,10 @@ mod tests {
             (CliError::SlateId, ErrorKind::Usage),
             (CliError::PayloadId, ErrorKind::Usage),
             (CliError::PayloadHex, ErrorKind::Usage),
+            (
+                CliError::PeerOrigin(lepic_methods::http::OriginError::Port),
+                ErrorKind::Usage,
+            ),
             (CliError::DomainNotConfigured, ErrorKind::Usage),
             (CliError::OwnerTlsNotConfigured, ErrorKind::Config),
             (

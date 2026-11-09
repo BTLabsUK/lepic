@@ -76,6 +76,8 @@ fn the_tree_has_every_planned_command() {
         "http listen",
         "tor address",
         "tor listen",
+        "peer pins",
+        "peer forget",
         "node status",
         "contact invite",
         "contact request",

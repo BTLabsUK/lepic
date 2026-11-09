@@ -89,6 +89,8 @@ pub enum Report {
     InPersonPost(InPersonPostReport),
     InPersonTaken(InPersonTakenReport),
     InPersonAnswers(InPersonAnswersReport),
+    PeerPins(PeerPinListReport),
+    PeerForget(PeerForgetReport),
 }
 
 #[derive(Serialize)]
@@ -885,6 +887,33 @@ pub struct ContactPayloadAckReport {
     pub acknowledged: usize,
 }
 
+/// The seal keys pinned for an account's direct payees, in origin order.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct PeerPinListReport {
+    pub account: String,
+    pub pins: Vec<PeerPinReport>,
+}
+
+/// The seal key a LEPIC wallet showed at an origin.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct PeerPinReport {
+    /// `http://host:port`, `https://host:port`, or the onion name alone.
+    pub origin: String,
+    /// The pinned key, 64 hex digits.
+    pub seal_key: String,
+    /// When the key was pinned.
+    pub first_seen: String,
+    /// The last exchange that showed the key.
+    pub last_seen: String,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct PeerForgetReport {
+    pub origin: String,
+    /// False when no key was pinned for the origin.
+    pub forgotten: bool,
+}
+
 /// A client of the owner TLS listener.
 #[derive(Debug, Serialize)]
 pub struct ApiClientReport {
@@ -1421,6 +1450,18 @@ fn write_human(out: &mut Vec<u8>, report: &Report) -> std::io::Result<()> {
             .clients
             .iter()
             .try_for_each(|client| writeln!(out, "{}  {}", client.name, client.fingerprint)),
+        Report::PeerPins(r) if r.pins.is_empty() => {
+            writeln!(out, "No pinned keys for account {}.", r.account)
+        }
+        Report::PeerPins(r) => r.pins.iter().try_for_each(|pin| {
+            writeln!(
+                out,
+                "{}  {}  pinned {}, last seen {}",
+                pin.origin, pin.seal_key, pin.first_seen, pin.last_seen
+            )
+        }),
+        Report::PeerForget(r) if r.forgotten => writeln!(out, "Forgot the key of {}.", r.origin),
+        Report::PeerForget(r) => writeln!(out, "No key was pinned for {}.", r.origin),
     }
 }
 
@@ -3060,6 +3101,25 @@ mod tests {
             (
                 Report::ApiClientList(ApiClientListReport { clients: vec![] }),
                 vec!["clients"],
+            ),
+            (
+                Report::PeerPins(PeerPinListReport {
+                    account: text("default"),
+                    pins: vec![PeerPinReport {
+                        origin: text("https://wallet.example:443"),
+                        seal_key: text("00"),
+                        first_seen: text("t"),
+                        last_seen: text("t"),
+                    }],
+                }),
+                vec!["account", "pins"],
+            ),
+            (
+                Report::PeerForget(PeerForgetReport {
+                    origin: text("https://wallet.example:443"),
+                    forgotten: true,
+                }),
+                vec!["forgotten", "origin"],
             ),
             (
                 Report::ContactPayloadList(ContactPayloadListReport { payloads: vec![] }),

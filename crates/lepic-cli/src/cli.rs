@@ -135,6 +135,9 @@ pub enum Command {
     /// Take payments at the wallet's onion address over Tor
     #[command(subcommand)]
     Tor(TorCommand),
+    /// Show and forget the keys this wallet pinned for the LEPIC wallets it paid directly
+    #[command(subcommand)]
+    Peer(PeerCommand),
     /// Query the node
     #[command(subcommand)]
     Node(NodeCommand),
@@ -763,6 +766,27 @@ pub struct TorBinaryArgs {
     /// Directory of the libraries the tor binary needs, put on the library path
     #[arg(long, value_name = "DIR", requires = "tor_binary")]
     pub lib_dir: Option<PathBuf>,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum PeerCommand {
+    /// List the pinned keys of the LEPIC wallets this account paid directly
+    #[command(after_help = "\
+A send over HTTP or Tor to a LEPIC wallet that offers its native endpoint pins the key the wallet \
+showed, under the address's origin. Later sends to the origin stop when the wallet shows another \
+key, until the pin is forgotten.")]
+    Pins(AccountArg),
+    /// Forget the pinned key of an origin; the next send to it pins the key it shows
+    Forget(PeerForgetArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct PeerForgetArgs {
+    /// The origin as `lepic peer pins` shows it: `http://host:port`, `https://host:port` or an
+    /// onion name
+    pub origin: String,
+    #[command(flatten)]
+    pub account: AccountArg,
 }
 
 #[derive(Debug, Subcommand)]

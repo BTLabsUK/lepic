@@ -22,10 +22,10 @@ use crate::cli::{
     InPersonArgs, InPersonCodeArg, InPersonCommand, InPersonFinalizeArgs, InPersonInvoiceArgs,
     InPersonPayArgs, InPersonPostArgs, InPersonReadArgs, InPersonReceiveArgs, InPersonSendArgs,
     InPersonSlateArg, InPersonTakeArgs, InviteExpiryArg, KeysArg, ListArgs, ListingArgs,
-    MAX_DRAIN_DAYS, MessageArg, NodeCommand, OnOffArg, OutFileArg, PeerArgs, PlainHttpArg,
-    PostArgs, ProfileCommand, ProfileSetArgs, SasArg, SelectionArg, SendArgs, SendDestinationArgs,
-    SendSlateIdArg, SpendArgs, TorBinaryArgs, TxCommand, TxIdArgs, TxShowArgs, WalletCommand,
-    WalletScanArgs,
+    MAX_DRAIN_DAYS, MessageArg, NodeCommand, OnOffArg, OutFileArg, PeerArgs, PeerCommand,
+    PeerForgetArgs, PlainHttpArg, PostArgs, ProfileCommand, ProfileSetArgs, SasArg, SelectionArg,
+    SendArgs, SendDestinationArgs, SendSlateIdArg, SpendArgs, TorBinaryArgs, TxCommand, TxIdArgs,
+    TxShowArgs, WalletCommand, WalletScanArgs,
 };
 use crate::commands::is_onion;
 use crate::output::{
@@ -36,10 +36,11 @@ use crate::output::{
     ContactPreviewReport, ContactQuarantineReport, ContactRemoveReport, ContactReport,
     EpicboxStatusReport, FinalizeReport, InPersonAnswersReport, InPersonCodeReport,
     InPersonPaidReport, InPersonPostReport, InPersonReadReport, InPersonTakenReport, InfoReport,
-    MethodsReport, NodeStatusReport, OutputsReport, PasswordReport, PeerReport, PostReport,
-    ProfileDomainAttachReport, ProfileDomainDocumentReport, ProfileDomainShowReport,
-    ProfileSetReport, ProfileShowReport, Report, SendReport, ServeStatusReport, SlateReceiveReport,
-    TxListReport, TxReport, TxStateReport, WalletScanReport,
+    MethodsReport, NodeStatusReport, OutputsReport, PasswordReport, PeerForgetReport,
+    PeerPinListReport, PeerReport, PostReport, ProfileDomainAttachReport,
+    ProfileDomainDocumentReport, ProfileDomainShowReport, ProfileSetReport, ProfileShowReport,
+    Report, SendReport, ServeStatusReport, SlateReceiveReport, TxListReport, TxReport,
+    TxStateReport, WalletScanReport,
 };
 
 type Answer = Result<Response<Body>, Problem>;
@@ -920,6 +921,56 @@ pub(crate) async fn profile_domain_file(api: &Api<'_>, request: Request) -> Answ
 )]
 pub(crate) async fn profile_domain_attach(api: &Api<'_>, _request: Request) -> Answer {
     api.run(domain(DomainCommand::Attach)).await
+}
+
+/// The pinned seal keys of the LEPIC wallets the account paid directly
+///
+/// In origin order. A send to an origin whose wallet shows another key stops until the pin is
+/// forgotten.
+#[utoipa::path(
+    get,
+    path = "/v1/peer-pins",
+    tag = "peer",
+    params(("account" = Option<String>, Query, description = "Account label; the default account when absent")),
+    responses((status = 200, body = PeerPinListReport)),
+)]
+pub(crate) async fn peer_pins(api: &Api<'_>, request: Request) -> Answer {
+    let query: AccountQuery = request.query()?;
+    let account = account(query.account);
+    api.run(Call::Command(Command::Peer(PeerCommand::Pins(account))))
+        .await
+}
+
+/// The origin whose pin is forgotten.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct PeerOriginQuery {
+    origin: String,
+    account: Option<String>,
+}
+
+/// Forget the pinned seal key of an origin
+///
+/// The next send to the origin pins the key its wallet shows. `forgotten` is false when no key
+/// was pinned.
+#[utoipa::path(
+    delete,
+    path = "/v1/peer-pins",
+    tag = "peer",
+    params(
+        ("origin" = String, Query, description = "`http://host:port`, `https://host:port` or an onion name"),
+        ("account" = Option<String>, Query, description = "Account label; the default account when absent"),
+    ),
+    responses((status = 200, body = PeerForgetReport)),
+)]
+pub(crate) async fn peer_pin_forget(api: &Api<'_>, request: Request) -> Answer {
+    let query: PeerOriginQuery = request.query()?;
+    let args = PeerForgetArgs {
+        origin: query.origin,
+        account: account(query.account),
+    };
+    api.run(Call::Command(Command::Peer(PeerCommand::Forget(args))))
+        .await
 }
 
 /// The paired contacts
