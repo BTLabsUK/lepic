@@ -1,107 +1,124 @@
 # Keys, proofs, kernels and the seed file
 
-Derived from the Epic node `v4.1.0` (`keychain/src/{mnemonic,extkey_bip32,keychain,types}.rs`,
-`core/src/libtx/{proof,aggsig,build,mod}.rs`, `core/src/core/transaction.rs`, `core/src/consensus.rs`,
-`core/src/global.rs`) and `epic-wallet` `v4.1.0` (`impls/src/lifecycle/seed.rs`,
-`libwallet/src/internal/{keys,scan,selection,tx}.rs`, `impls/src/backends/lmdb.rs`); the node
-`v4.0.4` and wallet `v4.0.2` files compute the same results (`upstream-4.1.0-review.md`). Items marked
-"confirm" need vectors before code depends on them.
+This page lists how an Epic wallet turns a recovery phrase into keys, outputs and kernels, and
+where `lepic-keychain`, `lepic-crypto` and `lepic-primitives` match it. The rules come from the
+Epic node `v4.1.0` (`keychain/src/{mnemonic,extkey_bip32,keychain,types}.rs`,
+`core/src/libtx/{proof,aggsig,build,mod}.rs`, `core/src/core/transaction.rs`,
+`core/src/consensus.rs`, `core/src/global.rs`) and `epic-wallet` `v4.1.0`
+(`impls/src/lifecycle/seed.rs`, `libwallet/src/internal/{keys,scan,selection,tx}.rs`,
+`libwallet/src/address.rs`). The golden vectors are in `testdata/vectors/keys/`,
+`testdata/vectors/primitives/` and `testdata/vectors/aggsig/`.
 
 ## From mnemonic to keys
 
-- The wallet seed is the BIP39 entropy, not the BIP39 PBKDF2 seed. The mnemonic (12, 15, 18, 21 or
-  24 English words) is converted to entropy with its checksum checked, and the entropy is the BIP32
-  input. Words are split on any run of whitespace and matched exactly against the English list, so
-  capitalised or Unicode-normalised variants are rejected.
-- Master key: HMAC-SHA512 with key `"IamVoldemort"` over the seed. Left half is the secret key, right
-  half the chain code.
-- Child derivation follows BIP32: HMAC-SHA512 keyed by the chain code over the compressed parent
-  public key (normal) or `0x00 || secret` (hardened), then the index as u32 big-endian; child secret
-  = left half + parent secret.
-- Network affects only the extended-key version bytes: floonet `0x03273A10`/`0x03273E4B`, mainnet
-  `0x033C04A4`/`0x033C08DF`. Derived keys are identical on both networks
-  (`testdata/vectors/keys/derivation_*`).
+- The wallet seed is the BIP39 entropy, not the BIP39 PBKDF2 seed. A mnemonic of 12, 15, 18, 21
+  or 24 English words gives 16, 20, 24, 28 or 32 bytes of entropy, with its checksum checked. The
+  entropy is the BIP32 input. Words are split on any run of whitespace and matched exactly against
+  the English list, so capitalised or Unicode-normalised variants are refused
+  (`lepic-keychain/src/mnemonic.rs`).
+- Master key: HMAC-SHA512 with the key `IamVoldemort` over the seed. The left half is the secret
+  key and the right half the chain code (`lepic-keychain/src/bip32.rs`).
+- Child derivation follows BIP32. HMAC-SHA512 is keyed by the chain code over the compressed
+  parent public key (normal child) or `0x00` and the parent secret (hardened child), then the
+  index as a big-endian `u32`. The child secret is the left half plus the parent secret. A derived
+  key that is zero or not below the curve order is an error.
+- The network changes only the extended-key version bytes:
+
+  | Network | Private | Public |
+  |---|---|---|
+  | Mainnet | `0x033C04A4` | `0x033C08DF` |
+  | Floonet | `0x03273A10` | `0x03273E4B` |
+
+  Derived keys are identical on both networks (`derivation_seed*_{mainnet,floonet}.json`).
 
 ## Identifiers and paths
 
-- An identifier is 17 bytes: depth (u8) then four u32 big-endian path components. Only the first
-  `depth` components are derived; a depth above 4 has no derivation upstream and LEPIC rejects it.
-- The parent of an identifier drops one level and zeroes the dropped component; the root is its own
-  parent. Upstream's path text prints hardened components as their raw `u32` value.
-- The default account is `m/0/0` (depth 2). Output keys are `m/0/0/<n>` (depth 3) with `n` taken from
-  the stored next-child counter.
-- The Epicbox address key path is in `docs/compat/epicbox.md`.
+- An identifier is 17 bytes: the depth (`u8`), then four big-endian `u32` path components. Only the
+  first `depth` components are derived. A depth above 4 is refused.
+- The parent of an identifier drops one level and zeroes the dropped component. The root is its
+  own parent. Upstream's path text prints a hardened component as its raw `u32`.
+- The default account is `m/0/0` (depth 2). Output keys are `m/0/0/<n>` (depth 3), with `n` from
+  the stored next-child counter of the account.
 
-## Payment-proof key
+## Address key and payment-proof key
 
-`epic-wallet` signs payment proofs with an ed25519 key whose 32-byte seed is the Epicbox address
-secret key for the account and derivation index (`libwallet/src/address.rs`, `ed25519_keypair`; used
-from `libwallet/src/internal/tx.rs` and `api_impl/owner.rs`). Its public key is the payment-proof
-address, also shown in onion v3 form. Vectors: `testdata/vectors/keys/address_keys_*`.
-
-LEPIC signs with this key too, except for a proof asked for over its onion: its onion has a key of
-its own, the namespace key `lepic-wallet onion key v1` (ADR 0044), and such a proof names that
-key as the receiver address and is signed with it. The onion `epic-wallet` publishes, the
-payment-proof address in onion form, is LEPIC's previous onion. Vectors:
-`testdata/vectors/keys/onion_key_*`.
+- The Epicbox address key of an account is the unkeyed BLAKE2b-256 of the plain key at
+  `m/0/1/<index>`. The account path gets its second component set to 1, and the index is appended
+  (`Keychain::address_key`). `epic-wallet` always uses index 0. Vectors:
+  `address_keys_seed*.json`. [epicbox.md](epicbox.md) uses it for addresses and signatures.
+- `epic-wallet` signs payment proofs with an ed25519 key whose 32-byte seed is that address key
+  (`Keychain::payment_proof_key`). Its public key is the payment-proof address. Vectors:
+  `address_proofs.json`.
+- The onion of a LEPIC wallet has a key of its own: the keyed BLAKE2b-256 of the seed over the
+  label `lepic-wallet onion key v1` is the ed25519 seed (`lepic-wallet/src/namespace.rs`,
+  ADR 0044). A payment proof asked for over the onion names that key as the receiver address and
+  is signed with it. Vectors: `onion_key_seed*.json`.
 
 ## Switch commitments
 
-- Output blinding factors use the "regular" switch commitment: the derived key is replaced by
+- An output blinding factor uses the regular switch commitment: the derived key is replaced by
   `blind_switch(amount, key)` from the secp256k1-zkp wrapper. Type codes: none 0, regular 1.
 - The output commitment is `commit(amount, blinding)` with the switched key.
 
 ## Range proofs
 
 - New outputs use `ProofBuilder`:
-  - `private_hash` = BLAKE2b-256 of the master secret key (unkeyed), `rewind_hash` = BLAKE2b-256 of
-    the 33-byte compressed master public key.
-  - Nonce for an output = BLAKE2b-256 keyed by the 33-byte commitment over the 32-byte hash (rewind
-    nonce from `rewind_hash`, private nonce from `private_hash`); vectors `proofs_builder_seed32`.
-  - 20-byte proof message: byte 0 = 0, byte 1 = 0 (wallet type), byte 2 = switch type, bytes 3..20 =
-    the 17-byte identifier, so byte 3 is its depth. On rewind upstream clamps a depth above 4 to 4
-    rather than rejecting the message.
-- `LegacyProofBuilder`, needed to restore old outputs: one nonce = BLAKE2b-256 keyed by the commitment
-  over the switch-blinded master key; message bytes 0..4 zero, bytes 4..20 the 16-byte path without
-  depth; depth assumed 3 and switch type regular.
-- Restore tries `ProofBuilder` first and falls back to `LegacyProofBuilder`.
+  - `private_hash` is the unkeyed BLAKE2b-256 of the secret key at the root path (no switch).
+    `rewind_hash` is the BLAKE2b-256 of the 33-byte compressed master public key.
+  - The nonce of an output is BLAKE2b-256 keyed by the 33-byte commitment over the 32-byte hash:
+    the rewind nonce from `rewind_hash`, the private nonce from `private_hash`
+    (`proofs_builder_seed32.json`).
+  - The 20-byte proof message is: byte 0 reserved (0), byte 1 the wallet type (0), byte 2 the
+    switch type, bytes 3 to 19 the 17-byte identifier, so byte 3 is its depth. When it rewinds,
+    `epic-wallet` clamps a depth above 4 to 4 rather than refusing the message, and
+    `lepic-keychain` does the same.
+  - A rewound output counts as the wallet's only if the commitment it recomputes from the amount,
+    path and switch type equals the output's commitment.
+- `LegacyProofBuilder` rewinds outputs made by older wallets. Both nonces are BLAKE2b-256 keyed by
+  the commitment over the switch-blinded root key. The message has bytes 0 to 3 zero and bytes 4
+  to 19 the 16-byte path without its depth. The depth is taken as 3 and the switch type as regular
+  (`proofs_legacy_builder_seed32.json`).
+- A restore tries `ProofBuilder` first and then `LegacyProofBuilder`.
 
 ## Kernels and fees
 
 - Kernel feature bytes: plain 0, coinbase 1, height-locked 2.
-- Kernel signature message: BLAKE2b-256 of the feature byte (coinbase), the feature byte then the fee
-  as u64 big-endian (plain), or the feature byte, fee and lock height, each u64 big-endian
-  (height-locked).
-- Kernel hash: unkeyed BLAKE2b-256 of the protocol version 1 layout (feature u8, fee u64 BE, lock
-  height u64 BE, 33-byte excess, 64-byte signature), whatever protocol version is spoken; version 2
-  drops the unused fee and lock height fields. Both binary layouts carry the signature in the secp
-  wrapper's internal form, the compact form with each 32-byte half byte-reversed; JSON uses the
-  compact form (`testdata/vectors/smoke/plain_kernel_hash.json`).
-- Fee = transaction weight times base fee. Base fee is `MILLI_EPIC` = 100,000 base units, where
-  1 EPIC = 100,000,000 base units (`EPIC_BASE`). Weight is `max(4 * outputs + kernels - inputs, 1)`,
-  with the subtraction saturating at 0.
-- Block weights: input 1, output 21, kernel 3. The block limit is 40,000 and a transaction may use
-  39,976, the limit less one coinbase output and kernel, on both networks.
-- Vectors: `testdata/vectors/primitives/` (`kernel_features`, `fee_grid`, `chain_params_*`,
-  `weight_limits`).
-- The receiver rejects a transaction whose fee is below the weight-based fee for its actual input,
+- The kernel signature message is the BLAKE2b-256 of: the feature byte (coinbase); the feature
+  byte and the fee as a big-endian `u64` (plain); or the feature byte, the fee and the lock height,
+  each a big-endian `u64` (height-locked).
+- The kernel hash is the unkeyed BLAKE2b-256 of the protocol version 1 layout (feature `u8`, fee
+  `u64`, lock height `u64`, the 33-byte excess and the 64-byte signature), whatever protocol
+  version is spoken. Version 2 on the wire omits the fee and lock height where a feature has none.
+  Both binary layouts carry the signature in the secp wrapper's internal form, the compact form
+  with each 32-byte half byte-reversed. JSON uses the compact form
+  (`testdata/vectors/smoke/plain_kernel_hash.json`).
+- Fee = transaction weight times the base fee. The base fee is `MILLI_EPIC`, 100,000 base units,
+  where 1 EPIC is 100,000,000 base units (`EPIC_BASE`). The weight is `max(4 * outputs + kernels -
+  inputs, 1)`, with the subtraction saturating at 0 (`lepic-primitives/src/fee.rs`).
+- Block weights: input 1, output 21, kernel 3. The block limit is 40,000. A transaction may use
+  39,976, the limit less one coinbase output and kernel, on both networks (`weight_limits.json`).
+- A receiver refuses a transaction whose fee is below the weight-based fee for its actual input,
   output and kernel counts.
-- Offset: the first party to add data generates a random 32-byte offset and subtracts it from its own
-  excess; the final kernel excess is the sum minus `commit(0, offset)`.
-- Coinbase maturity: 1,440 blocks on mainnet, 30 on floonet. A restored coinbase output is locked until
-  its height plus maturity.
+- Offset: the first party to add data draws a random 32-byte offset and subtracts it from its own
+  excess. The final kernel excess is the sum of the excesses minus `commit(0, offset)`.
+- Coinbase maturity is 1,440 blocks on mainnet and 30 on floonet
+  (`lepic-primitives/src/params.rs`). A restored coinbase output is locked until its height plus
+  the maturity.
+- Other vectors: `kernel_features.json`, `fee_grid.json`, `chain_params_*.json`.
 
 ## Aggregate signatures
 
-Partial signatures, partial verification, aggregation and single-signer signatures (for message
-signatures, over BLAKE2b-256 of the message) come from `core/src/libtx/aggsig.rs` over the
-secp256k1-zkp wrapper. Port the call sequence exactly and prove it with vectors.
+`lepic-crypto/src/aggsig.rs` ports `core/src/libtx/aggsig.rs` over the secp256k1-zkp wrapper:
+nonce creation, partial signatures and their verification, aggregation, the check of a completed
+signature, and the single-signer signature over the BLAKE2b-256 of a message. Vectors:
+`testdata/vectors/aggsig/`.
 
 ## Seed file `wallet.seed`
 
-Read-only for LEPIC (ADR 0005):
+LEPIC reads this file to import a wallet and does not write it (ADR 0005). It is pretty-printed
+JSON, `{ "encrypted_seed": hex, "salt": hex, "nonce": hex }`.
 
-- Pretty-printed JSON `{ "encrypted_seed": hex, "salt": hex, "nonce": hex }`.
-- Key = PBKDF2-HMAC-SHA512(password, 8-byte salt, 100 iterations, 32 bytes).
-- ChaCha20-Poly1305 with the 12-byte nonce and empty AAD; `encrypted_seed` is ciphertext then the
-  16-byte tag. The plaintext is the entropy.
+- Key: PBKDF2-HMAC-SHA512 over the password with the 8-byte salt, 100 iterations, 32 bytes.
+- Cipher: ChaCha20-Poly1305 with the 12-byte nonce and empty associated data. `encrypted_seed` is
+  the ciphertext followed by the 16-byte tag, and the plaintext is the entropy
+  (`lepic-keychain/src/vault/wallet_seed.rs`). Vectors: `wallet_seed_seed*.json`.

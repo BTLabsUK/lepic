@@ -4,22 +4,23 @@ A local page that shows one LEPIC wallet through the API of `lepic serve`: serve
 the wallet's height against the node tip, balances, address, transactions, outputs, the live
 event stream, and the API document rendered as a reference.
 
-It is its own program and workspace. It depends on no LEPIC crate and the `lepic` binary
-carries none of its HTML, so no policy of the console can reach the wallet core (ADR 0050).
-The page is plain HTML, CSS and JavaScript with no build step, embedded in the binary.
+The console is its own program and workspace. It depends on no LEPIC crate, and the `lepic`
+binary carries none of its HTML, so no policy of the console reaches the wallet core
+([ADR 0050](../docs/adr/0050-one-wallet-api.md)). The page is plain HTML, CSS and JavaScript with
+no build step, embedded in the console binary.
 
 ## Run
 
 Start `lepic serve` for the wallet, then the console:
 
-```
+```bash
 cd console
 cargo run --locked -- --network floonet
 ```
 
 At launch the console draws a link token and prints one line on stderr:
 
-```
+```text
 lepic-console on http://127.0.0.1:7421/#token=<64 hex digits> for <socket>
 ```
 
@@ -30,11 +31,16 @@ request, so a reload keeps it and each tab and each console (each address has it
 holds its own. The link works once: when it is used, the console prints a new link on stderr
 (`lepic-console: the link was used; for another tab open http://127.0.0.1:7421/#token=<new>`).
 A page opened without a valid link or stored session shows a message that says to open the
-console with the link from its terminal. Flags:
+console with the link from its terminal.
 
-- `--socket PATH`: the socket serve answers on. Without it the console uses the socket in
-  the default data dir of `--network` (`mainnet` unless given).
-- `--listen ADDR`: the loopback address and port to serve the page on.
+Flags:
+
+- `--socket PATH`: the socket `lepic serve` answers on. Without it the console uses
+  `~/.lepic/<network>/lepic.sock`.
+- `--network mainnet|floonet`: the network whose default data dir holds that socket. The
+  default is `mainnet`.
+- `--listen ADDR`: the loopback address and port to serve the page on. The default is
+  `127.0.0.1:7421`.
 
 Two consoles on different ports, for example mainnet on 7421 and floonet on 7422, draw their
 own tokens and sessions and do not affect each other.
@@ -66,12 +72,13 @@ The console binds loopback addresses only and refuses any other `--listen`.
 
 ## Test
 
-```
+```bash
 cd console
 cargo test --locked
 ```
 
 ## Third party
 
-`ui/vendor/scalar.js` is the standalone bundle of `@scalar/api-reference` (MIT); its licence
-and version are in `ui/vendor/`. It runs with web fonts, the request proxy and telemetry off.
+`ui/vendor/scalar.js` is the standalone bundle of `@scalar/api-reference` (MIT). Its licence and
+version are in [ui/vendor/](ui/vendor/README.md). It runs with web fonts, the request proxy and
+telemetry off.

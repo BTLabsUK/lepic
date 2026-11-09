@@ -1,9 +1,10 @@
 # primitives vectors
 
-Written by `conformance/vectors/src/primitives/` (task G-02) from the Epic node code at the commit in
-each file's `upstream`. Deterministic: every key, blinding factor, nonce and offset is a fixed test
-value, so `cargo xtask vectors generate --area primitives` reproduces these files byte for byte. The
-generator's own test (`cargo test -p vectors` in `conformance/`) fails if they drift.
+Written by `conformance/vectors/src/primitives/` from the Epic node code at the commit in each
+file's `upstream`. The area is deterministic: every key, blinding factor, nonce and offset is a
+fixed test value, so `cargo xtask vectors generate --area primitives` reproduces these files byte
+for byte. The generator's own test (`cargo test -p vectors` in `conformance/`) fails if they drift.
+The envelope and encoding rules are in [../README.md](../README.md).
 
 ## Conventions
 
@@ -13,8 +14,8 @@ generator's own test (`cargo test -p vectors` in `conformance/`) fails if they d
 - `serialized_v1` and `serialized_v2` are the binary layouts at protocol versions 1 and 2. They
   differ only in kernel features: version 1 always writes fee and lock height, version 2 only the
   fields the variant has. The node's local protocol version is 2.
-- Hashes are unkeyed BLAKE2b-256 except in `hash_bytes_keyed`. A kernel always hashes its version 1 layout; an output hashes
-  features and commitment, not its proof.
+- Hashes are unkeyed BLAKE2b-256 except in `hash_bytes_keyed`. A kernel always hashes its
+  version 1 layout. An output hashes its features and commitment, not its proof.
 - In JSON forms, signatures are the 64-byte compact form. Binary layouts carry the wrapper's
   internal form, which is the compact form with each 32-byte half byte-reversed.
 - Decode outcomes are `ok` or the upstream `ser::Error` variant: `CorruptedData`,
