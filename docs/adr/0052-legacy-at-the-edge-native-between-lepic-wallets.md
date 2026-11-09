@@ -95,7 +95,7 @@ Which way a payment goes depends on what the sender already knows (§3.1).
 | A payments address over Epicbox | `native_direct` is on and the peer claimed `NATIVE_SLATES` and is a LEPIC wallet seen lately (ADR 0016). A stock listener never acknowledges a message that is not a slate and loses its queue to one. |
 | An epic1 address | The payer holds an epic1 link. The payee has no contact, key or Epicbox address to start from. |
 | In person | A code shown on one screen and scanned on the other. |
-| A file to an unknown receiver | The marked V3 file with a one-time reply key, as before; a LEPIC receiver answers sealed. |
+| A file to an unknown receiver | The marked V3 file with a one-time reply key; a LEPIC receiver answers sealed. |
 
 `native_direct` is a `WalletConfig` and host-policy value (ADR 0036). It is off unless the host
 sets it (`native_direct` in the CLI, the `LEPIC_NATIVE_DIRECT` environment variable). With it off a

@@ -65,7 +65,7 @@ most 30 days.
 
 A `declined`, `withdrawn` or `cancelled` notice for a slate this wallet does not hold is kept
 under the slate and its sender, with the sender recorded. A repeat keeps its first time.
-`Event::NoticeUnmatched` and the forward to linked devices are unchanged.
+`Event::NoticeUnmatched` is raised all the same, for the host to forward to its other installs.
 
 When the slate arrives, an S1 received or an I1 parked, its entries leave the buffer and apply in
 one transaction under the rules of a notice just received: only the slate's recorded counterparty

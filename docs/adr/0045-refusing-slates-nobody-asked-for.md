@@ -68,7 +68,7 @@ on too.
 
 - No store migration: the switches live in the wallet's config and the sender's record is a
   setting.
-- The wire is unchanged. A LEPIC sender that does not act on a `declined` for its own S1 acknowledges
+- Nothing is added to the wire. A LEPIC sender that does not act on a `declined` for its own S1 acknowledges
   it and ignores it: the send stays "Sent" until its user cancels it.
 - Wallets that never read notices (the `epic-wallet` CLI and GUI, Stack Wallet) send unmarked S1s
   over Epicbox and get no notice; their send waits until their user cancels it. Over HTTP or Tor

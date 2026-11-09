@@ -66,7 +66,7 @@ switch, which governs files and pastes only.
      by QR is not stopped.
   3. The core learns compatibility from the pairing (`learn_from_pairing`). Without it, eligibility
      for unasked requests and the detection of other apps know less.
-  4. `OtherAddress` can no longer fire.
+  4. `OtherAddress` would never fire.
 
   Narrowing would also need `queue_card_update` and `confirm_proofs` to follow the new rule.
   Relaxing `contact_attach` for unproven pairings would not restore cases 2 and 3.

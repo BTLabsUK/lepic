@@ -50,7 +50,7 @@ ADR 0048.
 
 ## Consequences
 
-- A mining node can pay a LEPIC wallet. A host that does not turn the method on is unchanged.
+- A mining node can pay a LEPIC wallet. A host that does not turn the method on does not serve it.
 - No chain or proof-of-work crate enters the dependency graph.
 - A candidate is an ordinary output row, so the store has no table for it.
 
