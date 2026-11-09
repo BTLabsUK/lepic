@@ -658,8 +658,9 @@ stored S1, and finalizes it.
 ### 6.1 Paired contact
 
 1. A seals the S1 (or I1) to B's contact key, signed, with its current card. It goes native (type
-   `0A`, `BEGINEPICTX.`) when A has `native_direct` on and B's card claims native slates, and as
-   a sealed V3 slate (type `01`, `BEGINEPICSEALED.`) otherwise.
+   `0A`, `BEGINEPICTX.`) when A has `native_direct` on, B's card claims native slates and the
+   pairing is not private, and as a sealed V3 slate (type `01`, `BEGINEPICSEALED.`) otherwise.
+   An answer takes the format of its request.
 2. It travels by B's mailbox, a file or a paste (RFC 0002 §9).
 3. B opens it by hint, checks the signature against the pairing, and answers on the same channel,
    sealed and signed to A.
