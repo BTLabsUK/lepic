@@ -39,6 +39,7 @@ mod notices;
 mod onion_key;
 mod other_wallet;
 pub mod peer_compat;
+pub mod peer_pin;
 pub mod ports;
 mod process;
 mod receipt_cap;
@@ -65,6 +66,7 @@ pub use in_person_keys::IN_PERSON_REPLY_PREFIX;
 pub use lifecycle::{Password, RecoveryPhrase, WordCount, store_key};
 pub use notices::ContactNotice;
 pub use onion_key::OnionKey;
+pub use peer_pin::PinOutcome;
 pub use ports::{Clock, Ports, SecretVault, SecretVaultError, SharedRng, StoreOpener};
 #[cfg(feature = "sqlite")]
 pub use ports::{
