@@ -23,10 +23,10 @@ use lepic_store::{
     MAX_IMPORTED_MESSAGE_BYTES, MAX_PARKED_INVOICES, MAX_PARKED_INVOICES_PER_SENDER,
     MAX_PENDING_PAIRINGS, OpenReceipt, OtherWalletSpend, OutboxEntry, OutboxId, OutboxStatus,
     OutputStatus, PRIVATE_SLOT_END, PairRequest, PairingEndReason, PairingFacts, PairingId,
-    PairingState, ParticipantId, PeerCard, PeerCompat, PendingInvoiceStatus, PrivateContext,
-    Record, Repositories, ScanFoundRecord, SealMode, SlateStage, StatusKind, StatusNotice,
-    StoreError, TransactionEntry, TxDirection, TxId, TxMarks, TxState, TxWatch, WalletStore,
-    WatchPhase, WatchedOutput, export_contacts, import_contacts,
+    PairingState, ParticipantId, PeerCard, PeerCompat, PeerPin, PendingInvoiceStatus,
+    PrivateContext, Record, Repositories, ScanFoundRecord, SealMode, SlateStage, StatusKind,
+    StatusNotice, StoreError, TransactionEntry, TxDirection, TxId, TxMarks, TxState, TxWatch,
+    WalletStore, WatchPhase, WatchedOutput, export_contacts, import_contacts,
 };
 use uuid::Uuid;
 
@@ -2601,6 +2601,72 @@ fn deleting_a_transaction_removes_what_was_imported_with_it<B: Backend>() {
     );
 }
 
+fn peer_pins_are_kept_per_account_and_origin<B: Backend>() {
+    let backend = B::create(context_key(1));
+    let store = backend.store();
+    let pin = |account: u32, origin: &str, key: u8, seen: i64| PeerPin {
+        account: AccountIndex(account),
+        origin: origin.to_owned(),
+        seal_key: [key; 32],
+        first_seen: support::time(1),
+        last_seen: support::time(seen),
+    };
+    let web = "https://wallet.example:443";
+    let onion = "pg6mmjiyjmcrsslvykfwnntlaru7p5svn6y2ymmju6nubxndf4pscryd.onion";
+    write(store, |repos| {
+        repos.put_peer_pin(&pin(0, web, 1, 1))?;
+        repos.put_peer_pin(&pin(0, onion, 2, 1))?;
+        repos.put_peer_pin(&pin(1, web, 3, 1))?;
+        repos.put_peer_pin(&pin(0, web, 1, 5))
+    })
+    .unwrap();
+    let (found, other_account, listed, missing) = read(store, |repos| {
+        Ok((
+            repos.peer_pin(DEFAULT, web)?,
+            repos.peer_pin(AccountIndex(1), web)?,
+            repos.peer_pins(DEFAULT)?,
+            repos.peer_pin(DEFAULT, "http://wallet.example:80")?,
+        ))
+    })
+    .unwrap();
+    assert_eq!(found, Some(pin(0, web, 1, 5)));
+    assert_eq!(other_account, Some(pin(1, web, 3, 1)));
+    assert_eq!(listed, vec![pin(0, web, 1, 5), pin(0, onion, 2, 1)]);
+    assert_eq!(missing, None);
+
+    let (forgot, again) = write(store, |repos| {
+        Ok((
+            repos.forget_peer_pin(DEFAULT, web)?,
+            repos.forget_peer_pin(DEFAULT, web)?,
+        ))
+    })
+    .unwrap();
+    assert!(forgot);
+    assert!(!again);
+    let (gone, kept) = read(store, |repos| {
+        Ok((
+            repos.peer_pin(DEFAULT, web)?,
+            repos.peer_pin(AccountIndex(1), web)?,
+        ))
+    })
+    .unwrap();
+    assert_eq!(gone, None);
+    assert_eq!(kept, Some(pin(1, web, 3, 1)));
+
+    for origin in [String::new(), "a".repeat(301)] {
+        let error = write(store, |repos| repos.put_peer_pin(&pin(0, &origin, 1, 1))).unwrap_err();
+        assert!(
+            matches!(
+                error,
+                StoreError::OutOfRange {
+                    field: "pin origin"
+                }
+            ),
+            "{error:?}"
+        );
+    }
+}
+
 macro_rules! shared_suite {
     ($backend:ty: $($test:ident),+ $(,)?) => {
         $(
@@ -2910,6 +2976,7 @@ for_each_backend!(
     peer_compat_is_replaced_by_later_evidence,
     peer_compat_is_found_only_under_its_tag_key,
     forget_peers_deletes_rows_whose_newest_date_is_older,
+    peer_pins_are_kept_per_account_and_origin,
     imported_transactions_round_trip_and_are_replaced,
     imported_records_need_their_transaction_and_bounded_messages,
     imported_outputs_are_found_by_commitment_and_status,

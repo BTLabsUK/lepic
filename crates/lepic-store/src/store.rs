@@ -7,6 +7,7 @@ use crate::imported::ImportedRepository;
 use crate::invoice::InvoiceRepository;
 use crate::output::OutputRepository;
 use crate::peer::PeerRepository;
+use crate::pin::PeerPinRepository;
 use crate::relay::RelayRepository;
 use crate::settings::SettingsRepository;
 use crate::slate::SlateRepository;
@@ -24,6 +25,7 @@ pub trait Repositories:
     + SettingsRepository
     + InvoiceRepository
     + PeerRepository
+    + PeerPinRepository
     + ImportedRepository
     + ContactRepository
     + TxRecordRepository
@@ -40,6 +42,7 @@ impl<T> Repositories for T where
         + SettingsRepository
         + InvoiceRepository
         + PeerRepository
+        + PeerPinRepository
         + ImportedRepository
         + ContactRepository
         + TxRecordRepository

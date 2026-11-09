@@ -28,6 +28,7 @@ use crate::invoice::{
 };
 use crate::output::{CommitmentBytes, OutputRecord, OutputRepository, OutputStatus};
 use crate::peer::{self, PeerCompat, PeerRepository, PeerTagKey};
+use crate::pin::{self, PeerPin, PeerPinRepository};
 use crate::relay::{
     InboxEntry, OutboxEntry, OutboxId, OutboxStatus, RelayRepository, StoredOutbox,
 };
@@ -59,6 +60,7 @@ struct State {
     pending_invoices: BTreeMap<[u8; 16], SealedInvoice>,
     /// Sealed rows by tag, as the SQLite table holds them.
     peer_compat: BTreeMap<[u8; 32], Vec<u8>>,
+    peer_pins: BTreeMap<(AccountIndex, String), PeerPin>,
     contacts: BTreeMap<ContactId, ContactRecord>,
     contact_slot_counters: BTreeMap<AccountIndex, u32>,
     contact_mailboxes: BTreeMap<ContactId, ContactMailbox>,
@@ -870,6 +872,44 @@ impl PeerRepository for MemoryRepos<'_> {
             self.state.peer_compat.remove(tag);
         }
         Ok(stale.len())
+    }
+}
+
+impl PeerPinRepository for MemoryRepos<'_> {
+    fn put_peer_pin(&mut self, pin: &PeerPin) -> Result<(), StoreError> {
+        pin::check_origin(&pin.origin)?;
+        timestamp_to_column(pin.first_seen)?;
+        timestamp_to_column(pin.last_seen)?;
+        self.state
+            .peer_pins
+            .insert((pin.account, pin.origin.clone()), pin.clone());
+        Ok(())
+    }
+
+    fn peer_pin(&self, account: AccountIndex, origin: &str) -> Result<Option<PeerPin>, StoreError> {
+        Ok(self
+            .state
+            .peer_pins
+            .get(&(account, origin.to_owned()))
+            .cloned())
+    }
+
+    fn peer_pins(&self, account: AccountIndex) -> Result<Vec<PeerPin>, StoreError> {
+        Ok(self
+            .state
+            .peer_pins
+            .values()
+            .filter(|pin| pin.account == account)
+            .cloned()
+            .collect())
+    }
+
+    fn forget_peer_pin(&mut self, account: AccountIndex, origin: &str) -> Result<bool, StoreError> {
+        Ok(self
+            .state
+            .peer_pins
+            .remove(&(account, origin.to_owned()))
+            .is_some())
     }
 }
 

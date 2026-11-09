@@ -25,6 +25,7 @@ pub mod legacy;
 mod memory;
 mod output;
 mod peer;
+mod pin;
 mod relay;
 mod settings;
 mod slate;
@@ -75,6 +76,7 @@ pub use output::{
 #[doc(hidden)]
 pub use peer::vectors as peer_vectors;
 pub use peer::{PEER_TAG_KEY_LEN, PEER_TAG_LEN, PeerCompat, PeerRepository, PeerTag, PeerTagKey};
+pub use pin::{MAX_PIN_ORIGIN_LEN, PIN_KEY_LEN, PeerPin, PeerPinRepository};
 pub use relay::{
     InboxEntry, InboxStatus, OutboxEntry, OutboxId, OutboxStatus, RelayRepository, StoredOutbox,
 };

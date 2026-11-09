@@ -32,6 +32,7 @@ pub enum Record {
     TransactionRecord,
     PairRequest,
     StatusNotice,
+    PeerPin,
 }
 
 impl fmt::Display for Record {
@@ -58,6 +59,7 @@ impl fmt::Display for Record {
             Self::TransactionRecord => "transaction record",
             Self::PairRequest => "pair request",
             Self::StatusNotice => "status notice",
+            Self::PeerPin => "peer pin",
         })
     }
 }

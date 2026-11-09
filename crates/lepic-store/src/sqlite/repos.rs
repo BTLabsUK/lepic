@@ -29,6 +29,7 @@ use crate::invoice::{
 };
 use crate::output::{CommitmentBytes, KeyId, OutputRecord, OutputRepository, OutputStatus};
 use crate::peer::{self, PeerCompat, PeerRepository, PeerTag, PeerTagKey};
+use crate::pin::{self, PIN_KEY_LEN, PeerPin, PeerPinRepository};
 use crate::relay::{
     InboxEntry, InboxStatus, OutboxEntry, OutboxId, OutboxStatus, RelayRepository, StoredOutbox,
 };
@@ -1431,6 +1432,67 @@ impl PeerRepository for SqliteRepos<'_> {
             }
         }
         Ok(forgotten)
+    }
+}
+
+const PEER_PIN_COLUMNS: &str = "account, origin, seal_key, first_seen, last_seen";
+
+fn decode_peer_pin(row: &Row<'_>) -> Result<PeerPin, StoreError> {
+    let record = Record::PeerPin;
+    let seal_key: [u8; PIN_KEY_LEN] = row
+        .get::<_, Vec<u8>>(2)?
+        .try_into()
+        .map_err(|_| corrupt(record, "seal key"))?;
+    Ok(PeerPin {
+        account: AccountIndex(decode_u32(row.get(0)?, record, "account")?),
+        origin: row.get(1)?,
+        seal_key,
+        first_seen: timestamp_from_column(row.get(3)?, record, "first seen")?,
+        last_seen: timestamp_from_column(row.get(4)?, record, "last seen")?,
+    })
+}
+
+impl PeerPinRepository for SqliteRepos<'_> {
+    fn put_peer_pin(&mut self, pin: &PeerPin) -> Result<(), StoreError> {
+        pin::check_origin(&pin.origin)?;
+        self.conn.execute(
+            "INSERT INTO peer_pins (account, origin, seal_key, first_seen, last_seen)
+             VALUES (?1, ?2, ?3, ?4, ?5)
+             ON CONFLICT (account, origin) DO UPDATE SET seal_key = excluded.seal_key,
+                 first_seen = excluded.first_seen, last_seen = excluded.last_seen",
+            params![
+                i64::from(pin.account.0),
+                pin.origin,
+                pin.seal_key.as_slice(),
+                timestamp_to_column(pin.first_seen)?,
+                timestamp_to_column(pin.last_seen)?,
+            ],
+        )?;
+        Ok(())
+    }
+
+    fn peer_pin(&self, account: AccountIndex, origin: &str) -> Result<Option<PeerPin>, StoreError> {
+        self.first(
+            &format!("SELECT {PEER_PIN_COLUMNS} FROM peer_pins WHERE account = ?1 AND origin = ?2"),
+            params![i64::from(account.0), origin],
+            decode_peer_pin,
+        )
+    }
+
+    fn peer_pins(&self, account: AccountIndex) -> Result<Vec<PeerPin>, StoreError> {
+        self.collect(
+            &format!("SELECT {PEER_PIN_COLUMNS} FROM peer_pins WHERE account = ?1 ORDER BY origin"),
+            [i64::from(account.0)],
+            decode_peer_pin,
+        )
+    }
+
+    fn forget_peer_pin(&mut self, account: AccountIndex, origin: &str) -> Result<bool, StoreError> {
+        let deleted = self.conn.execute(
+            "DELETE FROM peer_pins WHERE account = ?1 AND origin = ?2",
+            params![i64::from(account.0), origin],
+        )?;
+        Ok(deleted > 0)
     }
 }
 
