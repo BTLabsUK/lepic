@@ -15,6 +15,7 @@ use crate::vault_port::VAULT_KEY;
 
 mod address_signature;
 mod contact;
+mod forwarded;
 mod http;
 mod invoice;
 mod kernel_lookup;

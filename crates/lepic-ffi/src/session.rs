@@ -1594,17 +1594,20 @@ impl Session {
         sender: &str,
         notice: &str,
     ) -> Result<bool, WalletError> {
-        let Ok(key) = lepic_methods::epicbox::peer_key(self.network, sender) else {
+        if lepic_methods::epicbox::peer_key(self.network, sender).is_err() {
             return Err(invalid("sender is not an Epicbox address of this network"));
-        };
+        }
         let lepic_wallet::notice::Payload::Notice(notice) =
             lepic_wallet::notice::classify_text(notice)
         else {
             return Err(invalid("not a notice"));
         };
+        // Matched by the Epicbox peer key alone, so a session with no relay takes it too.
+        let method: Arc<dyn Method> =
+            Arc::new(lepic_methods::epicbox::EpicboxNotices::new(self.network));
         Ok(self
             .engine
-            .notice_apply_forwarded_by_key(key, notice)
+            .notice_apply_forwarded(&method, sender, notice)
             .await?)
     }
 

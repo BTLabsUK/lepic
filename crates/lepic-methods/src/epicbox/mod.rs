@@ -383,6 +383,48 @@ impl Outbound for Epicbox {
     }
 }
 
+/// The Epicbox method as notices about its payments see it, for a wallet that may have no
+/// relay to reach: the peer keys and notice lengths of [`Epicbox`], with no delivery. A notice
+/// another install received over Epicbox and passed on is matched with it, so it is taken
+/// whether or not this wallet has a relay.
+#[derive(Debug, Clone, Copy)]
+pub struct EpicboxNotices {
+    network: Network,
+}
+
+impl EpicboxNotices {
+    /// The Epicbox notices of a wallet on `network`.
+    pub fn new(network: WalletNetwork) -> Self {
+        Self {
+            network: relay_network(network),
+        }
+    }
+}
+
+impl Transport for EpicboxNotices {
+    fn id(&self) -> TransportId {
+        TRANSPORT_ID
+    }
+
+    fn policy(&self) -> &dyn FormatPolicy {
+        &EpicboxPolicy
+    }
+}
+
+impl Method for EpicboxNotices {
+    fn carries(&self) -> Carries {
+        Carries::default()
+    }
+
+    fn notice_lengths(&self) -> &'static [usize] {
+        &NOTICE_LENGTHS
+    }
+
+    fn peer_key(&self, _network: WalletNetwork, address: &str) -> Result<String, TransportError> {
+        key_on(self.network, address)
+    }
+}
+
 /// The key under which the engine stores what it knows of `address`, an Epicbox address of the
 /// relay network of the wallet's `network`, as [`Method::peer_key`] of the Epicbox method gives
 /// it. Fails with [`TransportError::InvalidDestination`] for an address that does not parse.

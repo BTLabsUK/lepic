@@ -673,20 +673,6 @@ where
         self.apply_forwarded(Some(method), key, notice).await
     }
 
-    /// [`Self::notice_apply_forwarded`] of a notice from the peer stored under `key`, as a
-    /// method's [`Method::peer_key`] gives it. The notice is matched against the payment of the
-    /// method its stored name finds in [`crate::ports::Ports::methods`], since the method
-    /// instance of the install that received it is not this wallet's.
-    ///
-    /// Fails with [`crate::WalletError::Locked`] and as the store does.
-    pub async fn notice_apply_forwarded_by_key(
-        &self,
-        key: String,
-        notice: Notice,
-    ) -> Result<bool, crate::WalletError> {
-        self.apply_forwarded(None, key, notice).await
-    }
-
     async fn apply_forwarded(
         &self,
         via: Option<&Arc<dyn Method>>,
