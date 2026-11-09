@@ -8,7 +8,7 @@ points and lengths, and every failure comes back as a `CryptoError`.
 ## Where it fits
 
 - Depends on no other LEPIC crate. Its C backend is `grin_secp256k1zkp`, vendored in
-  `third_party/` with its changes listed in `third_party/PATCHES.md`.
+  `third_party/grin_secp256k1zkp/` with its changes listed in its `PATCHES.md`.
 - Used by almost every other crate: `lepic-primitives` for transactions, `lepic-keychain` for
   keys and proofs, the slate crates for signatures, the engine for building transactions.
 - No features.

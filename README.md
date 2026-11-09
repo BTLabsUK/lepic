@@ -4,95 +4,62 @@
 
 # LEPIC
 
-**A mobile-first Epic Cash wallet core in Rust.**
+**An Epic Cash wallet core in Rust, built to run inside an app.**
 
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![MSRV 1.99](https://img.shields.io/badge/rust-1.99-orange.svg)](rust-toolchain.toml)
 [![Version 0.3.1](https://img.shields.io/badge/version-0.3.1-informational.svg)](CHANGELOG.md)
 
-[Quick start](#quick-start) · [Build](#build-from-source) · [Architecture](docs/architecture.md) ·
-[Documentation](https://docs.btlabs.uk/developers/lepic/) ·
-[Flutter binding](https://github.com/BTLabsUK/lepic-flutter) · [Security](SECURITY.md)
-
-Source: [GitHub](https://github.com/BTLabsUK/lepic)
+[Quick start](#quick-start) · [Build](#build-from-source) · [Docs](docs/README.md) ·
+[Architecture](docs/architecture.md) · [Flutter binding](https://github.com/BTLabsUK/lepic-flutter) ·
+[Security](SECURITY.md)
 
 </div>
 
-LEPIC (light Epic) is an Epic Cash wallet that runs as a library inside a mobile or desktop app, in
-the app's own process. It creates and restores wallets, scans the chain through an Epic node, and
-sends and receives transactions with the standard `epic-wallet`. It is the wallet core of BT
-Wallet. `lepic-ffi` is its FFI API, built on
-[flutter_rust_bridge](https://github.com/fzyzcjy/flutter_rust_bridge); apps use it through the
-[Flutter binding](https://github.com/BTLabsUK/lepic-flutter), a separate repository.
+LEPIC (light Epic) is an Epic Cash wallet written as a Rust library. An app links it and calls it
+in its own process: there is no wallet server to start. It creates and restores wallets, scans the
+chain through an Epic node, and sends and receives transactions with `epic-wallet` and with other
+LEPIC wallets. It is the wallet core of BT Wallet.
 
-> **Status: beta.** LEPIC runs in production in BT Wallet. Its APIs may still change before 1.0.
+Status: beta. The APIs may change before 1.0.
 
-## Why LEPIC
+## Shape
 
-The standard Epic Cash wallet ships as a program with its own API server, and its crates pull in
-the node's. That works on a desktop, but a phone app cannot count on a second process staying
-alive, and building those crates for Android and iOS drags in mining and chain-storage code a
-phone never uses. LEPIC is the wallet rebuilt for that setting:
+| Part | What it is | Where |
+|---|---|---|
+| Library | The engine and its crates, used in-process from Rust | [`crates/`](docs/architecture.md#crates) |
+| CLI | `lepic`, a command-line wallet on the same engine | [CLI](docs/cli.md) |
+| FFI | `lepic-ffi`, the API apps call through flutter_rust_bridge | [FFI](docs/ffi.md) |
+| Flutter binding | `lepic-flutter`, the Dart package over the FFI library | [its own repository](https://github.com/BTLabsUK/lepic-flutter) |
 
-- **No wallet process needed.** An app embeds the engine as a library and calls it directly, from
-  Rust or through its FFI API, with no second process to start or keep alive. Hosts that want a
-  long-running wallet can use the optional `lepic` CLI: `lepic serve` keeps one unlocked wallet open
-  behind a local Unix socket, and `lepic http listen` serves the foreign API at `/v2/foreign`.
-- **Small mobile builds.** Android and iOS builds need Rust and a C toolchain (the Android NDK with
-  `cargo-ndk`, or Xcode): no mining code, chain storage, LMDB, OpenSSL or C++.
-- **Works with app suspension.** The Epicbox client connects, collects waiting messages and
-  disconnects, so nothing has to stay connected. A payment sent while the app is suspended waits
-  on the relay, which keeps it for 7 days, and is taken when the app next opens. LEPIC has no
-  push; a host that wants background receiving schedules a drain itself. Receiving over HTTP or
-  Tor needs the wallet running.
-- **Encrypted vault.** On desktop, seeds are kept in a vault file encrypted with XChaCha20-Poly1305
-  under an Argon2id key. Transaction secrets are encrypted at rest with XChaCha20-Poly1305. Only a
-  fixed list of secrets can cross the FFI API.
+A slate travels by file, over Epicbox, or directly over HTTP or Tor. Between two LEPIC wallets it
+can also go as a sealed native slate (EPICTX) to a paired contact or an epic1 link. The
+[protocols](docs/protocols/README.md) pages describe each format, and
+[configuration](docs/configuration.md) lists the settings.
 
-## What's different
+## Upstream matching
 
-LEPIC reads and writes the same formats as `epic-wallet` and adds:
+LEPIC reimplements the transaction, key and slate logic of the Epic node and `epic-wallet` instead
+of linking their code. The reference releases are `epic-wallet` `v4.1.0`
+([ADR 0020](docs/adr/0020-reference-epic-wallet-4-1.md)) and the Epic node `v4.1.2`
+([ADR 0038](docs/adr/0038-reference-node-4-1-2.md)), at exact commits.
 
-- **Every way to send in one engine:** slate files, Epicbox, and direct HTTP(S) and Tor, compatible
-  with `epic-wallet`'s HTTP send and listener.
-- **Tor where it matters:** the wallet gets its own `.onion` address on desktop and Android, and
-  with Tor on, the Epicbox relay and the node are reached through it too.
-- **Invoices over Epicbox,** with short notices between LEPIC wallets when an invoice is declined,
-  withdrawn or posted.
-- **Moving in from epic-wallet:** import its seed file and its transaction history, checked against
-  a chain scan.
-- **Typed errors.** Bad input from the network, files or other wallets is returned as a typed error.
-  Lint denies `unwrap` outside tests.
-- **Testable.** The node, storage, keys, network and clock are passed in, with no global state, so
-  one test can run several wallets side by side.
+- [`upstream.toml`](upstream.toml) records the upstream files each ported module follows.
+  `cargo xtask upstream-drift` lists upstream commits to those files since the recorded ones.
+- The golden vectors in `testdata/vectors/` are generated by the pinned Epic Cash code in
+  `conformance/`, and LEPIC's tests reproduce them byte for byte.
+- The [interop suite](interop/README.md) runs LEPIC against an unmodified `epic-wallet`, node and
+  Epicbox relay on a private test network.
+- The cryptography library is the one Epic Cash uses, vendored in
+  `third_party/grin_secp256k1zkp` with its changes listed in `PATCHES.md`.
 
-## Compatible with Epic Cash releases
-
-LEPIC reimplements the transaction, key and slate logic of the Epic Cash node and wallet instead of
-linking their full code, and uses the same cryptography library Epic Cash uses,
-[rust-secp256k1-zkp](https://github.com/EpicCash/rust-secp256k1-zkp), vendored from an exact commit
-with upstream backports and build fixes (`third_party/grin_secp256k1zkp/PATCHES.md`).
-Matching is tested as follows:
-
-- **One target release.** LEPIC targets `epic-wallet` `v4.1.0` and the Epic node `v4.1.2`, pinned
-  to exact commits. Moving to a new release means new pins, new test data and a review of every change.
-- **Byte-for-byte test data.** Slates, keys, signatures and Epicbox messages are generated by the
-  pinned Epic Cash code, and LEPIC's tests must reproduce them exactly.
-- **Tests against the real programs.** An [interop suite](interop/README.md) runs LEPIC against an
-  unmodified `epic-wallet`, node and Epicbox relay on a private test network.
-- **Watching upstream.** `cargo xtask upstream-drift`, run every week, reports changes in the Epic
-  Cash code that LEPIC has not reviewed yet.
-- **Dependency checks.** `cargo deny` checks advisories, licences and sources, and a weekly run
-  checks advisories; dependencies and toolchains are pinned.
-- **Fuzzing.** The parsers of untrusted input (slates, Epicbox messages, node responses, vault
-  files) are fuzzed.
-
-The formats LEPIC matches are written up in the [compatibility notes](docs/compat).
+The [compatibility notes](docs/compat/legacy-slates.md) in `docs/compat/` describe each format
+LEPIC matches.
 
 ## Quick start
 
-You need Rust (the repository pins 1.99 in `rust-toolchain.toml`; `rustup` installs it) and a C
-compiler. LEPIC is not on crates.io yet, so take it from git:
+You need Rust through `rustup` and a C compiler. The repository pins Rust 1.99.0 in
+`rust-toolchain.toml`. The crates are not published on crates.io; take them from git:
 
 ```toml
 [dependencies]
@@ -100,7 +67,7 @@ lepic-wallet = { git = "https://github.com/BTLabsUK/lepic" }
 lepic-primitives = { git = "https://github.com/BTLabsUK/lepic" }
 ```
 
-Read a slate from `epic-wallet` without opening a wallet:
+Read a slate file from `epic-wallet` without opening a wallet:
 
 ```rust
 use lepic_primitives::params::Network;
@@ -110,13 +77,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let path = std::env::args().nth(1).ok_or("usage: inspect <slate.json>")?;
     let json = std::fs::read_to_string(path)?;
 
-    // The legacy JSON formats epic-wallet reads and writes, with mainnet's minimum fee.
+    // The V3 and V2 JSON formats epic-wallet reads and writes, at mainnet's base fee.
     let base_fee = Network::Mainnet.params().default_base_fee();
     let mut codecs = CodecRegistry::new();
     codecs.register(Box::new(V3JsonCodec::new(base_fee)))?;
     codecs.register(Box::new(V2JsonCodec::new(base_fee)))?;
 
-    // A malformed slate is a typed error, never a panic.
+    // A malformed slate is a typed error.
     let slate = codecs.decode(&WireSlate::text(MediaType::JSON, json))?;
     println!(
         "{} {:?}: amount {}, fee {} (base units)",
@@ -129,97 +96,102 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-Apps use the Flutter binding, a separate repository:
-https://github.com/BTLabsUK/lepic-flutter. It wraps the full wallet: create or restore, scan the
-chain, send and receive.
+An app that wants the full wallet (create or restore, scan, send and receive) uses the
+[Flutter binding](https://github.com/BTLabsUK/lepic-flutter) or the `lepic-wallet` engine with its
+ports; [architecture](docs/architecture.md#ports) lists them.
 
 ## Build from source
 
-You need Git, Rust through `rustup` (the repository pins 1.99.0 in `rust-toolchain.toml`, and
-`rustup` installs it on the first command), and a C compiler. No OpenSSL, LMDB or C++ toolchain is
-needed for the library.
+You need Git, Rust through `rustup` (it installs the pinned 1.99.0 on the first command) and a C
+compiler.
 
 ```bash
 git clone https://github.com/BTLabsUK/lepic && cd lepic
-cargo build --release            # the library crates and the lepic CLI
-cargo xtask install              # the lepic CLI into ~/.local/bin (or --dir <directory>)
+cargo build --release            # every crate and the lepic CLI
+cargo xtask install              # build lepic and install it into ~/.local/bin
+cargo xtask install --dir /opt/lepic/bin
 ```
 
-The FFI library for apps is packaged per target with `cargo xtask mobile --package --target
-<triple>`, into `dist/native/<triple>/` with a `SHA256SUMS` file:
+`cargo xtask mobile --package` builds the release `lepic-ffi` library for apps, into
+`dist/native/<triple>/` with a `SHA256SUMS` file. Without `--target` it builds every target the
+host can build:
 
-| Platform | Target | Extra tools |
+| Target | Builds on | Extra tools |
 |---|---|---|
-| Linux | `x86_64-unknown-linux-gnu` | none |
-| Windows | `x86_64-pc-windows-msvc` | Visual Studio 2022 Build Tools (C++) |
-| macOS | `aarch64-apple-darwin`, `x86_64-apple-darwin` | Xcode command line tools |
-| Android | `aarch64-linux-android`, `armv7-linux-androideabi`, `x86_64-linux-android` | Android NDK 28.2.13676358, `cargo-ndk` 4.1.2 |
-| iOS | `aarch64-apple-ios`, `aarch64-apple-ios-sim` | Xcode |
+| `aarch64-linux-android`, `armv7-linux-androideabi`, `x86_64-linux-android` | any host | Android NDK and `cargo-ndk` (API level 24) |
+| `aarch64-apple-ios`, `aarch64-apple-ios-sim` | macOS | Xcode |
+| `x86_64-unknown-linux-gnu` | Linux | none |
+| `x86_64-pc-windows-msvc` | Windows | Visual Studio Build Tools (C++) |
 
-`--no-tor` builds the library without the wallet's Tor support (ADR 0026). The Flutter binding
-builds these for you: see [lepic-flutter](https://github.com/BTLabsUK/lepic-flutter).
+```bash
+cargo xtask mobile --package --target aarch64-linux-android
+cargo xtask mobile --package --no-tor   # without Tor (ADR 0026), into dist/native-no-tor/
+```
+
+The Flutter binding runs this step from its own build. `cargo xtask` with no command prints the
+list of commands.
 
 ## Testing
 
 ```bash
-cargo xtask check                # fmt, clippy, every test, cargo deny, the repository lints, vectors verify
+cargo xtask check                # the full gate: fmt, clippy, tests, cargo deny and the repo lints
 cargo test -p lepic-wallet       # one crate
 ```
 
-`cargo xtask check` is the gate every change passes. Builds and tests run on the maintainers'
-machines, not on hosted CI: run the same gate before you send a change. Run it from a git checkout:
-it lists files through `git`. Tests never touch the network; the few live ones are `#[ignore]`d
-and need `LEPIC_LIVE_TESTS=1`. The [interop suite](interop/README.md)
-runs LEPIC against the real `epic-wallet`, node and Epicbox relay in Docker on a private chain, by
-hand. `conformance/` builds the pinned Epic Cash code, regenerates the golden vectors from it and
-runs the differential tests (`cd conformance && cargo test --locked`).
+`cargo xtask check` is the gate every change passes; run it from a git checkout, because it lists
+files through `git`. Tests do not use the network. The few live tests are `#[ignore]`d and need
+`LEPIC_LIVE_TESTS=1`.
+
+Three suites sit outside the workspace:
+
+- `conformance/` builds the pinned Epic Cash code, generates the golden vectors and runs the
+  differential tests (`cd conformance && cargo test --locked`).
+- `fuzz/` holds the fuzz targets for parsers of untrusted input ([fuzzing](docs/fuzzing.md)).
+- `interop/` runs LEPIC against `epic-wallet`, the node and an Epicbox relay in Docker
+  ([interop suite](interop/README.md)).
 
 ## Project structure
 
-| Path | Contents |
-|---|---|
-| `crates/lepic-primitives` | Transaction types, binary serialization, hashing, weights, fees and chain parameters |
-| `crates/lepic-crypto` | The safe boundary over secp256k1-zkp: commitments, proofs, signatures |
-| `crates/lepic-keychain` | Mnemonics, key derivation, switch commitments, proof builders, seed vaults |
-| `crates/lepic-slate` | Slate model, codecs and the codec registry |
-| `crates/lepic-legacy-slate` | The V2 and V3 JSON slate codecs and the slate marker codecs epic-wallet speaks |
-| `crates/lepic-node` | Client for the Epic node's foreign JSON-RPC API |
-| `crates/lepic-epicbox` | Epicbox addresses, message crypto, protocol frames and relay transport |
-| `crates/lepic-transport` | Transport traits, format policy and the file transport |
-| `crates/lepic-peer` | The native direct endpoint between LEPIC wallets: serve and post sealed envelopes, the advert, pin origins |
-| `crates/lepic-legacy-rpc` | The foreign JSON-RPC API over HTTP: send to a listening wallet, and listen |
-| `crates/lepic-tor` | The wallet's onion service and sending to onion addresses |
-| `crates/lepic-store` | SQLite wallet storage behind repository traits |
-| `crates/lepic-contact`, `crates/lepic-wallet-contacts` | Contact pairing formats; pairing, mailboxes and invoices on the engine |
-| `crates/lepic-wallet` | The wallet engine |
-| `crates/lepic-ffi` | The flutter_rust_bridge API for apps |
-| `crates/lepic-cli` | The `lepic` command-line wallet ([docs/cli.md](docs/cli.md)) |
-| `crates/lepic-telemetry` | Tracing and redaction for the CLI and app hosts |
-| `testdata/vectors/` | Golden vectors generated by the pinned Epic Cash code |
-| `conformance/`, `fuzz/`, `interop/` | Vector generator and differential tests, fuzz targets, the Docker interop suite |
-| `docs/` | [Architecture](docs/architecture.md), [ADRs](docs/adr/README.md), [compatibility notes](docs/compat), [rules](docs/rules.md) |
-| `upstream.toml` | The upstream origin of every ported module |
-| `xtask/` | Repository automation (`cargo xtask …`) |
+| Path | Layer | Contents |
+|---|---|---|
+| `crates/lepic-crypto`, `lepic-primitives`, `lepic-keychain` | pure | Commitments, proofs and signatures; transactions, fees and chain parameters; keys and the seed vault |
+| `crates/lepic-slate`, `lepic-legacy-slate`, `lepic-native-slate` | pure | The slate model and codec registry; the V2/V3 JSON codecs; the binary `lepic.v1` slate |
+| `crates/lepic-seal`, `lepic-contact` | pure | Sealed envelopes and contact cards; pairing messages |
+| `crates/lepic-node`, `lepic-store` | I/O | Epic node client; wallet database |
+| `crates/lepic-transport`, `lepic-epicbox`, `lepic-epic1` | I/O | Transport traits and the file method; Epicbox; the epic1 address and link |
+| `crates/lepic-peer`, `lepic-legacy-rpc`, `lepic-tor` | I/O | Native direct endpoint; the `epic-wallet` foreign API over HTTP; onion service and client |
+| `crates/lepic-telemetry` | I/O | Logging and redaction for the hosts |
+| `crates/lepic-wallet` | engine | The wallet |
+| `crates/lepic-methods` | methods | The file, http, tor and epicbox methods |
+| `crates/lepic-wallet-contacts` | contacts | Pairing, contact mailboxes, epic1 payments |
+| `crates/lepic-cli`, `lepic-ffi` | host | The `lepic` CLI; the FFI API for apps |
+| `xtask/` | tooling | `cargo xtask` commands |
+| `testdata/vectors/` | data | Golden vectors from the pinned Epic Cash code |
+| `docs/` | docs | Architecture, protocols, ADRs, RFCs, compatibility notes |
 
-## Contributing
-
-Contributions are welcome. Read [CONTRIBUTING.md](CONTRIBUTING.md) first: commits follow
-Conventional Commits with a DCO sign-off, and every change passes `cargo xtask check`.
-
-## Security
-
-Please do not open public issues for vulnerabilities. [SECURITY.md](SECURITY.md) explains how to
-report one privately.
+Each crate has a README; [architecture](docs/architecture.md) shows how they depend on each other.
 
 ## Documentation
 
-- Developer guide: https://docs.btlabs.uk/developers/lepic/ (security model:
-  https://docs.btlabs.uk/developers/security-model/)
-- Source: https://github.com/BTLabsUK/lepic
+- [Docs index](docs/README.md)
+- [Architecture](docs/architecture.md)
+- [CLI](docs/cli.md), [FFI](docs/ffi.md), [configuration](docs/configuration.md)
+- [Protocols](docs/protocols/README.md)
+- [Architecture decision records](docs/adr/README.md), [RFCs](docs/rfcs/)
+- [Direction](docs/direction.md)
+- Developer guide: https://docs.btlabs.uk/developers/lepic/
+
+## Contributing
+
+Read [CONTRIBUTING.md](CONTRIBUTING.md) first. Commits follow Conventional Commits with a DCO
+sign-off, and every change passes `cargo xtask check`.
+
+## Security
+
+Do not open public issues for vulnerabilities. [SECURITY.md](SECURITY.md) explains how to report
+one privately.
 
 ## License
 
 Apache License 2.0, see [LICENSE](LICENSE) and [NOTICE](NOTICE). Parts of LEPIC are ported from the
-Epic Cash node and wallet, which are Apache-2.0 and descend from Grin.
-
-<p align="center"><sub>Made by BT Labs</sub></p>
+Epic node and `epic-wallet`, which are Apache-2.0 and descend from Grin.

@@ -67,8 +67,8 @@ for the network type, but it does no I/O itself.
 | [`lepic-cli`](../crates/lepic-cli/README.md) | host | The `lepic` command-line wallet |
 | [`lepic-ffi`](../crates/lepic-ffi/README.md) | host | flutter_rust_bridge API for the app |
 
-`xtask` holds the repository's own tooling (`cargo xtask --help`). Outside the workspace sit
-`conformance/`, `fuzz/`, `interop/`, `console/` and the vendored secp256k1-zkp in
+`xtask` holds the repository's own tooling; `cargo xtask` with no command lists it. Outside the
+workspace sit `conformance/`, `fuzz/`, `interop/`, `console/` and the vendored secp256k1-zkp in
 `third_party/`.
 
 ## Allowed dependency edges
