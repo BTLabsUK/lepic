@@ -138,8 +138,9 @@ A self-send to the wallet's own address is refused too while the switch is on.
 `native_direct = true` makes the wallet send `lepic.v1` slates (envelope type `0A`, ADR 0052) to
 the paired contacts whose pairing features claim native slates (bit 7), through their mailboxes.
 It is `true` or `false`, off by default: the wallet then sends V3 JSON (type `01`), as before. A
-contact without the claim always gets V3 JSON. Sealed text for a file or a paste is V3 JSON
-either way.
+contact without the claim always gets V3 JSON. Sealed text for a file or a paste follows the
+same rule: `BEGINEPICTX.` (`.epictx`) with the switch on and the claim, `BEGINEPICSEALED.`
+otherwise.
 
 The wallet takes native slates from its contacts whatever the switch says, and answers a slate
 in the format it came in.
@@ -631,8 +632,8 @@ tries again later, or `lepic tx cancel <ID>` gives up.
 ### Pinned keys
 
 With `native_direct` on, a LEPIC wallet listening over HTTP or Tor also offers its native
-endpoint, `/v1/peer`, with a seal key: the onion's own key on the onion, a key of its own over
-HTTP. With the switch off it answers `check_version` without the `lepic` key and serves no
+endpoint, `/v1/peer`, with a seal key the wallet derives from its seed: one for the onion on
+the onion, another for the web listener over HTTP. With the switch off it answers `check_version` without the `lepic` key and serves no
 native routes. With `native_direct` on, a send to a wallet that offers the endpoint goes there as a `lepic.v1` slate in a sealed envelope, and the first one
 that succeeds pins the key under the address's origin: `http://host:port`, `https://host:port`,
 or the onion name alone. A payment proof asked for over the endpoint names the listener's proof
