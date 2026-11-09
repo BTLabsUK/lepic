@@ -162,6 +162,9 @@ Verified mark. No match means the card was made by another seed.
 
 ### 3 Sealed envelope
 
+> **Code location.** The envelope (3.1 to 3.4), its armor and the contact card are built in
+> `lepic-seal`, which RFC 0003 extends. `lepic-contact` re-exports them at their former paths.
+
 #### 3.1 Binary layout
 
 | Field | Size | Value |

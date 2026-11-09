@@ -50,6 +50,14 @@ Conventional Commit messages at release time.
   `NativeV1Codec` for the codec registry (media type `application/vnd.lepic.slate`). The wallet
   does not use it yet. Golden vectors in `testdata/vectors/slates_native` and a `slate_native`
   fuzz target cover it.
+- `lepic-seal`, the sealed envelope format in a crate of its own (RFC 0003, ADR 0052).
+  `lepic-contact` re-exports the envelope, its armor and contact cards at their former paths.
+  New in it, not yet used by the engine: envelope type `0A` with a reply mailbox (tag `09`);
+  slate envelopes padded to at least 768 bytes (tag `FE`), which readers of RFC 0002 open as
+  before; the seal, epic1 and listener key classes (`KeyClass`, `seal_tx`, `open_tx`); the
+  `BEGINEPICTX.` armor beside `BEGINEPICSEALED.` (`armor_tx`, `dearmor_marked`); and `classify`
+  for payment files. A body over 65,535 bytes is refused with `EncodeError::BodyTooLarge`, which
+  carries the limit and the size and replaces `FieldTooLong` for the body.
 - Local quarantine and an early-notice buffer, both off by default (ADR 0049).
   `quarantine_max_bytes` keeps contact messages that opened and could not be taken, with
   `contact_quarantine`, `contact_quarantine_retry`, `contact_quarantine_discard` and
