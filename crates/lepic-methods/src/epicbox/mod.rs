@@ -65,6 +65,29 @@ const S1_ONE_INPUT: usize = 2423 + 29;
 /// What one more plain input adds to it: `,{"features":"Plain","commit":"<66 hex>"}`.
 const S1_INPUT: usize = 99;
 
+/// The lengths of [`NOTICE_LENGTHS`] when this wallet takes native slates over Epicbox: its
+/// first slates then carry the claim marker, `,"lepic":{"version":1,"f":F,"reply":"<64 hex>"}`
+/// with `F` from 207 to 255.
+pub const NATIVE_NOTICE_LENGTHS: [usize; 3] = [
+    NOTICE_LENGTHS[0] + CLAIM_EXTRA,
+    NOTICE_LENGTHS[1] + CLAIM_EXTRA,
+    NOTICE_LENGTHS[2] + CLAIM_EXTRA,
+];
+
+/// What the claim marker adds to `,"lepic":{"version":1,"f":15}`: one more digit of `f` and
+/// `,"reply":"<64 hex>"`.
+const CLAIM_EXTRA: usize = 1 + 75;
+
+/// The lengths a notice over Epicbox is padded to when the wallet's marker is `sending`'s: those
+/// of its first slates, with the claim marker when it claims native slates.
+pub const fn notice_lengths_for(sending: &Sending) -> &'static [usize; 3] {
+    if sending.seal_key.is_some() {
+        &NATIVE_NOTICE_LENGTHS
+    } else {
+        &NOTICE_LENGTHS
+    }
+}
+
 /// The Epicbox policy of ADR 0003, as `epic-wallet` `v4.0.2` speaks it: the V3 and V2 shapes are
 /// accepted, detected by shape with V3 tried first and the header ignored; a new slate goes out
 /// in the V2 shape with the header of a slate created here; a reply goes out in the shape it
@@ -351,6 +374,10 @@ impl Method for Epicbox {
         &NOTICE_LENGTHS
     }
 
+    fn notice_lengths_for(&self, sending: &Sending) -> &'static [usize] {
+        notice_lengths_for(sending)
+    }
+
     fn peer_key(&self, _network: WalletNetwork, address: &str) -> Result<String, TransportError> {
         // The addresses are read on the relay network the transport was built for, so the
         // wallet network the engine passes is not used.
@@ -424,6 +451,10 @@ impl Method for EpicboxNotices {
         &NOTICE_LENGTHS
     }
 
+    fn notice_lengths_for(&self, sending: &Sending) -> &'static [usize] {
+        notice_lengths_for(sending)
+    }
+
     fn peer_key(&self, _network: WalletNetwork, address: &str) -> Result<String, TransportError> {
         key_on(self.network, address)
     }
@@ -482,6 +513,35 @@ mod tests {
         let input = &slate["tx"]["body"]["inputs"][0];
         assert_eq!(input["features"], "Plain");
         assert_eq!(serde_json::to_string(input).unwrap().len() + 1, S1_INPUT);
+    }
+
+    #[test]
+    fn without_a_native_claim_the_notice_lengths_are_unchanged() {
+        assert_eq!(NOTICE_LENGTHS, [2452, 2551, 2650]);
+        let plain = Sending::new(WalletNetwork::Mainnet, 79, None);
+        assert_eq!(notice_lengths_for(&plain), &NOTICE_LENGTHS);
+        let transport = transport();
+        assert_eq!(transport.notice_lengths_for(&plain), NOTICE_LENGTHS);
+        assert_eq!(transport.notice_lengths(), NOTICE_LENGTHS);
+    }
+
+    #[test]
+    fn with_a_native_claim_the_notice_lengths_carry_the_claim_marker() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../testdata/vectors/epicbox/marker_s1_v2_native_claim_207.json");
+        let vector: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+        let plain = vector["inputs"]["plain_s1"].as_str().unwrap();
+        let claimed = vector["expected"]["json"].as_str().unwrap();
+        let marker = r#","lepic":{"version":1,"f":15}"#;
+        assert_eq!(claimed.len() - plain.len(), marker.len() + CLAIM_EXTRA);
+
+        let native = Sending::new(WalletNetwork::Mainnet, 207, None).with_seal_key([7; 32]);
+        assert_eq!(notice_lengths_for(&native), &NATIVE_NOTICE_LENGTHS);
+        assert_eq!(
+            transport().notice_lengths_for(&native),
+            NOTICE_LENGTHS.map(|length| length + CLAIM_EXTRA)
+        );
     }
 
     fn transport() -> Epicbox {

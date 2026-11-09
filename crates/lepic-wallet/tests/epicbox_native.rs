@@ -23,6 +23,7 @@ mod world;
 
 use lepic_contact::{EncPublicKey, Network as ContactNetwork, TxContent, TxKey, armor_tx, dearmor};
 use lepic_epicbox::EpicboxClient;
+use lepic_methods::epicbox::{NATIVE_NOTICE_LENGTHS, NOTICE_LENGTHS};
 use lepic_primitives::amount::Amount;
 use lepic_primitives::params::Network;
 use lepic_slate::codec::{MediaType, WireSlate};
@@ -176,6 +177,24 @@ fn a_marked_slate_without_native_direct_claims_none() {
     let features = lepic_marker_features(s1.wire()).unwrap();
     assert_eq!(features & NATIVE_SLATES, 0);
     assert!(!text(&s1).contains("\"reply\":"));
+}
+
+/// The length of the notice the payer sends the issuer once it has finalized a first payment.
+fn posted_notice_length(world: &World) -> usize {
+    send(world);
+    let s1 = only(world, &world.issuer);
+    assert_eq!(arrive(world, &world.issuer, &s1), Handled::Received);
+    let s2 = only(world, &world.payer);
+    assert_eq!(arrive(world, &world.payer, &s2), Handled::Finalized);
+    text(&only(world, &world.issuer)).len()
+}
+
+#[test]
+fn a_notice_is_padded_as_a_first_slate_with_the_marker_the_wallet_writes() {
+    let plain = posted_notice_length(&native(false, false));
+    assert!(NOTICE_LENGTHS.contains(&plain), "{plain}");
+    let claimed = posted_notice_length(&native(true, true));
+    assert!(NATIVE_NOTICE_LENGTHS.contains(&claimed), "{claimed}");
 }
 
 #[test]

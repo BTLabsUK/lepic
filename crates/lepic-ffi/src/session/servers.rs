@@ -122,6 +122,10 @@ impl Method for EpicboxSlot {
         self.current().notice_lengths()
     }
 
+    fn notice_lengths_for(&self, sending: &Sending) -> &'static [usize] {
+        self.current().notice_lengths_for(sending)
+    }
+
     fn peer_key(&self, network: Network, address: &str) -> Result<String, TransportError> {
         self.current().peer_key(network, address)
     }

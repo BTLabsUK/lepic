@@ -269,6 +269,14 @@ impl Method for RecordingEpicbox {
         }
     }
 
+    fn notice_lengths_for(&self, sending: &Sending) -> &'static [usize] {
+        if self.notices {
+            self.inner.notice_lengths_for(sending)
+        } else {
+            &[]
+        }
+    }
+
     fn peer_key(&self, network: Network, address: &str) -> Result<String, TransportError> {
         self.inner.peer_key(network, address)
     }

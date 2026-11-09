@@ -221,6 +221,13 @@ pub trait Method: Transport {
     /// engine then withholds them.
     fn notice_lengths(&self) -> &'static [usize];
 
+    /// The lengths a notice is padded to when this wallet's marker is `sending`'s, for a
+    /// method whose payments change length with what the marker claims. The same as
+    /// [`Method::notice_lengths`] by default, and empty whenever those are.
+    fn notice_lengths_for(&self, _sending: &Sending) -> &'static [usize] {
+        self.notice_lengths()
+    }
+
     /// The key an address of this method names, as peers are told apart. Fails with
     /// [`TransportError::UnknownDestination`] when the method has no notion of a peer key, and
     /// with [`TransportError::InvalidDestination`] for an address it cannot read.

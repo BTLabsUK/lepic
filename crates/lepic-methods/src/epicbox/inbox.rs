@@ -31,10 +31,10 @@ use tracing::{debug, info, instrument, warn};
 
 use super::Epicbox;
 
-use super::{NOTICE_LENGTHS, relay_network};
+use super::{NATIVE_NOTICE_LENGTHS, relay_network};
 
 // The engine drops a notice longer than this, so the longest padding must fit.
-const _: () = assert!(NOTICE_LENGTHS[2] <= lepic_wallet::notice::MAX_NOTICE_LEN);
+const _: () = assert!(NATIVE_NOTICE_LENGTHS[2] <= lepic_wallet::notice::MAX_NOTICE_LEN);
 
 /// The relay client's reconnect backoff also paces the retries of a held message.
 fn backoff(epicbox: &Epicbox) -> Backoff {

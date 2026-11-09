@@ -50,6 +50,7 @@ use crate::event::{
 use crate::finalize::answered_excess;
 use crate::inbox::{Handled, Hold};
 use crate::invoice::check_signed_payment;
+use crate::native_epicbox::Claim;
 use crate::notice::{Notice, NoticeKind};
 use crate::peer_compat::{NativeKey, Shown, facts, record_marked, record_slate};
 use crate::ports::{SecretVault, StoreOpener};
@@ -1398,8 +1399,7 @@ where
             warn!(slate_id = %slate_id, "notice not sent");
             return Err(Hold::Withheld);
         };
-        let lengths = method.notice_lengths();
-        if lengths.is_empty() {
+        if method.notice_lengths().is_empty() {
             debug!(slate_id = %slate_id, transport = %method.id(), "notice withheld, the method sends none");
             return Err(Hold::Withheld);
         }
@@ -1438,6 +1438,19 @@ where
                 transport: method.id(),
             });
         };
+        // The notice is padded as this wallet's own payments over the method are, whose marker
+        // may claim native slates.
+        let session = self.session()?;
+        let sending = self
+            .blocking(move |_, config| {
+                Ok(Claim::of(config, &session.seed).sending(config.network, None))
+            })
+            .await?;
+        let lengths = method.notice_lengths_for(&sending);
+        if lengths.is_empty() {
+            debug!(slate_id = %slate_id, transport = %method.id(), "notice withheld, the method sends none");
+            return Err(Hold::Withheld);
+        }
         let length = crate::notice::notice_length(lengths, &mut **self.ports().rng.lock());
         match outbound
             .deliver(to, &notice.encode_to(lengths, length))
