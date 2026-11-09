@@ -817,6 +817,44 @@ $ lepic in-person post <SLATE_ID> --relay-ok
 The sender collects or takes the answers as the payee of an invoice code does. Each check code
 is four digits of the receiver's public excess. `in-person finalize` finalizes the one picked.
 
+### Through an epic1 link
+
+An epic1 address (RFC 0003 §5.13) is the account's for good; a link to it names a mailbox for
+the payment. An on-screen link is for one payment; a printed one is kept until it is retired.
+
+```
+$ lepic epic1 address
+$ lepic epic1 link --amount 0.8
+$ lepic epic1 link --printed --relay relay.example
+$ lepic epic1 links
+$ lepic epic1 retire 1
+```
+
+`contact collect` takes the payments at the link mailboxes and stores an answer to each.
+`epic1 answers` lists them with the relay of the payer's reply mailbox, reported as for
+`in-person read`; `epic1 post-answer <SLATE_ID> --relay-ok` posts one, and posting again is
+safe. After a restore, `epic1 restore` reads the link mailboxes of the seed on the wallet's own
+relay; links named on other relays are not found.
+
+The payer reads the link first, then pays it:
+
+```
+$ lepic epic1 read 'epic:epic1…'
+$ lepic epic1 pay 'epic:epic1…' --hosts-ok
+$ lepic epic1 post-next <SLATE_ID> --hosts-ok
+```
+
+`read` shows the address paid, the amount, the message, the label and each relay with its
+`host_rule` and `in_relay_list`. `pay` pays the amount the link asks unless `--amount` is given,
+and takes the spending options of `tx send`; `--proof` asks for a payment proof signed with the
+payee's epic1 proof key. The payment goes to the first relay of the link; when the post fails,
+`post-next` tries the next one. The payer's `contact collect` takes the answer at the reply
+mailbox and finalizes it.
+
+`lepic epictx open <FILE|->` shows the slate in an `.epictx` file as JSON and takes nothing: a
+`lepic.v1` slate with its network, kernel features, header version and tail records, or the V3
+JSON of another slate.
+
 ## Contacts
 
 Pairing (RFC 0002) ties this wallet to another wallet or a service with keys of their own, so
@@ -1146,6 +1184,17 @@ when `serve` stops.
 | `POST /v1/in-person/take` | `in-person take`, with `answer`: the hex digits, the armoured text, or the UR parts |
 | `GET /v1/in-person/{slate_id}/answers` | `in-person answers` |
 | `POST /v1/in-person/{slate_id}/finalize` | `in-person finalize`, with `answer` and `fluff` |
+| `GET /v1/epic1/address` | `epic1 address`, with `account` in the query |
+| `POST /v1/epic1/links` | `epic1 link`, with `account`, `amount`, `message`, `printed` and `relays` |
+| `GET /v1/epic1/links` | `epic1 links` |
+| `POST /v1/epic1/links/{n}/retire` | `epic1 retire`, with `account` |
+| `POST /v1/epic1/read` | `epic1 read`, with `link` |
+| `POST /v1/epic1/pay` | `epic1 pay`, with `link`, `amount`, `account`, `message`, `proof` and `hosts_ok` |
+| `POST /v1/epic1/{slate_id}/post-next` | `epic1 post-next`, with `hosts_ok` |
+| `GET /v1/epic1/answers` | `epic1 answers` |
+| `POST /v1/epic1/{slate_id}/post-answer` | `epic1 post-answer`, with `relay_ok` |
+| `POST /v1/epic1/restore` | `epic1 restore` |
+| `POST /v1/epictx/open` | `epictx open`, with the file's `text` |
 
 A response body is the command's `--output json` report. Amounts are strings with eight
 decimals. An error is RFC 9457 problem details (`application/problem+json`): `type`
