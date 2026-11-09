@@ -216,13 +216,40 @@ async fn an_invoice_paid_in_person_is_finalized_only_when_its_answer_is_picked()
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_in_person_send_takes_its_ttl_from_the_app_and_refuses_a_short_one() {
+    let mut world = World::new();
+    let sender = world.funded().await;
+    for short in [10, 0] {
+        assert_eq!(
+            kind(
+                sender
+                    .in_person_send(EPIC / 10, 1, None, None, Some(short), Offline)
+                    .await
+            ),
+            WalletErrorKind::InvalidArgument,
+            "ttl {short}"
+        );
+    }
+    let default = sender
+        .in_person_send(EPIC / 10, 1, None, None, None, Offline)
+        .await
+        .unwrap();
+    let eleven = sender
+        .in_person_send(EPIC / 10, 1, None, None, Some(11), Offline)
+        .await
+        .unwrap();
+    // The chain does not move between the calls, so the cutoffs differ by the TTLs.
+    assert_eq!(default.ttl_cutoff - eleven.ttl_cutoff, 30 - 11);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_send_received_in_person_takes_the_answer_shown_back() {
     let mut world = World::new();
     let sender = world.funded().await;
     let receiver = world.wallet().await;
     receiver.session().scan_to_tip().await;
     let code = sender
-        .in_person_send(EPIC, 1, Some("change".to_owned()), None, Offline)
+        .in_person_send(EPIC, 1, Some("change".to_owned()), None, None, Offline)
         .await
         .unwrap();
     assert_eq!(code.mailbox, None);

@@ -86,19 +86,30 @@ impl EpicWallet {
     /// Makes an in-person send of `amount` atomic units, as [`EpicWallet::in_person_invoice`]
     /// makes an invoice, selecting outputs as `send` does. The send is stored and its inputs
     /// stay locked until an answer is finalized, the code expires or the send is cancelled.
+    /// `ttl_blocks` is as for `in_person_invoice`: the app chooses it, LEPIC uses 30 when `None`
+    /// and refuses one of 10 or fewer.
     ///
-    /// Fails with `InvalidArgument` for a zero amount, and as `send` fails before it delivers.
+    /// Fails with `InvalidArgument` for a zero amount or a TTL of 10 blocks or fewer, and as
+    /// `send` fails before it delivers.
     pub async fn in_person_send(
         &self,
         amount: u64,
         minimum_confirmations: u64,
         message: Option<String>,
         options: Option<SendOptions>,
+        ttl_blocks: Option<u64>,
         relay_mode: ContactRelayMode,
     ) -> Result<InPersonCode, WalletError> {
         self.run("in_person_send", |session| async move {
             session
-                .in_person_send(amount, minimum_confirmations, message, options, relay_mode)
+                .in_person_send(
+                    amount,
+                    minimum_confirmations,
+                    message,
+                    options,
+                    ttl_blocks,
+                    relay_mode,
+                )
                 .await
         })
         .await

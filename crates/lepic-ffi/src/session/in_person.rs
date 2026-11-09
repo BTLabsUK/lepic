@@ -6,6 +6,7 @@
 use lepic_primitives::amount::{Amount, Fee};
 use lepic_transport::host_rule::{HostClass, HostReport};
 use lepic_wallet::ReceiveRequest;
+use lepic_wallet::send::SendRequest;
 use lepic_wallet_contacts::{ContactError, InPersonInvoiceRequest, WalletContacts};
 
 use super::contact::{ms, slate_id, stage};
@@ -126,13 +127,17 @@ impl Session {
         minimum_confirmations: u64,
         message: Option<String>,
         options: Option<SendOptions>,
+        ttl_blocks: Option<u64>,
         mode: ContactRelayMode,
     ) -> Result<InPersonCode, WalletError> {
         positive(amount)?;
         let relays = self.contact_relays(mode)?;
-        let request =
-            self.policy
-                .send_request_with(amount, minimum_confirmations, message, options)?;
+        let request = SendRequest {
+            ttl_blocks,
+            ..self
+                .policy
+                .send_request_with(amount, minimum_confirmations, message, options)?
+        };
         let shown = self
             .engine
             .contact_book()
