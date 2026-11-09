@@ -1,6 +1,7 @@
 //! The one error every call returns. Dart receives it as a thrown [`WalletError`] and branches on
 //! [`WalletError::kind`] or the stable [`WalletError::code`], never on the message.
 
+use flutter_rust_bridge::frb;
 use lepic_keychain::AppDataError;
 use lepic_methods::http::PeerClientError;
 use lepic_wallet::error_text::{display_error_chain, display_error_message};
@@ -430,7 +431,13 @@ impl WalletErrorKind {
 
 /// The error of every fallible call. `message` is English for logs and bug reports; it never
 /// holds a secret.
+///
+/// In Dart `toString` prints the kind, the code and the message, so a log line or an
+/// unhandled exception names the failure.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[frb(
+    dart_code = "@override String toString() => 'WalletError(${kind.name}, $code): $message';"
+)]
 pub struct WalletError {
     pub kind: WalletErrorKind,
     /// `kind.code()`, for apps that store or transmit the error.
