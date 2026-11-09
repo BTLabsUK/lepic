@@ -17,6 +17,7 @@ between crates are fixed below and checked by `cargo xtask deps-check`.
 | `lepic-keychain` | Mnemonic to seed, BIP32 derivation, identifiers and paths, switch commitments, proof builders and rewind, seed vault formats, the host app's data file format (`docs/compat/wfeh.md`). | none |
 | `lepic-slate` | Slate domain model, stages and roles, codec trait, codec registry, the `ur:epic-slate` QR form of slate text (ADR 0025). | none |
 | `lepic-legacy-slate` | The V2 and V3 JSON slate codecs `epic-wallet` speaks, and the marked codecs that add the LEPIC marker to them (ADR 0052). | none |
+| `lepic-native-slate` | The native slate codec `lepic.v1` (EPICTX): the binary layout with its TLV tail, the network and block header version rule, a JSON view for display and tests. | none |
 | `lepic-contact` | Contact pairing formats (RFC 0002): the sealed envelope (HPKE to a contact's X25519 key, signed with its Ed25519 key) and its armor, contact cards, invites, pairing replies and confirms, the SAS. | none |
 | `lepic-epic1` | The epic1 address (bech32m, RFC 0003 §5.13) and the epic1 payment link with its Epicbox transport entries (RFC 0003 §5.14): pure text codes over the contact and Epicbox address types. | none |
 | `lepic-node` | Node JSON-RPC client for the foreign API, with strict response validation and bounded sizes. | network |
@@ -62,6 +63,7 @@ lepic-crypto      -> (external only)
 lepic-primitives  -> lepic-crypto
 lepic-keychain    -> lepic-crypto, lepic-primitives
 lepic-slate       -> lepic-crypto, lepic-primitives
+lepic-native-slate -> lepic-slate, lepic-crypto, lepic-primitives
 lepic-contact     -> (external only)
 lepic-node        -> lepic-primitives, lepic-crypto
 lepic-store       -> lepic-primitives
@@ -91,7 +93,7 @@ The edges to `lepic-legacy-slate` of `lepic-transport` and `lepic-methods`, and 
 `lepic-legacy-rpc` of `lepic-methods`, are optional, behind their default `legacy` feature
 (ADR 0052); `cargo xtask no-legacy` builds the crates that need no legacy crate without it.
 `lepic-wallet` keeps its edge to `lepic-legacy-slate`: it stores slates as V3 JSON.
-Pure crates (`crypto`, `primitives`, `keychain`, `slate`, `legacy-slate`, `contact`) may not depend on Tokio or the filesystem,
+Pure crates (`crypto`, `primitives`, `keychain`, `slate`, `legacy-slate`, `native-slate`, `contact`) may not depend on Tokio or the filesystem,
 read a clock, or create their own randomness.
 
 ## Engine and ports

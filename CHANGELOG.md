@@ -45,7 +45,11 @@ Conventional Commit messages at release time.
   carry a native slate or an envelope as bytes, uncompressed. Version 1 codes are unchanged.
 - Golden vectors for the epic1 address and link (`testdata/vectors/keys/epic1_*`) from an
   independent bech32m, and the `epic1_link` fuzz target.
-
+- `lepic-native-slate`, the native slate codec `lepic.v1` of EPICTX: a binary slate with the
+  network and block header version in its header, a TLV tail for reply records, a JSON view, and
+  `NativeV1Codec` for the codec registry (media type `application/vnd.lepic.slate`). The wallet
+  does not use it yet. Golden vectors in `testdata/vectors/slates_native` and a `slate_native`
+  fuzz target cover it.
 - Local quarantine and an early-notice buffer, both off by default (ADR 0049).
   `quarantine_max_bytes` keeps contact messages that opened and could not be taken, with
   `contact_quarantine`, `contact_quarantine_retry`, `contact_quarantine_discard` and
