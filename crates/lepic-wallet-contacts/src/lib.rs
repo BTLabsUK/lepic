@@ -100,7 +100,8 @@ pub use quarantine::{QuarantineReason, QuarantineRetry, QuarantinedMessage};
 pub use relay::{MAX_MEETING_RELAYS, meeting_host, meeting_relays};
 pub use requests::{MAX_LIVE_REQUESTS, MAX_SETTLED_REQUESTS, PairRequestView, REQUEST_EXPIRY};
 pub use sealed::{
-    SEAL_LAPSE, SealedAnswer, SealedPayment, SealedReceived, SealedSlate, is_epictx, payment_file,
+    EpictxView, SEAL_LAPSE, SealedAnswer, SealedPayment, SealedReceived, SealedSlate, is_epictx,
+    payment_file,
 };
 pub use status::{
     NEVER_FINISHED_AFTER, PairingStatus, STATUS_NOTICES, STATUS_RETRY_FOR, status_of,

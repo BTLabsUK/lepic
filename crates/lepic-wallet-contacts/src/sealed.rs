@@ -12,6 +12,7 @@ use lepic_contact::{
     Capabilities, ContactCard, Content, EncPublicKey, EncSecretKey, Hint, HintKey, HintRule,
     MessageType, Opened, PaymentFile, Purpose, SealedEnvelope, armor, classify, dearmor, seal,
 };
+use lepic_native_slate::{NativeSlate, SlateView};
 use lepic_node::{NodeApi, Propagation};
 use lepic_seal::{ArmorMarker, ClassifyError, dearmor_marked};
 use lepic_slate::codec::{MediaType, WireSlate};
@@ -53,6 +54,22 @@ pub struct SealedSlate {
     pub expires: Option<u64>,
     /// The slate's messages whose signatures verify, as transaction details show them.
     pub messages: Vec<lepic_wallet::details::SlateMessage>,
+}
+
+/// A slate in sealed text as it arrived, for tools and the API (RFC 0003 5.10).
+#[derive(Debug, Clone, PartialEq)]
+pub struct EpictxView {
+    /// The contact whose signature the envelope carries; `None` for an anonymous envelope.
+    pub contact_id: Option<ContactId>,
+    /// Whether the body is a `lepic.v1` slate.
+    pub native: bool,
+    /// The [`SlateView`] of a `lepic.v1` slate, or the V3 JSON of another.
+    pub slate: serde_json::Value,
+    pub purpose: Option<Purpose>,
+    /// The sender's own reference, shown and never trusted for crediting.
+    pub reference: Option<String>,
+    /// When the sender stops honouring the slate, in unix seconds; advisory.
+    pub expires: Option<u64>,
 }
 
 /// How an answer goes back on the channel its slate came by.
@@ -447,8 +464,44 @@ where
         Ok(self.open_text(text).await?.0)
     }
 
-    /// [`Wallet::sealed_open`], and whether the slate came native.
-    async fn open_text(&self, text: &str) -> Result<(SealedSlate, bool), ContactError> {
+    /// Opens sealed text with this wallet's keys and shows its slate as it arrived: the 1:1
+    /// JSON view of a `lepic.v1` slate (RFC 0003 5.10), or the V3 JSON of any other. Nothing is
+    /// stored and no contact is refreshed.
+    ///
+    /// Fails as [`Wallet::sealed_open`] does.
+    #[instrument(skip_all, fields(wallet = %self.wallet.config().name))]
+    pub async fn epictx_open(&self, text: &str) -> Result<EpictxView, ContactError> {
+        let network = self.wallet.config().network;
+        let (content, native, contact) = self.open_envelope(text).await?;
+        if content.kind != MessageType::Slate {
+            return Err(ContactError::NotASlate);
+        }
+        let slate = if native {
+            let native =
+                NativeSlate::decode(network, &content.body).map_err(|_| ContactError::NotASlate)?;
+            serde_json::to_value(SlateView::new(network, &native))
+                .map_err(|_| ContactError::NotASlate)?
+        } else {
+            serde_json::from_slice(&content.body).map_err(|_| ContactError::NotASlate)?
+        };
+        Ok(EpictxView {
+            contact_id: contact,
+            native,
+            slate,
+            purpose: content.purpose,
+            reference: content
+                .reference
+                .map(|reference| reference.as_str().to_owned()),
+            expires: content.expires,
+        })
+    }
+
+    /// The content of sealed text opened with this wallet's keys, whether its body is a
+    /// `lepic.v1` slate, and the contact whose key signed it.
+    async fn open_envelope(
+        &self,
+        text: &str,
+    ) -> Result<(Content, bool, Option<ContactId>), ContactError> {
         let network = self.wallet.config().network;
         let net = contact_network(network);
         payment_file(text.as_bytes())?;
@@ -493,6 +546,13 @@ where
             }
         };
         let ((Opened { content, .. }, native), contact) = (opened, contact);
+        Ok((content, native, contact))
+    }
+
+    /// [`Wallet::sealed_open`], and whether the slate came native.
+    async fn open_text(&self, text: &str) -> Result<(SealedSlate, bool), ContactError> {
+        let network = self.wallet.config().network;
+        let (content, native, contact) = self.open_envelope(text).await?;
         if content.kind != MessageType::Slate {
             return Err(ContactError::NotASlate);
         }
