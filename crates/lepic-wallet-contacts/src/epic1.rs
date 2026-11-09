@@ -20,7 +20,8 @@ use jiff::Timestamp;
 use lepic_crypto::PublicKey;
 use lepic_epic1::{Delivery as LinkDelivery, Epic1Address, Epic1Link, EpicboxTransport};
 use lepic_epicbox::{
-    EpicboxAddress, Handled, MailboxContent, MailboxHandler, MailboxMessage, RelayEndpoint,
+    EpicboxAddress, Handled, MAX_MAILBOXES_PER_DRAIN, MailboxContent, MailboxHandler,
+    MailboxMessage, RelayEndpoint,
 };
 use lepic_methods::epicbox::relay_network;
 use lepic_native_slate::{NativeSlate, Tail};
@@ -1286,25 +1287,26 @@ where
                     continue;
                 }
             };
-            let mut identities = Vec::with_capacity(mailboxes.len());
-            for (account, kind, n) in &mailboxes {
-                let mailbox = kind.mailbox(*n).ok_or(refused(Epic1Refusal::NotIssued))?;
-                let secret = self.wallet.link_mailbox_key(*account, net, mailbox)?;
-                identities.push(identity(secret, network, &endpoint)?);
-            }
-            let mut handler = Payments {
-                book: self,
-                relays,
-                mailboxes,
-                taken: 0,
-                restore: false,
-            };
-            let drained = client_for(relays, endpoint, known)
-                .drain_once(&identities, &mut handler)
-                .await;
-            taken = taken.saturating_add(handler.taken);
-            if let Err(error) = drained {
-                warn!(relay = %host, error = %ErrorChain(&error), "epic1 link mailboxes not drained");
+            let client = client_for(relays, endpoint.clone(), known);
+            for chunk in mailboxes.chunks(MAX_MAILBOXES_PER_DRAIN) {
+                let mut identities = Vec::with_capacity(chunk.len());
+                for (account, kind, n) in chunk {
+                    let mailbox = kind.mailbox(*n).ok_or(refused(Epic1Refusal::NotIssued))?;
+                    let secret = self.wallet.link_mailbox_key(*account, net, mailbox)?;
+                    identities.push(identity(secret, network, &endpoint)?);
+                }
+                let mut handler = Payments {
+                    book: self,
+                    relays,
+                    mailboxes: chunk.to_vec(),
+                    taken: 0,
+                    restore: false,
+                };
+                let drained = client.drain_once(&identities, &mut handler).await;
+                taken = taken.saturating_add(handler.taken);
+                if let Err(error) = drained {
+                    warn!(relay = %host, error = %ErrorChain(&error), "epic1 link mailboxes not drained");
+                }
             }
         }
         Ok(taken)
@@ -1319,25 +1321,28 @@ where
         let network = self.wallet.config().network;
         let net = contact_network(network);
         let own = relays.epicbox.settings().endpoint.clone();
-        let mut identities = Vec::with_capacity(replies.len());
-        for (slate_id, account) in &replies {
-            let secret = self
-                .wallet
-                .reply_mailbox_key(*account, net, slate_id.as_bytes())?;
-            identities.push(identity(secret, network, &own)?);
+        let client = mailbox_client(relays, own.clone(), None);
+        let mut taken = 0usize;
+        for chunk in replies.chunks(MAX_MAILBOXES_PER_DRAIN) {
+            let mut identities = Vec::with_capacity(chunk.len());
+            for (slate_id, account) in chunk {
+                let secret = self
+                    .wallet
+                    .reply_mailbox_key(*account, net, slate_id.as_bytes())?;
+                identities.push(identity(secret, network, &own)?);
+            }
+            let mut handler = Replies {
+                book: self,
+                slates: chunk.to_vec(),
+                taken: 0,
+            };
+            let drained = client.drain_once(&identities, &mut handler).await;
+            taken = taken.saturating_add(handler.taken);
+            if let Err(error) = drained {
+                warn!(error = %ErrorChain(&error), "epic1 reply mailboxes not drained");
+            }
         }
-        let mut handler = Replies {
-            book: self,
-            slates: replies,
-            taken: 0,
-        };
-        let drained = mailbox_client(relays, own, None)
-            .drain_once(&identities, &mut handler)
-            .await;
-        if let Err(error) = drained {
-            warn!(error = %ErrorChain(&error), "epic1 reply mailboxes not drained");
-        }
-        Ok(handler.taken)
+        Ok(taken)
     }
 
     /// After a restore from the phrase: drains, once, all 50 on-screen and all 32 printed link
@@ -1379,28 +1384,31 @@ where
                 })
             })
             .await?;
-        let mut taken = 0usize;
+        let mut mailboxes = Vec::new();
         for account in accounts {
-            let mut mailboxes = Vec::new();
-            let mut identities = Vec::new();
             for kind in [Epic1LinkKind::OnScreen, Epic1LinkKind::Printed] {
                 for n in 0..kind.count() {
-                    let mailbox = kind.mailbox(n).ok_or(refused(Epic1Refusal::NotIssued))?;
-                    let secret = self.wallet.link_mailbox_key(account, net, mailbox)?;
-                    identities.push(identity(secret, network, &own)?);
                     mailboxes.push((account, kind, n));
                 }
+            }
+        }
+        let client = mailbox_client(relays, own.clone(), None);
+        let mut taken = 0usize;
+        for chunk in mailboxes.chunks(MAX_MAILBOXES_PER_DRAIN) {
+            let mut identities = Vec::with_capacity(chunk.len());
+            for (account, kind, n) in chunk {
+                let mailbox = kind.mailbox(*n).ok_or(refused(Epic1Refusal::NotIssued))?;
+                let secret = self.wallet.link_mailbox_key(*account, net, mailbox)?;
+                identities.push(identity(secret, network, &own)?);
             }
             let mut handler = Payments {
                 book: self,
                 relays,
-                mailboxes,
+                mailboxes: chunk.to_vec(),
                 taken: 0,
                 restore: true,
             };
-            let drained = mailbox_client(relays, own.clone(), None)
-                .drain_once(&identities, &mut handler)
-                .await;
+            let drained = client.drain_once(&identities, &mut handler).await;
             taken = taken.saturating_add(handler.taken);
             drained.map_err(ContactError::Relay)?;
         }
