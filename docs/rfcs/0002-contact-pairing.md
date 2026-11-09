@@ -1,6 +1,6 @@
 # RFC 0002 Contact pairing, sealed slates and invoice trust
 
-Status: accepted. Decision record: [ADR 0024](../adr/0024-contact-pairing.md). Edge cases:
+Status: accepted. Decision record: [ADR 0024](../adr/0024-contact-pairing-and-invoice-trust.md). Edge cases:
 [0002-contact-pairing-cases.md](0002-contact-pairing-cases.md).
 
 Two LEPIC wallets pair once: in person by scanning each other's QR code, or online through a
@@ -28,7 +28,7 @@ Elsewhere:
 | Envelope bytes, HPKE, padding, signature, armor | [RFC 0003 §5.3 to §5.11](0003-epictx-native-slates.md#53-envelope-layout) |
 | Native slates between LEPIC wallets | [RFC 0003](0003-epictx-native-slates.md) |
 | Epicbox wire protocol | [Epicbox compatibility](../compat/epicbox.md) |
-| Notice shapes | [ADR 0016](../adr/0016-transaction-notices.md) |
+| Notice shapes | [ADR 0016](../adr/0016-epicbox-notices.md) |
 
 Stock `epic-wallet` and other wallets never receive an envelope, a card or an invite.
 
@@ -637,8 +637,8 @@ A makes an invite as in 7.1 with a 10-minute expiry and 5 random bytes `words`. 
 - A posts `base64url(nonce || ChaCha20-Poly1305(key, nonce, aad = "epic-pair/1 words" || net,
   invite))`, with a 12-byte random `nonce`, to the rendezvous mailbox on every one of the wallet's
   built-in relays for the network, whatever the home relay is. The posted text is at most 4,096
-  characters. One relay that takes it is enough; when none does, the invite is withdrawn and the words
-  are not shown.
+  characters. One relay that takes it is enough; when none does, the invite is withdrawn and the
+  words are not shown.
 
 The built-in relays are a meeting list for words only, the same fixed order on every wallet. A
 wallet's own relay may be any other. Words are not offered on a network with no built-in relay.
@@ -816,7 +816,7 @@ cycle's mailboxes are kept for contacts.
 A contact message that cannot be taken yet (its transaction is not stored, the store is busy) is
 left unacknowledged and counted. After the host's number of tries within its patience (at most 10
 tries and 24 hours) it is acknowledged and, when the host keeps a quarantine, stored there for 14
-days ([ADR 0049](../adr/0049-keep-messages-that-cannot-be-taken-yet.md)).
+days ([ADR 0049](../adr/0049-keeping-messages-that-cannot-be-taken-yet.md)).
 
 #### 8.5 A contact moves to another relay
 
@@ -1336,8 +1336,8 @@ attaches to one entry (C-21).
 - S. Vaudenay, "Secure Communications over Insecure Channels Based on Short Authenticated Strings",
   CRYPTO 2005.
 - [RFC 0001](0001-lepic-slate-v1.md), [RFC 0003](0003-epictx-native-slates.md).
-- ADRs [0016](../adr/0016-transaction-notices.md), [0024](../adr/0024-contact-pairing.md),
-  [0049](../adr/0049-keep-messages-that-cannot-be-taken-yet.md).
+- ADRs [0016](../adr/0016-epicbox-notices.md), [0024](../adr/0024-contact-pairing-and-invoice-trust.md),
+  [0049](../adr/0049-keeping-messages-that-cannot-be-taken-yet.md).
 - Crates [`lepic-seal`](../../crates/lepic-seal/README.md),
   [`lepic-contact`](../../crates/lepic-contact/README.md),
   [`lepic-wallet-contacts`](../../crates/lepic-wallet-contacts/README.md).
