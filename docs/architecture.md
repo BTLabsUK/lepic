@@ -134,7 +134,7 @@ The engine names what it needs as traits and generic parameters, and the host su
 |---|---|---|
 | `NodeApi` (`lepic-node`) | chain tip, outputs, kernels, push of a transaction | `NodeClient` over HTTP; `MockNode` with the `mock` feature |
 | `StoreOpener` | the wallet database, opened or created | `EncryptingSqliteStores`, `SqliteStores`, `EncryptedSqliteStores`; host wrappers in `lepic-cli` and `lepic-ffi` |
-| `SecretVault` | the sealed seed, created or unlocked with a password | a vault file in `lepic-cli`; the app's secure storage in `lepic-ffi` |
+| `SecretVault` | the sealed seed, created or unlocked with a password | a vault file in `lepic-cli`; the platform keystore in `lepic-ffi` |
 | `Clock`, `SharedRng`, runtime `Handle`, `MethodLookup` | the time, randomness, a Tokio runtime and the methods by name | the host's real ones; fixed ones in tests |
 
 A `Wallet` is `Wallet::new(config, ports)`, where `WalletConfig` carries the network, the name
@@ -243,7 +243,7 @@ package lives in its own repository, lepic-flutter (ADR 0023), which records the
 the API it was generated from in `crates/lepic-ffi/bridge.sha256`.
 
 - `LepicRuntime` owns one multi-threaded Tokio runtime for the app.
-- The seed stays in the app's secure storage; the binding passes the sealed vault bytes in and out
+- The seed stays in the platform keystore; the binding passes the sealed vault bytes in and out
   around each engine call (ADR 0014).
 - Logs go to a `LogSink` the app implements, or to an on-device `LogRing`.
 - Tor is a build feature (ADR 0026). With it, each open wallet runs a bundled `tor` binary as a
@@ -255,7 +255,7 @@ See [FFI](ffi.md).
 
 | What | Where | Protection |
 |---|---|---|
-| Seed | a vault file (CLI) or the app's secure storage | XChaCha20-Poly1305 under an Argon2id key from the password |
+| Seed | a vault file (CLI) or the platform keystore | XChaCha20-Poly1305 under an Argon2id key from the password |
 | Wallet database | SQLite file in the wallet directory | SQLite3 Multiple Ciphers under a key derived from the seed (ADR 0032) |
 | Transaction contexts (blinding factors, nonces) | rows in the database | also sealed with XChaCha20-Poly1305 under a key from the wallet's root key, bound to their row |
 | Logs | stderr or a rotating file (CLI); the app's sink or `LogRing` | `LogRing` redacts each record before it reaches the disk |

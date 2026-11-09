@@ -20,8 +20,8 @@ builds on the envelope of `lepic-seal` and re-exports most of its items.
   home relay of the pairing.
 - **Reply and confirm.** B answers with an envelope sealed to the invite's key, carrying the code
   and B's contact card. A checks it, stores the pairing and answers with a signed confirm carrying
-  A's card. A refusal is an anonymous envelope with one status byte. When the mailbox is not used, the same
-  envelopes travel as `epiccash://pair-reply/1/` and `epiccash://pair-confirm/1/` links.
+  A's card. A refusal is an unsigned (anonymous) envelope with one status byte. When the mailbox
+  is not used, the same envelopes travel as `epiccash://pair-reply/1/` and `epiccash://pair-confirm/1/` links.
 - **SAS.** Both screens show the same short string after pairing (`Sas`, `SasSymbol`), so two
   people can compare them.
 - **Pairing words.** `PairingWords` turns an invite into five SAS-table entries that find and

@@ -26,7 +26,7 @@ golden vector shows.
   are counted but not parsed, so the memory a decode uses does not grow with the input.
 - **The LEPIC marker.** `MarkedV2JsonCodec` and `MarkedV3JsonCodec` write the same slate plus a
   last top-level key `"lepic":{"version":1}`. Stock `epic-wallet` ignores the key and drops it
-  when it rewrites the slate, so a reply that still carries it came from LEPIC. Over Epicbox the
+  when it rewrites the slate, so a reply that carries it came from LEPIC. Over Epicbox the
   marker can carry claimed feature bits (`f`) and the key native slates are sealed to; in a file
   or paste slate it can carry an X25519 reply key (RFC 0002 section 5). No slate signature covers
   the key, and it authenticates nothing. A marked codec shares the id of its plain codec, so a
