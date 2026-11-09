@@ -205,13 +205,13 @@ where
     /// the host set `native_direct` and the contact claims native slates; anything else is
     /// `BEGINEPICSEALED.` for a `.epicsealed` file. `purpose` defaults to a payment for an S1 and a
     /// request for an I1. The transaction is remembered as the contact's, for
-    /// [`Wallet::contact_plain_fallback`].
+    /// [`ContactBook::contact_plain_fallback`].
     ///
     /// Fails with [`ContactError::UnknownContact`] for a contact that is not paired or whose keys
     /// changed, [`ContactError::Waiting`] before the contact was heard in the pairing,
-    /// [`ContactError::Ended`] once it ended, [`ContactError::SealOff`] when sealing is off for it or its card says it cannot
-    /// open sealed files, and [`ContactError::UnknownTransaction`] when the transaction has no
-    /// slate to send.
+    /// [`ContactError::Ended`] once it ended, [`ContactError::SealOff`] when sealing is off for it
+    /// or its card says it cannot open sealed files, and [`ContactError::UnknownTransaction`] when
+    /// the transaction has no slate to send.
     #[instrument(skip_all, fields(wallet = %self.wallet.config().name, tx_id = %tx_id))]
     pub async fn contact_seal_slate(
         &self,
@@ -226,12 +226,12 @@ where
     }
 
     /// Checks that a slate can go to the contact `contact_id` through its mailbox, as
-    /// [`Wallet::contact_post_slate`] would check it, before anything is built or locked: the
+    /// [`ContactBook::contact_post_slate`] would check it, before anything is built or locked: the
     /// contact is paired or verified, its card says it opens sealed slates, and its mailbox is
     /// known. Reads only.
     ///
     /// Fails with [`ContactError::UnknownContact`] and [`ContactError::SealOff`] as
-    /// [`Wallet::contact_post_slate`] does.
+    /// [`ContactBook::contact_post_slate`] does.
     pub async fn contact_check_mailbox_send(
         &self,
         contact_id: ContactId,
@@ -257,7 +257,7 @@ where
     }
 
     /// Seals the slate this wallet last wrote for `tx_id` to the contact for `channel`, as
-    /// [`Wallet::contact_seal_slate`] describes, with the format it was sealed in.
+    /// [`ContactBook::contact_seal_slate`] describes, with the format it was sealed in.
     async fn seal_stored_slate(
         &self,
         contact_id: ContactId,
@@ -350,14 +350,14 @@ where
 
     /// Sends the slate this wallet last wrote for `tx_id` through the contact's mailbox (RFC 0002
     /// 9.1, "Send through Anna's mailbox"; 12.5 for a withdrawal): sealed as
-    /// [`Wallet::contact_seal_slate`] seals it, queued in the outbox, and posted once when relays
-    /// may be reached. The answer comes back to our mailbox and is taken by collecting. A
+    /// [`ContactBook::contact_seal_slate`] seals it, queued in the outbox, and posted once when
+    /// relays may be reached. The answer comes back to our mailbox and is taken by collecting. A
     /// mailbox carries only sealed envelopes, so the contact's seal switch does not apply.
     ///
     /// Returns the format the slate was sealed in.
     ///
-    /// Fails as [`Wallet::contact_seal_slate`] does, except that [`ContactError::SealOff`] means
-    /// only that the contact's card says it cannot open sealed slates.
+    /// Fails as [`ContactBook::contact_seal_slate`] does, except that [`ContactError::SealOff`]
+    /// means only that the contact's card says it cannot open sealed slates.
     #[instrument(skip_all, fields(wallet = %self.wallet.config().name, tx_id = %tx_id))]
     pub async fn contact_post_slate(
         &self,
@@ -370,7 +370,7 @@ where
             .await
     }
 
-    /// Posts as [`Wallet::contact_post_slate`] does, with the format the slate was sealed in.
+    /// Posts as [`ContactBook::contact_post_slate`] does, with the format the slate was sealed in.
     async fn post_stored_slate(
         &self,
         relays: &super::ContactRelays,
@@ -406,15 +406,15 @@ where
     }
 
     /// Pays the contact `contact_id` through its mailbox. The contact is checked as
-    /// [`Wallet::contact_check_mailbox_send`] checks it, so a send it cannot take locks nothing;
-    /// then `request` is sent with its S1 written to `slate_file` on the way, and posted as
-    /// [`Wallet::contact_post_slate`] posts it. `slate_file` is a path in the wallet's directory
-    /// that the caller removes afterwards.
+    /// [`ContactBook::contact_check_mailbox_send`] checks it, so a send it cannot take locks
+    /// nothing; then `request` is sent with its S1 written to `slate_file` on the way, and posted
+    /// as [`ContactBook::contact_post_slate`] posts it. `slate_file` is a path in the wallet's
+    /// directory that the caller removes afterwards.
     ///
     /// A send that was stored but could not be written or queued is cancelled, so it holds no
     /// inputs. When that cancel fails too, the error is [`ContactError::NotCancelled`] with the
     /// transaction, never a silent leftover. Fails with [`ContactError::Send`] when the send
-    /// fails, and otherwise as [`Wallet::contact_post_slate`] does.
+    /// fails, and otherwise as [`ContactBook::contact_post_slate`] does.
     #[instrument(skip_all, fields(wallet = %self.wallet.config().name))]
     pub async fn contact_send(
         &self,
@@ -477,11 +477,11 @@ where
     /// refreshes the contact. Nothing else is stored.
     ///
     /// Fails with [`ContactError::SavedTransaction`] or [`ContactError::NotPaymentFile`] as
-    /// [`payment_file`] does, [`ContactError::Decode`] for text that is not sealed, damaged or
-    /// for the other network, [`ContactError::NotForThisInstall`] when no key of this wallet matches, or the
-    /// signer is not the contact of the key that opened it (sealed for another wallet or
-    /// install), [`ContactError::CannotOpen`], and [`ContactError::NotASlate`] for an envelope
-    /// that holds no slate.
+    /// [`payment_file`] does, [`ContactError::Decode`] for text that is not sealed, damaged or for
+    /// the other network, [`ContactError::NotForThisInstall`] when no key of this wallet matches,
+    /// or the signer is not the contact of the key that opened it (sealed for another wallet or
+    /// install), [`ContactError::CannotOpen`], and [`ContactError::NotASlate`] for an envelope that
+    /// holds no slate.
     #[instrument(skip_all, fields(wallet = %self.wallet.config().name))]
     pub async fn sealed_open(&self, text: &str) -> Result<SealedSlate, ContactError> {
         Ok(self.open_text(text).await?.0)
@@ -491,7 +491,7 @@ where
     /// JSON view of a `lepic.v1` slate (RFC 0003 5.10), or the V3 JSON of any other. Nothing is
     /// stored and no contact is refreshed.
     ///
-    /// Fails as [`Wallet::sealed_open`] does.
+    /// Fails as [`ContactBook::sealed_open`] does.
     #[instrument(skip_all, fields(wallet = %self.wallet.config().name))]
     pub async fn epictx_open(&self, text: &str) -> Result<EpictxView, ContactError> {
         let network = self.wallet.config().network;
@@ -572,7 +572,7 @@ where
         Ok((content, native, contact))
     }
 
-    /// [`Wallet::sealed_open`], and whether the slate came native.
+    /// [`ContactBook::sealed_open`], and whether the slate came native.
     async fn open_text(&self, text: &str) -> Result<(SealedSlate, bool), ContactError> {
         let network = self.wallet.config().network;
         let (content, native, contact) = self.open_envelope(text).await?;
@@ -624,8 +624,8 @@ where
     /// on the same channel (RFC 0002 9.2): sealed and signed to the contact that signed it, or
     /// sealed anonymously to its marker's reply key, or else plain.
     ///
-    /// Fails as [`Wallet::sealed_open`] does, with [`ContactError::Stage`] for another stage, and
-    /// with [`ContactError::Receive`] as [`Wallet::receive`] does.
+    /// Fails as [`ContactBook::sealed_open`] does, with [`ContactError::Stage`] for another stage,
+    /// and with [`ContactError::Receive`] as [`Wallet::receive`] does.
     #[instrument(skip_all, fields(wallet = %self.wallet.config().name))]
     pub async fn sealed_receive(
         &self,
@@ -654,11 +654,11 @@ where
     }
 
     /// Pays the I1 in sealed text as [`Wallet::pay_invoice`] pays one by file, and answers on the
-    /// same channel as [`Wallet::sealed_receive`] does. Paying is the user's decision: call it
+    /// same channel as [`ContactBook::sealed_receive`] does. Paying is the user's decision: call it
     /// only after they approved the amount.
     ///
-    /// Fails as [`Wallet::sealed_open`] does, with [`ContactError::Stage`] for another stage, and
-    /// with [`ContactError::Invoice`] as [`Wallet::pay_invoice`] does.
+    /// Fails as [`ContactBook::sealed_open`] does, with [`ContactError::Stage`] for another stage,
+    /// and with [`ContactError::Invoice`] as [`Wallet::pay_invoice`] does.
     #[instrument(skip_all, fields(wallet = %self.wallet.config().name))]
     pub async fn sealed_pay(
         &self,
@@ -689,7 +689,7 @@ where
     /// Finalizes and posts the S2 or I2 in sealed text, as [`Wallet::finalize`] and
     /// [`Wallet::finalize_invoice`] do for a file.
     ///
-    /// Fails as [`Wallet::sealed_open`] does, with [`ContactError::Stage`] for another stage,
+    /// Fails as [`ContactBook::sealed_open`] does, with [`ContactError::Stage`] for another stage,
     /// and with [`ContactError::Finalize`] or [`ContactError::Invoice`].
     #[instrument(skip_all, fields(wallet = %self.wallet.config().name))]
     pub async fn sealed_finalize(

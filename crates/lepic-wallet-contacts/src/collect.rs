@@ -398,7 +398,7 @@ where
         self.contacts_collect_only(relays, trigger, None).await
     }
 
-    /// [`Wallet::contacts_collect`] with only the mailboxes of the contacts in `only` drained,
+    /// [`ContactBook::contacts_collect`] with only the mailboxes of the contacts in `only` drained,
     /// their pairings in progress included, when it is given: a cheap look at a few pairings.
     /// The turn the other contacts take across cycles is left as it was; everything else a
     /// cycle does runs as it always does.

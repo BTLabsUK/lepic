@@ -156,7 +156,7 @@ where
         self.deliver_outbox(relays, false).await
     }
 
-    /// The outbox run of [`Wallet::contacts_outbox_deliver`], for a caller that holds the
+    /// The outbox run of [`ContactBook::contacts_outbox_deliver`], for a caller that holds the
     /// contact engine's turn. `all` tries every queued entry at once, due or not.
     pub(crate) async fn deliver_outbox(
         &self,
