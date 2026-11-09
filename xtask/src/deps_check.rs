@@ -34,6 +34,7 @@ pub(crate) const PURE_CRATES: &[&str] = &[
     "lepic-slate",
     "lepic-legacy-slate",
     "lepic-native-slate",
+    "lepic-seal",
     "lepic-contact",
 ];
 
