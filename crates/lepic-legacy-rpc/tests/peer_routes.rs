@@ -285,3 +285,45 @@ async fn over_the_payment_budget_is_rate_limited_with_retry_after() {
     assert_eq!(wallet.calls.load(Ordering::SeqCst), 2);
     listener.shutdown().await;
 }
+
+/// The socket a local tor reaches, as behind an onion: it serves the endpoint it was given, and
+/// none without one.
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_unix_socket_serves_its_endpoint_as_behind_an_onion() {
+    let path = std::env::temp_dir().join(format!("lepic-peer-routes-{}.sock", std::process::id()));
+    let get = b"GET /v1/peer HTTP/1.1\r\nhost: x.onion\r\nconnection: close\r\n\r\n";
+    let unix_exchange = |request: &'static [u8]| {
+        let path = path.clone();
+        async move {
+            let mut stream = tokio::net::UnixStream::connect(&path).await.unwrap();
+            stream.write_all(request).await.unwrap();
+            let mut answer = Vec::new();
+            let _ =
+                tokio::time::timeout(Duration::from_secs(3), stream.read_to_end(&mut answer)).await;
+            String::from_utf8_lossy(&answer).into_owned()
+        }
+    };
+
+    let without = lepic_legacy_rpc::listen_unix(&path, settings(), Arc::new(NoLegacy))
+        .await
+        .unwrap();
+    let raw = unix_exchange(get).await;
+    assert!(raw.starts_with("HTTP/1.1 404"), "{raw}");
+    without.shutdown().await;
+
+    let endpoint = PeerEndpoint::new(Arc::new(Reversing::default()), KEY_B, Network::Mainnet);
+    let with = lepic_legacy_rpc::listen_unix_with(
+        &path,
+        settings(),
+        Arc::new(NoLegacy),
+        Some(Arc::new(endpoint)),
+    )
+    .await
+    .unwrap();
+    let raw = unix_exchange(get).await;
+    assert!(raw.starts_with("HTTP/1.1 200"), "{raw}");
+    assert!(raw.contains(r#""network":"mainnet""#), "{raw}");
+    assert!(raw.contains(&"b2".repeat(32)), "{raw}");
+    with.shutdown().await;
+}
