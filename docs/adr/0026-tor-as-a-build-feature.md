@@ -1,53 +1,47 @@
-# 0026 Tor is a build feature of the binding
+# ADR 0026: Tor is a build feature of the binding
 
 Status: accepted
-Date: 2026-10-27
 
 ## Context
 
-The app has a build without Tor (`WFE_TOR=0`) for app stores and for places where Tor is a
-problem. It never starts tor, but `lepic-ffi` depended on `lepic-tor` unconditionally (ADR 0018,
-ADR 0021, ADR 0022), so that build still carried the tor controller, the SOCKS client, the onion
-service and the `tor` transport. The operator asked on 2026-10-27 for a library with no Tor code
-in it.
+An app can ship a build without Tor, for app stores and for places where Tor is a problem. That
+build never starts tor, but it should hold no Tor code: no tor controller, SOCKS client, onion
+service or `tor` transport.
 
-The binding's two halves are generated from `crates/lepic-ffi/src/api` once (ADR 0007, ADR 0023)
+The binding's two halves are generated from `crates/lepic-ffi/src/api` once (ADR 0007, ADR 0023),
 and the Dart half refuses a library whose API hash differs, so both builds must expose the same
 API.
 
 ## Decision
 
-- `lepic-ffi` has a default feature `tor` that enables the optional `lepic-tor` dependency and
-  everything that uses it. Every existing build keeps it.
-- Built without it (`--no-default-features`, `cargo xtask mobile --package --no-tor`),
-  `lepic-tor` and the code only it needs are not compiled. The API keeps every Tor function with
-  the same signature, so the generated halves are the same for both builds:
-  - `start_tor`, `refresh_tor`, `onion_address`, `send_tor` and `resend_tor` fail with
-    `Unsupported` ("this build of LEPIC has no Tor"); `start_tor` reports no event.
-  - `tor_status` is `Off`; `stop_tor` and `tor_network_lost` do nothing; `expect_tor` only checks
-    the wallet is unlocked; `set_onion_routes` accepts any list and keeps none.
-  - `epicbox_over_tor` and `node_over_tor` read `false` and their setters change nothing: the
-    relay and the node are always reached directly. A node or relay at an onion host fails to
-    connect; nothing goes to an onion.
+- `lepic-ffi` has a default feature `tor` that enables the optional `lepic-tor` dependency,
+  `lepic-methods/tor` and everything that uses them (ADR 0018, ADR 0021, ADR 0022).
+- Built without it (`--no-default-features`, or `cargo xtask mobile --package --no-tor`),
+  `lepic-tor` is not compiled. The API keeps every Tor function with the same signature, so the
+  generated halves are the same for both builds. In that build:
+  - `onion_address`, `start_tor`, `refresh_tor`, `tor_network_lost`, `send_tor` and `resend_tor`
+    (and their dialect forms) fail with `Unsupported` and the message "this build of LEPIC has
+    no Tor". `start_tor` reports no event.
+  - `tor_status` is `Off`. `stop_tor` does nothing, `expect_tor` only checks that the wallet is
+    unlocked, and `set_onion_routes` accepts any list and keeps none.
+  - `epicbox_over_tor`, `node_over_tor` and `http_over_tor` read `false`, and their setters
+    change nothing. The relay and the node are reached directly, and an onion host cannot be
+    reached.
   - `validate_onion_address` is `false` for every address.
-- `lepic-cli` keeps `lepic-tor`: it is a desktop tool and never ships in an app.
+- `lepic-cli` keeps `lepic-tor`: it is a desktop tool and is not part of an app build.
 - `cargo xtask mobile --package` writes a `FEATURES` file next to each library listing the
   `lepic-ffi` features it was built with, so the binding's build hook can tell the two builds
-  apart. `cargo xtask check` runs clippy on `lepic-ffi` without default features.
+  apart. `cargo xtask check` runs clippy on `lepic-ffi` without default features, with its
+  tests.
 
 ## Consequences
 
-- One generated binding serves both builds; no Dart or `frb_generated.rs` change. An app built
-  for Tor against the library without it sees `Unsupported` from `start_tor` instead of a
-  missing symbol.
-- The crate edge `lepic-ffi -> lepic-tor` stays in `docs/architecture.md`; it is optional.
-- New Tor functions of the API need a branch in the build without Tor too; the clippy step of
-  `cargo xtask check` fails until they have one.
+- One generated binding serves both builds. An app built for Tor that loads the library without
+  it gets `Unsupported` from `start_tor` instead of a missing symbol.
+- The dependency from `lepic-ffi` to `lepic-tor` is optional.
+- A new Tor function in the API needs a branch for the build without Tor, or the clippy step of
+  `cargo xtask check` fails.
 
-## Alternatives considered
+## Related
 
-- Leaving the Tor functions out of the API without the feature: the generated halves would then
-  differ per build, needing two Dart packages or a generated file per variant.
-- A new error kind `TorNotBuilt`: a change to the binding's shape and to every app's error
-  mapping, for a case `Unsupported` ("not available in this build") already names.
-- Keeping `lepic-tor` and not calling it, as the app did: the code stays in the library.
+- ADR 0018, ADR 0021, ADR 0022, ADR 0023

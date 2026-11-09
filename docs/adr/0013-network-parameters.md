@@ -1,25 +1,35 @@
-# 0013 Network parameters live with the format that uses them
+# ADR 0013: Network parameters live with the format that uses them
 
 Status: accepted
-Date: 2026-10-02
-Supersedes: the `ChainParams` contents listed in ADR 0011. The rest of ADR 0011 stands.
 
 ## Context
 
-ADR 0011 put address version bytes and a test network into `ChainParams`. While porting, the
-version bytes turned out to belong to two unrelated formats: Epicbox addresses (`lepic-epicbox`) and
-BIP32 extended keys (`lepic-keychain`). Putting them into `lepic-primitives` would make the
-primitives crate know about formats it never parses. No test so far needs a third network.
+A wallet needs consensus values (coinbase maturity, weight limits, fee) and, for two formats,
+network-specific version bytes: Epicbox addresses and BIP32 extended keys. The version bytes
+belong to the formats that encode them. The primitives crate does not parse those formats.
 
 ## Decision
 
-- `lepic-primitives` defines `Network` (mainnet, floonet) and `ChainParams` with the consensus values a
-  wallet needs: coinbase maturity, block and transaction weight limits, base fee, protocol version.
-- Each format crate maps `Network` to its own version bytes, next to the code that encodes them.
-- A test network variant is added when a test needs values that differ from floonet, with vectors
-  for those values.
+- `lepic-primitives` defines `Network` (`Mainnet`, `Floonet`) and `ChainParams`, built with
+  `Network::params()` or `ChainParams::for_network`. `ChainParams` holds the network and its
+  consensus values: coinbase maturity (1,440 blocks on mainnet, 30 on floonet), the first hard
+  fork height, block header version, base fee, block reward schedule and the protocol version.
+  Block and transaction weight limits are constants shared by both networks, so decoders, which
+  see no network, enforce them.
+- Each format crate maps the network to its own version bytes, next to the code that encodes
+  them:
+  - `lepic-keychain` maps `Network` to the BIP32 private and public version bytes. Floonet's
+    bytes serve every non-mainnet chain.
+  - `lepic-epicbox` has its own `Network` enum and maps it to the two address version bytes.
+- Every crate takes the network as a parameter (ADR 0011).
+- A third network is added when a test needs values that differ from floonet, together with
+  vectors for those values.
 
 ## Consequences
 
-- Still no process-global state: every crate takes `Network` as a parameter.
 - Version-byte mistakes are caught by the vectors of the format that uses them.
+- Callers that use both crates convert between the two `Network` types.
+
+## Related
+
+- ADR 0011
