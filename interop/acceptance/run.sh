@@ -65,6 +65,33 @@ while (($# > 0)); do
     esac
     shift
 done
+
+# Every entry is "display name:function", the name without a colon, and an ACCEPTANCE_ONLY name
+# is a function of some entry. A filter that matches nothing must not start the stack.
+only_count=0
+if [[ "${stack_only}" == false ]]; then
+    valid=()
+    for entry in "${STEPS[@]}"; do
+        if [[ "${entry//[^:]/}" != ":" ]]; then
+            echo "step entry needs exactly one colon, between name and function: ${entry}" >&2
+            exit 2
+        fi
+        valid+=("${entry#*:}")
+    done
+    if [[ -n "${ACCEPTANCE_ONLY:-}" ]]; then
+        IFS=, read -r -a only_names <<<"${ACCEPTANCE_ONLY}"
+        only_count=${#only_names[@]}
+        unknown=()
+        for name in "${only_names[@]}"; do
+            [[ " ${valid[*]} " == *" ${name} "* ]] || unknown+=("${name}")
+        done
+        if ((${#unknown[@]} > 0)); then
+            echo "ACCEPTANCE_ONLY names no step: ${unknown[*]}" >&2
+            echo "valid names: ${valid[*]}" >&2
+            exit 2
+        fi
+    fi
+fi
 hold_stack lepic-acceptance
 
 WORK_DIR="${ACCEPTANCE_DIR}/.work"
@@ -169,12 +196,18 @@ run_step() {
 
 run_step "setup and funding" "${setup_step}"
 if [[ "${results[0]}" == PASS ]]; then
+    steps_run=0
     for entry in "${STEPS[@]}"; do
         if [[ -n "${ACCEPTANCE_ONLY:-}" && ",${ACCEPTANCE_ONLY}," != *",${entry#*:},"* ]]; then
             continue
         fi
         run_step "${entry%%:*}" "${entry#*:}"
+        steps_run=$((steps_run + 1))
     done
+    if [[ -n "${ACCEPTANCE_ONLY:-}" && "${steps_run}" != "${only_count}" ]]; then
+        log "ACCEPTANCE_ONLY listed ${only_count} steps and ${steps_run} ran"
+        failed=$((failed + 1))
+    fi
 fi
 peer_listen_stop >/dev/null 2>&1 || true
 
