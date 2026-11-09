@@ -70,7 +70,7 @@ paths and amounts. A grid lists its entries under `expected` in a fixed order.
 
 | Key | Meaning |
 |---|---|
-| `schema` | Version of this envelope, currently `1`. |
+| `schema` | Version of this envelope: `1`. |
 | `area` | The directory the file lives in. |
 | `name` | The file name without `.json`, lowercase with underscores. |
 | `generator` | The generator module that wrote the file. |
