@@ -20,8 +20,9 @@ lepic-epicbox.workspace = true
 lepic-keychain.workspace = true
 lepic-legacy-slate.workspace = true
 lepic-native-slate.workspace = true
-lepic-methods = { workspace = true, features = ["epicbox"] }
+lepic-methods = { workspace = true, features = ["epicbox", "http"] }
 lepic-node.workspace = true
+lepic-peer.workspace = true
 lepic-primitives.workspace = true
 lepic-seal.workspace = true
 lepic-slate.workspace = true

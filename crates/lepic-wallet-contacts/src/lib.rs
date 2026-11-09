@@ -14,6 +14,7 @@
 mod address_proof;
 mod check;
 mod collect;
+mod direct;
 mod domain;
 mod hex;
 mod in_person;
@@ -55,6 +56,7 @@ use lepic_wallet::ports::{SecretVault, StoreOpener};
 use thiserror::Error;
 
 pub use collect::{CollectReport, CollectTrigger};
+pub use direct::{Dialect, DirectError, DirectHandler, DirectSent, NativeFailure};
 pub use domain::{DOMAIN_FILE_MAX, DomainFile, DomainRefused, DomainSigner, DomainVerdict, verify};
 pub use in_person::{
     IN_PERSON_TTL_BLOCKS, InPersonAnswerView, InPersonCode, InPersonCodeView,

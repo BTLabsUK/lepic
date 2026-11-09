@@ -40,7 +40,7 @@ pub(crate) fn wants_native(native_direct: bool, record: &ContactRecord) -> bool 
 }
 
 /// The `lepic.v1` bytes of a slate stored as V3 JSON.
-fn native_body(network: Network, v3: &[u8]) -> Result<Vec<u8>, ContactError> {
+pub(crate) fn native_body(network: Network, v3: &[u8]) -> Result<Vec<u8>, ContactError> {
     let slate = legacy_codecs(network)
         .map_err(ContactError::Receive)?
         .decode(&WireSlate::binary(MediaType::JSON, v3.to_vec()))

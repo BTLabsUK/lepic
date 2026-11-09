@@ -1628,6 +1628,7 @@ dependencies = [
  "lepic-methods",
  "lepic-native-slate",
  "lepic-node",
+ "lepic-peer",
  "lepic-primitives",
  "lepic-seal",
  "lepic-slate",
