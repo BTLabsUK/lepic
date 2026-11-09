@@ -15,6 +15,7 @@ use crate::error::{CryptoError, Item};
 use crate::hex;
 use crate::item_hex;
 use crate::limits::{MAX_SUM_TERMS, check_batch_len};
+use crate::public_key::PublicKey;
 use crate::secret::SecretKey;
 
 /// A Pedersen commitment `blinding*G + value*H`, 33 bytes, always a valid curve point.
@@ -60,6 +61,12 @@ impl Commitment {
     /// Zero has no such commitment and is rejected.
     pub fn commit_value(value: u64) -> Result<Self, CryptoError> {
         Self::from_backend(secp().commit_value(value)?)
+    }
+
+    /// The commitment to zero whose blinding point is `key`: `commit(0, k)` for `key = k*G`. A
+    /// kernel excess is the sum of the parties' public blind excesses read this way.
+    pub fn from_public_key(key: &PublicKey) -> Result<Self, CryptoError> {
+        Self::from_backend(BackendCommitment::from_pubkey(secp(), key.as_backend())?)
     }
 
     /// `sum(positive) - sum(negative)`. Fails with [`CryptoError::SumIsZero`] when the terms
@@ -122,6 +129,23 @@ mod tests {
         let c = Commitment::commit(7, &secret(7)).unwrap();
         assert_eq!(Commitment::sum(&[a, b], &[]), Ok(c));
         assert_eq!(Commitment::sum(&[c], &[b]), Ok(a));
+    }
+
+    #[test]
+    fn commitment_of_a_public_key_is_the_commitment_to_zero_of_its_secret() {
+        for byte in [1, 2, 7, 200] {
+            let key = PublicKey::from_secret_key(&secret(byte)).unwrap();
+            let commitment = Commitment::from_public_key(&key).unwrap();
+            assert_eq!(Ok(commitment), Commitment::commit(0, &secret(byte)));
+            let backend = BackendCommitment::from_pubkey(secp(), key.as_backend()).unwrap();
+            assert_eq!(commitment.as_bytes(), &backend.0);
+            assert_eq!(
+                backend
+                    .to_pubkey(secp())
+                    .map(|point| point == *key.as_backend()),
+                Ok(true)
+            );
+        }
     }
 
     #[test]
