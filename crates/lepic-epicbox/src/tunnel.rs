@@ -19,7 +19,9 @@ use tokio_rustls::rustls::ClientConfig;
 use tracing::debug;
 
 use crate::address::{DEFAULT_PORT, Domain};
-use crate::session::{Connector, RelayEndpoint, RelayStream, Security, TcpConnector};
+use crate::session::{
+    Connector, RelayEndpoint, RelayStream, Security, TcpConnector, refuse_loopback_name,
+};
 
 /// Where a relay may say which onion it is also reachable at.
 pub const DISCOVERY_PATH: &str = "/.well-known/epicbox.json";
@@ -447,6 +449,21 @@ impl Connector for TunnelConnector {
         Box::pin(self.connect_given(endpoint, Some(onion)))
     }
 
+    /// Through the tunnel only the name is checked: Tor resolves it at the exit, so no address
+    /// is seen here. Directly, as [`TcpConnector`] checks.
+    fn connect_untrusted<'a>(
+        &'a self,
+        endpoint: &'a RelayEndpoint,
+    ) -> BoxFuture<'a, io::Result<Box<dyn RelayStream>>> {
+        Box::pin(async move {
+            if !self.tunnelled(endpoint) {
+                return self.direct.connect_untrusted(endpoint).await;
+            }
+            refuse_loopback_name(endpoint)?;
+            self.connect_given(endpoint, None).await
+        })
+    }
+
     fn connect_timeout(&self, endpoint: &RelayEndpoint, configured: Duration) -> Duration {
         if self.tunnelled(endpoint) {
             configured.max(self.timings.connect_timeout)
@@ -727,6 +744,30 @@ mod tests {
             assert_eq!(error.kind(), io::ErrorKind::InvalidInput, "{domain}");
             assert!(error.to_string().contains("needs Tor"), "{domain}");
         }
+    }
+
+    #[tokio::test]
+    async fn an_untrusted_relay_on_a_loopback_or_unspecified_host_is_refused() {
+        let tunnel = Arc::new(FakeTunnel::new(true));
+        let connector = connector(&tunnel);
+        let direct = TcpConnector::new(tls());
+        for domain in ["localhost", "relay.localhost", "127.0.0.1", "0.0.0.0"] {
+            let endpoint = relay(domain, 443);
+            for error in [
+                direct.connect_untrusted(&endpoint).await.err().unwrap(),
+                connector.connect_untrusted(&endpoint).await.err().unwrap(),
+            ] {
+                assert_eq!(error.kind(), io::ErrorKind::InvalidInput, "{domain}");
+                assert_eq!(
+                    error
+                        .get_ref()
+                        .and_then(|inner| inner.downcast_ref::<crate::EndpointError>()),
+                    Some(&crate::EndpointError::LoopbackHost),
+                    "{domain}"
+                );
+            }
+        }
+        assert!(tunnel.opened().is_empty());
     }
 
     #[tokio::test]

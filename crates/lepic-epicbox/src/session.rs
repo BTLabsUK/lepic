@@ -9,13 +9,15 @@
 
 use std::fmt;
 use std::io;
+use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 use std::time::Duration;
 
 use futures_util::{SinkExt, StreamExt};
+use lepic_transport::host_rule;
 use lepic_transport::transport::BoxFuture;
 use tokio::io::{AsyncRead, AsyncWrite};
-use tokio::net::TcpStream;
+use tokio::net::{TcpStream, lookup_host};
 use tokio::time::{Instant, timeout, timeout_at};
 use tokio_rustls::TlsConnector;
 use tokio_rustls::rustls::ClientConfig;
@@ -140,6 +142,95 @@ pub trait Connector: Send + Sync {
         let _ = (endpoint, route);
         Box::pin(std::future::pending())
     }
+
+    /// As [`Connector::connect`], for a relay that untrusted input named (RFC 0003 §5.14): a
+    /// loopback or unspecified host is refused. This default checks the name only. A
+    /// connector that resolves names checks every address it resolved and connects to those
+    /// addresses, so a second lookup cannot reach another one.
+    fn connect_untrusted<'a>(
+        &'a self,
+        endpoint: &'a RelayEndpoint,
+    ) -> BoxFuture<'a, io::Result<Box<dyn RelayStream>>> {
+        Box::pin(async move {
+            refuse_loopback_name(endpoint)?;
+            self.connect(endpoint).await
+        })
+    }
+}
+
+/// `inner` with every connection made as [`Connector::connect_untrusted`] makes it, for
+/// clients that reach relays untrusted input named. An onion route is not taken: the relay is
+/// reached as its name says.
+pub struct UntrustedHosts(pub Arc<dyn Connector>);
+
+impl Connector for UntrustedHosts {
+    fn connect<'a>(
+        &'a self,
+        endpoint: &'a RelayEndpoint,
+    ) -> BoxFuture<'a, io::Result<Box<dyn RelayStream>>> {
+        self.0.connect_untrusted(endpoint)
+    }
+
+    fn connect_to_onion<'a>(
+        &'a self,
+        endpoint: &'a RelayEndpoint,
+        onion: &'a DialTarget,
+    ) -> BoxFuture<'a, io::Result<Box<dyn RelayStream>>> {
+        let _ = onion;
+        self.0.connect_untrusted(endpoint)
+    }
+
+    fn connect_timeout(&self, endpoint: &RelayEndpoint, configured: Duration) -> Duration {
+        self.0.connect_timeout(endpoint, configured)
+    }
+
+    fn route(&self, endpoint: &RelayEndpoint) -> u64 {
+        self.0.route(endpoint)
+    }
+
+    fn route_changed<'a>(&'a self, endpoint: &'a RelayEndpoint, route: u64) -> BoxFuture<'a, ()> {
+        self.0.route_changed(endpoint, route)
+    }
+
+    fn connect_untrusted<'a>(
+        &'a self,
+        endpoint: &'a RelayEndpoint,
+    ) -> BoxFuture<'a, io::Result<Box<dyn RelayStream>>> {
+        self.0.connect_untrusted(endpoint)
+    }
+}
+
+impl fmt::Debug for UntrustedHosts {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("UntrustedHosts").finish_non_exhaustive()
+    }
+}
+
+fn loopback_error() -> io::Error {
+    io::Error::new(io::ErrorKind::InvalidInput, EndpointError::LoopbackHost)
+}
+
+/// Refuses an endpoint whose host name is loopback or unspecified, before any lookup.
+pub(crate) fn refuse_loopback_name(endpoint: &RelayEndpoint) -> io::Result<()> {
+    host_rule::classify_name(endpoint.domain().as_str())
+        .map(|_| ())
+        .map_err(|_| loopback_error())
+}
+
+fn refuse_onion(endpoint: &RelayEndpoint) -> io::Result<()> {
+    if endpoint
+        .domain()
+        .as_str()
+        .to_ascii_lowercase()
+        .trim_end_matches('.')
+        .ends_with(".onion")
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "an onion relay needs Tor",
+        ));
+    }
+    Ok(())
 }
 
 /// Why [`TcpConnector`] refused an endpoint without connecting. Carried inside the
@@ -149,6 +240,8 @@ pub trait Connector: Send + Sync {
 pub enum EndpointError {
     #[error("plain websocket relay is not a loopback host")]
     PlainToRemoteHost,
+    #[error("the relay host is a loopback or unspecified address")]
+    LoopbackHost,
 }
 
 /// TCP, with TLS from the given rustls configuration when the endpoint asks for it (ADR 0006).
@@ -195,22 +288,36 @@ impl Connector for TcpConnector {
         endpoint: &'a RelayEndpoint,
     ) -> BoxFuture<'a, io::Result<Box<dyn RelayStream>>> {
         Box::pin(async move {
-            if endpoint
-                .domain()
-                .as_str()
-                .to_ascii_lowercase()
-                .trim_end_matches('.')
-                .ends_with(".onion")
-            {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidInput,
-                    "an onion relay needs Tor",
-                ));
-            }
+            refuse_onion(endpoint)?;
             endpoint
                 .check_security()
                 .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
             let tcp = TcpStream::connect((endpoint.domain().as_str(), endpoint.port())).await?;
+            tcp.set_nodelay(true)?;
+            self.secure(endpoint, tcp).await
+        })
+    }
+
+    /// Resolves the name once, refuses it when any address is loopback or unspecified, and
+    /// connects to the addresses it checked. TLS still verifies the endpoint's domain.
+    fn connect_untrusted<'a>(
+        &'a self,
+        endpoint: &'a RelayEndpoint,
+    ) -> BoxFuture<'a, io::Result<Box<dyn RelayStream>>> {
+        Box::pin(async move {
+            refuse_onion(endpoint)?;
+            refuse_loopback_name(endpoint)?;
+            endpoint
+                .check_security()
+                .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
+            let name = endpoint.domain().as_str();
+            let addrs: Vec<SocketAddr> = lookup_host((name, endpoint.port())).await?.collect();
+            let ips: Vec<IpAddr> = addrs.iter().map(SocketAddr::ip).collect();
+            host_rule::classify_resolved(name, &ips).map_err(|_| loopback_error())?;
+            if addrs.is_empty() {
+                return Err(io::Error::from(io::ErrorKind::NotFound));
+            }
+            let tcp = TcpStream::connect(addrs.as_slice()).await?;
             tcp.set_nodelay(true)?;
             self.secure(endpoint, tcp).await
         })

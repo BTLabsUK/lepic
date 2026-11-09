@@ -51,5 +51,5 @@ pub use mailbox::{
 pub use prefilter::{Admission, Prefilter};
 pub use session::{
     Connector, DEFAULT_PLAIN_PORT, EndpointError, ProtocolVersion, RelayEndpoint, RelayStream,
-    Security, TcpConnector,
+    Security, TcpConnector, UntrustedHosts,
 };
