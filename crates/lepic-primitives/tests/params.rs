@@ -30,3 +30,15 @@ fn networks_display_their_lowercase_names() {
     assert_eq!(Network::Mainnet.to_string(), "mainnet");
     assert_eq!(Network::Floonet.to_string(), "floonet");
 }
+
+#[test]
+fn header_version_changes_at_each_network_first_hard_fork() {
+    for (network, fork) in [(Network::Mainnet, 9_000_000), (Network::Floonet, 25_800)] {
+        let params = network.params();
+        assert_eq!(params.first_hard_fork(), Height::new(fork));
+        assert_eq!(params.block_header_version(Height::ZERO), 6);
+        assert_eq!(params.block_header_version(Height::new(fork - 1)), 6);
+        assert_eq!(params.block_header_version(Height::new(fork)), 7);
+        assert_eq!(params.block_header_version(Height::new(u64::MAX)), 7);
+    }
+}

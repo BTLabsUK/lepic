@@ -103,6 +103,24 @@ impl ChainParams {
         ProtocolVersion::V2
     }
 
+    /// Height of the first hard fork, from which blocks carry header version 7.
+    pub const fn first_hard_fork(&self) -> Height {
+        match self.network {
+            Network::Mainnet => Height::new(MAINNET_FIRST_HARD_FORK),
+            Network::Floonet => Height::new(FLOONET_FIRST_HARD_FORK),
+        }
+    }
+
+    /// Block header version of a block at `height`: 6 below the first hard fork, 7 from it.
+    /// The table covers every height.
+    pub const fn block_header_version(&self, height: Height) -> u16 {
+        if height.value() < self.first_hard_fork().value() {
+            6
+        } else {
+            7
+        }
+    }
+
     /// Fee per unit of transaction weight that `epic-wallet` uses unless configured otherwise.
     pub const fn default_base_fee(&self) -> Fee {
         Fee::new(MILLI_EPIC)
@@ -181,6 +199,11 @@ impl ChainParams {
         )
     }
 }
+
+/// Heights at which each network's block header version changes from 6 to 7, as in the node's
+/// `consensus::header_version`. `lepic-wallet` keeps its own copy.
+const MAINNET_FIRST_HARD_FORK: u64 = 9_000_000;
+const FLOONET_FIRST_HARD_FORK: u64 = 25_800;
 
 /// Blocks in a day at the target block time of one minute.
 const DAY_HEIGHT: u64 = 1_440;
