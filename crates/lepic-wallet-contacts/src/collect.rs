@@ -97,6 +97,8 @@ pub struct CollectReport {
     /// Notices for a slate this wallet does not hold yet, kept to apply when it arrives
     /// (ADR 0049).
     pub buffered: usize,
+    /// Answers taken from the reply mailboxes of in-person codes.
+    pub in_person: usize,
 }
 
 /// Relays that keep failing wait this long before the next try, one step per failure.
@@ -532,6 +534,12 @@ where
         for ended in self.ended_since(&ended_before).await? {
             if !report.ended.contains(&ended) {
                 report.ended.push(ended);
+            }
+        }
+        match self.collect_in_person(relays).await {
+            Ok(taken) => report.in_person = taken,
+            Err(error) => {
+                warn!(error = %ErrorChain(&error), "in-person reply mailboxes not collected");
             }
         }
         if let Err(error) = self.repost_replies(relays).await {
@@ -1852,7 +1860,7 @@ fn hold_forgotten(value: &str, now: u64, patience: Duration, kept: Duration) -> 
 /// Whether `error` passes by itself: the node, a relay or the store did not answer, or the
 /// wallet is locked. A message that fails so is kept for the next cycle without counting a
 /// hold, as the payments inbox keeps one; any other failure counts.
-fn passes(error: &ContactError) -> bool {
+pub(crate) fn passes(error: &ContactError) -> bool {
     match error {
         ContactError::Offline | ContactError::EpicboxOff => true,
         ContactError::Wallet(error) => chain_passes(error),

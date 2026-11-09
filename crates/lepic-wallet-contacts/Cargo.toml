@@ -21,8 +21,10 @@ lepic-keychain.workspace = true
 lepic-legacy-slate.workspace = true
 lepic-native-slate.workspace = true
 lepic-methods = { workspace = true, features = ["epicbox"] }
+lepic-native-slate.workspace = true
 lepic-node.workspace = true
 lepic-primitives.workspace = true
+lepic-seal.workspace = true
 lepic-slate.workspace = true
 lepic-store = { workspace = true, default-features = false }
 lepic-transport.workspace = true
@@ -42,6 +44,8 @@ zeroize.workspace = true
 default = ["sqlite"]
 # Contact backups read and write the SQLite store (`lepic_store::export_contacts`).
 sqlite = ["lepic-store/sqlite", "lepic-wallet/sqlite"]
+# Codes and answers outside the in-person rules, for the wallet's tests.
+test-support = []
 
 [dev-dependencies]
 proptest = { workspace = true, features = ["std"] }

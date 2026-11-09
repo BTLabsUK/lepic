@@ -387,7 +387,11 @@ where
 
     /// Cancels the stored send `tx_id` after `cause` stopped it. A cancel that fails is logged
     /// and returned with the transaction, so the caller can cancel it again.
-    async fn give_up_send(&self, tx_id: lepic_store::TxId, cause: ContactError) -> ContactError {
+    pub(crate) async fn give_up_send(
+        &self,
+        tx_id: lepic_store::TxId,
+        cause: ContactError,
+    ) -> ContactError {
         match self.wallet.cancel(tx_id).await {
             Ok(()) => {
                 info!(tx_id = %tx_id, "send to a contact cancelled, it was not delivered");

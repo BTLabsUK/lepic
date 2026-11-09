@@ -1608,6 +1608,7 @@ dependencies = [
  "lepic-native-slate",
  "lepic-node",
  "lepic-primitives",
+ "lepic-seal",
  "lepic-slate",
  "lepic-store",
  "lepic-transport",

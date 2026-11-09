@@ -55,7 +55,7 @@ fn is_relay_name(domain: &Domain) -> bool {
 }
 
 /// The domain and optional port of `host`, `domain[:port]`.
-fn parse_host(host: &str) -> Result<(Domain, Option<u16>), ContactError> {
+pub(crate) fn parse_host(host: &str) -> Result<(Domain, Option<u16>), ContactError> {
     let (domain, port) = match host.rsplit_once(':') {
         Some((domain, port)) => (
             domain,

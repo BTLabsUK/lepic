@@ -16,6 +16,10 @@ mod check;
 mod collect;
 mod domain;
 mod hex;
+mod in_person;
+#[cfg(feature = "test-support")]
+#[doc(hidden)]
+pub mod in_person_testing;
 mod invoices;
 mod key_schedule;
 mod keycheck;
@@ -52,6 +56,10 @@ use thiserror::Error;
 
 pub use collect::{CollectReport, CollectTrigger};
 pub use domain::{DOMAIN_FILE_MAX, DomainFile, DomainRefused, DomainSigner, DomainVerdict, verify};
+pub use in_person::{
+    IN_PERSON_TTL_BLOCKS, InPersonAnswerView, InPersonCode, InPersonCodeView,
+    InPersonInvoiceRequest, InPersonPaid, InPersonRead, InPersonRefusal, InPersonTaken,
+};
 pub use invoices::{ContactInvoice, InvoiceDetails, SAME_AMOUNT_WINDOW};
 pub use key_schedule::{
     BOX_SALT_LEN, ContactKeyError, ContactKeys, ContactRoot, PRIVATE_SLOT_BASE, ReplyKey,
@@ -436,6 +444,12 @@ pub enum ContactError {
     /// The contact claimed no domain in its pairing, or its stored claim cannot be read.
     #[error("the contact claimed no domain")]
     NoDomainClaim,
+    /// A `lepic.v1` slate was refused.
+    #[error("the slate code was refused")]
+    Native(#[source] lepic_native_slate::NativeError),
+    /// An in-person code or answer was refused.
+    #[error("in-person slate refused: {0}")]
+    InPerson(InPersonRefusal),
 }
 
 impl From<StoreError> for ContactError {

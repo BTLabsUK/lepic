@@ -36,7 +36,7 @@ default = ["sqlite"]
 sqlite = ["lepic-store/sqlite"]
 
 [dev-dependencies]
-lepic-wallet-contacts.workspace = true
+lepic-wallet-contacts = { workspace = true, features = ["test-support"] }
 insta.workspace = true
 proptest = { workspace = true, features = ["std"] }
 lepic-epicbox = { workspace = true, features = ["mock-relay"] }
