@@ -374,6 +374,7 @@ impl Party {
             None,
             WalletPolicy::default(),
             PortsMethods::Recording,
+            false,
             node,
             relay,
             runtime,
@@ -381,7 +382,8 @@ impl Party {
     }
 
     /// As [`Self::with_profile`], the wallet claiming `domain` in the cards it sends,
-    /// configured with `policy` and with `methods` in its ports.
+    /// configured with `policy`, with `methods` in its ports and sending native slates to
+    /// contacts that take them with `native_direct`.
     #[allow(clippy::too_many_arguments)]
     fn with_domain(
         mnemonic: &str,
@@ -391,6 +393,7 @@ impl Party {
         domain: Option<&str>,
         policy: WalletPolicy,
         methods: PortsMethods,
+        native_direct: bool,
         node: &MockNode,
         relay: &MockRelay,
         runtime: &tokio::runtime::Runtime,
@@ -437,7 +440,7 @@ impl Party {
             host_features: 0,
             profile,
             domain: domain.map(str::to_owned),
-            native_direct: false,
+            native_direct,
         };
         let wallet = Wallet::new(config, ports).unwrap();
         lepic_wallet_contacts::install(&wallet);
@@ -647,6 +650,7 @@ impl World {
             WalletPolicy::default(),
             WalletPolicy::default(),
             PortsMethods::Recording,
+            (false, false),
         )
     }
 
@@ -658,6 +662,7 @@ impl World {
             policy,
             WalletPolicy::default(),
             PortsMethods::Recording,
+            (false, false),
         )
     }
 
@@ -669,6 +674,7 @@ impl World {
             WalletPolicy::default(),
             policy,
             PortsMethods::Recording,
+            (false, false),
         )
     }
 
@@ -681,6 +687,7 @@ impl World {
             WalletPolicy::default(),
             WalletPolicy::default(),
             PortsMethods::Recording,
+            (false, false),
         )
     }
 
@@ -692,6 +699,20 @@ impl World {
             WalletPolicy::default(),
             WalletPolicy::default(),
             methods,
+            (false, false),
+        )
+    }
+
+    /// As [`Self::new`], each wallet sending native slates to contacts that take them when its
+    /// flag is set, the issuer's configured with `issuer_policy`.
+    pub fn with_native(issuer: bool, payer: bool, issuer_policy: WalletPolicy) -> Self {
+        Self::with_parties(
+            (0, None),
+            (0, None),
+            issuer_policy,
+            WalletPolicy::default(),
+            PortsMethods::Recording,
+            (issuer, payer),
         )
     }
 
@@ -701,6 +722,7 @@ impl World {
         issuer_policy: WalletPolicy,
         payer_policy: WalletPolicy,
         issuer_methods: PortsMethods,
+        native_direct: (bool, bool),
     ) -> Self {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -725,6 +747,7 @@ impl World {
             issuer.1,
             issuer_policy,
             issuer_methods,
+            native_direct.0,
             &node,
             &relay,
             &runtime,
@@ -737,6 +760,7 @@ impl World {
             payer.1,
             payer_policy,
             PortsMethods::Recording,
+            native_direct.1,
             &node,
             &relay,
             &runtime,

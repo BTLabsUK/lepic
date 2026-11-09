@@ -256,3 +256,139 @@ where
         }))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use lepic_contact::{
+        Capabilities, CardFields, ContactKind, ContactName, EncodeError, HintKey, MAX_BODY_LEN,
+        MailboxAddress,
+    };
+    use lepic_crypto::Commitment;
+    use lepic_native_slate::{OutputView, SlateView};
+
+    use super::*;
+
+    /// A source of the same byte, enough for a seal that fails before it draws.
+    struct FixedRng;
+
+    impl rand_core::TryRng for FixedRng {
+        type Error = core::convert::Infallible;
+
+        fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
+            Ok(7)
+        }
+
+        fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
+            Ok(7)
+        }
+
+        fn try_fill_bytes(&mut self, dst: &mut [u8]) -> Result<(), Self::Error> {
+            dst.fill(7);
+            Ok(())
+        }
+    }
+
+    impl rand_core::TryCryptoRng for FixedRng {}
+
+    /// The floonet S2 of the `slates_native` vectors with `extra` more outputs, as V3 JSON.
+    fn s2_with_outputs(extra: usize) -> Vec<u8> {
+        let text =
+            include_str!("../../../testdata/vectors/slates_native/send_file_plain_s2_floonet.json");
+        let vector: serde_json::Value = serde_json::from_str(text).unwrap();
+        let mut view: SlateView =
+            serde_json::from_value(vector["expected"]["view"].clone()).unwrap();
+        let proof = view.outputs[0].proof.clone();
+        // A fee the outputs pay for.
+        view.fee = "1000000000".to_owned();
+        // Commitments on the curve, each one new to the slate.
+        let commitments = (0u16..)
+            .map(|n| {
+                let mut bytes = [0u8; 33];
+                bytes[0] = 0x08;
+                bytes[1..3].copy_from_slice(&n.to_be_bytes());
+                bytes
+            })
+            .filter_map(|bytes| Commitment::from_bytes(&bytes).ok())
+            .map(|commitment| {
+                commitment
+                    .as_bytes()
+                    .iter()
+                    .map(|byte| format!("{byte:02x}"))
+                    .collect::<String>()
+            })
+            .filter(|commitment| {
+                view.outputs
+                    .iter()
+                    .all(|held| held.commitment != *commitment)
+            })
+            .take(extra)
+            .collect::<Vec<_>>();
+        view.outputs
+            .extend(commitments.into_iter().map(|commitment| OutputView {
+                features: "plain".to_owned(),
+                commitment,
+                proof: proof.clone(),
+            }));
+        let (network, native) = view.into_native().unwrap();
+        let (slate, _) = native.into_parts();
+        let context = EncodeContext {
+            block_header_version: network.params().block_header_version(slate.height()),
+        };
+        legacy_codecs(network)
+            .unwrap()
+            .encode(LEGACY_V3_JSON, &slate, &context)
+            .unwrap()
+            .unwrap()
+            .as_bytes()
+            .to_vec()
+    }
+
+    fn card(signing: &SigningKey) -> ContactCard {
+        let fields = CardFields {
+            kind: ContactKind::Person,
+            name: ContactName::new("Anna").unwrap(),
+            enc_key: EncSecretKey::from_bytes([3; 32]).public_key(),
+            sig_key: signing.verifying_key(),
+            hint_key: HintKey::from_bytes([3; 32]),
+            mailbox: MailboxAddress::new(
+                "es7Rq2XGuB2GAqa4CqLwBPeZVsSnktXTQtCbdNuf9nvYv7bATYwM@relay.test:80",
+            )
+            .unwrap(),
+            payments_address: None,
+            home_onion: None,
+            caps: Capabilities::default(),
+            max_envelope_version: 1,
+            seq: 1,
+        };
+        ContactCard::sign(lepic_contact::Network::Floonet, fields, signing).unwrap()
+    }
+
+    /// A slate whose `lepic.v1` bytes exceed an envelope body is refused before it is sealed,
+    /// with the limit and the length it found.
+    #[test]
+    fn a_native_slate_over_the_body_limit_is_refused() {
+        let signing = SigningKey::from_bytes(&[3; 32]);
+        let card = card(&signing);
+        let seal = |v3: Vec<u8>| {
+            seal_native(
+                Network::Floonet,
+                &card,
+                Content::new(MessageType::Slate, v3),
+                &signing,
+                &mut LockedRng(&mut FixedRng),
+            )
+        };
+        let fits = s2_with_outputs(80);
+        assert!(native_body(Network::Floonet, &fits).unwrap().len() <= MAX_BODY_LEN);
+        assert!(seal(fits).is_ok());
+
+        let large = s2_with_outputs(100);
+        let found = native_body(Network::Floonet, &large).unwrap().len();
+        assert!(found > MAX_BODY_LEN);
+        assert!(matches!(
+            seal(large),
+            Err(ContactError::Encode(EncodeError::BodyTooLarge { limit, found: got }))
+                if limit == MAX_BODY_LEN && got == found
+        ));
+    }
+}
