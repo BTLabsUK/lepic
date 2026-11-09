@@ -391,4 +391,162 @@ mod tests {
                 if limit == MAX_BODY_LEN && got == found
         ));
     }
+
+    /// The V3 JSON of the `slates_native` vector `name` with `inputs` and `outputs` more
+    /// entries, as LEPIC encodes it, with a fee that pays for them.
+    fn vector_with(name: &str, inputs: usize, outputs: usize) -> Vec<u8> {
+        let path = format!(
+            "{}/../../testdata/vectors/slates_native/{name}.json",
+            env!("CARGO_MANIFEST_DIR")
+        );
+        let vector: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+        let mut slate: serde_json::Value =
+            serde_json::from_str(vector["inputs"]["v3_json"].as_str().unwrap()).unwrap();
+        if inputs > 0 || outputs > 0 {
+            let body = &mut slate["tx"]["body"];
+            let proof = body["outputs"][0]["proof"].clone();
+            let held = |entries: &serde_json::Value| -> Vec<String> {
+                entries
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|entry| entry["commit"].as_str().unwrap().to_owned())
+                    .collect()
+            };
+            let mut taken = held(&body["inputs"]);
+            taken.extend(held(&body["outputs"]));
+            let mut fresh = (0u16..)
+                .map(|n| {
+                    let mut bytes = [0u8; 33];
+                    bytes[0] = 0x09;
+                    bytes[1..3].copy_from_slice(&n.to_be_bytes());
+                    bytes
+                })
+                .filter_map(|bytes| Commitment::from_bytes(&bytes).ok())
+                .map(|commitment| {
+                    commitment
+                        .as_bytes()
+                        .iter()
+                        .map(|byte| format!("{byte:02x}"))
+                        .collect::<String>()
+                })
+                .filter(|commitment| !taken.contains(commitment));
+            for commit in fresh.by_ref().take(inputs) {
+                body["inputs"]
+                    .as_array_mut()
+                    .unwrap()
+                    .push(serde_json::json!({ "features": "Plain", "commit": commit }));
+            }
+            for commit in fresh.take(outputs) {
+                body["outputs"].as_array_mut().unwrap().push(
+                    serde_json::json!({ "features": "Plain", "commit": commit, "proof": proof }),
+                );
+            }
+            for kernel in body["kernels"].as_array_mut().unwrap() {
+                kernel["fee"] = serde_json::json!("100000000000");
+            }
+            slate["fee"] = serde_json::json!("100000000000");
+        }
+        let decoded = legacy_codecs(Network::Floonet)
+            .unwrap()
+            .decode(&WireSlate::binary(
+                MediaType::JSON,
+                serde_json::to_vec(&slate).unwrap(),
+            ))
+            .unwrap();
+        let context = EncodeContext {
+            block_header_version: Network::Floonet
+                .params()
+                .block_header_version(decoded.height()),
+        };
+        legacy_codecs(Network::Floonet)
+            .unwrap()
+            .encode(LEGACY_V3_JSON, &decoded, &context)
+            .unwrap()
+            .unwrap()
+            .as_bytes()
+            .to_vec()
+    }
+
+    /// Prints, for slates of each stage, the `lepic.v1` and V3 JSON lengths and the length of
+    /// each sealed, signed contact envelope (type `01` with V3, type `0A` with `lepic.v1`, both
+    /// padded), and the armored text of the `0A` one. Run with `--nocapture` to see the table.
+    #[test]
+    fn sizes_of_native_and_v3_slate_envelopes() {
+        let signing = SigningKey::from_bytes(&[3; 32]);
+        let card = card(&signing);
+        let rows = [
+            ("S1 plain", "send_file_plain_s1_floonet", 0, 0),
+            ("S1 with proof", "send_file_payment_proof_s1_floonet", 0, 0),
+            (
+                "S1 three change outputs",
+                "send_file_three_change_outputs_s1_floonet",
+                0,
+                0,
+            ),
+            ("S1 +9 inputs", "send_file_plain_input_s1_floonet", 9, 0),
+            ("S1 +99 inputs", "send_file_plain_input_s1_floonet", 99, 0),
+            ("S2 plain", "send_file_plain_s2_floonet", 0, 0),
+            ("S2 with proof", "send_file_payment_proof_s2_floonet", 0, 0),
+            ("S2 +99 inputs", "send_file_plain_input_s2_floonet", 99, 0),
+            ("I1 plain", "invoice_file_plain_i1_floonet", 0, 0),
+            ("I1 with messages", "invoice_file_messages_i1_floonet", 0, 0),
+            ("I2 plain", "invoice_file_plain_i2_floonet", 0, 0),
+            ("I2 +9 inputs", "invoice_file_plain_i2_floonet", 9, 0),
+            ("I2 +99 inputs", "invoice_file_plain_i2_floonet", 99, 0),
+            (
+                "I2 +9 inputs +2 outputs",
+                "invoice_file_plain_i2_floonet",
+                9,
+                2,
+            ),
+        ];
+        println!(
+            "| Slate | inputs/outputs (V3) | lepic.v1 | V3 JSON | 01 envelope | 0A envelope | 0A text |"
+        );
+        println!("|---|---|---|---|---|---|---|");
+        for (label, name, inputs, outputs) in rows {
+            let v3 = vector_with(name, inputs, outputs);
+            let slate: serde_json::Value = serde_json::from_slice(&v3).unwrap();
+            let counts = |key: &str| slate["tx"]["body"][key].as_array().unwrap().len();
+            let native = native_body(Network::Floonet, &v3).unwrap();
+            let mut content = Content::new(MessageType::Slate, v3.clone());
+            content.sent_at = Some(1_800_000_000);
+            // A request carries the key its answer is sealed to.
+            if label.starts_with("S1") || label.starts_with("I1") {
+                content.reply_key = Some(EncSecretKey::from_bytes([5; 32]).public_key());
+            }
+            let v3_envelope = lepic_contact::seal(
+                lepic_contact::Network::Floonet,
+                card.enc_key(),
+                card.hint_rule(),
+                &content,
+                Some(&signing),
+                &mut FixedRng,
+            )
+            .unwrap();
+            let native_envelope = seal_native(
+                Network::Floonet,
+                &card,
+                content,
+                &signing,
+                &mut LockedRng(&mut FixedRng),
+            )
+            .unwrap();
+            let text = armor_slate(&native_envelope, true);
+            println!(
+                "| {label} | {}/{} | {} | {} | {} | {} | {} |",
+                counts("inputs"),
+                counts("outputs"),
+                native.len(),
+                v3.len(),
+                v3_envelope.len(),
+                native_envelope.len(),
+                text.len(),
+            );
+            assert!(native.len() < v3.len());
+            assert!(native_envelope.len() < v3_envelope.len());
+        }
+    }
 }
