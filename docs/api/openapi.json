@@ -5695,7 +5695,7 @@
               "string",
               "null"
             ],
-            "description": "How the slate went: `legacy` JSON, or `native` over Epicbox (RFC 0003 11.1). Null for a\nrepeat, which sent nothing."
+            "description": "How the slate went: `legacy` JSON, or `native` over Epicbox (RFC 0003 11.1) or to a\nlistener's native endpoint. Null for a repeat, which sent nothing."
           },
           "repeated": {
             "type": "boolean",
