@@ -89,52 +89,32 @@ The reader refuses, with distinct errors:
 
 ## Age and network
 
-A code says nothing of its age or its network; the slate inside does, through its TTL. An I1
-the binding issues (`issue_invoice_slate`, `issue_invoice_file`) carries a TTL cutoff 1,440
-blocks, a day, above the issuer's tip, as the binding's sends carry their limit. A LEPIC payer
-refuses one from 10 blocks before its cutoff (`PaymentExpired`) and one whose cutoff lies
-more than 2,880 blocks above its tip (`InvoiceNotForThisChain`), which a request from a
-network with a longer chain has. A floonet request read on mainnet has its cutoff millions of
-blocks below the tip; one whose cutoff lies more than 525,600 blocks, a year, below the tip is
-refused as `InvoiceNotForThisChain` too, and one that expired more recently as
-`PaymentExpired`. Nothing is stored in any of these cases. An I1 without a TTL, from an older
-app or the CLI, is paid as before.
+A code says nothing of its age or its network. The slate inside does, through its TTL. The rules
+a LEPIC payer applies to an I1's cutoff (the 10-block margin and the lead and lag limits) and the
+codes they raise are in [states.md](states.md). An I1 without a TTL has no margin and no limit.
 
-The issuer refuses to finalize a payment from 10 blocks before the cutoff on and to retry a
-failed post from the cutoff on, and the payer releases a payment its node holds no kernel of
-10 blocks after the cutoff, so nodes a few blocks apart never let a payer spend inputs its issuer posted
-(`states.md`).
-
-## Worked example
-
-The S1 and S2 of the `send_file_plain` slate vectors (`testdata/vectors/slates`), at three
-fragment lengths. The payload is the CBOR map with the compressed slate; QR versions are the
-smallest at level L that hold the longest part in alphanumeric mode.
-
-| Slate | JSON | Payload | Fragment limit | Fragments | Parts written | Longest part | QR version |
-|---|---|---|---|---|---|---|---|
-| S1 | 2426 B | 1263 B | 150 B | 9 | 27 | 337 characters | 10 |
-| S1 | 2426 B | 1263 B | 200 B | 7 | 21 | 415 characters | 11 |
-| S1 | 2426 B | 1263 B | 250 B | 6 | 18 | 475 characters | 12 |
-| S2 | 4248 B | 2243 B | 150 B | 15 | 45 | 356 characters | 10 |
-| S2 | 4248 B | 2243 B | 200 B | 12 | 36 | 430 characters | 11 |
-| S2 | 4248 B | 2243 B | 250 B | 9 | 27 | 555 characters | 13 |
-
-At 200 bytes, the S1 becomes 7 fragments of 181 bytes, written as parts `UR:EPIC-SLATE/1-7/...`
-to `UR:EPIC-SLATE/7-7/...` and fountain parts `UR:EPIC-SLATE/8-7/...` to
-`UR:EPIC-SLATE/21-7/...`. A scanner that caught all 7 pure parts holds the slate, and so does
-one that missed a pure part but caught a fountain part whose other fragments it already has. A short JSON text such as
-`{"amount":"1"}` fits one fragment and is a single-part code.
+## Example
 
 `crates/lepic-slate/tests/snapshots/ur_slate__small_encodings.snap` records the exact codes of a
-short text in both forms.
+short text in both forms. At a fragment length of 200 bytes,
+`{"id":"0436430c-2b02-624c-2032-570501212b00","amount":"1000000"}` is the single-part code
+
+```text
+UR:EPIC-SLATE/OEADADAOHDFHCALEESBALADYBESSZEEYECDNSNCKASBGRSVYISDELAAMDRMWRSIOBZHGMTVWCTVDLYAHBNPEVYUOSKENNYGHLUEERDGANLHKPDOLNLLDASWMYKKEYLNDRSJPLATBADCPAESNYT
+```
+
+At a fragment length of 24 bytes it is 3 fragments, written as parts `UR:EPIC-SLATE/1-3/...`
+to `UR:EPIC-SLATE/3-3/...` and 10 fountain parts, `UR:EPIC-SLATE/4-3/...` to
+`UR:EPIC-SLATE/13-3/...`. A scanner that caught all 3 pure parts holds the slate. One that missed
+a pure part recovers it from a fountain part whose other fragments it already has.
 
 ## Version 2
 
 Version 2 carries a native `lepic.v1` slate or an envelope as bytes, nothing compressed
-(RFC 0003 §5.18). Version 1 is unchanged and keeps its payload, codes and limits as written
-above; `lepic_slate::ur_slate` reads and writes both, version 1 through `encode_ur_slate` and
-`decode_ur_slate`, version 2 through `encode_ur_binary` and `decode_ur_parts`.
+(RFC 0003 §5.18). It has the same UR type, framing and case as version 1. `lepic_slate::ur_slate`
+reads and writes both versions: version 1 through `encode_ur_slate` and `decode_ur_slate`,
+version 2 through `encode_ur_binary` and `decode_ur_parts`. The binding uses version 2 for the
+codes and answers of the in-person flow.
 
 ### Payload
 
