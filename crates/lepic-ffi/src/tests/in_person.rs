@@ -84,13 +84,20 @@ async fn a_contact_shows_native_slates_only_with_native_slates_on() {
     let mut world = World::new();
     let anna = reopened(&mut world, true).await;
     let ben = reopened(&mut world, false).await;
+    let cara = reopened(&mut world, true).await;
+    let dina = reopened(&mut world, true).await;
+    // A wallet with native slates off claims none, and shows none.
     pair(&anna, &ben).await;
     let anna_view = anna.contacts().await.unwrap();
     assert_eq!(anna_view.len(), 1);
-    assert!(anna_view[0].native_slates);
+    assert!(!anna_view[0].native_slates);
     let ben_view = ben.contacts().await.unwrap();
     assert_eq!(ben_view.len(), 1);
     assert!(!ben_view[0].native_slates);
+    // Two wallets with it on claim it to each other.
+    pair(&cara, &dina).await;
+    assert!(cara.contacts().await.unwrap()[0].native_slates);
+    assert!(dina.contacts().await.unwrap()[0].native_slates);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -234,6 +241,8 @@ async fn an_in_person_send_takes_its_ttl_from_the_app_and_refuses_a_short_one() 
         .in_person_send(EPIC / 10, 1, None, None, None, Offline)
         .await
         .unwrap();
+    // The one coin is locked by the first send; cancelling it frees the coin.
+    sender.cancel_transaction(default.tx_id).await.unwrap();
     let eleven = sender
         .in_person_send(EPIC / 10, 1, None, None, Some(11), Offline)
         .await
