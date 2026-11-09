@@ -43,7 +43,7 @@ use crate::codecs;
 use crate::epicbox_invoice::epicbox_invoice_payment;
 use crate::error::WalletError;
 use crate::event::{Balance, Event, SlateId, SupersededReceive};
-use crate::finalize::kernel_excess;
+use crate::finalize::answered_excess;
 use crate::invoice::{earliest_cutoff, payer_release_height};
 use crate::lifecycle::Session;
 use crate::other_wallet;
@@ -1471,8 +1471,7 @@ fn kernel_lookups(
 
 /// The kernel excess of the final slate stored for a transaction, and the height the slate was
 /// created at, below which the kernel cannot be. An invoice payer never receives the I3, so its
-/// excess is computed from the stored I2, which already holds every input, output and the final
-/// offset, as `epic-wallet` does when it locks the payer's outputs.
+/// excess is taken from the stored I2, which holds both parties' public excesses.
 pub(crate) fn final_kernel(
     repos: &dyn Repositories,
     codecs: &CodecRegistry,
@@ -1488,7 +1487,7 @@ pub(crate) fn final_kernel(
     }
     let payment = stored_slate(repos, codecs, tx_id, slate_id, SlateStage::Invoice2)?;
     Ok(payment.and_then(|slate| {
-        kernel_excess(&slate)
+        answered_excess(&slate)
             .ok()
             .map(|excess| (excess, slate.height()))
     }))
@@ -1496,8 +1495,8 @@ pub(crate) fn final_kernel(
 
 /// The kernel of a transaction the peer may still complete without this wallet, and the height
 /// below which it cannot be: one finalized here, an invoice payment once its I2 exists, and a
-/// received payment once its S2 exists. The S2 holds every input, output and the final offset,
-/// so the excess the sender finalizes to is computed from it, as for the I2.
+/// received payment once its S2 exists. The S2 holds both parties' public excesses, so the
+/// excess the sender finalizes to is taken from it, as for the I2.
 pub(crate) fn pending_kernel(
     repos: &dyn Repositories,
     codecs: &CodecRegistry,
@@ -1514,7 +1513,7 @@ pub(crate) fn pending_kernel(
         (TxDirection::Incoming, TxState::Received) => {
             let reply = stored_slate(repos, codecs, stored.id, slate_id, SlateStage::Standard2)?;
             Ok(reply.and_then(|slate| {
-                kernel_excess(&slate)
+                answered_excess(&slate)
                     .ok()
                     .map(|excess| (excess, slate.height()))
             }))

@@ -47,7 +47,7 @@ use crate::event::{
     CancelledPayment, DeclinedInvoice, DeclinedPayment, Event, PostedInvoice, PostedPayment,
     UnmatchedNotice, WithdrawnInvoice,
 };
-use crate::finalize::kernel_excess;
+use crate::finalize::answered_excess;
 use crate::inbox::{Handled, Hold};
 use crate::invoice::check_signed_payment;
 use crate::notice::{Notice, NoticeKind};
@@ -398,7 +398,7 @@ fn report_posted(
         return Ok(Effect::Dropped);
     };
     let expected = stored_slate(repos, codecs, tx_id, slate_id, SlateStage::Standard2)?
-        .and_then(|reply| kernel_excess(&reply).ok());
+        .and_then(|reply| answered_excess(&reply).ok());
     if expected != Some(excess) {
         return Ok(Effect::Dropped);
     }

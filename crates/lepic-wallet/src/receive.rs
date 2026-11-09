@@ -667,7 +667,13 @@ fn build_response(
             if &key.verifying_key().to_bytes() != proof.receiver_address.as_bytes() {
                 return Err(ReceiveError::ForeignProofAddress);
             }
-            let excess = kernel_excess(&slate, &output)?;
+            // A native S1 carries no body; the excess the kernel will have is then the sum
+            // of both parties' public excesses.
+            let excess = if slate.inputs().is_empty() {
+                Commitment::from_public_key(&excess_sum).map_err(ReceiveError::Signing)?
+            } else {
+                kernel_excess(&slate, &output)?
+            };
             let mut signed = Vec::with_capacity(8 + Commitment::LEN + 32);
             signed.extend_from_slice(&amount.to_be_bytes());
             signed.extend_from_slice(excess.as_bytes());

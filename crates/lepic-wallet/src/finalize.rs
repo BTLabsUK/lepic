@@ -401,6 +401,32 @@ fn check_fee(slate: &Slate, base_fee: Fee) -> Result<(), FinalizeError> {
     Ok(())
 }
 
+/// The kernel excess of an answered or final slate, from the participants' public excesses (the
+/// body of a native proposal is not carried, so a stored answer may lack the other party's
+/// inputs and outputs). For an honest slate this is [`kernel_excess`]; a slate with fewer than
+/// two participants falls back to it.
+pub(crate) fn answered_excess(slate: &Slate) -> Result<Commitment, FinalizeError> {
+    match participant_excess(slate) {
+        Some(excess) => Ok(excess),
+        None => kernel_excess(slate),
+    }
+}
+
+/// The sum of the participants' public blind excesses as a commitment to zero, when both
+/// parties are on the slate.
+pub(crate) fn participant_excess(slate: &Slate) -> Option<Commitment> {
+    let keys: Vec<PublicKey> = slate
+        .participants()
+        .map(|(_, participant)| participant.public_blind_excess)
+        .collect();
+    if keys.len() < 2 {
+        return None;
+    }
+    PublicKey::sum(&keys)
+        .and_then(|sum| Commitment::from_public_key(&sum))
+        .ok()
+}
+
 /// `calc_excess`: the outputs plus the fee, less the inputs and the offset.
 pub(crate) fn kernel_excess(slate: &Slate) -> Result<Commitment, FinalizeError> {
     let body = TransactionBody::from_parts(
@@ -1335,6 +1361,53 @@ mod tests {
         let mut json = json.clone();
         change(&mut json);
         decode(&json)
+    }
+
+    /// Every answered or final V2/V3 slate the vectors hold: the participants' public excesses
+    /// sum to the excess the body gives, so a reader may take either.
+    #[test]
+    fn the_participants_sum_to_the_body_excess_in_every_answered_vector() {
+        let dir =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../testdata/vectors/slates");
+        let codecs = codecs::legacy(Network::Floonet.params().default_base_fee());
+        let mut checked = 0;
+        for entry in std::fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            let vector: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap())
+                .unwrap_or(Value::Null);
+            let inputs = &vector["inputs"];
+            let answered =
+                ["S2", "S3", "I2", "I3"].contains(&inputs["stage"].as_str().unwrap_or(""));
+            let legacy = ["v2", "v3"].contains(&inputs["encoding"].as_str().unwrap_or(""));
+            let Some(json) = vector["expected"]["json"].as_str() else {
+                continue;
+            };
+            if !answered || !legacy {
+                continue;
+            }
+            let slate = codecs
+                .decode(&WireSlate::text(MediaType::JSON, json.to_owned()))
+                .unwrap();
+            assert_eq!(
+                participant_excess(&slate),
+                Some(kernel_excess(&slate).unwrap()),
+                "{}",
+                path.display()
+            );
+            assert_eq!(answered_excess(&slate).ok(), kernel_excess(&slate).ok());
+            if let Some(kernel) = slate.kernel() {
+                assert_eq!(kernel.excess, kernel_excess(&slate).unwrap());
+            }
+            checked += 1;
+        }
+        assert_eq!(checked, 72);
+    }
+
+    #[test]
+    fn a_slate_with_one_participant_takes_the_body_excess() {
+        let s1 = decode(&slate_json(S1));
+        assert_eq!(participant_excess(&s1), None);
+        assert_eq!(answered_excess(&s1).ok(), kernel_excess(&s1).ok());
     }
 
     #[test]

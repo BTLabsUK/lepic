@@ -16,7 +16,7 @@ use lepic_store::{Repositories, SlateStage, StoreError, StoredSlate, TxId};
 use uuid::Uuid;
 
 use crate::details::{SlateMessage, verified_messages};
-use crate::finalize::kernel_excess;
+use crate::finalize::answered_excess;
 use crate::refresh::decode_stored;
 
 /// The decoded stages of each slate a history read looked at, by slate id. It holds no more
@@ -131,7 +131,7 @@ impl Decoded {
         Self {
             kernel: slate.kernel().map(|kernel| kernel.excess),
             payer_excess: (stage == SlateStage::Invoice2)
-                .then(|| kernel_excess(slate).ok())
+                .then(|| answered_excess(slate).ok())
                 .flatten(),
             height: slate.height(),
             ttl_cutoff_height: slate.ttl_cutoff_height(),
