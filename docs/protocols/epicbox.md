@@ -6,11 +6,14 @@ pairing and contact mailboxes of [pairing](pairing.md). This guide covers the ad
 message encryption, the websocket frames, listening and draining, notices, and the rules for a
 message the wallet cannot take yet. LEPIC speaks the protocol of `epic-wallet` `v4.0.2` and
 relay protocol `3.0.0`. The behaviour of other clients and relays is in the
-[Epicbox compatibility notes](../compat/epicbox.md).
+[Epicbox compatibility notes](../compat/epicbox.md). Contact and pairing mailboxes are specified
+in [RFC 0002 §8](../rfcs/0002-contact-pairing.md#8-mailboxes-and-the-home-relay), and native
+slates at the payments address in
+[RFC 0003 §11](../rfcs/0003-epictx-native-slates.md#11-native-slates-over-epicbox).
 
 | Crate | Holds |
 |---|---|
-| `lepic-epicbox` | Addresses, message crypto, frames, the relay client, one-off mailbox drains, tunnels |
+| [`lepic-epicbox`](../../crates/lepic-epicbox/README.md) | Addresses, message crypto, frames, the relay client, one-off mailbox drains, tunnels |
 | `lepic-methods` (`epicbox`) | The Epicbox method: format policy, notice lengths, listing addresses |
 | `lepic-wallet` | The inbox: what each message does, notices, holds |
 | `lepic-wallet-contacts` | Pairing and contact mailboxes, quarantine |
@@ -193,7 +196,8 @@ no acknowledgement and keeps the message.
 
 ### Mailbox drains
 
-`MailboxClient::drain_once` reads mailboxes that are not the wallet's own address. A
+`MailboxClient::drain_once` reads mailboxes that are not the wallet's own address
+([RFC 0002 §8.2](../rfcs/0002-contact-pairing.md#82-one-off-drains)). A
 `MailboxHandler` answers each message:
 
 - `Handled::Stored` acknowledges it;
