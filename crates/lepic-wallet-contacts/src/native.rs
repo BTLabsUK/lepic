@@ -11,7 +11,8 @@
 
 use lepic_contact::{
     ContactCard, Content, DecodeError, EncSecretKey, KeyClass, MessageType, Opened, SealedEnvelope,
-    SigningKey, TxContent, TxKey, TxOpened, VerifyingKey, armor, armor_tx, seal, seal_padded, seal_tx,
+    SigningKey, TxContent, TxKey, TxOpened, VerifyingKey, armor, armor_tx, seal, seal_padded,
+    seal_tx,
 };
 use lepic_legacy_slate::v3_json::LEGACY_V3_JSON;
 use lepic_native_slate::{NativeSlate, Tail};

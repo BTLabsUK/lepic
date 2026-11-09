@@ -4,8 +4,8 @@
 //! method reaches the listener. Sealing and opening the envelopes is the caller's.
 
 use lepic_peer::{
-    AddressClass, Advert, FORMAT_LEPIC_V1, Origin, OriginError, PROTOCOL, PeerClient, PeerClientError,
-    PeerTarget, WebScheme,
+    AddressClass, Advert, FORMAT_LEPIC_V1, Origin, OriginError, PROTOCOL, PeerClient,
+    PeerClientError, PeerTarget, WebScheme,
 };
 use lepic_transport::transport::{BoxFuture, Destination};
 use thiserror::Error;

@@ -67,8 +67,8 @@ use crate::api::types::{
     LegacyImportStatus, ListenerEvent, ListenerEventKind, ListingRef, NodeRoute, NodeTip,
     OutputCategory, OutputStatus, PeerCompat, ReceivedSlate, ScanFound, ScanProgress, ScanResult,
     SelfInputs, SelfOutputs, SelfSendRequest, SelfSentTx, SendOptions, SentTx, Slate, SlateMessage,
-    SlateStage, SlateWire, TransactionDetails, TransportConnection, TransportState, TxOrigin, TxStatus,
-    WalletConfig, WalletEvent, WalletEventKind, WalletOutput, WalletSummary,
+    SlateStage, SlateWire, TransactionDetails, TransportConnection, TransportState, TxOrigin,
+    TxStatus, WalletConfig, WalletEvent, WalletEventKind, WalletOutput, WalletSummary,
 };
 use crate::boundary::InFlight;
 use crate::frb_generated::StreamSink;

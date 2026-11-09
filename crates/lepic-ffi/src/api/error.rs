@@ -438,9 +438,7 @@ impl WalletErrorKind {
 /// In Dart `toString` prints the kind, the code and the message, so a log line or an
 /// unhandled exception names the failure.
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[frb(
-    dart_code = "@override String toString() => 'WalletError(${kind.name}, $code): $message';"
-)]
+#[frb(dart_code = "@override String toString() => 'WalletError(${kind.name}, $code): $message';")]
 pub struct WalletError {
     pub kind: WalletErrorKind,
     /// `kind.code()`, for apps that store or transmit the error.

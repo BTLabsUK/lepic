@@ -31,10 +31,10 @@ use super::{ContactError, ContactRelays, LockedRng, RelayMode};
 use crate::{ContactBook, file_method};
 use lepic_methods::epicbox::NOTICE_LENGTHS;
 use lepic_primitives::error_chain::ErrorChain;
+use lepic_wallet::SlateFormat;
 use lepic_wallet::event::{ContactInvoiceEvent, ContactSlateEvent, Event};
 use lepic_wallet::invoice::{InvoiceError, InvoiceRequest, IssuedInvoice, PaidInvoice, PayRequest};
 use lepic_wallet::notice::{Notice, NoticeKind, Payload, classify_text};
-use lepic_wallet::SlateFormat;
 use lepic_wallet::ports::{SecretVault, StoreOpener};
 use lepic_wallet::receive::{ReceiveError, ReceiveRequest, legacy_codecs};
 

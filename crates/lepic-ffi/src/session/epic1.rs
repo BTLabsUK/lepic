@@ -13,8 +13,7 @@ use super::{DEFAULT_ACCOUNT, ScratchFile, Session};
 use crate::api::error::{WalletError, WalletErrorKind};
 use crate::api::types::{
     ContactRelayMode, Epic1AnswerView, Epic1Attempt, Epic1Host, Epic1Link, Epic1LinkKind,
-    Epic1LinkRead, Epic1LinkView, Epic1Paid, EpictxView, HostClassView, SendOptions,
-    SlateWire,
+    Epic1LinkRead, Epic1LinkView, Epic1Paid, EpictxView, HostClassView, SendOptions, SlateWire,
 };
 
 /// The longest link text taken from the app; a link carries at most three relays and short

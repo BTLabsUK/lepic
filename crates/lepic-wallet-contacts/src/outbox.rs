@@ -23,8 +23,8 @@ use super::relay::{check_online, endpoint_for, mailbox_client};
 use super::{ContactError, ContactRelays};
 use crate::ContactBook;
 use lepic_primitives::error_chain::ErrorChain;
-use lepic_wallet::event::{Event, OutboxNews};
 use lepic_wallet::SlateFormat;
+use lepic_wallet::event::{Event, OutboxNews};
 use lepic_wallet::ports::{SecretVault, StoreOpener};
 
 /// Waits before the next try, one step per failed try; the last repeats.

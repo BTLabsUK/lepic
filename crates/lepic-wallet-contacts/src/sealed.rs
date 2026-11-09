@@ -10,7 +10,8 @@ use std::time::Duration;
 use jiff::Timestamp;
 use lepic_contact::{
     Capabilities, ContactCard, Content, EncPublicKey, EncSecretKey, Hint, HintKey, HintRule,
-    MessageType, Opened, PaymentFile, Purpose, SealedEnvelope, armor, classify, dearmor, seal, seal_padded,
+    MessageType, Opened, PaymentFile, Purpose, SealedEnvelope, armor, classify, dearmor, seal,
+    seal_padded,
 };
 use lepic_native_slate::{NativeSlate, SlateView};
 use lepic_node::{NodeApi, Propagation};

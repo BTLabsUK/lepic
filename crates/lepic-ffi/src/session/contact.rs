@@ -14,7 +14,8 @@ use lepic_wallet_contacts::{
     InvitePreview as EnginePreview, InviteRequest, InvoiceDetails,
     KeyCheckStart as EngineKeyCheckStart, KeysDecision as EngineKeysDecision, LinkOutcome,
     PairingClass as EngineClass, PairingFailure, PairingRole, Purpose, RelayMode,
-    SasDecision as EngineSasDecision, SasSymbol, SealedAnswer as EngineAnswer, WalletContacts, is_epictx,
+    SasDecision as EngineSasDecision, SasSymbol, SealedAnswer as EngineAnswer, WalletContacts,
+    is_epictx,
 };
 
 use super::http::slate_wire;
