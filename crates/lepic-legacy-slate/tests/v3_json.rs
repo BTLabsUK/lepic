@@ -524,6 +524,60 @@ mod kernel_and_fees {
         );
     }
 
+    /// A zero-input S1 or S2 is the shape of a native proposal and its answer (RFC 0003); the
+    /// sender's inputs are unknown, so the weight floors at one base fee.
+    fn without_body(fee: &'static str) -> impl FnOnce(&mut Value) {
+        move |value| {
+            set_fee(fee)(value);
+            value["tx"]["body"]["inputs"] = json!([]);
+            value["tx"]["body"]["outputs"] = json!([]);
+        }
+    }
+
+    #[test]
+    fn a_proposal_without_inputs_needs_one_base_fee() {
+        let accepted = decode_mutated(S1, without_body("100000")).unwrap();
+        assert_eq!(accepted.fee(), BASE_FEE);
+        assert_eq!(accepted.inputs().len(), 0);
+        assert_eq!(
+            decode_mutated(S1, without_body("99999")),
+            invalid(ValidationError::FeeBelowMinimum {
+                fee: Fee::new(99_999),
+                minimum: BASE_FEE
+            })
+        );
+    }
+
+    #[test]
+    fn an_answer_without_inputs_needs_one_base_fee() {
+        let no_inputs = |fee: &'static str| {
+            move |value: &mut Value| {
+                set_fee(fee)(value);
+                value["tx"]["body"]["inputs"] = json!([]);
+            }
+        };
+        assert!(decode_mutated(S2, no_inputs("100000")).is_ok());
+        assert_eq!(
+            decode_mutated(S2, no_inputs("99999")),
+            invalid(ValidationError::FeeBelowMinimum {
+                fee: Fee::new(99_999),
+                minimum: BASE_FEE
+            })
+        );
+    }
+
+    #[test]
+    fn a_proposal_with_an_input_keeps_its_full_minimum() {
+        // The vector's one input and one change output: weight 8, so one base fee is too little.
+        assert_eq!(
+            decode_mutated(S1, set_fee("100000")),
+            invalid(ValidationError::FeeBelowMinimum {
+                fee: Fee::new(100_000),
+                minimum: Fee::new(800_000)
+            })
+        );
+    }
+
     #[test]
     fn minimum_fee_follows_the_configured_base_fee() {
         let strict = V3JsonCodec::new(Fee::new(BASE_FEE.value() + 1));

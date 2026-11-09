@@ -455,7 +455,10 @@ fn check_body_weight(inputs: usize, outputs: usize, kernels: usize) -> Result<()
 }
 
 /// The fee covers the final transaction. An S1 slate lacks the one output the receiver adds,
-/// and an I1 slate has no fee until the sender chooses it.
+/// and an I1 slate has no fee until the sender chooses it. A native `lepic.v1` proposal and the
+/// answer to it carry no inputs (RFC 0003), so the sender's inputs are unknown: the weight is
+/// then bounded from below, at one base fee, and the sender's own check and the node enforce
+/// the real minimum on the final transaction. A slate with an input is checked as always.
 fn check_fee_covers_weight(slate: &Slate, base_fee: Fee) -> Result<(), ValidationError> {
     let missing_outputs = match slate.stage() {
         Stage::I1 => return Ok(()),
@@ -463,8 +466,12 @@ fn check_fee_covers_weight(slate: &Slate, base_fee: Fee) -> Result<(), Validatio
         Stage::S2 | Stage::S3 | Stage::I2 | Stage::I3 => 0,
     };
     let count = |len: usize| u64::try_from(len).unwrap_or(u64::MAX);
+    let inputs = match (slate.stage(), slate.inputs().len()) {
+        (Stage::S1 | Stage::S2, 0) => u64::MAX,
+        (_, len) => count(len),
+    };
     let counts = BodyCounts::new(
-        count(slate.inputs().len()),
+        inputs,
         count(slate.outputs().len()).saturating_add(missing_outputs),
         1,
     );

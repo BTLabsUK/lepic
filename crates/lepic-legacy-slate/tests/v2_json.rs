@@ -479,6 +479,28 @@ mod shared_rules {
         ));
     }
 
+    /// A zero-input S1 is the shape of a native proposal (RFC 0003); the sender's inputs are
+    /// unknown, so the weight floors at one base fee.
+    #[test]
+    fn a_proposal_without_inputs_needs_one_base_fee() {
+        let without_body = |fee: &'static str| {
+            move |value: &mut Value| {
+                value["fee"] = json!(fee);
+                value["tx"]["body"]["kernels"][0]["fee"] = json!(fee);
+                value["tx"]["body"]["inputs"] = json!([]);
+                value["tx"]["body"]["outputs"] = json!([]);
+            }
+        };
+        assert!(decode_mutated(S1, without_body("100000")).is_ok());
+        assert_eq!(
+            decode_mutated(S1, without_body("99999")),
+            invalid(ValidationError::FeeBelowMinimum {
+                fee: Fee::new(99_999),
+                minimum: BASE_FEE
+            })
+        );
+    }
+
     #[test]
     fn minimum_fee_follows_the_configured_base_fee() {
         let strict = V2JsonCodec::new(Fee::new(BASE_FEE.value() + 1));

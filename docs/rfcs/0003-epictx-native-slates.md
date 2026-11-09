@@ -777,7 +777,11 @@ version that breaks the rule above; HeightLocked with a zero lock height; `PROOF
 flow; a message flag for an absent party or for the initiator at S2 or I2; truncation; a tail that
 breaks its rule; weight over `MAX_TX_WEIGHT`; bad input or output features; points that do not
 parse; a proof address that does not decompress (decoded through the shipped functions); a message over 256 bytes or not UTF-8; the same commitment twice; anything
-`Slate::from_parts` rejects. The responder checks a minimum fee (RFC 0001 §4).
+`Slate::from_parts` rejects. The responder checks a minimum fee (RFC 0001 §4). An S1 or S2
+that carries no inputs, which is what a native proposal is (it holds no inputs or outputs), has
+unknown input counts, so the check bounds the weight from below: the fee is at least one base
+fee. The sender's own finalize check and the node enforce the real minimum on the final
+transaction. A slate with an input, and every I1, I2, S3 and I3, is checked as before.
 
 **Bound.** `MAX_WIRE_SLATE_LEN` (8 MiB, `crates/lepic-slate/src/codec/mod.rs:13`) stays the
 codec's own bound. Every carrier of a `lepic.v1` slate in this specification is an envelope body,

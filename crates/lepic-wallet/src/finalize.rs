@@ -1535,6 +1535,26 @@ mod tests {
         assert_eq!(answered_excess(&s1).ok(), kernel_excess(&s1).ok());
     }
 
+    /// A zero-input S2 decodes at one base fee (a native answer carries no inputs), but the
+    /// sender's finalize keeps the real minimum for the body it holds.
+    #[test]
+    fn finalize_checks_the_fee_against_the_real_counts() {
+        let base_fee = Network::Floonet.params().default_base_fee();
+        let s2 = changed(&slate_json(S2), |json| {
+            json["fee"] = Value::from("100000");
+            json["tx"]["body"]["kernels"][0]["fee"] = Value::from("100000");
+            json["tx"]["body"]["inputs"] = Value::Array(Vec::new());
+        });
+        assert_eq!(s2.inputs().len(), 0);
+        let counts = BodyCounts::new(0, count(s2.outputs().len()), 1);
+        let Err(FinalizeError::FeeBelowMinimum { fee, minimum }) = check_fee(&s2, base_fee) else {
+            panic!("a fee below the real minimum was taken");
+        };
+        assert_eq!(fee, Fee::new(100_000));
+        assert_eq!(minimum, counts.tx_fee(base_fee).unwrap());
+        assert!(check_fee(&decode(&slate_json(S2)), base_fee).is_ok());
+    }
+
     #[test]
     fn the_g03_s2_answers_its_s1() {
         assert!(check_reply(&decode(&slate_json(S1)), &decode(&slate_json(S2))).is_ok());

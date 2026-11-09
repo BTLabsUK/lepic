@@ -465,6 +465,155 @@ fn contact_files_follow_the_native_slate_setting() {
     }
 }
 
+/// Funds the payer with six outputs of 60 coins, so that a send of `AMOUNT` spends six inputs.
+/// Its fee is then three base fees, below the five a proposal without inputs would need.
+fn fund_for_many_inputs(world: &World) {
+    for child in 1..=6 {
+        world.payer.fund(child, 60_000_000);
+    }
+}
+
+/// The fee of the S1 the payer stored for `slate_id`, in base fees.
+fn s1_fee_in_base_fees(party: &Party, slate_id: uuid::Uuid) -> u64 {
+    let base = lepic_primitives::params::Network::Floonet
+        .params()
+        .default_base_fee()
+        .value();
+    let json = slate_json(&stored(party, slate_id, SlateStage::Standard1));
+    let inputs = json["tx"]["body"]["inputs"].as_array().unwrap().len();
+    assert!(inputs >= 5, "{inputs} inputs");
+    json["fee"].as_str().unwrap().parse::<u64>().unwrap() / base
+}
+
+/// A native S1 carries no inputs, so its fee may be lower than the minimum of a proposal without
+/// any: a sender with several inputs pays less (RFC 0003). The receiver takes and answers it
+/// through a sealed `.epictx`, answers a repeat with the stored S2, and reads its rows.
+#[test]
+fn a_native_proposal_from_a_sender_with_many_inputs_is_answered_sealed() {
+    let (world, _, ben_side) = paired((true, true), WalletPolicy::default());
+    fund_for_many_inputs(&world);
+    let tx_id = world
+        .block_on(world.payer.wallet.send(
+            &crate::support::file(),
+            SendRequest {
+                minimum_confirmations: 1,
+                strategy: SelectionStrategy::Smallest,
+                ..SendRequest::new(ACCOUNT, Amount::new(AMOUNT))
+            },
+            Delivery::Export {
+                to: lepic_transport::transport::Location::File(
+                    tempfile::tempdir().unwrap().keep().join("s1.tx"),
+                ),
+            },
+        ))
+        .unwrap()
+        .tx_id;
+    let slate_id = slate_id_of(&world.payer, tx_id);
+    assert!(s1_fee_in_base_fees(&world.payer, slate_id) < 5);
+
+    let s1 = world
+        .block_on(world.payer.wallet.contact_book().contact_seal_slate(
+            ben_side,
+            tx_id,
+            Some(Purpose::Withdrawal),
+        ))
+        .unwrap();
+    assert!(lepic_wallet_contacts::is_epictx(&s1));
+    let received = world
+        .block_on(
+            world
+                .issuer
+                .wallet
+                .contact_book()
+                .sealed_receive(&s1, ReceiveRequest::default()),
+        )
+        .unwrap();
+    let SealedAnswer::Sealed(s2) = received.answer else {
+        panic!("a plain answer");
+    };
+    let received_tx = received.received.tx_id;
+    let stored_s2 = stored(&world.issuer, slate_id, SlateStage::Standard2);
+
+    // The same S1 again is answered from what was stored, not received twice.
+    let again = world
+        .block_on(
+            world
+                .issuer
+                .wallet
+                .contact_book()
+                .sealed_receive(&s1, ReceiveRequest::default()),
+        )
+        .unwrap();
+    assert_eq!(again.received.tx_id, received_tx);
+    assert!(matches!(again.answer, SealedAnswer::Sealed(_)));
+    assert_eq!(
+        stored(&world.issuer, slate_id, SlateStage::Standard2),
+        stored_s2
+    );
+
+    // The stored rows read back through refresh and the details.
+    world.block_on(world.issuer.wallet.refresh()).unwrap();
+    let details = world
+        .block_on(world.issuer.wallet.transaction_details(received_tx))
+        .unwrap();
+    assert_eq!(details.transaction.entry.slate_id, Some(slate_id));
+    assert_eq!(tx_state(&world.issuer, received_tx), TxState::Received);
+
+    let finalized = world
+        .block_on(
+            world
+                .payer
+                .wallet
+                .contact_book()
+                .sealed_finalize(&s2, Propagation::Stem),
+        )
+        .unwrap();
+    assert!(finalized.pushed);
+}
+
+/// The same through the contacts' mailboxes, and a mailbox S1 delivered a second time.
+#[test]
+fn a_native_proposal_from_a_sender_with_many_inputs_is_answered_by_mailbox() {
+    let (world, shop_side, ben_side) = paired((true, true), WalletPolicy::default());
+    fund_for_many_inputs(&world);
+    let tx_id = send_s1(&world, ben_side);
+    let slate_id = slate_id_of(&world.payer, tx_id);
+    assert!(s1_fee_in_base_fees(&world.payer, slate_id) < 5);
+    assert_eq!(
+        format_of(
+            &world.payer,
+            ben_side,
+            SlateStage::Standard1,
+            &world.issuer,
+            shop_side
+        ),
+        Format::Native
+    );
+
+    world.collect(&world.issuer);
+    let s2 = format_of(
+        &world.issuer,
+        shop_side,
+        SlateStage::Standard2,
+        &world.payer,
+        ben_side,
+    );
+    assert_eq!(s2, Format::Native);
+    world.collect(&world.payer);
+    assert_eq!(tx_state(&world.payer, tx_id), TxState::Posted);
+
+    // Both sides read their stored rows.
+    for party in [&world.issuer, &world.payer] {
+        world.block_on(party.wallet.refresh()).unwrap();
+        let rows = party.read(|repos| repos.transactions(ACCOUNT));
+        assert_eq!(rows.len(), 1);
+        let details = world
+            .block_on(party.wallet.transaction_details(rows[0].id))
+            .unwrap();
+        assert_eq!(details.transaction.entry.slate_id, Some(slate_id));
+    }
+}
+
 /// Records that the contact `contact` of `party` claims native slates, as one paired while its
 /// wallet had them on does.
 fn claim_native(party: &Party, contact: ContactId) {

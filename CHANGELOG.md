@@ -7,6 +7,13 @@ Conventional Commit messages at release time.
 
 ## [Unreleased]
 
+### Fixed
+
+- A native `lepic.v1` proposal was refused with `FeeBelowMinimum` when the sender spent several
+  inputs. It carries no inputs, so the legacy check priced it at five base fees. A V2 or V3 S1 or
+  S2 without inputs now needs one base fee at least; the sender's finalize and the node enforce
+  the real minimum. Slates with an input are checked as before.
+
 ### Changed
 
 - The legacy formats have crates of their own (ADR 0052). `lepic-foreign` is renamed

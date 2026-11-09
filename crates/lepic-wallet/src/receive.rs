@@ -773,12 +773,15 @@ fn with_offset(
 
 /// Upstream checks the fee against the transaction as it will be once the receiver's output is
 /// in. Its second check, that this fee does not exceed amount plus fee, follows from the first.
+///
+/// A native S1 carries no inputs, so the sender's are unknown and the weight is bounded from
+/// below, at one base fee; the sender's finalize and the node enforce the real minimum.
 fn check_fee(slate: &Slate, base_fee: Fee) -> Result<(), ReceiveError> {
-    let counts = BodyCounts::new(
-        count(slate.inputs().len()),
-        count(slate.outputs().len()).saturating_add(1),
-        1,
-    );
+    let inputs = match slate.inputs().len() {
+        0 => u64::MAX,
+        len => count(len),
+    };
+    let counts = BodyCounts::new(inputs, count(slate.outputs().len()).saturating_add(1), 1);
     let minimum = counts
         .tx_fee(base_fee)
         .map_err(|_| ReceiveError::FeeOverflow)?;
