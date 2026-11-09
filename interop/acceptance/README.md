@@ -22,7 +22,9 @@ payment as posted by its sender seconds after the sender's push, before it confi
 `epic-wallet` receiver's unmarked answer is recorded as another wallet's and is sent no notice. A stock `epic-wallet`
 listener sends lepic's invoice back unpaid; lepic counts it as bounced, records that peer as not
 paying invoices (read from its store, which no command shows), sends it no notice when the
-invoice is cancelled, and pays it over Epicbox afterwards. It then prints a pass or fail table and
+invoice is cancelled, and pays it over Epicbox afterwards. Both lepic wallets then pair again
+with `native_direct = true`: `contact list` shows `native_slates` on both sides, and an invoice
+goes through the mailboxes as native slates, paid, posted and confirmed. It then prints a pass or fail table and
 exits 0 only when every step passed.
 
 ```

@@ -22,6 +22,8 @@ EPICBOX_SEND_TX=""
 # The service's and the payer's contact ids of their pairing, set by the pairing step.
 SERVICE_SIDE=""
 PAYER_SIDE=""
+# `true` while a step runs both lepic wallets with native slates to their contacts.
+NATIVE_DIRECT=""
 
 fail() {
     DETAIL="$*"
@@ -32,7 +34,7 @@ fail() {
 # and the acceptance config file. Nothing from the invoking shell's LEPIC_* variables leaks in.
 lepic_env() {
     env -i PATH="${PATH}" HOME="${STATE_DIR}/home" LEPIC_CONFIG="${STATE_DIR}/config.toml" \
-        LEPIC_PASSWORD="${LEPIC_PASSWORD_VALUE}" "$@"
+        LEPIC_PASSWORD="${LEPIC_PASSWORD_VALUE}" ${NATIVE_DIRECT:+LEPIC_NATIVE_DIRECT="${NATIVE_DIRECT}"} "$@"
 }
 
 # The lepic under test, with JSON output. Its stderr goes to the run log, and so do a failure's
@@ -757,6 +759,73 @@ step_invoice_lepic_over_epicbox() {
     DETAIL="paired by invite, words matched, invoices allowed; I1 through the mailboxes paid once, finalized and posted by the service; payer heard posted; ${slate_id} confirmed"
 }
 
+# Whether `who` (lepic or payer) sends new slates to its contact `id` as native slates.
+native_slates_to() {
+    "$1" contact list | jq -r --arg id "$2" '.contacts[] | select(.contact_id == $id) | .native_slates'
+}
+
+# The pairing step again with `native_direct = true` in both wallets: both claim native slates
+# in their pairing, so the invoice and its answer go through the mailboxes as native slates
+# (envelope type 0A), which `contact list` shows as `native_slates`.
+step_invoice_lepic_native() {
+    NATIVE_DIRECT=true
+    invoice_lepic_native
+    local status=$?
+    NATIVE_DIRECT=""
+    return "${status}"
+}
+
+invoice_lepic_native() {
+    local invite link service_side accepted payer_side
+    invite="$(lepic contact invite --name "Native service")" || fail "contact invite failed" || return 1
+    link="$(jq -r .link <<<"${invite}")"
+    service_side="$(jq -r .contact_id <<<"${invite}")"
+    accepted="$(payer contact accept "${link}" --name "Native payer")" || fail "contact accept failed" || return 1
+    payer_side="$(jq -r .contact_id <<<"${accepted}")"
+    collect_until lepic 60 '[[ "$(lepic contact list | jq -r --arg id "${service_side}" ".contacts[] | select(.contact_id == \$id) | .state")" == paired ]]' ||
+        fail "the service never paired: $(lepic contact list)" || return 1
+    collect_until payer 60 '[[ "$(payer contact list | jq -r --arg id "${payer_side}" ".contacts[] | select(.contact_id == \$id) | .state")" == paired ]]' ||
+        fail "the payer never paired: $(payer contact list)" || return 1
+    lepic contact sas "${service_side}" match >/dev/null || fail "the service's words check failed" || return 1
+    payer contact sas "${payer_side}" match >/dev/null || fail "the payer's words check failed" || return 1
+    payer contact allow-invoices "${payer_side}" on >/dev/null || fail "allow-invoices failed" || return 1
+    [[ "$(native_slates_to lepic "${service_side}")" == true && "$(native_slates_to payer "${payer_side}")" == true ]] ||
+        fail "native_slates is not on both sides: $(lepic contact list) $(payer contact list)" || return 1
+    [[ "$(NATIVE_DIRECT="" native_slates_to lepic "${service_side}")" == false ]] ||
+        fail "native_slates without native_direct: $(NATIVE_DIRECT="" lepic contact list)" || return 1
+
+    local before issued tx_id slate_id
+    before="$(payer_balance total)"
+    issued="$(lepic contact invoice "${service_side}" 0.4 --reference order-native)" ||
+        fail "contact invoice failed" || return 1
+    tx_id="$(jq -r .tx_id <<<"${issued}")"
+    slate_id="$(jq -r .slate_id <<<"${issued}")"
+    lepic contact collect >/dev/null || fail "the service's collect failed" || return 1
+    collect_until payer 60 '[[ "$(payer contact invoices | jq -r --arg id "${slate_id}" "[.invoices[] | select(.slate_id == \$id)] | length")" == 1 ]]' ||
+        fail "the payer parked no native invoice: $(payer contact invoices)" || return 1
+
+    local paid payment_tx fee
+    paid="$(payer contact pay-invoice "${slate_id}" 0.4)" || fail "the payer could not pay the invoice" || return 1
+    payment_tx="$(jq -r .tx_id <<<"${paid}")"
+    fee="$(to_units "$(jq -r .fee <<<"${paid}")")"
+    payer contact collect >/dev/null || fail "the payer's collect failed" || return 1
+    collect_until lepic 120 '[[ "$(lepic_tx_state "${tx_id}")" == posted || "$(lepic_tx_state "${tx_id}")" == confirmed ]]' ||
+        fail "the service did not post: tx ${tx_id} is $(lepic_tx_state "${tx_id}")" || return 1
+    wait_until "lepic tx ${tx_id} confirmed" 180 lepic_tx_confirmed "${tx_id}" ||
+        fail "the service's tx ${tx_id} is $(lepic_tx_state "${tx_id}"), not confirmed" || return 1
+    wait_until "payer tx ${payment_tx} confirmed" 180 payer_tx_confirmed "${payment_tx}" ||
+        fail "the payer's tx ${payment_tx} did not confirm" || return 1
+    local excess
+    excess="$(lepic tx show "${tx_id}" | jq -r .kernel_excess)"
+    [[ -n "${excess}" && "${excess}" == "$(payer tx show "${payment_tx}" | jq -r .kernel_excess)" ]] ||
+        fail "service and payer disagree on the kernel" || return 1
+    EXPECTED_TOTAL=$((EXPECTED_TOTAL + $(to_units 0.4)))
+    check_lepic_total || return 1
+    (($(payer_balance total) == before - $(to_units 0.4) - fee)) ||
+        fail "payer total $(payer_balance total) units after paying" || return 1
+    DETAIL="paired with native_direct on both sides, native_slates on both; native I1 and I2 through the mailboxes, ${slate_id} finalized, posted and confirmed"
+}
+
 # When the service last heard from the payer, by its contact list; "never" before the first.
 lepic_heard_payer() {
     lepic contact list |
@@ -964,4 +1033,5 @@ STEPS=(
     "no CLI limits on password or expiry:step_cli_limits"
     "lepic sends to lepic by epicbox, posted notice:step_send_to_lepic_over_epicbox"
     "epic-wallet bounces an epicbox invoice:step_stock_listener_bounces_invoice"
+    "lepic invoices lepic with native slates:step_invoice_lepic_native"
 )
