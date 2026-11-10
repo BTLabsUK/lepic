@@ -1439,10 +1439,12 @@ where
     }
 
     /// Takes the refusal of the payment `slate_id` that came to its reply mailbox: a sealed
-    /// `declined` notice for the slate, anonymous, opened with the slate's reply key, which
-    /// only the payee holds. The wallet cancels the payment, which frees its inputs, as it
-    /// does for a send declined unanswered. A refusal for a payment that is finalized, was
-    /// answered or ended changes nothing. Returns whether the payment was cancelled by it.
+    /// `declined` notice for the slate, anonymous, sealed to the reply key the S1 gave the payee
+    /// and opened with its secret. The relay of the reply mailbox could forge one, which only
+    /// frees this wallet's inputs (ADR 0045). The wallet cancels the payment, which frees its
+    /// inputs, as it does for a send declined unanswered. A refusal for a payment that is
+    /// finalized, was answered or ended changes nothing. Returns whether the payment was
+    /// cancelled by it.
     async fn take_epic1_refusal(
         &self,
         slate_id: SlateId,

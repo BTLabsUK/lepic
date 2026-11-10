@@ -710,14 +710,14 @@ where
         }
     }
 
-    /// Takes the refusal of a send by its receiver that came over a channel only the receiver
-    /// can use, as the reply mailbox of an epic1 payment, whose key only the holder of the
-    /// payment could name. The refusal is taken as a `declined` of ADR 0045 is: only while the
-    /// send waits unanswered, `sent`, with its S1 stored and no S2. The first one is recorded
-    /// with its time and raises [`Event::PaymentDeclined`]; the send is cancelled, so its inputs
-    /// are free again, and a repeat cancels again without an event. One for a send that was
-    /// answered, finalized, ended or is not held changes nothing. Returns whether the refusal
-    /// was taken.
+    /// Takes the refusal of a send by its receiver that came sealed to a key the send named to
+    /// its receiver, as the reply key of an epic1 payment at its reply mailbox. The relay of that
+    /// mailbox could forge one; it only frees this wallet's inputs (ADR 0045). The refusal is
+    /// taken as a `declined` of ADR 0045 is: only while the send waits unanswered, `sent`, with
+    /// its S1 stored and no S2. The first one is recorded with its time and raises
+    /// [`Event::PaymentDeclined`]; the send is cancelled, so its inputs are free again, and a
+    /// repeat cancels again without an event. One for a send that was answered, finalized, ended
+    /// or is not held changes nothing. Returns whether the refusal was taken.
     ///
     /// Fails with [`crate::WalletError::Locked`] and as the store does; the caller keeps the
     /// message and takes it again.
