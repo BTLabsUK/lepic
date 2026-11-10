@@ -479,6 +479,9 @@ impl<H: Host> Run<'_, H> {
             }
             TxCommand::List(args) => {
                 let opened = self.open().await?;
+                if args.refresh.refresh {
+                    refreshed::<H>(&opened).await?;
+                }
                 let account = opened.wallet.account(&args.account.account)?;
                 let transactions = opened
                     .store()?
@@ -491,6 +494,9 @@ impl<H: Host> Run<'_, H> {
             TxCommand::Show(args) => {
                 let slate_id = args.slate_id.slate_id.as_deref().map(SlateId::parse);
                 let opened = self.open().await?;
+                if args.refresh.refresh {
+                    refreshed::<H>(&opened).await?;
+                }
                 let details = match (args.tx_id, slate_id) {
                     (Some(tx_id), _) => opened.wallet.transaction_details(TxId(tx_id)).await?,
                     (None, Some(Ok(slate_id))) => opened
@@ -765,36 +771,7 @@ impl<H: Host> Run<'_, H> {
 
     async fn info(&mut self) -> Result<Report, CliError> {
         let opened = self.open().await?;
-        let mut attempt = 1;
-        let mut catch_up = 0;
-        let (outcome, balances) = loop {
-            let mut events = opened.wallet.subscribe();
-            let outcome = match opened.wallet.refresh().await {
-                Err(error) if attempt < REFRESH_ATTEMPTS && chain_moved_during(&error) => {
-                    attempt = attempt.saturating_add(1);
-                    tracing::debug!(attempt, error = %error, "refresh repeated");
-                    continue;
-                }
-                outcome => outcome?,
-            };
-            let mut balances: Vec<Balance> = Vec::new();
-            while let Ok(event) = events.try_recv() {
-                if let Event::Balance(balance) = event {
-                    balances.push(balance);
-                }
-            }
-            // A tip too far above the last confirmed one is held until a later answer agrees,
-            // and the balances stay at the confirmed height; the next refresh is that answer.
-            if let RefreshOutcome::Refreshed(summary) = &outcome
-                && balances_height(&balances).is_some_and(|height| height < summary.height)
-                && catch_up < CATCH_UP_REFRESHES
-            {
-                catch_up = catch_up.saturating_add(1);
-                tracing::debug!(tip = %summary.height, "refresh repeated for a held tip");
-                continue;
-            }
-            break (outcome, balances);
-        };
+        let (outcome, balances) = refreshed::<H>(&opened).await?;
         let (height, node_behind, node_height) = match outcome {
             RefreshOutcome::Refreshed(summary) => {
                 let height = balances_height(&balances).unwrap_or(summary.height);
@@ -2203,10 +2180,10 @@ async fn next_event(
     }
 }
 
-/// How often `wallet info` asks for a refresh the chain outgrew while it ran.
+/// How often a refresh the chain outgrew while it ran is asked for.
 const REFRESH_ATTEMPTS: u32 = 3;
 
-/// How many more refreshes `wallet info` asks for while the wallet holds the node's tip as
+/// How many more refreshes are asked for while the wallet holds the node's tip as
 /// pending. One agreeing answer confirms it; a second covers a chain that grew past the bound
 /// in between.
 const CATCH_UP_REFRESHES: u32 = 2;
@@ -2229,6 +2206,44 @@ fn chain_moved_during(error: &RefreshError) -> bool {
             height, tip, ..
         }) => height > tip,
         _ => false,
+    }
+}
+
+/// Refreshes the wallet from the node and returns the outcome with the balances it announced.
+/// A refresh the chain outgrew while it ran is asked for again, up to [`REFRESH_ATTEMPTS`]
+/// times, and a tip held as pending up to [`CATCH_UP_REFRESHES`] more times.
+async fn refreshed<H: Host>(
+    opened: &Opened<HostNode<H>>,
+) -> Result<(RefreshOutcome, Vec<Balance>), CliError> {
+    let mut attempt = 1;
+    let mut catch_up = 0;
+    loop {
+        let mut events = opened.wallet.subscribe();
+        let outcome = match opened.wallet.refresh().await {
+            Err(error) if attempt < REFRESH_ATTEMPTS && chain_moved_during(&error) => {
+                attempt = attempt.saturating_add(1);
+                tracing::debug!(attempt, error = %error, "refresh repeated");
+                continue;
+            }
+            outcome => outcome?,
+        };
+        let mut balances: Vec<Balance> = Vec::new();
+        while let Ok(event) = events.try_recv() {
+            if let Event::Balance(balance) = event {
+                balances.push(balance);
+            }
+        }
+        // A tip too far above the last confirmed one is held until a later answer agrees, and
+        // the balances stay at the confirmed height; the next refresh is that answer.
+        if let RefreshOutcome::Refreshed(summary) = &outcome
+            && balances_height(&balances).is_some_and(|height| height < summary.height)
+            && catch_up < CATCH_UP_REFRESHES
+        {
+            catch_up = catch_up.saturating_add(1);
+            tracing::debug!(tip = %summary.height, "refresh repeated for a held tip");
+            continue;
+        }
+        return Ok((outcome, balances));
     }
 }
 
@@ -2826,6 +2841,7 @@ mod tests {
     fn a_received_slate_event_becomes_a_receipt_line() {
         let received = Event::Received(lepic_wallet::event::ReceivedTransaction {
             tx_id: TxId(4),
+            slate_id: SlateId::from_bytes([4; 16]),
             account: lepic_store::AccountIndex(0),
             amount: lepic_primitives::amount::Amount::new(150_000_000),
             transport: TRANSPORT_ID,

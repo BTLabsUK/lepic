@@ -106,6 +106,7 @@ impl From<&Event> for EventReport {
             },
             Event::Received(received) => Self {
                 tx_id: Some(received.tx_id.0),
+                slate_id: Some(received.slate_id.to_string()),
                 account: Some(received.account.0),
                 amount: Some(format_amount(received.amount)),
                 transport: Some(received.transport.as_str().to_owned()),

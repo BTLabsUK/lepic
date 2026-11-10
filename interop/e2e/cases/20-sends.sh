@@ -67,14 +67,16 @@ show_by_slate() {
     w "$1" tx show "${id}"
 }
 
-# Waits until a transaction, found by slate id, is in one of the states; `wallet info` refreshes.
+# Waits until a transaction, found by slate id, is in one of the states; `tx list --refresh`
+# refreshes from the node first.
 wait_slate_state() {
     local wallet="$1" slate="$2" states="$3" timeout="${4:-240}"
     wait_until "${wallet} tx ${slate:0:8} in ${states}" "${timeout}" slate_state_refreshed "${wallet}" "${slate}" "${states}"
 }
 slate_state_refreshed() {
-    w "$1" wallet info >/dev/null 2>&1 || true
-    slate_state_in "$1" "$2" "$3"
+    local s
+    s="$(w "$1" tx list --refresh 2>/dev/null | jq -r --arg id "$2" '[.transactions[] | select(.slate_id == $id)] | first | .state // empty')"
+    [[ " $3 " == *" ${s} "* ]]
 }
 
 # Waits for the receiver's spendable to reach `before + amount` (units).

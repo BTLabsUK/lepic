@@ -318,6 +318,7 @@ where
         info!(tx_id = %received.tx_id, "slate received");
         self.emit(Event::Received(ReceivedTransaction {
             tx_id: received.tx_id,
+            slate_id: received.slate.id(),
             account,
             amount: received.slate.amount(),
             transport,

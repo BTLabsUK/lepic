@@ -1033,6 +1033,8 @@ $ lepic tx list
 
 States: `sent` (S1 or I2 handed over), `received` (S2 or I1 answered, waiting for the other side),
 `finalized`, `posted` (with the node), `confirmed` (in a block), `cancelled`, `expired`.
+`tx list` and `tx show` read the states as the last refresh stored them. `--refresh` refreshes
+from the node first, as `lepic wallet info` does, so the listing shows current confirmations.
 `lepic tx show <ID>` (or `--slate-id <UUID>` for a send) adds the slate id, timestamps, the slate stages stored, the final kernel's
 excess (`Kernel`, JSON `kernel_excess`, in hex) and the block height the transaction was
 confirmed at (`Confirmed at`, JSON `confirmed_height`). The kernel is known once this wallet has
@@ -1130,15 +1132,15 @@ when `serve` stops.
 | Route | Command it runs |
 |---|---|
 | `GET /v1/status` | the running serve, above |
-| `GET /v1/methods` | the methods serve's registry holds, in order, and what each does: `delivers`, `listens`, `exchanges`, `notices`, and what a slate over it `carries` |
+| `GET /v1/methods` | the methods serve's registry holds, in order, and what each does: `delivers`, `listens` (whether this serve receives slates over it: `epicbox` always, `http` with `--http`), `exchanges`, `notices`, and what a slate over it `carries` |
 | `GET /v1/events` | the wallet's events, as server-sent events |
 | `GET /v1/wallet` | `wallet info` |
 | `GET /v1/wallet/address` | `wallet address` |
 | `PUT /v1/wallet/password` | `wallet password`, with `current_password` and `new_password` |
 | `GET /v1/outputs?account=` | `wallet outputs` |
 | `GET /v1/node` | `node status` |
-| `GET /v1/transactions?account=` | `tx list` |
-| `GET /v1/transactions/{tx_id}` | `tx show` |
+| `GET /v1/transactions?account=&refresh=` | `tx list`; `refresh=true` as `--refresh` |
+| `GET /v1/transactions/{tx_id}?refresh=` | `tx show`; `refresh=true` as `--refresh` |
 | `POST /v1/transactions` | `tx send`: `amount`, `to`, and optionally `method` (one of `GET /v1/methods`; Epicbox when absent; the API sends over `epicbox` and `http`), `slate_id`, `account`, `message`, `min_confirmations`, `change_outputs` and `legacy` (as `--legacy`; the report's `dialect` says which went). Over TLS an `http` send goes to other computers only: a `to` naming `localhost`, a loopback or an unspecified address is a 400 `usage` problem and stores nothing, and a host that resolves only to such addresses fails to connect, leaving the send stored and undelivered |
 | `POST /v1/slates/receive` | `tx receive`, with the `slate` text; the reply slate is in the report |
 | `POST /v1/slates/finalize` | `tx finalize`, with the `slate` text and `fluff` |

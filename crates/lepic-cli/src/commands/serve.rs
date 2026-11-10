@@ -176,7 +176,7 @@ impl<H: Host> Service<'_, H> {
                     .held
                     .methods
                     .iter()
-                    .map(|method| method_report(method.as_ref()))
+                    .map(|method| method_report(method.as_ref(), self.listens_on(method.as_ref())))
                     .collect(),
             })),
             Call::DomainFile { relays } => {
@@ -186,17 +186,29 @@ impl<H: Host> Service<'_, H> {
     }
 }
 
-/// What `method` can do, from its capabilities; nothing here connects anywhere.
-fn method_report(method: &dyn Method) -> MethodReport {
+/// What `method` can do, from its capabilities and from whether this serve receives slates
+/// over it; nothing here connects anywhere.
+fn method_report(method: &dyn Method, listens: bool) -> MethodReport {
     MethodReport {
         id: method.id().to_string(),
         delivers: method.outbound().is_some(),
-        listens: method.inbound().is_some(),
+        listens,
         exchanges: method.exchange().is_some(),
         notices: !method.notice_lengths().is_empty(),
         carries: CarriesReport {
             reply_key: method.carries().reply_key,
         },
+    }
+}
+
+impl<H: Host> Service<'_, H> {
+    /// Whether this serve receives slates over `method`: it always runs the Epicbox listener,
+    /// and the HTTP listener when it runs with `--http`.
+    fn listens_on(&self, method: &dyn Method) -> bool {
+        let id = method.id();
+        method.inbound().is_some()
+            || id == lepic_epicbox::TRANSPORT_ID
+            || (id == lepic_methods::http::TRANSPORT_ID && self.http.is_some())
     }
 }
 

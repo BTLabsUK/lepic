@@ -359,6 +359,7 @@ pub struct TransactionState {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ReceivedTransaction {
     pub tx_id: TxId,
+    pub slate_id: SlateId,
     pub account: AccountIndex,
     pub amount: Amount,
     pub transport: TransportId,
