@@ -59,6 +59,14 @@ pub fn with_proof_key_of(link: &str, other: &str) -> Option<String> {
     rebuilt(link, Some(other), None)
 }
 
+/// `link` asking no amount, everything else kept.
+#[must_use]
+pub fn without_amount(link: &str) -> Option<String> {
+    let mut link = Epic1Link::parse(link).ok()?;
+    link.amount = None;
+    Some(link.to_uri())
+}
+
 /// `link` with no transport.
 #[must_use]
 pub fn without_transports(link: &str) -> Option<String> {

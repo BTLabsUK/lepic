@@ -93,16 +93,27 @@ async fn a_link_paid_is_answered_by_the_payee_and_finalized_by_the_payers_collec
     assert_eq!(read.hosts[0].host, RELAY);
     assert_eq!(read.hosts[0].class, HostClassView::Public);
 
-    // Nothing is paid before the user confirmed the relays.
+    // A relay outside the relay list is not paid before the user confirmed it.
+    let elsewhere = anna
+        .epic1_link_make(
+            Some(EPIC),
+            None,
+            Epic1LinkKind::Printed,
+            vec!["shop.example".to_owned()],
+            Online,
+        )
+        .await
+        .unwrap();
     assert_eq!(
         kind(
-            ben.epic1_pay(link.link.clone(), None, 1, None, None, false, false, Online)
+            ben.epic1_pay(elsewhere.link, None, 1, None, None, false, false, Online)
                 .await
         ),
         WalletErrorKind::RelayNotConfirmed
     );
+    // The wallet's own relay needs no confirmation.
     let paid = ben
-        .epic1_pay(link.link.clone(), None, 1, None, None, false, true, Online)
+        .epic1_pay(link.link.clone(), None, 1, None, None, false, false, Online)
         .await
         .unwrap();
     assert_eq!(paid.address, address);
@@ -110,29 +121,21 @@ async fn a_link_paid_is_answered_by_the_payee_and_finalized_by_the_payers_collec
     assert_eq!(paid.attempts.len(), 1);
     assert_eq!(paid.attempts[0].error, None);
 
-    // The payee takes the payment and holds its answer until the user confirms the relay.
+    // The payee takes the payment and posts its answer in the same collect.
     assert_eq!(collect(&anna).await, 1);
     let answers = anna.epic1_answers(Online).await.unwrap();
     assert_eq!(answers.len(), 1);
     assert_eq!(answers[0].slate_id, paid.slate_id);
-    assert!(!answers[0].posted);
-    assert!(anna.epic1_links().await.unwrap()[0].used_at_ms.is_some());
-    collect(&ben).await;
-    assert_eq!(world.chain.pushed_count(), 0);
-
-    assert_eq!(
-        kind(
-            anna.epic1_post_answer(paid.slate_id.clone(), false, Online)
-                .await
-        ),
-        WalletErrorKind::RelayNotConfirmed
+    assert!(answers[0].posted);
+    assert!(
+        anna.epic1_links()
+            .await
+            .unwrap()
+            .iter()
+            .any(|view| view.used_at_ms.is_some())
     );
-    anna.epic1_post_answer(paid.slate_id.clone(), true, Online)
-        .await
-        .unwrap();
-    assert!(anna.epic1_answers(Online).await.unwrap()[0].posted);
-    // Posting the answer finalizes nothing; the payer's collect does.
     assert_eq!(world.chain.pushed_count(), 0);
+    // The payer's collect finalizes.
     collect(&ben).await;
     assert_eq!(world.chain.pushed_count(), 1);
 

@@ -140,6 +140,9 @@ pub enum Epic1Refusal {
     /// The payment was finalized already.
     #[error("the payment was finalized already")]
     Finalized,
+    /// The amount of a payment is not the one its link asks.
+    #[error("the amount is not the one the link asks")]
+    AmountMismatch,
 }
 
 /// The kind of a link mailbox.
@@ -260,6 +263,8 @@ pub struct Epic1Paid {
     pub attempts: Vec<Epic1Attempt>,
     /// The transport, from 0, the payment was posted to.
     pub posted: Option<usize>,
+    /// The proof address, hex, the payment's proof is signed for; `None` when none was asked.
+    pub proof_address: Option<String>,
 }
 
 /// An S2 this wallet made for a payment taken at a link mailbox.
@@ -281,6 +286,10 @@ struct LinkState {
     used_at: Option<i64>,
     /// `domain[:port]` of each relay the link names.
     relays: Vec<String>,
+    /// The amount the link asks, in atoms; `None` when it asks none, and for a link issued
+    /// before the amount was kept.
+    #[serde(default)]
+    amount: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -317,6 +326,15 @@ struct PayState {
     next: usize,
     posted: Option<usize>,
     finalized: bool,
+    /// The proof address, hex, when the payment asks a proof.
+    #[serde(default)]
+    proof: Option<String>,
+}
+
+/// Whether the relays of a payment are confirmed: the user said so, or every one is in the
+/// relay list of the settings.
+fn hosts_confirmed(hosts_ok: bool, usable: &[(EpicboxTransport, HostReport)]) -> bool {
+    hosts_ok || usable.iter().all(|(_, report)| report.in_relay_list)
 }
 
 fn refused(refusal: Epic1Refusal) -> ContactError {
@@ -436,7 +454,7 @@ fn open_payment(
     network: Network,
     envelope: &[u8],
     secret: &lepic_seal::EncSecretKey,
-) -> Result<(SlateId, Vec<u8>, EncPublicKey, lepic_seal::ReplyMailbox), ContactError> {
+) -> Result<OpenedPayment, ContactError> {
     let net = contact_network(network);
     let sealed = SealedEnvelope::decode(envelope, net).map_err(ContactError::Decode)?;
     if sealed.hint() != Hint::from_bytes([0; 8]) {
@@ -458,8 +476,25 @@ fn open_payment(
         return Err(refused(Epic1Refusal::WrongStage));
     }
     let slate_id = slate.id();
+    let amount = slate.amount();
     let v3 = v3_of_native(network, slate, None).ok_or(ContactError::NotASlate)?;
-    Ok((slate_id, v3, reply_key, reply_mailbox))
+    Ok(OpenedPayment {
+        slate_id,
+        v3,
+        amount,
+        reply_key,
+        reply_mailbox,
+    })
+}
+
+/// What an envelope at a link mailbox holds.
+struct OpenedPayment {
+    slate_id: SlateId,
+    v3: Vec<u8>,
+    /// What the S1 pays.
+    amount: Amount,
+    reply_key: EncPublicKey,
+    reply_mailbox: lepic_seal::ReplyMailbox,
 }
 
 impl<N, S, V> ContactBook<'_, N, S, V>
@@ -523,6 +558,7 @@ where
         let now = self.wallet.ports().clock.now().as_second();
         let session = self.wallet.session()?;
         let stored_hosts = hosts.clone();
+        let stored_amount = request.amount.map(Amount::value);
         let n = self
             .contact_work(move |_, _| {
                 session.store.write(|repos| {
@@ -552,6 +588,7 @@ where
                         issued_at: now,
                         used_at: None,
                         relays: stored_hosts,
+                        amount: stored_amount,
                     };
                     repos.put_setting(
                         &link_key(account, kind, n),
@@ -668,8 +705,9 @@ where
     }
 
     /// Posts the S2 for the payment `slate_id` to the reply mailbox the payer named, from a
-    /// key used for this slate only, through the wallet's connector. `relay_ok` says the user
-    /// confirmed the relay [`ContactBook::epic1_answers`] reported. The host is checked again
+    /// key used for this slate only, through the wallet's connector. Collecting posts it by
+    /// itself when the relay is in the relay list; for any other relay `relay_ok` says the
+    /// user confirmed the relay [`ContactBook::epic1_answers`] reported. The host is checked again
     /// when connecting, as [`ContactBook::in_person_post`] checks it. Posting again is safe.
     ///
     /// Fails with [`ContactError::Epic1`] when `relay_ok` is false or no S2 is stored,
@@ -688,6 +726,15 @@ where
         }
         self.check_contact_network(relays)?;
         check_online(relays)?;
+        self.post_stored_answer(relays, slate_id).await
+    }
+
+    /// Posts the stored answer of `slate_id` to the payer's reply mailbox.
+    async fn post_stored_answer(
+        &self,
+        relays: &ContactRelays,
+        slate_id: SlateId,
+    ) -> Result<(), ContactError> {
         let network = self.wallet.config().network;
         let net = contact_network(network);
         let session = self.wallet.session()?;
@@ -736,7 +783,9 @@ where
 
     /// Takes a payment that came to the link mailbox of `account`: an S1 sealed to the epic1
     /// seal key, received with the epic1 proof key, its S2 sealed to the slate's reply key and
-    /// stored to post. Returns whether it was new; one taken before changes nothing.
+    /// stored to post. Returns whether it was new; one taken before changes nothing. A payment
+    /// whose amount is not the one the link asks is refused with
+    /// [`Epic1Refusal::AmountMismatch`] before anything is received.
     async fn take_payment(
         &self,
         account: AccountIndex,
@@ -746,24 +795,40 @@ where
         let network = self.wallet.config().network;
         let net = contact_network(network);
         let secret = self.wallet.epic1_seal_key(account, net)?;
-        let (slate_id, v3, reply_key, reply_mailbox) = open_payment(network, envelope, &secret)?;
+        let OpenedPayment {
+            slate_id,
+            v3,
+            amount,
+            reply_key,
+            reply_mailbox,
+        } = open_payment(network, envelope, &secret)?;
         let session = self.wallet.session()?;
-        let (taken, label) = self
+        let (taken, label, asked) = self
             .contact_work(move |_, _| {
                 session.store.read(|repos| {
                     let taken = repos.setting(&answer_key(slate_id))?.is_some();
+                    let asked = match link {
+                        Some((kind, n)) => repos
+                            .setting(&link_key(account, kind, n))?
+                            .and_then(|text| from_text::<LinkState>(&text, "epic1 link").ok())
+                            .and_then(|state| state.amount),
+                        None => None,
+                    };
                     let label = repos
                         .accounts()?
                         .into_iter()
                         .find(|record| record.index == account)
                         .map(|record| record.label);
-                    Ok::<_, ContactError>((taken, label))
+                    Ok::<_, ContactError>((taken, label, asked))
                 })
             })
             .await?;
         if taken {
             debug!(slate_id = %slate_id, "epic1 payment taken before");
             return Ok(false);
+        }
+        if asked.is_some_and(|asked| asked != amount.value()) {
+            return Err(refused(Epic1Refusal::AmountMismatch));
         }
         let received = self
             .wallet
@@ -845,12 +910,13 @@ where
     /// envelope names the slate's reply key and a reply mailbox on the wallet's own relay. The
     /// payment is stored, then posted to the link's first transport, and to the next when a
     /// post fails, at most three. `hosts_ok` says the user confirmed every relay
-    /// [`ContactBook::epic1_read`] reported. Collecting watches the reply mailbox until the TTL
+    /// [`ContactBook::epic1_read`] reported; it is not needed when each is in the relay list. Collecting watches the reply mailbox until the TTL
     /// and finalizes the S2 that answers.
     ///
-    /// Fails as [`ContactBook::epic1_read`] does, with [`ContactError::Epic1`] when `hosts_ok`
-    /// is false or the wallet's relay is on this device, [`ContactError::Send`] as sending
-    /// fails, and [`ContactError::Encode`] with [`lepic_seal::EncodeError::BodyTooLarge`] for
+    /// Fails as [`ContactBook::epic1_read`] does, with [`ContactError::Epic1`] when a relay is
+    /// not in the relay list and `hosts_ok` is false, the wallet's relay is on this device, the
+    /// amount sent is not the one the link asks ([`Epic1Refusal::AmountMismatch`]),
+    /// [`ContactError::Send`] as sending fails, and [`ContactError::Encode`] with [`lepic_seal::EncodeError::BodyTooLarge`] for
     /// a slate too large to seal; a send that could not be sealed or stored is cancelled.
     #[instrument(skip_all, fields(wallet = %self.wallet.config().name))]
     pub async fn epic1_pay(
@@ -859,18 +925,24 @@ where
         request: Epic1PayRequest,
         hosts_ok: bool,
     ) -> Result<Epic1Paid, ContactError> {
-        if !hosts_ok {
-            return Err(refused(Epic1Refusal::RelayNotConfirmed));
-        }
         self.check_contact_network(relays)?;
         check_online(relays)?;
         let network = self.wallet.config().network;
         let (link, usable) = read_link(&request.link, network, relays)?;
+        if !hosts_confirmed(hosts_ok, &usable) {
+            return Err(refused(Epic1Refusal::RelayNotConfirmed));
+        }
+        if link
+            .amount
+            .is_some_and(|asked| asked != request.send.amount)
+        {
+            return Err(refused(Epic1Refusal::AmountMismatch));
+        }
         let own = own_relay(relays)?.clone();
         let mut send = request.send;
         let account = send.account;
         send.ttl_blocks = Some(send.ttl_blocks.unwrap_or(EPIC1_TTL_BLOCKS));
-        send.payment_proof_recipient = if request.proof {
+        let send_proof = if request.proof {
             Some(
                 ProofAddress::from_bytes(link.address.proof_key().to_bytes())
                     .map_err(|_| refused(Epic1Refusal::ProofKey))?,
@@ -878,6 +950,7 @@ where
         } else {
             None
         };
+        send.payment_proof_recipient = send_proof;
         let delivery = Delivery::Export {
             to: Location::File(request.slate_file),
         };
@@ -888,6 +961,7 @@ where
             }
             Err(error) => return Err(ContactError::Send(error)),
         };
+        let proof = send_proof.map(|address| hex::encode(address.as_bytes()));
         let entries: Vec<StoredEntry> = usable
             .iter()
             .map(|(transport, _)| StoredEntry {
@@ -903,6 +977,7 @@ where
                 sent.slate_id,
                 account,
                 entries,
+                proof.clone(),
             )
             .await
         {
@@ -918,11 +993,13 @@ where
             address: link.address.encode(),
             attempts,
             posted,
+            proof_address: proof,
         })
     }
 
     /// Seals the stored S1 of `slate_id` to `address` and stores the payment. Returns the
     /// envelope.
+    #[allow(clippy::too_many_arguments)] // Each is a separate part of the stored payment.
     async fn store_payment(
         &self,
         address: &Epic1Address,
@@ -931,6 +1008,7 @@ where
         slate_id: SlateId,
         account: AccountIndex,
         entries: Vec<StoredEntry>,
+        proof: Option<String>,
     ) -> Result<Vec<u8>, ContactError> {
         let network = self.wallet.config().network;
         let net = contact_network(network);
@@ -978,6 +1056,7 @@ where
             next: 0,
             posted: None,
             finalized: false,
+            proof,
         };
         let session = self.wallet.session()?;
         self.contact_work(move |_, _| {
@@ -1064,10 +1143,11 @@ where
     }
 
     /// Posts the stored payment `slate_id` again, the same bytes, to the transports of its link
-    /// after the one it was last posted to. `hosts_ok` says the user confirmed their relays.
+    /// after the one it was last posted to. `hosts_ok` says the user confirmed their relays; it
+    /// is not needed when each is in the relay list.
     ///
-    /// Fails with [`ContactError::Epic1`] when `hosts_ok` is false, no payment is stored, it
-    /// was finalized, or every transport was tried.
+    /// Fails with [`ContactError::Epic1`] when a relay is not in the relay list and `hosts_ok`
+    /// is false, no payment is stored, it was finalized, or every transport was tried.
     #[instrument(skip_all, fields(wallet = %self.wallet.config().name))]
     pub async fn epic1_post_next(
         &self,
@@ -1075,9 +1155,6 @@ where
         slate_id: SlateId,
         hosts_ok: bool,
     ) -> Result<Epic1Paid, ContactError> {
-        if !hosts_ok {
-            return Err(refused(Epic1Refusal::RelayNotConfirmed));
-        }
         self.check_contact_network(relays)?;
         check_online(relays)?;
         let session = self.wallet.session()?;
@@ -1095,6 +1172,9 @@ where
             return Err(refused(Epic1Refusal::NoMoreEntries));
         }
         let usable = stored_entries(relays, &state.entries)?;
+        if !hosts_confirmed(hosts_ok, &usable) {
+            return Err(refused(Epic1Refusal::RelayNotConfirmed));
+        }
         let envelope = hex::unhex(&state.envelope).ok_or(corrupt("epic1 payment"))?;
         let (attempts, posted) = self
             .post_payment(
@@ -1112,6 +1192,7 @@ where
             address: state.address,
             attempts,
             posted,
+            proof_address: state.proof,
         })
     }
 
@@ -1262,7 +1343,29 @@ where
         if !replies.is_empty() {
             taken = taken.saturating_add(self.drain_replies(relays, replies).await?);
         }
+        self.post_trusted_answers(relays).await;
         Ok(taken)
+    }
+
+    /// Posts the answers not posted yet whose reply mailbox is on a relay in the relay list.
+    /// An answer for any other relay waits for [`ContactBook::epic1_post_answer`]. One that
+    /// fails is tried again at the next cycle.
+    async fn post_trusted_answers(&self, relays: &ContactRelays) {
+        let answers = match self.epic1_answers(relays).await {
+            Ok(answers) => answers,
+            Err(error) => {
+                warn!(error = %ErrorChain(&error), "epic1 answers not listed");
+                return;
+            }
+        };
+        for answer in answers {
+            if answer.posted || !answer.report.is_some_and(|report| report.in_relay_list) {
+                continue;
+            }
+            if let Err(error) = self.post_stored_answer(relays, answer.slate_id).await {
+                warn!(slate_id = %answer.slate_id, error = %ErrorChain(&error), "epic1 answer not posted");
+            }
+        }
     }
 
     /// Drains the link mailboxes `links`, `(relay, account, kind, n)`, by relay.
@@ -1439,6 +1542,7 @@ where
                         issued_at: now,
                         used_at: Some(now),
                         relays: vec![host],
+                        amount: None,
                     };
                     repos.put_setting(&key, &to_text(&state, "epic1 link")?)?;
                 }
