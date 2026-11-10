@@ -1847,11 +1847,16 @@ fn write_show(out: &mut Vec<u8>, tx: &TxReport) -> std::io::Result<()> {
         writeln!(out, "{:<12} declined at {at}", "Receiver")?;
     }
     if let Some(at) = &tx.payer_declined_at {
-        writeln!(
-            out,
-            "{:<12} declined by the payer at {at}; cancel it with `lepic tx cancel {}`",
-            "Payer", tx.tx_id
-        )?;
+        // The way out is shown only while the invoice still waits for payment.
+        if tx.state == "received" {
+            writeln!(
+                out,
+                "{:<12} declined by the payer at {at}; cancel it with `lepic tx cancel {}`",
+                "Payer", tx.tx_id
+            )?;
+        } else {
+            writeln!(out, "{:<12} declined by the payer at {at}", "Payer")?;
+        }
     }
     if let Some(origin) = &tx.origin {
         writeln!(out, "{:<12} {origin}", "Origin")?;
@@ -2512,6 +2517,7 @@ mod tests {
     fn a_declined_invoice_shows_when_and_how_to_end_it() {
         let declined = || TxReport {
             payer_declined_at: Some(text("2026-11-10T09:00:00Z")),
+            state: text("received"),
             ..tx(None)
         };
         let json: Value =
@@ -2525,6 +2531,16 @@ mod tests {
             human.as_str()
         );
         assert_eq!(json["payer_declined_at"], "2026-11-10T09:00:00Z");
+        let cancelled = TxReport {
+            state: text("cancelled"),
+            ..declined()
+        };
+        let human = render(&Report::Show(cancelled), OutputFormat::Human);
+        assert!(
+            human.contains("declined by the payer at 2026-11-10T09:00:00Z\n"),
+            "{}",
+            human.as_str()
+        );
         let plain = render(&Report::Show(tx(None)), OutputFormat::Json);
         assert!(!plain.contains("payer_declined_at"), "{}", plain.as_str());
     }
