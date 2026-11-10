@@ -1058,6 +1058,7 @@ where
         let (tip, _) = self.stage_tip(&session, InvoiceError::Node).await?;
         let reply_keys = self.reply_keys();
         let method = Arc::clone(method);
+        let opens_native = self.native_slates().is_some();
         self.blocking(move |ports, config| {
             let env = InvoiceEnvironment {
                 keychain: &session.keychain,
@@ -1065,7 +1066,7 @@ where
                 tip,
                 now: ports.clock.now(),
                 reply_keys: reply_keys.as_deref(),
-                claim: Claim::of(config, &session.seed),
+                claim: Claim::of(config, &session.seed, opens_native),
             };
             let issued = I1Randomness::draw(&mut **ports.rng.lock())
                 .map_err(InvoiceError::Signing)
@@ -1159,6 +1160,7 @@ where
         debug!(height = tip.value(), "slate checked");
 
         let method = Arc::clone(method);
+        let opens_native = self.native_slates().is_some();
         let paid = self
             .blocking(move |ports, config| {
                 let env = InvoiceEnvironment {
@@ -1167,7 +1169,7 @@ where
                     tip,
                     now: ports.clock.now(),
                     reply_keys: None,
-                    claim: Claim::of(config, &session.seed),
+                    claim: Claim::of(config, &session.seed, opens_native),
                 };
                 let paid = I2Randomness::draw(&mut **ports.rng.lock())
                     .map_err(InvoiceError::Signing)
@@ -1267,6 +1269,7 @@ where
             return Err(InvoiceError::WrongStage { stage: i2.stage() });
         }
         let (tip, _) = self.stage_tip(&session, InvoiceError::Node).await?;
+        let opens_native = self.native_slates().is_some();
         self.blocking(move |ports, config| {
             let env = InvoiceEnvironment {
                 keychain: &session.keychain,
@@ -1274,7 +1277,7 @@ where
                 tip,
                 now: ports.clock.now(),
                 reply_keys: None,
-                claim: Claim::of(config, &session.seed),
+                claim: Claim::of(config, &session.seed, opens_native),
             };
             Ok(session.store.read(|repos| check_stored(repos, &env, &i2)))
         })
@@ -1296,6 +1299,7 @@ where
             return Err(InvoiceError::WrongStage { stage: i2.stage() });
         }
         let (tip, _) = self.stage_tip(&session, InvoiceError::Node).await?;
+        let opens_native = self.native_slates().is_some();
         let stored = self
             .blocking(move |ports, config| {
                 let env = InvoiceEnvironment {
@@ -1304,7 +1308,7 @@ where
                     tip,
                     now: ports.clock.now(),
                     reply_keys: None,
-                    claim: Claim::of(config, &session.seed),
+                    claim: Claim::of(config, &session.seed, opens_native),
                 };
                 Ok(session
                     .store

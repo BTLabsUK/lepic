@@ -1270,7 +1270,7 @@ where
         let answer = reply.clone();
         let sealed = self
             .blocking(move |ports, config| {
-                let features = Claim::of(config, &session.seed).features;
+                let features = Claim::of(config, &session.seed, true).features;
                 let sealing = Sealing {
                     network: config.network,
                     slates: &*slates,

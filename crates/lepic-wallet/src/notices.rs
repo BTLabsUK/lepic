@@ -1501,9 +1501,10 @@ where
         // The notice is padded as this wallet's own payments over the method are, whose marker
         // may claim native slates.
         let session = self.session()?;
+        let opens_native = self.native_slates().is_some();
         let sending = self
             .blocking(move |_, config| {
-                Ok(Claim::of(config, &session.seed).sending(config.network, None))
+                Ok(Claim::of(config, &session.seed, opens_native).sending(config.network, None))
             })
             .await?;
         let lengths = method.notice_lengths_for(&sending);

@@ -289,7 +289,7 @@ where
         // An answer from a listing claims no native slates, so the listing's address is not
         // linked to the payments address's seal key.
         let claim = match listing {
-            None => Claim::of(self.config(), &session.seed),
+            None => Claim::of(self.config(), &session.seed, self.native_slates().is_some()),
             Some(_) => Claim::plain(self.config().claimed_features()),
         };
         debug!(height = tip.value(), "slate checked");

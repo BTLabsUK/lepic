@@ -1159,7 +1159,7 @@ where
                     network: config.network,
                     now: ports.clock.now(),
                     reply_keys: reply_keys.as_deref(),
-                    claim: Claim::of(config, &session.seed),
+                    claim: Claim::of(config, &session.seed, native_slates.is_some()),
                     native_direct: config.native_direct,
                     sealing: native_slates.as_deref().map(|slates| Sealing {
                         network: config.network,
@@ -1212,6 +1212,7 @@ where
         check_delivery(&**method, &delivery)?;
         let (tip, _) = self.stage_tip(&session, SendError::Node).await?;
         let reply_keys = self.reply_keys();
+        let opens_native = self.native_slates().is_some();
         let carrier = Arc::clone(method);
         let stored = self
             .blocking(move |ports, config| {
@@ -1221,7 +1222,7 @@ where
                     network: config.network,
                     now: ports.clock.now(),
                     reply_keys: reply_keys.as_deref(),
-                    claim: Claim::of(config, &session.seed),
+                    claim: Claim::of(config, &session.seed, opens_native),
                     native_direct: config.native_direct,
                     sealing: None,
                 };
@@ -1293,7 +1294,7 @@ where
                     network: config.network,
                     now: ports.clock.now(),
                     reply_keys: reply_keys.as_deref(),
-                    claim: Claim::of(config, &session.seed),
+                    claim: Claim::of(config, &session.seed, native_slates.is_some()),
                     native_direct: config.native_direct,
                     sealing: native_slates.as_deref().map(|slates| Sealing {
                         network: config.network,
@@ -1529,7 +1530,7 @@ mod tests {
     }
 
     #[test]
-    fn the_native_claim_rides_the_marker_only_with_native_direct_on() {
+    fn the_native_claim_rides_the_marker_only_with_native_direct_on_and_a_hook() {
         use lepic_transport::marker::features::NATIVE_SLATES;
         use lepic_transport::marker::v3::lepic_marker_reply_key;
         let seed = lepic_keychain::Seed::from_entropy(&[7; 32]).unwrap();
@@ -1541,14 +1542,20 @@ mod tests {
         let encode = |sending: &Sending| epicbox.encode_new(&slate, &context, sending).unwrap();
 
         // Off: the marker is the one a wallet without the claim writes, byte for byte.
-        let off = Claim::of(&config(false), &seed);
+        let off = Claim::of(&config(false), &seed, true);
         let features = config(false).claimed_features();
         assert_eq!(off, Claim::plain(features));
         let before = encode(&Sending::new(Network::Floonet, features, None)).wire;
         assert_eq!(encode(&off.sending(Network::Floonet, None)).wire, before);
 
         // On: bit 7 and the payments address's kind-03 public key.
-        let on = Claim::of(&config(true), &seed);
+        // On without a hook to open native slates: nothing is claimed that could not be opened.
+        assert_eq!(
+            Claim::of(&config(true), &seed, false),
+            Claim::plain(features)
+        );
+
+        let on = Claim::of(&config(true), &seed, true);
         let key = *crate::native_epicbox::payments_seal_key(&seed, Network::Floonet)
             .unwrap()
             .public_key()

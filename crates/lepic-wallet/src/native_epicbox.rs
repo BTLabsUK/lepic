@@ -57,11 +57,13 @@ impl Claim {
         }
     }
 
-    /// The claim of the wallet of `seed` under `config`. A seal key that does not derive is
-    /// logged and the wallet claims no native slates.
-    pub(crate) fn of(config: &WalletConfig, seed: &Seed) -> Self {
+    /// The claim of the wallet of `seed` under `config`. `opens_native` says a
+    /// [`NativeSlates`] hook is installed to open native slates: without one the wallet claims
+    /// none, as it could not open them. A seal key that does not derive is logged and the
+    /// wallet claims no native slates.
+    pub(crate) fn of(config: &WalletConfig, seed: &Seed, opens_native: bool) -> Self {
         let features = config.claimed_features();
-        if !config.native_direct {
+        if !config.native_direct || !opens_native {
             return Self::plain(features);
         }
         match payments_seal_key(seed, config.network) {
