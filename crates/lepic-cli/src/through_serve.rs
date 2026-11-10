@@ -3,11 +3,16 @@
 //!
 //! serve holds the data directory lock for as long as it runs. A command that has a route in the
 //! wallet API is sent to serve's socket as that route's request (the socket the data directory's
-//! `serve-socket` pointer names, else the default one), and the
-//! answer is printed as the command prints it when it runs on its own: the JSON report as it
-//! comes, the text serve renders for `Accept: text/plain`, or the problem as the CLI error with
-//! the same kind, exit code, causes and transaction. A command with no route, or with an option
-//! the route has no field for, runs here and meets the lock.
+//! `serve-socket` pointer names, else the default one). The answer is printed as the command
+//! prints it when it runs on its own: the JSON report as it comes, the text serve renders for
+//! `Accept: text/plain`, or the problem as the CLI error with the same kind, exit code, causes,
+//! hint and transaction.
+//!
+//! The wallet, transaction, Epicbox and profile commands map here; `families` maps the contact,
+//! in-person, epic1, `epictx open` and `profile domain` commands. A file a command reads is read
+//! after the connection is made and goes in the request body; a file it writes is written from the
+//! answer (`Finish`), through the same helpers a direct run uses. A command with no route, or with
+//! an option the route has no field for, runs here and meets the lock.
 
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
