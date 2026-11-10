@@ -207,7 +207,8 @@ pub const RETRY_WAITS: [Duration; 3] = [
 
 /// Runs `attempt` until it succeeds, fails with an error `is_transient` rejects, has been
 /// retried after each of `waits`, or the next retry would not start before `budget` from now.
-/// A retry starts after its wait; the failure of the last try is the result.
+/// A retry starts after its wait and is logged as a warning with the failure it follows; the
+/// failure of the last try is the result.
 pub async fn retrying<T, E, F, Fut>(
     waits: &[Duration],
     budget: Duration,
@@ -215,6 +216,7 @@ pub async fn retrying<T, E, F, Fut>(
     mut attempt: F,
 ) -> Result<T, E>
 where
+    E: std::fmt::Display,
     F: FnMut(usize) -> Fut,
     Fut: Future<Output = Result<T, E>>,
 {
@@ -232,6 +234,12 @@ where
             return Err(error);
         }
         tries = tries.saturating_add(1);
+        tracing::warn!(
+            transport = "tor",
+            retry = tries,
+            wait_s = wait.as_secs(),
+            "onion not reachable yet ({error}); trying again"
+        );
         tokio::time::sleep(wait).await;
     }
 }
