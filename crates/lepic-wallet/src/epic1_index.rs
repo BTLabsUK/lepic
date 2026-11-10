@@ -11,7 +11,7 @@
 //! handed out is not handed out again. From then on the account counts from that address.
 
 use lepic_contact::EncSecretKey;
-use lepic_store::{AccountIndex, Repositories, StoreError, TxId};
+use lepic_store::{AccountIndex, Record, Repositories, StoreError, TxId};
 
 /// How many indexes past the highest one known a restored wallet tries, and skips before it
 /// issues the next address.
@@ -31,10 +31,19 @@ const RESTORED_SETTING: &str = "epic1.restored";
 /// their gap.
 const PAST_GAP_PREFIX: &str = "epic1.past_gap.";
 
+/// The address index stored under `key`. A value that is not one is
+/// [`StoreError::Corrupt`]: read as absent, a damaged count of issued addresses would issue
+/// them again.
 fn number(repos: &dyn Repositories, key: &str) -> Result<Option<u32>, StoreError> {
-    Ok(repos
+    repos
         .setting(key)?
-        .and_then(|text| text.parse::<u32>().ok()))
+        .map(|text| {
+            text.parse::<u32>().map_err(|_| StoreError::Corrupt {
+                record: Record::Setting,
+                field: "epic1 address index",
+            })
+        })
+        .transpose()
 }
 
 fn account_key(prefix: &str, account: AccountIndex) -> String {
@@ -142,9 +151,10 @@ pub(crate) fn record_payment(
 }
 
 /// The epic1 address index the payment `tx_id` came to; `None` for a transaction that did not
-/// come to an epic1 address.
+/// come to an epic1 address, or whose stored index is damaged: it is only shown, and a
+/// damaged one does not keep the transaction from being listed.
 pub fn index_of(repos: &dyn Repositories, tx_id: TxId) -> Result<Option<u32>, StoreError> {
-    number(repos, &format!("{TX_PREFIX}{}", tx_id.0))
+    Ok(number(repos, &format!("{TX_PREFIX}{}", tx_id.0)).unwrap_or_else(|_| None))
 }
 
 /// Tries the seal keys `keys`, `(index, key)` in the order given, and returns the index of the
@@ -228,6 +238,40 @@ mod tests {
                 assert_eq!(issue_next(repos, A)?, Some(33 + RESTORE_GAP));
                 // Another account is still inside its gap.
                 assert_eq!(issue_next(repos, B)?, Some(1 + RESTORE_GAP));
+                Ok::<_, StoreError>(())
+            })
+            .unwrap();
+    }
+
+    fn corrupt<T>(result: Result<T, StoreError>) -> bool {
+        matches!(
+            result,
+            Err(StoreError::Corrupt {
+                record: Record::Setting,
+                ..
+            })
+        )
+    }
+
+    #[test]
+    fn a_damaged_count_refuses_to_issue_and_issues_nothing_again() {
+        let store = new_store();
+        store
+            .write(|repos| {
+                for _ in 0..3 {
+                    issue_next(repos, A)?;
+                }
+                let key = account_key(ISSUED_PREFIX, A);
+                repos.put_setting(&key, "3x")?;
+                assert!(corrupt(issue_next(repos, A)));
+                assert!(corrupt(highest_tried(repos, A)));
+                assert_eq!(repos.setting(&key)?.as_deref(), Some("3x"));
+                repos.put_setting(&account_key(SEEN_PREFIX, B), "")?;
+                assert!(corrupt(issue_next(repos, B)));
+                assert!(corrupt(trial_order(repos, B)));
+                // A damaged index kept with a transaction only hides it.
+                repos.put_setting(&format!("{TX_PREFIX}9"), "-1")?;
+                assert_eq!(index_of(repos, TxId(9))?, None);
                 Ok::<_, StoreError>(())
             })
             .unwrap();
