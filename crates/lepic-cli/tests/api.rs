@@ -283,9 +283,10 @@ fn the_event_stream_yields_the_wallets_events() {
         let status = http(socket, "GET", "/v1/status", None).ok();
         assert_eq!(status["requests"]["in_flight"], 2, "{status}");
 
-        sender
+        let sent = sender
             .run(client, &["tx", "send", "1", "--to", &address])
-            .ok();
+            .ok()
+            .json();
         let started = Instant::now();
         let mut name = String::new();
         loop {
@@ -299,6 +300,7 @@ fn the_event_stream_yields_the_wallets_events() {
                 assert_eq!(event["kind"], name.as_str(), "{event}");
                 if name == "received" {
                     assert_eq!(event["amount"], "1.00000000", "{event}");
+                    assert_eq!(event["slate_id"], sent["slate_id"], "{event}");
                     break;
                 }
             }
@@ -342,6 +344,28 @@ fn transaction_routes_refuse_what_the_cli_refuses() {
         );
         let scan = http(socket, "POST", "/v1/wallet/scan", Some("{}")).ok();
         assert!(scan.is_object(), "{scan}");
+
+        let refreshed = http(socket, "GET", "/v1/transactions?refresh=true", None).ok();
+        assert_eq!(
+            refreshed["transactions"].as_array().unwrap().len(),
+            1,
+            "{refreshed}"
+        );
+        let tx_id = &refreshed["transactions"][0]["tx_id"];
+        let shown = http(
+            socket,
+            "GET",
+            &format!("/v1/transactions/{tx_id}?refresh=true"),
+            None,
+        )
+        .ok();
+        assert_eq!(shown["state"], "confirmed", "{shown}");
+        for path in [
+            "/v1/transactions?refresh=yes",
+            "/v1/transactions/1?refresh=1",
+        ] {
+            problem(&http(socket, "GET", path, None), 400, "usage");
+        }
     });
 }
 
@@ -360,6 +384,14 @@ fn methods_are_listed_and_a_send_names_one() {
         let epicbox = methods.iter().find(|m| m["id"] == "epicbox").unwrap();
         assert_eq!(epicbox["delivers"], true, "{listed}");
         assert_eq!(epicbox["notices"], true, "{listed}");
+        assert_eq!(epicbox["listens"], true, "{listed}");
+        let listens = |id: &str| methods.iter().find(|m| m["id"] == id).unwrap()["listens"].clone();
+        assert_eq!(
+            listens("http"),
+            false,
+            "serve runs without --http: {listed}"
+        );
+        assert_eq!(listens("file"), false, "{listed}");
         let file = methods.iter().find(|m| m["id"] == "file").unwrap();
         assert_eq!(file["exchanges"], true, "{listed}");
         assert_eq!(file["carries"]["reply_key"], true, "{listed}");

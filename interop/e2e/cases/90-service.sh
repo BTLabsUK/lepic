@@ -90,6 +90,8 @@ case_svc_status() {
     api GET /v1/methods || fail "GET /v1/methods ${API_STATUS}" || return 1
     methods="$(jq -c '[.methods[].id]' <<<"${API_BODY}")"
     expect_json "${methods}" 'index("epicbox") != null and index("http") != null' "methods epicbox and http" || return 1
+    # serve always listens on Epicbox; this one runs without --http.
+    expect_json "${API_BODY}" '(.methods[] | select(.id == "epicbox") | .listens) == true and (.methods[] | select(.id == "http") | .listens) == false' "epicbox listens, http does not" || return 1
     api GET /v1/openapi.json || fail "GET /v1/openapi.json ${API_STATUS}" || return 1
     # A problem is RFC 9457 JSON with a code a client can branch on.
     api GET /v1/transactions/999999 && { fail "an unknown transaction answered ${API_STATUS}"; return 1; }
@@ -209,11 +211,11 @@ case_svc_deposit_burst() {
         got="$(jq -c --arg s "${slate}" '.transactions[] | select(.slate_id == $s)' <<<"${API_BODY}")"
         [[ -n "${got}" ]] || fail "deposit ${i} (${slate}) not in the bot's list" || return 1
         expect_json "${got}" '.direction == "incoming"' "deposit ${i} incoming" || return 1
-        # A received event names the transaction by tx_id; the slate is in the transaction.
+        # A received event names the transaction and its slate.
         id="$(jq -r .tx_id <<<"${got}")"
         grep '^data:' "${CASE_DIR}/events.txt" | sed 's/^data: //' |
-            jq -e --argjson id "${id}" 'select(.kind == "received" and .tx_id == $id)' >/dev/null ||
-            fail "no received event for deposit ${i} (tx ${id})" || return 1
+            jq -e --argjson id "${id}" --arg s "${slate}" 'select(.kind == "received" and .tx_id == $id and .slate_id == $s)' >/dev/null ||
+            fail "no received event for deposit ${i} (tx ${id}, slate ${slate})" || return 1
     done
     for i in "${!SVC_USERS[@]}"; do
         slate="$(jq -r .slate_id "${CASE_DIR}/deposit.${i}.json")"

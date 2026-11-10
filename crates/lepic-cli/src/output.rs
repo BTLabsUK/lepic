@@ -1019,7 +1019,8 @@ pub struct MethodReport {
     pub id: String,
     /// Whether it delivers a slate to a destination.
     pub delivers: bool,
-    /// Whether it receives slates on its own (a listener or an inbox).
+    /// Whether this serve receives slates over it: true for Epicbox, whose listener serve
+    /// always runs, and for HTTP when serve runs with `--http`.
     pub listens: bool,
     /// Whether it hands a slate to the caller and takes the answer back (files).
     pub exchanges: bool,

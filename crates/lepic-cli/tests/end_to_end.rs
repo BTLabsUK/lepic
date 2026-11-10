@@ -277,6 +277,56 @@ fn mine_pushed(host: &TestHost, height: u64) {
     });
 }
 
+/// `tx list` and `tx show` read what the last refresh stored; with `--refresh` they refresh
+/// from the node first, so a bot sees confirmations without `wallet info`.
+#[test]
+fn tx_list_and_show_refresh_first_when_asked() {
+    let (host, sender, receiver) = two_wallets();
+    let slate = sender.path("refresh.slate");
+    let sent = sender
+        .run(
+            &host,
+            &["tx", "send", "1", "--to-file", slate.to_str().unwrap()],
+        )
+        .ok()
+        .json();
+    let tx_id = sent["tx_id"].to_string();
+    let received = receiver
+        .run(&host, &["tx", "receive", slate.to_str().unwrap()])
+        .ok()
+        .json();
+    sender
+        .run(&host, &["tx", "finalize", text(&received, "reply_file")])
+        .ok();
+    mine_pushed(&host, TIP + 1);
+
+    let stored = sender.run(&host, &["tx", "show", &tx_id]).ok().json();
+    assert_eq!(stored["state"], "posted", "{stored}");
+    let shown = sender
+        .run(&host, &["tx", "show", &tx_id, "--refresh"])
+        .ok()
+        .json();
+    assert_eq!(shown["state"], "confirmed", "{shown}");
+    assert_eq!(shown["confirmed_height"], TIP + 1, "{shown}");
+
+    let incoming = |listing: &serde_json::Value| {
+        listing["transactions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|tx| tx["tx_id"] == received["tx_id"])
+            .unwrap()["state"]
+            .clone()
+    };
+    let listed = receiver.run(&host, &["tx", "list"]).ok().json();
+    assert_eq!(incoming(&listed), "received", "{listed}");
+    let listed = receiver
+        .run(&host, &["tx", "list", "--refresh"])
+        .ok()
+        .json();
+    assert_eq!(incoming(&listed), "confirmed", "{listed}");
+}
+
 #[test]
 fn tx_show_gives_the_kernel_and_the_confirmation_height() {
     let (host, sender, receiver) = two_wallets();

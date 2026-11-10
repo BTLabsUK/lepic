@@ -108,6 +108,7 @@ fn a_received_slate_announces_the_transaction_it_created() {
         announced,
         [Event::Received(ReceivedTransaction {
             tx_id: received.tx_id,
+            slate_id: received.slate.id(),
             account: AccountIndex(0),
             amount: received.slate.amount(),
             transport,

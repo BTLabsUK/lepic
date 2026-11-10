@@ -2175,6 +2175,7 @@ fn session_event(event: &Event) -> Option<WalletEvent> {
         },
         Event::Received(received) => WalletEvent {
             tx_id: Some(received.tx_id.0),
+            slate_id: Some(received.slate_id.to_string()),
             to: Some(TxStatus::Received),
             ..WalletEvent::of(WalletEventKind::Transaction)
         },
@@ -2799,6 +2800,7 @@ mod tests {
     fn received() -> Event {
         Event::Received(ReceivedTransaction {
             tx_id: TxId(3),
+            slate_id: lepic_wallet::event::SlateId::from_bytes([3; 16]),
             account: DEFAULT_ACCOUNT,
             amount: Amount::new(100_000_000),
             transport: TRANSPORT_ID,

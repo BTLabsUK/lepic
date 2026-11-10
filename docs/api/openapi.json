@@ -2548,6 +2548,7 @@
           "transactions"
         ],
         "summary": "The account's transactions",
+        "description": "They are read as the last refresh stored them; serve refreshes on its own schedule. With\n`refresh=true` the wallet is refreshed from the node first.",
         "operationId": "transactions",
         "parameters": [
           {
@@ -2557,6 +2558,15 @@
             "required": false,
             "schema": {
               "type": "string"
+            }
+          },
+          {
+            "name": "refresh",
+            "in": "query",
+            "description": "Refresh from the node first; false when absent",
+            "required": false,
+            "schema": {
+              "type": "boolean"
             }
           }
         ],
@@ -2628,6 +2638,7 @@
           "transactions"
         ],
         "summary": "One transaction",
+        "description": "With `refresh=true` the wallet is refreshed from the node first.",
         "operationId": "transaction",
         "parameters": [
           {
@@ -2639,6 +2650,15 @@
               "type": "integer",
               "format": "int32",
               "minimum": 0
+            }
+          },
+          {
+            "name": "refresh",
+            "in": "query",
+            "description": "Refresh from the node first; false when absent",
+            "required": false,
+            "schema": {
+              "type": "boolean"
             }
           }
         ],
@@ -5630,7 +5650,7 @@
           },
           "listens": {
             "type": "boolean",
-            "description": "Whether it receives slates on its own (a listener or an inbox)."
+            "description": "Whether this serve receives slates over it: true for Epicbox, whose listener serve\nalways runs, and for HTTP when serve runs with `--http`."
           },
           "notices": {
             "type": "boolean",

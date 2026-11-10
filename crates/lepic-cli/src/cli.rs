@@ -605,6 +605,8 @@ pub struct TxShowArgs {
     pub tx_id: Option<u32>,
     #[command(flatten)]
     pub slate_id: SendSlateIdArg,
+    #[command(flatten)]
+    pub refresh: RefreshArg,
 }
 
 #[derive(Debug, Args)]
@@ -626,6 +628,16 @@ pub struct PostArgs {
 pub struct ListArgs {
     #[command(flatten)]
     pub account: AccountArg,
+    #[command(flatten)]
+    pub refresh: RefreshArg,
+}
+
+#[derive(Debug, Args)]
+pub struct RefreshArg {
+    /// Refresh from the node first, as `wallet info` does, so confirmations and states are
+    /// current; without it the listing reads what the last refresh stored
+    #[arg(long)]
+    pub refresh: bool,
 }
 
 #[derive(Debug, Subcommand)]

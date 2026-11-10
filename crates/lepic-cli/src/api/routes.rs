@@ -25,9 +25,9 @@ use crate::cli::{
     InPersonPostArgs, InPersonReadArgs, InPersonReceiveArgs, InPersonSendArgs, InPersonSlateArg,
     InPersonTakeArgs, InviteExpiryArg, KeysArg, LegacyArg, ListArgs, ListingArgs, MAX_DRAIN_DAYS,
     MessageArg, NodeCommand, OnOffArg, OutFileArg, PeerArgs, PeerCommand, PeerForgetArgs,
-    PlainHttpArg, PostArgs, ProfileCommand, ProfileSetArgs, SasArg, SelectionArg, SendArgs,
-    SendDestinationArgs, SendSlateIdArg, SpendArgs, TorBinaryArgs, TxCommand, TxIdArgs, TxShowArgs,
-    WalletCommand, WalletScanArgs,
+    PlainHttpArg, PostArgs, ProfileCommand, ProfileSetArgs, RefreshArg, SasArg, SelectionArg,
+    SendArgs, SendDestinationArgs, SendSlateIdArg, SpendArgs, TorBinaryArgs, TxCommand, TxIdArgs,
+    TxShowArgs, WalletCommand, WalletScanArgs,
 };
 use crate::commands::is_onion;
 use crate::output::{
@@ -640,35 +640,78 @@ pub(crate) async fn node_status(api: &Api<'_>, _request: Request) -> Answer {
         .await
 }
 
+/// The account a transaction listing covers, refreshed from the node first when asked.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct TransactionsQuery {
+    account: Option<String>,
+    refresh: Option<String>,
+}
+
+/// The `refresh` query parameter: `true` or `false`, false when absent.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct RefreshQuery {
+    refresh: Option<String>,
+}
+
+/// Reads a `true` or `false` query value; absent is false.
+fn refresh_flag(value: Option<&str>) -> Result<RefreshArg, Problem> {
+    let refresh = match value {
+        None | Some("false") => false,
+        Some("true") => true,
+        Some(other) => {
+            return Err(Problem::usage(format!(
+                "refresh is true or false, not {other}"
+            )));
+        }
+    };
+    Ok(RefreshArg { refresh })
+}
+
 /// The account's transactions
+///
+/// They are read as the last refresh stored them; serve refreshes on its own schedule. With
+/// `refresh=true` the wallet is refreshed from the node first.
 #[utoipa::path(
     get,
     path = "/v1/transactions",
     tag = "transactions",
-    params(("account" = Option<String>, Query, description = "Account label; the default account when absent")),
+    params(
+        ("account" = Option<String>, Query, description = "Account label; the default account when absent"),
+        ("refresh" = Option<bool>, Query, description = "Refresh from the node first; false when absent"),
+    ),
     responses((status = 200, body = TxListReport)),
 )]
 pub(crate) async fn transactions(api: &Api<'_>, request: Request) -> Answer {
-    let query: AccountQuery = request.query()?;
+    let query: TransactionsQuery = request.query()?;
     let args = ListArgs {
         account: account(query.account),
+        refresh: refresh_flag(query.refresh.as_deref())?,
     };
     api.run(Call::Command(Command::Tx(TxCommand::List(args))))
         .await
 }
 
 /// One transaction
+///
+/// With `refresh=true` the wallet is refreshed from the node first.
 #[utoipa::path(
     get,
     path = "/v1/transactions/{tx_id}",
     tag = "transactions",
-    params(("tx_id" = u32, Path, description = "Local transaction id, as the list shows it")),
+    params(
+        ("tx_id" = u32, Path, description = "Local transaction id, as the list shows it"),
+        ("refresh" = Option<bool>, Query, description = "Refresh from the node first; false when absent"),
+    ),
     responses((status = 200, body = TxReport)),
 )]
 pub(crate) async fn transaction(api: &Api<'_>, request: Request) -> Answer {
+    let query: RefreshQuery = request.query()?;
     let args = TxShowArgs {
         tx_id: Some(tx_id(&request)?.tx_id),
         slate_id: SendSlateIdArg { slate_id: None },
+        refresh: refresh_flag(query.refresh.as_deref())?,
     };
     api.run(Call::Command(Command::Tx(TxCommand::Show(args))))
         .await
