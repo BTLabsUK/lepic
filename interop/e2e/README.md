@@ -60,7 +60,9 @@ step with `|| fail "<why>" || return 1`, and `note "<detail>"` for what a pass f
   status; the error JSON is on stdout, in `LAST_JSON`.
 - `wbg <wallet> <tag> <args>` runs lepic in the background; `epicbox_listen`, `http_listen` wrap the
   listeners. Background processes stop at the end of the case.
-- A listener or `serve` holds the wallet's data directory: another command on it exits 5 at once.
+- A listener or `serve` holds the wallet's data directory: another command on it exits 5 at once,
+  except that a command with an API route runs through a running `serve` (docs/cli.md, "Commands
+  while serve runs").
 - `ensure_wallet`, `ensure_funds`, `wait_until`, `wait_blocks`, `tx_by_slate`, `slate_state_is`,
   `expect_eq`, `expect_match`, `expect_json`.
 

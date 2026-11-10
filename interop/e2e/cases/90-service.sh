@@ -1,7 +1,8 @@
 # shellcheck shell=bash
-# A service on `lepic serve` and its wallet API, as a tip bot runs it: status and the CLI kept out
-# while serve holds the wallet, withdrawals sent at once over HTTP and Epicbox, deposits arriving
-# at once over HTTP and Epicbox, the event stream, and a slate_id repeated in a race.
+# A service on `lepic serve` and its wallet API, as a tip bot runs it: status and the CLI running
+# through serve while it holds the wallet, withdrawals sent at once over HTTP and Epicbox,
+# deposits arriving at once over HTTP and Epicbox, the event stream, and a slate_id repeated in a
+# race.
 
 SVC_PATHS="crates/lepic-cli/src/api crates/lepic-cli/src/service.rs crates/lepic-cli/src/commands/serve.rs crates/lepic-wallet crates/lepic-epicbox"
 CASES+=("svc.status|case_svc_status|${SVC_PATHS}")
@@ -96,12 +97,18 @@ case_svc_status() {
     expect_json "${API_BODY}" '.code == "not_found" and .status == 404' "unknown transaction problem" || return 1
     api POST /v1/transactions '{"to":"nonsense","amount":"abc"}' && { fail "a bad send was accepted"; return 1; }
     expect_json "${API_BODY}" '.code == "usage" or .code == "rejected"' "bad send problem" || return 1
-    # Serve holds the data directory: the CLI on the same wallet is refused at once.
-    wx 5 "${SVC_BOT}" wallet info || return 1
-    expect_json "${LAST_JSON}" '.error.kind == "wallet_state"' "CLI refused while serve runs" || return 1
+    # Serve holds the data directory: a command with a route runs through serve's socket, errors
+    # included, and one with no route exits 5 naming serve (ADR 0053).
+    cli_address="$(w "${SVC_BOT}" wallet address | jq -r .address)"
+    expect_eq "${cli_address}" "${address}" "wallet address through serve" || return 1
+    w "${SVC_BOT}" wallet info >"${CASE_DIR}/info.json" || fail "wallet info through serve" || return 1
+    expect_json "$(cat "${CASE_DIR}/info.json")" '.network == "floonet" and (.accounts | length) >= 1' "wallet info through serve" || return 1
+    wx 6 "${SVC_BOT}" tx show 999999 || return 1
+    expect_json "${LAST_JSON}" '.error.kind == "not_found"' "unknown transaction through serve" || return 1
+    wx 5 "${SVC_BOT}" tx send --to-file "${CASE_DIR}/unrouted.slate" 0.01 || return 1
+    expect_json "${LAST_JSON}" '.error.kind == "wallet_state" and (.error.message | contains("lepic serve is running"))' "a command with no route names serve" || return 1
     wstop "${SVC_PID}"
-    w "${SVC_BOT}" wallet info >/dev/null || fail "CLI refused after serve stopped" || return 1
-    note "status, wallet, address, epic1, node, methods, problems; CLI exits 5 while serve runs"
+    note "status, wallet, address, epic1, node, methods, problems; CLI through serve, exit 5 with no route"
 }
 
 # Three withdrawals at once to three HTTP listeners, then two requests racing under one slate_id.
