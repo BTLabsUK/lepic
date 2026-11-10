@@ -1,6 +1,6 @@
 # 0053 CLI commands reach a running `lepic serve` through its socket
 
-Status: proposed
+Status: accepted
 Date: 2026-11-10
 
 ## Context
