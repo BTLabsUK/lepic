@@ -694,6 +694,48 @@ fn a_usage_error_under_json_output_is_a_json_error() {
 }
 
 #[test]
+fn a_command_group_without_a_subcommand_under_json_output_is_a_json_error() {
+    let host = TestHost::new();
+    let wallet = Instance::new("test password");
+    let mut plain = wallet.env();
+    plain.retain(|(key, _)| key != "LEPIC_OUTPUT");
+    for (args, group) in [
+        (&["--output", "json", "tx"][..], "lepic tx"),
+        (&["--output=json", "contact"][..], "lepic contact"),
+        (&["--output", "json", "wallet"][..], "lepic wallet"),
+    ] {
+        let outcome = wallet.run_with(&host, args, plain.clone(), "");
+        assert_eq!((outcome.code, error_kind(&outcome).as_str()), (2, "usage"));
+        let message = outcome.json()["error"]["message"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        assert!(
+            message.starts_with(&format!("`{group}` needs a subcommand: ")),
+            "{message}"
+        );
+        assert!(outcome.stderr.is_empty(), "{outcome:?}");
+    }
+    let outcome = wallet.run_with(&host, &["--output", "json", "tx"], plain.clone(), "");
+    let message = outcome.json()["error"]["message"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert!(
+        message.contains("list") && message.contains("send"),
+        "{message}"
+    );
+    // The environment selects JSON too.
+    let outcome = wallet.run(&host, &["tx"]);
+    assert_eq!((outcome.code, error_kind(&outcome).as_str()), (2, "usage"));
+    // Text mode keeps the help text on standard error.
+    let outcome = wallet.run_with(&host, &["--output", "human", "tx"], plain, "");
+    assert_eq!(outcome.code, 2);
+    assert!(outcome.stderr.contains("Usage"), "{outcome:?}");
+    assert!(outcome.stdout.is_empty(), "{outcome:?}");
+}
+
+#[test]
 fn a_native_send_to_this_device_is_a_rejection() {
     let error = lepic_cli::exit::CliError::from(lepic_wallet_contacts::DirectError::ThisDevice {
         origin: "http://127.0.0.1:1".to_owned(),

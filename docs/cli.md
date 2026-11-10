@@ -1367,7 +1367,10 @@ $ lepic --output json tx send 1000 --to-file x.slate
 
 A command line that does not parse is an error of kind `usage` too: with `--output json`, or
 `LEPIC_OUTPUT=json`, it prints the same document (exit 2, the parser's message as `message`) and
-nothing on stderr. `--help` and `--version` still print text.
+nothing on stderr. A command group without a subcommand (`lepic tx`) is the same error, its message
+naming the group and listing the subcommands: "`lepic tx` needs a subcommand: list, show, …". In
+text mode it prints the group's help on stderr with exit 2. `--help` and `--version` still print
+text.
 
 Amounts are strings with eight decimals. The exit code says what kind of failure it was:
 
