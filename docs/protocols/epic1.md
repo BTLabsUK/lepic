@@ -23,8 +23,21 @@ text  = bech32m("epic", data)   on mainnet: 115 characters
   epic1.
 - The **seal key** is the X25519 seal key of kind `00`. Payments to the epic1 are sealed to it.
 
-Both derive from the seed and account, so a restore gives the same epic1. The address carries
-no mailbox, relay or transport.
+Both derive from the seed, the account and the address's index, so a restore gives the same
+epic1. The address carries no mailbox, relay or transport, and no index.
+
+### Numbered addresses
+
+Each address of an account has a number, its index. Index 0 is the account's first address and
+always exists. `epic1_new_address` issues the next one, and payments to every issued address
+come to the same account; the wallet records which index each payment came to. An address the
+account did not issue is refused (`AddressNotIssued`).
+
+A wallet restored from its recovery phrase does not know how far it issued. It tries the seal
+keys of `RESTORE_GAP`, 50, indexes past the highest one it knows, and issues nothing until
+`epic1_issue_here` makes this install the one that issues (`NotIssuingInstall` until then). Run
+it once no other install on the same phrase issues addresses: two that both issue give the same
+address to two payers. The first address issued after it comes after the gap.
 
 ```rust
 use lepic_epic1::Epic1Address;
@@ -45,7 +58,7 @@ A reader decodes in this order and stops at the first error, an `Epic1Error`:
 | 65 data bytes | `Length` | address data has N bytes, expected 65 |
 | Version `01` | `Version` | address version 0x02 is not defined |
 | Proof key | `ProofKey` | proof key is not a canonical Ed25519 point of large order |
-| Seal key | `SealKey` | seal key is of small order |
+| Seal key, canonical and not of small order | `SealKey` | seal key is of small order |
 
 | Constant | Value |
 |---|---|
@@ -124,16 +137,16 @@ A relay from a link, from tag `09` of an envelope or from tail record `02` is un
 `RelayHost::parse` and `parse_host_port` check its syntax:
 
 - `host[:port]` of at most `MAX_HOST_PORT_LEN`, 128 bytes;
-- labels of 1 to 63 letters, digits and hyphens, with no hyphen at either end, lower-cased;
-- a last label of digits only makes the host an IPv4 literal: four decimal labels, each at most
-  255, without leading zeros. An IPv6 literal cannot be written;
+- labels of 1 to 63 letters and digits, lower-cased. No hyphens: Epicbox relays apply this rule
+  to every address they carry;
+- a last label that starts with a digit makes the host an IPv4 literal: four decimal labels,
+  each at most 255, without leading zeros. An IPv6 literal cannot be written;
 - a port from 1 to 65535.
 
 | `RelayHostError` | Message |
 |---|---|
 | `Length` | relay host is empty or longer than 128 octets with its port |
-| `Label` | relay host has an empty label, a label over 63 octets or a character outside letters, digits, dots and hyphens |
-| `Hyphen` | relay host has a hyphen at the end of a label |
+| `Label` | relay host has an empty label, a label over 63 octets or a character outside letters, digits and dots |
 | `NotAnAddress` | relay host looks like an IPv4 literal but is not four decimal numbers up to 255 |
 | `Port` | relay port is not a number from 1 to 65535 |
 
@@ -170,14 +183,25 @@ A link names the wallet's own relay unless the caller passes other relays, at mo
 3. armors it `BEGINEPICTX.` and posts it, with a post key of role initiator, to the first usable
    entry.
 
-When that post fails, `epic1_post_next` posts the same bytes to the next entry. The payer must
-pass `hosts_ok` to either call: it is the user's consent to the relays the link names.
+When that post fails, `epic1_post_next` posts the same bytes to the next entry. A link whose
+relays are all in the relay list is paid as it is. For any other relay the payer must pass
+`hosts_ok` to either call: it is the user's consent to the relays the link names.
+
+`Epic1Paid` lists the posts in `attempts`. `posted` is the entry the payment went to, and
+`uncertain` the first entry whose post failed after the payment was sent: that relay may still
+hold it, and posting to the next relay never pays twice. While a payment to a link waits for its
+answer, another payment to it is refused (`PaymentPending`).
 
 **Payee.** On collect, the payee:
 
 - drops a message at a link mailbox that is not `BEGINEPICTX.` armor;
-- opens the envelope with the epic1 seal key and checks it;
-- builds the S2, and signs a payment proof with the epic1 proof key when the S1 asks for one;
+- opens the envelope with the seal key of one of the account's addresses and checks it;
+- refuses an amount other than the one the link asks (`AmountMismatch`) before receiving
+  anything, and stores a `declined` notice with reason `amount`, sealed to the reply key. Collect
+  posts it to the reply mailbox when that relay is in the relay list ([ADR 0045](../adr/0045-refusing-slates-nobody-asked-for.md)). The payer cancels
+  the payment and frees its inputs;
+- builds the S2, and signs a payment proof with the proof key of the address paid when the S1
+  asks for one;
 - seals the S2 to the reply key and stores it.
 
 The check refuses a signed envelope, a non-zero hint, a missing tag `03` or `09`, and any stage
@@ -214,11 +238,19 @@ A refusal is an `Epic1Refusal` inside `ContactError::Epic1`:
 | `Message` | the message does not fit in a link |
 | `ProofKey` | the address's proof key is not usable |
 | `Finalized` | the payment was finalized already |
+| `AmountMismatch` | the amount is not the one the link asks |
+| `AddressNotIssued` | the account did not issue that address |
+| `NoAddressLeft` | the account has no address index left |
+| `NotIssuingInstall` | this install does not issue new epic1 addresses |
+| `PaymentPending` | a payment to this link is waiting for its answer |
 
 ## From the CLI
 
 ```bash
 lepic epic1 address
+lepic epic1 new-address
+lepic epic1 addresses
+lepic epic1 issue-here
 lepic epic1 link 0.8
 lepic epic1 link --printed --epicbox relay.example
 lepic epic1 read 'epic:epic1…'

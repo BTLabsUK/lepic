@@ -228,7 +228,7 @@ over the method that carried it (ADR 0016):
 
 | `type` | From → to | Effect |
 |---|---|---|
-| `declined` | Payer → invoice issuer; a receiver that refuses unasked payments → sender | Reports the invoice declined; cancels a send the receiver never answered |
+| `declined` | Payer → invoice issuer; a receiver that refuses unasked payments → sender; an epic1 payee → payer, reason `amount` | Reports the invoice declined; cancels a send the receiver never answered, or an epic1 payment of the wrong amount |
 | `withdrawn` | Invoice issuer → payer | The issuer cancelled the invoice or let it expire |
 | `posted` | Issuer of a paid invoice → payer; sender → receiver | The transaction was posted; carries the kernel `excess` |
 | `cancelled` | Sender → receiver | The sender cancelled a payment the receiver had answered |

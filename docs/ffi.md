@@ -123,7 +123,7 @@ A stream that cannot start ends with a `WalletError` as its error and no event.
 | `http` | Sends to an `http(s)` listener and the wallet's own listener, with pinned peer keys ([ADR 0017](adr/0017-foreign-api-over-http.md)) |
 | `tor` | The wallet's own tor, its onion address, and Epicbox, node and HTTP traffic over it ([ADR 0018](adr/0018-tor-on-desktop.md)) |
 | `in_person` | EPICTX between two phones by QR code ([RFC 0003](rfcs/0003-epictx-native-slates.md)) |
-| `epic1` | EPICTX epic1 links: make, read, pay and answer them without pairing |
+| `epic1` | EPICTX epic1 links: make, read, pay and answer them without pairing; `epic1_issuing` and `epic1_issue_here` after a restore; `set_epic1_at_listener` per `ListenerSocket` (`Web`, `Onion`), off until turned on, read at the next listener start and used only with native slates on |
 | `at_rest` | Whether the database is encrypted, migration progress, `retire_plain_store` |
 | `app_data` | `seal_app_data` and `open_app_data`, with a key derived from the seed that stays in Rust |
 | `diagnostics` | `LogLevel` and `LogEntry` |
@@ -160,6 +160,7 @@ Every failing call returns a `WalletError`:
 | `message` | Text for logs; it may change |
 | `tx_id` | The stored transaction, when the failure left one |
 | `origin`, `pinned_key`, `shown_key` | The listener and keys of an HTTP pin failure |
+| `retry_after_secs` | For `NativeExchangeFailed`: the seconds the listener asked to wait before the next post; a longer wait reads as `u32::MAX` |
 
 Branch on `kind` or `code`, never on `message`. A code never changes meaning. Codes 32 to 36 and
 38 to 39 are unused.
@@ -272,6 +273,7 @@ Branch on `kind` or `code`, never on `message`. A code never changes meaning. Co
 | 111 | `Epic1WrongNetwork` | The link is for another network |
 | 112 | `NotAnEpic1Link` | The text is not an epic1 link |
 | 113 | `WalletTooNew` | A newer LEPIC wrote the database; update the app |
+| 114 | `Epic1PaymentPending` | A payment to the link waits for its answer: finalize or cancel it, or post it to the next relay |
 
 ## Building the native libraries
 

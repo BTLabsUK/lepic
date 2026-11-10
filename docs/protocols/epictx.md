@@ -235,7 +235,9 @@ answering party's public excess:
 check = u32(SHA256("epic-check/1" || excess)[0..4]) mod 10000
 ```
 
-The user finalizes the answer whose check code the other screen shows. `InPersonRefusal` names
+The answering wallet shows its check code once it posts the answer; an answer shown back as a
+code carries none, and the side that takes it reports the code. The user finalizes the answer
+whose check code the other screen shows. `InPersonRefusal` names
 why a code or an answer was refused. Examples: `Proof`, `NoReplyKey`, `NoTtl`, `Signed`,
 `ReplyMailboxTag`, `OtherSlate`, `TooManyAnswers` and `Loopback`.
 

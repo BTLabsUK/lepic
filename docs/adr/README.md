@@ -68,3 +68,4 @@ they were written, and the file names do not change.
 | [0051](0051-transaction-methods-in-one-crate.md) | Transaction methods live in one crate, outside the engine | accepted |
 | [0052](0052-legacy-at-the-edge-native-between-lepic-wallets.md) | Epic compatibility at the edge, a native protocol between LEPIC wallets | accepted |
 | [0053](0053-cli-commands-through-a-running-serve.md) | CLI commands reach a running `lepic serve` through its socket | accepted |
+| [0054](0054-epic1-over-carriers-derived-mailboxes-short-links.md) | epic1 over carriers: derived mailboxes and a short link | proposed |

@@ -240,6 +240,12 @@ key; see [EPICTX](epictx.md). Its `Content-Type` is `application/vnd.lepic.epict
 most 69,632 bytes (`MAX_ENVELOPE_LEN`). A declared length over that is refused before any of the
 body is read. The listener seals the S2 to the reply key.
 
+A payment sealed to one of the wallet's epic1 addresses is taken here only when the user turned
+that on for the listener: `epic1_web_listener` or `epic1_onion_listener` in the CLI,
+`set_epic1_at_listener` in the FFI. Both are off by default; the listener then answers such a
+payment as one sealed to a key it does not hold, so whoever has an epic1 address cannot tell that
+the listener is the same wallet. The setting takes effect at the next listener start.
+
 The endpoint keeps the last 64 replies (`MAX_CACHED_REPLIES`) by the SHA-256 of the envelope, so a
 repeated envelope gets the same bytes. Refusals are not cached. Peer routes spend the same budgets
 as the foreign API.
