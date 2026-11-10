@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "LEPIC wallet API",
-    "description": "The owner API of `lepic serve`, on its Unix socket, and the payment endpoint of `lepic serve --http`. Response bodies are the JSON `lepic --output json` prints. Amounts are decimal strings in EPIC. The owner routes are answered on the socket to its own user, and with `--owner-tls` over mutual TLS to the clients `api-clients` lists; an operation marked `x-socket-only` is refused over TLS.",
+    "description": "The owner API of `lepic serve`, on its Unix socket, and the payment endpoint of `lepic serve --http`. Response bodies are the JSON `lepic --output json` prints. Amounts are decimal strings in EPIC. The owner routes are answered on the socket to its own user, and with `--owner-tls` over mutual TLS to the clients `api-clients` lists; an operation marked `x-socket-only` is refused over TLS. A request with `Accept: text/plain` gets a report as the text `lepic` prints without `--output json`; errors are problem documents either way.",
     "license": {
       "name": "Apache-2.0"
     },
@@ -6094,6 +6094,13 @@
           "code"
         ],
         "properties": {
+          "causes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The causes `detail` ends with, outermost first, as the CLI's JSON error lists them.\n`detail` is the error itself followed by these, joined by `: `."
+          },
           "code": {
             "type": "string",
             "enum": [

@@ -1123,6 +1123,40 @@ has mode 600 and `serve` drops connections from any other user. A socket file le
 `serve` is replaced; any other file at the path is an error and is left alone. The socket is removed
 when `serve` stops.
 
+### Commands while serve runs
+
+While `serve` holds a wallet, a `lepic` command on that wallet that has a route in the API runs on
+serve's wallet through the socket in the data directory (ADR 0053). It prints what it prints when
+it runs on its own: the same JSON with `--output json`, the same text without it, and the same
+error, kind and exit code when it fails. It asks for no password: the socket admits only serve's
+own user, and serve holds the wallet unlocked. It runs with serve's settings, and prints no
+progress lines on stderr.
+
+| Command | Route |
+| --- | --- |
+| `wallet info` | `GET /v1/wallet` |
+| `wallet address` | `GET /v1/wallet/address` |
+| `wallet outputs` | `GET /v1/outputs` |
+| `wallet scan` | `POST /v1/wallet/scan` |
+| `node status` | `GET /v1/node` |
+| `tx list` | `GET /v1/transactions` |
+| `tx show <TX_ID>` | `GET /v1/transactions/{id}` |
+| `tx cancel`, `tx release`, `tx post` | `POST /v1/transactions/{id}/cancel`, `/release`, `/post` |
+| `tx send --to <ADDRESS or URL>` | `POST /v1/transactions` |
+| `epicbox status` | `GET /v1/epicbox` |
+| `epicbox peer` | `GET /v1/epicbox/peers/{address}` |
+| `profile show`, `profile set` | `GET`, `PATCH /v1/profile` |
+| `peer pins`, `peer forget` | `GET`, `DELETE /v1/peer-pins` |
+
+`tx send` goes through serve only without `--to-file`, `--to-contact`, `--purpose`,
+`--allow-plain-http`, `--tor-binary`, `--lib-dir`, `--fluff` and `--ttl-blocks`, with the default
+`--selection`, and to an address that is not an onion. `tx show --slate-id` and `epicbox status
+--listing` do not go through serve. Every other command, and every command given one of these
+options, exits 5 with `lepic serve is running on this wallet (socket <path>) and this command
+does not go through its API`: stop serve to run it, or call the API. A serve started with
+`--socket` on another path is not found, and commands on its wallet exit 5 with `another lepic
+process is using the data directory`.
+
 ### The API
 
 `docs/api/openapi.json` is the OpenAPI 3.1 document; `GET /v1/openapi.json` serves it.
@@ -1337,6 +1371,7 @@ With human output, an error ends with a `hint:` line that names what to try next
 | `wallet database belongs to a mainnet wallet, the configuration says floonet` | The data directory holds a wallet of the other chain; pass the matching `--network`. |
 | `password did not unlock the wallet` | Wrong password, or `LEPIC_PASSWORD` is set to an old one. |
 | `another lepic process is using the data directory` | A `lepic epicbox listen` or other command has the wallet open; stop it first. |
+| `lepic serve is running on this wallet (socket ...) and this command does not go through its API` | Stop `serve` to run the command, or call its API; see "Commands while serve runs". |
 | `other users can access the data directory` | Run `chmod 700` on it. |
 | `could not connect to the node` (exit 9) | The node is not running at `node_url`, or listens elsewhere. |
 | `node rejected the api secret` | Set `node_api_secret_file` to the node's `.foreign_api_secret`. |

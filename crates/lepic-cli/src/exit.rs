@@ -72,6 +72,11 @@ impl ErrorKind {
         }
     }
 
+    /// The kind whose [`ErrorKind::name`] is `name`.
+    pub fn from_name(name: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|kind| kind.name() == name)
+    }
+
     /// The `kind` field of a JSON error.
     pub const fn name(self) -> &'static str {
         match self {
@@ -189,6 +194,30 @@ pub enum CliError {
     SharedDataDir,
     #[error("another lepic process is using the data directory")]
     DataDirInUse,
+    /// `lepic serve` holds the wallet, and the command has no route in its API (ADR 0053).
+    #[error(
+        "lepic serve is running on this wallet (socket {}) and this command does not go through \
+         its API",
+        socket.display()
+    )]
+    ServeHoldsWallet { socket: std::path::PathBuf },
+    /// The error the running `lepic serve` answered for a command it ran (ADR 0053): the kind,
+    /// message, causes and transaction the command reports when it runs on its own.
+    #[error("{message}")]
+    Served {
+        kind: ErrorKind,
+        message: String,
+        #[source]
+        causes: Option<Box<ServedCause>>,
+        tx_id: Option<u32>,
+    },
+    /// The running `lepic serve` took a command and gave no answer, or one that is not the API's.
+    #[error("lepic serve on {} did not answer the command", socket.display())]
+    ServeUnanswered {
+        socket: std::path::PathBuf,
+        #[source]
+        source: Box<dyn std::error::Error + Send + Sync>,
+    },
     #[error("http address rejected")]
     HttpUrl(#[source] lepic_methods::http::UrlError),
     #[error("invoices go over epicbox or through a slate file, not over http")]
@@ -334,7 +363,9 @@ impl CliError {
             Self::Wallet(error) => wallet_kind(error),
             Self::Store(StoreError::SchemaTooNew { .. }) => ErrorKind::WalletState,
             Self::Store(_) => ErrorKind::Internal,
-            Self::DataDirInUse => ErrorKind::WalletState,
+            Self::DataDirInUse | Self::ServeHoldsWallet { .. } => ErrorKind::WalletState,
+            Self::Served { kind, .. } => *kind,
+            Self::ServeUnanswered { .. } => ErrorKind::Transport,
             Self::SlateIdReused { .. } => ErrorKind::Rejected,
             Self::NoSendWithSlate => ErrorKind::NotFound,
             Self::Send(error) => send_kind(error),
@@ -375,8 +406,28 @@ impl CliError {
             | Self::SlateIdReused { tx_id }
             | Self::HttpReplyLost { tx_id } => Some(*tx_id),
             Self::Direct(DirectError::Native { tx_id, .. }) => Some(tx_id.0),
+            Self::Served { tx_id, .. } => *tx_id,
             _ => None,
         }
+    }
+}
+
+/// One cause of an error `lepic serve` answered, with the causes below it.
+#[derive(Debug, Error)]
+#[error("{message}")]
+pub struct ServedCause {
+    message: String,
+    #[source]
+    next: Option<Box<Self>>,
+}
+
+impl ServedCause {
+    /// The chain of `causes`, outermost first; `None` when there are none.
+    pub fn chain(causes: Vec<String>) -> Option<Box<Self>> {
+        causes
+            .into_iter()
+            .rev()
+            .fold(None, |next, message| Some(Box::new(Self { message, next })))
     }
 }
 
@@ -769,6 +820,21 @@ mod tests {
             ),
             (ReceiveError::ZeroAmount.into(), ErrorKind::Rejected),
             (CliError::DataDirInUse, ErrorKind::WalletState),
+            (
+                CliError::ServeHoldsWallet {
+                    socket: "lepic.sock".into(),
+                },
+                ErrorKind::WalletState,
+            ),
+            (
+                CliError::Served {
+                    kind: ErrorKind::InsufficientFunds,
+                    message: "not enough".to_owned(),
+                    causes: None,
+                    tx_id: None,
+                },
+                ErrorKind::InsufficientFunds,
+            ),
             (
                 InvoiceError::NotParked {
                     slate_id: lepic_wallet::event::SlateId::from_bytes([1; 16]),

@@ -25,6 +25,8 @@ mod service;
 pub mod settings;
 pub mod settings_file;
 pub mod stores;
+#[cfg(unix)]
+mod through_serve;
 pub mod vault;
 
 use std::ffi::OsString;
@@ -164,8 +166,15 @@ fn execute<H: Host>(
         .enable_all()
         .build()
         .map_err(CliError::io("start the async runtime"))?;
-    let report = tracing::dispatcher::with_default(telemetry.dispatch(), || {
-        runtime.block_on(commands::execute(host, cli.command, settings, console))
-    })?;
-    Ok(render(&report, settings.output))
+    tracing::dispatcher::with_default(telemetry.dispatch(), || {
+        runtime.block_on(async {
+            // While `lepic serve` holds the wallet, a command with a route runs there.
+            #[cfg(unix)]
+            if let Some(text) = through_serve::run(&cli.command, settings).await? {
+                return Ok(text);
+            }
+            let report = commands::execute(host, cli.command, settings, console).await?;
+            Ok(render(&report, settings.output))
+        })
+    })
 }
