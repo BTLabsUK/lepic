@@ -167,13 +167,18 @@ case_send_tor() {
     wait_until "onion address printed" 240 grep -Eq '[a-z2-7]{56}\.onion' "${log}.out" "${log}.err" ||
         fail "tor listener never printed an onion address: $(tail -n 3 "${log}.err" | cut -c1-200)" || return 1
     onion="$(cat "${log}.out" "${log}.err" | grep -Eo '[a-z2-7]{56}\.onion' | head -n 1)"
-    out="$(w "${PAY_A}" tx send --to "${onion}" "${tor_args[@]}" --min-confirmations "${E2E_MINCONF}" "${amount}")" ||
-        fail "tx send over tor failed: $(tail -c 300 <<<"$(cat "${CASE_DIR}/last.err")${out}")" || return 1
+    # The send's stderr is kept in send.err, pass or fail: it names each retry of the onion.
+    local status=0 retries
+    out="$(w "${PAY_A}" tx send --to "${onion}" "${tor_args[@]}" --min-confirmations "${E2E_MINCONF}" "${amount}")" || status=$?
+    cp "${CASE_DIR}/last.err" "${CASE_DIR}/send.err"
+    ((status == 0)) ||
+        fail "tx send over tor failed: $(tail -c 300 <<<"$(cat "${CASE_DIR}/send.err")${out}")" || return 1
+    retries="$(grep -c 'onion not reachable yet' "${CASE_DIR}/send.err" || true)"
     slate="$(jq -r .slate_id <<<"${out}")"
     expect_json "${out}" '.delivered == true' "tor send result" || return 1
     wstop "${tor_pid}"
     check_paid "${PAY_A}" "${PAY_B}" "${slate}" "$(to_units "${amount}")" "${before}" || return 1
-    note "tor ${amount} paid to ${onion:0:12}…, fee ${PAID_FEE}, transport $(jq -r .transport <<<"${out}")"
+    note "tor ${amount} paid to ${onion:0:12}…, fee ${PAID_FEE}, transport $(jq -r .transport <<<"${out}"), onion retries ${retries}"
 }
 
 case_send_native_vs_legacy() {
