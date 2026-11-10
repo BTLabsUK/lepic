@@ -6,7 +6,7 @@ use lepic_primitives::amount::Amount;
 use lepic_wallet::send::{SendError, SendRequest};
 use lepic_wallet_contacts::{
     ContactError, ContactRelays, Epic1AnswerView, Epic1LinkKind, Epic1LinkRequest, Epic1LinkView,
-    Epic1Paid, Epic1PayRequest, WalletContacts,
+    Epic1Paid, Epic1PayRequest, Epic1Refusal, WalletContacts,
 };
 
 use super::contact::{SlateFile, purpose_name, read_sealed, relays_in_mode};
@@ -267,9 +267,13 @@ async fn pay<N: lepic_node::NodeApi + 'static>(
         .await;
     match (paid, caller_slate) {
         (Ok(paid), _) => Ok((paid, false)),
-        // A payment under the same id that ran at the same time stored its transaction first.
+        // A payment under the same id that ran at the same time stored its transaction first,
+        // or its payment, which then waits for its answer.
         (
-            Err(error @ ContactError::Send(SendError::SlateIdTaken { sent: Some(_), .. })),
+            Err(
+                error @ (ContactError::Send(SendError::SlateIdTaken { sent: Some(_), .. })
+                | ContactError::Epic1(Epic1Refusal::PaymentPending)),
+            ),
             Some(slate_id),
         ) => match first.find(opened, slate_id).await {
             Ok(Some(paid)) => Ok((paid, true)),
