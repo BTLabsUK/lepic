@@ -63,6 +63,7 @@ pub(crate) struct AccountQuery {
 #[serde(deny_unknown_fields)]
 pub(crate) struct Epic1AddressQuery {
     account: Option<String>,
+    #[serde(default, deserialize_with = "query_number")]
     index: Option<u32>,
 }
 
@@ -71,8 +72,23 @@ pub(crate) struct Epic1AddressQuery {
 #[serde(deny_unknown_fields)]
 pub(crate) struct Epic1AddressesQuery {
     account: Option<String>,
+    #[serde(default, deserialize_with = "query_number")]
     from: Option<u32>,
+    #[serde(default, deserialize_with = "query_number")]
     limit: Option<u32>,
+}
+
+/// Reads a whole-number query value: the query holds every value as a string.
+fn query_number<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<u32>, D::Error> {
+    let text = String::deserialize(deserializer)?;
+    text.parse().map(Some).map_err(|_| {
+        serde::de::Error::custom(format!(
+            "{text:?} is not a whole number from 0 to {}",
+            u32::MAX
+        ))
+    })
 }
 
 /// The account that issues the next epic1 address.

@@ -556,6 +556,8 @@ fn the_route_covered_command_families_run_through_a_running_serve() {
         vec!["contact", "request-dismiss", "nosuch"],
         vec!["contact", "import", &missing],
         vec!["epic1", "address"],
+        vec!["epic1", "address", "--index", "3"],
+        vec!["epic1", "addresses", "--from", "1", "--limit", "2"],
         vec!["epic1", "links"],
         vec!["epic1", "answers"],
         vec!["epic1", "read", "epic:epic1nonsense"],
