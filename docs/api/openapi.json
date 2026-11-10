@@ -5579,14 +5579,9 @@
         "description": "An answer to a scanned code, from `in-person pay`.",
         "required": [
           "tx_id",
-          "slate_id",
-          "check_code"
+          "slate_id"
         ],
         "properties": {
-          "check_code": {
-            "type": "string",
-            "description": "The check code the other screen shows for this answer."
-          },
           "envelope": {
             "type": [
               "string",
@@ -5686,9 +5681,14 @@
         "description": "An answer posted to the relay its code names, from `in-person post`.",
         "required": [
           "slate_id",
-          "posted"
+          "posted",
+          "check_code"
         ],
         "properties": {
+          "check_code": {
+            "type": "string",
+            "description": "The check code the other screen shows for this answer, shown only once it is posted."
+          },
           "posted": {
             "type": "boolean"
           },

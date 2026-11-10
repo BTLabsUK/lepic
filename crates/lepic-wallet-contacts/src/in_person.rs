@@ -201,7 +201,8 @@ pub struct InPersonPaid {
     pub slate_id: SlateId,
     /// The sealed answer, to show when it is not posted.
     pub envelope: Vec<u8>,
-    /// The check code the other screen shows for this answer.
+    /// The check code the other screen shows for this answer. Show it only once the answer is
+    /// posted, as [`ContactBook::in_person_post`] returns it.
     pub check_code: String,
     pub mailbox: Option<HostReport>,
 }
@@ -959,13 +960,15 @@ where
     /// the code named no mailbox or the transaction was cancelled or ended
     /// ([`InPersonRefusal::Ended`]), [`ContactError::Offline`] or [`ContactError::EpicboxOff`],
     /// and [`ContactError::Relay`] when the post failed; posting again is safe.
+    ///
+    /// Returns the answer's check code, to show now that it is posted.
     #[instrument(skip_all, fields(wallet = %self.wallet.config().name))]
     pub async fn in_person_post(
         &self,
         relays: &ContactRelays,
         slate_id: SlateId,
         relay_ok: bool,
-    ) -> Result<(), ContactError> {
+    ) -> Result<String, ContactError> {
         if !relay_ok {
             return Err(refused(InPersonRefusal::RelayNotConfirmed));
         }
@@ -1022,7 +1025,7 @@ where
         })
         .await?;
         info!(slate_id = %slate_id, "in-person answer posted");
-        Ok(())
+        Ok(state.check_code)
     }
 
     /// Takes an answer to a code this wallet showed, given offline: the envelope's bytes, or

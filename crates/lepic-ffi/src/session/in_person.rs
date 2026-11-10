@@ -14,7 +14,8 @@ use super::{DEFAULT_ACCOUNT, Session};
 use crate::api::error::{WalletError, WalletErrorKind};
 use crate::api::types::{
     ContactRelayMode, FinalizedTx, InPersonAnswerView, InPersonCode, InPersonCodeView,
-    InPersonHost, InPersonRead, InPersonReply, InPersonTaken, SendOptions, SlateWire,
+    InPersonHost, InPersonPosted, InPersonRead, InPersonReply, InPersonTaken, SendOptions,
+    SlateWire,
 };
 
 /// The longest code or answer taken from the app: the largest slate envelope, as bytes or as
@@ -68,7 +69,6 @@ fn reply(paid: lepic_wallet_contacts::InPersonPaid) -> InPersonReply {
         slate_id: paid.slate_id.to_string(),
         armored: lepic_wallet_contacts::armor_tx(&paid.envelope),
         envelope: paid.envelope,
-        check_code: paid.check_code,
         mailbox: paid.mailbox.map(host),
         format: SlateWire::Native,
     }
@@ -233,16 +233,20 @@ impl Session {
         slate: &str,
         relay_ok: bool,
         mode: ContactRelayMode,
-    ) -> Result<SlateWire, WalletError> {
+    ) -> Result<InPersonPosted, WalletError> {
         let id = slate_id(slate)?;
         let relays = self.contact_relays(mode)?;
-        self.engine
+        let check_code = self
+            .engine
             .contact_book()
             .in_person_post(&relays, id, relay_ok)
             .await
             .map_err(in_person_error)?;
-        // An in-person answer is always `lepic.v1`.
-        Ok(SlateWire::Native)
+        Ok(InPersonPosted {
+            check_code,
+            // An in-person answer is always `lepic.v1`.
+            format: SlateWire::Native,
+        })
     }
 
     pub(crate) async fn in_person_take(

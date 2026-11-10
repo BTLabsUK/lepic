@@ -1553,6 +1553,8 @@ in-person answer by itself:
   written with leading zeros; the excess is the 33-byte compressed point.
 - When a later answer has the same check code as the first, it reports that too.
 - It finalizes only when the consumer calls finalize for the answer it chose.
+- On the answering side it gives the check code with the post of the answer, not when it builds
+  the answer, so the consumer shows it only after posting.
 
 **Payee starts (step 7).** Online, one scan:
 

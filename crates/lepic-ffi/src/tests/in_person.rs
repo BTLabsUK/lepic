@@ -8,7 +8,7 @@ use super::kind;
 use crate::api::error::WalletErrorKind;
 use crate::api::in_person::{in_person_qr_parts, in_person_qr_read};
 use crate::api::secret_store::AppSecretStore;
-use crate::api::types::{CollectTrigger, ContactRelayMode, SlateStage};
+use crate::api::types::{CollectTrigger, ContactRelayMode, SlateStage, SlateWire};
 use crate::api::wallet::EpicWallet;
 
 use ContactRelayMode::{Offline, Online};
@@ -141,7 +141,6 @@ async fn an_invoice_paid_in_person_is_finalized_only_when_its_answer_is_picked()
         .await
         .unwrap();
     assert_eq!(reply.slate_id, code.slate_id);
-    assert_eq!(reply.check_code.len(), 4);
     assert!(reply.armored.starts_with("BEGINEPICTX."));
     assert_eq!(
         kind(
@@ -159,15 +158,25 @@ async fn an_invoice_paid_in_person_is_finalized_only_when_its_answer_is_picked()
         ),
         WalletErrorKind::ContactsOffline
     );
-    payer
+    // The check code comes with the post, not before it.
+    let posted = payer
         .in_person_post(reply.slate_id.clone(), true, Online)
         .await
         .unwrap();
-    // Posting again is safe.
-    payer
+    assert_eq!(posted.check_code.len(), 4);
+    assert!(
+        posted
+            .check_code
+            .bytes()
+            .all(|digit| digit.is_ascii_digit())
+    );
+    assert_eq!(posted.format, SlateWire::Native);
+    // Posting again is safe, and shows the same code.
+    let again = payer
         .in_person_post(reply.slate_id.clone(), true, Online)
         .await
         .unwrap();
+    assert_eq!(again, posted);
 
     let mut events = shop.session().subscribe();
     let collected = shop
@@ -183,14 +192,14 @@ async fn an_invoice_paid_in_person_is_finalized_only_when_its_answer_is_picked()
         })
         .collect();
     assert_eq!(answers.len(), 1);
-    assert_eq!(answers[0].check_code, reply.check_code);
+    assert_eq!(answers[0].check_code, posted.check_code);
     assert_eq!(answers[0].answer, 1);
 
     // The check code is reported; nothing is finalized until the app picks the answer.
     let view = shop.in_person_answers(code.slate_id.clone()).await.unwrap();
     assert_eq!(view.answers.len(), 1);
     assert_eq!(view.answers[0].number, 1);
-    assert_eq!(view.answers[0].check_code, reply.check_code);
+    assert_eq!(view.answers[0].check_code, posted.check_code);
     assert!(!view.answers[0].same_code);
     assert_eq!(view.finalized, None);
     assert_eq!(world.chain.pushed_count(), 0);
@@ -296,7 +305,7 @@ async fn a_send_received_in_person_takes_the_answer_shown_back() {
         .unwrap();
     assert_eq!(taken.slate_id, code.slate_id);
     assert_eq!(taken.answer, 1);
-    assert_eq!(taken.check_code, reply.check_code);
+    assert_eq!(taken.check_code.len(), 4);
     assert!(!taken.duplicate);
     assert_eq!(world.chain.pushed_count(), 0);
 

@@ -573,8 +573,6 @@ pub struct InPersonPaidReport {
     pub envelope: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub file: Option<String>,
-    /// The check code the other screen shows for this answer.
-    pub check_code: String,
     pub mailbox: Option<InPersonHostReport>,
 }
 
@@ -583,6 +581,8 @@ pub struct InPersonPaidReport {
 pub struct InPersonPostReport {
     pub slate_id: String,
     pub posted: bool,
+    /// The check code the other screen shows for this answer, shown only once it is posted.
+    pub check_code: String,
 }
 
 /// An answer taken for a code this wallet showed, from `in-person take`.
@@ -2281,9 +2281,13 @@ fn write_in_person_human(out: &mut Vec<u8>, report: &Report) -> std::io::Result<
                 (Some(envelope), None) => writeln!(out, "Answer: {envelope}")?,
                 (None, None) => {}
             }
-            writeln!(out, "Check code {}; transaction {}.", r.check_code, r.tx_id)
+            writeln!(out, "Transaction {}.", r.tx_id)
         }
-        Report::InPersonPost(r) => writeln!(out, "Answer to {} posted.", r.slate_id),
+        Report::InPersonPost(r) => writeln!(
+            out,
+            "Answer to {} posted; check code {}.",
+            r.slate_id, r.check_code
+        ),
         Report::InPersonTaken(r) if r.duplicate => writeln!(
             out,
             "Answer {} to {} was taken before.",

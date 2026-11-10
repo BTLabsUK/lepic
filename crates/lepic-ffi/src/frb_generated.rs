@@ -14491,6 +14491,18 @@ impl SseDecode for crate::api::types::InPersonHost {
     }
 }
 
+impl SseDecode for crate::api::types::InPersonPosted {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut var_checkCode = <String>::sse_decode(deserializer);
+        let mut var_format = <crate::api::types::SlateWire>::sse_decode(deserializer);
+        return crate::api::types::InPersonPosted {
+            check_code: var_checkCode,
+            format: var_format,
+        };
+    }
+}
+
 impl SseDecode for crate::api::types::InPersonQrProgress {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
@@ -14536,7 +14548,6 @@ impl SseDecode for crate::api::types::InPersonReply {
         let mut var_slateId = <String>::sse_decode(deserializer);
         let mut var_envelope = <Vec<u8>>::sse_decode(deserializer);
         let mut var_armored = <String>::sse_decode(deserializer);
-        let mut var_checkCode = <String>::sse_decode(deserializer);
         let mut var_mailbox = <Option<crate::api::types::InPersonHost>>::sse_decode(deserializer);
         let mut var_format = <crate::api::types::SlateWire>::sse_decode(deserializer);
         return crate::api::types::InPersonReply {
@@ -14544,7 +14555,6 @@ impl SseDecode for crate::api::types::InPersonReply {
             slate_id: var_slateId,
             envelope: var_envelope,
             armored: var_armored,
-            check_code: var_checkCode,
             mailbox: var_mailbox,
             format: var_format,
         };
@@ -16893,6 +16903,7 @@ impl SseDecode for crate::api::error::WalletError {
         let mut var_origin = <Option<String>>::sse_decode(deserializer);
         let mut var_pinnedKey = <Option<String>>::sse_decode(deserializer);
         let mut var_shownKey = <Option<String>>::sse_decode(deserializer);
+        let mut var_retryAfterSecs = <Option<u32>>::sse_decode(deserializer);
         return crate::api::error::WalletError {
             kind: var_kind,
             code: var_code,
@@ -16901,6 +16912,7 @@ impl SseDecode for crate::api::error::WalletError {
             origin: var_origin,
             pinned_key: var_pinnedKey,
             shown_key: var_shownKey,
+            retry_after_secs: var_retryAfterSecs,
         };
     }
 }
@@ -19409,6 +19421,27 @@ impl flutter_rust_bridge::IntoIntoDart<crate::api::types::InPersonHost>
     }
 }
 // Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for crate::api::types::InPersonPosted {
+    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+        [
+            self.check_code.into_into_dart().into_dart(),
+            self.format.into_into_dart().into_dart(),
+        ]
+        .into_dart()
+    }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive
+    for crate::api::types::InPersonPosted
+{
+}
+impl flutter_rust_bridge::IntoIntoDart<crate::api::types::InPersonPosted>
+    for crate::api::types::InPersonPosted
+{
+    fn into_into_dart(self) -> crate::api::types::InPersonPosted {
+        self
+    }
+}
+// Codec=Dco (DartCObject based), see doc to use other codecs
 impl flutter_rust_bridge::IntoDart for crate::api::types::InPersonQrProgress {
     fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
         [
@@ -19465,7 +19498,6 @@ impl flutter_rust_bridge::IntoDart for crate::api::types::InPersonReply {
             self.slate_id.into_into_dart().into_dart(),
             self.envelope.into_into_dart().into_dart(),
             self.armored.into_into_dart().into_dart(),
-            self.check_code.into_into_dart().into_dart(),
             self.mailbox.into_into_dart().into_dart(),
             self.format.into_into_dart().into_dart(),
         ]
@@ -21641,6 +21673,7 @@ impl flutter_rust_bridge::IntoDart for crate::api::error::WalletError {
             self.origin.into_into_dart().into_dart(),
             self.pinned_key.into_into_dart().into_dart(),
             self.shown_key.into_into_dart().into_dart(),
+            self.retry_after_secs.into_into_dart().into_dart(),
         ]
         .into_dart()
     }
@@ -22817,6 +22850,14 @@ impl SseEncode for crate::api::types::InPersonHost {
     }
 }
 
+impl SseEncode for crate::api::types::InPersonPosted {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <String>::sse_encode(self.check_code, serializer);
+        <crate::api::types::SlateWire>::sse_encode(self.format, serializer);
+    }
+}
+
 impl SseEncode for crate::api::types::InPersonQrProgress {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
@@ -22847,7 +22888,6 @@ impl SseEncode for crate::api::types::InPersonReply {
         <String>::sse_encode(self.slate_id, serializer);
         <Vec<u8>>::sse_encode(self.envelope, serializer);
         <String>::sse_encode(self.armored, serializer);
-        <String>::sse_encode(self.check_code, serializer);
         <Option<crate::api::types::InPersonHost>>::sse_encode(self.mailbox, serializer);
         <crate::api::types::SlateWire>::sse_encode(self.format, serializer);
     }
@@ -24812,6 +24852,7 @@ impl SseEncode for crate::api::error::WalletError {
         <Option<String>>::sse_encode(self.origin, serializer);
         <Option<String>>::sse_encode(self.pinned_key, serializer);
         <Option<String>>::sse_encode(self.shown_key, serializer);
+        <Option<u32>>::sse_encode(self.retry_after_secs, serializer);
     }
 }
 

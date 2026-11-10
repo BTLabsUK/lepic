@@ -94,15 +94,17 @@ impl<H: Host> Run<'_, H> {
                 let paid = book
                     .in_person_receive(&relays, &code_bytes(&code)?, request)
                     .await?;
-                paid_report(out.out.as_deref(), paid)?
+                paid_report(out.out.as_deref(), &paid)?
             }
             InPersonCommand::Post(args) => {
                 let slate_id = slate_id(&args.slate.slate_id)?;
-                book.in_person_post(&relays, slate_id, args.relay_ok)
+                let check_code = book
+                    .in_person_post(&relays, slate_id, args.relay_ok)
                     .await?;
                 Report::InPersonPost(InPersonPostReport {
                     slate_id: slate_id.to_string(),
                     posted: true,
+                    check_code,
                 })
             }
             InPersonCommand::Take(args) => taken_report(take(&opened, args).await?),
@@ -192,7 +194,7 @@ async fn pay<N: lepic_node::NodeApi + 'static>(
         .contact_book()
         .in_person_pay(relays, &bytes, request)
         .await?;
-    paid_report(out.out.as_deref(), paid)
+    paid_report(out.out.as_deref(), &paid)
 }
 
 /// Writes the code to show to `out` or prints it.
@@ -209,14 +211,13 @@ fn code_report(out: Option<&Path>, code: InPersonCode) -> Result<Report, CliErro
 }
 
 /// Writes the sealed answer to `out` or prints it.
-fn paid_report(out: Option<&Path>, paid: InPersonPaid) -> Result<Report, CliError> {
+fn paid_report(out: Option<&Path>, paid: &InPersonPaid) -> Result<Report, CliError> {
     let (envelope, file) = write_or_hex(out, &paid.envelope)?;
     Ok(Report::InPersonPaid(InPersonPaidReport {
         tx_id: paid.tx_id.0,
         slate_id: paid.slate_id.to_string(),
         envelope,
         file,
-        check_code: paid.check_code,
         mailbox: paid.mailbox.as_ref().map(host_report),
     }))
 }

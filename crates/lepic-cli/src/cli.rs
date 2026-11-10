@@ -974,6 +974,9 @@ Post the answer with `lepic in-person post`, or show it to the sender to take by
 sender finalizes the answer whose check code both screens show.")]
     Receive(InPersonReceiveArgs),
     /// Post the answer to a paid code to the relay the code names
+    #[command(after_help = "\
+Prints the answer's check code once it is posted: show it to the other party, who finalizes the \
+answer whose check code both screens show.")]
     Post(InPersonPostArgs),
     /// Take an answer shown back by hand, for a code this wallet showed
     #[command(after_help = "\

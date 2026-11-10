@@ -7,7 +7,8 @@
 //! message and the reply mailbox, and answers with [`EpicWallet::in_person_pay`] or
 //! [`EpicWallet::in_person_receive`]. The answer is sealed to the code's reply key; it is posted
 //! with [`EpicWallet::in_person_post`] to the reply mailbox the code names, or shown back as a
-//! QR code or as its `BEGINEPICTX.` text.
+//! QR code or as its `BEGINEPICTX.` text. The answering side shows its check code only after
+//! posting: `in_person_post` returns it.
 //!
 //! The showing side takes answers from its reply mailbox with [`EpicWallet::contacts_collect`],
 //! which raises `InPersonAnswer` for each, or from a scan with [`EpicWallet::in_person_take`]
@@ -27,8 +28,8 @@ use flutter_rust_bridge::frb;
 
 use crate::api::error::WalletError;
 use crate::api::types::{
-    ContactRelayMode, FinalizedTx, InPersonCode, InPersonCodeView, InPersonQrProgress,
-    InPersonRead, InPersonReply, InPersonTaken, SendOptions, SlateWire,
+    ContactRelayMode, FinalizedTx, InPersonCode, InPersonCodeView, InPersonPosted,
+    InPersonQrProgress, InPersonRead, InPersonReply, InPersonTaken, SendOptions,
 };
 use crate::api::wallet::EpicWallet;
 use crate::boundary::guard;
@@ -139,8 +140,8 @@ impl EpicWallet {
     /// Pays a scanned in-person invoice of `amount`, the amount [`EpicWallet::in_person_read`]
     /// showed, as `pay_invoice` pays one, and seals the answer to the code. The payment and
     /// the answer are stored; the inputs stay locked until the code expires or the payment is
-    /// cancelled. Show `check_code` to the user, then post the answer with
-    /// [`EpicWallet::in_person_post`] or show it back.
+    /// cancelled. Post the answer with [`EpicWallet::in_person_post`], which returns the check
+    /// code to show, or show the answer back.
     ///
     /// Fails as [`EpicWallet::in_person_read`] does, with `InvalidArgument` for a zero amount,
     /// and as `pay_invoice` fails.
@@ -170,8 +171,9 @@ impl EpicWallet {
     }
 
     /// Receives a scanned in-person send as `receive` receives a slate, and seals the answer to
-    /// the code. The transaction and the answer are stored. Show `check_code` to the user, then
-    /// post the answer with [`EpicWallet::in_person_post`] or show it back.
+    /// the code. The transaction and the answer are stored. Post the answer with
+    /// [`EpicWallet::in_person_post`], which returns the check code to show, or show the answer
+    /// back.
     ///
     /// Fails as [`EpicWallet::in_person_read`] does, and as `receive` fails.
     pub async fn in_person_receive(
@@ -196,13 +198,14 @@ impl EpicWallet {
     /// `ContactsOffline` or `EpicboxOff` before connecting, and `TransportFailed` when the
     /// post failed.
     ///
-    /// Returns the format the answer went out in, always `Native`.
+    /// Returns the answer's check code, to show the user now and not before, and the format
+    /// the answer went out in, always `Native`.
     pub async fn in_person_post(
         &self,
         slate_id: String,
         relay_ok: bool,
         relay_mode: ContactRelayMode,
-    ) -> Result<SlateWire, WalletError> {
+    ) -> Result<InPersonPosted, WalletError> {
         self.run("in_person_post", |session| async move {
             session
                 .in_person_post(&slate_id, relay_ok, relay_mode)

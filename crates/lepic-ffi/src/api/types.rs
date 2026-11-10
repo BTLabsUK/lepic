@@ -2004,10 +2004,18 @@ pub struct InPersonReply {
     pub envelope: Vec<u8>,
     /// `envelope` as `BEGINEPICTX.` text.
     pub armored: String,
-    /// Four digits to show: the other party finalizes the answer that shows the same.
-    pub check_code: String,
     pub mailbox: Option<InPersonHost>,
     /// How the answer is written: always `Native`, a sealed `lepic.v1` slate.
+    pub format: SlateWire,
+}
+
+/// An answer posted by `EpicWallet::in_person_post`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InPersonPosted {
+    /// Four digits to show now that the answer is posted: the other party finalizes the
+    /// answer that shows the same. Show them only after posting.
+    pub check_code: String,
+    /// How the answer went out: always `Native`, a sealed `lepic.v1` slate.
     pub format: SlateWire,
 }
 

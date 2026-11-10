@@ -797,8 +797,10 @@ mailbox, its `host`, `port`, `in_relay_list` (this wallet's own or a meeting rel
 used for this slate only, over Tor when Epicbox goes over Tor. A loopback or unspecified host is
 refused: connecting directly, every address the name resolves to is checked and the connection
 goes to the addresses checked; through Tor the exit resolves the name, so the name is checked.
-The answer never goes to the Epicbox sender of anything. Offline, the payer shows the answer
-back and the payee takes it by hand, as hex, armoured `BEGINEPICTX.` text or UR parts:
+The answer never goes to the Epicbox sender of anything. `post` prints the answer's check code;
+`pay` does not, so the payer's screen shows it only once the answer is posted. Offline, the payer
+shows the answer back and the payee takes it by hand, as hex, armoured `BEGINEPICTX.` text or UR
+parts:
 
 ```
 $ lepic in-person take --file answer.bin
@@ -810,8 +812,8 @@ The payer's inputs stay locked until the payment is posted or cancelled; past th
 The payee's `contact collect` watches each open code's mailbox until its TTL. It takes only an
 I2 to its own I1, sealed to the code's reply key, and drops anything else with a reason. Nothing
 is finalized on its own: each answer that checks is listed with its check code, four digits of
-the payer's public excess, which the payer's screen shows too. A later answer with the same
-check code is flagged. Finalize the answer whose check code the other screen shows:
+the payer's public excess, which the payer's screen shows once it has posted. A later answer with
+the same check code is flagged. Finalize the answer whose check code the other screen shows:
 
 ```
 $ lepic in-person answers <SLATE_ID>

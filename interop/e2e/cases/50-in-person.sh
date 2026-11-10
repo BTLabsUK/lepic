@@ -62,11 +62,12 @@ ip_round() {
         paid="$(w "${payer}" in-person receive --hex "$(jq -r .code <<<"${code}")")" || fail "in-person receive failed" || return 1
     fi
     printf '%s\n' "${paid}" >"${CASE_DIR}/answer.json"
-    expect_json "${paid}" ".slate_id == \"${slate}\" and (.check_code | length > 0)" "answer" || return 1
+    expect_json "${paid}" ".slate_id == \"${slate}\" and .check_code == null" "answer, no check code before posting" || return 1
     w "${payer}" in-person post "${slate}" --relay-ok >"${CASE_DIR}/post.json" || fail "in-person post failed" || return 1
+    expect_json "$(cat "${CASE_DIR}/post.json")" '.check_code | test("^[0-9]{4}$")' "check code once posted" || return 1
     ip_collect_answer "${shower}" "${slate}" || return 1
     printf '%s\n' "${IP_ANSWERS}" >"${CASE_DIR}/answers.json"
-    expect_json "${IP_ANSWERS}" ".answers | length == 1 and .[0].check_code == \"$(jq -r .check_code <<<"${paid}")\"" "answer check code matches the payer's" || return 1
+    expect_json "${IP_ANSWERS}" ".answers | length == 1 and .[0].check_code == \"$(jq -r .check_code "${CASE_DIR}/post.json")\"" "answer check code matches the payer's" || return 1
     n="$(jq -r '.answers[0].number' <<<"${IP_ANSWERS}")"
     w "${shower}" in-person finalize "${slate}" "${n}" >"${CASE_DIR}/finalize.json" || fail "in-person finalize failed" || return 1
     expect_json "$(cat "${CASE_DIR}/finalize.json")" '.state == "posted"' "finalize state" || return 1
@@ -101,7 +102,7 @@ case_ip_by_hand() {
     expect_json "${paid}" '.file != null and .envelope == null' "answer written to a file" || return 1
     taken="$(w "${shower}" in-person take --file "${CASE_DIR}/answer.bin" --offline)" || fail "in-person take failed" || return 1
     printf '%s\n' "${taken}" >"${CASE_DIR}/taken.json"
-    expect_json "${taken}" ".slate_id == \"${slate}\" and .duplicate == false and .check_code == \"$(jq -r .check_code <<<"${paid}")\"" "take: same code as the payer's" || return 1
+    expect_json "${taken}" ".slate_id == \"${slate}\" and .duplicate == false and (.check_code | test(\"^[0-9]{4}$\"))" "take" || return 1
     again="$(w "${shower}" in-person take --file "${CASE_DIR}/answer.bin" --offline)" || fail "second take failed" || return 1
     printf '%s\n' "${again}" >"${CASE_DIR}/taken-again.json"
     expect_json "${again}" '.duplicate == true' "the same answer taken twice is a duplicate" || return 1

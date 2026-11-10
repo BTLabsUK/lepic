@@ -377,15 +377,17 @@ in_person_exchange() {
     else
         paid="$(payer in-person receive --file "${code}" --out "${answer}" "${flags[@]}")"
     fi || fail "the payer's in-person ${direction} answer failed" || return 1
-    local check_code payer_tx
-    check_code="$(jq -r .check_code <<<"${paid}")"
+    local check_code payer_tx taken
     payer_tx="$(jq -r .tx_id <<<"${paid}")"
-    [[ "${check_code}" =~ ^[0-9]{4}$ ]] || fail "the check code is '${check_code}': ${paid}" || return 1
-    lepic in-person take --file "${answer}" --offline >/dev/null || fail "in-person take failed" || return 1
+    # The answering side shows its check code only once it posts; this answer is shown back.
+    jq -e '.check_code == null' <<<"${paid}" >/dev/null || fail "a check code before posting: ${paid}" || return 1
+    taken="$(lepic in-person take --file "${answer}" --offline)" || fail "in-person take failed" || return 1
+    check_code="$(jq -r .check_code <<<"${taken}")"
+    [[ "${check_code}" =~ ^[0-9]{4}$ ]] || fail "the check code is '${check_code}': ${taken}" || return 1
     local answers
     answers="$(lepic in-person answers "${slate_id}" "${flags[@]}")" || fail "in-person answers failed" || return 1
     jq -e --arg code "${check_code}" '(.answers | length) == 1 and .answers[0].check_code == $code' <<<"${answers}" >/dev/null ||
-        fail "answers ${answers}, the payer showed check code ${check_code}" || return 1
+        fail "answers ${answers}, the answer taken had check code ${check_code}" || return 1
     # Nothing is finalized, or posted, until the finalize command.
     if tx_state_in lepic "${lepic_tx}" finalized posted confirmed; then
         fail "tx ${lepic_tx} is $(lepic_tx_state "${lepic_tx}") before in-person finalize" || return 1
