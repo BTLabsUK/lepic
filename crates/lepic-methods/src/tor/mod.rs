@@ -33,7 +33,7 @@ use lepic_transport::transport::{
 use thiserror::Error;
 use tracing::debug;
 
-use lepic_tor::socks::{self, SocksCredentials};
+use lepic_tor::socks::{self, RETRY_WAITS, SocksCredentials};
 
 use crate::http::{DirectPeer, HttpPolicy, Probe, ProbeError, WebScheme, slate_id_of};
 
@@ -79,6 +79,12 @@ pub enum TorSendError {
 }
 
 impl TorSendError {
+    /// Whether the same send can succeed on a new circuit after a wait: see
+    /// [`SocksError::is_transient`].
+    pub const fn is_transient(&self) -> bool {
+        matches!(self, Self::Socks(error) if error.is_transient())
+    }
+
     /// What the failure means for the person sending.
     pub const fn class(&self) -> SendFailure {
         match self {
@@ -108,6 +114,11 @@ impl OnionClient {
     /// A client with the limits in `settings`.
     pub const fn new(settings: OnionClientSettings) -> Self {
         Self { settings }
+    }
+
+    /// How long a send keeps trying to reach an onion: twice the time of one connect.
+    const fn connect_budget(&self) -> Duration {
+        self.settings.connect_timeout.saturating_mul(2)
     }
 
     /// Asks which slate versions the wallet at `onion` accepts.
@@ -248,6 +259,7 @@ pub struct Tor {
     client: OnionClient,
     proxy: SharedProxy,
     held: Arc<Mutex<VecDeque<Held>>>,
+    retry_waits: &'static [Duration],
 }
 
 impl std::fmt::Debug for Tor {
@@ -271,7 +283,16 @@ impl Tor {
             client,
             proxy: Arc::new(RwLock::new(None)),
             held: Arc::new(Mutex::new(VecDeque::new())),
+            retry_waits: &RETRY_WAITS,
         }
+    }
+
+    /// The waits before each retry of a connect that failed in a way waiting can mend, in place
+    /// of [`RETRY_WAITS`]: none for no retries.
+    #[must_use]
+    pub const fn with_retry_waits(mut self, waits: &'static [Duration]) -> Self {
+        self.retry_waits = waits;
+        self
     }
 
     /// Sends go through `proxy` from now on, usually the wallet's [`TorProcess`].
@@ -318,31 +339,39 @@ impl Tor {
         held.push_back(Held { slate_id, wire });
     }
 
-    /// `check_version` at `onion`, tried once more on a new circuit when the first one timed
-    /// out, and the credentials of the circuit that answered.
+    /// `check_version` at `onion`, and the credentials of the circuit that answered. A connect
+    /// that failed the way a restarted onion or a slow circuit does is tried again on a new
+    /// circuit after a wait, within twice the connect timeout; the first circuit to an onion can
+    /// take much longer than the next one, and a service that has just published a new
+    /// descriptor is not yet found everywhere.
     async fn versions(
         &self,
         proxy: SocketAddr,
         onion: &OnionAddress,
     ) -> Result<(VersionInfo, SocksCredentials), TorSendError> {
-        let credentials = SocksCredentials::random()?;
-        match self.client.check_version(proxy, onion, &credentials).await {
-            // The first circuit to an onion can take much longer than the next one.
-            Err(TorSendError::Socks(SocksError::Timeout)) => {
-                debug!(
-                    transport = "tor",
-                    attempt = 2,
-                    "onion connect timed out, retrying"
-                );
+        socks::retrying(
+            self.retry_waits,
+            self.client.connect_budget(),
+            TorSendError::is_transient,
+            |attempt| async move {
                 let credentials = SocksCredentials::random()?;
-                let version = self
-                    .client
-                    .check_version(proxy, onion, &credentials)
-                    .await?;
-                Ok((version, credentials))
-            }
-            other => Ok((other?, credentials)),
-        }
+                let result = self.client.check_version(proxy, onion, &credentials).await;
+                match result {
+                    Ok(version) => Ok((version, credentials)),
+                    Err(error) => {
+                        debug!(
+                            transport = "tor",
+                            attempt = attempt.saturating_add(1),
+                            transient = error.is_transient(),
+                            error = ?error,
+                            "onion connect failed"
+                        );
+                        Err(error)
+                    }
+                }
+            },
+        )
+        .await
     }
 
     /// The `check_version` answer of the wallet at the onion `to`, as a send's first call
@@ -404,10 +433,18 @@ impl PeerDialer for OnionDialer {
             let proxy = self.tor.socks_address().ok_or_else(|| {
                 io::Error::new(io::ErrorKind::NotConnected, TorSendError::NotRunning)
             })?;
-            let credentials = SocksCredentials::random().map_err(io::Error::other)?;
-            let stream = socks::connect(proxy, host, port, &credentials, self.connect_timeout)
-                .await
-                .map_err(io::Error::other)?;
+            let connect_timeout = self.connect_timeout;
+            let stream = socks::retrying(
+                self.tor.retry_waits,
+                connect_timeout.saturating_mul(2),
+                SocksError::is_transient,
+                |_| async move {
+                    let credentials = SocksCredentials::random()?;
+                    socks::connect(proxy, host, port, &credentials, connect_timeout).await
+                },
+            )
+            .await
+            .map_err(io::Error::other)?;
             Ok(Box::new(stream) as Box<dyn PeerStream>)
         })
     }

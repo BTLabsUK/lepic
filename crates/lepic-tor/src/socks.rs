@@ -4,12 +4,14 @@
 //! circuit under `IsolateSOCKSAuth`. Tor's extended replies (`ExtendedErrors`) say why an onion
 //! could not be reached.
 
+use std::future::Future;
 use std::net::SocketAddr;
 use std::time::Duration;
 
 use thiserror::Error;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpStream;
+use tokio::time::Instant;
 
 const VERSION: u8 = 5;
 const METHOD_USERNAME_PASSWORD: u8 = 2;
@@ -168,6 +170,69 @@ impl SocksError {
                 SendFailure::Broken
             }
         }
+    }
+}
+
+impl SocksError {
+    /// Whether another try, on a new circuit and after a short wait, can succeed: the onion's
+    /// descriptor was not found or its introduction points failed, which is what a client sees
+    /// while a service that has just restarted is still spreading its new descriptor, or the
+    /// circuit was slow or broke. An address that is not valid, one that needs a client key, an
+    /// invalid descriptor, a refused credential, an unreachable proxy and a failure of the
+    /// protocol do not change by waiting.
+    #[must_use]
+    pub const fn is_transient(&self) -> bool {
+        match self {
+            Self::Timeout => true,
+            Self::Refused(reply) => matches!(
+                reply,
+                SocksReply::OnionNotFound
+                    | SocksReply::OnionIntroductionFailed
+                    | SocksReply::OnionRendezvousFailed
+                    | SocksReply::OnionIntroductionTimedOut
+                    | SocksReply::TtlExpired
+                    | SocksReply::HostUnreachable
+            ),
+            _ => false,
+        }
+    }
+}
+
+/// The waits before the first, second and third retry of a connect to an onion.
+pub const RETRY_WAITS: [Duration; 3] = [
+    Duration::from_secs(2),
+    Duration::from_secs(5),
+    Duration::from_secs(10),
+];
+
+/// Runs `attempt` until it succeeds, fails with an error `is_transient` rejects, has been
+/// retried after each of `waits`, or the next retry would not start before `budget` from now.
+/// A retry starts after its wait; the failure of the last try is the result.
+pub async fn retrying<T, E, F, Fut>(
+    waits: &[Duration],
+    budget: Duration,
+    is_transient: impl Fn(&E) -> bool,
+    mut attempt: F,
+) -> Result<T, E>
+where
+    F: FnMut(usize) -> Fut,
+    Fut: Future<Output = Result<T, E>>,
+{
+    let started = Instant::now();
+    let mut tries = 0usize;
+    loop {
+        let error = match attempt(tries).await {
+            Ok(value) => return Ok(value),
+            Err(error) => error,
+        };
+        let Some(wait) = waits.get(tries).copied() else {
+            return Err(error);
+        };
+        if !is_transient(&error) || started.elapsed().saturating_add(wait) >= budget {
+            return Err(error);
+        }
+        tries = tries.saturating_add(1);
+        tokio::time::sleep(wait).await;
     }
 }
 
@@ -474,5 +539,78 @@ mod tests {
         assert_ne!(a, b);
         assert_eq!(a.username.len(), 2 * CREDENTIAL_BYTES);
         assert_eq!(format!("{a:?}"), "SocksCredentials([redacted])");
+    }
+
+    #[test]
+    fn only_failures_that_waiting_can_mend_are_transient() {
+        for reply in [
+            SocksReply::OnionNotFound,
+            SocksReply::OnionIntroductionFailed,
+            SocksReply::OnionRendezvousFailed,
+            SocksReply::OnionIntroductionTimedOut,
+            SocksReply::TtlExpired,
+            SocksReply::HostUnreachable,
+        ] {
+            assert!(SocksError::Refused(reply).is_transient(), "{reply:?}");
+        }
+        for reply in [
+            SocksReply::OnionAddressInvalid,
+            SocksReply::OnionMissingClientAuth,
+            SocksReply::OnionWrongClientAuth,
+            SocksReply::OnionDescriptorInvalid,
+        ] {
+            assert!(!SocksError::Refused(reply).is_transient(), "{reply:?}");
+        }
+        assert!(SocksError::Timeout.is_transient());
+        assert!(!SocksError::AuthRefused.is_transient());
+        assert!(!SocksError::HostTooLong.is_transient());
+    }
+
+    #[tokio::test]
+    async fn retrying_waits_between_tries_and_stops_at_the_waits_or_a_permanent_error() {
+        let waits = [Duration::ZERO; 3];
+        let budget = Duration::from_secs(60);
+        let transient = |error: &u8| *error < 100;
+
+        let tried = std::cell::Cell::new(0usize);
+        let result = retrying(&waits, budget, transient, |n| {
+            tried.set(n + 1);
+            async move { if n == 2 { Ok(n) } else { Err(1u8) } }
+        })
+        .await;
+        assert_eq!((result, tried.get()), (Ok(2), 3));
+
+        let result: Result<(), u8> = retrying(&waits, budget, transient, |n| {
+            tried.set(n + 1);
+            async { Err(1) }
+        })
+        .await;
+        assert_eq!(
+            (result, tried.get()),
+            (Err(1), 4),
+            "one try and three retries"
+        );
+
+        let result: Result<(), u8> = retrying(&waits, budget, transient, |n| {
+            tried.set(n + 1);
+            async { Err(200) }
+        })
+        .await;
+        assert_eq!(
+            (result, tried.get()),
+            (Err(200), 1),
+            "a permanent error ends it"
+        );
+
+        let result: Result<(), u8> = retrying(&[Duration::from_secs(90)], budget, transient, |n| {
+            tried.set(n + 1);
+            async { Err(1) }
+        })
+        .await;
+        assert_eq!(
+            (result, tried.get()),
+            (Err(1), 1),
+            "a retry past the budget is not started"
+        );
     }
 }

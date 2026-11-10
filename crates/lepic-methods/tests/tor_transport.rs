@@ -14,7 +14,9 @@ use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use lepic_methods::http::{Exposure, ListenSettings, ReceiveHandler, Refusal, RpcError, listen};
+use lepic_methods::http::{
+    Exposure, ListenSettings, ListenerHandle, ReceiveHandler, Refusal, RpcError, listen,
+};
 use lepic_methods::tor::{
     FixedSocks, OnionAddress, OnionClient, OnionClientSettings, OnionError, SendFailure,
     SocksError, Tor, TorSendError,
@@ -26,6 +28,8 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
 const S1: &str = r#"{"id":"0436430c-2b02-624c-2032-570501212b00","amount":"60000000000"}"#;
+const LONG_WAIT: [Duration; 1] = [Duration::from_secs(60)];
+const S1_ID: &str = "0436430c-2b02-624c-2032-570501212b00";
 const S2: &str =
     r#"{"id":"0436430c-2b02-624c-2032-570501212b00","amount":"60000000000","participant_data":[]}"#;
 
@@ -55,6 +59,13 @@ enum Behaviour {
     Forward(SocketAddr),
     /// Replies with this failure code.
     Fail(u8),
+    /// Replies with this failure code to the first `times` connections, then forwards to
+    /// `then`: an onion whose new descriptor is not yet found everywhere.
+    FailFirst {
+        code: u8,
+        times: usize,
+        then: SocketAddr,
+    },
     /// Accepts the TCP connection and never answers.
     Silent,
 }
@@ -81,9 +92,13 @@ async fn fake_socks(behaviour: Behaviour) -> FakeSocks {
     tokio::spawn(async move {
         loop {
             let (stream, _) = listener.accept().await.unwrap();
-            *connections_by_server.lock().unwrap() += 1;
+            let index = {
+                let mut connections = connections_by_server.lock().unwrap();
+                *connections += 1;
+                *connections - 1
+            };
             let seen = seen_by_server.clone();
-            tokio::spawn(serve_socks(stream, behaviour, seen));
+            tokio::spawn(serve_socks(stream, behaviour, index, seen));
         }
     });
     FakeSocks {
@@ -93,7 +108,17 @@ async fn fake_socks(behaviour: Behaviour) -> FakeSocks {
     }
 }
 
-async fn serve_socks(mut stream: TcpStream, behaviour: Behaviour, seen: Arc<Mutex<Vec<Seen>>>) {
+async fn serve_socks(
+    mut stream: TcpStream,
+    behaviour: Behaviour,
+    index: usize,
+    seen: Arc<Mutex<Vec<Seen>>>,
+) {
+    let behaviour = match behaviour {
+        Behaviour::FailFirst { code, times, .. } if index < times => Behaviour::Fail(code),
+        Behaviour::FailFirst { then, .. } => Behaviour::Forward(then),
+        other => other,
+    };
     if matches!(behaviour, Behaviour::Silent) {
         tokio::time::sleep(Duration::from_secs(30)).await;
         return;
@@ -139,7 +164,7 @@ async fn serve_socks(mut stream: TcpStream, behaviour: Behaviour, seen: Arc<Mute
             let mut upstream = TcpStream::connect(target).await.unwrap();
             let _ = tokio::io::copy_bidirectional(&mut stream, &mut upstream).await;
         }
-        Behaviour::Silent => {}
+        Behaviour::Silent | Behaviour::FailFirst { .. } => {}
     }
 }
 
@@ -215,7 +240,8 @@ async fn tor_failure_replies_become_typed_errors() {
     ] {
         let socks = fake_socks(Behaviour::Fail(code)).await;
         let transport =
-            transport_through(socks.address, lepic_tor::testing::onion_client_settings());
+            transport_through(socks.address, lepic_tor::testing::onion_client_settings())
+                .with_retry_waits(&[]);
         let error = transport
             .send(&onion().to_string(), &s1())
             .await
@@ -228,6 +254,107 @@ async fn tor_failure_replies_become_typed_errors() {
     }
 }
 
+/// A listener answering every `receive_tx` with the S2.
+async fn answering_listener() -> ListenerHandle {
+    listen(
+        ListenSettings::new(
+            Exposure::LocalOnly,
+            0,
+            lepic_legacy_rpc::testing::listen_limits(),
+        ),
+        Arc::new(Answering),
+    )
+    .await
+    .unwrap()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_onion_that_is_not_found_yet_is_found_on_a_later_try() {
+    for code in [0xF0, 0xF2, 0xF3, 0xF7] {
+        let listener = answering_listener().await;
+        let socks = fake_socks(Behaviour::FailFirst {
+            code,
+            times: 2,
+            then: listener.local_addr(),
+        })
+        .await;
+        let transport =
+            transport_through(socks.address, lepic_tor::testing::onion_client_settings())
+                .with_retry_waits(&[Duration::ZERO; 3]);
+        transport
+            .send(&onion().to_string(), &s1())
+            .await
+            .unwrap_or_else(|error| panic!("{code:#x}: {error:?}"));
+        let seen = socks.seen.lock().unwrap().clone();
+        assert_eq!(
+            seen.len(),
+            4,
+            "{code:#x}: two failed tries, then both calls"
+        );
+        assert_ne!(seen[0].username, seen[1].username, "a new circuit per try");
+        assert_eq!(seen[2].username, seen[3].username, "one circuit per send");
+        assert!(transport.take_reply(&S1_ID.to_uppercase()).is_some());
+        listener.shutdown().await;
+    }
+}
+
+#[tokio::test]
+async fn a_failure_waiting_cannot_mend_is_not_tried_again() {
+    for code in [0xF1, 0xF4, 0xF5, 0xF6, 0x01, 0x02] {
+        let socks = fake_socks(Behaviour::Fail(code)).await;
+        let transport =
+            transport_through(socks.address, lepic_tor::testing::onion_client_settings())
+                .with_retry_waits(&[Duration::ZERO; 3]);
+        let error = transport
+            .send(&onion().to_string(), &s1())
+            .await
+            .unwrap_err();
+        assert!(!error.is_transient(), "{code:#x}: {error:?}");
+        assert_eq!(*socks.connections.lock().unwrap(), 1, "{code:#x}");
+    }
+}
+
+#[tokio::test]
+async fn an_onion_that_stays_unreachable_is_tried_a_bounded_number_of_times() {
+    let socks = fake_socks(Behaviour::Fail(0xF2)).await;
+    let transport = transport_through(socks.address, lepic_tor::testing::onion_client_settings())
+        .with_retry_waits(&[Duration::ZERO; 3]);
+    let error = transport
+        .send(&onion().to_string(), &s1())
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(
+            &error,
+            TorSendError::Socks(SocksError::Refused(SocksReply::OnionIntroductionFailed))
+        ),
+        "{error:?}"
+    );
+    assert_eq!(error.class(), SendFailure::Unreachable);
+    assert_eq!(
+        *socks.connections.lock().unwrap(),
+        4,
+        "one try and three retries"
+    );
+}
+
+#[tokio::test]
+async fn retries_stop_when_the_next_one_would_start_after_the_budget() {
+    let socks = fake_socks(Behaviour::Fail(0xF0)).await;
+    let settings = OnionClientSettings {
+        connect_timeout: Duration::from_millis(100),
+        ..lepic_tor::testing::onion_client_settings()
+    };
+    let transport = transport_through(socks.address, settings).with_retry_waits(&LONG_WAIT);
+    let started = std::time::Instant::now();
+    transport
+        .send(&onion().to_string(), &s1())
+        .await
+        .unwrap_err();
+    assert!(started.elapsed() < Duration::from_secs(5));
+    assert_eq!(*socks.connections.lock().unwrap(), 1);
+}
+
 #[tokio::test]
 async fn a_connect_that_never_answers_times_out_after_one_retry() {
     let socks = fake_socks(Behaviour::Silent).await;
@@ -235,7 +362,7 @@ async fn a_connect_that_never_answers_times_out_after_one_retry() {
         connect_timeout: Duration::from_millis(200),
         ..lepic_tor::testing::onion_client_settings()
     };
-    let transport = transport_through(socks.address, settings);
+    let transport = transport_through(socks.address, settings).with_retry_waits(&[Duration::ZERO]);
     let error = transport
         .send(&onion().to_string(), &s1())
         .await
