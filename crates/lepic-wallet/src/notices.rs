@@ -710,6 +710,53 @@ where
         }
     }
 
+    /// Takes the refusal of a send by its receiver that came over a channel only the receiver
+    /// can use, as the reply mailbox of an epic1 payment, whose key only the holder of the
+    /// payment could name. The refusal is taken as a `declined` of ADR 0045 is: only while the
+    /// send waits unanswered, `sent`, with its S1 stored and no S2. The first one is recorded
+    /// with its time and raises [`Event::PaymentDeclined`]; the send is cancelled, so its inputs
+    /// are free again, and a repeat cancels again without an event. One for a send that was
+    /// answered, finalized, ended or is not held changes nothing. Returns whether the refusal
+    /// was taken.
+    ///
+    /// Fails with [`crate::WalletError::Locked`] and as the store does; the caller keeps the
+    /// message and takes it again.
+    pub async fn send_refused_by_receiver(
+        &self,
+        slate_id: SlateId,
+    ) -> Result<bool, crate::WalletError> {
+        let id = uuid(slate_id);
+        let effect = self
+            .inbox_write(move |repos, now| {
+                let Some(stored) = repos.transaction_by_slate(id, TxDirection::Outgoing)? else {
+                    return Ok(Effect::Dropped);
+                };
+                if repos.slate(id, SlateStage::Standard1)?.is_none() {
+                    return Ok(Effect::Dropped);
+                }
+                if stored.entry.state != TxState::Sent
+                    || repos.slate(id, SlateStage::Standard2)?.is_some()
+                {
+                    return Ok(Effect::Noted);
+                }
+                let key = format!("{SEND_DECLINED_PREFIX}{id}");
+                let first = repos.setting(&key)?.is_none();
+                if first {
+                    repos.put_setting(&key, &now.to_string())?;
+                }
+                Ok(Effect::SendDeclined {
+                    tx_id: stored.id,
+                    first,
+                })
+            })
+            .await?;
+        let handled = self.report_notice(slate_id, effect);
+        if let Effect::SendDeclined { tx_id, .. } = effect {
+            self.cancel_declined(tx_id).await?;
+        }
+        Ok(handled == Handled::Notice && matches!(effect, Effect::SendDeclined { .. }))
+    }
+
     async fn apply_peer_notice(
         &self,
         via: Option<&Arc<dyn Method>>,
