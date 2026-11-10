@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 //! The open receipt caps that bound payments nobody asked for, on every transport that takes
 //! them: [`WalletPolicy::max_open_receipts_per_sender`] per sender, where the transport names
-//! one, and [`WalletPolicy::max_open_receipts`] in all. Each transport counts only its own open receipts.
+//! one, and [`WalletPolicy::max_open_receipts`] in all. Each transport counts only its own open
+//! receipts; payments taken at epic1 link mailboxes count apart, whatever transport carried them.
 
 use std::cmp::Reverse;
 use std::collections::HashMap;
@@ -44,6 +45,23 @@ impl From<WalletError> for NoRoom {
 }
 
 type KeyOf<'a> = &'a (dyn Fn(&str) -> String + Sync);
+
+/// The open receipts a cap counts.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum Pool {
+    /// Those received over the transport.
+    Transport(TransportId),
+    /// Those paid to an epic1 address of the wallet, taken at a link mailbox or not.
+    Epic1(TransportId),
+}
+
+impl Pool {
+    fn transport(self) -> TransportId {
+        match self {
+            Self::Transport(transport) | Self::Epic1(transport) => transport,
+        }
+    }
+}
 
 /// The sender of a new S1, for transports that name one: its key, and how the counterparty
 /// stored with an open receipt maps to a key.
@@ -107,7 +125,41 @@ where
         wire: &WireSlate,
         request: ReceiveRequest,
     ) -> Result<Received, ReceiveError> {
-        let transport = method.id();
+        let refuse = self.config().policy.refuse_unsolicited_payments;
+        self.receive_capped(method, wire, request, Pool::Transport(method.id()), refuse)
+            .await
+    }
+
+    /// [`Wallet::receive`] of a payment that came to an epic1 link mailbox, paid to the epic1
+    /// address `request` names: received only within [`WalletPolicy::max_open_receipts`],
+    /// counted over the open receipts paid to the wallet's epic1 addresses, as
+    /// [`Wallet::receive_unsolicited`] receives within the cap of a transport. A link is a
+    /// request the user made, so [`WalletPolicy::refuse_unsolicited_payments`] does not apply.
+    ///
+    /// Fails as [`Wallet::receive_unsolicited`] does, but never with [`ReceiveError::Refused`].
+    #[instrument(
+        name = "receive_at_link",
+        skip_all,
+        fields(wallet = %self.config().name, transport = %method.id())
+    )]
+    pub async fn receive_at_link(
+        &self,
+        method: &Arc<dyn Method>,
+        wire: &WireSlate,
+        request: ReceiveRequest,
+    ) -> Result<Received, ReceiveError> {
+        self.receive_capped(method, wire, request, Pool::Epic1(method.id()), false)
+            .await
+    }
+
+    async fn receive_capped(
+        &self,
+        method: &Arc<dyn Method>,
+        wire: &WireSlate,
+        request: ReceiveRequest,
+        pool: Pool,
+        refuse: bool,
+    ) -> Result<Received, ReceiveError> {
         let slate = method
             .decode(self.config().network, wire)
             .map_err(ReceiveError::Decode)?;
@@ -115,8 +167,7 @@ where
         // Taken after the checks, so slates that are not payments never wait for it.
         let _turn = self.unsolicited_turn().await;
         let slate_id = Uuid::from_bytes(*slate.id().as_bytes());
-        let refuse = self.config().policy.refuse_unsolicited_payments;
-        match self.make_room(transport, slate_id, None, refuse).await {
+        match self.make_room(pool, slate_id, None, refuse).await {
             Ok(()) => {}
             Err(NoRoom::Wallet(error)) => return Err(ReceiveError::Wallet(error)),
             Err(NoRoom::Unchecked(error)) => return Err(ReceiveError::OpenReceipts(Some(error))),
@@ -126,7 +177,7 @@ where
         self.receive(method, wire, request).await
     }
 
-    /// Checks the open receipt caps of `transport` before the new S1 `slate_id`, from `sender`
+    /// Checks the open receipt caps of `pool` before the new S1 `slate_id`, from `sender`
     /// when the transport names one, is received. A slate id received before passes, so its
     /// stored S2 is sent again. Over the sender's cap the S1 is refused; at the total cap room
     /// is made as [`WalletPolicy::max_open_receipts`] says, and only on a transport that names a sender:
@@ -135,13 +186,13 @@ where
     /// [`WalletPolicy::refuse_unsolicited_payments`] says.
     pub(crate) async fn make_room(
         &self,
-        transport: TransportId,
+        pool: Pool,
         slate_id: Uuid,
         sender: Option<Sender<'_>>,
         refuse: bool,
     ) -> Result<(), NoRoom> {
         let Some(mut open) = self
-            .open_receipts_unless_known(transport, Some(slate_id))
+            .open_receipts_unless_known(pool, Some(slate_id))
             .await?
         else {
             return Ok(());
@@ -172,7 +223,7 @@ where
                 warn!(error = %ErrorChain(&error), "tip not refreshed");
             }
             open = self
-                .open_receipts_unless_known(transport, None)
+                .open_receipts_unless_known(pool, None)
                 .await?
                 .unwrap_or_default();
         }
@@ -210,11 +261,11 @@ where
         Err(NoRoom::Full)
     }
 
-    /// The open receipts over `transport`, oldest first, or `None` when `slate_id` was
-    /// received before.
+    /// The open receipts of `pool`, oldest first, or `None` when `slate_id` was received
+    /// before.
     async fn open_receipts_unless_known(
         &self,
-        transport: TransportId,
+        pool: Pool,
         slate_id: Option<Uuid>,
     ) -> Result<Option<Vec<OpenReceipt>>, WalletError> {
         let session = self.session()?;
@@ -229,7 +280,11 @@ where
                 }
                 // A paired contact's receipts have caps of their own (RFC 0002 12.5).
                 let mut open = Vec::new();
-                for receipt in repos.open_receipts(transport.as_str())? {
+                for receipt in repos.open_receipts(pool.transport().as_str())? {
+                    let epic1 = crate::epic1_index::index_of(repos, receipt.id)?.is_some();
+                    if epic1 != matches!(pool, Pool::Epic1(_)) {
+                        continue;
+                    }
                     let contact = match repos.transaction(receipt.id)?.and_then(|tx| tx.slate_id) {
                         Some(slate) => crate::contact_link::slate_contact(repos, slate)?,
                         None => None,

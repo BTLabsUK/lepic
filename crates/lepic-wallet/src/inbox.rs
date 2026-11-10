@@ -68,7 +68,7 @@ use crate::native_epicbox::{self, Arrived, Claim, NativeRefusal, Opening, Sealin
 use crate::notice::{self, Payload};
 use crate::peer_compat::Shown;
 use crate::ports::{SecretVault, StoreOpener};
-use crate::receipt_cap::{NoRoom, Sender};
+use crate::receipt_cap::{NoRoom, Pool, Sender};
 use crate::receive::{ReceiveError, ReceiveRequest};
 use crate::refresh::last_confirmed;
 use crate::twin_answer::{self, Refused, Step};
@@ -1470,7 +1470,7 @@ where
         };
         let refuse = listing.is_none() && self.config().policy.refuse_unsolicited_payments;
         match self
-            .make_room(method.id(), slate_id, Some(sender), refuse)
+            .make_room(Pool::Transport(method.id()), slate_id, Some(sender), refuse)
             .await
         {
             Ok(()) => Ok(()),

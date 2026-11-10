@@ -1269,7 +1269,9 @@ where
     /// are tried). Returns whether it was new; one taken before changes nothing. A payment
     /// whose amount is not the one the link asks is refused with
     /// [`Epic1Refusal::AmountMismatch`] before anything is received, and a notice that says so
-    /// is sealed to its reply key and stored to post to its reply mailbox.
+    /// is sealed to its reply key and stored to post to its reply mailbox. A new payment is
+    /// taken only within the open receipt cap
+    /// ([`lepic_wallet::Wallet::receive_at_link`]); one refused leaves the link as it was.
     async fn take_payment(
         &self,
         account: AccountIndex,
@@ -1307,7 +1309,7 @@ where
         }
         let received = self
             .wallet
-            .receive(
+            .receive_at_link(
                 &file_method(),
                 &WireSlate::binary(MediaType::JSON, v3),
                 ReceiveRequest {

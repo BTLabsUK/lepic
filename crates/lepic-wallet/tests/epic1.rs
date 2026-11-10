@@ -1067,3 +1067,37 @@ fn a_file_sealed_to_another_accounts_address_is_received_into_that_account() {
             .all(|details| details.transaction.entry.direction != TxDirection::Incoming)
     );
 }
+
+#[test]
+fn a_link_payment_past_the_open_receipt_cap_is_refused_and_leaves_its_link_unused() {
+    let world = World::with_issuer_policy(lepic_wallet::WalletPolicy {
+        max_open_receipts: 1,
+        ..lepic_wallet::WalletPolicy::default()
+    });
+    let first = world.issue_link(&world.issuer, Epic1LinkKind::OnScreen, &[]);
+    let second = world.issue_link(&world.issuer, Epic1LinkKind::Printed, &[]);
+    world.pay_link(&first.link, false).unwrap();
+    assert_eq!(world.taken(&world.issuer), 1);
+    world.payer.fund(20, FUNDING);
+    let refused = world.pay_link(&second.link, false).unwrap();
+    assert_eq!(refused.posted, Some(0));
+
+    // The second payment finds the cap full and is dropped.
+    assert_eq!(world.taken(&world.issuer), 0);
+    let received = world
+        .block_on(world.issuer.wallet.transactions(ACCOUNT))
+        .unwrap();
+    assert_eq!(received.len(), 1);
+    let mailbox = &link_mailboxes(&second.link).unwrap()[0];
+    assert_eq!(world.relay.pending(mailbox), 0);
+    let links = world
+        .block_on(world.issuer.wallet.contact_book().epic1_links())
+        .unwrap();
+    let used: Vec<_> = links
+        .iter()
+        .map(|link| (link.kind, link.used_at.is_some()))
+        .collect();
+    assert!(used.contains(&(Epic1LinkKind::OnScreen, true)));
+    assert!(used.contains(&(Epic1LinkKind::Printed, false)));
+    assert_eq!(world.answers_posted(), 1);
+}
