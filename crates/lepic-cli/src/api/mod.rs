@@ -167,6 +167,7 @@ api!(
     in_person_finalize,
     epic1_address,
     epic1_new_address,
+    epic1_issue_here,
     epic1_addresses,
     epic1_link,
     epic1_links,

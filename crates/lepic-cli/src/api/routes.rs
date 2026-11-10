@@ -38,9 +38,9 @@ use crate::output::{
     ContactPayloadAckReport, ContactPayloadListReport, ContactPayloadPostReport,
     ContactPreviewReport, ContactQuarantineReport, ContactRemoveReport, ContactReport,
     ContactRequestCancelReport, ContactRequestDismissReport, ContactRequestsReport,
-    Epic1AddressReport, Epic1AddressesReport, Epic1AnswersReport, Epic1LinkReport,
-    Epic1LinksReport, Epic1PaidReport, Epic1PostReport, Epic1ReadReport, Epic1RestoreReport,
-    Epic1RetireReport, EpicboxStatusReport, EpictxOpenReport, FinalizeReport,
+    Epic1AddressReport, Epic1AddressesReport, Epic1AnswersReport, Epic1IssuerReport,
+    Epic1LinkReport, Epic1LinksReport, Epic1PaidReport, Epic1PostReport, Epic1ReadReport,
+    Epic1RestoreReport, Epic1RetireReport, EpicboxStatusReport, EpictxOpenReport, FinalizeReport,
     InPersonAnswersReport, InPersonCodeReport, InPersonPaidReport, InPersonPostReport,
     InPersonReadReport, InPersonTakenReport, InfoReport, MethodsReport, NodeStatusReport,
     OutputsReport, PasswordReport, PeerForgetReport, PeerPinListReport, PeerReport, PostReport,
@@ -2038,6 +2038,21 @@ pub(crate) async fn epic1_post_answer(api: &Api<'_>, request: Request) -> Answer
         relay_ok: body.relay_ok,
     };
     api.run(epic1(Epic1Command::PostAnswer(args))).await
+}
+
+/// Make this restored install the one that issues new epic1 addresses
+///
+/// A wallet restored from its recovery phrase issues no new address until this is called.
+/// Call it once no other install on the same phrase issues them. Calling it again changes
+/// nothing.
+#[utoipa::path(
+    post,
+    path = "/v1/epic1/issue-here",
+    tag = "epic1",
+    responses((status = 200, body = Epic1IssuerReport)),
+)]
+pub(crate) async fn epic1_issue_here(api: &Api<'_>, _request: Request) -> Answer {
+    api.run(epic1(Epic1Command::IssueHere)).await
 }
 
 /// Read the link mailboxes of the wallet's seed after a restore

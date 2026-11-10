@@ -1267,6 +1267,37 @@
         }
       }
     },
+    "/v1/epic1/issue-here": {
+      "post": {
+        "tags": [
+          "epic1"
+        ],
+        "summary": "Make this restored install the one that issues new epic1 addresses",
+        "description": "A wallet restored from its recovery phrase issues no new address until this is called.\nCall it once no other install on the same phrase issues them. Calling it again changes\nnothing.",
+        "operationId": "epic1_issue_here",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Epic1IssuerReport"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error, as RFC 9457 problem details",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/epic1/links": {
       "get": {
         "tags": [
@@ -4473,6 +4504,18 @@
           },
           "host": {
             "type": "string"
+          }
+        }
+      },
+      "Epic1IssuerReport": {
+        "type": "object",
+        "description": "This install made the one that issues new epic1 addresses, from `epic1 issue-here`.",
+        "required": [
+          "issuing"
+        ],
+        "properties": {
+          "issuing": {
+            "type": "boolean"
           }
         }
       },

@@ -577,6 +577,7 @@ fn contact_kind(error: &ContactError) -> ErrorKind {
         ContactError::Epic1(
             Epic1Refusal::NotIssued | Epic1Refusal::NoPayment | Epic1Refusal::AddressNotIssued,
         ) => ErrorKind::NotFound,
+        ContactError::Epic1(Epic1Refusal::NotIssuingInstall) => ErrorKind::WalletState,
         ContactError::Epic1(_) => ErrorKind::Rejected,
         ContactError::Post(_) => ErrorKind::Transport,
         ContactError::NotCancelled { cause, .. } => contact_kind(cause),
@@ -903,6 +904,14 @@ mod tests {
             (
                 CliError::StartAboveTip { start: 9, tip: 8 },
                 ErrorKind::Usage,
+            ),
+            (
+                ContactError::Epic1(Epic1Refusal::NotIssuingInstall).into(),
+                ErrorKind::WalletState,
+            ),
+            (
+                ContactError::Epic1(Epic1Refusal::NoAddressLeft).into(),
+                ErrorKind::Rejected,
             ),
         ];
         for (error, kind) in cases {

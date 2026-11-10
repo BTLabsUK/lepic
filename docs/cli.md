@@ -871,6 +871,13 @@ restore from the phrase tries 50 numbers past the highest it knows, and the firs
 after it takes the number after those. A payment sealed to an address at no known number and more
 than 50 past it is not found.
 
+Another install on the same phrase may still be issuing addresses, and two installs that both
+issue give the same number to two payers. So a restored wallet refuses `epic1 new-address`
+(`wallet_state`) until `epic1 issue-here` makes it the install that issues; run that once the
+other install no longer issues. Until then it keeps trying 50 numbers past the highest one paid,
+so it still finds payments to the addresses the other install hands out. Number 0 is always
+there. A wallet created with `wallet init` issues from the start.
+
 The payer reads the link first, then pays it:
 
 ```
@@ -1316,6 +1323,7 @@ lock: `another lepic process is using the data directory`.
 | `POST /v1/in-person/{slate_id}/finalize` | `in-person finalize`, with `answer` and `fluff` |
 | `GET /v1/epic1/address` | `epic1 address`, with `account` and `index` in the query |
 | `POST /v1/epic1/addresses` | `epic1 new-address`, with `account` |
+| `POST /v1/epic1/issue-here` | `epic1 issue-here` |
 | `GET /v1/epic1/addresses` | `epic1 addresses`, with `account`, `from` and `limit` in the query |
 | `POST /v1/epic1/links` | `epic1 link`, with `account`, `index`, `amount`, `message`, `printed` and `relays` |
 | `GET /v1/epic1/links` | `epic1 links` |

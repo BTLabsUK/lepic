@@ -652,6 +652,12 @@ mod tests {
             ),
             (&["epic1", "restore"], "POST", "/v1/epic1/restore", None),
             (
+                &["epic1", "issue-here"],
+                "POST",
+                "/v1/epic1/issue-here",
+                None,
+            ),
+            (
                 &["profile", "domain", "show"],
                 "GET",
                 "/v1/profile/domain",

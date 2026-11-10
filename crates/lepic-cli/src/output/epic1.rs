@@ -134,6 +134,12 @@ pub struct Epic1PostReport {
     pub posted: bool,
 }
 
+/// This install made the one that issues new epic1 addresses, from `epic1 issue-here`.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct Epic1IssuerReport {
+    pub issuing: bool,
+}
+
 /// The link mailboxes read after a restore, from `epic1 restore`.
 #[derive(Debug, Serialize, ToSchema)]
 pub struct Epic1RestoreReport {
@@ -246,6 +252,7 @@ pub(super) fn write_epic1_human(out: &mut Vec<u8>, report: &Report) -> std::io::
         }),
         Report::Epic1Post(r) => writeln!(out, "Answer to {} posted.", r.slate_id),
         Report::Epic1Restore(r) => writeln!(out, "{} payment(s) taken or finalized.", r.taken),
+        Report::Epic1Issuer(_) => writeln!(out, "This install issues new epic1 addresses."),
         Report::EpictxOpen(r) => {
             let text = serde_json::to_string_pretty(&r.slate).map_err(std::io::Error::other)?;
             writeln!(out, "{text}")

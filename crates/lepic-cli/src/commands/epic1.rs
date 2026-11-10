@@ -18,9 +18,9 @@ use crate::exit::CliError;
 use crate::host::Host;
 use crate::output::{
     Epic1AddressEntryReport, Epic1AddressReport, Epic1AddressesReport, Epic1AnswerReport,
-    Epic1AnswersReport, Epic1AttemptReport, Epic1LinkEntryReport, Epic1LinkReport,
-    Epic1LinksReport, Epic1PaidReport, Epic1PostReport, Epic1ReadReport, Epic1RestoreReport,
-    Epic1RetireReport, EpictxOpenReport, Report,
+    Epic1AnswersReport, Epic1AttemptReport, Epic1IssuerReport, Epic1LinkEntryReport,
+    Epic1LinkReport, Epic1LinksReport, Epic1PaidReport, Epic1PostReport, Epic1ReadReport,
+    Epic1RestoreReport, Epic1RetireReport, EpictxOpenReport, Report,
 };
 
 /// The report of `epic1 addresses` for the account labelled `account`.
@@ -68,6 +68,10 @@ impl<H: Host> Run<'_, H> {
                     index,
                     address: address.encode(),
                 })
+            }
+            Epic1Command::IssueHere => {
+                book.epic1_issue_here().await?;
+                Report::Epic1Issuer(Epic1IssuerReport { issuing: true })
             }
             Epic1Command::Addresses(args) => {
                 let account = wallet.account(&args.account.account)?.index;

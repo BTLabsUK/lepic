@@ -1128,8 +1128,15 @@ pub enum Epic1Command {
     /// Issue the account's next epic1 address
     #[command(after_help = "\
 Each address of an account is a number. The account's first address, number 0, always exists. \
-Payments to every issued address come to the same account; the payment shows the number.")]
+Payments to every issued address come to the same account; the payment shows the number. A \
+wallet restored from its recovery phrase issues none until `lepic epic1 issue-here`.")]
     NewAddress(AccountArg),
+    /// Make this restored install the one that issues new epic1 addresses
+    #[command(after_help = "\
+Run it once no other install on the same recovery phrase issues addresses: two that both issue \
+give the same address to two payers. The first address each account issues afterwards skips \
+the 50 numbers past the highest one known. Running it again changes nothing.")]
+    IssueHere,
     /// List the epic1 addresses the account issued
     Addresses(Epic1AddressesArgs),
     /// Make a link to the account's epic1 address; payments to it come to a link mailbox

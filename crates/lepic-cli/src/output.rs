@@ -18,9 +18,9 @@ mod epic1;
 
 pub use epic1::{
     Epic1AddressEntryReport, Epic1AddressReport, Epic1AddressesReport, Epic1AnswerReport,
-    Epic1AnswersReport, Epic1AttemptReport, Epic1LinkEntryReport, Epic1LinkReport,
-    Epic1LinksReport, Epic1PaidReport, Epic1PostReport, Epic1ReadReport, Epic1RestoreReport,
-    Epic1RetireReport, EpictxOpenReport,
+    Epic1AnswersReport, Epic1AttemptReport, Epic1IssuerReport, Epic1LinkEntryReport,
+    Epic1LinkReport, Epic1LinksReport, Epic1PaidReport, Epic1PostReport, Epic1ReadReport,
+    Epic1RestoreReport, Epic1RetireReport, EpictxOpenReport,
 };
 
 // One report is built per command and rendered at once, so the size of its largest variant
@@ -113,6 +113,7 @@ pub enum Report {
     Epic1Answers(Epic1AnswersReport),
     Epic1Post(Epic1PostReport),
     Epic1Restore(Epic1RestoreReport),
+    Epic1Issuer(Epic1IssuerReport),
     EpictxOpen(EpictxOpenReport),
 }
 
@@ -1556,6 +1557,7 @@ fn write_human(out: &mut Vec<u8>, report: &Report) -> std::io::Result<()> {
         | Report::Epic1Answers(_)
         | Report::Epic1Post(_)
         | Report::Epic1Restore(_)
+        | Report::Epic1Issuer(_)
         | Report::EpictxOpen(_) => epic1::write_epic1_human(out, report),
         Report::ApiClientAdd(r) => writeln!(out, "Client {} added: {}", r.name, r.fingerprint),
         Report::ApiClientRemove(r) => writeln!(out, "Client {} removed.", r.name),

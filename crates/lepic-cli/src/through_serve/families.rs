@@ -470,6 +470,7 @@ pub(super) fn epic1(args: &Epic1Args) -> Option<Call> {
             json!({ "relay_ok": relay_ok }),
         ),
         Epic1Command::Restore => post("/v1/epic1/restore"),
+        Epic1Command::IssueHere => post("/v1/epic1/issue-here"),
     }
 }
 
