@@ -723,7 +723,9 @@ Two LEPIC wallets also tell each other what happened to an invoice, with short n
 never move funds. The payer's next `epicbox drain` hears that the service posted the payment. When the service cancels an invoice with `lepic tx cancel`, or it expires, the payer's
 drain deletes it if it was not paid yet, and names the payment if it was, so the payer can give
 up on it with `tx cancel`; nothing is cancelled for the payer. `invoice decline` tells the
-service, whose next drain or listen names the invoice to withdraw. Notices go only about an
+service, whose next drain or listen names the invoice to withdraw. The service's `tx show` of the
+invoice then shows `Payer  declined by the payer at …` (`payer_declined_at` in JSON); the invoice stays
+`received` until the service cancels it. Notices go only about an
 exchange whose slate came marked, to a wallet that has shown it runs LEPIC in the last 30 days,
 because `epic-wallet` cannot read them; they are counted as
 `notices` and, with human output, shown on stderr.
@@ -984,7 +986,9 @@ Profile 3 (no-payments, automated)
 
 `contact allow-invoices <ID> on` lets a verified contact send invoices; they arrive with
 `contact collect` and wait in `contact invoices` until `contact pay-invoice <SLATE_ID> <AMOUNT>`
-or `contact decline <SLATE_ID>`, which tells the contact.
+or `contact decline <SLATE_ID>`, which tells the contact. The issuer's `tx show` of the invoice then
+shows when the payer declined it (`payer_declined_at`); the invoice stays `received` until the
+issuer cancels it with `tx cancel`.
 `contact invoice <ID> <AMOUNT>` invoices a contact. `contact collect` also sends what the outbox
 holds. `contact export <FILE>` and `contact import <FILE>` carry the pairings in a backup.
 

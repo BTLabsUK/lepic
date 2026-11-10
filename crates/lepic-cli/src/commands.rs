@@ -2711,6 +2711,7 @@ fn show(repos: &dyn Repositories, details: &TransactionDetails) -> Result<TxRepo
             .sender_reported_cancelled_at
             .map(|at| at.to_string()),
         receiver_declined_at: details.receiver_declined_at.map(|at| at.to_string()),
+        payer_declined_at: details.payer_declined_at.map(|at| at.to_string()),
         receive_listing: details.receive_listing.map(|listing| ListingReport {
             service_key: listing.service_key().to_hex(),
             generation: listing.generation(),
@@ -2810,6 +2811,7 @@ fn tx_report(tx: &StoredTransaction, stages: Option<Vec<String>>) -> TxReport {
         sender_reported_posted_at: None,
         sender_reported_cancelled_at: None,
         receiver_declined_at: None,
+        payer_declined_at: None,
         receive_listing: None,
     }
 }

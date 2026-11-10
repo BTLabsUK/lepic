@@ -711,6 +711,34 @@ fn the_issuer_hears_a_decline_from_the_invoiced_address() {
 }
 
 #[test]
+fn a_declined_invoice_carries_the_time_of_the_decline() {
+    let world = World::new();
+    let issued = world.issue(None);
+    world.drain_payer_invoices();
+    let declined_at = |world: &World| {
+        world
+            .block_on(world.issuer.wallet.transaction_details(issued.tx_id))
+            .unwrap()
+            .payer_declined_at
+    };
+    assert_eq!(declined_at(&world), None);
+
+    world
+        .block_on(
+            world
+                .payer
+                .wallet
+                .decline_invoice(&world.payer.method, issued.slate_id),
+        )
+        .unwrap();
+    world.drain_issuer();
+    assert!(
+        declined_at(&world).is_some(),
+        "the decline is recorded with its time"
+    );
+}
+
+#[test]
 fn a_decline_after_the_invoice_was_finalized_raises_no_event() {
     let world = World::new();
     let peer = world.peer_client(9);

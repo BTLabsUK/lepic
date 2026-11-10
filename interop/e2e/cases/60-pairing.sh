@@ -347,9 +347,10 @@ case_ct_invoices() {
     id="$(w "${CT_BOB}" contact invoices | jq -r '.invoices[0].slate_id')"
     w "${CT_BOB}" contact decline "${id}" >/dev/null || fail "contact decline failed" || return 1
     expect_json "$(w "${CT_BOB}" contact invoices)" '.invoices | length == 0' "declined invoice no longer parked" || return 1
-    # The issuer is told by a `declined` notice: it raises an event (no CLI output) and leaves the
-    # tx `received` (lepic-wallet notices.rs take_decline). What the CLI shows is that the shop's
-    # next collect takes one message, and that its tx is not paid or cancelled.
+    # The issuer is told by a `declined` notice: it raises an event, records when the payer
+    # declined, and leaves the tx `received` (lepic-wallet notices.rs take_decline). The shop's
+    # next collect takes one message, its tx is not paid or cancelled, and `tx show` carries
+    # `payer_declined_at`.
     local got=0 n m
     for n in 1 2 3 4 5 6 7 8; do
         w "${CT_BOB}" contact collect >/dev/null 2>&1
@@ -360,7 +361,8 @@ case_ct_invoices() {
     done
     ((got >= 1)) || fail "the shop took no message after the decline" || return 1
     expect_eq "$(tx_by_slate "${CT_SHOP}" "${id}" | jq -r .state)" received "the declined invoice stays unpaid on the shop" || return 1
-    note "unallowed not parked; allowed paid; declined: the shop took the notice (tx stays received)"
+    expect_json "$(w "${CT_SHOP}" tx show "$(tx_by_slate "${CT_SHOP}" "${id}" | jq -r .tx_id)")" '(.payer_declined_at // "") != ""' "the shop's tx shows when the payer declined" || return 1
+    note "unallowed not parked; allowed paid; declined: the shop took the notice (tx stays received, payer_declined_at set)"
 }
 ct_invoices_count() { (($(w "$1" contact invoices | jq '.invoices | length') >= $2)); }
 ct_tx_cancelled() { slate_state_in "$1" "$2" "cancelled canceled"; }

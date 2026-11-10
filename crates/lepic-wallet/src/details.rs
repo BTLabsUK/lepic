@@ -23,7 +23,9 @@ use crate::codecs;
 use crate::epicbox_invoice::display_message;
 use crate::error::WalletError;
 use crate::legacy_history::{self, TxOrigin};
-use crate::notices::{cancelled_report, posted_report, receiver_declined_report};
+use crate::notices::{
+    cancelled_report, payer_declined_report, posted_report, receiver_declined_report,
+};
 use crate::ports::{SecretVault, StoreOpener};
 use crate::receive::verify_message;
 use crate::release::release_check_with;
@@ -116,6 +118,11 @@ pub struct TransactionDetails {
     /// refuse payments nobody asked for does (ADR 0045), and the send was cancelled for it.
     /// Show the send as declined by the receiver. `None` for any other transaction.
     pub receiver_declined_at: Option<Timestamp>,
+    /// For an invoice this wallet issued, when its payer declined it (ADR 0016). The invoice
+    /// stays `received` and unpaid: a decline never cancels it, so show it as declined and let
+    /// the issuer cancel it. `None` for any other transaction, and for a decline recorded
+    /// without a time by an older version.
+    pub payer_declined_at: Option<Timestamp>,
     /// Whether the transaction is a block reward this wallet received: an incoming entry with
     /// no slate whose output is a coinbase output, whether a mining node had this wallet build
     /// it or a scan found it. Its output is locked until its `lock_height`.
@@ -191,6 +198,20 @@ fn receiver_decline(
     match transaction.entry.slate_id {
         Some(slate_id) if transaction.entry.direction == TxDirection::Outgoing => {
             receiver_declined_report(repos, slate_id)
+        }
+        _ => Ok(None),
+    }
+}
+
+/// When the payer declined the invoice this wallet issued. Reads the setting only for an
+/// incoming transaction with a slate.
+fn payer_decline(
+    repos: &dyn Repositories,
+    transaction: &StoredTransaction,
+) -> Result<Option<Timestamp>, StoreError> {
+    match transaction.entry.slate_id {
+        Some(slate_id) if transaction.entry.direction == TxDirection::Incoming => {
+            payer_declined_report(repos, slate_id)
         }
         _ => Ok(None),
     }
@@ -411,6 +432,7 @@ fn details(
     let sender_reported_posted_at = sender_report(repos, &transaction, now, sends_notices)?;
     let sender_reported_cancelled_at = sender_cancel_report(repos, &transaction)?;
     let receiver_declined_at = receiver_decline(repos, &transaction)?;
+    let payer_declined_at = payer_decline(repos, &transaction)?;
     let unverified =
         origin == TxOrigin::OtherWallet && crate::other_wallet::is_unverified(repos, tx_id)?;
     let coinbase = is_coinbase(repos, &transaction, &output_commits)?;
@@ -420,6 +442,7 @@ fn details(
         sender_reported_posted_at,
         sender_reported_cancelled_at,
         receiver_declined_at,
+        payer_declined_at,
         output_commits,
         spent_commits,
         undelivered,
