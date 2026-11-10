@@ -20,7 +20,7 @@ use lepic_primitives::params::Network;
 use lepic_slate::codec::{Codec, EncodeContext, MediaType, WireSlate};
 use lepic_slate::model::Slate;
 use lepic_slate::stage::Stage;
-use lepic_store::{Repositories, SlateStage, StoreError, StoredSlate, TxDirection, TxState};
+use lepic_store::{Repositories, SlateStage, StoreError, StoredSlate, TxDirection};
 use lepic_transport::marker::features::NATIVE_SLATES;
 use lepic_transport::method::{Method, Sending};
 use lepic_transport::transport::{Destination, Envelope};
@@ -253,6 +253,24 @@ pub enum NativeRefusal {
     NoReplyKey,
     #[error("native slates are not read by this build")]
     NotInstalled,
+    /// Sealed to a reply key no send of this wallet has: the answer to a send another install
+    /// of the recovery phrase made, or to none.
+    #[error("native answer for a send this wallet does not hold")]
+    UnknownSend,
+}
+
+/// A key for the native answer in `envelope`, on `network`, that no send of this wallet
+/// matches, to track it while it is held for another install: taken from its envelope's
+/// ephemeral key, so a copy posted back unchanged has the same one. `None` for an envelope that
+/// does not decode.
+pub(crate) fn answer_tag(network: Network, envelope: &Envelope) -> Option<Uuid> {
+    let bytes = dearmor(envelope.wire().as_text()?).ok()?;
+    let sealed = SealedEnvelope::decode(&bytes, contact_network(network)).ok()?;
+    sealed
+        .enc()
+        .first_chunk::<16>()
+        .copied()
+        .map(Uuid::from_bytes)
 }
 
 /// A native slate that came over Epicbox, opened.
@@ -275,8 +293,9 @@ pub(crate) struct Opening<'a> {
 impl Opening<'_> {
     /// Opens the native slate of `envelope`: an S1 sealed to the payments address's seal key of
     /// kind 03, or the S2 answering a send of this wallet, sealed to that send's reply key and
-    /// completed from its stored S1. Anything else is refused; only a store failure is an
-    /// error.
+    /// completed from its stored S1, whatever state the send is in. An answer sealed to a reply
+    /// key no send has is refused with [`NativeRefusal::UnknownSend`], anything else with
+    /// another refusal; only a store failure is an error.
     pub(crate) fn open(
         &self,
         repos: &dyn Repositories,
@@ -298,8 +317,11 @@ impl Opening<'_> {
             };
             (sealed.open_tx(&key, KeyClass::Epicbox), None)
         } else {
-            let Some((key, request)) = self.reply_opening(repos, &sealed)? else {
+            if self.reply_keys.is_none() {
                 return Ok(Err(NativeRefusal::CannotOpen));
+            }
+            let Some((key, request)) = self.reply_opening(repos, &sealed)? else {
+                return Ok(Err(NativeRefusal::UnknownSend));
             };
             (sealed.open_tx(&key, KeyClass::Seal), Some(request))
         };
@@ -366,8 +388,10 @@ impl Opening<'_> {
         })
     }
 
-    /// The reply key of a send waiting for its answer whose hint `sealed` carries, with the
-    /// send's stored S1.
+    /// The reply key of a send of this wallet whose hint `sealed` carries, with the send's
+    /// stored S1. Every outgoing send is tried, not only one waiting for its answer: the
+    /// answer to a send that was cancelled or finalized meanwhile is settled by the rules for
+    /// that state.
     fn reply_opening(
         &self,
         repos: &dyn Repositories,
@@ -379,9 +403,8 @@ impl Opening<'_> {
         for account in repos.accounts()? {
             for stored in repos.transactions(account.index)? {
                 let entry = &stored.entry;
-                let waiting =
-                    (entry.direction, entry.state) == (TxDirection::Outgoing, TxState::Sent);
-                let Some(slate_id) = entry.slate_id.filter(|_| waiting) else {
+                let outgoing = entry.direction == TxDirection::Outgoing;
+                let Some(slate_id) = entry.slate_id.filter(|_| outgoing) else {
                     continue;
                 };
                 let Some(key) = reply_keys.reply_secret_key(

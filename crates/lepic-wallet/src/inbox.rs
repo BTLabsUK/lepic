@@ -736,9 +736,10 @@ where
         let network = self.config().network;
         // A native slate is opened, and refused with nothing stored when it does not open
         // to an S1 for the payments address or the S2 of a send of this wallet; then it goes
-        // on as the marked V3 JSON it holds.
+        // on as the marked V3 JSON it holds. An answer to a send this wallet does not hold is
+        // kept for another install first.
         let arrived = if native_epicbox::is_native(envelope.wire()) {
-            Some(self.open_native(envelope).await?)
+            Some(self.open_native(msg_id, envelope).await?)
         } else {
             None
         };
@@ -1171,8 +1172,14 @@ where
         }
     }
 
-    /// Opens the native slate of `envelope` (RFC 0003 11.1).
-    async fn open_native(&self, envelope: &Envelope) -> Result<Arrived, Settlement> {
+    /// Opens the native slate of `envelope`, the message `msg_id` (RFC 0003 11.1). An answer
+    /// sealed to a reply key no send of this wallet has is settled by
+    /// [`Wallet::unknown_native_answer`].
+    async fn open_native(
+        &self,
+        msg_id: Option<&str>,
+        envelope: &Envelope,
+    ) -> Result<Arrived, Settlement> {
         let Some(slates) = self.native_slates() else {
             return Err(Refusal::Native(NativeRefusal::NotInstalled).into());
         };
@@ -1188,14 +1195,68 @@ where
                     slates: &*slates,
                     reply_keys: reply_keys.as_deref(),
                 };
-                Ok(session.store.read(|repos| opening.open(repos, &envelope))?)
+                let opened = session.store.read(|repos| opening.open(repos, &envelope))?;
+                let tag = match opened {
+                    Err(NativeRefusal::UnknownSend) => {
+                        native_epicbox::answer_tag(config.network, &envelope)
+                    }
+                    _ => None,
+                };
+                Ok((opened, tag))
             })
             .await
             .map_err(Hold::from)?;
-        opened.map_err(|refusal| {
-            warn!(error = %refusal, "native slate refused");
-            Refusal::Native(refusal).into()
-        })
+        match opened {
+            (Ok(arrived), _) => Ok(arrived),
+            (Err(NativeRefusal::UnknownSend), Some(tag)) => {
+                self.unknown_native_answer(msg_id, tag).await
+            }
+            (Err(refusal), _) => {
+                warn!(error = %refusal, "native slate refused");
+                Err(Refusal::Native(refusal).into())
+            }
+        }
+    }
+
+    /// Settles the message `msg_id` of a native answer sealed to a reply key no send of this
+    /// wallet has, as [`Wallet::unknown_answer`] settles a plain one: held, requeued for
+    /// another install of the recovery phrase, or refused. Nothing in it can be read here, so
+    /// it is tracked by `tag`, from its envelope, and refused at the end of the requeue window
+    /// or when too many others cycle, not when its inputs are spent.
+    async fn unknown_native_answer(
+        &self,
+        msg_id: Option<&str>,
+        tag: Uuid,
+    ) -> Result<Arrived, Settlement> {
+        let refusal = Refusal::Native(NativeRefusal::UnknownSend);
+        let arrived = self.first_arrival(msg_id).await?;
+        let step = self
+            .inbox_write(move |repos, now| twin_answer::step(repos, tag, Stage::S2, arrived, now))
+            .await
+            .map_err(Hold::from)?;
+        match step {
+            Step::Hold { first } => {
+                if first {
+                    info!(
+                        msg_id = msg_id.unwrap_or(""),
+                        "native answer for a send this wallet does not hold kept for another install"
+                    );
+                }
+                Err(Hold::UnknownSlate.into())
+            }
+            Step::Requeue { .. } => Err(Settlement::Requeue(Requeue {
+                slate_id: SlateId::from_bytes(*tag.as_bytes()),
+                stage: Stage::S2,
+                refusal,
+            })),
+            Step::Refuse(_) => {
+                info!(
+                    msg_id = msg_id.unwrap_or(""),
+                    "native answer for a send this wallet does not hold refused"
+                );
+                Err(refusal.into())
+            }
+        }
     }
 
     /// The answer `reply`, marked V3 JSON, as a native slate sealed to `key`, the reply key of
@@ -1588,7 +1649,8 @@ pub(crate) enum Settlement {
 /// An answer for a slate this store does not know, to requeue.
 #[derive(Debug)]
 pub struct Requeue {
-    /// The slate it answers.
+    /// The slate it answers. For a native answer to a send this wallet does not hold, which
+    /// it cannot open, a key taken from its envelope instead.
     pub slate_id: SlateId,
     /// Its stage: S2 or I2.
     pub stage: Stage,

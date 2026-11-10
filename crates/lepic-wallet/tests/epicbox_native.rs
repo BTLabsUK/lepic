@@ -31,7 +31,7 @@ use lepic_store::{PeerCompat, TxDirection, TxState};
 use lepic_transport::marker::features::NATIVE_SLATES;
 use lepic_transport::marker::v3::lepic_marker_features;
 use lepic_transport::transport::{Destination, Envelope, Inbound};
-use lepic_wallet::inbox::{Arrival, Handled};
+use lepic_wallet::inbox::{Arrival, Handled, Hold, Outcome};
 use lepic_wallet::selection::SelectionStrategy;
 use lepic_wallet::send::{Delivery, SendRequest, SentSlate};
 use lepic_wallet::{SlateFormat, WalletPolicy};
@@ -341,4 +341,76 @@ fn a_native_invoice_to_a_payments_address_is_refused() {
         None
     );
     assert_eq!(world.payer.writes(), before);
+}
+
+/// A native answer that a payment's payer sent, before it reached `world`'s payer.
+fn native_answer(world: &World) -> (SentSlate, Envelope) {
+    first_payment(world);
+    let sent = send(world);
+    assert_eq!(sent.format, SlateFormat::Native);
+    let s1 = only(world, &world.issuer);
+    assert_eq!(arrive(world, &world.issuer, &s1), Handled::Received);
+    let s2 = only(world, &world.payer);
+    assert!(text(&s2).starts_with(TX_ARMOR), "{}", text(&s2));
+    (sent, s2)
+}
+
+#[test]
+fn a_native_answer_for_a_send_of_another_install_is_held_for_it() {
+    let world = native(true, true);
+    let (sent, s2) = native_answer(&world);
+    let twin = world.payer_twin();
+    let before = world.node.pushed_transactions().len();
+
+    let held = world.block_on(twin.wallet.arrived(
+        &twin.method,
+        Arrival {
+            msg_id: Some("7"),
+            envelope: &s2,
+            attempt: 1,
+            listing: None,
+        },
+    ));
+    assert!(
+        matches!(held, Err(Outcome::Hold(Hold::UnknownSlate))),
+        "{held:?}"
+    );
+    let requeued = world.block_on(twin.wallet.arrived(
+        &twin.method,
+        Arrival {
+            msg_id: None,
+            envelope: &s2,
+            attempt: 1,
+            listing: None,
+        },
+    ));
+    assert!(matches!(requeued, Err(Outcome::Requeue(_))), "{requeued:?}");
+
+    // The install that made the send still finalizes it.
+    assert_eq!(arrive(&world, &world.payer, &s2), Handled::Finalized);
+    assert_eq!(
+        state(&world.payer, &sent, TxDirection::Outgoing),
+        Some(TxState::Posted)
+    );
+    assert_eq!(world.node.pushed_transactions().len(), before + 1);
+}
+
+#[test]
+fn a_native_answer_for_a_cancelled_send_is_settled_by_the_cancel() {
+    let world = native(true, true);
+    let (sent, s2) = native_answer(&world);
+    world
+        .block_on(world.payer.wallet.cancel(sent.tx_id))
+        .unwrap();
+    assert_eq!(world.relay.pending(&world.issuer.address), 0);
+    let before = world.node.pushed_transactions().len();
+
+    assert_eq!(arrive(&world, &world.payer, &s2), Handled::Rejected);
+    assert_eq!(
+        state(&world.payer, &sent, TxDirection::Outgoing),
+        Some(TxState::Cancelled)
+    );
+    assert_eq!(world.node.pushed_transactions().len(), before);
+    // The payee is told the payment was cancelled.
+    assert_eq!(world.relay.pending(&world.issuer.address), 1);
 }
