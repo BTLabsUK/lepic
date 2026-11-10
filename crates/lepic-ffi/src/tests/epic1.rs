@@ -4,6 +4,8 @@
 //! finalized by the payer's collect, printed links retired, and `.epictx` text between native
 //! contacts.
 
+use lepic_wallet_contacts::WalletContacts as _;
+
 use super::contact::{EPIC, RELAY, World, pair};
 use super::kind;
 use crate::api::contact::sealed_file_extension;
@@ -164,6 +166,16 @@ async fn a_link_paid_is_answered_by_the_payee_and_finalized_by_the_payers_collec
     assert_eq!(paid.posted, Some(0));
     assert_eq!(paid.attempts.len(), 1);
     assert_eq!(paid.attempts[0].error, None);
+    // The payment is stored under its slate id, so a caller can find it again.
+    let book = ben.session().engine_wallet().contact_book();
+    let slate_id = lepic_wallet::event::SlateId::parse(&paid.slate_id).unwrap();
+    let stored = book.epic1_payment(slate_id).await.unwrap().unwrap();
+    assert_eq!(stored.tx_id.0, paid.tx_id);
+    assert_eq!(stored.address, address);
+    assert_eq!(stored.posted, Some(0));
+    assert!(stored.attempts.is_empty());
+    let other = lepic_wallet::event::SlateId::from_bytes([4; 16]);
+    assert_eq!(book.epic1_payment(other).await.unwrap(), None);
 
     // The payee takes the payment and posts its answer in the same collect.
     assert_eq!(collect(&anna).await, 1);

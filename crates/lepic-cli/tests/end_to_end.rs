@@ -748,6 +748,12 @@ fn a_send_made_again_under_its_slate_id_sends_nothing() {
 
     let other_amount = send("3", &address);
     assert_eq!(other_amount.code, 7, "{other_amount:?}");
+    // An epic1 payment under the slate id of a send that was not one pays nothing.
+    let not_epic1 = sender.run(
+        &host,
+        &["epic1", "pay", "epic:epic1x", "2", "--slate-id", slate_id],
+    );
+    assert_eq!(not_epic1.code, 7, "{not_epic1:?}");
     let drained = receiver.run(&host, &["epicbox", "drain"]).ok().json();
     assert_eq!(drained["received"], 1, "{drained}");
 

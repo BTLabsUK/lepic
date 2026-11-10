@@ -1615,7 +1615,7 @@ fn start_from_confirmed_tip<T: RpcTransport + Clone + 'static>(
 }
 
 /// A random version-4 slate id, drawn as the engine draws one.
-fn drawn_slate_id() -> Result<SlateId, CliError> {
+pub(crate) fn drawn_slate_id() -> Result<SlateId, CliError> {
     random_bytes().map(SlateId::from_random_bytes)
 }
 
@@ -1641,7 +1641,7 @@ fn random_bytes<const N: usize>() -> Result<[u8; N], CliError> {
 
 /// A slate id for `tx send --slate-id`. It travels in the slate, so only a random version-4
 /// UUID is taken: one derived from a user or an order id would leak it to the receiver.
-fn caller_slate_id(text: &str) -> Result<SlateId, CliError> {
+pub(crate) fn caller_slate_id(text: &str) -> Result<SlateId, CliError> {
     let slate_id = SlateId::parse(text).map_err(|_| CliError::SlateId)?;
     let bytes = slate_id.as_bytes();
     let version = bytes.get(6).map(|byte| byte >> 4);
@@ -1716,6 +1716,17 @@ async fn repeat_of<N: lepic_node::NodeApi + 'static>(
     .map(Some)
 }
 
+/// What a stored send paid the other party: debited less change and fee.
+pub(super) fn amount_sent(first: &TransactionDetails) -> Option<u64> {
+    let entry = &first.transaction.entry;
+    let fee = entry.fee.map_or(0, lepic_primitives::amount::Fee::value);
+    entry
+        .amount_debited
+        .value()
+        .checked_sub(entry.amount_credited.value())
+        .and_then(|value| value.checked_sub(fee))
+}
+
 fn repeated_send(
     first: &TransactionDetails,
     first_contact: Option<ContactId>,
@@ -1728,11 +1739,7 @@ fn repeated_send(
     let entry = &first.transaction.entry;
     let tx_id = first.transaction.id;
     let fee = entry.fee.map_or(0, lepic_primitives::amount::Fee::value);
-    let sent = entry
-        .amount_debited
-        .value()
-        .checked_sub(entry.amount_credited.value())
-        .and_then(|value| value.checked_sub(fee));
+    let sent = amount_sent(first);
     let to_same = match payee {
         Payee::Delivery(_, Delivery::Deliver { to }) => first.counterparty.as_ref() == Some(to),
         Payee::Delivery(_, Delivery::Export { .. }) => first_contact.is_none(),

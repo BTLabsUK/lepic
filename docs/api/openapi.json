@@ -4691,7 +4691,8 @@
           "slate_id",
           "address",
           "attempts",
-          "posted_ok"
+          "posted_ok",
+          "repeated"
         ],
         "properties": {
           "address": {
@@ -4714,6 +4715,10 @@
           "posted_ok": {
             "type": "boolean",
             "description": "Whether the payment was posted to any relay; false when every post failed."
+          },
+          "repeated": {
+            "type": "boolean",
+            "description": "The payment was made before under the same `slate_id`; this run posted nothing, and\n`attempts` is empty."
           },
           "slate_id": {
             "type": "string"
@@ -4781,6 +4786,13 @@
           "proof": {
             "type": "boolean",
             "description": "Ask the payee for a payment proof signed with its epic1 proof key."
+          },
+          "slate_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A random version-4 UUID the caller stores before paying. A payment made again under it\nposts nothing and reports the first payment with `repeated: true`. Required on the\nowner TLS listener."
           }
         },
         "additionalProperties": false

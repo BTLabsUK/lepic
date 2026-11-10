@@ -3,15 +3,15 @@
 //! (RFC 0003 §5.19); `lepic epictx open`: an `.epictx` file shown as JSON (§5.10).
 
 use lepic_primitives::amount::Amount;
-use lepic_wallet::send::SendRequest;
+use lepic_wallet::send::{SendError, SendRequest};
 use lepic_wallet_contacts::{
-    ContactRelays, Epic1AnswerView, Epic1LinkKind, Epic1LinkRequest, Epic1LinkView, Epic1Paid,
-    Epic1PayRequest, WalletContacts,
+    ContactError, ContactRelays, Epic1AnswerView, Epic1LinkKind, Epic1LinkRequest, Epic1LinkView,
+    Epic1Paid, Epic1PayRequest, WalletContacts,
 };
 
 use super::contact::{SlateFile, purpose_name, read_sealed, relays_in_mode};
 use super::in_person::{host_report, slate_id};
-use super::{Opened, Run, Spend, drawn_slate_id};
+use super::{Opened, Run, Spend, amount_sent, caller_slate_id, drawn_slate_id};
 use crate::amount::{format_amount, parse_amount};
 use crate::cli::{Epic1Args, Epic1Command, Epic1LinkArgs, Epic1PayArgs, EpictxCommand};
 use crate::exit::CliError;
@@ -108,11 +108,13 @@ impl<H: Host> Run<'_, H> {
             }
             Epic1Command::Pay(args) => {
                 let data_dir = self.settings.data_dir.clone();
-                paid_report(pay(&opened, &relays, args, &data_dir).await?)
+                let (paid, repeated) = pay(&opened, &relays, args, &data_dir).await?;
+                paid_report(paid, repeated)
             }
             Epic1Command::PostNext(args) => paid_report(
                 book.epic1_post_next(&relays, slate_id(&args.slate_id)?, args.hosts_ok)
                     .await?,
+                false,
             ),
             Epic1Command::Answers => Report::Epic1Answers(Epic1AnswersReport {
                 answers: book
@@ -196,13 +198,14 @@ async fn link<N: lepic_node::NodeApi + 'static>(
     }))
 }
 
-/// Pays an epic1 link: the amount given, or the one the link asks.
+/// Pays an epic1 link: the amount given, or the one the link asks. Returns the payment and
+/// whether it was made before under the caller's slate id, in which case nothing is sent.
 async fn pay<N: lepic_node::NodeApi + 'static>(
     opened: &Opened<N>,
     relays: &ContactRelays,
     args: Epic1PayArgs,
     data_dir: &std::path::Path,
-) -> Result<Epic1Paid, CliError> {
+) -> Result<(Epic1Paid, bool), CliError> {
     let Epic1PayArgs {
         link,
         amount,
@@ -211,9 +214,16 @@ async fn pay<N: lepic_node::NodeApi + 'static>(
         spend,
         proof,
         hosts_ok,
+        slate_id,
     } = args;
     let wallet = &opened.wallet;
     let book = wallet.contact_book();
+    let caller_slate = slate_id
+        .slate_id
+        .as_deref()
+        .map(caller_slate_id)
+        .transpose()?;
+    let account = wallet.account(&account.account)?.index;
     let amount: Amount = match amount {
         Some(amount) => parse_amount(&amount)?,
         None => book
@@ -221,6 +231,17 @@ async fn pay<N: lepic_node::NodeApi + 'static>(
             .amount
             .ok_or(CliError::Epic1Amount)?,
     };
+    let first = FirstPayment {
+        relays,
+        link: &link.link,
+        account,
+        amount,
+    };
+    if let Some(slate_id) = caller_slate
+        && let Some(paid) = first.find(opened, slate_id).await?
+    {
+        return Ok((paid, true));
+    }
     let spend = Spend::from_args(&spend)?;
     let send = SendRequest {
         minimum_confirmations: spend.minimum_confirmations,
@@ -228,22 +249,72 @@ async fn pay<N: lepic_node::NodeApi + 'static>(
         strategy: spend.strategy,
         ttl_blocks: spend.ttl_blocks,
         message: message.message,
-        slate_id: Some(drawn_slate_id()?),
-        ..SendRequest::new(wallet.account(&account.account)?.index, amount)
+        slate_id: Some(caller_slate.map_or_else(drawn_slate_id, Ok)?),
+        ..SendRequest::new(account, amount)
     };
     let slate_file = SlateFile::new(data_dir)?;
-    Ok(book
+    let paid = book
         .epic1_pay(
             relays,
             Epic1PayRequest {
-                link: link.link,
+                link: link.link.clone(),
                 send,
                 proof,
                 slate_file: slate_file.path.clone(),
             },
             hosts_ok,
         )
-        .await?)
+        .await;
+    match (paid, caller_slate) {
+        (Ok(paid), _) => Ok((paid, false)),
+        // A payment under the same id that ran at the same time stored its transaction first.
+        (
+            Err(error @ ContactError::Send(SendError::SlateIdTaken { sent: Some(_), .. })),
+            Some(slate_id),
+        ) => match first.find(opened, slate_id).await {
+            Ok(Some(paid)) => Ok((paid, true)),
+            _ => Err(error.into()),
+        },
+        (Err(error), _) => Err(error.into()),
+    }
+}
+
+/// The payment a caller asks for, to compare with one made before under its slate id.
+struct FirstPayment<'a> {
+    relays: &'a ContactRelays,
+    link: &'a str,
+    account: lepic_store::AccountIndex,
+    amount: Amount,
+}
+
+impl FirstPayment<'_> {
+    /// The payment made before under `slate_id`, if there was one. A send under it that was
+    /// not this payment (another account, amount or address, or no epic1 payment at all) is
+    /// refused, since the caller asked for a payment that was not made.
+    async fn find<N: lepic_node::NodeApi + 'static>(
+        &self,
+        opened: &Opened<N>,
+        slate_id: lepic_wallet::event::SlateId,
+    ) -> Result<Option<Epic1Paid>, CliError> {
+        let Some(first) = opened.wallet.sent_with_slate(slate_id).await? else {
+            return Ok(None);
+        };
+        let reused = CliError::SlateIdReused {
+            tx_id: first.transaction.id.0,
+        };
+        let book = opened.wallet.contact_book();
+        let Some(paid) = book.epic1_payment(slate_id).await? else {
+            return Err(reused);
+        };
+        let address = book.epic1_read(self.relays, self.link)?.address;
+        if first.transaction.entry.account != self.account
+            || amount_sent(&first) != Some(self.amount.value())
+            || paid.address != address
+        {
+            return Err(reused);
+        }
+        Ok(Some(paid))
+    }
 }
 
 fn kind_name(kind: Epic1LinkKind) -> &'static str {
@@ -275,7 +346,7 @@ fn answer_entry(view: Epic1AnswerView) -> Epic1AnswerReport {
     }
 }
 
-fn paid_report(paid: Epic1Paid) -> Report {
+fn paid_report(paid: Epic1Paid, repeated: bool) -> Report {
     Report::Epic1Paid(Epic1PaidReport {
         tx_id: paid.tx_id.0,
         slate_id: paid.slate_id.to_string(),
@@ -290,6 +361,7 @@ fn paid_report(paid: Epic1Paid) -> Report {
             .collect(),
         posted: paid.posted,
         posted_ok: paid.posted.is_some(),
+        repeated,
     })
 }
 
@@ -312,7 +384,7 @@ mod tests {
             }],
             posted: Some(0),
         };
-        let json = serde_json::to_value(paid_report(paid)).unwrap();
+        let json = serde_json::to_value(paid_report(paid, false)).unwrap();
         let mut fields: Vec<&str> = json
             .as_object()
             .unwrap()
@@ -327,6 +399,7 @@ mod tests {
                 "attempts",
                 "posted",
                 "posted_ok",
+                "repeated",
                 "slate_id",
                 "tx_id"
             ]

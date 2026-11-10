@@ -896,6 +896,9 @@ key. The payment
 goes to the first relay of the link; when the post fails, `post-next` tries the next one. In
 JSON, `posted` is the index of the relay it went to and `posted_ok` says whether any post went
 through. The payer's `contact collect` takes the answer at the reply mailbox and finalizes it.
+`--slate-id` works as for `tx send`: a payment already made under that id to the same address,
+from the same account and for the same amount posts nothing and exits 0 with `"repeated": true`
+and the first payment's `tx_id` and `posted`; anything else under that id exits 7.
 
 `lepic epictx open <FILE|->` shows the slate in an `.epictx` file as JSON and takes nothing: a
 `lepic.v1` slate with its network, kernel features, header version and tail records, or the V3

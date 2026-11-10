@@ -22,7 +22,7 @@ use crate::cli::{
     EpictxOpenArgs, InPersonArgs, InPersonCodeArg, InPersonCommand, InPersonFinalizeArgs,
     InPersonInvoiceArgs, InPersonPayArgs, InPersonPostArgs, InPersonReadArgs, InPersonReceiveArgs,
     InPersonSendArgs, InPersonSlateArg, InPersonTakeArgs, MessageArg, OnOffArg, OutFileArg,
-    SelectionArg, SpendArgs,
+    SelectionArg, SendSlateIdArg, SpendArgs,
 };
 use crate::commands::files;
 
@@ -444,6 +444,7 @@ pub(super) fn epic1(args: &Epic1Args) -> Option<Call> {
             spend,
             proof,
             hosts_ok,
+            slate_id: SendSlateIdArg { slate_id },
         }) => {
             let (min_confirmations, change_outputs, _) = plain_spend(spend, false)?;
             post_json(
@@ -457,6 +458,7 @@ pub(super) fn epic1(args: &Epic1Args) -> Option<Call> {
                     "change_outputs": change_outputs,
                     "proof": proof,
                     "hosts_ok": hosts_ok,
+                    "slate_id": slate_id,
                 }),
             )
         }

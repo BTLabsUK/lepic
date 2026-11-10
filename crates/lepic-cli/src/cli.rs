@@ -1244,6 +1244,8 @@ pub struct Epic1PayArgs {
     /// The relays of the link that are not in the relay list were checked and may be used
     #[arg(long)]
     pub hosts_ok: bool,
+    #[command(flatten)]
+    pub slate_id: SendSlateIdArg,
 }
 
 #[derive(Debug, Args)]

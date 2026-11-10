@@ -107,6 +107,9 @@ pub struct Epic1PaidReport {
     pub posted: Option<usize>,
     /// Whether the payment was posted to any relay; false when every post failed.
     pub posted_ok: bool,
+    /// The payment was made before under the same `slate_id`; this run posted nothing, and
+    /// `attempts` is empty.
+    pub repeated: bool,
 }
 
 /// An answer this wallet made for a payment taken at a link mailbox.
@@ -166,6 +169,23 @@ pub struct EpictxOpenReport {
     pub slate: serde_json::Value,
 }
 
+/// A payment made before under the same slate id, which this run did not post again.
+fn write_repeated(out: &mut Vec<u8>, r: &Epic1PaidReport) -> std::io::Result<()> {
+    match r.posted {
+        Some(_) => writeln!(
+            out,
+            "Payment {} was made before as transaction {} and posted; nothing was posted now.",
+            r.slate_id, r.tx_id
+        ),
+        None => writeln!(
+            out,
+            "Payment {} was made before as transaction {} and is not posted; `lepic epic1 \
+             post-next` tries the next relay.",
+            r.slate_id, r.tx_id
+        ),
+    }
+}
+
 /// An epic1 or epictx report. Writes nothing for any other.
 pub(super) fn write_epic1_human(out: &mut Vec<u8>, report: &Report) -> std::io::Result<()> {
     match report {
@@ -218,6 +238,7 @@ pub(super) fn write_epic1_human(out: &mut Vec<u8>, report: &Report) -> std::io::
                 )
             })
         }
+        Report::Epic1Paid(r) if r.repeated => write_repeated(out, r),
         Report::Epic1Paid(r) => {
             r.attempts
                 .iter()

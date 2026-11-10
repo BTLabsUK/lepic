@@ -479,6 +479,10 @@ pub(crate) struct Epic1PayBody {
     /// The relays `POST /v1/epic1/read` showed for the link were checked and may be used.
     #[serde(default)]
     hosts_ok: bool,
+    /// A random version-4 UUID the caller stores before paying. A payment made again under it
+    /// posts nothing and reports the first payment with `repeated: true`. Required on the
+    /// owner TLS listener.
+    slate_id: Option<String>,
 }
 
 /// The consent to post a payment to the next relay of its link.
@@ -1979,6 +1983,12 @@ pub(crate) async fn epic1_read(api: &Api<'_>, request: Request) -> Answer {
 )]
 pub(crate) async fn epic1_pay(api: &Api<'_>, request: Request) -> Answer {
     let body: Epic1PayBody = request.json()?;
+    if request.listener == Listener::Tls && body.slate_id.is_none() {
+        return Err(Problem::usage(
+            "a payment over the owner TLS listener needs a slate_id, so a repeated request is \
+             safe",
+        ));
+    }
     let args = Epic1PayArgs {
         link: Epic1LinkArg { link: body.link },
         amount: body.amount,
@@ -1989,6 +1999,9 @@ pub(crate) async fn epic1_pay(api: &Api<'_>, request: Request) -> Answer {
         spend: spend(body.min_confirmations, body.change_outputs),
         proof: body.proof,
         hosts_ok: body.hosts_ok,
+        slate_id: SendSlateIdArg {
+            slate_id: body.slate_id,
+        },
     };
     api.run(epic1(Epic1Command::Pay(args))).await
 }

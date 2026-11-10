@@ -502,6 +502,20 @@ fn a_send_over_tls_needs_a_slate_id() {
         .ok();
         assert_eq!(with["slate_id"], slate_id, "{with}");
         assert_eq!(with["delivered"], true, "{with}");
+
+        let pay = serve
+            .request(
+                Some(&laptop),
+                "POST",
+                "/v1/epic1/pay",
+                r#"{"link":"epic:epic1x","amount":"1"}"#,
+            )
+            .unwrap();
+        assert_eq!(pay.status, 400, "{pay:?}");
+        assert!(
+            pay.json()["detail"].as_str().unwrap().contains("slate_id"),
+            "{pay:?}"
+        );
     });
 }
 

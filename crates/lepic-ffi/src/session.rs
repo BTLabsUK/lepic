@@ -561,6 +561,14 @@ fn engine(
     Ok(engine)
 }
 
+#[cfg(test)]
+impl Session {
+    /// The engine wallet, for tests that check what it stored.
+    pub(crate) const fn engine_wallet(&self) -> &EngineWallet {
+        &self.engine
+    }
+}
+
 impl Session {
     /// A locked wallet on `config.data_dir`, which must exist and not be open anywhere.
     pub(crate) async fn new(

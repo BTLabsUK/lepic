@@ -1664,6 +1664,34 @@ where
         })
     }
 
+    /// The payment this wallet made to an epic1 link under `slate_id`, when it holds one: its
+    /// transaction, address and the transport it was last posted to. It lists no attempts, as
+    /// nothing is posted.
+    pub async fn epic1_payment(
+        &self,
+        slate_id: SlateId,
+    ) -> Result<Option<Epic1Paid>, ContactError> {
+        let session = self.wallet.session()?;
+        let state = self
+            .contact_work(move |_, _| {
+                session.store.read(|repos| {
+                    repos
+                        .setting(&pay_key(slate_id))?
+                        .map(|text| from_text::<PayState>(&text, "epic1 payment"))
+                        .transpose()
+                        .map_err(ContactError::from)
+                })
+            })
+            .await?;
+        Ok(state.map(|state| Epic1Paid {
+            tx_id: TxId(state.tx_id),
+            slate_id,
+            address: state.address,
+            attempts: Vec::new(),
+            posted: state.posted,
+        }))
+    }
+
     /// The secret of the reply mailbox of `slate_id`, and the payment this wallet made to an
     /// epic1 link under it, when it holds one.
     async fn reply_state(
