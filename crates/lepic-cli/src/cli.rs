@@ -1170,7 +1170,8 @@ to the next when a post fails, at most three.")]
 pub struct Epic1AddressArgs {
     #[command(flatten)]
     pub account: AccountArg,
-    /// The address's number, as `epic1 new-address` gave it [default: 0, the first address]
+    /// The number of the account's epic1 address, as `epic1 new-address` gave it [default: 0,
+    /// the first address]
     #[arg(long, value_name = "N", default_value_t = 0)]
     pub index: u32,
 }
@@ -1191,7 +1192,8 @@ pub struct Epic1AddressesArgs {
 pub struct Epic1LinkArgs {
     #[command(flatten)]
     pub account: AccountArg,
-    /// The number of the epic1 address the link pays [default: 0, the first address]
+    /// The number of the account's epic1 address, as `epic1 new-address` gave it [default: 0,
+    /// the first address]
     #[arg(long, value_name = "N", default_value_t = 0)]
     pub index: u32,
     /// Amount to ask for, in EPIC [default: the payer chooses]
