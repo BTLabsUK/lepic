@@ -4203,7 +4203,8 @@
           "tx_id",
           "slate_id",
           "address",
-          "attempts"
+          "attempts",
+          "posted_ok"
         ],
         "properties": {
           "address": {
@@ -4222,6 +4223,17 @@
             ],
             "description": "The relay of the link, from 0, the payment was posted to; absent when every post failed.",
             "minimum": 0
+          },
+          "posted_ok": {
+            "type": "boolean",
+            "description": "Whether the payment was posted to any relay; false when every post failed."
+          },
+          "proof_address": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The payment proof address of the recipient, as hex, when `--proof` was asked; absent\notherwise."
           },
           "slate_id": {
             "type": "string"

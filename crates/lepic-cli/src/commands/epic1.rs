@@ -248,5 +248,7 @@ fn paid_report(paid: Epic1Paid) -> Report {
             })
             .collect(),
         posted: paid.posted,
+        posted_ok: paid.posted.is_some(),
+        proof_address: paid.proof_address,
     })
 }
