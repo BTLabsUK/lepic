@@ -326,7 +326,7 @@ fn commands_run_through_a_running_serve() {
     let too_much = ["tx", "send", "1000000", "--to", &address];
     let direct = [
         wallet.run(&host, &["wallet", "info"]).ok(),
-        wallet.run(&host, &["tx", "list"]).ok(),
+        wallet.run(&host, &["tx", "list", "--refresh"]).ok(),
         wallet
             .run_with(&host, &["wallet", "info"], human.clone(), "")
             .ok(),
@@ -347,7 +347,7 @@ fn commands_run_through_a_running_serve() {
         wait_for_socket(&socket);
         let through = [
             wallet.run(&client, &["wallet", "info"]),
-            wallet.run(&client, &["tx", "list"]),
+            wallet.run(&client, &["tx", "list", "--refresh"]),
             wallet.run_with(&client, &["wallet", "info"], human.clone(), ""),
             wallet.run(&client, &["tx", "show", "999"]),
             wallet.run(&client, &too_much),

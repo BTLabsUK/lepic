@@ -22,8 +22,8 @@ use tokio::net::UnixStream;
 use zeroize::Zeroizing;
 
 use crate::cli::{
-    AccountArg, Command, EpicboxCommand, FluffArg, LegacyArg, ListingArgs, MessageArg, NodeCommand,
-    PeerCommand, PlainHttpArg, PostArgs, ProfileCommand, SelectionArg, SendArgs,
+    AccountArg, Command, EpicboxCommand, FluffArg, LegacyArg, ListArgs, ListingArgs, MessageArg,
+    NodeCommand, PeerCommand, PlainHttpArg, PostArgs, ProfileCommand, SelectionArg, SendArgs,
     SendDestinationArgs, SendSlateIdArg, SpendArgs, TorBinaryArgs, TxCommand, TxShowArgs,
     WalletCommand,
 };
@@ -184,11 +184,19 @@ fn call(command: &Command) -> Option<Call> {
             )
         }
         Command::Node(NodeCommand::Status) => get("/v1/node".to_owned()),
-        Command::Tx(TxCommand::List(args)) => get(accounted("/v1/transactions", &args.account)),
+        Command::Tx(TxCommand::List(ListArgs { account, refresh })) => get(format!(
+            "{}&refresh={}",
+            accounted("/v1/transactions", account),
+            refresh.refresh
+        )),
         Command::Tx(TxCommand::Show(TxShowArgs {
             tx_id: Some(tx_id),
             slate_id: SendSlateIdArg { slate_id: None },
-        })) => get(format!("/v1/transactions/{tx_id}")),
+            refresh,
+        })) => get(format!(
+            "/v1/transactions/{tx_id}?refresh={}",
+            refresh.refresh
+        )),
         Command::Tx(TxCommand::Cancel(tx)) => Some(Call {
             method: Method::POST,
             target: format!("/v1/transactions/{}/cancel", tx.tx_id),
