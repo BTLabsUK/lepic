@@ -145,6 +145,9 @@ pub enum InPersonRefusal {
     /// The scanned parts do not make a whole envelope yet.
     #[error("the scanned parts are not complete")]
     UrIncomplete,
+    /// The answer's transaction was cancelled or has ended: it is not posted.
+    #[error("the transaction was cancelled or has ended")]
+    Ended,
 }
 
 /// An in-person invoice to show.
@@ -939,8 +942,12 @@ where
     /// unspecified is refused, and the connection goes to the addresses checked. Through Tor
     /// the exit resolves the name, so only the name is checked.
     ///
-    /// Fails with [`ContactError::InPerson`] when `relay_ok` is false, no answer is stored or
-    /// the code named no mailbox, [`ContactError::Offline`] or [`ContactError::EpicboxOff`],
+    /// Only an answer whose transaction is still sent or received is posted: once it is
+    /// cancelled, the answer no longer moves money.
+    ///
+    /// Fails with [`ContactError::InPerson`] when `relay_ok` is false, no answer is stored,
+    /// the code named no mailbox or the transaction was cancelled or ended
+    /// ([`InPersonRefusal::Ended`]), [`ContactError::Offline`] or [`ContactError::EpicboxOff`],
     /// and [`ContactError::Relay`] when the post failed; posting again is safe.
     #[instrument(skip_all, fields(wallet = %self.wallet.config().name))]
     pub async fn in_person_post(
@@ -957,9 +964,18 @@ where
         let network = self.wallet.config().network;
         let net = contact_network(network);
         let session = self.wallet.session()?;
-        let state = self
-            .contact_work(move |_, _| session.store.read(|repos| load_reply(repos, slate_id)))
+        let (state, tx_state) = self
+            .contact_work(move |_, _| {
+                session.store.read(|repos| {
+                    let state = load_reply(repos, slate_id)?;
+                    let tx_state = repos.transaction(TxId(state.tx_id))?.map(|tx| tx.state);
+                    Ok::<_, ContactError>((state, tx_state))
+                })
+            })
             .await?;
+        if !matches!(tx_state, Some(TxState::Sent | TxState::Received)) {
+            return Err(refused(InPersonRefusal::Ended));
+        }
         let (Some(key), Some(host)) = (&state.mailbox_key, &state.mailbox) else {
             return Err(refused(InPersonRefusal::NoMailbox));
         };

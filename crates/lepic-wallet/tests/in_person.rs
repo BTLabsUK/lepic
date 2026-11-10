@@ -1052,3 +1052,31 @@ fn a_ttl_at_or_under_the_margin_is_refused_and_the_default_is_thirty_blocks() {
     assert_eq!(invoice_with(ttl).unwrap().ttl_cutoff, TIP + ttl);
     assert_eq!(send_with(ttl).unwrap().ttl_cutoff, TIP + ttl);
 }
+
+#[test]
+fn an_answer_to_a_cancelled_payment_is_not_posted() {
+    let world = World::new();
+    let code = world.show(&relays(&world.issuer));
+    let paid = world
+        .block_on(world.payer.wallet.contact_book().in_person_pay(
+            &relays(&world.payer),
+            &code.bytes,
+            pay_request(),
+        ))
+        .unwrap();
+    world
+        .block_on(world.payer.wallet.cancel(paid.tx_id))
+        .unwrap();
+
+    assert_eq!(
+        refusal(
+            world.block_on(world.payer.wallet.contact_book().in_person_post(
+                &relays(&world.payer),
+                paid.slate_id,
+                true,
+            ))
+        ),
+        InPersonRefusal::Ended
+    );
+    assert_eq!(world.collect_with(&world.issuer, &relays(&world.issuer)), 0);
+}

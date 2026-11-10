@@ -51,6 +51,7 @@ pub enum WalletErrorKind {
     /// The transaction was finalized and stored, but the node did not accept it. Post it again
     /// with `repost_transaction`.
     NotPosted,
+    /// The operation, or the transaction it was for, was cancelled.
     Cancelled,
     /// The operation is not available in this build or for this configuration.
     Unsupported,
@@ -876,6 +877,7 @@ const fn in_person_kind(refusal: InPersonRefusal) -> WalletErrorKind {
         R::UrIncomplete => K::UrCodeIncomplete,
         R::StoredAnswer => K::Other,
         R::TtlTooShort { .. } => K::InvalidArgument,
+        R::Ended => K::Cancelled,
         _ => K::InvalidSlate,
     }
 }
@@ -1519,6 +1521,7 @@ mod tests {
                 K::InvalidArgument,
             ),
             (E::InPerson(InPersonRefusal::Proof), K::InvalidSlate),
+            (E::InPerson(InPersonRefusal::Ended), K::Cancelled),
             (E::InPerson(InPersonRefusal::Loopback), K::InvalidSlate),
             (E::Wallet(lepic_wallet::WalletError::Locked), K::Locked),
             (
