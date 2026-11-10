@@ -158,7 +158,7 @@ impl Invite {
         let expires = fields.require_u64(TAG_EXPIRES)?;
         let code = PairingCode::from_bytes(fields.require_array(TAG_CODE)?);
         let commit = Commitment::from_bytes(fields.require_array(TAG_COMMIT)?);
-        let enc_key = EncPublicKey::from_bytes(fields.require_array(TAG_ENC_KEY)?)
+        let enc_key = EncPublicKey::from_pairing_bytes(fields.require_array(TAG_ENC_KEY)?)
             .map_err(|_| value(TAG_ENC_KEY))?;
         let home_relay = RelayHost::try_from(fields.require(TAG_HOME_RELAY)?)
             .map_err(|_| value(TAG_HOME_RELAY))?;

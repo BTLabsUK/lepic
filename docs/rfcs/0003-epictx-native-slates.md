@@ -515,8 +515,13 @@ document publishes or uses index 0 (O-8).
 - Ephemeral key: `DeriveKeyPair(ikm)` with 32 bytes from the caller's RNG (RFC 9180 §7.1.3). A
   fixed RNG gives identical envelopes across implementations (used for vectors).
 - The sender rejects a recipient key that is all zeros or of small order
-  (`EncPublicKey::from_bytes`, `crates/lepic-contact/src/keys.rs`). Every X25519 key this document
-  adds (epic1 seal key, advert seal key, reply key in a tail record) is decoded through that same function.
+  (`EncPublicKey::from_bytes`, `crates/lepic-seal/src/keys.rs`). Every X25519 key this document
+  adds (epic1 seal key, advert seal key, reply key in tag `03` or a tail record, a marker's
+  `reply`) is decoded through that same function, which also requires the canonical encoding:
+  bit 255 clear and the u-coordinate below 2^255 - 19. X25519 ignores bit 255 and reduces u, so
+  any other spelling is a second name for a key that has a canonical one; it is refused before
+  the small-order check. Keys X25519 derives are always canonical. RFC 0002 cards and invites
+  keep their rule, which refuses small order only. Vectors: `epictx_public_keys.json`.
 - Library: Rust `hpke` 0.14.1, `default-features = false` (`Cargo.toml:70`), pinned in the lock
   file; `cargo deny` refuses wildcard versions. Calls:
   `hpke::setup_sender_with_rng::<ChaCha20Poly1305, HkdfSha256, SealKem>` and `single_shot_open`.

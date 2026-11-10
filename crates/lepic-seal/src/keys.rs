@@ -10,13 +10,34 @@ use crate::error::{DecodeError, KeyError};
 /// Any clamped scalar sends exactly the small-order points to the all-zero output.
 const SMALL_ORDER_PROBE: [u8; 32] = [0x01; 32];
 
+/// The field prime 2^255 - 19, little-endian: a canonical u-coordinate is below it.
+const FIELD_PRIME: [u8; 32] = {
+    let mut p = [0xff; 32];
+    p[0] = 0xed;
+    p[31] = 0x7f;
+    p
+};
+
 /// An X25519 public key that envelopes may be sealed to: never of small order, so the HPKE
 /// Diffie-Hellman output cannot be all zeros.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub struct EncPublicKey([u8; 32]);
 
 impl EncPublicKey {
+    /// A key read from input (RFC 0003 5.4): the canonical encoding, bit 255 clear and the
+    /// u-coordinate below 2^255 - 19, of a point that is not of small order. X25519 ignores bit
+    /// 255 and reduces u, so any other spelling names a key that has a canonical one.
     pub fn from_bytes(bytes: [u8; 32]) -> Result<Self, KeyError> {
+        if !is_canonical(&bytes) {
+            return Err(KeyError::NonCanonical);
+        }
+        Self::from_pairing_bytes(bytes)
+    }
+
+    /// A key read under the rule of RFC 0002 cards and invites, which refuses only points of
+    /// small order. Stored contact cards decode through it, so the cards a wallet holds keep
+    /// opening as they did when they were paired.
+    pub fn from_pairing_bytes(bytes: [u8; 32]) -> Result<Self, KeyError> {
         if x25519(SMALL_ORDER_PROBE, bytes) == [0; 32] {
             return Err(KeyError::SmallOrder);
         }
@@ -26,6 +47,16 @@ impl EncPublicKey {
     pub fn as_bytes(&self) -> &[u8; 32] {
         &self.0
     }
+}
+
+/// Whether `bytes`, read little-endian, is below the field prime.
+fn is_canonical(bytes: &[u8; 32]) -> bool {
+    for (byte, prime) in bytes.iter().rev().zip(FIELD_PRIME.iter().rev()) {
+        if byte != prime {
+            return byte < prime;
+        }
+    }
+    false
 }
 
 impl fmt::Debug for EncPublicKey {
@@ -142,8 +173,18 @@ mod tests {
     #[test]
     fn rejects_small_order_public_keys() {
         for point in SMALL_ORDER_POINTS {
+            let expected = if is_canonical(&point) {
+                KeyError::SmallOrder
+            } else {
+                KeyError::NonCanonical
+            };
             assert_eq!(
                 EncPublicKey::from_bytes(point),
+                Err(expected),
+                "{point:02x?}"
+            );
+            assert_eq!(
+                EncPublicKey::from_pairing_bytes(point),
                 Err(KeyError::SmallOrder),
                 "{point:02x?}"
             );
@@ -192,6 +233,59 @@ mod tests {
         unreduced[0] = 0xf0;
         unreduced[31] = 0x7f;
         assert_eq!(sig_key(&unreduced), Err(DecodeError::WeakSigKey));
+    }
+
+    /// `p + k` for `k` below 19, the 19 values from p to 2^255 - 1, little-endian.
+    fn unreduced(k: u8) -> [u8; 32] {
+        // 0xed + 18 is 0xff: the low byte never carries.
+        let mut value = FIELD_PRIME;
+        value[0] = value[0].saturating_add(k);
+        value
+    }
+
+    #[test]
+    fn refuses_keys_that_are_not_canonical() {
+        for k in 0..19 {
+            assert_eq!(
+                EncPublicKey::from_bytes(unreduced(k)),
+                Err(KeyError::NonCanonical),
+                "p + {k}"
+            );
+        }
+        let derived = *EncSecretKey::from_bytes([7; 32]).public_key().as_bytes();
+        let mut high = derived;
+        high[31] |= 0x80;
+        assert_eq!(EncPublicKey::from_bytes(high), Err(KeyError::NonCanonical));
+        let mut below = FIELD_PRIME;
+        below[0] = 0xea;
+        assert!(EncPublicKey::from_bytes(below).is_ok(), "p - 3");
+    }
+
+    #[test]
+    fn pairing_rule_still_reads_keys_that_are_not_canonical() {
+        let mut high = *EncSecretKey::from_bytes([7; 32]).public_key().as_bytes();
+        high[31] |= 0x80;
+        assert_eq!(
+            EncPublicKey::from_pairing_bytes(high).map(|key| *key.as_bytes()),
+            Ok(high)
+        );
+        assert_eq!(
+            EncPublicKey::from_pairing_bytes(SMALL_ORDER_POINTS[0]),
+            Err(KeyError::SmallOrder)
+        );
+    }
+
+    /// X25519 encodes its output reduced with bit 255 clear (RFC 7748 5), so every key LEPIC
+    /// derives from a clamped scalar times the base point reads back under the strict rule.
+    #[test]
+    fn derived_public_keys_are_canonical() {
+        use sha2::{Digest, Sha256};
+        for round in 0u32..4096 {
+            let secret: [u8; 32] = Sha256::digest(round.to_le_bytes()).into();
+            let public = EncSecretKey::from_bytes(secret).public_key();
+            assert!(is_canonical(public.as_bytes()), "round {round}");
+            assert_eq!(EncPublicKey::from_bytes(*public.as_bytes()), Ok(public));
+        }
     }
 
     #[test]

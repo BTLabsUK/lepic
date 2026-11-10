@@ -2,8 +2,8 @@
 //! Replays the envelope vectors in `testdata/vectors/pairing` that belong to the format alone,
 //! written by the independent pairing kit: the HPKE suite against RFC 9180 A.2.1, and the RFC
 //! 0003 envelopes of type 0A with their key classes, padding, the reply mailbox, the EPICTX
-//! armor, the payment file classifier and every malformed input with the typed error it must
-//! give.
+//! armor, the payment file classifier, every malformed input with the typed error it must give,
+//! and the X25519 public keys a reader takes or refuses.
 
 // Helpers outside `#[test]` functions are test code too and may unwrap, index and panic.
 #![allow(
@@ -21,17 +21,17 @@ use hpke::kdf::HkdfSha256;
 use hpke::kem::X25519HkdfSha256;
 use hpke::{Deserializable, Kem, OpModeR, OpModeS, Serializable};
 use lepic_seal::{
-    ArmorMarker, ClassifyError, DecodeError, EncSecretKey, EncodeError, HintKey, HintRule,
-    KeyClass, MAX_BODY_LEN, Malformed, MessageType, NATIVE_SLATE, Network, PaymentFile,
-    ReplyMailbox, SUITE, SealedEnvelope, SigningKey, TxContent, TxKey, TxOpened, armor, armor_tx,
-    classify, dearmor, dearmor_marked, pad_target, padme, seal_padded, seal_tx,
+    ArmorMarker, ClassifyError, DecodeError, EncPublicKey, EncSecretKey, EncodeError, HintKey,
+    HintRule, KeyClass, KeyError, MAX_BODY_LEN, Malformed, MessageType, NATIVE_SLATE, Network,
+    PaymentFile, ReplyMailbox, SUITE, SealedEnvelope, SigningKey, TxContent, TxKey, TxOpened,
+    armor, armor_tx, classify, dearmor, dearmor_marked, pad_target, padme, seal_padded, seal_tx,
 };
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
 const KIT_GENERATOR: &str = "epic-pairing-kit";
 const KIT_VERSION: &str = "0.5.0";
-const KIT_COMMIT: &str = "c506876dae4fe8ec8efa304c3a9967fb41dc6e90";
+const KIT_COMMIT: &str = "b5ab063c6384d4ef6aa08d78742da538dc275749";
 
 fn vectors(file: &str) -> Vec<Value> {
     let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -531,5 +531,24 @@ fn every_malformed_epictx_input_gives_its_typed_error() {
             }
             other => panic!("unknown kind {other}"),
         }
+    }
+}
+
+#[test]
+fn public_keys_are_taken_or_refused_as_the_kit_says() {
+    for vector in vectors("epictx_public_keys.json") {
+        let name = text(&vector["name"]);
+        let key = array(&vector["public_key"]);
+        let expected = match vector["expected_error"].as_str() {
+            None => Ok(key),
+            Some("non_canonical_key") => Err(KeyError::NonCanonical),
+            Some("weak_recipient_key") => Err(KeyError::SmallOrder),
+            Some(other) => panic!("{name}: unknown error code {other}"),
+        };
+        assert_eq!(
+            EncPublicKey::from_bytes(key).map(|key| *key.as_bytes()),
+            expected,
+            "{name}"
+        );
     }
 }

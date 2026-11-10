@@ -2,7 +2,7 @@
   "meta": {
     "generator": "epic-pairing-kit",
     "kit_version": "0.5.0",
-    "git_commit": "c506876dae4fe8ec8efa304c3a9967fb41dc6e90",
+    "git_commit": "b5ab063c6384d4ef6aa08d78742da538dc275749",
     "rfc": "0002-contact-pairing",
     "file": "sas.json"
   },

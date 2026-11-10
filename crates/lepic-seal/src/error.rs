@@ -100,6 +100,8 @@ pub enum EncodeError {
 pub enum KeyError {
     #[error("x25519 public key is of small order")]
     SmallOrder,
+    #[error("x25519 public key is not the canonical encoding")]
+    NonCanonical,
     #[error("ed25519 public key is not a canonical point or is of small order")]
     InvalidVerifyingKey,
 }

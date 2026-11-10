@@ -207,7 +207,7 @@ impl ContactCard {
         let value = |tag| Malformed::FieldValue { tag };
         let kind = ContactKind::from_byte(fields.require_u8(TAG_KIND)?).ok_or(value(TAG_KIND))?;
         let name = ContactName::try_from(fields.require(TAG_NAME)?).map_err(|_| value(TAG_NAME))?;
-        let enc_key = EncPublicKey::from_bytes(fields.require_array(TAG_ENC_KEY)?)
+        let enc_key = EncPublicKey::from_pairing_bytes(fields.require_array(TAG_ENC_KEY)?)
             .map_err(|_| value(TAG_ENC_KEY))?;
         let sig_key = sig_key(&fields.require_array(TAG_SIG_KEY)?)?;
         let hint_key = HintKey::from_bytes(fields.require_array(TAG_HINT_KEY)?);

@@ -1,0 +1,275 @@
+{
+  "meta": {
+    "generator": "epic-pairing-kit",
+    "kit_version": "0.5.0",
+    "git_commit": "b5ab063c6384d4ef6aa08d78742da538dc275749",
+    "rfc": "0003-epictx",
+    "file": "epictx_public_keys.json"
+  },
+  "vectors": [
+    {
+      "name": "derived_0",
+      "section": "5.4",
+      "public_key": "801297f8aa4f6b6f4c95f0fe6ea4182c9f9967fca3212c7009af9e4235f93305",
+      "expected_error": null
+    },
+    {
+      "name": "derived_1",
+      "section": "5.4",
+      "public_key": "44468cf3acb593e2d0149c76f5d369fb3bf83564270f919cab3990caa54b306f",
+      "expected_error": null
+    },
+    {
+      "name": "derived_2",
+      "section": "5.4",
+      "public_key": "5087492faac28200e0fbd4962e631056b18d69a39cd5a01b8db678e8c6735139",
+      "expected_error": null
+    },
+    {
+      "name": "derived_3",
+      "section": "5.4",
+      "public_key": "fda7dbce7cee2f27d049e6f1efd0604335d6ee4c1ca24486e4b95a1c9bc1fa1b",
+      "expected_error": null
+    },
+    {
+      "name": "derived_4",
+      "section": "5.4",
+      "public_key": "373d0ede77b3b95025927a0f8491ba2a99d01255a2beecf81fba0ee9a395974f",
+      "expected_error": null
+    },
+    {
+      "name": "derived_5",
+      "section": "5.4",
+      "public_key": "2a70aff49bf75aadd3028aa77d154f68284b8ec9eb224b04ea01f9e7fd48bb68",
+      "expected_error": null
+    },
+    {
+      "name": "derived_6",
+      "section": "5.4",
+      "public_key": "09d221f55db2544e16afd134ab8892be396193986804d87819780a5985d7e053",
+      "expected_error": null
+    },
+    {
+      "name": "derived_7",
+      "section": "5.4",
+      "public_key": "5e3ac1a6aa2f6d597caa92e9766d51bb2008dd1b4ca163496b3cb3c5a2189c24",
+      "expected_error": null
+    },
+    {
+      "name": "u_p_minus_2",
+      "section": "5.4",
+      "public_key": "ebffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+      "expected_error": null
+    },
+    {
+      "name": "u_2",
+      "section": "5.4",
+      "public_key": "0200000000000000000000000000000000000000000000000000000000000000",
+      "expected_error": null
+    },
+    {
+      "name": "u_9",
+      "section": "5.4",
+      "public_key": "0900000000000000000000000000000000000000000000000000000000000000",
+      "expected_error": null
+    },
+    {
+      "name": "u_p_plus_0",
+      "section": "5.4",
+      "public_key": "edffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+      "expected_error": "non_canonical_key"
+    },
+    {
+      "name": "u_p_plus_1",
+      "section": "5.4",
+      "public_key": "eeffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+      "expected_error": "non_canonical_key"
+    },
+    {
+      "name": "u_p_plus_2",
+      "section": "5.4",
+      "public_key": "efffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+      "expected_error": "non_canonical_key"
+    },
+    {
+      "name": "u_p_plus_3",
+      "section": "5.4",
+      "public_key": "f0ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+      "expected_error": "non_canonical_key"
+    },
+    {
+      "name": "u_p_plus_4",
+      "section": "5.4",
+      "public_key": "f1ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+      "expected_error": "non_canonical_key"
+    },
+    {
+      "name": "u_p_plus_5",
+      "section": "5.4",
+      "public_key": "f2ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+      "expected_error": "non_canonical_key"
+    },
+    {
+      "name": "u_p_plus_6",
+      "section": "5.4",
+      "public_key": "f3ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+      "expected_error": "non_canonical_key"
+    },
+    {
+      "name": "u_p_plus_7",
+      "section": "5.4",
+      "public_key": "f4ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+      "expected_error": "non_canonical_key"
+    },
+    {
+      "name": "u_p_plus_8",
+      "section": "5.4",
+      "public_key": "f5ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+      "expected_error": "non_canonical_key"
+    },
+    {
+      "name": "u_p_plus_9",
+      "section": "5.4",
+      "public_key": "f6ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+      "expected_error": "non_canonical_key"
+    },
+    {
+      "name": "u_p_plus_10",
+      "section": "5.4",
+      "public_key": "f7ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+      "expected_error": "non_canonical_key"
+    },
+    {
+      "name": "u_p_plus_11",
+      "section": "5.4",
+      "public_key": "f8ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+      "expected_error": "non_canonical_key"
+    },
+    {
+      "name": "u_p_plus_12",
+      "section": "5.4",
+      "public_key": "f9ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+      "expected_error": "non_canonical_key"
+    },
+    {
+      "name": "u_p_plus_13",
+      "section": "5.4",
+      "public_key": "faffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+      "expected_error": "non_canonical_key"
+    },
+    {
+      "name": "u_p_plus_14",
+      "section": "5.4",
+      "public_key": "fbffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+      "expected_error": "non_canonical_key"
+    },
+    {
+      "name": "u_p_plus_15",
+      "section": "5.4",
+      "public_key": "fcffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+      "expected_error": "non_canonical_key"
+    },
+    {
+      "name": "u_p_plus_16",
+      "section": "5.4",
+      "public_key": "fdffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+      "expected_error": "non_canonical_key"
+    },
+    {
+      "name": "u_p_plus_17",
+      "section": "5.4",
+      "public_key": "feffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+      "expected_error": "non_canonical_key"
+    },
+    {
+      "name": "u_p_plus_18",
+      "section": "5.4",
+      "public_key": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+      "expected_error": "non_canonical_key"
+    },
+    {
+      "name": "derived_0_bit_255",
+      "section": "5.4",
+      "public_key": "801297f8aa4f6b6f4c95f0fe6ea4182c9f9967fca3212c7009af9e4235f93385",
+      "expected_error": "non_canonical_key"
+    },
+    {
+      "name": "derived_1_bit_255",
+      "section": "5.4",
+      "public_key": "44468cf3acb593e2d0149c76f5d369fb3bf83564270f919cab3990caa54b30ef",
+      "expected_error": "non_canonical_key"
+    },
+    {
+      "name": "derived_2_bit_255",
+      "section": "5.4",
+      "public_key": "5087492faac28200e0fbd4962e631056b18d69a39cd5a01b8db678e8c67351b9",
+      "expected_error": "non_canonical_key"
+    },
+    {
+      "name": "derived_3_bit_255",
+      "section": "5.4",
+      "public_key": "fda7dbce7cee2f27d049e6f1efd0604335d6ee4c1ca24486e4b95a1c9bc1fa9b",
+      "expected_error": "non_canonical_key"
+    },
+    {
+      "name": "derived_4_bit_255",
+      "section": "5.4",
+      "public_key": "373d0ede77b3b95025927a0f8491ba2a99d01255a2beecf81fba0ee9a39597cf",
+      "expected_error": "non_canonical_key"
+    },
+    {
+      "name": "derived_5_bit_255",
+      "section": "5.4",
+      "public_key": "2a70aff49bf75aadd3028aa77d154f68284b8ec9eb224b04ea01f9e7fd48bbe8",
+      "expected_error": "non_canonical_key"
+    },
+    {
+      "name": "derived_6_bit_255",
+      "section": "5.4",
+      "public_key": "09d221f55db2544e16afd134ab8892be396193986804d87819780a5985d7e0d3",
+      "expected_error": "non_canonical_key"
+    },
+    {
+      "name": "derived_7_bit_255",
+      "section": "5.4",
+      "public_key": "5e3ac1a6aa2f6d597caa92e9766d51bb2008dd1b4ca163496b3cb3c5a2189ca4",
+      "expected_error": "non_canonical_key"
+    },
+    {
+      "name": "u_9_bit_255",
+      "section": "5.4",
+      "public_key": "0900000000000000000000000000000000000000000000000000000000000080",
+      "expected_error": "non_canonical_key"
+    },
+    {
+      "name": "u_0_bit_255",
+      "section": "5.4",
+      "public_key": "0000000000000000000000000000000000000000000000000000000000000080",
+      "expected_error": "non_canonical_key"
+    },
+    {
+      "name": "all_ff",
+      "section": "5.4",
+      "public_key": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "expected_error": "non_canonical_key"
+    },
+    {
+      "name": "u_0",
+      "section": "5.4",
+      "public_key": "0000000000000000000000000000000000000000000000000000000000000000",
+      "expected_error": "weak_recipient_key"
+    },
+    {
+      "name": "u_1",
+      "section": "5.4",
+      "public_key": "0100000000000000000000000000000000000000000000000000000000000000",
+      "expected_error": "weak_recipient_key"
+    },
+    {
+      "name": "u_p_minus_1",
+      "section": "5.4",
+      "public_key": "ecffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+      "expected_error": "weak_recipient_key"
+    }
+  ]
+}
