@@ -394,4 +394,81 @@ mod tests {
         assert!(slot.delivery_is_permanent(&errors[0]));
         assert!(!slot.delivery_is_permanent(&errors[2]));
     }
+
+    #[tokio::test]
+    async fn the_slot_forwards_the_other_calls_to_the_epicbox_in_it() {
+        let slot = EpicboxSlot::new(epicbox());
+        let method = registered(&slot);
+        let epicbox = epicbox();
+        assert_eq!(method.carries(), epicbox.carries());
+
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../testdata/vectors/slates/send_file_plain_input_s1_v2.json");
+        let vector: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+        let wire = WireSlate::text(
+            MediaType::JSON,
+            vector["expected"]["json"].as_str().unwrap().to_owned(),
+        );
+        let slate = method.decode(Network::Floonet, &wire).unwrap();
+        assert_eq!(slate, epicbox.decode(Network::Floonet, &wire).unwrap());
+        let junk = WireSlate::text(MediaType::JSON, "{}".to_owned());
+        assert!(method.decode(Network::Floonet, &junk).is_err());
+
+        let context = EncodeContext {
+            block_header_version: 1,
+        };
+        let sending = Sending::new(Network::Floonet, 0x0f, None);
+        let from = SenderFacts::default();
+        assert_eq!(
+            method.encode_reply(&slate, &context, &sending, &from),
+            epicbox.encode_reply(&slate, &context, &sending, &from)
+        );
+
+        assert_eq!(method.notice_lengths(), epicbox.notice_lengths());
+        assert_eq!(
+            method.notice_lengths_for(&sending),
+            epicbox.notice_lengths_for(&sending)
+        );
+
+        let payee = "zzRMBr82zhzvz6hAxJMecEchV4ohxJkrNtDKLqwJMq7EQ4y2ibhQ@epicbox.example:443";
+        let to = Destination::new(payee.to_owned());
+        for allowed in [
+            payee,
+            "zzRMBr82zhzvz6hAxJMecEchV4ohxJkrNtDKLqwJMq7EQ4y2ibhQ",
+            "",
+        ] {
+            assert_eq!(
+                method.same_payee(Network::Floonet, &to, allowed),
+                epicbox.same_payee(Network::Floonet, &to, allowed),
+                "{allowed}"
+            );
+        }
+        assert!(method.same_payee(Network::Floonet, &to, payee));
+
+        // Neither has a wallet attached, so both refuse the delivery alike.
+        let sent = slot.deliver(&to, &wire).await.unwrap_err();
+        let direct = Outbound::deliver(&epicbox, &to, &wire).await.unwrap_err();
+        assert_eq!(sent.to_string(), direct.to_string());
+    }
+
+    #[test]
+    fn a_replaced_epicbox_answers_the_calls_after_it() {
+        let slot = EpicboxSlot::new(epicbox());
+        let method = registered(&slot);
+        let floonet = "zzRMBr82zhzvz6hAxJMecEchV4ohxJkrNtDKLqwJMq7EQ4y2ibhQ@epicbox.example:443";
+        assert!(method.peer_key(Network::Floonet, floonet).is_ok());
+        let endpoint =
+            RelayEndpoint::new(Domain::parse("other.test").unwrap(), None, Security::Plain);
+        let mainnet = Epicbox::new(
+            client_settings(endpoint.clone()),
+            RelayNetwork::Mainnet,
+            MockRelay::new(RelayNetwork::Mainnet).connector(),
+        );
+        slot.replace(mainnet).detach();
+        // The registered clone shares the slot, so it reads addresses on the new relay's
+        // network now.
+        assert_eq!(slot.current().settings().endpoint, endpoint);
+        assert!(method.peer_key(Network::Floonet, floonet).is_err());
+    }
 }
