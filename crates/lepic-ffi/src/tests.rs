@@ -878,10 +878,10 @@ fn a_panic_in_a_call_without_an_error_gives_its_fallback() {
     assert!(!answered);
 }
 
-/// The crate docs and ADR 0014 tell app developers what LEPIC keeps in their store.
+/// The FFI guide and ADR 0014 tell app developers what LEPIC keeps in their store.
 #[test]
 fn the_docs_name_every_key_lepic_writes_to_the_app_store() {
-    let readme = include_str!("lib.rs");
+    let guide = include_str!("../../../docs/ffi.md");
     let adr = include_str!("../../../docs/adr/0014-secrets-at-the-flutter-boundary.md");
     for key in [
         VAULT_KEY,
@@ -890,7 +890,7 @@ fn the_docs_name_every_key_lepic_writes_to_the_app_store() {
         crate::pin::PENDING_KEY_KEY,
         crate::pin::FAILURES_KEY,
     ] {
-        assert!(readme.contains(&format!("`{key}`")), "{key}");
+        assert!(guide.contains(&format!("`{key}`")), "{key}");
     }
     assert!(adr.contains(&format!("`{}`", crate::pin::KEY_KEY)));
     assert!(adr.contains("node API secret"));
