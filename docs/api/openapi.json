@@ -7261,6 +7261,13 @@
             ],
             "description": "`wallet`, `imported` or `found-by-scan`; shown by `tx show` only."
           },
+          "payer_declined_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "For an invoice this wallet issued, when its payer declined it. The invoice stays\nunpaid; cancel it to end it. `tx show` only."
+          },
           "receive_listing": {
             "oneOf": [
               {

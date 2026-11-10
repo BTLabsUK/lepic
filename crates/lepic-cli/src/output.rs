@@ -374,6 +374,10 @@ pub struct TxReport {
     /// cancelled then. `tx show` only.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub receiver_declined_at: Option<String>,
+    /// For an invoice this wallet issued, when its payer declined it. The invoice stays
+    /// unpaid; cancel it to end it. `tx show` only.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub payer_declined_at: Option<String>,
     /// For a payment received at a listing address, the service key (hex) and generation of
     /// that listing; `tx show` only.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1842,6 +1846,18 @@ fn write_show(out: &mut Vec<u8>, tx: &TxReport) -> std::io::Result<()> {
     if let Some(at) = &tx.receiver_declined_at {
         writeln!(out, "{:<12} declined at {at}", "Receiver")?;
     }
+    if let Some(at) = &tx.payer_declined_at {
+        // The way out is shown only while the invoice still waits for payment.
+        if tx.state == "received" {
+            writeln!(
+                out,
+                "{:<12} declined by the payer at {at}; cancel it with `lepic tx cancel {}`",
+                "Payer", tx.tx_id
+            )?;
+        } else {
+            writeln!(out, "{:<12} declined by the payer at {at}", "Payer")?;
+        }
+    }
     if let Some(origin) = &tx.origin {
         writeln!(out, "{:<12} {origin}", "Origin")?;
     }
@@ -2497,6 +2513,38 @@ mod tests {
         value.to_owned()
     }
 
+    #[test]
+    fn a_declined_invoice_shows_when_and_how_to_end_it() {
+        let declined = || TxReport {
+            payer_declined_at: Some(text("2026-11-10T09:00:00Z")),
+            state: text("received"),
+            ..tx(None)
+        };
+        let json: Value =
+            serde_json::from_str(&render(&Report::Show(declined()), OutputFormat::Json)).unwrap();
+        let human = render(&Report::Show(declined()), OutputFormat::Human);
+        assert!(
+            human.contains(
+                "declined by the payer at 2026-11-10T09:00:00Z; cancel it with `lepic tx cancel 1`"
+            ),
+            "{}",
+            human.as_str()
+        );
+        assert_eq!(json["payer_declined_at"], "2026-11-10T09:00:00Z");
+        let cancelled = TxReport {
+            state: text("cancelled"),
+            ..declined()
+        };
+        let human = render(&Report::Show(cancelled), OutputFormat::Human);
+        assert!(
+            human.contains("declined by the payer at 2026-11-10T09:00:00Z\n"),
+            "{}",
+            human.as_str()
+        );
+        let plain = render(&Report::Show(tx(None)), OutputFormat::Json);
+        assert!(!plain.contains("payer_declined_at"), "{}", plain.as_str());
+    }
+
     fn tx(stages: Option<Vec<String>>) -> TxReport {
         TxReport {
             tx_id: 1,
@@ -2521,6 +2569,7 @@ mod tests {
             sender_reported_posted_at: None,
             sender_reported_cancelled_at: None,
             receiver_declined_at: None,
+            payer_declined_at: None,
             receive_listing: None,
         }
     }
@@ -2576,7 +2625,8 @@ mod tests {
         let human = render(&Report::Info(report()), OutputFormat::Human).to_string();
         assert!(
             human.contains("Catching up to the node's tip 863; balances are at height 800."),
-            "{human}"
+            "{}",
+            human.as_str()
         );
         let json: Value = serde_json::from_str(&json_line(&report())).unwrap();
         assert_eq!(json["catching_up"], true, "{json}");

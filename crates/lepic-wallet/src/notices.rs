@@ -243,7 +243,7 @@ fn apply_notice(
             &from,
             methods,
         )? {
-            Some((tx_id, TxState::Received)) => take_decline(repos, tx_id, slate_id)?,
+            Some((tx_id, TxState::Received)) => take_decline(repos, tx_id, slate_id, now)?,
             // The invoice was paid and finalized, or ended otherwise, before the decline came.
             Some(_) => Effect::Noted,
             None => take_send_decline(repos, slate_id, &from, methods, now)?,
@@ -289,17 +289,19 @@ fn declined_setting(slate_id: Uuid) -> String {
 }
 
 /// A `declined` for the invoice `tx_id`, which still waits for payment. Only the first one
-/// raises an event; it is recorded, so a repeat, as when the method delivers it again, is noted.
+/// raises an event; it is recorded with its time, so a repeat, as when the method delivers it
+/// again, is noted.
 fn take_decline(
     repos: &mut dyn Repositories,
     tx_id: TxId,
     slate_id: Uuid,
+    now: jiff::Timestamp,
 ) -> Result<Effect, StoreError> {
     let key = declined_setting(slate_id);
     if repos.setting(&key)?.is_some() {
         return Ok(Effect::Noted);
     }
-    repos.put_setting(&key, "1")?;
+    repos.put_setting(&key, &now.to_string())?;
     Ok(Effect::Declined { tx_id })
 }
 
@@ -335,6 +337,17 @@ fn take_send_decline(
         repos.put_setting(&key, &now.to_string())?;
     }
     Ok(Effect::SendDeclined { tx_id, first })
+}
+
+/// When the payer of the invoice `slate_id` declined it. A decline recorded without a time, as
+/// older versions stored it (`1`), still counts as declined for the notice but has none to give.
+pub(crate) fn payer_declined_report(
+    repos: &dyn Repositories,
+    slate_id: Uuid,
+) -> Result<Option<jiff::Timestamp>, StoreError> {
+    Ok(repos
+        .setting(&declined_setting(slate_id))?
+        .and_then(|at| at.parse().ok()))
 }
 
 /// When the receiver of the send `slate_id` declined it unanswered (ADR 0045).

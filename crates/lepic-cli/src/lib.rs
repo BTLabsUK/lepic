@@ -140,19 +140,56 @@ fn json_requested(args: &[OsString], env: &Env) -> bool {
 fn is_informational(error: &clap::Error) -> bool {
     matches!(
         error.kind(),
-        ClapErrorKind::DisplayHelp
-            | ClapErrorKind::DisplayVersion
-            | ClapErrorKind::DisplayHelpOnMissingArgumentOrSubcommand
+        ClapErrorKind::DisplayHelp | ClapErrorKind::DisplayVersion
     )
 }
 
 /// The first paragraph of clap's message, without its `error: ` prefix: the usage lines and
 /// the pointer to `--help` that follow are for a terminal.
 fn usage_message(error: &clap::Error) -> String {
+    if error.kind() == ClapErrorKind::DisplayHelpOnMissingArgumentOrSubcommand {
+        return missing_subcommand_message(error);
+    }
     let plain = error.render().to_string();
     let first = plain.split("\n\n").next().unwrap_or_default();
     let first = first.trim();
     first.strip_prefix("error: ").unwrap_or(first).to_owned()
+}
+
+/// The message for a command group given without a subcommand: it names the group and lists
+/// its subcommands. The group's path is read from the usage line of clap's help, which has
+/// already skipped the global options and their values.
+fn missing_subcommand_message(error: &clap::Error) -> String {
+    use clap::CommandFactory as _;
+    let help = error.render().to_string();
+    let path: Vec<String> = help
+        .lines()
+        .find_map(|line| line.strip_prefix("Usage: "))
+        .map(|usage| {
+            usage
+                .split_whitespace()
+                .take_while(|word| !word.starts_with(['[', '<']))
+                .map(str::to_owned)
+                .collect()
+        })
+        .unwrap_or_default();
+    let mut command = Cli::command();
+    for name in path.iter().skip(1) {
+        match command.find_subcommand(name) {
+            Some(found) => command = found.clone(),
+            None => break,
+        }
+    }
+    let names: Vec<&str> = command
+        .get_subcommands()
+        .filter(|sub| !sub.is_hide_set() && sub.get_name() != "help")
+        .map(clap::Command::get_name)
+        .collect();
+    format!(
+        "`{}` needs a subcommand: {}",
+        path.join(" "),
+        names.join(", ")
+    )
 }
 
 /// What a command line that does not parse prints, and the exit code: help and version on
