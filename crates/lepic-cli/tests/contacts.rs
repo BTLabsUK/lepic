@@ -121,6 +121,36 @@ fn a_verified_contact_lists_its_sas_indexes_and_verdict_time() {
 
 /// `lepic serve` answers a check by itself; the asking wallet's next collect takes the answer
 /// and `contact list` shows the contact heard again.
+/// A wallet that paid a LEPIC peer over Epicbox asks it to pair at its payments address. The
+/// request goes out over Epicbox, so the command attaches the wallet's identity first.
+#[test]
+fn a_pairing_request_to_a_paid_peer_is_posted() {
+    let host = TestHost::new();
+    host.fund(SENDER_MNEMONIC, 0, FUNDING, 1);
+    let payer = Instance::new("payer password");
+    payer.restore(&host, SENDER_MNEMONIC);
+    let shop = Instance::new("shop password");
+    shop.run(&host, &["wallet", "init"]).ok();
+    let address = shop.run(&host, &["wallet", "address"]).ok().json();
+    let address = text(&address, "address").to_owned();
+    payer
+        .run(&host, &["tx", "send", "2", "--to", &address])
+        .ok();
+    shop.run(&host, &["epicbox", "drain"]).ok();
+    let drained = payer.run(&host, &["epicbox", "drain"]).ok().json();
+    assert_eq!(drained["finalized"], 1, "{drained}");
+
+    let request = payer
+        .run(&host, &["contact", "request", &address, "--name", "Payer"])
+        .ok()
+        .json();
+    assert!(request["contact_id"].is_string(), "{request}");
+    assert!(
+        text(&request, "link").starts_with("epiccash://pair/"),
+        "{request}"
+    );
+}
+
 #[test]
 fn a_contact_check_is_answered_by_a_serving_wallet() {
     let mut host = TestHost::new();

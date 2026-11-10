@@ -476,6 +476,8 @@ async fn request<N: lepic_node::NodeApi + 'static>(
     relays: &ContactRelays,
     args: ContactRequestArgs,
 ) -> Result<Report, CliError> {
+    // The request goes to the peer's payments address over Epicbox, under this wallet's identity.
+    opened.epicbox.attach_wallet(&opened.wallet)?;
     let offer = opened
         .wallet
         .contact_book()
