@@ -447,8 +447,9 @@ pub(super) fn epic1(args: &Epic1Args) -> Option<Call> {
             slate_id: SendSlateIdArg { slate_id },
         }) => {
             let (min_confirmations, change_outputs, _) = plain_spend(spend, false)?;
-            post_json(
-                "/v1/epic1/pay",
+            super::pays(
+                Method::POST,
+                "/v1/epic1/pay".to_owned(),
                 json!({
                     "link": link,
                     "amount": amount,

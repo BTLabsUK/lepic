@@ -52,6 +52,9 @@ struct Call {
     target: String,
     body: Body,
     finish: Finish,
+    /// The call moves money: its JSON body carries a `slate_id`, drawn here when the command
+    /// gave none, so the payment can be looked up, and made again safely, when no answer comes.
+    pays: bool,
 }
 
 /// What the request carries.
@@ -80,7 +83,29 @@ impl Call {
             target,
             body: Body::None,
             finish: Finish::Print,
+            pays: false,
         }
+    }
+
+    fn pays(mut self) -> Self {
+        self.pays = true;
+        self
+    }
+
+    /// The slate id of a call that moves money, drawn into its body when the command gave none.
+    fn slate_id(&mut self) -> Result<Option<String>, CliError> {
+        if !self.pays {
+            return Ok(None);
+        }
+        let Body::Json(Value::Object(body)) = &mut self.body else {
+            return Ok(None);
+        };
+        let slate_id = match body.get("slate_id") {
+            Some(Value::String(given)) => given.clone(),
+            _ => crate::commands::drawn_slate_id()?.to_string(),
+        };
+        body.insert("slate_id".to_owned(), Value::String(slate_id.clone()));
+        Ok(Some(slate_id))
     }
 
     fn json(mut self, body: Value) -> Self {
@@ -123,15 +148,25 @@ pub(crate) async fn serving(data_dir: &Path) -> Option<PathBuf> {
     service::connect(data_dir).await.map(|(_, socket)| socket)
 }
 
+/// Sends `call` and reads the answer. A call that moves money and gets no answer fails with
+/// [`CliError::PaymentUnanswered`], naming its slate id: the payment may have been made.
 async fn exchange(
     stream: UnixStream,
     socket: &Path,
-    call: Call,
+    mut call: Call,
     format: OutputFormat,
 ) -> Result<Zeroizing<String>, CliError> {
-    let unanswered = |source: Box<dyn std::error::Error + Send + Sync>| CliError::ServeUnanswered {
-        socket: socket.to_owned(),
-        source,
+    let slate_id = call.slate_id()?;
+    let unanswered = |source: Box<dyn std::error::Error + Send + Sync>| match &slate_id {
+        Some(slate_id) => CliError::PaymentUnanswered {
+            socket: socket.to_owned(),
+            slate_id: slate_id.clone(),
+            source,
+        },
+        None => CliError::ServeUnanswered {
+            socket: socket.to_owned(),
+            source,
+        },
     };
     let body = match call.body {
         Body::None => None,
@@ -400,7 +435,7 @@ fn send(args: &SendArgs) -> Option<Call> {
         return None;
     }
     let method = to.contains("://").then_some("http");
-    with_body(
+    pays(
         Method::POST,
         "/v1/transactions".to_owned(),
         json!({
@@ -423,6 +458,11 @@ fn get(target: String) -> Option<Call> {
 
 fn with_body(method: Method, target: String, body: Value) -> Option<Call> {
     Some(Call::new(method, target).json(body))
+}
+
+/// A call that moves money; see [`Call::pays`].
+fn pays(method: Method, target: String, body: Value) -> Option<Call> {
+    Some(Call::new(method, target).json(body).pays())
 }
 
 fn accounted(path: &str, account: &AccountArg) -> String {
@@ -717,6 +757,70 @@ mod tests {
         for arguments in local {
             assert!(request(arguments).is_none(), "{arguments:?}");
         }
+    }
+
+    #[test]
+    fn a_payment_carries_a_slate_id_drawn_when_none_is_given() {
+        let given = "8a6e2f0c-4b1d-4c3e-9f2a-7d5b6c8e9f01";
+        let payments: &[&[&str]] = &[
+            &["tx", "send", "1", "--to", "a@relay.example"],
+            &["epic1", "pay", "epic:epic1x"],
+        ];
+        for arguments in payments {
+            let parse = |arguments: &[&str]| {
+                use clap::Parser as _;
+                let mut line = vec!["lepic"];
+                line.extend_from_slice(arguments);
+                let cli = crate::cli::Cli::try_parse_from(line).unwrap();
+                let mut call = call(&cli.command).unwrap();
+                let slate_id = call.slate_id().unwrap().unwrap();
+                let Body::Json(body) = call.body else {
+                    panic!("{arguments:?}")
+                };
+                (slate_id, body)
+            };
+            let (drawn, body) = parse(arguments);
+            assert_eq!(body["slate_id"], drawn.as_str(), "{arguments:?}");
+            crate::commands::caller_slate_id(&drawn).unwrap();
+            let mut with_given = arguments.to_vec();
+            with_given.extend(["--slate-id", given]);
+            let (kept, body) = parse(&with_given);
+            assert_eq!(kept, given, "{arguments:?}");
+            assert_eq!(body["slate_id"], given, "{arguments:?}");
+        }
+        let mut other = call(&Command::Wallet(WalletCommand::Info)).unwrap();
+        assert_eq!(other.slate_id().unwrap(), None);
+    }
+
+    #[tokio::test]
+    async fn a_payment_serve_does_not_answer_names_its_slate_id() {
+        let (client, server) = UnixStream::pair().unwrap();
+        drop(server);
+        let call = Call::new(Method::POST, "/v1/epic1/pay".to_owned())
+            .json(json!({ "link": "epic:epic1x", "slate_id": null }))
+            .pays();
+        let error = exchange(client, Path::new("lepic.sock"), call, OutputFormat::Json)
+            .await
+            .unwrap_err();
+        let CliError::PaymentUnanswered { slate_id, .. } = &error else {
+            panic!("{error:?}")
+        };
+        assert_eq!(error.kind(), ErrorKind::Incomplete);
+        assert_eq!(
+            crate::hint::recovery(&error),
+            [format!("lepic tx show --slate-id {slate_id}")]
+        );
+        let (client, server) = UnixStream::pair().unwrap();
+        drop(server);
+        let error = exchange(
+            client,
+            Path::new("lepic.sock"),
+            Call::new(Method::GET, "/v1/wallet".to_owned()),
+            OutputFormat::Json,
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::Transport, "{error:?}");
     }
 
     #[test]

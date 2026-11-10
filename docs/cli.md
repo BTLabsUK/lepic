@@ -1229,6 +1229,11 @@ sent in the request. Files it writes (`contact export`, `profile domain file`) a
 
 The route names above are shortened; `docs/api/openapi.json` has each in full.
 
+`tx send` and `epic1 pay` forwarded to serve always carry a slate id: the one given with
+`--slate-id`, or one `lepic` draws. If serve takes the request and does not answer, `lepic`
+exits 11 and names that id; `lepic tx show --slate-id <UUID>` shows whether the payment was
+made, and the same command with `--slate-id <UUID>` pays nothing twice.
+
 A command given an option its route has no field for runs on its own and meets the lock. These
 options keep a command off serve: `--to-file`, `--to-contact`, `--purpose`, `--allow-plain-http`,
 `--tor-binary`, `--lib-dir`, `--fluff` and `--ttl-blocks` on `tx send` (`--ttl-blocks` also on
@@ -1520,6 +1525,7 @@ With human output, an error ends with a `hint:` line that names what to try next
 | `was already received as transaction N` | The file is a different slate under the id of one received before, or that transaction was cancelled or expired. The same slate again would have rewritten its reply. |
 | `transaction N cannot be released` (exit 7) | The send is not finalized or posted, or no refresh at the height `lepic tx show` names has missed its kernel yet. |
 | `transaction N is in the node's pool` (exit 7) | The node may still mine it; refresh later instead of releasing it. |
+| `lepic serve on ... did not answer the payment <UUID>; it may have been made` (exit 11) | Serve took a forwarded `tx send` or `epic1 pay` and closed without an answer. `lepic tx show --slate-id <UUID>` shows whether it was made; the same command with `--slate-id <UUID>` pays nothing twice. |
 | `finalized but the node did not accept it` (exit 11) | The node neither took the transaction nor holds its kernel. Check the node, then `lepic tx post <ID>`. |
 | `a restore scan must complete before new outputs are created` (exit 5) | The wallet was restored with `--no-scan`, or its database was rebuilt, and its restore scan, from genesis or from the restore's `--from-height`, has not completed since. Run `lepic wallet scan`. |
 | `The node is behind the last refresh; balances not updated.` from `wallet info` | The node is still syncing, or the wallet stored a height this chain does not have. Once the node is synced, `lepic wallet scan --reset-chain` recovers. |

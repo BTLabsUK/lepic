@@ -225,6 +225,18 @@ pub enum CliError {
         #[source]
         source: Box<dyn std::error::Error + Send + Sync>,
     },
+    /// The running `lepic serve` took a payment and gave no answer, or one that is not the
+    /// API's: the payment may have been made under `slate_id`.
+    #[error(
+        "lepic serve on {} did not answer the payment {slate_id}; it may have been made",
+        socket.display()
+    )]
+    PaymentUnanswered {
+        socket: std::path::PathBuf,
+        slate_id: String,
+        #[source]
+        source: Box<dyn std::error::Error + Send + Sync>,
+    },
     #[error("http address rejected")]
     HttpUrl(#[source] lepic_methods::http::UrlError),
     #[error("invoices go over epicbox or through a slate file, not over http")]
@@ -377,6 +389,7 @@ impl CliError {
             Self::DataDirInUse | Self::ServeHoldsWallet { .. } => ErrorKind::WalletState,
             Self::Served { kind, .. } => *kind,
             Self::ServeUnanswered { .. } => ErrorKind::Transport,
+            Self::PaymentUnanswered { .. } => ErrorKind::Incomplete,
             Self::SlateIdReused { .. } => ErrorKind::Rejected,
             Self::NoSendWithSlate => ErrorKind::NotFound,
             Self::Send(error) => send_kind(error),
@@ -855,6 +868,14 @@ mod tests {
                     socket: "lepic.sock".into(),
                 },
                 ErrorKind::WalletState,
+            ),
+            (
+                CliError::PaymentUnanswered {
+                    socket: "lepic.sock".into(),
+                    slate_id: "s1".to_owned(),
+                    source: "closed".into(),
+                },
+                ErrorKind::Incomplete,
             ),
             (
                 CliError::Served {

@@ -109,6 +109,12 @@ pub fn hint(error: &CliError, settings: Option<&Settings>) -> Option<String> {
             );
         }
         CliError::ServeHoldsWallet { .. } => return Some(SERVE_HOLDS_WALLET.to_owned()),
+        CliError::PaymentUnanswered { slate_id, .. } => {
+            return Some(format!(
+                "`lepic tx show --slate-id {slate_id}` shows whether it was made; running the \
+                 command again with `--slate-id {slate_id}` pays nothing twice"
+            ));
+        }
         CliError::SocketPathTooLong { .. } => {
             return Some("give a shorter path with --socket".to_owned());
         }
@@ -231,6 +237,9 @@ pub fn recovery(error: &CliError) -> Vec<String> {
             vec![post(tx_id), cancel(tx_id)]
         }
         CliError::HttpReplyLost { tx_id } => vec![resend(&TxId(*tx_id)), cancel(&TxId(*tx_id))],
+        CliError::PaymentUnanswered { slate_id, .. } => {
+            vec![format!("lepic tx show --slate-id {slate_id}")]
+        }
         CliError::Served { recovery, .. } => recovery.to_vec(),
         _ => Vec::new(),
     }
