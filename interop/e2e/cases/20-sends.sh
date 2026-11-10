@@ -168,7 +168,7 @@ case_send_tor() {
         fail "tor listener never printed an onion address: $(tail -n 3 "${log}.err" | cut -c1-200)" || return 1
     onion="$(cat "${log}.out" "${log}.err" | grep -Eo '[a-z2-7]{56}\.onion' | head -n 1)"
     out="$(w "${PAY_A}" tx send --to "${onion}" "${tor_args[@]}" --min-confirmations "${E2E_MINCONF}" "${amount}")" ||
-        fail "tx send over tor failed: $(tail -c 300 "${CASE_DIR}/last.err")" || return 1
+        fail "tx send over tor failed: $(tail -c 300 <<<"$(cat "${CASE_DIR}/last.err")${out}")" || return 1
     slate="$(jq -r .slate_id <<<"${out}")"
     expect_json "${out}" '.delivered == true' "tor send result" || return 1
     wstop "${tor_pid}"
