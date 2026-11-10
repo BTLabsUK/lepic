@@ -1254,25 +1254,6 @@ impl<H: Host> Run<'_, H> {
             .import(&Location::File(args.slate.file.clone()))
             .await
             .map_err(slate_file(&args.slate.file))?;
-        // A reply sealed to this wallet's reply key (ADR 0052) is armored text.
-        let armoured = matches!(
-            wire.as_text()
-                .map(|text| lepic_wallet_contacts::payment_file(text.as_bytes())),
-            Some(Ok(lepic_wallet_contacts::PaymentFile::Armour))
-        );
-        if armoured {
-            let text = wire.as_text().unwrap_or_default();
-            let finalized = opened
-                .wallet
-                .contact_book()
-                .sealed_finalize(text, propagation(args.fluff.fluff))
-                .await?;
-            return Ok(Report::Finalize(FinalizeReport {
-                tx_id: finalized.tx_id.0,
-                slate_id: finalized.slate.id().to_string(),
-                state: "posted".to_owned(),
-            }));
-        }
         finalize_slate(&opened, &wire, args.fluff.fluff).await
     }
 
@@ -2371,7 +2352,6 @@ const fn category_name(category: BalanceCategory) -> &'static str {
     }
 }
 
-/// Receives `wire`, a slate as a file holds it, into `account`.
 /// The file that answers `incoming`: `reply` sealed to the reply key in the LEPIC marker of a
 /// slate a LEPIC wallet wrote (RFC 0002 5, ADR 0052), and `reply` as stored for a slate without
 /// one, so a stock wallet reads it.
@@ -2390,6 +2370,7 @@ fn answer_wire<N: NodeApi + 'static>(
     })
 }
 
+/// Receives `wire`, a slate as a file holds it, into `account`.
 async fn receive_slate<N: NodeApi + 'static>(
     opened: &Opened<N>,
     wire: &WireSlate,
@@ -2411,6 +2392,25 @@ async fn finalize_slate<N: NodeApi + 'static>(
     fluff: bool,
 ) -> Result<Report, CliError> {
     let propagation = propagation(fluff);
+    // A reply sealed to this wallet's reply key (ADR 0052) is armored text.
+    let armoured = matches!(
+        wire.as_text()
+            .map(|text| lepic_wallet_contacts::payment_file(text.as_bytes())),
+        Some(Ok(lepic_wallet_contacts::PaymentFile::Armour))
+    );
+    if armoured {
+        let text = wire.as_text().unwrap_or_default();
+        let finalized = opened
+            .wallet
+            .contact_book()
+            .sealed_finalize(text, propagation)
+            .await?;
+        return Ok(Report::Finalize(FinalizeReport {
+            tx_id: finalized.tx_id.0,
+            slate_id: finalized.slate.id().to_string(),
+            state: "posted".to_owned(),
+        }));
+    }
     // Which flow the slate answers is known only once it is decoded, which the engine does.
     let finalized = match opened
         .wallet

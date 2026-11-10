@@ -4888,7 +4888,7 @@
           },
           "slate": {
             "type": "string",
-            "description": "The answer slate, V2 or V3 slate JSON."
+            "description": "The answer: V2 or V3 slate JSON, or the sealed text of a reply to a LEPIC slate."
           }
         },
         "additionalProperties": false

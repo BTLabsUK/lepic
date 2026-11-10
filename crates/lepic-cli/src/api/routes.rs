@@ -102,7 +102,7 @@ pub(crate) struct ReceiveBody {
 #[derive(Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct FinalizeBody {
-    /// The answer slate, V2 or V3 slate JSON.
+    /// The answer: V2 or V3 slate JSON, or the sealed text of a reply to a LEPIC slate.
     slate: String,
     /// Broadcast to all peers at once instead of through the stem phase.
     #[serde(default)]
