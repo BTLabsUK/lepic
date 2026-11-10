@@ -6398,6 +6398,16 @@
             "type": "string",
             "description": "The error and its causes, outermost first."
           },
+          "recovery": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            },
+            "description": "The commands that finish or give up the transaction, in the order to try them; present\nwith `code` `incomplete`."
+          },
           "status": {
             "type": "integer",
             "format": "int32",

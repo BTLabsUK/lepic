@@ -409,16 +409,20 @@ Transaction 1 receives 20.00000000 EPIC. Return payment.slate.response to the se
 Slate c3160940-aa63-461b-963b-3cda6d320cf9.
 ```
 
-`--reply-file <FILE>` writes the answer elsewhere. The amount shows under awaiting finalization
+`--reply-file <FILE>` writes the answer elsewhere. A file from a LEPIC wallet carries a one-time
+reply key, and the answer is sealed to it: the `.response` file is armoured text, not V3 JSON,
+and only the sender's `tx finalize` opens it. A file without a reply key, such as one from a
+stock wallet, gets a plain V3 answer. The amount shows under awaiting finalization
 until the sender posts, then under awaiting confirmation until it is mined.
 
 Receiving the same slate file again, for example after the reply file was lost, writes the reply
-stored the first time again, byte for byte, and stores nothing new; the JSON report has
+stored the first time again, as the same answer, and stores nothing new; the JSON report has
 `"repeated": true`. `--message` and `--account` are ignored on a repeat, because the stored
 reply already carries the first ones. A different slate that reuses the slate id is refused, and
 so is the same slate once its transaction was cancelled or expired.
 
-Send. Write S1 to a file, give it to the receiver, and finalize their answer:
+Send. Write S1 to a file, give it to the receiver, and finalize their answer; `tx finalize` takes a
+plain V3 answer and a sealed one alike:
 
 ```
 $ lepic tx send 1.5 --to-file pay-alice.slate -m "for lunch"
@@ -1355,6 +1359,10 @@ $ lepic --output json tx send 1000 --to-file x.slate
 {"error":{"kind":"insufficient_funds","exit_code":8,"message":"send failed","causes":["output selection failed: not enough funds"]}}
 ```
 
+A command line that does not parse is an error of kind `usage` too: with `--output json`, or
+`LEPIC_OUTPUT=json`, it prints the same document (exit 2, the parser's message as `message`) and
+nothing on stderr. `--help` and `--version` still print text.
+
 Amounts are strings with eight decimals. The exit code says what kind of failure it was:
 
 | Code | Kind | Meaning |
@@ -1373,7 +1381,19 @@ Amounts are strings with eight decimals. The exit code says what kind of failure
 | 11 | `incomplete` | stored, but not delivered or not posted; retry |
 | 12 | `interrupted` | stopped by Ctrl-C or SIGTERM before it finished |
 
-An error about one stored transaction also carries its `tx_id`. A `tx send` stopped by Ctrl-C
+An error about one stored transaction also carries its `tx_id`. Exit 11 also carries `recovery`,
+the commands that finish or give up that transaction, in the order to try them:
+
+```
+{"error":{"kind":"incomplete","exit_code":11,"message":"finalize failed","causes":["transaction 3 is finalized but the node did not accept it","..."],"tx_id":3,"recovery":["lepic tx post 3","lepic tx cancel 3"]}}
+```
+
+A slate that was not delivered lists `lepic tx resend <ID> --to <ADDRESS>` and `lepic tx cancel
+<ID>`; an invoice that was not delivered lists `lepic tx cancel <ID>`; a transaction the node did
+not accept lists `lepic tx post <ID>` and `lepic tx cancel <ID>`. The serve API's problem document
+carries the same `recovery` list.
+
+ A `tx send` stopped by Ctrl-C
 or SIGTERM after it stored its transaction exits 12 with that `tx_id`; `lepic tx show` tells
 whether it was delivered, and `tx resend` or `tx cancel` settles it.
 
@@ -1394,6 +1414,7 @@ With human output, an error ends with a `hint:` line that names what to try next
 | `not enough funds` (exit 8) | The hint shows what is spendable. Recent receives and change need `--min-confirmations` blocks, and `--selection all` locks every output until its transaction confirms. |
 | `epicbox address rejected` (exit 2) | The address is mistyped or belongs to the other network. Nothing was stored. |
 | `stored but was not delivered` (exit 11) | The relay did not take the slate; check the address and its port, then `tx resend` or `tx cancel`. |
+| `... is on this device, which a native send does not reach` (exit 7) | A native send to a listener on this computer. Nothing was stored; `--legacy` sends the V2 or V3 slate. |
 | `epicbox subscription failed` | The relay at `epicbox_relay` is unreachable. |
 | `http address rejected` (exit 2) | The `--to` URL is not `http(s)://host[:port][/path]`, or is plain `http` to another computer without `--allow-plain-http`. Nothing was stored. |
 | `invoices go over epicbox or through a slate file, not over http` (exit 2) | `invoice issue --to` was given an address with a scheme (`://`). |

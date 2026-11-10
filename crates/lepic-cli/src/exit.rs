@@ -116,6 +116,9 @@ Exit codes:
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum CliError {
+    /// The command line did not parse; the text is clap's own message.
+    #[error("{0}")]
+    Arguments(String),
     #[error("settings are invalid")]
     Settings(#[from] SettingsError),
     #[error("secret input failed")]
@@ -202,7 +205,8 @@ pub enum CliError {
     )]
     ServeHoldsWallet { socket: std::path::PathBuf },
     /// The error the running `lepic serve` answered for a command it ran (ADR 0053): the kind,
-    /// message, causes and transaction the command reports when it runs on its own.
+    /// message, causes, transaction and recovery commands the command reports when it runs on
+    /// its own.
     #[error("{message}")]
     Served {
         kind: ErrorKind,
@@ -210,6 +214,7 @@ pub enum CliError {
         #[source]
         causes: Option<Box<ServedCause>>,
         tx_id: Option<u32>,
+        recovery: Box<[String]>,
     },
     /// The running `lepic serve` took a command and gave no answer, or one that is not the API's.
     #[error("lepic serve on {} did not answer the command", socket.display())]
@@ -325,7 +330,8 @@ impl CliError {
                 | SecretError::PasswordFile { .. },
             ) => ErrorKind::Config,
             Self::Secret(SecretError::Mismatch | SecretError::EmptyNew) => ErrorKind::Rejected,
-            Self::Secret(_)
+            Self::Arguments(_)
+            | Self::Secret(_)
             | Self::Amount(_)
             | Self::Zero { .. }
             | Self::NoDestination
@@ -408,7 +414,23 @@ impl CliError {
             Self::SendInterrupted { tx_id }
             | Self::SlateIdReused { tx_id }
             | Self::HttpReplyLost { tx_id } => Some(*tx_id),
-            Self::Direct(DirectError::Native { tx_id, .. }) => Some(tx_id.0),
+            Self::Direct(DirectError::Native { tx_id, .. })
+            | Self::Send(SendError::Undelivered { tx_id, .. })
+            | Self::Finalize(FinalizeError::NotPosted { tx_id, .. })
+            | Self::Invoice(
+                InvoiceError::Undelivered { tx_id, .. }
+                | InvoiceError::PaymentUndelivered { tx_id, .. }
+                | InvoiceError::NotPosted { tx_id, .. },
+            )
+            | Self::Contact(
+                ContactError::Send(SendError::Undelivered { tx_id, .. })
+                | ContactError::Finalize(FinalizeError::NotPosted { tx_id, .. })
+                | ContactError::Invoice(
+                    InvoiceError::Undelivered { tx_id, .. }
+                    | InvoiceError::PaymentUndelivered { tx_id, .. }
+                    | InvoiceError::NotPosted { tx_id, .. },
+                ),
+            ) => Some(tx_id.0),
             Self::Served { tx_id, .. } => *tx_id,
             _ => None,
         }
@@ -489,7 +511,9 @@ fn direct_kind(error: &DirectError) -> ErrorKind {
         DirectError::Wallet(error) => wallet_kind(error),
         DirectError::Send(error) => send_kind(error),
         DirectError::Probe { .. } => ErrorKind::Transport,
-        DirectError::PinnedNoAdvert { .. } | DirectError::PinChanged { .. } => ErrorKind::Rejected,
+        DirectError::PinnedNoAdvert { .. }
+        | DirectError::PinChanged { .. }
+        | DirectError::ThisDevice { .. } => ErrorKind::Rejected,
         DirectError::Native { .. } => ErrorKind::Incomplete,
         _ => ErrorKind::Internal,
     }
@@ -835,6 +859,7 @@ mod tests {
                     message: "not enough".to_owned(),
                     causes: None,
                     tx_id: None,
+                    recovery: Box::default(),
                 },
                 ErrorKind::InsufficientFunds,
             ),

@@ -135,6 +135,8 @@ struct Problem {
     #[serde(default)]
     causes: Vec<String>,
     tx_id: Option<u32>,
+    #[serde(default)]
+    recovery: Vec<String>,
 }
 
 impl Problem {
@@ -155,6 +157,7 @@ impl Problem {
             message,
             causes: ServedCause::chain(causes),
             tx_id: self.tx_id,
+            recovery: self.recovery.into(),
         }
     }
 }
@@ -353,11 +356,16 @@ mod tests {
             detail: "send failed: not enough: 1 short".to_owned(),
             causes: vec!["not enough".to_owned(), "1 short".to_owned()],
             tx_id: Some(4),
+            recovery: vec!["lepic tx post 4".to_owned(), "lepic tx cancel 4".to_owned()],
         };
         let error = problem.into_error();
         assert_eq!(error.kind(), ErrorKind::InsufficientFunds);
         assert_eq!(error.chain(), ["send failed", "not enough", "1 short"]);
         assert_eq!(error.tx_id(), Some(4));
+        assert_eq!(
+            crate::hint::recovery(&error),
+            ["lepic tx post 4", "lepic tx cancel 4"]
+        );
     }
 
     #[test]
@@ -367,6 +375,7 @@ mod tests {
             detail: "a: b".to_owned(),
             causes: Vec::new(),
             tx_id: None,
+            recovery: Vec::new(),
         };
         let error = problem.into_error();
         assert_eq!(error.kind(), ErrorKind::Internal);

@@ -192,6 +192,11 @@ case_send_native_vs_legacy() {
     expect_json "${out_native}" '.format != "legacy"' "format with native_direct on" || return 1
     out_forced="$(w "${PAY_A}" tx send "${NATIVE_SEND_ARGS[@]}" --to "${HTTP_URL}" --legacy --min-confirmations "${E2E_MINCONF}" 0.01)" || fail "--legacy send failed" || return 1
     expect_eq "$(jq -r .format <<<"${out_forced}")" legacy "format with --legacy" || return 1
+    # A native send to a listener on this device is refused before anything is stored: exit 7.
+    wstop "${HTTP_PID}"
+    http_listen "${PAY_B}" || return 1
+    wx 7 "${PAY_A}" tx send --to "${HTTP_URL}" --min-confirmations "${E2E_MINCONF}" 0.01 || return 1
+    expect_json "${LAST_JSON}" '.error.kind == "rejected"' "native send to this device is rejected" || return 1
     wconfig_reset "${PAY_A}"
     wconfig_reset "${PAY_B}"
     wstop "${HTTP_PID}"
@@ -217,6 +222,7 @@ case_send_file() {
     r="$(w "${PAY_B}" tx receive "${dir}/s1.slate" --reply-file "${dir}/s2.slate")" || fail "tx receive failed" || return 1
     printf '%s\n' "${r}" >"${dir}/receive.json"
     [[ -s "${dir}/s2.slate" ]] || fail "no reply file" || return 1
+    ! jq -e . "${dir}/s2.slate" >/dev/null 2>&1 || fail "the reply to a file with a reply key is plain JSON" || return 1
     expect_eq "$(tx_state "${PAY_B}" "$(jq -r .tx_id <<<"${r}")")" received "payee state after receive" || return 1
     out="$(w "${PAY_A}" tx finalize "${dir}/s2.slate")" || fail "tx finalize failed" || return 1
     expect_json "${out}" '.state == "posted" or .state == "finalized"' "finalize result" || return 1
@@ -243,6 +249,7 @@ case_send_message() {
     expect_json "$(show_by_slate "${PAY_B}" "${slate}")" "[.messages[]? | select(.text == \"${tag}\")] | length >= 1" "payee sees the message" || return 1
     # --purpose belongs to contact sends: with --to it is a usage error.
     wx 2 "${PAY_A}" tx send --to "${HTTP_URL}" --purpose payment 0.01 || return 1
+    expect_json "${LAST_JSON}" '.error.kind == "usage"' "a usage error is the JSON error" || return 1
     note "message '${tag}' on both sides; --purpose with --to is exit 2"
 }
 
@@ -386,6 +393,8 @@ case_send_epictx() {
     printf '%s\n' "${r}" >"${dir}/receive.json"
     [[ -s "${dir}/reply.epictx" ]] || fail "no reply file" || return 1
     printf 'reply starts: %s\n' "$(head -c 40 "${dir}/reply.epictx")" >"${dir}/reply.kind"
+    # A file with a reply key is answered sealed, not as V3 JSON.
+    ! jq -e . "${dir}/reply.epictx" >/dev/null 2>&1 || fail "the reply to a file with a reply key is plain JSON" || return 1
     out="$(w "${PAY_A}" tx finalize "${dir}/reply.epictx")" || fail "tx finalize of the reply failed" || return 1
     expect_json "${out}" '.state == "posted" or .state == "finalized"' "finalize result" || return 1
     check_paid_file "${slate}" "${amount}" "${before}" || return 1

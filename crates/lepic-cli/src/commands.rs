@@ -1233,8 +1233,9 @@ impl<H: Host> Run<'_, H> {
             .reply_file
             .unwrap_or_else(|| response_path(&args.slate.file));
         refuse_saved_txs(&reply)?;
+        let answer = answer_wire(&opened, &wire, &received.reply)?;
         files
-            .export(&received.reply, &Location::File(reply.clone()))
+            .export(&answer, &Location::File(reply.clone()))
             .await
             .map_err(slate_file(&reply))?;
         Ok(Report::Receive(ReceiveReport {
@@ -1253,6 +1254,25 @@ impl<H: Host> Run<'_, H> {
             .import(&Location::File(args.slate.file.clone()))
             .await
             .map_err(slate_file(&args.slate.file))?;
+        // A reply sealed to this wallet's reply key (ADR 0052) is armored text.
+        let armoured = matches!(
+            wire.as_text()
+                .map(|text| lepic_wallet_contacts::payment_file(text.as_bytes())),
+            Some(Ok(lepic_wallet_contacts::PaymentFile::Armour))
+        );
+        if armoured {
+            let text = wire.as_text().unwrap_or_default();
+            let finalized = opened
+                .wallet
+                .contact_book()
+                .sealed_finalize(text, propagation(args.fluff.fluff))
+                .await?;
+            return Ok(Report::Finalize(FinalizeReport {
+                tx_id: finalized.tx_id.0,
+                slate_id: finalized.slate.id().to_string(),
+                state: "posted".to_owned(),
+            }));
+        }
         finalize_slate(&opened, &wire, args.fluff.fluff).await
     }
 
@@ -1394,8 +1414,9 @@ impl<H: Host> Run<'_, H> {
             .reply_file
             .unwrap_or_else(|| response_path(&file));
         refuse_saved_txs(&reply)?;
+        let answer = answer_wire(&opened, &wire, &paid.reply)?;
         files
-            .export(&paid.reply, &Location::File(reply.clone()))
+            .export(&answer, &Location::File(reply.clone()))
             .await
             .map_err(slate_file(&reply))?;
         let reply = reply.display().to_string();
@@ -2351,6 +2372,24 @@ const fn category_name(category: BalanceCategory) -> &'static str {
 }
 
 /// Receives `wire`, a slate as a file holds it, into `account`.
+/// The file that answers `incoming`: `reply` sealed to the reply key in the LEPIC marker of a
+/// slate a LEPIC wallet wrote (RFC 0002 5, ADR 0052), and `reply` as stored for a slate without
+/// one, so a stock wallet reads it.
+fn answer_wire<N: NodeApi + 'static>(
+    opened: &Opened<N>,
+    incoming: &WireSlate,
+    reply: &WireSlate,
+) -> Result<WireSlate, CliError> {
+    let sealed = opened
+        .wallet
+        .contact_book()
+        .sealed_answer_to_marker(incoming, reply)?;
+    Ok(match sealed {
+        Some(text) => WireSlate::text(reply.media_type(), text),
+        None => reply.clone(),
+    })
+}
+
 async fn receive_slate<N: NodeApi + 'static>(
     opened: &Opened<N>,
     wire: &WireSlate,

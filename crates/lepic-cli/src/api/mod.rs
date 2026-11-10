@@ -721,7 +721,10 @@ mod tests {
             .err()
             .unwrap();
         assert_eq!(refused.status(), StatusCode::METHOD_NOT_ALLOWED);
-        assert_eq!(refused.allow.as_deref(), Some("GET, POST"));
+        assert_eq!(
+            refused.allow.as_deref().map(String::as_str),
+            Some("GET, POST")
+        );
         assert!(
             router
                 .find(&Method::GET, "/v1/transactions/", Listener::Socket)

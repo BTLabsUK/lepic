@@ -33,9 +33,18 @@ pub(crate) struct Problem {
     /// delivery was known, or a `slate_id` used before.
     #[serde(skip_serializing_if = "Option::is_none")]
     tx_id: Option<u32>,
+    /// The commands that finish or give up the transaction, in the order to try them; present
+    /// with `code` `incomplete`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(value_type = Option<Vec<String>>)]
+    // One pointer keeps the `Err` of every route under clippy's size limit.
+    #[allow(clippy::box_collection)]
+    recovery: Option<Box<Vec<String>>>,
     /// The methods the route takes, for the `Allow` header of a 405.
     #[serde(skip)]
-    pub(crate) allow: Option<Box<str>>,
+    // One pointer, as for `recovery`.
+    #[allow(clippy::box_collection)]
+    pub(crate) allow: Option<Box<String>>,
 }
 
 impl Problem {
@@ -48,6 +57,7 @@ impl Problem {
             code: code.name(),
             causes: Box::default(),
             tx_id: None,
+            recovery: None,
             allow: None,
         }
     }
@@ -66,7 +76,7 @@ impl Problem {
 
     pub(crate) fn method_not_allowed(allow: String) -> Self {
         Self {
-            allow: Some(allow.into()),
+            allow: Some(Box::new(allow)),
             ..Self::new(
                 StatusCode::METHOD_NOT_ALLOWED,
                 ErrorKind::Usage,
@@ -116,6 +126,9 @@ impl From<CliError> for Problem {
         Self {
             tx_id: error.tx_id(),
             causes: chain.get(1..).unwrap_or_default().into(),
+            recovery: Some(crate::hint::recovery(&error))
+                .filter(|commands| !commands.is_empty())
+                .map(Box::new),
             ..Self::new(status(kind), kind, chain.join(": "))
         }
     }

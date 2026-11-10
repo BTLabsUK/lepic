@@ -67,6 +67,15 @@ pub fn run<H: Host>(
     let args: Vec<OsString> = args.into_iter().map(Into::into).collect();
     let cli = match Cli::try_parse_from(&args) {
         Ok(cli) => cli,
+        Err(error) if json_requested(&args, &console.env) && !is_informational(&error) => {
+            let message = usage_message(&error);
+            return report_error(
+                console,
+                OutputFormat::Json,
+                &CliError::Arguments(message),
+                None,
+            );
+        }
         Err(error) => {
             let (text, code) = usage_text(&error);
             let stream = if code == 0 {
@@ -103,6 +112,47 @@ pub fn run<H: Host>(
             Some(&settings),
         ),
     }
+}
+
+/// Whether the command line, or failing that the environment, asks for JSON output. It reads
+/// the raw arguments, since it runs when they did not parse: the last `--output` before a bare
+/// `--` counts.
+fn json_requested(args: &[OsString], env: &Env) -> bool {
+    let mut value: Option<String> = None;
+    let mut iter = args.iter().skip(1).map(|arg| arg.to_string_lossy());
+    while let Some(arg) = iter.next() {
+        if arg == "--" {
+            break;
+        }
+        if let Some(given) = arg.strip_prefix("--output=") {
+            value = Some(given.to_owned());
+        } else if arg == "--output" {
+            value = iter.next().map(std::borrow::Cow::into_owned);
+        }
+    }
+    let value = value.or_else(|| env.get("LEPIC_OUTPUT").map(str::to_owned));
+    value.is_some_and(|value| {
+        <crate::cli::OutputArg as clap::ValueEnum>::from_str(&value, false)
+            .is_ok_and(|parsed| matches!(parsed, crate::cli::OutputArg::Json))
+    })
+}
+
+fn is_informational(error: &clap::Error) -> bool {
+    matches!(
+        error.kind(),
+        ClapErrorKind::DisplayHelp
+            | ClapErrorKind::DisplayVersion
+            | ClapErrorKind::DisplayHelpOnMissingArgumentOrSubcommand
+    )
+}
+
+/// The first paragraph of clap's message, without its `error: ` prefix: the usage lines and
+/// the pointer to `--help` that follow are for a terminal.
+fn usage_message(error: &clap::Error) -> String {
+    let plain = error.render().to_string();
+    let first = plain.split("\n\n").next().unwrap_or_default();
+    let first = first.trim();
+    first.strip_prefix("error: ").unwrap_or(first).to_owned()
 }
 
 /// What a command line that does not parse prints, and the exit code: help and version on
