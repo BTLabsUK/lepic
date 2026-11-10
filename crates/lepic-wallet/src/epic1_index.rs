@@ -193,7 +193,10 @@ pub(crate) fn record_payment(
 /// come to an epic1 address, or whose stored index is damaged: it is only shown, and a
 /// damaged one does not keep the transaction from being listed.
 pub fn index_of(repos: &dyn Repositories, tx_id: TxId) -> Result<Option<u32>, StoreError> {
-    Ok(number(repos, &format!("{TX_PREFIX}{}", tx_id.0)).unwrap_or_else(|_| None))
+    match number(repos, &format!("{TX_PREFIX}{}", tx_id.0)) {
+        Err(StoreError::Corrupt { .. }) => Ok(None),
+        other => other,
+    }
 }
 
 /// Tries the seal keys `keys`, `(index, key)` in the order given, and returns the index of the
