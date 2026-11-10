@@ -2175,6 +2175,9 @@ pub struct Epic1Attempt {
     pub host: String,
     /// Why the post failed; `None` when it went through.
     pub error: Option<String>,
+    /// The post failed after the payment was sent: the relay may hold it, and the payee may
+    /// still take it from there.
+    pub uncertain: bool,
 }
 
 /// A payment made to an epic1 link, from `EpicWallet::epic1_pay` or
@@ -2188,6 +2191,10 @@ pub struct Epic1Paid {
     pub attempts: Vec<Epic1Attempt>,
     /// The transport, from 0, the payment was posted to.
     pub posted: Option<u32>,
+    /// The first transport, from 0, whose relay may hold the payment though its post failed.
+    /// Show that the payment may still arrive and do not offer to pay again;
+    /// `EpicWallet::epic1_post_next` posts the same payment to the next relay.
+    pub uncertain: Option<u32>,
     /// How the payment is written: always `Native`, a sealed `lepic.v1` slate.
     pub format: SlateWire,
 }

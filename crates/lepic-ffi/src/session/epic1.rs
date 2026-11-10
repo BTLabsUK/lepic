@@ -80,11 +80,15 @@ fn paid(paid: lepic_wallet_contacts::Epic1Paid) -> Epic1Paid {
             .map(|attempt| Epic1Attempt {
                 host: attempt.host,
                 error: attempt.error,
+                uncertain: attempt.uncertain,
             })
             .collect(),
         // At most three transports.
         posted: paid
             .posted
+            .map(|index| u32::try_from(index).unwrap_or(u32::MAX)),
+        uncertain: paid
+            .uncertain
             .map(|index| u32::try_from(index).unwrap_or(u32::MAX)),
         format: SlateWire::Native,
     }
