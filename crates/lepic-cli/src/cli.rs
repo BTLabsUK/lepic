@@ -1138,8 +1138,9 @@ in use, until `lepic epic1 retire`. `lepic contact collect` takes the payments a
     Read(Epic1LinkArg),
     /// Pay an epic1 link; `lepic contact collect` finalizes the answer
     #[command(after_help = "\
-Check the relays `lepic epic1 read` shows, then give --hosts-ok. The payment is posted to the \
-link's first relay, and to the next when a post fails, at most three.")]
+A link whose relays are all in the relay list is paid as it is. Check the others with \
+`lepic epic1 read`, then give --hosts-ok. The payment is posted to the link's first relay, and \
+to the next when a post fails, at most three.")]
     Pay(Epic1PayArgs),
     /// Post a payment again, the same bytes, to the next relay of its link
     PostNext(Epic1PostNextArgs),
@@ -1200,7 +1201,7 @@ pub struct Epic1PayArgs {
     /// Ask the payee for a payment proof signed with its epic1 proof key
     #[arg(long)]
     pub proof: bool,
-    /// The relays `epic1 read` showed for the link were checked and may be used
+    /// The relays of the link that are not in the relay list were checked and may be used
     #[arg(long)]
     pub hosts_ok: bool,
 }
@@ -1210,7 +1211,7 @@ pub struct Epic1PostNextArgs {
     /// Slate id of the payment, as `epic1 pay` printed it
     #[arg(value_name = "SLATE_ID")]
     pub slate_id: String,
-    /// The relays `epic1 read` showed for the link were checked and may be used
+    /// The relays of the link that are not in the relay list were checked and may be used
     #[arg(long)]
     pub hosts_ok: bool,
 }

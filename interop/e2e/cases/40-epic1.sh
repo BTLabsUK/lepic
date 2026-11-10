@@ -24,9 +24,12 @@ e1_setup() {
 
 # Runs `contact collect` on a wallet until the transaction of a slate shows in a state of `states`.
 # Each round is a separate command, so the wallet's lock is held only while it runs.
+# A fourth argument names a wallet that collects in each round too, so an answer it could not
+# post at once is posted on a later round.
 e1_collect_until() {
-    local name="$1" slate="$2" states="$3" i
+    local name="$1" slate="$2" states="$3" also="${4:-}" i
     for ((i = 0; i < 40; i++)); do
+        [[ -z "${also}" ]] || w "${also}" contact collect >/dev/null 2>&1 || true
         w "${name}" contact collect >"${CASE_DIR}/${name}.collect.json" || fail "contact collect on ${name} failed" || return 1
         w "${name}" wallet info >/dev/null 2>&1 || true
         slate_state_in "${name}" "${slate}" "${states}" && return 0
@@ -65,24 +68,22 @@ case_e1_link_pay() {
     expect_json "${read}" ".hosts | length == 1 and .[0].host == \"${E2E_RELAY}\"" "read hosts" || return 1
     printf '%s\n' "${read}" >"${CASE_DIR}/read.json"
     t0=${SECONDS}
-    pay="$(w "${E1_PAYER}" epic1 pay "${link}" --hosts-ok --min-confirmations "${E2E_MINCONF}" --ttl-blocks 200)" || fail "epic1 pay failed" || return 1
+    pay="$(w "${E1_PAYER}" epic1 pay "${link}" --min-confirmations "${E2E_MINCONF}" --ttl-blocks 200)" || fail "epic1 pay failed" || return 1
     printf '%s\n' "${pay}" >"${CASE_DIR}/pay.json"
-    expect_json "${pay}" '.posted == 0 and .attempts[0].error == null' "pay posted to entry 0" || return 1
+    expect_json "${pay}" '.posted == 0 and .posted_ok == true and .attempts[0].error == null' "pay posted to entry 0 with no --hosts-ok" || return 1
     slate="$(jq -r .slate_id <<<"${pay}")"
     note "paid in $((SECONDS - t0))s"
     t=${SECONDS}
     e1_collect_until "${E1_PAYEE}" "${slate}" "pending_confirmation received finalized" || return 1
     printf '%s\n' "$(tx_by_slate "${E1_PAYEE}" "${slate}")" >"${CASE_DIR}/payee-tx.json"
     note "payee took in $((SECONDS - t))s"
-    # The payee's answers list shows the payment; the answer is posted by collect or by hand.
+    # The payee's collect posted the answer itself.
     answers="$(w "${E1_PAYEE}" epic1 answers)" || fail "epic1 answers failed" || return 1
     printf '%s\n' "${answers}" >"${CASE_DIR}/answers.json"
     expect_json "${answers}" "[.. | objects | select(.slate_id? == \"${slate}\")] | length >= 1" "answer listed for the slate" || return 1
-    expect_json "${answers}" "[.answers[] | select(.slate_id == \"${slate}\" and .posted == false)] | length == 1" "collect does not post the answer by itself" || return 1
-    w "${E1_PAYEE}" epic1 post-answer "${slate}" --relay-ok >"${CASE_DIR}/post-answer.json" || fail "epic1 post-answer failed" || return 1
-    expect_json "$(w "${E1_PAYEE}" epic1 answers)" "[.answers[] | select(.slate_id == \"${slate}\" and .posted == true)] | length == 1" "answer marked posted" || return 1
+    expect_json "${answers}" "[.answers[] | select(.slate_id == \"${slate}\" and .posted == true)] | length == 1" "collect posted the answer by itself" || return 1
     t=${SECONDS}
-    e1_collect_until "${E1_PAYER}" "${slate}" "posted confirmed" || return 1
+    e1_collect_until "${E1_PAYER}" "${slate}" "posted confirmed" "${E1_PAYEE}" || return 1
     note "payer finalized in $((SECONDS - t))s"
     e1_confirmed "${E1_PAYEE}" "${slate}" || return 1
     e1_confirmed "${E1_PAYER}" "${slate}" || return 1
@@ -93,13 +94,12 @@ case_e1_link_pay() {
 e1_pay_and_take() {
     local link="$1" amount="${2:-}" pay args=()
     [[ -n "${amount}" ]] && args=("${amount}")
-    pay="$(w "${E1_PAYER}" epic1 pay "${link}" "${args[@]}" --hosts-ok --min-confirmations "${E2E_MINCONF}" --ttl-blocks 200)" || fail "epic1 pay ${amount} failed" || return 1
+    pay="$(w "${E1_PAYER}" epic1 pay "${link}" "${args[@]}" --min-confirmations "${E2E_MINCONF}" --ttl-blocks 200)" || fail "epic1 pay ${amount} failed" || return 1
     E1_SLATE="$(jq -r .slate_id <<<"${pay}")"
     E1_PAY="${pay}"
     e1_collect_until "${E1_PAYEE}" "${E1_SLATE}" "pending_confirmation received finalized confirmed" || return 1
-    # Answer it, so the payer finalizes and its inputs are not left locked.
-    w "${E1_PAYEE}" epic1 post-answer "${E1_SLATE}" --relay-ok >/dev/null || fail "epic1 post-answer failed" || return 1
-    e1_collect_until "${E1_PAYER}" "${E1_SLATE}" "posted confirmed" || return 1
+    # The payee's collect answered it; the payer's collect finalizes.
+    e1_collect_until "${E1_PAYER}" "${E1_SLATE}" "posted confirmed" "${E1_PAYEE}" || return 1
 }
 
 # A link with no amount cannot be paid without one; an explicit amount works, and is what the payee gets.
@@ -110,7 +110,7 @@ case_e1_no_amount() {
     expect_match "${link}" '^epic:tepic1' "link" || return 1
     [[ "${link}" != *amount=* ]] || fail "link with no amount carries one: ${link}" || return 1
     expect_json "$(w "${E1_PAYER}" epic1 read "${link}")" '.amount == null' "read shows no amount" || return 1
-    wx 2 "${E1_PAYER}" epic1 pay "${link}" --hosts-ok --min-confirmations "${E2E_MINCONF}" || return 1
+    wx 2 "${E1_PAYER}" epic1 pay "${link}" --min-confirmations "${E2E_MINCONF}" || return 1
     printf "%s\n" "${LAST_JSON}" >"${CASE_DIR}/refused.json"
     e1_pay_and_take "${link}" 0.03 || return 1
     expect_json "$(tx_by_slate "${E1_PAYEE}" "${E1_SLATE}")" '.amount_credited == "0.03000000"' "payee credited the explicit amount" || return 1
@@ -142,7 +142,7 @@ case_e1_printed() {
     expect_json "$(w "${E1_PAYEE}" epic1 links)" "[.links[] | select(.kind == \"printed\" and .n == ${n})] | length == 0" "retired link gone from links" || return 1
     wx 6 "${E1_PAYEE}" epic1 retire "${n}" || return 1
     # A payment to the retired link is posted by the payer but the payee never takes it.
-    out="$(w "${E1_PAYER}" epic1 pay "${link}" --hosts-ok --min-confirmations "${E2E_MINCONF}" --ttl-blocks 30)" || fail "pay to a retired link failed to post" || return 1
+    out="$(w "${E1_PAYER}" epic1 pay "${link}" --min-confirmations "${E2E_MINCONF}" --ttl-blocks 30)" || fail "pay to a retired link failed to post" || return 1
     slate1="$(jq -r .slate_id <<<"${out}")"
     for _ in 1 2 3; do w "${E1_PAYEE}" contact collect >/dev/null || fail "collect failed" || return 1; sleep 3; done
     [[ -z "$(tx_by_slate "${E1_PAYEE}" "${slate1}")" ]] || fail "payee took a payment to a retired link" || return 1
@@ -151,14 +151,19 @@ case_e1_printed() {
 
 # Refusals reachable from the CLI.
 case_e1_refusals() {
-    local link main bad
+    local link main bad other
     e1_setup || return 1
     link="$(w "${E1_PAYEE}" epic1 link 0.01 | jq -r .link)" || fail "epic1 link failed" || return 1
     wx 2 "${E1_PAYER}" epic1 read "epic:notalink" || return 1
-    wx 2 "${E1_PAYER}" epic1 pay "epic:tepic1qqqq" 0.01 --hosts-ok || return 1
-    # No --hosts-ok: refused before anything is sent.
-    wx 7 "${E1_PAYER}" epic1 pay "${link}" --min-confirmations "${E2E_MINCONF}" || return 1
+    wx 2 "${E1_PAYER}" epic1 pay "epic:tepic1qqqq" 0.01 || return 1
+    # A relay outside the wallet's settings and no --hosts-ok: refused before anything is sent.
+    other="$(w "${E1_PAYEE}" epic1 link 0.01 --epicbox "unreachable.btlabs.uk" | jq -r .link)" || fail "epic1 link --epicbox failed" || return 1
+    wx 7 "${E1_PAYER}" epic1 pay "${other}" --min-confirmations "${E2E_MINCONF}" || return 1
     expect_json "${LAST_JSON}" '.error != null' "RelayNotConfirmed has an error" || return 1
+    # Another amount than the link asks: refused before anything is sent.
+    wx 7 "${E1_PAYER}" epic1 pay "${link}" 0.02 --min-confirmations "${E2E_MINCONF}" || return 1
+    expect_json "${LAST_JSON}" '.error != null' "AmountMismatch has an error" || return 1
+    printf "%s\n" "${LAST_JSON}" >"${CASE_DIR}/amount-mismatch.json"
     # The same link with a mainnet prefix is refused as the wrong network.
     main="$(python3 -I - "${link}" <<'PY'
 import sys
@@ -188,7 +193,7 @@ PY
     printf "%s\n" "${LAST_JSON}" >"${CASE_DIR}/mainnet.json"
     # A retire of a slot never issued.
     wx 6 "${E1_PAYEE}" epic1 retire 31 || return 1
-    note "malformed 2, no --hosts-ok 7, mainnet link 7, unissued retire 6; Signed/HintNotZero/NoReplyKey/NoReplyMailbox not reachable from the CLI"
+    note "malformed 2, unlisted relay without --hosts-ok 7, other amount 7, mainnet link 7, unissued retire 6; Signed/HintNotZero/NoReplyKey/NoReplyMailbox not reachable from the CLI"
 }
 
 # The relays of a link: --epicbox once and twice, a dead first relay falls through to the next,
@@ -205,8 +210,7 @@ case_e1_epicbox_param() {
     expect_json "${pay}" '.posted == 0 and .attempts[0].error == null' "posted to the second relay" || return 1
     slate="$(jq -r .slate_id <<<"${pay}")"
     e1_collect_until "${E1_PAYEE}" "${slate}" "pending_confirmation received finalized confirmed" || return 1
-    w "${E1_PAYEE}" epic1 post-answer "${slate}" --relay-ok >/dev/null || fail "post-answer via ${E2E_RELAY2} failed" || return 1
-    e1_collect_until "${E1_PAYER}" "${slate}" "posted confirmed" || return 1
+    e1_collect_until "${E1_PAYER}" "${slate}" "posted confirmed" "${E1_PAYEE}" || return 1
     note "second relay ${E2E_RELAY2} answers floonet addresses: payment taken and finalized"
     # 2. Two relays, the first dead.
     link="$(w "${E1_PAYEE}" epic1 link 0.01 --epicbox "${dead}" --epicbox "${E2E_RELAY}" | jq -r .link)" || fail "link with two relays failed" || return 1
@@ -217,22 +221,19 @@ case_e1_epicbox_param() {
     expect_json "${pay}" '.posted == 1 and (.attempts[0].error != null)' "dead first relay recorded, posted to the second" || return 1
     slate="$(jq -r .slate_id <<<"${pay}")"
     e1_collect_until "${E1_PAYEE}" "${slate}" "pending_confirmation received finalized confirmed" || return 1
-    w "${E1_PAYEE}" epic1 post-answer "${slate}" --relay-ok >/dev/null || fail "post-answer failed" || return 1
-    e1_collect_until "${E1_PAYER}" "${slate}" "posted confirmed" || return 1
+    e1_collect_until "${E1_PAYER}" "${slate}" "posted confirmed" "${E1_PAYEE}" || return 1
     # 3. post-next: the same payment to the next relay; the payee takes one transaction.
     link="$(w "${E1_PAYEE}" epic1 link 0.01 --epicbox "${E2E_RELAY}" --epicbox "${E2E_RELAY2}" | jq -r .link)" || fail "link failed" || return 1
     pay="$(w "${E1_PAYER}" epic1 pay "${link}" --hosts-ok --min-confirmations "${E2E_MINCONF}" --ttl-blocks 100)" || fail "pay failed" || return 1
     slate="$(jq -r .slate_id <<<"${pay}")"
     expect_json "${pay}" '.posted == 0' "first entry took it" || return 1
-    wx 7 "${E1_PAYER}" epic1 post-next "${slate}" || return 1
     w "${E1_PAYER}" epic1 post-next "${slate}" --hosts-ok >"${CASE_DIR}/post-next.json" || fail "post-next failed" || return 1
     e1_collect_until "${E1_PAYEE}" "${slate}" "pending_confirmation received finalized confirmed" || return 1
     w "${E1_PAYEE}" contact collect >/dev/null || fail "second collect failed" || return 1
     n="$(w "${E1_PAYEE}" tx list | jq --arg id "${slate}" '[.transactions[] | select(.slate_id == $id)] | length')"
     expect_eq "${n}" 1 "one transaction for the slate posted twice" || return 1
-    w "${E1_PAYEE}" epic1 post-answer "${slate}" --relay-ok >/dev/null || fail "post-answer failed" || return 1
-    e1_collect_until "${E1_PAYER}" "${slate}" "posted confirmed" || return 1
-    note "relay2 ok, dead first relay falls through (posted 1), post-next needs --hosts-ok, payee takes the duplicate once"
+    e1_collect_until "${E1_PAYER}" "${slate}" "posted confirmed" "${E1_PAYEE}" || return 1
+    note "relay2 ok, dead first relay falls through (posted 1), post-next to the second relay, payee takes the duplicate once"
 }
 
 # pay --proof: the payee signs a payment proof with its epic1 proof key.
@@ -240,16 +241,16 @@ case_e1_proof() {
     local link pay slate
     e1_setup || return 1
     link="$(w "${E1_PAYEE}" epic1 link 0.01 | jq -r .link)" || fail "epic1 link failed" || return 1
-    pay="$(w "${E1_PAYER}" epic1 pay "${link}" --proof --hosts-ok --min-confirmations "${E2E_MINCONF}" --ttl-blocks 100)" || fail "epic1 pay --proof failed" || return 1
+    pay="$(w "${E1_PAYER}" epic1 pay "${link}" --proof --min-confirmations "${E2E_MINCONF}" --ttl-blocks 100)" || fail "epic1 pay --proof failed" || return 1
     printf '%s\n' "${pay}" >"${CASE_DIR}/pay.json"
+    expect_json "${pay}" '(.proof_address | test("^[0-9a-f]{64}$"))' "pay --proof reports the proof address" || return 1
     slate="$(jq -r .slate_id <<<"${pay}")"
     e1_collect_until "${E1_PAYEE}" "${slate}" "pending_confirmation received finalized confirmed" || return 1
-    w "${E1_PAYEE}" epic1 post-answer "${slate}" --relay-ok >/dev/null || fail "post-answer failed" || return 1
-    e1_collect_until "${E1_PAYER}" "${slate}" "posted confirmed" || return 1
+    e1_collect_until "${E1_PAYER}" "${slate}" "posted confirmed" "${E1_PAYEE}" || return 1
     e1_confirmed "${E1_PAYER}" "${slate}" || return 1
     w "${E1_PAYER}" tx show "$(tx_by_slate "${E1_PAYER}" "${slate}" | jq -r .tx_id)" >"${CASE_DIR}/payer-tx.json" || fail "tx show failed" || return 1
     w "${E1_PAYEE}" tx show "$(tx_by_slate "${E1_PAYEE}" "${slate}" | jq -r .tx_id)" >"${CASE_DIR}/payee-tx.json" || fail "tx show failed" || return 1
-    note "pay --proof finalized and confirmed (the CLI shows no proof field to inspect)"
+    note "pay --proof reported the proof address, finalized and confirmed"
 }
 
 # A payee restored from its phrase reads the link mailboxes once and takes a payment made while
@@ -260,15 +261,14 @@ case_e1_restore() {
     ensure_wallet "${first}" || fail "could not create ${first}" || return 1
     phrase="$(jq -r .recovery_phrase "${E2E_STATE}/wallets/${first}.init.json")"
     link="$(w "${first}" epic1 link 0.01 | jq -r .link)" || fail "epic1 link failed" || return 1
-    pay="$(w "${E1_PAYER}" epic1 pay "${link}" --hosts-ok --min-confirmations "${E2E_MINCONF}" --ttl-blocks 100)" || fail "pay failed" || return 1
+    pay="$(w "${E1_PAYER}" epic1 pay "${link}" --min-confirmations "${E2E_MINCONF}" --ttl-blocks 100)" || fail "pay failed" || return 1
     slate="$(jq -r .slate_id <<<"${pay}")"
     rm -rf "$(wdir "${copy}")"
     w "${copy}" wallet restore <<<"${phrase}" >"${CASE_DIR}/restore.json" || fail "wallet restore failed" || return 1
     expect_eq "$(w "${copy}" epic1 address | jq -r .address)" "$(w "${first}" epic1 address | jq -r .address)" "same epic1 address after restore" || return 1
     w "${copy}" epic1 restore >"${CASE_DIR}/epic1-restore.json" || fail "epic1 restore failed" || return 1
     e1_collect_until "${copy}" "${slate}" "pending_confirmation received finalized confirmed" || fail "the restored wallet did not take the payment: $(cat "${CASE_DIR}/epic1-restore.json")" || return 1
-    w "${copy}" epic1 post-answer "${slate}" --relay-ok >/dev/null || fail "post-answer from the copy failed" || return 1
-    e1_collect_until "${E1_PAYER}" "${slate}" "posted confirmed" || return 1
+    e1_collect_until "${E1_PAYER}" "${slate}" "posted confirmed" "${E1_PAYEE}" || return 1
     note "restored wallet took the payment made while it was gone (epic1 restore: $(jq -c . "${CASE_DIR}/epic1-restore.json" | cut -c1-120))"
 }
 
@@ -287,7 +287,7 @@ case_e1_concurrent() {
     out="$(w "${E1_PAYEE}" epic1 link --printed 0.01)" || fail "printed link failed" || return 1
     link="$(jq -r .link <<<"${out}")"
     for i in 0 1 2; do
-        wbg "${names[i]}" pay --output json epic1 pay "${link}" --hosts-ok --min-confirmations "${E2E_MINCONF}" --ttl-blocks 100
+        wbg "${names[i]}" pay --output json epic1 pay "${link}" --min-confirmations "${E2E_MINCONF}" --ttl-blocks 100
         pids+=("${BG_PID}")
         logs+=("${BG_LOG}")
     done
@@ -300,11 +300,8 @@ case_e1_concurrent() {
     for slate in "${slates[@]}"; do
         e1_collect_until "${E1_PAYEE}" "${slate}" "pending_confirmation received finalized confirmed" || return 1
     done
-    for slate in "${slates[@]}"; do
-        w "${E1_PAYEE}" epic1 post-answer "${slate}" --relay-ok >/dev/null || fail "post-answer ${slate} failed" || return 1
-    done
     for i in 0 1 2; do
-        e1_collect_until "${names[i]}" "${slates[i]}" "posted confirmed" || return 1
+        e1_collect_until "${names[i]}" "${slates[i]}" "posted confirmed" "${E1_PAYEE}" || return 1
     done
     w "${E1_PAYEE}" epic1 retire "$(jq -r .n <<<"${out}")" >/dev/null || fail "retire failed" || return 1
     note "three payers on one printed link, all taken and finalized"

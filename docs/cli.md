@@ -838,26 +838,32 @@ $ lepic epic1 links
 $ lepic epic1 retire 1
 ```
 
-`contact collect` takes the payments at the link mailboxes and stores an answer to each.
-`epic1 answers` lists them with the relay of the payer's reply mailbox, reported as for
-`in-person read`; `epic1 post-answer <SLATE_ID> --relay-ok` posts one, and posting again is
-safe. After a restore, `epic1 restore` reads the link mailboxes of the seed on the wallet's own
+`contact collect` takes the payments at the link mailboxes, stores an answer to each and posts
+it to the payer's reply mailbox when that relay is in the relay list (the wallet's own relay or
+a meeting relay), so the payer's own collect finalizes it. A payment whose amount is not the one
+the link asked is refused and creates no transaction. `epic1 answers` lists the answers with the
+relay of the reply mailbox, reported as for `in-person read`; `epic1 post-answer <SLATE_ID>
+--relay-ok` posts one to a relay outside the list, and posting again is safe. After a restore, `epic1 restore` reads the link mailboxes of the seed on the wallet's own
 relay; links named on other relays are not found.
 
 The payer reads the link first, then pays it:
 
 ```
 $ lepic epic1 read 'epic:epic1…'
-$ lepic epic1 pay 'epic:epic1…' --hosts-ok
-$ lepic epic1 post-next <SLATE_ID> --hosts-ok
+$ lepic epic1 pay 'epic:epic1…'
+$ lepic epic1 pay 'epic:epic1…' --hosts-ok     # a relay that is not in the relay list
+$ lepic epic1 post-next <SLATE_ID>
 ```
 
 `read` shows the address paid, the amount, the message, the label and each relay with its
-`host_rule` and `in_relay_list`. `pay` pays the amount the link asks unless an amount follows
-the link, and takes the spending options of `tx send`; `--proof` asks for a payment proof signed
-with the payee's epic1 proof key. The payment goes to the first relay of the link; when the post fails,
-`post-next` tries the next one. The payer's `contact collect` takes the answer at the reply
-mailbox and finalizes it.
+`host_rule` and `in_relay_list`. `pay` pays the amount the link asks and refuses another one;
+a link that asks none takes the amount that follows it. It takes the spending options of `tx
+send`. `--hosts-ok` confirms relays outside the relay list and is not needed when every relay
+of the link is in it. `--proof` asks for a payment proof signed with the payee's epic1 proof
+key; the report's `proof_address` is that key as hex, and absent without `--proof`. The payment
+goes to the first relay of the link; when the post fails, `post-next` tries the next one. In
+JSON, `posted` is the index of the relay it went to and `posted_ok` says whether any post went
+through. The payer's `contact collect` takes the answer at the reply mailbox and finalizes it.
 
 `lepic epictx open <FILE|->` shows the slate in an `.epictx` file as JSON and takes nothing: a
 `lepic.v1` slate with its network, kernel features, header version and tail records, or the V3

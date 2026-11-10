@@ -26,7 +26,8 @@ use lepic_transport::host_rule::HostClass;
 use lepic_wallet::selection::SelectionStrategy;
 use lepic_wallet::send::SendRequest;
 use lepic_wallet_contacts::epic1_testing::{
-    for_other_network, link_mailboxes, sealed_to_epic1, with_proof_key_of, without_transports,
+    for_other_network, link_mailboxes, sealed_to_epic1, with_proof_key_of, without_amount,
+    without_transports,
 };
 use lepic_wallet_contacts::in_person_testing::{armored, without_tail};
 use lepic_wallet_contacts::{
@@ -89,16 +90,26 @@ impl World {
     }
 
     fn pay_link(&self, link: &str, proof: bool) -> Result<Epic1Paid, ContactError> {
+        self.pay(link, proof, send(), true)
+    }
+
+    fn pay(
+        &self,
+        link: &str,
+        proof: bool,
+        send: SendRequest,
+        hosts_ok: bool,
+    ) -> Result<Epic1Paid, ContactError> {
         let file = tempfile::tempdir().unwrap().keep().join("s1.tx");
         self.block_on(self.payer.wallet.contact_book().epic1_pay(
             &relays(&self.payer),
             Epic1PayRequest {
                 link: link.to_owned(),
-                send: send(),
+                send,
                 proof,
                 slate_file: file,
             },
-            true,
+            hosts_ok,
         ))
     }
 
@@ -106,17 +117,13 @@ impl World {
         self.collect(party).epic1
     }
 
-    /// The payee posts every answer it holds; returns how many.
-    fn answer_all(&self) -> usize {
+    /// The answers the payee holds, all posted by collecting; returns how many.
+    fn answers_posted(&self) -> usize {
         let book = self.issuer.wallet.contact_book();
         let answers = self
             .block_on(book.epic1_answers(&relays(&self.issuer)))
             .unwrap();
-        for answer in &answers {
-            assert!(!answer.posted);
-            self.block_on(book.epic1_post_answer(&relays(&self.issuer), answer.slate_id, true))
-                .unwrap();
-        }
+        assert!(answers.iter().all(|answer| answer.posted));
         answers.len()
     }
 
@@ -154,19 +161,20 @@ fn a_link_paid_is_answered_through_the_reply_mailbox_and_finalized() {
     assert_eq!(read.hosts[0].host, "relay.test");
     assert_eq!(read.hosts[0].class, HostClass::Public);
 
-    let unconfirmed = world.block_on(world.payer.wallet.contact_book().epic1_pay(
-        &relays(&world.payer),
-        Epic1PayRequest {
-            link: issued.link.clone(),
-            send: send(),
-            proof: true,
-            slate_file: tempfile::tempdir().unwrap().keep().join("s1.tx"),
-        },
-        false,
-    ));
-    assert_eq!(refusal(unconfirmed), Epic1Refusal::RelayNotConfirmed);
+    // A relay outside the relay list needs the user's word.
+    let elsewhere = world.issue_link(&world.issuer, Epic1LinkKind::Printed, &["shop.test"]);
+    assert_eq!(
+        refusal(world.pay(&elsewhere.link, true, send(), false)),
+        Epic1Refusal::RelayNotConfirmed
+    );
+    assert_eq!(
+        world.payer.wallet.balance(ACCOUNT).unwrap().locked,
+        Amount::ZERO
+    );
 
-    let paid = world.pay_link(&issued.link, true).unwrap();
+    // The wallet's own relay needs none.
+    let paid = world.pay(&issued.link, true, send(), false).unwrap();
+    assert_eq!(paid.proof_address.as_ref().map(String::len), Some(64));
     assert_eq!(paid.address, address);
     assert_eq!(paid.posted, Some(0));
     assert_eq!(paid.attempts.len(), 1);
@@ -176,9 +184,13 @@ fn a_link_paid_is_answered_through_the_reply_mailbox_and_finalized() {
     let links = world
         .block_on(world.issuer.wallet.contact_book().epic1_links())
         .unwrap();
-    assert_eq!(links.len(), 1);
-    assert!(links[0].used_at.is_some());
-    assert_eq!(world.answer_all(), 1);
+    assert_eq!(links.len(), 2);
+    assert_eq!(
+        links.iter().filter(|link| link.used_at.is_some()).count(),
+        1
+    );
+    // Collecting posted the answer; the payer finalizes by collecting alone.
+    assert_eq!(world.answers_posted(), 1);
     assert!(world.node.pushed_transactions().is_empty());
 
     world.collect(&world.payer);
@@ -230,6 +242,7 @@ fn post_next_posts_the_same_payment_to_the_second_mailbox_answered_once() {
     );
     let paid = world.pay_link(&issued.link, false).unwrap();
     assert_eq!(paid.posted, Some(0));
+    assert_eq!(paid.proof_address, None);
 
     let next = world
         .block_on(world.payer.wallet.contact_book().epic1_post_next(
@@ -256,7 +269,7 @@ fn post_next_posts_the_same_payment_to_the_second_mailbox_answered_once() {
 
     // The payee drains its own relay; the copy at the second mailbox is the same slate.
     assert_eq!(world.taken(&world.issuer), 1);
-    assert_eq!(world.answer_all(), 1);
+    assert_eq!(world.answers_posted(), 1);
     world.collect(&world.payer);
     assert_eq!(world.node.pushed_transactions().len(), 1);
 }
@@ -545,4 +558,70 @@ fn the_payment_file_classifier_tells_armour_json_saved_transactions_and_garbage_
         payment_file(b"not a slate at all"),
         Err(ContactError::NotPaymentFile)
     ));
+}
+
+fn half() -> SendRequest {
+    SendRequest {
+        amount: Amount::new(AMOUNT / 2),
+        ..send()
+    }
+}
+
+#[test]
+fn a_payment_of_another_amount_than_the_link_asks_is_refused_before_it_is_sent() {
+    let world = World::new();
+    let issued = world.issue_link(&world.issuer, Epic1LinkKind::OnScreen, &[]);
+
+    assert_eq!(
+        refusal(world.pay(&issued.link, false, half(), false)),
+        Epic1Refusal::AmountMismatch
+    );
+    assert_eq!(
+        world.payer.wallet.balance(ACCOUNT).unwrap().locked,
+        Amount::ZERO
+    );
+    let mailbox = &link_mailboxes(&issued.link).unwrap()[0];
+    assert_eq!(world.relay.pending(mailbox), 0);
+
+    // A link that asks no amount takes the one the payer names.
+    let open = without_amount(&issued.link).unwrap();
+    world.pay(&open, false, half(), false).unwrap();
+}
+
+#[test]
+fn the_payee_refuses_a_payment_that_is_not_the_amount_it_issued() {
+    let world = World::new();
+    let issued = world.issue_link(&world.issuer, Epic1LinkKind::OnScreen, &[]);
+    // A payer that does not read the amount from the link.
+    let open = without_amount(&issued.link).unwrap();
+    world.pay(&open, false, half(), false).unwrap();
+
+    assert_eq!(world.taken(&world.issuer), 0);
+    assert!(
+        world
+            .block_on(
+                world
+                    .issuer
+                    .wallet
+                    .contact_book()
+                    .epic1_answers(&relays(&world.issuer))
+            )
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        world
+            .block_on(world.issuer.wallet.transactions(ACCOUNT))
+            .unwrap()
+            .is_empty()
+    );
+    // The refused payment is taken off the mailbox and the link stays usable.
+    let mailbox = &link_mailboxes(&issued.link).unwrap()[0];
+    assert_eq!(world.relay.pending(mailbox), 0);
+    let links = world
+        .block_on(world.issuer.wallet.contact_book().epic1_links())
+        .unwrap();
+    assert!(links.iter().all(|link| link.used_at.is_none()));
+    world.collect(&world.payer);
+    assert!(world.node.pushed_transactions().is_empty());
 }
