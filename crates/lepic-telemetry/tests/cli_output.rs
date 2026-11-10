@@ -83,14 +83,16 @@ fn documented_field_names() -> Vec<String> {
     let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/logging.md");
     let doc = fs::read_to_string(path).unwrap();
     let table = doc
-        .split("## One vocabulary")
+        .split("## Field names")
         .nth(1)
         .and_then(|rest| rest.split("\n## ").next())
         .unwrap();
+    // A row's first cell names one field or more: "| `answer`, `same_code` |".
     table
         .lines()
-        .filter_map(|line| line.strip_prefix("| `"))
-        .filter_map(|line| line.split('`').next())
+        .filter(|line| line.starts_with("| `"))
+        .filter_map(|line| line.split('|').nth(1))
+        .flat_map(|cell| cell.split('`').skip(1).step_by(2))
         .map(str::to_owned)
         .collect()
 }
@@ -122,6 +124,18 @@ fn json_lines_carry_documented_field_names() {
             tag = "t",
             status = "imported",
             count = 3_u32,
+            tip = 1_002_u64,
+            paused_ms = 40_000_u64,
+            rounds = 2_u32,
+            text = "duplicate commitment",
+            cleared = 1_u32,
+            kind = "invoice",
+            origin = "http://127.0.0.1",
+            relays = 2_u32,
+            online = true,
+            answer = 1_u32,
+            same_code = false,
+            amount = 1_000_000_u64,
             "slate sent"
         );
     });
