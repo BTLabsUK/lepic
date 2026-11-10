@@ -20,7 +20,7 @@ Every normative statement carries one of these marks:
 | **[App]** | Expected behaviour of the wallet app, not a LEPIC rule. LEPIC is core only: it reports facts to its consumer and acts when the consumer calls it; limits, prompts and policy live in the consumer (3.2). Marked "to explore in the wallet app" where the design is not settled. |
 | **[Shipped]** | On LEPIC `main` at commit `078eadb7`, with the path given. |
 | **[Unmerged]** | On the feature branch `feat/wallet-methods` only at `c100d2bc` (the wallet methods refactor); may still move or change. |
-| **Built, unreleased** | In the code on the branch line above `main`, in no release (used in section 9 only). |
+| **Built, unreleased** | In the code on the branch line above `main`, in no release (used in section 9 and wherever a mark names it). |
 | **[Specified]** | Written in an RFC, an ADR or this document, not built. |
 | **[Reasoning]** | The author's own reasoning or arithmetic, not checked against a source or code. |
 | **[Open]** | Not decided and not proposed. Listed again in section 11. |
@@ -40,7 +40,7 @@ row), and ADRs 0050 and 0051 exist only there:
   specification are in Appendix A.
 - ADR 0044 `docs/adr/0044-the-onion-has-its-own-key.md` — the onion key. Status: accepted, shipped.
 - ADR 0050 (proposed) and ADR 0051 (accepted) — the wallet methods refactor and its follow-up.
-  **[Unmerged]**: both exist only on `feat/wallet-methods`. They move the marker and the transport
+  **Built, unreleased**: both are in the code on the branch line above `main`. They move the marker and the transport
   code this specification builds on (5.16, 9).
 - ADR 0052 `docs/adr/0052-legacy-at-the-edge-native-between-lepic-wallets.md` — "Epic
   compatibility at the edge, a native protocol between LEPIC wallets". Status: accepted. Its
@@ -304,9 +304,9 @@ k = BLAKE2b-256(key = seed, msg = "lepic-wallet <purpose> v<n>" || context)
   has a vector under `testdata/vectors/keys/`.
 - Existing namespace keys: `lepic-wallet onion key v1` (Ed25519, the onion and the proof key
   for slates that arrive over the onion, ADR 0044; empty context), `device link key v1`,
-  `seed check v1`, `peer tag v1`, store keys, `listing key v1`. `api tls v1` is **[Unmerged]**.
+  `seed check v1`, `peer tag v1`, store keys, `listing key v1`. `api tls v1` is **Built, unreleased**.
 
-**Seal keys** — **[Decided]** label; context **[Specified]** here (draft 2):
+**Seal keys** — **[Decided]** label; context **Built, unreleased** here (draft 2):
 
 ```
 seal_sk = BLAKE2b-256(key = seed, msg = "lepic-wallet seal key v1" || be32(account) || net || kind)   (X25519)
@@ -314,7 +314,7 @@ seal_pk = X25519(seal_sk, 9)
 ```
 
 - `kind` (u8): `00` the epic1 address, `01` the onion listener, `02` the plain web listener, `03`
-  the Epicbox payments address (5.15) **[Specified]**. Other values are reserved. The context is
+  the Epicbox payments address (5.15) **Built, unreleased**. Other values are reserved. The context is
   fixed-width (6 bytes), so ADR 0033 rule 4 holds. This key is the same in every build: the
   address index (5.13) is not in it (O-19).
 - `net` is in the context so that one seed shows different seal keys on mainnet and floonet, as
@@ -329,7 +329,7 @@ seal_pk = X25519(seal_sk, 9)
   wallet.
 - Vectors under `testdata/vectors/keys/` (rule 8) before any code uses the key.
 
-**epic1 seal key at an address index** — context **[Specified]** (O-19):
+**epic1 seal key at an address index** — context **Built, unreleased** (O-19):
 
 ```
 index 0:   epic1_seal_sk = seal_sk with kind 00 (above)
@@ -344,7 +344,7 @@ index ≥ 1: epic1_seal_sk = BLAKE2b-256(key = seed, msg = "lepic-wallet epic1 s
 - Vectors: `pairing/epic1_seal_keys.json` (indexes 0, 1, 2 and 2³²−1; index 0 equals the
   kind-`00` key in `pairing/seal_keys.json`).
 
-**epic1 proof key** — **[Decided]** (O-8, 2026-11-08); context **[Specified]**:
+**epic1 proof key** — **[Decided]** (O-8, 2026-11-08); context **Built, unreleased**:
 
 ```
 index 0:   proof_sk = BLAKE2b-256(key = seed, msg = "lepic-wallet epic1 proof key v1" || be32(account) || net)   (Ed25519 seed)
@@ -368,7 +368,7 @@ index ≥ 1: proof_sk = BLAKE2b-256(key = seed, msg = "lepic-wallet epic1 indexe
   2³²−1).
 
 **Epicbox mailbox keys for payments** — **[Decided]** use (owner, after draft 3: a throwaway reply
-mailbox per payment, transport in the link); labels and contexts **[Specified]** (draft 4,
+mailbox per payment, transport in the link); labels and contexts **Built, unreleased** (draft 4,
 Appendix A):
 
 ```
@@ -393,7 +393,7 @@ link_box_sk  = BLAKE2b-256(key = seed, msg = "lepic-wallet link mailbox v1"  || 
   key, and a fresh one ties no Epicbox address of the poster to the payment. Nothing is ever
   received at it.
 - **Link mailbox** (`link_box_sk`): the mailbox an epic1 link names in `epicbox=` (5.14).
-  **[Decided]** (owner, 2026-11-09); detail **[Specified]** (draft 6).
+  **[Decided]** (owner, 2026-11-09); detail **Built, unreleased** (draft 6).
   Printed and on-screen codes have their own index spaces, told apart by `kind`:
   - *On screen* (`kind` `00`): a new `n` per receive session, and per share or copy of the link;
     showing the same session again, or drawing it again, keeps its `n`. `n` runs `0 … 49` and then
@@ -404,7 +404,7 @@ link_box_sk  = BLAKE2b-256(key = seed, msg = "lepic-wallet link mailbox v1"  || 
     watched until the user retires it (how a user retires one is **[Open]**, 11.1). A 33rd printed
     code needs one retired first.
   - The wallet stores every `n` it issued.
-- Restore **[Specified]** (draft 6): after a restore from the phrase the wallet drains all 50
+- Restore **Built, unreleased** (draft 6): after a restore from the phrase the wallet drains all 50
   on-screen and all 32 printed link mailboxes. Both spaces are small and scanned in full, so
   nothing the relay still holds is missed. This replaces draft 5's gap of 50 over one shared
   space, which lost a printed code with no recent payment once more than 50 on-screen codes came
@@ -447,7 +447,7 @@ reply_sk = HKDF-Expand(root, "reply" || slate_id, 32)     X25519, slate_id = 16 
 
 Nothing is stored; the key is rebuilt from the slate id. A second install on the same seed can
 open the answer. The same keys serve the reply key of every in-person first code (tail record
-`01`, 5.10, O-13) and of an S1 sent to an epic1 (envelope tag `03`) **[Specified]**. Vector
+`01`, 5.10, O-13) and of an S1 sent to an epic1 (envelope tag `03`) **Built, unreleased**. Vector
 (shipped): `testdata/vectors/pairing/reply_keys.json`. The reply mailbox that travels with the key is a
 secp256k1 key of its own (above): an Epicbox address cannot be an X25519 key.
 
@@ -481,7 +481,7 @@ document publishes or uses index 0 (O-8).
   network, before any allocation larger than the input.
 - Opening failure is one typed error that does not say which step failed.
 
-### 5.4 HPKE — **[Shipped]** for suites `01` and `41`; new `info` **[Specified]** (draft 2)
+### 5.4 HPKE — **[Shipped]** for suites `01` and `41`; new `info` **Built, unreleased** (draft 2)
 
 - RFC 9180, single-shot. Mode base (`SealBase` / `OpenBase`) for every envelope except private
   pairing, which uses mode PSK (`epic-private/1`, `crates/lepic-contact/src/private.rs`). Auth and
@@ -503,9 +503,9 @@ document publishes or uses index 0 (O-8).
 | Recipient key class | `info` | Status |
 |---|---|---|
 | Contact keys, one-time reply keys, pairing keys, any body type | `"epic-seal/1" \|\| net \|\| suite` (13 bytes) | **[Shipped]** |
-| epic1 seal key | `"epic-tx/1" \|\| net \|\| suite \|\| 00` (12 bytes) | **[Specified]** |
-| Listener seal key (onion or web) | `"epic-tx/1" \|\| net \|\| suite \|\| 01` (12 bytes) | **[Specified]** |
-| Epicbox seal key (kind `03`, 5.15) | `"epic-tx/1" \|\| net \|\| suite \|\| 02` (12 bytes) | **[Specified]** |
+| epic1 seal key | `"epic-tx/1" \|\| net \|\| suite \|\| 00` (12 bytes) | **Built, unreleased** |
+| Listener seal key (onion or web) | `"epic-tx/1" \|\| net \|\| suite \|\| 01` (12 bytes) | **Built, unreleased** |
+| Epicbox seal key (kind `03`, 5.15) | `"epic-tx/1" \|\| net \|\| suite \|\| 02` (12 bytes) | **Built, unreleased** |
 
   The opener knows the class of each candidate key (5.9), so it never guesses an `info`.
   `"epic-tx/1"` is a new label because ADR 0033 rule 3 wants new HPKE `info` labels prefix-free,
@@ -545,8 +545,8 @@ version and is **[Open]**.
 | One-time reply key | `HMAC-SHA256(key = H("epic-seal/1 reply" || reply_pk), enc)[0..8]` | RFC 0002 §3.2 |
 | Pairing reply | `invite_id = H("epic-pair/1 id" || code)[0..8]` | RFC 0002 §2.4, §3.2 |
 | epic1 seal key | `00 00 00 00 00 00 00 00` | **[Decided]** (owner, 2026-11-10) |
-| Listener seal key (advert) | `00 00 00 00 00 00 00 00` | **[Specified]** (draft 2): one rule for both new classes, no new hint rule |
-| Epicbox seal key | `00 00 00 00 00 00 00 00` | **[Specified]** (5.15): the same rule |
+| Listener seal key (advert) | `00 00 00 00 00 00 00 00` | **Built, unreleased** (draft 2): one rule for both new classes, no new hint rule |
+| Epicbox seal key | `00 00 00 00 00 00 00 00` | **Built, unreleased** (5.15): the same rule |
 
 A recipient computes candidate hints for its live keys and opens only with matching keys
 (RFC 0002 §3.4 step 2). A zero hint means "try the epic1 seal keys, or the seal key of the
@@ -592,17 +592,17 @@ comes last.
 | Tag | Name | Value | Notes |
 |---|---|---|---|
 | `01` | type | u8 | `01` slate (V3 JSON), `02` notice, `03` pairing reply, `04` confirm, `05` contact update, `06` key check, `07` key check answer, `09` contact check, `40` app payload. Every other value is refused. `08` is avoided because the reference kit refuses it (`envelope.rs:78-81`). **`lepic.v1` slate: `0A` — [Decided] (D3).** |
-| `02` | body | bytes, at most 65,535 | Per type. For `0A` **[Specified]**: the raw `lepic.v1` slate bytes (5.10), not an RFC 0001 pack. |
+| `02` | body | bytes, at most 65,535 | Per type. For `0A` **Built, unreleased**: the raw `lepic.v1` slate bytes (5.10), not an RFC 0001 pack. |
 | `03` | reply key | 32 | X25519 key the answer is sealed to, for an anonymous envelope |
 | `04` | purpose | u8 | `01` payment … `05` request between people |
 | `05` | reference | 1–64 B UTF-8 | A service's reference; never trusted for crediting |
 | `06` | expires | u64 seconds | Advisory |
 | `07` | card | bytes | The sender's contact card (RFC 0002 §6) |
 | `08` | sender key | 32 | Sender's Ed25519 `sig_pk` for this contact; required with `FF` |
-| **`09`** | **reply mailbox** | **34–161** | **[Specified]** (draft 4). The Epicbox mailbox the answer is posted to: a 33-byte compressed secp256k1 key, then the ASCII `domain[:port]` of its relay (1–128 bytes in all; the domain is `relay-domain` of Appendix B.2: labels of letters and digits, no hyphens, as Epicbox addresses allow; port 1–65535; 128 is LEPIC's limit, Epicbox sets none). Only with `03`, only in an anonymous S1 or I1 of type `0A`. Unknown to shipped builds, which refuse it (it is below `0x80`); that is intended, since only native readers get a `0A`. Tag `09` is unused at `main` (the envelope test refuses it). |
+| **`09`** | **reply mailbox** | **34–161** | **Built, unreleased** (draft 4). The Epicbox mailbox the answer is posted to: a 33-byte compressed secp256k1 key, then the ASCII `domain[:port]` of its relay (1–128 bytes in all; the domain is `relay-domain` of Appendix B.2: labels of letters and digits, no hyphens, as Epicbox addresses allow; port 1–65535; 128 is LEPIC's limit, Epicbox sets none). Only with `03`, only in an anonymous S1 or I1 of type `0A`. Unknown to shipped builds, which refuse it (it is below `0x80`); that is intended, since only native readers get a `0A`. Tag `09` is unused at `main` (the envelope test refuses it). |
 | `80` | sent at | u64 seconds | In every signed slate, notice and payload. Refused if over 30 days old or a day ahead |
 | `81`, `82`, `83` | address proof, feature word, domain claim | | ADR 0034, 0041, 0043 |
-| **`FE`** | **padding** | **zero bytes, at most 65,535** | **[Decided]**, not built (5.7) |
+| **`FE`** | **padding** | **zero bytes, at most 65,535** | **[Decided]**; **Built, unreleased** (5.7) |
 | `FF` | signature | 64 | Ed25519 by `sig_sk` (5.8) |
 
 Rules (RFC 0002 §3.3): `FF` without `08` is refused; `08` without `FF` counts as unsigned. An
@@ -612,18 +612,18 @@ a contact record, even when they open with a contact key.
 **[Reasoning]** Because `FE` sits in the ignored range, a LEPIC build that predates padding skips
 it. Only new readers check the zeros.
 
-**[Specified]** (draft 2) Readers that know `FE` must find it whatever its position among the
+**Built, unreleased** (draft 2) Readers that know `FE` must find it whatever its position among the
 extensions. The shipped field list keeps only the first 8 extension fields and skips the rest
 unread (`EXTENSION_SLOTS`, `crates/lepic-seal/src/tlv.rs`); `FE` is therefore read into a slot
 of its own, not into the extension slots. The zero check need not be constant-time: the bytes are
 the sender's, checked after the AEAD.
 
-**[Specified]** (draft 2) A TLV value has a `u16` length and a tag may not repeat, so the body of
+**Built, unreleased** (draft 2) A TLV value has a `u16` length and a tag may not repeat, so the body of
 an envelope is at most 65,535 bytes. That is the binding size limit of every sealed slate (5.17).
 `Writer::field` returns `FieldTooLong` past it (`crates/lepic-seal/src/tlv.rs`);
 callers must handle it as section 5.17 says.
 
-### 5.7 Padding — **[Decided]** rule; input length **[Specified]** (draft 2); floor 768 **[Decided]** (O-6, owner, 2026-11-08)
+### 5.7 Padding — **[Decided]** rule; input length **Built, unreleased** (draft 2); floor 768 **[Decided]** (O-6, owner, 2026-11-08)
 
 Padmé (Nikitin et al., PETS 2019) above a floor. For a length `L`:
 
@@ -704,7 +704,7 @@ in effect. For zero-hint and fixed-hint envelopes the *recipient* can re-seal a 
 under a fresh `enc` to itself; that is harmless, because the recipient key is in the signed input
 and nobody else can open the result.
 
-### 5.9 Opening rules — **[Shipped]** (RFC 0002 §3.4); type `0A` rules **[Specified]** (draft 2)
+### 5.9 Opening rules — **[Shipped]** (RFC 0002 §3.4); type `0A` rules **Built, unreleased** (draft 2)
 
 1. Decode the header. Reject another network, an unknown version or suite.
 2. Find candidate keys by hint. None means "not for this install". A zero hint selects the seal
@@ -729,7 +729,7 @@ For type `0A`, normative:
   invoice window (O-15) is removed (owner, 2026-11-09; 6.10). An invoice is never paid
   automatically. (Legacy V3 I1 files keep their shipped handling.)
 - Tag `09` (reply mailbox) is required in an anonymous S1 that arrives at a link mailbox, and
-  refused in every other envelope. **[Specified]** Without it the answer has nowhere to go: an
+  refused in every other envelope. **Built, unreleased** Without it the answer has nowhere to go: an
   epic1 sender has no other address.
 - Reply relays **[Decided]** (owner, 2026-11-09; 3.2): the relay named in tag `09` or record `02`
   is a host from untrusted input. Before LEPIC posts an S2 there, it reports the host, whether it
@@ -746,7 +746,7 @@ For type `0A`, normative:
 - A signed `0A` from a contact follows the contact's shipped rules (RFC 0002 §11 for invoices).
 - An anonymous `0A` never attributes to a contact record, even when it opens with a contact key.
 
-### 5.10 Native slate `lepic.v1` — **[Specified]** (RFC 0001 §1–4 as amended); positions **[Specified]** (draft 2); tail rule **[Decided]** (O-5)
+### 5.10 Native slate `lepic.v1` — **Built, unreleased** (RFC 0001 §1–4 as amended); positions **Built, unreleased** (draft 2); tail rule **[Decided]** (O-5)
 
 RFC 0001 §2 with the decided amendments (4.1 "Native slate", "Data format") at fixed positions.
 Draft 2 adds the network byte (4.1) and retires the `LOCK` flag bit in favour of
@@ -790,7 +790,7 @@ says the party has signed, then, when its message flag is set, message length (u
 the UTF-8 message and the message signature (64). Input and output features: `00` plain, `01`
 coinbase. Range proof: 675 bytes.
 
-**Header version rule** **[Specified]**, **[Reasoning]**. The writer sets the block header
+**Header version rule** **Built, unreleased**, **[Reasoning]**. The writer sets the block header
 version that the consensus table gives for the slate's `height` on the slate's network: today 6
 below the first hard fork, 7 from it (mainnet 9,000,000, floonet 25,800;
 `crates/lepic-wallet/src/send.rs`, `block_header_version`, which legacy slates already use). A
@@ -807,7 +807,7 @@ is ignored. It replaces the BOLT 1 odd/even rule decided first (BigSize fields, 
 fuzzed, has a fixed width (so no minimal-encoding rule is needed), and leaves one parser rule and
 one fuzz corpus for the whole stack. Further:
 
-- Protocol 1 defines two tail records, **[Specified]** (`01` draft 3, `02` draft 4, for 3.1):
+- Protocol 1 defines two tail records, **Built, unreleased** (`01` draft 3, `02` draft 4, for 3.1):
 
   | Type | Name | Value | Allowed in |
   |---|---|---|---|
@@ -857,7 +857,7 @@ the kernel features and the header version as fields, and unknown tail records a
 `BEGINEPICSLATE.` armour are not built. A native slate travels inside an envelope, or raw in an
 in-person code (5.18): the slate's own bytes, nothing around them. Whatever only old wallets need
 stays in the legacy code. Native slates to Epicbox payments addresses
-(step 11) travel in an envelope too (5.15) **[Specified]**. Reason: with
+(step 11) travel in an envelope too (5.15) **Built, unreleased**. Reason: with
 the network byte in the slate, the pack's only remaining field was the mode, always `00`, and every
 carrier this specification defines is an envelope.
 
@@ -938,7 +938,7 @@ kind. LEPIC only reads the `stored_tx` name during the GUI-wallet import
 `saved_txs` is a test of that import (`app/test/legacy_wallets_test.dart`). The stock name is
 upstream's and cannot change.
 
-**No-clash rule** — **[Decided]** (O-2: keep `.epictx`); rule **[Specified]** (draft 3):
+**No-clash rule** — **[Decided]** (O-2: keep `.epictx`); rule **Built, unreleased** (draft 3):
 
 1. LEPIC and the app write a file named `*.epictx` only with armoured `BEGINEPICTX.` text (5.11).
    They never create, or write into, a directory named `saved_txs`.
@@ -961,7 +961,7 @@ upstream's and cannot change.
 No owner question remains from this: nothing on our side clashes once rule 1 holds, and the stock
 file is told apart by its first bytes.
 
-### 5.13 epic1 address — **[Decided]** content (two keys, O-14 as replaced); layout **[Specified]** (draft 2), Appendix B
+### 5.13 epic1 address — **[Decided]** content (two keys, O-14 as replaced); layout **Built, unreleased** (draft 2), Appendix B
 
 RFC 0001 §8 base, amended:
 
@@ -985,7 +985,7 @@ RFC 0001 §8 base, amended:
   seal key: nobody can open the S1, and the sender's inputs stay locked until cancel or TTL; no
   coins are lost.
 - **Every send to an epic1 sets a TTL** (`TTL` flag and `ttl_cutoff_height`), so locked inputs
-  come back by themselves. **[Specified]**. The default TTL is 24 hours, 1,440 blocks
+  come back by themselves. **Built, unreleased**. The default TTL is 24 hours, 1,440 blocks
   **[Decided]** (owner, 2026-11-08). Epic's target is one block a minute (`BLOCK_TIME_SECONDS = 60`,
   `crates/lepic-wallet/src/chain.rs`); a TTL in time is turned into blocks at that rate, rounded up
   to a whole block, and `ttl_cutoff_height` is the wallet's chain height plus that count. Real
@@ -1023,7 +1023,7 @@ RFC 0001 §8 base, amended:
   from vector `slates/send_file_payment_proof_s1_v3`) is the old one-key form. No two-key vector
   exists yet; the vectors come with the codec.
 
-### 5.14 Payment links — **[Decided]** two separate links (3.1) and transport in the link (O-14 as replaced, owner after draft 3); grammar **[Specified]** (draft 4)
+### 5.14 Payment links — **[Decided]** two separate links (3.1) and transport in the link (O-14 as replaced, owner after draft 3); grammar **Built, unreleased** (draft 4)
 
 Shipped link builder: `EpicUri.build` in `app/lib/src/scan/scan_router.dart:620-636` writes
 `epic:<address>` then `amount`, `message`, `label`, `method`, `direct`. The parser
@@ -1058,10 +1058,10 @@ the default receive code.
   is the obvious next one; `nostr=` is a note only, not specified). A reader that does not know a
   field ignores it.
 - **Order.** The payer tries the transport entries it can use in the order they appear, at most
-  three; writers write at most three. **[Specified]** "Tries" means: post the sealed S1 to the
+  three; writers write at most three. **Built, unreleased** "Tries" means: post the sealed S1 to the
   first; if the relay cannot be reached or refuses the post, the next. Each post goes through the
   host rule below ("Hosts from untrusted input").
-- **No answer** **[Decided]** (owner, 2026-11-09); detail **[Specified]**
+- **No answer** **[Decided]** (owner, 2026-11-09); detail **Built, unreleased**
   (draft 6). Draft 5 made an accepted post final, which left a payer whose payee never drains that
   relay waiting until the TTL with the coins locked. Now LEPIC keeps the sent S1 and, when the
   consumer asks, posts the same sealed S1 to the next `epicbox=` entry. The S1 is sealed once, so
@@ -1126,7 +1126,7 @@ A relay or host from the configured relay list or the user's settings is not cov
 This replaces draft 3's `via=` route hint, its epic1 mailbox extension on route servers (with the
 `"epic-box/1"` challenge), and the alternative of a third key in the epic1.
 
-**No mixing** **[Specified]**. No parameter of either link is read as a second address. A LEPIC
+**No mixing** **Built, unreleased**. No parameter of either link is read as a second address. A LEPIC
 reader ignores a `native=` parameter, or any epic1, inside an Epicbox link, and pays the Epicbox
 address as a stock reader does. Inside an epic1 link, `epicbox=` is transport (above), never an
 address. One QR code never carries both kinds of link.
@@ -1172,7 +1172,7 @@ Each `epicbox=` entry adds 82 characters with a 20-character domain. One entry i
 second is for a paypoint that wants a fallback relay. Draft 3's `via=` link was v13 at H; the
 transport entry costs three versions, because a mailbox is an Epicbox address.
 
-### 5.15 Advert and native direct endpoint — **[Decided]** shape (ADR 0052 "Native direct endpoint"); seal key and pinning **[Decided]** (D1 as revised by O-10); rest **[Specified]** (draft 2)
+### 5.15 Advert and native direct endpoint — **[Decided]** shape (ADR 0052 "Native direct endpoint"); seal key and pinning **[Decided]** (D1 as revised by O-10); rest **Built, unreleased** (draft 2)
 
 `check_version` answer of a LEPIC listener, extra key:
 
@@ -1198,11 +1198,11 @@ Endpoints on the same socket as `/v2/foreign`:
 - `GET /v1/peer` → `{"protocol":1,"formats":["lepic.v1"],"network":"mainnet","key":"<seal key>"}`.
   Protocol 1 has no feature bits here (see versioning below).
 - `POST /v1/peer/slates`: body the binary envelope (type `0A`, hint zero) sealed to the advertised
-  key, media type `application/vnd.lepic.epictx` (D4). **[Specified]** binary, because the endpoint is not a text carrier.
+  key, media type `application/vnd.lepic.epictx` (D4). **Built, unreleased** binary, because the endpoint is not a text carrier.
   Body limit 68 KiB (69,632 bytes), the largest slate envelope rounded up (5.17); larger bodies get
   `too_large` before they are read in full.
 - `200` returns the reply envelope, sealed to the sender's reply key (tag `03` of the request) with
-  the one-time reply-key hint (5.5). **[Specified]**
+  the one-time reply-key hint (5.5). **Built, unreleased**
 - Errors are RFC 9457 problem details: `not_ready` 503 (`Retry-After`), `refused` 422,
   `too_large` 413, `rate_limited` 429, `unsupported_format` 415. A repeated slate returns the
   same reply. A listener checks the media type, the declared length and the decoding of the
@@ -1214,7 +1214,7 @@ Endpoints on the same socket as `/v2/foreign`:
 - The endpoint's host comes from an address the user entered or scanned, so it follows the host
   rule of 5.14 ("Hosts from untrusted input"): loopback refused, the address class reported.
 - Versioning: `protocol` is the endpoint shape (additive; a break is `/v2`); `formats` lists
-  codecs. **[Specified]** (draft 2) The endpoint carries no feature bits in protocol 1.
+  codecs. **Built, unreleased** (draft 2) The endpoint carries no feature bits in protocol 1.
   If a later protocol adds them, they are a field of their own, numbered from bit 0 with BOLT 9
   parity (even required, odd optional; a peer claiming an unknown even bit is refused). They are
   never the marker's bits (5.16), which are claims without parity. Draft 1 put BOLT 9 parity on
@@ -1243,7 +1243,7 @@ slate goes to a payments address only when the peer claimed the bit and is "LEPI
 (ADR 0016), because a stock listener acknowledges only payloads that parse as a slate and can lose
 its queue to one (ADR 0052, "Discovery" 3).
 
-The carrier **[Specified]** (step 11):
+The carrier **Built, unreleased** (step 11):
 
 - A wallet with native slates on puts bit 7 in the marker of every legacy slate it sends over
   Epicbox, and the public key of its Epicbox seal key (5.2, kind `03`) in the marker's `reply`
@@ -1348,7 +1348,7 @@ would let a sender's coin count decide whether a payment is sealed, without the 
 With the default 500-input selection window a `lepic.v1` slate rarely reaches the limit; a sealed
 V3 slate (type `01`) reaches it with a few hundred inputs.
 
-### 5.18 Slates in QR codes — **[Decided]** form (3.1, O-13, one scan online); framing **[Specified]** (drafts 3 and 4)
+### 5.18 Slates in QR codes — **[Decided]** form (3.1, O-13, one scan online); framing **Built, unreleased** (drafts 3 and 4)
 
 - In person, the first code carries the `lepic.v1` slate as it is (5.10): no pack, no armour, no
   envelope around it. Its tail always holds the one-time reply key (record `01`) and, when the
@@ -1359,30 +1359,30 @@ V3 slate (type `01`) reaches it with a few hundred inputs.
   the reply is sealed, and nothing is left behind in a chat or a download folder.
 - Framing: the app's QR transport `ur:epic-slate` (ADR 0025), animated, with fountain parts. Its
   payload today is deflated slate JSON, and its readers refuse anything else
-  (`docs/compat/ur-epic-slate.md` "Payload"). **[Specified]** Payload version 2: the CBOR map
+  (`docs/compat/ur-epic-slate.md` "Payload"). **Built, unreleased** Payload version 2: the CBOR map
   `{1: 2, 2: <bytes>}`, the bytes being a `lepic.v1` slate (magic `89 45 53 4C`) or an envelope
   (magic `89 45 53 45`). The reader tells them apart by the fourth byte. Nothing is compressed:
   the slate is binary and an envelope is ciphertext. The UR layer is the transport the app already
   uses for every slate code; it adds no field to the slate.
 - One code when the payload is at most 360 bytes (version 15 at L at most); longer payloads are
-  animated 200-byte frames (version 11 at L, 6 frames a second, as shipped). **[Specified]** (draft
+  animated 200-byte frames (version 11 at L, 6 frames a second, as shipped). **Built, unreleased** (draft
   4; draft 3 had 300.) The shipped encoder makes one code only up to 200 bytes; 360 keeps a
   first code with a TTL, a reply key, a reply mailbox and a short message as one static code
   (360 bytes are 752 characters of the 758 that v15 at L holds, checked with `segno`).
 - Accepted from the camera only. A raw `lepic.v1` slate in a file, pasted text, a mailbox or an
   HTTP body is refused: everywhere else a native slate travels inside an envelope (5.10).
-  **[Specified]**
+  **Built, unreleased**
 - A raw I1 the payer scans is an invoice the payer started: no pairing is needed (3.1), and
   nothing pays without the user's approval (PIN).
 - No payment proof in person **[Reasoning]**: the sender of an S1 does not know the receiver's
   proof key before the first scan, and the invoice flow has no proofs (5.10).
-- Every in-person S1 and I1 sets a TTL, so a walk-away frees the inputs. **[Specified]** The
+- Every in-person S1 and I1 sets a TTL, so a walk-away frees the inputs. **Built, unreleased** The
   expiry is the app's choice **[Decided]** (owner, 2026-11-09, replacing 15 blocks of 2026-11-08): the app
   passes its own TTL in blocks. LEPIC keeps the 10-block margin (the payer stops paying 10 blocks before the
   cutoff, 5.13), refuses a TTL at or under it, and falls back to 30 blocks for a caller that passes none
   (the CLI, tests).
 
-Sizes, **[Reasoning]**: bytes from the 5.10 layout (the codec is not built, so these are computed,
+Sizes, **[Reasoning]**: bytes from the 5.10 layout (these are computed,
 not measured), a 20-character relay domain in record `02`, codes from the shipped UR framing
 (bytewords, two characters a byte, CRC32), versions at level L in alphanumeric mode, computed with
 `segno`:
@@ -1435,7 +1435,7 @@ Shipped today with V3 JSON bodies (RFC 0002 §9). Native adds type `0A`.
 8. A slate too large to seal (5.17) is not stored; the app offers fewer coins, combining coins
    first (a send to self), plain V3, or cancel (O-9).
 
-### 6.2 Direct HTTP or Tor peer — **[Specified]**
+### 6.2 Direct HTTP or Tor peer — **Built, unreleased**
 
 Step 10 (O-12: after contacts, in person and epic1).
 
@@ -1460,7 +1460,7 @@ Step 10 (O-12: after contacts, in person and epic1).
 10. A slate too large to seal (5.17): fewer coins, combine first, `/v2/foreign` unsealed, or
     cancel (O-9).
 
-### 6.3 epic1 link — **[Decided]** model (O-14 as replaced); detail **[Specified]** (draft 4)
+### 6.3 epic1 link — **[Decided]** model (O-14 as replaced); detail **Built, unreleased** (draft 4)
 
 Step 8, after the payee-shows-I1 codes (4.1).
 
@@ -1538,7 +1538,7 @@ Two cases.
   bodies. Native type `0A` would follow when both claim native slates. **[Open]** The kit is
   Python (RFC 0002 OD-P4) and would need its own `lepic.v1` codec.
 
-### 6.7 Face to face, two phones — **[Decided]** model (3.1, O-13, O-16 as rewritten in draft 6); detail **[Specified]** (drafts 4 and 6)
+### 6.7 Face to face, two phones — **[Decided]** model (3.1, O-13, O-16 as rewritten in draft 6); detail **Built, unreleased** (drafts 4 and 6)
 
 LEPIC to LEPIC, no contacts assumed. Two directions, in two rollout steps (4.1): the payee shows an
 I1 and the payer scans it (step 7); the payer shows an S1 and the payee scans it (step 9, only
@@ -1550,7 +1550,7 @@ in-person answer by itself:
 
 - It closes the code on the first answer that checks against the stored slate (RFC 0001 §11).
 - It reports every answer to the consumer with its check code, four digits from
-  `SHA-256("epic-check/1" || receiver public excess)` (Appendix A). **[Specified]** (draft 5) The
+  `SHA-256("epic-check/1" || receiver public excess)` (Appendix A). **Built, unreleased** (draft 5) The
   four digits are the first 4 bytes of the hash read as a big-endian number, modulo 10,000,
   written with leading zeros; the excess is the 33-byte compressed point.
 - When a later answer has the same check code as the first, it reports that too.
@@ -1628,7 +1628,7 @@ onlooker who answered first and alone was paid. With the confirmation:
 - The code is 4 digits and the receiver picks its excess, so the code alone is no proof of who
   answered; the order above is what bounds the guess (10, "Check-code grinding").
 
-### 6.8 Paypoint — **[Decided]** model (3.1, O-13, one scan); detail **[Specified]** (draft 4)
+### 6.8 Paypoint — **[Decided]** model (3.1, O-13, one scan); detail **Built, unreleased** (draft 4)
 
 A shop terminal that shows codes and scans back. The first code always carries a one-time reply
 key (tail record `01`, 5.10; key from 5.2), and the reply is sealed to it. The paypoint's mailbox
@@ -1658,7 +1658,7 @@ before finalizing.
 No invoice is pushed to an address the customer shows: draft 5's invoice window is removed
 (6.10).
 
-### 6.9 Payment code or link over Epicbox — **[Shipped]**; native carrier **[Specified]** (5.15)
+### 6.9 Payment code or link over Epicbox — **[Shipped]**; native carrier **Built, unreleased** (5.15)
 
 1. B's receive screen shows the plain Epicbox link (3.1, 5.14), with an amount and a message if B
    set them.
