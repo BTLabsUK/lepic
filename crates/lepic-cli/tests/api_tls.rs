@@ -469,6 +469,33 @@ fn the_tls_listener_has_its_own_connection_cap() {
 }
 
 #[test]
+fn a_handshake_has_its_own_deadline_and_takes_no_connection_slot() {
+    let mut host = TestHost::new();
+    host.api_limits = Some(limits(1, PATIENCE, PATIENCE));
+    let wallet = funded_wallet(&host);
+    let laptop = client_key(&wallet, "laptop");
+
+    serving(host, &wallet, |serve| {
+        serve.client(&["add", "laptop", laptop.pem.to_str().unwrap()]);
+        // A listed client holds the only connection slot.
+        let mut held = serve.connect(Some(&laptop)).unwrap();
+        assert_eq!(keep_alive_get(&mut held, "/v1/status").unwrap().status, 200);
+        // A connection that never starts its handshake is not refused for want of a slot: it
+        // waits for its handshake, and is closed when the handshake deadline, shorter than
+        // the header time, passes.
+        let started = Instant::now();
+        let mut idle = TcpStream::connect(serve.address).unwrap();
+        idle.set_read_timeout(Some(PATIENCE)).unwrap();
+        let mut rest = Vec::new();
+        let _ = idle.read_to_end(&mut rest);
+        let waited = started.elapsed();
+        assert!(waited >= Duration::from_secs(4), "{waited:?}");
+        assert!(waited < PATIENCE - Duration::from_secs(5), "{waited:?}");
+        assert_eq!(keep_alive_get(&mut held, "/v1/status").unwrap().status, 200);
+    });
+}
+
+#[test]
 fn a_tls_connection_closes_at_its_age_limit() {
     let age = Duration::from_secs(1);
     let mut host = TestHost::new();

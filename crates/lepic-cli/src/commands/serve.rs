@@ -34,7 +34,7 @@ use super::{
 };
 use crate::Console;
 use crate::amount::format_amount;
-use crate::api::{Api, Call, Listener, Owner, OwnerTls, epicbox_state};
+use crate::api::{Api, Call, Listener, Owner, OwnerTls, Shaken, epicbox_state};
 use crate::cli::{Command, ServeArgs};
 use crate::exit::CliError;
 use crate::host::{Host, HostNode};
@@ -304,7 +304,9 @@ const ACCEPT_PAUSE: Duration = Duration::from_millis(100);
 /// Listens, maintains the wallet and answers the API until `stop` turns true and the listener
 /// and the connections have ended. The stop closes each connection once its answer is out, and
 /// a failed listener sets it. The socket and the owner TLS listener each have their own cap on
-/// connections, so connections from the network cannot use up the socket's.
+/// connections, so connections from the network cannot use up the socket's. A TLS connection
+/// takes its slot once its handshake ends; handshakes have a cap of the same size of their own,
+/// so connections that never finish one do not hold the slots of listed clients.
 async fn serving<H: Host>(
     service: &Service<'_, H>,
     api: &Api<'_>,
@@ -325,6 +327,7 @@ async fn serving<H: Host>(
     let tls = service.owner_tls;
     let mut sockets = FuturesUnordered::<LocalBoxFuture<'_, ()>>::new();
     let mut tls_connections = FuturesUnordered::<LocalBoxFuture<'_, ()>>::new();
+    let mut handshakes = FuturesUnordered::<LocalBoxFuture<'_, Option<Shaken>>>::new();
     let mut events = Some(opened.wallet.subscribe());
     let mut stopped = stop.subscribe();
     let mut ended = None;
@@ -333,7 +336,11 @@ async fn serving<H: Host>(
     let mut tls_pause = None;
     loop {
         match ended {
-            Some(result) if sockets.is_empty() && tls_connections.is_empty() => return result,
+            Some(result)
+                if sockets.is_empty() && tls_connections.is_empty() && handshakes.is_empty() =>
+            {
+                return result;
+            }
             _ => {}
         }
         let stopping = *stop.borrow();
@@ -367,8 +374,8 @@ async fn serving<H: Host>(
                 }
             },
             accepted = after(tls_pause, accept_tls(tls)), if !stopping => match accepted {
-                Ok((tls, stream)) if tls_connections.len() < api.limits().max_connections => {
-                    tls_connections.push(api.tls_connection(tls, stream).boxed_local());
+                Ok((tls, stream)) if handshakes.len() < api.limits().max_connections => {
+                    handshakes.push(api.tls_handshake(tls, stream).boxed_local());
                 }
                 Ok(_) => api.refuse(),
                 Err(error) => {
@@ -378,6 +385,16 @@ async fn serving<H: Host>(
             },
             Some(()) = sockets.next(), if !sockets.is_empty() => {}
             Some(()) = tls_connections.next(), if !tls_connections.is_empty() => {}
+            Some(shaken) = handshakes.next(), if !handshakes.is_empty() => match shaken {
+                Some(shaken)
+                    if !*stop.borrow()
+                        && tls_connections.len() < api.limits().max_connections =>
+                {
+                    tls_connections.push(api.tls_connection(shaken).boxed_local());
+                }
+                Some(_) => api.refuse(),
+                None => {}
+            },
         }
     }
 }

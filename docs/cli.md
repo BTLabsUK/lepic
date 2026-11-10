@@ -1415,8 +1415,10 @@ accepts none and logs a warning. The JSON reports are `{"name", "fingerprint"}` 
 `remove`, and `{"clients": [...]}` of those for `list`.
 
 The routes and the `[api]` bounds are those of the socket. Each listener has its own
-`max_connections`, so TLS clients cannot take the socket's connections. A handshake that fails
-or does not end within the header time counts as refused.
+`max_connections`, so TLS clients cannot take the socket's connections. A TLS connection takes
+one of them once its handshake ends; up to `max_connections` handshakes run at a time besides,
+and more are refused. A handshake that fails, or does not end within 5 seconds or the header
+time when that is shorter, counts as refused.
 `PUT /v1/wallet/password`, `POST /v1/contacts/export` and `POST /v1/contacts/import` are
 answered on the socket only: over TLS each is a 403 problem with code `usage`, and the OpenAPI
 document marks them `x-socket-only`. `GET /v1/status` then holds the listener's address and the

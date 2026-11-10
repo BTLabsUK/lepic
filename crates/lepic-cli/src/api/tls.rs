@@ -6,6 +6,7 @@
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Duration;
 
 use lepic_wallet::ApiTlsKey;
 use rcgen::{Certificate, CertificateParams, DistinguishedName, DnType, KeyPair};
@@ -21,6 +22,7 @@ use rustls::{
 use time::OffsetDateTime;
 use tokio::net::{TcpListener, TcpStream};
 use tokio_rustls::TlsAcceptor;
+use tokio_rustls::server::TlsStream;
 use zeroize::Zeroizing;
 
 use super::{Api, Listener};
@@ -86,12 +88,22 @@ impl OwnerTls {
     }
 }
 
+/// The longest a TLS handshake may take, or the header deadline when that is shorter.
+const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// A connection to the owner TLS listener whose handshake ended, with its listed client.
+pub(crate) struct Shaken {
+    stream: TlsStream<TcpStream>,
+    client: Fingerprint,
+}
+
 impl Api<'_> {
-    /// Answers the requests on `stream` once its handshake ends, within the header deadline.
-    /// A failed handshake counts as a refused connection.
-    pub(crate) async fn tls_connection(&self, tls: &OwnerTls, stream: TcpStream) {
+    /// The handshake of `stream`, within [`HANDSHAKE_TIMEOUT`] and the header deadline. A
+    /// failed handshake counts as a refused connection.
+    pub(crate) async fn tls_handshake(&self, tls: &OwnerTls, stream: TcpStream) -> Option<Shaken> {
         let handshake = tls.acceptor.accept(stream);
-        match tokio::time::timeout(self.limits().header_timeout, handshake).await {
+        let deadline = HANDSHAKE_TIMEOUT.min(self.limits().header_timeout);
+        match tokio::time::timeout(deadline, handshake).await {
             Ok(Ok(stream)) => {
                 // The verifier took only an Ed25519 certificate, so a client has a key here.
                 let client = stream
@@ -100,17 +112,27 @@ impl Api<'_> {
                     .peer_certificates()
                     .and_then(<[_]>::first)
                     .and_then(Fingerprint::of_ed25519);
-                match client {
-                    Some(client) => self.connection(stream, Listener::Tls, Some(client)).await,
-                    None => self.refuse(),
+                if client.is_none() {
+                    self.refuse();
                 }
+                client.map(|client| Shaken { stream, client })
             }
             Ok(Err(error)) => {
                 tracing::debug!(error = %error, "owner tls handshake failed");
                 self.refuse();
+                None
             }
-            Err(_) => self.refuse(),
+            Err(_) => {
+                self.refuse();
+                None
+            }
         }
+    }
+
+    /// Answers the requests of a client whose handshake ended.
+    pub(crate) async fn tls_connection(&self, shaken: Shaken) {
+        self.connection(shaken.stream, Listener::Tls, Some(shaken.client))
+            .await;
     }
 }
 

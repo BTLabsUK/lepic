@@ -44,7 +44,7 @@ use zeroize::Zeroizing;
 pub(crate) use caller::{Caller, VERSION, VERSION_HEADER};
 pub(crate) use events::epicbox_state;
 pub(crate) use problem::Problem;
-pub(crate) use tls::OwnerTls;
+pub(crate) use tls::{OwnerTls, Shaken};
 
 use openapi::{Problems, Security};
 
