@@ -372,3 +372,100 @@ fn commands_run_through_a_running_serve() {
     let report = served.ok().json();
     assert_eq!(report["requests"], 5, "{report}");
 }
+
+/// Stops the serve of a test when it goes out of scope, so a failed assertion ends the test
+/// instead of leaving the scope waiting for a serve that never stops.
+struct StopOnDrop(Arc<AtomicBool>);
+
+impl Drop for StopOnDrop {
+    fn drop(&mut self) {
+        self.0.store(true, Ordering::SeqCst);
+    }
+}
+
+/// A serve on `--socket` names its socket in the data directory, so commands run through it, and
+/// takes the name away when it stops.
+#[test]
+fn commands_find_a_serve_on_another_socket() {
+    let mut host = TestHost::new();
+    host.fund(SENDER_MNEMONIC, 0, FUNDING, 1);
+    let wallet = Instance::new("serving password");
+    wallet.restore(&host, SENDER_MNEMONIC);
+    let direct = wallet.run(&host, &["wallet", "info"]).ok();
+
+    let stop = Arc::new(AtomicBool::new(false));
+    let signal = Arc::clone(&stop);
+    host.interrupt_when = Some(Arc::new(move || signal.load(Ordering::SeqCst)));
+    let client = host.without_interrupt();
+    let dir = tempfile::tempdir().unwrap();
+    let socket = dir.path().join("s.sock");
+    let socket_arg = socket.to_str().unwrap();
+    let pointer = wallet.data_dir().join("serve-socket");
+
+    let (through, unrouted, served) = std::thread::scope(|scope| {
+        let _stop = StopOnDrop(Arc::clone(&stop));
+        let server = scope.spawn(|| wallet.run(&host, &["serve", "--socket", socket_arg]));
+        wait_for_socket(&socket);
+        wait_for_socket(&pointer);
+        assert_eq!(std::fs::read(&pointer).unwrap(), socket_arg.as_bytes());
+        let through = wallet.run(&client, &["wallet", "info"]);
+        let to_file = wallet.path("slate.json");
+        let to_file = to_file.to_str().unwrap();
+        let unrouted = wallet.run(&client, &["tx", "send", "1", "--to-file", to_file]);
+        stop.store(true, Ordering::SeqCst);
+        (through, unrouted, server.join().unwrap())
+    });
+
+    assert_eq!(through.code, 0, "{through:?}");
+    assert_eq!(through.stdout, direct.stdout, "{through:?}");
+    // A command that runs here names the serve it found on the other socket.
+    assert_eq!(unrouted.code, 5, "{unrouted:?}");
+    let message = unrouted.json()["error"]["message"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert!(message.contains(socket_arg), "{message}");
+    assert_eq!(served.ok().json()["requests"], 1);
+    assert!(!pointer.exists());
+    assert!(!socket.exists());
+}
+
+/// A pointer whose socket does not answer names nothing: the default socket is tried next, and
+/// with no serve running the command runs here.
+#[test]
+fn a_stale_pointer_is_ignored() {
+    let mut host = TestHost::new();
+    host.fund(SENDER_MNEMONIC, 0, FUNDING, 1);
+    let wallet = Instance::new("serving password");
+    wallet.restore(&host, SENDER_MNEMONIC);
+    let direct = wallet.run(&host, &["wallet", "info"]).ok();
+    let dir = tempfile::tempdir().unwrap();
+    let dead = dir.path().join("dead.sock");
+    drop(std::os::unix::net::UnixListener::bind(&dead).unwrap());
+    assert!(dead.exists());
+    let pointer = wallet.data_dir().join("serve-socket");
+    std::fs::write(&pointer, dead.to_str().unwrap()).unwrap();
+
+    // No serve: the command runs here and opens the wallet.
+    let alone = wallet.run(&host, &["wallet", "info"]);
+    assert_eq!(alone.stdout, direct.stdout, "{alone:?}");
+
+    // A serve on the default socket answers although the pointer names the dead one.
+    let stop = Arc::new(AtomicBool::new(false));
+    let signal = Arc::clone(&stop);
+    host.interrupt_when = Some(Arc::new(move || signal.load(Ordering::SeqCst)));
+    let client = host.without_interrupt();
+    let socket = wallet.data_dir().join("lepic.sock");
+    let (through, served) = std::thread::scope(|scope| {
+        let _stop = StopOnDrop(Arc::clone(&stop));
+        let server = scope.spawn(|| wallet.run(&host, &["serve"]));
+        wait_for_socket(&socket);
+        wait_for_socket(&pointer);
+        std::fs::write(&pointer, dead.to_str().unwrap()).unwrap();
+        let through = wallet.run(&client, &["wallet", "info"]);
+        stop.store(true, Ordering::SeqCst);
+        (through, server.join().unwrap())
+    });
+    assert_eq!(through.stdout, direct.stdout, "{through:?}");
+    assert_eq!(served.ok().json()["requests"], 1);
+}

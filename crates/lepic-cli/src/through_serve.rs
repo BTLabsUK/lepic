@@ -2,7 +2,8 @@
 //! Commands that run on the wallet a running `lepic serve` holds (ADR 0053).
 //!
 //! serve holds the data directory lock for as long as it runs. A command that has a route in the
-//! wallet API is sent to serve's socket in the data directory as that route's request, and the
+//! wallet API is sent to serve's socket as that route's request (the socket the data directory's
+//! `serve-socket` pointer names, else the default one), and the
 //! answer is printed as the command prints it when it runs on its own: the JSON report as it
 //! comes, the text serve renders for `Accept: text/plain`, or the problem as the CLI error with
 //! the same kind, exit code, causes and transaction. A command with no route, or with an option
@@ -44,7 +45,7 @@ struct Call {
 }
 
 /// Runs `command` on the wallet serve holds and returns what the command prints, when serve
-/// answers on the data directory's socket and the command has a route. `None` when the command
+/// answers on a socket of the data directory and the command has a route. `None` when the command
 /// runs here.
 pub(crate) async fn run(
     command: &Command,
@@ -53,8 +54,7 @@ pub(crate) async fn run(
     let Some(call) = call(command) else {
         return Ok(None);
     };
-    let socket = service::default_socket(&settings.data_dir);
-    let Ok(stream) = UnixStream::connect(&socket).await else {
+    let Some((stream, socket)) = service::connect(&settings.data_dir).await else {
         return Ok(None);
     };
     exchange(stream, &socket, call, settings.output)
@@ -62,10 +62,10 @@ pub(crate) async fn run(
         .map(Some)
 }
 
-/// The socket serve answers on in `data_dir`, when it runs there.
+/// The socket serve answers on in `data_dir`, when it runs there: the one its pointer file
+/// names, or the default.
 pub(crate) async fn serving(data_dir: &Path) -> Option<PathBuf> {
-    let socket = service::default_socket(data_dir);
-    UnixStream::connect(&socket).await.ok().map(|_| socket)
+    service::connect(data_dir).await.map(|(_, socket)| socket)
 }
 
 async fn exchange(
