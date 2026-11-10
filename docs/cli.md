@@ -1502,6 +1502,10 @@ A slate that was not delivered lists `lepic tx resend <ID> --to <ADDRESS>` and `
 not accept lists `lepic tx post <ID>` and `lepic tx cancel <ID>`. The serve API's problem document
 carries the same `recovery` list.
 
+When a native send's listener answered that it is not ready or takes no more payments for now, and
+said how long to wait, the error also carries `retry_after_s`, the seconds to wait before
+`lepic tx resend`. In text mode it is a line under the error.
+
  A `tx send` stopped by Ctrl-C
 or SIGTERM after it stored its transaction exits 12 with that `tx_id`; `lepic tx show` tells
 whether it was delivered, and `tx resend` or `tx cancel` settles it.

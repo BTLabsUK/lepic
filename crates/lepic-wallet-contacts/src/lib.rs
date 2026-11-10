@@ -20,6 +20,9 @@ mod epic1;
 #[cfg(feature = "test-support")]
 #[doc(hidden)]
 pub mod epic1_testing;
+#[cfg(any(test, feature = "test-support"))]
+#[doc(hidden)]
+pub mod error_samples;
 mod hex;
 mod in_person;
 #[cfg(feature = "test-support")]
@@ -77,6 +80,8 @@ pub use key_schedule::{
     SLOT_COUNT, contact_root, key_check_tag, pairing_mailbox_keys,
 };
 pub use keycheck::{KEY_CHECK_WINDOW, KeyCheckStart, KeysDecision};
+/// Why a card or envelope could not be built, which [`ContactError::Encode`] carries.
+pub use lepic_contact::EncodeError as ContactEncodeError;
 pub use lepic_contact::PaymentFile;
 /// The contact formats a host names in these calls.
 pub use lepic_contact::{

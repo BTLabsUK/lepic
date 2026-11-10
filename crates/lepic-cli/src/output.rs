@@ -1214,6 +1214,9 @@ struct ErrorBody<'a> {
     tx_id: Option<u32>,
     #[serde(skip_serializing_if = "<[String]>::is_empty")]
     recovery: &'a [String],
+    /// Seconds the listener asked the sender to wait before it posts again.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    retry_after_s: Option<u64>,
 }
 
 /// The text a successful command prints. A report that carries the recovery phrase is rendered
@@ -1371,11 +1374,19 @@ pub fn render_error(error: &CliError, format: OutputFormat, hint: Option<&str>) 
                     causes,
                     tx_id: error.tx_id(),
                     recovery: &crate::hint::recovery(error),
+                    retry_after_s: error.retry_after().map(|wait| wait.as_secs()),
                 },
             })
         }
         OutputFormat::Human => {
             let mut text = format!("error: {}\n", chain.join(": "));
+            if let Some(wait) = error.retry_after() {
+                let _ = writeln!(
+                    text,
+                    "the listener asks to try again in {} s",
+                    wait.as_secs()
+                );
+            }
             if let Some(hint) = hint {
                 let _ = writeln!(text, "hint: {hint}");
             }

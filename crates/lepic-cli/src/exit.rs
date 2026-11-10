@@ -2,6 +2,7 @@
 //! Typed command failures and the exit codes they map to. The codes are part of the CLI's
 //! interface: scripts branch on them, so a code never changes meaning.
 
+use lepic_methods::http::PeerClientError;
 use lepic_node::NodeError;
 use lepic_store::StoreError;
 use lepic_telemetry::TelemetryError;
@@ -15,7 +16,9 @@ use lepic_wallet::scan::ScanError;
 use lepic_wallet::selection::SelectionError;
 use lepic_wallet::send::SendError;
 use lepic_wallet::{AccountError, ReceiveError, WalletError};
-use lepic_wallet_contacts::{ContactError, DirectError, Epic1Refusal, InPersonRefusal};
+use lepic_wallet_contacts::{
+    ContactEncodeError, ContactError, DirectError, Epic1Refusal, InPersonRefusal, NativeFailure,
+};
 use thiserror::Error;
 
 use crate::amount::AmountError;
@@ -462,6 +465,22 @@ impl CliError {
             _ => None,
         }
     }
+
+    /// How long the listener asked the sender to wait before it posts the slate again, when it
+    /// said so.
+    pub const fn retry_after(&self) -> Option<std::time::Duration> {
+        match self {
+            Self::Direct(DirectError::Native {
+                source:
+                    NativeFailure::Post(
+                        PeerClientError::NotReady { retry_after }
+                        | PeerClientError::RateLimited { retry_after },
+                    ),
+                ..
+            }) => *retry_after,
+            _ => None,
+        }
+    }
 }
 
 /// One cause of an error `lepic serve` answered, with the causes below it.
@@ -510,6 +529,7 @@ fn wallet_kind(error: &WalletError) -> ErrorKind {
         | WalletError::NotReleasable { .. }
         | WalletError::ChangedDuringCancel(_)
         | WalletError::InvalidListing => ErrorKind::Rejected,
+        WalletError::MinimumConfirmationsOutOfRange { .. } => ErrorKind::Usage,
         _ => ErrorKind::Internal,
     }
 }
@@ -565,7 +585,8 @@ fn contact_kind(error: &ContactError) -> ErrorKind {
         | ContactError::NoDomainConfigured
         | ContactError::TooLarge { .. }
         | ContactError::SavedTransaction
-        | ContactError::NotPaymentFile => ErrorKind::Usage,
+        | ContactError::NotPaymentFile
+        | ContactError::WrongClass => ErrorKind::Usage,
         ContactError::UnknownContact
         | ContactError::UnknownPairing
         | ContactError::UnknownTransaction
@@ -606,7 +627,23 @@ fn contact_kind(error: &ContactError) -> ErrorKind {
         ContactError::Epic1(_) => ErrorKind::Rejected,
         ContactError::Post(_) => ErrorKind::Transport,
         ContactError::NotCancelled { cause, .. } => contact_kind(cause),
+        ContactError::Encode(error) => contact_encode_kind(*error),
         _ => ErrorKind::Internal,
+    }
+}
+
+/// What a card or envelope that could not be built says of the input. Every variant is named,
+/// so a new one is mapped where it is added.
+const fn contact_encode_kind(error: ContactEncodeError) -> ErrorKind {
+    use ContactEncodeError as E;
+    match error {
+        E::FieldTooLong { .. } | E::BodyTooLarge { .. } | E::Oversized { .. } | E::WrongClass => {
+            ErrorKind::Usage
+        }
+        E::WrongNetwork => ErrorKind::Config,
+        E::ReplyMailbox | E::SigningKeyMismatch | E::Encapsulation | E::Encryption => {
+            ErrorKind::Internal
+        }
     }
 }
 
@@ -966,5 +1003,156 @@ mod tests {
                 "node did not answer within the request timeout",
             ]
         );
+    }
+
+    /// Every wallet error the CLI shows, by the variant that made it.
+    fn engine_samples() -> Vec<CliError> {
+        use lepic_wallet_contacts::error_samples as samples;
+        let mut errors: Vec<CliError> = Vec::new();
+        errors.extend(samples::wallet_errors().into_iter().map(CliError::from));
+        errors.extend(samples::send_errors().into_iter().map(CliError::from));
+        errors.extend(samples::receive_errors().into_iter().map(CliError::from));
+        errors.extend(samples::finalize_errors().into_iter().map(CliError::from));
+        errors.extend(samples::invoice_errors().into_iter().map(CliError::from));
+        errors.extend(samples::inbox_errors().into_iter().map(CliError::from));
+        errors.extend(samples::contact_errors().into_iter().map(CliError::from));
+        errors.extend(samples::direct_errors().into_iter().map(CliError::from));
+        errors
+    }
+
+    /// Wallet errors that exit `internal`: a defect of the wallet, its storage or its keys,
+    /// never the input, the node or the network. Each entry is the start of the error's debug
+    /// text and names at least one sample.
+    const INTERNAL: &[&str] = &[
+        "Wallet(StoredSeed(",
+        "Wallet(Keychain(",
+        "Wallet(Identifier(",
+        "Wallet(SecretVault(",
+        "Wallet(SecretStore(",
+        "Wallet(SecretName(",
+        "Wallet(Store(WalUnavailable)",
+        // The CLI reads no app data file.
+        "Wallet(AppData(",
+        "Wallet(Balance(",
+        "Wallet(NoValidKey)",
+        "Wallet(Task(",
+        "Send(CodecNotRegistered",
+        "Send(InputKeyMismatch)",
+        "Send(KeyIdentifier(",
+        "Send(Proof(",
+        "Send(Crypto(",
+        "Send(Slate(",
+        "Send(Arithmetic(",
+        "Send(StoredSlate(",
+        "Send(MalformedContext)",
+        "Receive(Output(",
+        "Receive(Signing(",
+        "Receive(Excess(",
+        "Receive(Slate(",
+        "Receive(Codecs(",
+        "Receive(Encode(",
+        "Finalize(Signing(",
+        "Finalize(Excess(",
+        "Finalize(Slate(",
+        "Finalize(Codecs(",
+        "Finalize(Encode(",
+        "Finalize(StoredSlate(",
+        "Finalize(MissingContext",
+        "Finalize(MalformedContext)",
+        "Invoice(InputKeyMismatch)",
+        "Invoice(KeyIdentifier(",
+        "Invoice(Output(",
+        "Invoice(Signing(",
+        "Invoice(Excess(",
+        "Invoice(Slate(",
+        "Invoice(Arithmetic(",
+        "Invoice(Codecs(",
+        "Invoice(Encode(",
+        "Invoice(StoredSlate(",
+        "Invoice(MissingContext",
+        "Invoice(MalformedContext)",
+        "Inbox(Identity(",
+        "Inbox(NotHostFeature)",
+        "Contact(Keys(",
+        "Contact(StoredData(",
+        "Contact(NoFreeSlot)",
+        "Contact(Encode(ReplyMailbox)",
+        "Contact(Encode(SigningKeyMismatch)",
+        "Contact(Encode(Encapsulation)",
+        "Contact(Encode(Encryption)",
+    ];
+
+    #[test]
+    fn only_a_defect_of_the_wallet_exits_internal() {
+        let samples = engine_samples();
+        for error in &samples {
+            let shown = format!("{error:?}");
+            let listed = INTERNAL.iter().any(|start| shown.starts_with(start));
+            assert_eq!(error.kind() == ErrorKind::Internal, listed, "{shown}");
+        }
+        for start in INTERNAL {
+            assert!(
+                samples
+                    .iter()
+                    .any(|error| format!("{error:?}").starts_with(start)),
+                "no sample starts with {start}"
+            );
+        }
+    }
+
+    #[test]
+    fn mapping_fixes_hold() {
+        use lepic_wallet_contacts::ContactEncodeError as EncodeError;
+        let cases: Vec<(CliError, ErrorKind)> = vec![
+            (ContactError::WrongClass.into(), ErrorKind::Usage),
+            (
+                ContactError::Encode(EncodeError::WrongClass).into(),
+                ErrorKind::Usage,
+            ),
+            (
+                ContactError::Encode(EncodeError::BodyTooLarge { limit: 1, found: 2 }).into(),
+                ErrorKind::Usage,
+            ),
+            (
+                ContactError::Encode(EncodeError::WrongNetwork).into(),
+                ErrorKind::Config,
+            ),
+            (
+                WalletError::MinimumConfirmationsOutOfRange { count: 0 }.into(),
+                ErrorKind::Usage,
+            ),
+            (
+                ContactError::Epic1(Epic1Refusal::AddressNotIssued).into(),
+                ErrorKind::NotFound,
+            ),
+        ];
+        for (error, kind) in cases {
+            assert_eq!(error.kind(), kind, "{error:?}");
+        }
+    }
+
+    #[test]
+    fn a_listener_that_asks_for_a_wait_says_how_long() {
+        use lepic_wallet_contacts::error_samples::RETRY_AFTER;
+        let asked: Vec<CliError> = engine_samples()
+            .into_iter()
+            .filter(|error| error.retry_after().is_some())
+            .collect();
+        assert_eq!(asked.len(), 2, "{asked:?}");
+        for error in &asked {
+            assert_eq!(error.retry_after(), Some(RETRY_AFTER));
+            let json =
+                crate::output::render_error(error, crate::settings::OutputFormat::Json, None);
+            assert!(json.contains("\"retry_after_s\":30"), "{json}");
+            let text =
+                crate::output::render_error(error, crate::settings::OutputFormat::Human, None);
+            assert!(text.contains("try again in 30 s"), "{text}");
+        }
+        let json = crate::output::render_error(
+            &CliError::from(WalletError::Locked),
+            crate::settings::OutputFormat::Json,
+            None,
+        );
+        assert!(!json.contains("retry_after_s"), "{json}");
     }
 }

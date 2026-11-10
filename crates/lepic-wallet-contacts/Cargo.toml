@@ -30,6 +30,8 @@ lepic-slate.workspace = true
 lepic-store = { workspace = true, default-features = false }
 lepic-transport.workspace = true
 lepic-wallet = { workspace = true, default-features = false }
+# For a sample of every error of a post, with `test-support`.
+rustls = { workspace = true, optional = true }
 rand_core.workspace = true
 serde = { workspace = true, features = ["derive", "std"] }
 serde_json = { workspace = true, features = ["std"] }
@@ -46,9 +48,11 @@ default = ["sqlite"]
 # Contact backups read and write the SQLite store (`lepic_store::export_contacts`).
 sqlite = ["lepic-store/sqlite", "lepic-wallet/sqlite"]
 # Codes and answers outside the in-person rules, for the wallet's tests.
-test-support = []
+test-support = ["dep:rustls"]
 
 [dev-dependencies]
+# The error samples are built in this crate's own tests as well.
+rustls.workspace = true
 proptest = { workspace = true, features = ["std"] }
 serde_json = { workspace = true, features = ["std"] }
 tokio = { workspace = true, features = ["rt", "sync", "macros"] }

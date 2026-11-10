@@ -1638,6 +1638,7 @@ dependencies = [
  "lepic-wallet",
  "proptest",
  "rand_core 0.10.1",
+ "rustls",
  "serde",
  "serde_json",
  "sha2",
