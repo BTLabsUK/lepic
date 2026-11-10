@@ -1148,6 +1148,8 @@ struct ErrorBody<'a> {
     causes: &'a [String],
     #[serde(skip_serializing_if = "Option::is_none")]
     tx_id: Option<u32>,
+    #[serde(skip_serializing_if = "<[String]>::is_empty")]
+    recovery: &'a [String],
 }
 
 /// The text a successful command prints. A report that carries the recovery phrase is rendered
@@ -1304,6 +1306,7 @@ pub fn render_error(error: &CliError, format: OutputFormat, hint: Option<&str>) 
                     message,
                     causes,
                     tx_id: error.tx_id(),
+                    recovery: &crate::hint::recovery(error),
                 },
             })
         }

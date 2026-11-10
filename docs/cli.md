@@ -1309,14 +1309,14 @@ $ lepic --output json tx send 1000 --to-file x.slate
 {"error":{"kind":"insufficient_funds","exit_code":8,"message":"send failed","causes":["output selection failed: not enough funds"]}}
 ```
 
-Amounts are strings with eight decimals. The exit code says what kind of failure it was:
-
-| Code | Kind | Meaning |
-|---|---|---|
 A command line that does not parse is an error of kind `usage` too: with `--output json`, or
 `LEPIC_OUTPUT=json`, it prints the same document (exit 2, the parser's message as `message`) and
 nothing on stderr. `--help` and `--version` still print text.
 
+Amounts are strings with eight decimals. The exit code says what kind of failure it was:
+
+| Code | Kind | Meaning |
+|---|---|---|
 | 0 | | success |
 | 1 | `internal` | an unexpected failure, see the log |
 | 2 | `usage` | invalid arguments or missing input |
@@ -1331,7 +1331,19 @@ nothing on stderr. `--help` and `--version` still print text.
 | 11 | `incomplete` | stored, but not delivered or not posted; retry |
 | 12 | `interrupted` | stopped by Ctrl-C or SIGTERM before it finished |
 
-An error about one stored transaction also carries its `tx_id`. A `tx send` stopped by Ctrl-C
+An error about one stored transaction also carries its `tx_id`. Exit 11 also carries `recovery`,
+the commands that finish or give up that transaction, in the order to try them:
+
+```
+{"error":{"kind":"incomplete","exit_code":11,"message":"finalize failed","causes":["transaction 3 is finalized but the node did not accept it","..."],"tx_id":3,"recovery":["lepic tx post 3","lepic tx cancel 3"]}}
+```
+
+A slate that was not delivered lists `lepic tx resend <ID> --to <ADDRESS>` and `lepic tx cancel
+<ID>`; an invoice that was not delivered lists `lepic tx cancel <ID>`; a transaction the node did
+not accept lists `lepic tx post <ID>` and `lepic tx cancel <ID>`. The serve API's problem document
+carries the same `recovery` list.
+
+ A `tx send` stopped by Ctrl-C
 or SIGTERM after it stored its transaction exits 12 with that `tx_id`; `lepic tx show` tells
 whether it was delivered, and `tx resend` or `tx cancel` settles it.
 
@@ -1351,6 +1363,7 @@ With human output, an error ends with a `hint:` line that names what to try next
 | `not enough funds` (exit 8) | The hint shows what is spendable. Recent receives and change need `--min-confirmations` blocks, and `--selection all` locks every output until its transaction confirms. |
 | `epicbox address rejected` (exit 2) | The address is mistyped or belongs to the other network. Nothing was stored. |
 | `stored but was not delivered` (exit 11) | The relay did not take the slate; check the address and its port, then `tx resend` or `tx cancel`. |
+| `... is on this device, which a native send does not reach` (exit 7) | A native send to a listener on this computer. Nothing was stored; `--legacy` sends the V2 or V3 slate. |
 | `epicbox subscription failed` | The relay at `epicbox_relay` is unreachable. |
 | `http address rejected` (exit 2) | The `--to` URL is not `http(s)://host[:port][/path]`, or is plain `http` to another computer without `--allow-plain-http`. Nothing was stored. |
 | `invoices go over epicbox or through a slate file, not over http` (exit 2) | `invoice issue --to` was given an address with a scheme (`://`). |
@@ -1371,4 +1384,3 @@ With human output, an error ends with a `hint:` line that names what to try next
 | `finalized but the node did not accept it` (exit 11) | The node neither took the transaction nor holds its kernel. Check the node, then `lepic tx post <ID>`. |
 | `a restore scan must complete before new outputs are created` (exit 5) | The wallet was restored with `--no-scan`, or its database was rebuilt, and its restore scan, from genesis or from the restore's `--from-height`, has not completed since. Run `lepic wallet scan`. |
 | `The node is behind the last refresh; balances not updated.` from `wallet info` | The node is still syncing, or the wallet stored a height this chain does not have. Once the node is synced, `lepic wallet scan --reset-chain` recovers. |
-| `... is on this device, which a native send does not reach` (exit 7) | A native send to a listener on this computer. Nothing was stored; `--legacy` sends the V2 or V3 slate. |

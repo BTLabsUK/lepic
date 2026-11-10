@@ -16,7 +16,7 @@ use lepic_wallet::scan::ScanError;
 use lepic_wallet::selection::SelectionError;
 use lepic_wallet::send::SendError;
 use lepic_wallet::{ReceiveError, WalletError};
-use lepic_wallet_contacts::DirectError;
+use lepic_wallet_contacts::{ContactError, DirectError};
 
 use crate::amount::format_amount;
 use crate::commands::peer::to_hex;
@@ -189,6 +189,40 @@ fn invoice_hint(error: &InvoiceError) -> Option<String> {
             format_amount(*approved)
         )),
         _ => None,
+    }
+}
+
+/// The commands that finish or give up a transaction left half done (exit code 11), in the
+/// order to try them; empty for any other error. The JSON error and the problem document carry
+/// it as `recovery`.
+pub fn recovery(error: &CliError) -> Vec<String> {
+    let resend = |tx_id: &TxId| format!("lepic tx resend {tx_id} --to <ADDRESS>");
+    let cancel = |tx_id: &TxId| format!("lepic tx cancel {tx_id}");
+    let post = |tx_id: &TxId| format!("lepic tx post {tx_id}");
+    match error {
+        CliError::Send(SendError::Undelivered { tx_id, .. })
+        | CliError::Direct(DirectError::Native { tx_id, .. })
+        | CliError::Invoice(InvoiceError::PaymentUndelivered { tx_id, .. })
+        | CliError::Contact(
+            ContactError::Send(SendError::Undelivered { tx_id, .. })
+            | ContactError::Invoice(InvoiceError::PaymentUndelivered { tx_id, .. }),
+        ) => {
+            vec![resend(tx_id), cancel(tx_id)]
+        }
+        CliError::Invoice(InvoiceError::Undelivered { tx_id, .. })
+        | CliError::Contact(ContactError::Invoice(InvoiceError::Undelivered { tx_id, .. })) => {
+            vec![cancel(tx_id)]
+        }
+        CliError::Finalize(FinalizeError::NotPosted { tx_id, .. })
+        | CliError::Invoice(InvoiceError::NotPosted { tx_id, .. })
+        | CliError::Contact(
+            ContactError::Finalize(FinalizeError::NotPosted { tx_id, .. })
+            | ContactError::Invoice(InvoiceError::NotPosted { tx_id, .. }),
+        ) => {
+            vec![post(tx_id), cancel(tx_id)]
+        }
+        CliError::HttpReplyLost { tx_id } => vec![resend(&TxId(*tx_id)), cancel(&TxId(*tx_id))],
+        _ => Vec::new(),
     }
 }
 

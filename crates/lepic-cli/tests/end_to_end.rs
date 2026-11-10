@@ -190,6 +190,42 @@ fn the_reply_to_a_file_with_a_reply_key_is_sealed() {
 
 /// A node that refuses the finalized transaction leaves it stored: the error names it, and
 /// `recovery` lists the commands that post it again or give it up.
+#[test]
+fn a_finalized_transaction_the_node_refused_names_its_recovery() {
+    let (host, sender, receiver) = two_wallets();
+    let slate = sender.path("payment.slate");
+    let sent = sender
+        .run(
+            &host,
+            &["tx", "send", "1.5", "--to-file", slate.to_str().unwrap()],
+        )
+        .ok()
+        .json();
+    let received = receiver
+        .run(&host, &["tx", "receive", slate.to_str().unwrap()])
+        .ok()
+        .json();
+    host.node.fail_next(
+        "push_transaction",
+        lepic_node::mock::MockFailure::Rejected(lepic_node::RejectionKind::Internal),
+    );
+
+    let outcome = sender.run(&host, &["tx", "finalize", text(&received, "reply_file")]);
+
+    assert_eq!(outcome.code, 11, "{outcome:?}");
+    let error = outcome.json()["error"].clone();
+    assert_eq!(error["tx_id"], sent["tx_id"], "{error}");
+    let id = sent["tx_id"].to_string();
+    assert_eq!(
+        error["recovery"],
+        serde_json::json!([
+            format!("lepic tx post {id}"),
+            format!("lepic tx cancel {id}")
+        ]),
+        "{error}"
+    );
+}
+
 /// A reply file lost after the receive stored it is written again by receiving the same slate,
 /// and the sender finalizes that copy. Another slate under the same id is refused.
 #[test]

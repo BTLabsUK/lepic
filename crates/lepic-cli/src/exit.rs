@@ -378,7 +378,23 @@ impl CliError {
             Self::SendInterrupted { tx_id }
             | Self::SlateIdReused { tx_id }
             | Self::HttpReplyLost { tx_id } => Some(*tx_id),
-            Self::Direct(DirectError::Native { tx_id, .. }) => Some(tx_id.0),
+            Self::Direct(DirectError::Native { tx_id, .. })
+            | Self::Send(SendError::Undelivered { tx_id, .. })
+            | Self::Finalize(FinalizeError::NotPosted { tx_id, .. })
+            | Self::Invoice(
+                InvoiceError::Undelivered { tx_id, .. }
+                | InvoiceError::PaymentUndelivered { tx_id, .. }
+                | InvoiceError::NotPosted { tx_id, .. },
+            )
+            | Self::Contact(
+                ContactError::Send(SendError::Undelivered { tx_id, .. })
+                | ContactError::Finalize(FinalizeError::NotPosted { tx_id, .. })
+                | ContactError::Invoice(
+                    InvoiceError::Undelivered { tx_id, .. }
+                    | InvoiceError::PaymentUndelivered { tx_id, .. }
+                    | InvoiceError::NotPosted { tx_id, .. },
+                ),
+            ) => Some(tx_id.0),
             _ => None,
         }
     }

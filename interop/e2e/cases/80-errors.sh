@@ -95,6 +95,7 @@ case_err_double_spend() {
     printf '%s\n' "${LAST_JSON}" >"${CASE_DIR}/double-spend.json"
     expect_kind incomplete || return 1
     expect_json "${LAST_JSON}" '[.error.causes[]? | select(test("did not accept"))] | length >= 1' "error says the node did not accept it" || return 1
+    expect_json "${LAST_JSON}" '.error.tx_id != null and (.error.recovery | length) >= 1 and (.error.recovery | map(test("^lepic tx (resend|post|cancel) ")) | all)' "error names the transaction and its recovery commands" || return 1
     wstop "${HTTP_PID}"
     id="$(w "${clone}" tx list | jq '[.transactions[] | select(.state == "finalized")] | last | .tx_id')"
     expect_json "$(w "${clone}" tx show "${id}")" '.state == "finalized"' "the refused spend stays finalized, not posted" || return 1

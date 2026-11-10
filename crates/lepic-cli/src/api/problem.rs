@@ -28,6 +28,13 @@ pub(crate) struct Problem {
     /// delivery was known, or a `slate_id` used before.
     #[serde(skip_serializing_if = "Option::is_none")]
     tx_id: Option<u32>,
+    /// The commands that finish or give up the transaction, in the order to try them; present
+    /// with `code` `incomplete`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(value_type = Option<Vec<String>>)]
+    // One pointer keeps the `Err` of every route under clippy's size limit.
+    #[allow(clippy::box_collection)]
+    recovery: Option<Box<Vec<String>>>,
     /// The methods the route takes, for the `Allow` header of a 405.
     #[serde(skip)]
     pub(crate) allow: Option<String>,
@@ -42,6 +49,7 @@ impl Problem {
             detail: detail.into(),
             code: code.name(),
             tx_id: None,
+            recovery: None,
             allow: None,
         }
     }
@@ -108,6 +116,9 @@ impl From<CliError> for Problem {
         let kind = error.kind();
         Self {
             tx_id: error.tx_id(),
+            recovery: Some(crate::hint::recovery(&error))
+                .filter(|commands| !commands.is_empty())
+                .map(Box::new),
             ..Self::new(status(kind), kind, error.chain().join(": "))
         }
     }
