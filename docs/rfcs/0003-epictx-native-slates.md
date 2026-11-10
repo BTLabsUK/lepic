@@ -5,8 +5,9 @@ Date: 2026-11-09
 Decision record: ADR 0052. Amends RFC 0001 (section 4 lists what it supersedes). Builds on RFC 0002's
 sealed envelope.
 Audience: implementers and reviewers, including those who have not seen LEPIC before.
-Built so far: the sealed envelope it reuses is shipped. Nothing in section 5.10 onwards (native
-slate, EPICTX text, epic1 address, advert) is built yet.
+Built so far: the sealed envelope it reuses is shipped. The native slate, EPICTX text, epic1
+address, advert and the other parts of 5.10 onwards are built on the branch line and unreleased;
+section 9 lists each part and the file that implements it.
 
 ## How to read this document
 
@@ -19,6 +20,7 @@ Every normative statement carries one of these marks:
 | **[App]** | Expected behaviour of the wallet app, not a LEPIC rule. LEPIC is core only: it reports facts to its consumer and acts when the consumer calls it; limits, prompts and policy live in the consumer (3.2). Marked "to explore in the wallet app" where the design is not settled. |
 | **[Shipped]** | On LEPIC `main` at commit `078eadb7`, with the path given. |
 | **[Unmerged]** | On the feature branch `feat/wallet-methods` only at `c100d2bc` (the wallet methods refactor); may still move or change. |
+| **Built, unreleased** | In the code on the branch line above `main`, in no release (used in section 9 only). |
 | **[Specified]** | Written in an RFC, an ADR or this document, not built. |
 | **[Reasoning]** | The author's own reasoning or arithmetic, not checked against a source or code. |
 | **[Open]** | Not decided and not proposed. Listed again in section 11. |
@@ -1803,47 +1805,49 @@ From ADR 0052 "Existing installs" and RFC 0002 §16.
 
 ## 9 Implemented vs specified
 
-Paths are in the LEPIC repository at `main` `078eadb7` unless marked otherwise.
+Paths are in the LEPIC repository at the head of the `docs/epic1-docs-sync` branch (the branch stack
+above `main` `1bba74a6`). **Built, unreleased** means the code is on that branch line and in no
+release; the sealed envelope of RFC 0002 is the only part in a release.
 
 | Part | Status | Where |
 |---|---|---|
-| RFC 0002 envelope, HPKE base and PSK (suite `41`), signed/anonymous, opening rules | **[Shipped]** | `crates/lepic-contact/src/{envelope,tlv,hint,keys,private}.rs` |
-| `BEGINEPICSEALED.` armour, `.epicsealed`, 96 KiB bound, typed checksum error | **[Shipped]** | `crates/lepic-contact/src/armor.rs` |
+| RFC 0002 envelope, HPKE base and PSK (suite `41`), signed/anonymous, opening rules | **[Shipped]** | `crates/lepic-seal/src/{envelope,tlv,hint,keys,psk}.rs`, `crates/lepic-contact/src/private.rs` |
+| `BEGINEPICSEALED.` armour, `.epicsealed`, 96 KiB bound, typed checksum error | **[Shipped]** | `crates/lepic-seal/src/armor.rs` |
 | Contact keys, reply keys | **[Shipped]** | `crates/lepic-wallet-contacts/src/key_schedule.rs` |
 | Sealed slates to contacts and sealed answers to marked files | **[Shipped]** | `crates/lepic-wallet-contacts/src/sealed.rs` |
-| Marker with reply key, `MarkedV3JsonCodec`, feature bits | **[Shipped]** at `crates/lepic-epicbox/src/marker/`; moved to `crates/lepic-transport/src/marker/` **[Unmerged]** | bit 7 `NATIVE_SLATES` claimed in a pairing only while `native_direct` is on **[Unmerged]** (`feat/native-contacts`, step 6) |
-| Native slates in paired-contact mailboxes (6.1, step 6): `lepic.v1` in type `0A` when `native_direct` is on and the contact claims bit 7, replies in the request's format, `BEGINEPICTX.` text | **[Unmerged]** `feat/native-contacts`, off by default (`native_direct = false`) | `crates/lepic-wallet-contacts/src/native.rs`, `crates/lepic-wallet/tests/contact_native.rs` |
-| ADR 0033 namespace construction, onion key | **[Shipped]** | `lepic_wallet::namespace` |
-| `api tls v1` namespace key | **[Unmerged]** | `feat/wallet-methods` only (ADR 0033 row "unreleased") |
-| Methods refactor (ADR 0050, 0051) | **[Unmerged]** | `feat/wallet-methods` at `c100d2bc`; `crates/lepic-methods/` exists only there |
-| Vectors | **[Shipped]** | `testdata/vectors/pairing/` (`hpke_rfc9180_a2.json`, `contact_keys.json`, `reply_keys.json`, `envelopes.json`, `malformed.json`, …), `testdata/vectors/keys/` |
-| HPKE dependency | **[Shipped]** `hpke` 0.14.1 | `Cargo.toml:70` |
+| Marker with reply key, `MarkedV3JsonCodec`, feature bits; bit 7 `NATIVE_SLATES` claimed in a pairing only while `native_direct` is on | Marker **[Shipped]**; bit 7 **Built, unreleased** | `crates/lepic-transport/src/marker/`, `crates/lepic-wallet/src/config.rs` (`native_direct`) |
+| Native slates in paired-contact mailboxes (6.1, step 6): `lepic.v1` in type `0A` when `native_direct` is on and the contact claims bit 7, replies in the request's format, `BEGINEPICTX.` text | **Built, unreleased**; off by default (`native_direct = false`) | `crates/lepic-wallet-contacts/src/native.rs`, `crates/lepic-wallet/src/native_epicbox.rs`, `crates/lepic-wallet/tests/contact_native.rs` |
+| ADR 0033 namespace construction, onion key | **[Shipped]** | `crates/lepic-wallet/src/namespace.rs` |
+| `api tls v1` namespace key | **Built, unreleased** | `crates/lepic-wallet/src/namespace.rs`, `api_tls_key.rs`, vectors `keys/api_tls_key_seed{16,32}.json` |
+| Methods refactor (ADR 0050, 0051) | **Built, unreleased** | `crates/lepic-methods/`, `crates/lepic-transport/` |
+| Vectors | **[Shipped]** for RFC 0002; **Built, unreleased** for the rest | `testdata/vectors/pairing/` (`hpke_rfc9180_a2.json`, `contact_keys.json`, `reply_keys.json`, `envelopes.json`, `malformed.json`, `mailbox_keys.json`, `seal_keys.json`, `epic1_seal_keys.json`, `epictx_*.json`), `testdata/vectors/keys/`, `testdata/vectors/slates_native/` |
+| HPKE dependency | **[Shipped]** `hpke` 0.14.1 | `Cargo.toml` (`[workspace.dependencies]`) |
 | Onion on its own socket | **[Shipped]** | `crates/lepic-tor/src/listen.rs` |
-| `lepic.v1` codec | **[Specified]**, no code | RFC 0001 §1–4, ADR 0012, 5.10 here |
-| Amendments (network, kernel features, header version, tail) | **[Specified]** here at fixed positions; not yet in RFC 0001 | 5.10 |
+| `lepic.v1` codec | **Built, unreleased** | `crates/lepic-native-slate/src/{codec,slate,wire,view}.rs` |
+| Amendments (network, kernel features, header version, tail) | **Built, unreleased** in the codec; not yet in RFC 0001 | `crates/lepic-native-slate/src/{slate,wire,tail}.rs` |
 | Plain pack | Dropped (O-7); RFC 0001 §5 to be amended | 5.10 |
-| Tail records `01` reply key and `02` reply mailbox | **[Specified]** (drafts 3 and 4), not built | 5.10 |
-| Envelope tag `09` reply mailbox | **[Specified]** (draft 4), not built; tag unused at `main` | 5.6 |
-| Reply mailbox, post key and link mailbox keys | Labels and contexts **[Specified]** (draft 4, Appendix A), not built, no vectors | 5.2 |
-| Type `0A`, padding `FE`, `BEGINEPICTX.`, EPICTX file and its no-clash rule | **[Decided]** (D3, O-2, O-4), not built | 5.6, 5.11, 5.12 |
-| Slates in QR codes: `ur:epic-slate` payload version 2 (raw `lepic.v1` or an envelope), one code up to 360 bytes; one scan online, the sealed reply animated offline | Model **[Decided]** (3.1, O-13), framing **[Specified]**, not built | 5.18, 6.7, 6.8 |
+| Tail records `01` reply key and `02` reply mailbox | **Built, unreleased** | `crates/lepic-native-slate/src/tail.rs` |
+| Envelope tag `09` reply mailbox | **Built, unreleased** | `crates/lepic-seal/src/envelope.rs` (`TAG_REPLY_MAILBOX`), vector `pairing/epictx_reply_mailbox.json` |
+| Reply mailbox, post key and link mailbox keys | **Built, unreleased**, with vectors | `crates/lepic-wallet/src/namespace.rs` (`REPLY_MAILBOX_LABEL`, `POST_KEY_LABEL`, `LINK_MAILBOX_LABEL`), vectors `keys/reply_mailbox_seed{16,32}.json`, `keys/post_key_seed{16,32}.json`, `keys/link_mailbox_seed{16,32}.json`, `pairing/mailbox_keys.json` |
+| Type `0A`, padding `FE`, `BEGINEPICTX.`, EPICTX file and its no-clash rule | **Built, unreleased** | `crates/lepic-seal/src/{envelope,tlv,armor,tx}.rs`, vectors `pairing/epictx_{envelopes,files,padding,malformed}.json` |
+| Slates in QR codes: `ur:epic-slate` payload version 2 (raw `lepic.v1` or an envelope), one code up to 360 bytes; one scan online, the sealed reply animated offline | **Built, unreleased** (codec; the scanning screen is **[App]**) | `crates/lepic-slate/src/ur_slate.rs`, `crates/lepic-ffi/src/ur_slate.rs`, `docs/compat/ur-epic-slate.md` |
 | Invoice window | Removed in draft 6 (owner, 2026-11-09); never built | 6.10 |
-| In-person answers: closed on the first, each reported with its check code, finalized only on the consumer's call; the app's check-code confirmation | LEPIC part implemented **[Unmerged]** on `feat/in-person-invoice` (invoice codes) and `feat/in-person-send` (send codes): `crates/lepic-wallet-contacts/src/in_person.rs`, `lepic in-person`, `/v1/in-person/…`; app part **[App]**, to explore in the wallet app | 6.7 |
-| Hosts from untrusted input: report host, relay-list flag and address class; post on the consumer's word, through Tor when configured; loopback refused on the resolved address | **[Decided]** (O-17), address classes **[Decided]** (O-18); implemented for in-person posts **[Unmerged]** on `feat/in-person-invoice`: `lepic_transport::host_rule`, `Connector::connect_untrusted` in `crates/lepic-epicbox/src/session.rs` | 5.14 |
-| epic1 send with no answer: the same sealed S1 to the next entry on request, cancel and unlock | **[Decided]** (owner, 2026-11-09), not built | 5.14, 6.3 |
-| Default TTLs (epic1 send 24 hours, in person the app's choice, fallback 30 blocks), link-mailbox index spaces, restore and watch time, relay domains without hyphens | **[Decided]** (after drafts 4 and 5), not built | 5.2, 5.9, 5.13, 5.14, 5.18 |
-| Per-class HPKE `info` | **[Specified]** (draft 2), not built | 5.4 |
-| Seal key `lepic-wallet seal key v1`, and `lepic-wallet epic1 seal key v1` for epic1 indexes 1 and above | **[Decided]** label, context **[Specified]**; the index label implemented **[Unmerged]** on `feat/epic1-indexed-keys`: `crates/lepic-wallet/src/namespace.rs`, vectors `pairing/seal_keys.json`, `pairing/epic1_seal_keys.json` | 5.2 |
-| epic1 proof key, and `lepic-wallet epic1 indexed proof key v1` for indexes 1 and above | **[Decided]** (O-8), context **[Specified]**; the index label implemented **[Unmerged]** on `feat/epic1-indexed-keys`, vectors `keys/epic1_proof_key_seed32`, `keys/epic1_proof_key_seed16`, `keys/epic1_indexed_proof_key_seed32`, `keys/epic1_indexed_proof_key_seed16` | 5.2 |
-| Numbered epic1 addresses: issue, list, address at an index; zero hint, link mailbox to index, trial decryption elsewhere; index per payment; restore gap of 50 | **[Decided]** (owner, 2026-11-10); implemented **[Unmerged]** on `feat/epic1-indexed-keys`: `crates/lepic-wallet/src/epic1_index.rs`, `crates/lepic-wallet-contacts/src/epic1.rs`, `sealed.rs`, `direct.rs`, `lepic address`, `new-address`, `addresses` | 5.5, 5.13, 6.3 |
-| epic1 two-key address | **[Decided]**, layout **[Specified]**, not built; `bech32` not in workspace dependencies | 5.13 |
-| `check_version` advert, `/v1/peer`, pinning | **[Specified]**, not built | 5.15 |
-| Two separate links, the epic1 link with transport fields, the receive screen | **[Decided]** (3.1, O-14 as replaced), grammar **[Specified]** (Appendix B), not built | 5.14; app `app/lib/src/scan/scan_router.dart` |
+| In-person answers: closed on the first, each reported with its check code, finalized only on the consumer's call; the app's check-code confirmation | LEPIC part **Built, unreleased**; app part **[App]**, to explore in the wallet app | `crates/lepic-wallet-contacts/src/in_person.rs`, `lepic in-person`, `/v1/in-person/…` |
+| Hosts from untrusted input: report host, relay-list flag and address class; post on the consumer's word, through Tor when configured; loopback refused on the resolved address | **Built, unreleased** | `crates/lepic-transport/src/host_rule.rs`, `Connector::connect_untrusted` in `crates/lepic-epicbox/src/session.rs` |
+| epic1 send with no answer: the same sealed S1 to the next entry on request, cancel and unlock | **Built, unreleased**: `epic1_post_next` (`lepic epic1 post-next`); cancel is `lepic tx cancel` | `crates/lepic-wallet-contacts/src/epic1.rs` |
+| Default TTLs (epic1 send 1,440 blocks, in person 30 blocks), link-mailbox index spaces, restore gap, relay domains without hyphens | **Built, unreleased** | `EPIC1_TTL_BLOCKS` in `crates/lepic-wallet-contacts/src/epic1.rs`, `IN_PERSON_TTL_BLOCKS` in `in_person.rs`, `crates/lepic-wallet/src/namespace.rs`, `epic1_index.rs` (`RESTORE_GAP`), `crates/lepic-epic1/src/relay.rs` |
+| Per-class HPKE `info` | **Built, unreleased** | `crates/lepic-seal/src/envelope.rs` (`KeyClass::info`) |
+| Seal key `lepic-wallet seal key v1`, and `lepic-wallet epic1 seal key v1` for epic1 indexes 1 and above | **Built, unreleased** | `crates/lepic-wallet/src/namespace.rs`, vectors `pairing/seal_keys.json`, `pairing/epic1_seal_keys.json` |
+| epic1 proof key, and `lepic-wallet epic1 indexed proof key v1` for indexes 1 and above | **Built, unreleased** | `crates/lepic-wallet/src/namespace.rs`, `epic1_keys.rs`, vectors `keys/epic1_proof_key_seed{16,32}.json`, `keys/epic1_indexed_proof_key_seed{16,32}.json` |
+| Numbered epic1 addresses: issue, list, address at an index; zero hint, link mailbox to index, trial decryption elsewhere; index per payment; restore gap of 50 | **Built, unreleased** | `crates/lepic-wallet/src/epic1_index.rs`, `crates/lepic-wallet-contacts/src/epic1.rs`, `sealed.rs`, `direct.rs`, `lepic epic1 address`, `new-address`, `addresses`, `issue-here` |
+| epic1 two-key address | **Built, unreleased**; own bech32m code, no `bech32` dependency | `crates/lepic-epic1/src/{address,bech32m}.rs`, vectors `keys/epic1_addresses.json`, `keys/epic1_addresses_refused.json` |
+| `check_version` advert, `/v1/peer`, pinning | **Built, unreleased** | `crates/lepic-peer/src/`, `crates/lepic-methods/src/http/peer.rs`, `crates/lepic-wallet/src/{peer_compat,peer_pin}.rs` |
+| Two separate links, the epic1 link with transport fields, the receive screen | Link **Built, unreleased**; receive screen **[App]** | `crates/lepic-epic1/src/link.rs`, vectors `keys/epic1_links.json`; app `app/lib/src/scan/scan_router.dart` |
 | Epicbox relay for link and reply mailboxes | Protocol **[Shipped]** (Epicbox 3.0.0); no relay change needed | `docs/compat/epicbox.md` |
-| Handling of `FieldTooLong` when sealing | Not handled today; flow **[Decided]** (O-9), not built; a largest-first selection strategy is needed | 5.17 |
+| Handling of `FieldTooLong` and `BodyTooLarge` when sealing | **Built, unreleased**: a typed encode error, a usage error in the CLI and `InvalidArgument` in the FFI. A largest-first coin selection is not built | `crates/lepic-seal/src/{tlv,envelope,error}.rs`, `crates/lepic-cli/src/exit.rs`, `crates/lepic-ffi/src/api/error.rs` |
 | Consolidation (send to self) | **[Shipped]** | `crates/lepic-wallet/src/self_send.rs` |
-| CLI JSON view of an EPICTX | **[Decided]**, not built | — |
-| Fuzz targets for slate, envelope, armour | Required before default-on | — |
+| CLI JSON view of an EPICTX | **Built, unreleased**: `lepic epictx open` prints the slate as JSON | `crates/lepic-cli/src/cli.rs` (`EpictxCommand`), `crates/lepic-native-slate/src/view.rs` |
+| Fuzz targets for slate, envelope, armour | **Built, unreleased**; required before default-on | `fuzz/fuzz_targets/{slate_native,envelope_inner,armor_sealed,seal_open,epic1_link}.rs` |
 
 ---
 
