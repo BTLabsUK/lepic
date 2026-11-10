@@ -1203,7 +1203,10 @@ Endpoints on the same socket as `/v2/foreign`:
   the one-time reply-key hint (5.5). **[Specified]**
 - Errors are RFC 9457 problem details: `not_ready` 503 (`Retry-After`), `refused` 422,
   `too_large` 413, `rate_limited` 429, `unsupported_format` 415. A repeated slate returns the
-  same reply.
+  same reply. A listener checks the media type, the declared length and the decoding of the
+  envelope (its header and fields, nothing opened) before the post counts against its payment
+  budget, so such a body gets `unsupported_format` or `too_large`, and a body still arriving
+  holds no payment's place.
 - Invoices (I1) are not taken here: they need the payer's consent, and arrive only from paired
   contacts, or in a code the payer scans (5.9, 6.10).
 - The endpoint's host comes from an address the user entered or scanned, so it follows the host

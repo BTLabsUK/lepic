@@ -867,19 +867,26 @@ async fn answer_peer(
         return peer.info_response();
     }
     let limit = state.settings.receives_per_minute;
-    let Some(slot) = Served::take_slot(&state.receives, limit) else {
-        debug!("receive limit reached");
-        return rate_limited();
-    };
-    let answering = peer.answer(route, request, state.settings.body_timeout);
-    match tokio::time::timeout(state.settings.request_timeout, answering).await {
-        Ok(answer) => {
-            // Only an envelope the wallet took spends the payment budget.
-            if !answer.received {
-                Served::give_back(&state.receives, slot, limit);
-            }
-            answer.response
+    let answering = async {
+        // The headers, the body and the envelope's layout are checked before a payment's
+        // budget is held: a body that is not an envelope never holds a payment's place.
+        let envelope = match peer.read(request, state.settings.body_timeout).await {
+            Ok(envelope) => envelope,
+            Err(response) => return *response,
+        };
+        let Some(slot) = Served::take_slot(&state.receives, limit) else {
+            debug!("receive limit reached");
+            return rate_limited();
+        };
+        let answer = peer.receive(envelope).await;
+        // Only an envelope the wallet took spends the payment budget.
+        if !answer.received {
+            Served::give_back(&state.receives, slot, limit);
         }
+        answer.response
+    };
+    match tokio::time::timeout(state.settings.request_timeout, answering).await {
+        Ok(response) => response,
         Err(_) => {
             debug!("request timed out");
             problem_response(ProblemCode::NotReady, Some(BUDGET_RETRY))

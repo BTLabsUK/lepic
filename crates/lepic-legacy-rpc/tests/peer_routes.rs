@@ -35,7 +35,7 @@ impl ReceiveHandler for NoLegacy {
 }
 
 /// Answers an envelope with its bytes reversed, counting calls; refuses an envelope that starts
-/// with `I`.
+/// with `I` and does not read one that starts with `X`.
 #[derive(Default)]
 struct Reversing {
     calls: AtomicUsize,
@@ -50,6 +50,14 @@ impl SlateHandler for Reversing {
             }
             Ok(envelope.into_iter().rev().collect())
         })
+    }
+
+    /// Bytes that start with `X` are not an envelope.
+    fn check(&self, envelope: &[u8]) -> Result<(), PeerRefusal> {
+        if envelope.first() == Some(&b'X') {
+            return Err(PeerRefusal::UnsupportedFormat);
+        }
+        Ok(())
     }
 }
 
@@ -283,6 +291,52 @@ async fn over_the_payment_budget_is_rate_limited_with_retry_after() {
         "{error:?}"
     );
     assert_eq!(wallet.calls.load(Ordering::SeqCst), 2);
+    listener.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_body_that_is_not_an_envelope_is_refused_before_the_payment_budget() {
+    let mut limited = settings();
+    limited.receives_per_minute = 1;
+    let (listener, wallet) = serving(limited, KEY_A).await;
+    let port = listener.local_addr().port();
+    peer_client()
+        .post_slate(&target(port), b"first")
+        .await
+        .unwrap();
+    // The budget is spent; each of these is answered for what it is, not as over the budget.
+    let json = "POST /v1/peer/slates HTTP/1.1\r\nhost: x\r\ncontent-type: application/json\r\ncontent-length: 2\r\nconnection: close\r\n\r\n{}";
+    let raw = exchange(port, json.as_bytes()).await;
+    assert!(raw.starts_with("HTTP/1.1 415"), "{raw}");
+    let long = "POST /v1/peer/slates HTTP/1.1\r\nhost: x\r\ncontent-type: application/vnd.lepic.epictx\r\ncontent-length: 2000000\r\n\r\n";
+    let raw = exchange(port, long.as_bytes()).await;
+    assert!(raw.starts_with("HTTP/1.1 413"), "{raw}");
+    let junk = "POST /v1/peer/slates HTTP/1.1\r\nhost: x\r\ncontent-type: application/vnd.lepic.epictx\r\ncontent-length: 4\r\nconnection: close\r\n\r\nXjnk";
+    let raw = exchange(port, junk.as_bytes()).await;
+    assert!(raw.starts_with("HTTP/1.1 415"), "{raw}");
+    assert!(raw.contains(r#""code":"unsupported_format""#), "{raw}");
+    assert_eq!(wallet.calls.load(Ordering::SeqCst), 1);
+    listener.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_body_still_arriving_holds_no_payment_place() {
+    let mut limited = settings();
+    limited.receives_per_minute = 1;
+    let (listener, wallet) = serving(limited, KEY_A).await;
+    let port = listener.local_addr().port();
+    // A post whose body has not all come in yet.
+    let mut slow = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+    let head = "POST /v1/peer/slates HTTP/1.1\r\nhost: x\r\ncontent-type: application/vnd.lepic.epictx\r\ncontent-length: 10\r\n\r\nslow";
+    slow.write_all(head.as_bytes()).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    let reply = peer_client()
+        .post_slate(&target(port), b"first")
+        .await
+        .unwrap();
+    assert_eq!(reply, b"tsrif");
+    assert_eq!(wallet.calls.load(Ordering::SeqCst), 1);
+    drop(slow);
     listener.shutdown().await;
 }
 

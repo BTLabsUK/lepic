@@ -36,6 +36,14 @@ pub type HandlerFuture<'a> =
 pub trait SlateHandler: Send + Sync {
     /// The reply envelope to `envelope`, or why there is none.
     fn receive(&self, envelope: Vec<u8>) -> HandlerFuture<'_>;
+
+    /// Whether `envelope` is laid out as one the wallet reads, checked without opening it. A
+    /// listener checks before it spends a payment's budget on the envelope. The default takes
+    /// any bytes.
+    fn check(&self, envelope: &[u8]) -> Result<(), PeerRefusal> {
+        let _ = envelope;
+        Ok(())
+    }
 }
 
 /// Why a [`SlateHandler`] gives no reply.
@@ -197,7 +205,7 @@ impl PeerEndpoint {
     {
         let response = match route {
             PeerRoute::Info => self.info_response(),
-            PeerRoute::Slates => match read_envelope(request, body_timeout).await {
+            PeerRoute::Slates => match self.read(request, body_timeout).await {
                 Ok(envelope) => return self.receive(envelope).await,
                 Err(response) => *response,
             },
@@ -206,6 +214,28 @@ impl PeerEndpoint {
             response,
             received: false,
         }
+    }
+
+    /// The envelope a slates request carries, read within `body_timeout` and checked by the
+    /// wallet without opening it, or the response refusing it: 415 for another media type or
+    /// an envelope the wallet does not read, 413 for a body over [`MAX_ENVELOPE_LEN`], a bare
+    /// 408 for one that does not arrive in time. A listener reads the envelope this way before
+    /// it spends a payment's budget, then passes it to [`Self::receive`].
+    pub async fn read<B>(
+        &self,
+        request: Request<B>,
+        body_timeout: Duration,
+    ) -> Result<Vec<u8>, Box<Response<Full<Bytes>>>>
+    where
+        B: Body<Data = Bytes>,
+        B::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
+    {
+        let envelope = read_envelope(request, body_timeout).await?;
+        if let Err(refusal) = self.handler.check(&envelope) {
+            debug!(?refusal, "envelope not read");
+            return Err(Box::new(refusal.response()));
+        }
+        Ok(envelope)
     }
 
     /// The reply to `envelope`. Only a reply is kept: a refused envelope is asked again.
@@ -330,6 +360,14 @@ mod tests {
                     None => Ok([envelope, format!(" reply {call}").into_bytes()].concat()),
                 }
             })
+        }
+
+        /// Bytes that start with `X` are not an envelope.
+        fn check(&self, envelope: &[u8]) -> Result<(), PeerRefusal> {
+            if envelope.first() == Some(&b'X') {
+                return Err(PeerRefusal::UnsupportedFormat);
+            }
+            Ok(())
         }
     }
 
@@ -513,5 +551,34 @@ mod tests {
             )
             .await;
         assert_eq!(answer.response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn an_envelope_the_wallet_does_not_read_is_refused_before_it_is_received() {
+        let (handler, endpoint) = endpoint(None);
+        let refused = endpoint
+            .read(post(b"X not an envelope", ENVELOPE_MEDIA_TYPE), TIMEOUT)
+            .await
+            .unwrap_err();
+        assert_eq!(refused.status(), StatusCode::UNSUPPORTED_MEDIA_TYPE);
+        let answer = endpoint
+            .answer(
+                PeerRoute::Slates,
+                post(b"X not an envelope", ENVELOPE_MEDIA_TYPE),
+                TIMEOUT,
+            )
+            .await;
+        assert!(!answer.received);
+        assert_eq!(
+            problem(answer.response).await.known_code(),
+            Some(ProblemCode::UnsupportedFormat)
+        );
+        assert_eq!(handler.calls.load(Ordering::SeqCst), 0);
+        let read = endpoint
+            .read(post(b"env", ENVELOPE_MEDIA_TYPE), TIMEOUT)
+            .await
+            .unwrap();
+        assert_eq!(read, b"env");
+        assert_eq!(handler.calls.load(Ordering::SeqCst), 0);
     }
 }

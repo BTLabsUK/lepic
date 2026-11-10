@@ -708,6 +708,13 @@ impl<H: Host> DirectHandler<H> {
 }
 
 impl<H: Host> SlateHandler for DirectHandler<H> {
+    /// The envelope's header and fields decode for this network; nothing is opened.
+    fn check(&self, envelope: &[u8]) -> Result<(), PeerRefusal> {
+        SealedEnvelope::decode(envelope, contact_network(self.network))
+            .map(|_| ())
+            .map_err(|_| PeerRefusal::UnsupportedFormat)
+    }
+
     fn receive(&self, envelope: Vec<u8>) -> HandlerFuture<'_> {
         Box::pin(async move {
             let Proposal {
@@ -885,6 +892,44 @@ mod tests {
             .build()
             .unwrap();
         (runtime.block_on(handler.receive(envelope)), host)
+    }
+
+    #[test]
+    fn only_an_envelope_for_this_network_passes_the_check() {
+        let key = EncSecretKey::from_bytes([3; 32]);
+        let host = Arc::new(Counting::default());
+        let handler = DirectHandler::new(
+            Arc::clone(&host),
+            http(),
+            ProofKey::Payments,
+            key.clone(),
+            Network::Floonet,
+            SharedRng::new(FixedRng),
+        );
+        let sealed = |network| {
+            seal_tx(
+                contact_network(network),
+                &key.public_key(),
+                TxKey::Listener,
+                &TxContent::new(b"slate".to_vec()),
+                None,
+                &mut FixedRng,
+            )
+            .unwrap()
+        };
+        assert_eq!(handler.check(&sealed(Network::Floonet)), Ok(()));
+        for envelope in [
+            sealed(Network::Mainnet),
+            b"not an envelope".to_vec(),
+            Vec::new(),
+        ] {
+            assert_eq!(
+                handler.check(&envelope),
+                Err(PeerRefusal::UnsupportedFormat)
+            );
+        }
+        assert_eq!(host.receives.load(Ordering::Relaxed), 0);
+        assert_eq!(host.refusals.load(Ordering::Relaxed), 0);
     }
 
     #[test]
