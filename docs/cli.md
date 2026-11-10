@@ -421,7 +421,10 @@ Receiving the same slate file again, for example after the reply file was lost, 
 stored the first time again, as the same answer, and stores nothing new; the JSON report has
 `"repeated": true`. `--message` and `--account` are ignored on a repeat, because the stored
 reply already carries the first ones. A different slate that reuses the slate id is refused, and
-so is the same slate once its transaction was cancelled or expired.
+so is the same slate once its transaction was cancelled or expired. A repeat is answered only
+over the transport and to the address that took the slate the first time; the same slate sent to
+another listener or another address of the wallet is refused as already received, so the answer
+never shows that two addresses belong to one wallet.
 
 Send. Write S1 to a file, give it to the receiver, and finalize their answer; `tx finalize` takes a
 plain V3 answer and a sealed one alike:

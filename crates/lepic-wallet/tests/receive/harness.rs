@@ -46,6 +46,8 @@ pub const PASSWORD: &str = "receiver password";
 /// Stands in for the Epicbox transport, whose policy replies in the shape and header of the
 /// inbound slate (ADR 0003).
 pub const EPICBOX: TransportId = TransportId::new("epicbox");
+/// The HTTP listener's transport, whose listeners sign under more than one key.
+pub const HTTP: TransportId = TransportId::new("http");
 
 pub const DATA_DIR: &str = "/receiver";
 
@@ -224,6 +226,7 @@ impl Receiver {
         for (id, policy) in [
             (FILE, Arc::new(FilePolicy) as Arc<dyn FormatPolicy>),
             (EPICBOX, Arc::new(EchoPolicy)),
+            (HTTP, Arc::new(EchoPolicy)),
         ] {
             let (own, _peer) = LoopbackTransport::pair(
                 id,

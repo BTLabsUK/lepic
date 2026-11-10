@@ -19,6 +19,7 @@ use lepic_primitives::amount::{Amount, Height};
 use lepic_primitives::params::Network;
 use lepic_slate::role::Role;
 use lepic_slate::stage::Stage;
+use lepic_store::TxId;
 use lepic_store::{
     AccountIndex, OutputStatus, ParticipantId, SlateStage, StoreError, TxDirection, TxState,
     WalletStore,
@@ -26,7 +27,7 @@ use lepic_store::{
 use lepic_transport::file::FILE;
 use lepic_wallet::chain::SLATE_LEAD_BLOCKS;
 use lepic_wallet::event::{AnsweredSlate, ReceivedTransaction};
-use lepic_wallet::{Event, ReceiveError, WalletError};
+use lepic_wallet::{Event, ProofKey, ReceiveError, ReceiveRequest, WalletError};
 use receive_harness::*;
 use serde_json::Value;
 use support::every_store;
@@ -287,6 +288,79 @@ fn an_expired_receive_is_not_answered_again() {
         "{error:?}"
     );
     assert_eq!(receiver.next_child(), next_child);
+}
+
+fn assert_already_received(result: Result<lepic_wallet::Received, ReceiveError>, tx_id: TxId) {
+    let error = result.unwrap_err();
+    assert!(
+        matches!(error, ReceiveError::AlreadyReceived { tx_id: id, .. } if id == tx_id),
+        "{error:?}"
+    );
+}
+
+fn request(proof_key: ProofKey) -> ReceiveRequest {
+    ReceiveRequest {
+        proof_key,
+        ..ReceiveRequest::default()
+    }
+}
+
+every_store!(a_repeat_is_answered_only_on_the_transport_and_key_that_took_the_slate);
+fn a_repeat_is_answered_only_on_the_transport_and_key_that_took_the_slate() {
+    let (s1, _) = delivered_s1("send_file_plain");
+    let receiver = Receiver::new(
+        &receiver_mnemonic(&vector("send_file_plain_s2_v3")),
+        slate_height(&s1),
+    );
+    let first = receiver
+        .receive_with(HTTP, &json(&s1), request(ProofKey::Onion))
+        .unwrap();
+
+    assert_already_received(
+        receiver.receive_with(HTTP, &json(&s1), request(ProofKey::Payments)),
+        first.tx_id,
+    );
+    assert_already_received(
+        receiver.receive_with(EPICBOX, &json(&s1), request(ProofKey::Onion)),
+        first.tx_id,
+    );
+    assert_already_received(
+        receiver.receive_with(HTTP, &json(&s1), request(ProofKey::Epic1 { index: 0 })),
+        first.tx_id,
+    );
+    let again = receiver
+        .receive_with(HTTP, &json(&s1), request(ProofKey::Onion))
+        .unwrap();
+    assert!(again.repeated);
+    assert_eq!(again.reply.as_bytes(), first.reply.as_bytes());
+}
+
+every_store!(a_repeat_of_a_slate_stored_without_its_proof_key_is_answered_off_the_listeners);
+fn a_repeat_of_a_slate_stored_without_its_proof_key_is_answered_off_the_listeners() {
+    let (s1, _) = delivered_s1("send_file_plain");
+    for (transport, answered) in [(FILE, true), (EPICBOX, true), (HTTP, false)] {
+        let receiver = Receiver::new(
+            &receiver_mnemonic(&vector("send_file_plain_s2_v3")),
+            slate_height(&s1),
+        );
+        let first = receiver.receive(transport, &json(&s1), None).unwrap();
+        // A row written before the proof key was recorded with the transaction.
+        receiver
+            .store()
+            .write(|repos| repos.delete_setting(&format!("receive.proof_key.{}", first.tx_id.0)))
+            .unwrap();
+
+        let again = receiver.receive(transport, &json(&s1), None);
+        if answered {
+            assert!(again.unwrap().repeated, "{transport}");
+            assert_already_received(
+                receiver.receive_with(transport, &json(&s1), request(ProofKey::Onion)),
+                first.tx_id,
+            );
+        } else {
+            assert_already_received(again, first.tx_id);
+        }
+    }
 }
 
 every_store!(a_cancelled_receive_is_not_answered_again);

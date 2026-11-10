@@ -200,12 +200,13 @@ where
     ///
     /// Asks the node for its tip. Fails with [`ReceiveError::Wallet`] carrying
     /// [`WalletError::Locked`] when the wallet is locked, with [`ReceiveError::AlreadyReceived`]
-    /// for another S1 under a slate id this wallet has received before or for a slate whose
-    /// transaction was cancelled or expired, with [`ReceiveError::Expired`] when the
-    /// tip has reached the slate's TTL cutoff, with [`ReceiveError::AheadOfTip`] when its height
-    /// is above any the chain can have reached by now, and with a typed
-    /// rejection for any slate that is malformed, not an S1, pays nothing, or whose fee or
-    /// messages do not check. Fails with
+    /// for another S1 under a slate id this wallet has received before, for a slate whose
+    /// transaction was cancelled or expired, or for a repeat that arrives over another
+    /// transport or to another proof key than the first time, with [`ReceiveError::Expired`]
+    /// when the tip has reached the slate's TTL cutoff, with [`ReceiveError::AheadOfTip`] when
+    /// its height is above any the chain can have reached by now, and with a typed rejection
+    /// for any slate that is malformed, not an S1, pays nothing, or whose fee or messages do
+    /// not check. Fails with
     /// [`WalletError::RestoreScanRequired`] inside [`ReceiveError::Wallet`] on a database rebuilt
     /// from the seed before a scan from genesis completed. Nothing is stored on failure.
     pub async fn receive(
@@ -274,7 +275,11 @@ where
         span.record("slate_id", tracing::field::display(slate.id()));
         span.record("stage", slate.stage().as_str());
         check_proposal(&slate)?;
-        if let Some(received) = self.received_before(&slate).await? {
+        let arrival = redelivery::Arrival {
+            transport,
+            proof_key: request.proof_key,
+        };
+        if let Some(received) = self.received_before(&slate, arrival).await? {
             return Ok(self.answered_again(received, transport));
         }
         let (tip, limit) = self.stage_tip(&session, ReceiveError::Node).await?;
@@ -340,14 +345,18 @@ where
     /// The S2 stored for `proposal` when this wallet received it before, read before the node
     /// is asked anything, so a repeat is answered while the node is unreachable or past the
     /// slate's TTL.
-    async fn received_before(&self, proposal: &Slate) -> Result<Option<Received>, ReceiveError> {
+    async fn received_before(
+        &self,
+        proposal: &Slate,
+        arrival: redelivery::Arrival,
+    ) -> Result<Option<Received>, ReceiveError> {
         let session = self.session()?;
         let network = self.config().network;
         let proposal = proposal.clone();
         self.blocking(move |_, _| {
             Ok(session
                 .store
-                .read(|repos| redelivery::answer_again(repos, network, &proposal)))
+                .read(|repos| redelivery::answer_again(repos, network, &proposal, arrival)))
         })
         .await?
     }
@@ -411,8 +420,12 @@ fn store_reply<N, S: StoreOpener, V>(
     let sending = proposal.claim.sending(proposal.network, None);
     let now = ports.clock.now();
     session.store.write(|repos| {
+        let arrival = redelivery::Arrival {
+            transport,
+            proof_key: request.proof_key,
+        };
         if let Some(received) =
-            redelivery::answer_again(&*repos, proposal.network, &proposal.slate)?
+            redelivery::answer_again(&*repos, proposal.network, &proposal.slate, arrival)?
         {
             return Ok(Answer::Repeated(received));
         }
@@ -423,6 +436,7 @@ fn store_reply<N, S: StoreOpener, V>(
             .encode_reply(&response.slate, &proposal.context, &sending, &proposal.from)
             .map_err(ReceiveError::Encode)?;
         let tx_id = store_response(repos, &response, &reply, codec.as_str(), transport, now)?;
+        redelivery::record_proof_key(repos, tx_id, request.proof_key)?;
         if let Some(counterparty) = &proposal.counterparty {
             repos.set_counterparty(tx_id, counterparty.as_str())?;
         }

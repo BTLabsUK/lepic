@@ -8,6 +8,11 @@
 //! S2 and before acknowledging, and a user receives the same file again when the reply file was
 //! lost. The receiver answers it with the S2 it stored, never a new one, so each inbound slate
 //! stays idempotent on `(slate_id, stage)`.
+//!
+//! The stored S2 goes back only where the S1 first came: the same transport and the same key
+//! signing its payment proof. Two listeners of one wallet (the web listener and the onion, or
+//! an epic1 address) never hand out the same bytes, so a repeat cannot show that they are one
+//! wallet; elsewhere the repeat is refused as received before.
 
 use lepic_primitives::params::Network;
 use lepic_slate::codec::{MediaType, WireSlate};
@@ -15,10 +20,71 @@ use lepic_slate::error::DecodeError;
 use lepic_slate::model::{Slate, SlateId};
 use lepic_slate::role::Role;
 use lepic_slate::stage::Stage;
-use lepic_store::{Repositories, SlateStage, StoreError, TxDirection, TxId, TxState};
+use lepic_store::{
+    Repositories, SlateStage, StoreError, StoredTransaction, TxDirection, TxId, TxState,
+};
+use lepic_transport::transport::TransportId;
 use uuid::Uuid;
 
-use super::{ReceiveError, Received, legacy_codecs};
+use super::{ProofKey, ReceiveError, Received, legacy_codecs};
+
+/// The setting that keeps, per received transaction, the key that signed its payment proof.
+const PROOF_KEY_PREFIX: &str = "receive.proof_key.";
+
+/// Transports whose listeners answer under more than one key. A transaction stored before the
+/// proof key was recorded is not answered again on them, since the key that took it is not
+/// known.
+const LISTENER_TRANSPORTS: [&str; 2] = ["http", "tor"];
+
+/// Where an S1 arrived: the transport, and the key that signs a payment proof there.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Arrival {
+    pub(crate) transport: TransportId,
+    pub(crate) proof_key: ProofKey,
+}
+
+/// Records that `proof_key` signs the payment proof of the received transaction `tx_id`.
+pub(crate) fn record_proof_key(
+    repos: &mut dyn Repositories,
+    tx_id: TxId,
+    proof_key: ProofKey,
+) -> Result<(), StoreError> {
+    repos.put_setting(&proof_key_setting(tx_id), &proof_key_text(proof_key))
+}
+
+fn proof_key_setting(tx_id: TxId) -> String {
+    format!("{PROOF_KEY_PREFIX}{}", tx_id.0)
+}
+
+fn proof_key_text(proof_key: ProofKey) -> String {
+    match proof_key {
+        ProofKey::Payments => "payments".to_owned(),
+        ProofKey::Onion => "onion".to_owned(),
+        ProofKey::Epic1 { index } => format!("epic1.{index}"),
+    }
+}
+
+/// Whether the S1 of `transaction` came the way `arrival` did. A transaction stored before the
+/// key was recorded took the epic1 key when it has an epic1 index, and otherwise the payments
+/// key, except on a listener transport, where the key is not known and the answer is no.
+fn arrived_alike(
+    repos: &dyn Repositories,
+    transaction: &StoredTransaction,
+    arrival: Arrival,
+) -> Result<bool, StoreError> {
+    if transaction.entry.transport.as_deref() != Some(arrival.transport.as_str()) {
+        return Ok(false);
+    }
+    let wanted = proof_key_text(arrival.proof_key);
+    if let Some(recorded) = repos.setting(&proof_key_setting(transaction.id))? {
+        return Ok(recorded == wanted);
+    }
+    if let Some(index) = crate::epic1_index::index_of(repos, transaction.id)? {
+        return Ok(arrival.proof_key == ProofKey::Epic1 { index });
+    }
+    Ok(arrival.proof_key == ProofKey::Payments
+        && !LISTENER_TRANSPORTS.contains(&arrival.transport.as_str()))
+}
 
 /// The S2 this wallet stored when it received a slate, and the state its transaction is in now.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -62,13 +128,16 @@ pub(crate) fn decode_reply(network: Network, reply: &StoredReply) -> Result<Slat
         .map_err(ReceiveError::Decode)
 }
 
-/// The stored S2 again, when this wallet received `proposal` before, or `None` when it has not
-/// received its slate id. A different S1 under that id is refused, and so is one whose
-/// transaction was cancelled or expired: cancelling released the output the reply pays to.
+/// The stored S2 again, when this wallet received `proposal` before over the transport and
+/// under the proof key of `arrival`, or `None` when it has not received its slate id. A
+/// different S1 under that id is refused, and so is one whose transaction was cancelled or
+/// expired, since cancelling released the output the reply pays to, and one that arrives
+/// another way than the first.
 pub(crate) fn answer_again(
     repos: &dyn Repositories,
     network: Network,
     proposal: &Slate,
+    arrival: Arrival,
 ) -> Result<Option<Received>, ReceiveError> {
     let slate_id = proposal.id();
     let uuid = Uuid::from_bytes(*slate_id.as_bytes());
@@ -82,7 +151,9 @@ pub(crate) fn answer_again(
     let Some(stored) = stored_reply(repos, slate_id)? else {
         return Err(refused);
     };
-    if matches!(stored.state, TxState::Cancelled | TxState::Expired) {
+    if matches!(stored.state, TxState::Cancelled | TxState::Expired)
+        || !arrived_alike(repos, &transaction, arrival)?
+    {
         return Err(refused);
     }
     let slate = decode_reply(network, &stored)?;
