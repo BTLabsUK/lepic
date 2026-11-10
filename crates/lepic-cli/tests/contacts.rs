@@ -151,6 +151,101 @@ fn a_pairing_request_to_a_paid_peer_is_posted() {
     );
 }
 
+/// A wallet that paid a LEPIC peer and asked it to pair: the request is listed as sent until it
+/// is withdrawn, the peer lists it as received, and a withdrawn request lets a new one go out.
+#[test]
+fn a_pairing_request_is_listed_on_both_sides_and_can_be_withdrawn_or_dismissed() {
+    let host = TestHost::new();
+    host.fund(SENDER_MNEMONIC, 0, FUNDING, 1);
+    let payer = Instance::new("payer password");
+    payer.restore(&host, SENDER_MNEMONIC);
+    let shop = Instance::new("shop password");
+    shop.run(&host, &["wallet", "init"]).ok();
+    let address = shop.run(&host, &["wallet", "address"]).ok().json();
+    let address = text(&address, "address").to_owned();
+    payer
+        .run(&host, &["tx", "send", "2", "--to", &address])
+        .ok();
+    shop.run(&host, &["epicbox", "drain"]).ok();
+    payer.run(&host, &["epicbox", "drain"]).ok();
+
+    let request = payer
+        .run(&host, &["contact", "request", &address, "--name", "Payer"])
+        .ok()
+        .json();
+    let contact_id = text(&request, "contact_id").to_owned();
+
+    let sent = payer.run(&host, &["contact", "list"]).ok().json();
+    let sent = sent["sent_requests"].as_array().unwrap().clone();
+    assert_eq!(sent.len(), 1, "{sent:?}");
+    assert_eq!(sent[0]["contact_id"], contact_id.as_str());
+    assert_eq!(sent[0]["to_address"], address.as_str());
+    // A second request to the same address is refused while the first stands.
+    let again = payer.run(&host, &["contact", "request", &address]);
+    assert_ne!(again.code, 0, "{again:?}");
+    assert_eq!(again.json()["error"]["kind"], "rejected");
+
+    let seen = shop.run(&host, &["epicbox", "drain"]).ok().json();
+    drop(seen);
+    let received = shop.run(&host, &["contact", "requests"]).ok().json();
+    let received = received["requests"].as_array().unwrap().clone();
+    assert_eq!(received.len(), 1, "{received:?}");
+    assert!(
+        text(&received[0], "invite_link").starts_with("epiccash://pair/"),
+        "{received:?}"
+    );
+    let request_id = text(&received[0], "request_id").to_owned();
+    let dismissed = shop
+        .run(&host, &["contact", "request-dismiss", &request_id])
+        .ok()
+        .json();
+    assert_eq!(dismissed["dismissed"], true, "{dismissed}");
+    let received = shop.run(&host, &["contact", "requests"]).ok().json();
+    assert!(received["requests"].as_array().unwrap().is_empty());
+    let unknown = shop.run(&host, &["contact", "request-dismiss", &request_id]);
+    assert_eq!(unknown.code, 6, "{unknown:?}");
+    assert_eq!(unknown.json()["error"]["kind"], "not_found");
+
+    let cancelled = payer
+        .run(&host, &["contact", "request-cancel", &contact_id])
+        .ok()
+        .json();
+    assert_eq!(cancelled["cancelled"], true, "{cancelled}");
+    let sent = payer.run(&host, &["contact", "list"]).ok().json();
+    assert!(sent["sent_requests"].as_array().unwrap().is_empty());
+    payer
+        .run(&host, &["contact", "request", &address, "--name", "Payer"])
+        .ok();
+}
+
+#[test]
+fn removing_an_unknown_contact_is_not_found() {
+    let host = TestHost::new();
+    let wallet = Instance::new("wallet password");
+    wallet.run(&host, &["wallet", "init"]).ok();
+    let failed = wallet.run(
+        &host,
+        &["contact", "remove", "0123456789abcdef0123456789abcdef"],
+    );
+    assert_eq!(failed.code, 6, "{failed:?}");
+    assert_eq!(failed.json()["error"]["kind"], "not_found");
+}
+
+#[test]
+fn an_empty_profile_value_clears_it_and_no_value_is_a_usage_error() {
+    let host = TestHost::new();
+    let wallet = Instance::new("wallet password");
+    wallet.run(&host, &["wallet", "init"]).ok();
+    let set = wallet
+        .run(&host, &["profile", "set", "no-payments"])
+        .ok()
+        .json();
+    assert_ne!(set["profile"], 0, "{set}");
+    let cleared = wallet.run(&host, &["profile", "set", ""]).ok().json();
+    assert_eq!(cleared["profile"], 0, "{cleared}");
+    assert_eq!(wallet.run(&host, &["profile", "set"]).code, 2);
+}
+
 #[test]
 fn a_contact_check_is_answered_by_a_serving_wallet() {
     let mut host = TestHost::new();

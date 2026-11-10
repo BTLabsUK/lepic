@@ -477,8 +477,25 @@ fn contact_routes_pair_back_up_and_refuse_bad_input() {
         let import = http(socket, "POST", "/v1/contacts/import", Some(&body));
         assert_eq!(import.status, 200, "{import:?}");
 
-        let removed = http(socket, "DELETE", &update, None).ok();
-        assert_eq!(removed["removed"], false, "{removed}");
+        problem(&http(socket, "DELETE", &update, None), 404, "not_found");
+
+        let requests = http(socket, "GET", "/v1/contacts/requests", None).ok();
+        assert_eq!(requests["requests"], serde_json::json!([]), "{requests}");
+        problem(
+            &http(socket, "DELETE", "/v1/contacts/requests/ab12", None),
+            400,
+            "usage",
+        );
+        let unknown = "/v1/contacts/requests/0123456789abcdef";
+        problem(&http(socket, "DELETE", unknown, None), 404, "not_found");
+        let accept = format!("{unknown}/accept");
+        problem(
+            &http(socket, "POST", &accept, Some(r#"{"name":"Shop"}"#)),
+            404,
+            "not_found",
+        );
+        let withdraw = format!("/v1/contacts/{NO_CONTACT}/request");
+        problem(&http(socket, "DELETE", &withdraw, None), 404, "not_found");
 
         problem(
             &http(socket, "DELETE", "/v1/contacts/ab12", None),

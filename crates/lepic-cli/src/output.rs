@@ -71,6 +71,9 @@ pub enum Report {
     ContactRemove(ContactRemoveReport),
     ContactKeyCheck(ContactKeyCheckReport),
     ContactCheck(ContactCheckReport),
+    ContactRequests(ContactRequestsReport),
+    ContactRequestDismiss(ContactRequestDismissReport),
+    ContactRequestCancel(ContactRequestCancelReport),
     ContactMoveHome(ContactMoveHomeReport),
     ProfileShow(ProfileShowReport),
     ProfileSet(ProfileSetReport),
@@ -711,6 +714,55 @@ pub struct ContactReport {
 #[derive(Debug, Serialize, ToSchema)]
 pub struct ContactListReport {
     pub contacts: Vec<ContactReport>,
+    /// The pair requests this wallet sent that wait for an answer, oldest first.
+    pub sent_requests: Vec<SentRequestReport>,
+}
+
+/// A pair request this wallet sent that nobody answered yet.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct SentRequestReport {
+    /// The id `contact request-cancel` takes.
+    pub contact_id: String,
+    /// The address the request went to.
+    pub to_address: Option<String>,
+    pub created_at: String,
+    /// When the request's invite stops being answerable.
+    pub expires_at: String,
+}
+
+/// A pair request another wallet sent to this one.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct PairRequestReport {
+    /// The id `contact request-accept` and `contact request-dismiss` take.
+    pub request_id: String,
+    /// The sender's payments address, as the relay authenticated it.
+    pub from_address: String,
+    /// The name the sender's invite gives it, unverified.
+    pub claimed_name: String,
+    pub received_at: String,
+    pub expires_at: String,
+    /// The invite the request carries, for `contact accept`.
+    pub invite_link: String,
+}
+
+/// `lepic contact requests`.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct ContactRequestsReport {
+    pub requests: Vec<PairRequestReport>,
+}
+
+/// `lepic contact request-dismiss`.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct ContactRequestDismissReport {
+    pub request_id: String,
+    pub dismissed: bool,
+}
+
+/// `lepic contact request-cancel`.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct ContactRequestCancelReport {
+    pub contact_id: String,
+    pub cancelled: bool,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -1451,6 +1503,9 @@ fn write_human(out: &mut Vec<u8>, report: &Report) -> std::io::Result<()> {
         Report::ContactBackup(r) => writeln!(out, "{}", r.backup),
         Report::Contact(_)
         | Report::ContactList(_)
+        | Report::ContactRequests(_)
+        | Report::ContactRequestDismiss(_)
+        | Report::ContactRequestCancel(_)
         | Report::ContactRemove(_)
         | Report::ContactSlate(_)
         | Report::ContactKeyCheck(_)
@@ -2268,14 +2323,41 @@ fn write_contact_human(out: &mut Vec<u8>, report: &Report) -> std::io::Result<()
     match report {
         Report::Contact(r) => write_contact(out, r),
         Report::ContactList(r) => {
-            if r.contacts.is_empty() {
+            if r.contacts.is_empty() && r.sent_requests.is_empty() {
                 return writeln!(out, "No contacts are paired.");
             }
             for contact in &r.contacts {
                 write_contact(out, contact)?;
             }
+            for sent in &r.sent_requests {
+                writeln!(
+                    out,
+                    "Request {} to {} waits for an answer until {}.",
+                    sent.contact_id,
+                    sent.to_address.as_deref().unwrap_or("an unknown address"),
+                    sent.expires_at
+                )?;
+            }
             Ok(())
         }
+        Report::ContactRequests(r) => {
+            if r.requests.is_empty() {
+                return writeln!(out, "No pair requests wait.");
+            }
+            for request in &r.requests {
+                writeln!(
+                    out,
+                    "Request {} from {} ({}), until {}.",
+                    request.request_id,
+                    request.from_address,
+                    request.claimed_name,
+                    request.expires_at
+                )?;
+            }
+            Ok(())
+        }
+        Report::ContactRequestDismiss(r) => writeln!(out, "Request {} dismissed.", r.request_id),
+        Report::ContactRequestCancel(r) => writeln!(out, "Request {} withdrawn.", r.contact_id),
         Report::ContactRemove(r) if r.removed => writeln!(out, "Pairing {} removed.", r.contact_id),
         Report::ContactRemove(r) => writeln!(out, "No pairing {}.", r.contact_id),
         Report::ContactSlate(r) => write_contact_slate(out, r),
@@ -3008,8 +3090,29 @@ mod tests {
                 ],
             ),
             (
-                Report::ContactList(ContactListReport { contacts: vec![] }),
-                vec!["contacts"],
+                Report::ContactList(ContactListReport {
+                    contacts: vec![],
+                    sent_requests: vec![],
+                }),
+                vec!["contacts", "sent_requests"],
+            ),
+            (
+                Report::ContactRequests(ContactRequestsReport { requests: vec![] }),
+                vec!["requests"],
+            ),
+            (
+                Report::ContactRequestDismiss(ContactRequestDismissReport {
+                    request_id: text("r"),
+                    dismissed: true,
+                }),
+                vec!["dismissed", "request_id"],
+            ),
+            (
+                Report::ContactRequestCancel(ContactRequestCancelReport {
+                    contact_id: text("c"),
+                    cancelled: true,
+                }),
+                vec!["cancelled", "contact_id"],
             ),
             (
                 Report::ContactRemove(ContactRemoveReport {

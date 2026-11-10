@@ -899,7 +899,7 @@ pub struct DomainFileArgs {
 
 #[derive(Debug, Args)]
 pub struct ProfileSetArgs {
-    /// Bit names: no-payments, automated; empty clears the profile
+    /// Bit names: no-payments, automated; "" (an empty value, given explicitly) clears the profile
     #[arg(
         value_name = "NAMES",
         required_unless_present = "bits",
@@ -1244,6 +1244,20 @@ The invite's mailboxes live on this wallet's relay. `lepic contact collect` take
 Sent only to a key that ran LEPIC within 30 days, answered nothing without the marker since and \
 claims pair requests. `lepic contact collect` takes the answer.")]
     Request(ContactRequestArgs),
+    /// List the pair requests other wallets sent to this one, oldest first
+    #[command(after_help = "\
+Answer one with `lepic contact request-accept`, or hide it with `lepic contact request-dismiss`. \
+`lepic contact list` shows the requests this wallet sent.")]
+    Requests,
+    /// Answer a pair request that arrived, as `contact accept` answers its invite
+    RequestAccept(ContactRequestAcceptArgs),
+    /// Hide a pair request that arrived; its sender is not told
+    RequestDismiss(ContactRequestIdArg),
+    /// Withdraw a pair request this wallet sent, so a new one can go to the same address
+    #[command(after_help = "\
+`lepic contact list` shows the requests sent, with the id this command takes. An answer that \
+comes later is refused.")]
+    RequestCancel(ContactIdArg),
     /// Show what an invite link says, before answering it
     Open(ContactLinkArg),
     /// Answer an invite; the reply goes to the inviter's relay unless --by-hand
@@ -1436,6 +1450,22 @@ pub struct ContactRequestArgs {
     /// The wallet's Epicbox address
     #[arg(value_name = "ADDRESS")]
     pub address: String,
+    #[command(flatten)]
+    pub name: ContactNameArg,
+}
+
+#[derive(Debug, Args)]
+pub struct ContactRequestIdArg {
+    /// The request's id, as `contact requests` shows it
+    #[arg(value_name = "REQUEST")]
+    pub request: String,
+}
+
+#[derive(Debug, Args)]
+pub struct ContactRequestAcceptArgs {
+    /// The request's id, as `contact requests` shows it
+    #[arg(value_name = "REQUEST")]
+    pub request: String,
     #[command(flatten)]
     pub name: ContactNameArg,
 }

@@ -885,6 +885,16 @@ reply or confirm link sent by hand. In person, each side runs `contact show-card
 `contact request <ADDRESS> --name Anna` asks a wallet this one paid or was paid by lately to
 pair, at its Epicbox address; it is sent only to a key that ran LEPIC within 30 days and claims
 pair requests, and the pairing completes verified when the answer proves that address.
+A request waits up to 7 days for the answer and `contact list` shows it under `sent_requests`
+(the contact id, the address and when it expires); a second request to that address is refused
+while it waits. `contact request-cancel <ID>` withdraws it, so a late answer is refused and a new
+request may go out.
+
+`contact requests` lists the pair requests this wallet received, each with a `request_id`, the
+address it came from, the name it claims and its invite link. `contact request-accept <REQUEST>
+[--name Anna]` pairs through that link, as `contact accept` does, and the pairing completes
+verified against the address that asked. `contact request-dismiss <REQUEST>` drops one without an
+answer. The request id is 16 hex digits; an unknown one exits 6.
 
 A contact that moves to another relay asks for it in an update; `contact list` then shows
 `asks to move to relay <HOST>`, and `contact move <ID> --apply <HOST>` moves this wallet's
@@ -970,7 +980,7 @@ holds. `contact export <FILE>` and `contact import <FILE>` carry the pairings in
 
 `contact invite` takes `--expiry 1h`, `24h` or `7d` (default `24h`), `--pairing-words`, and
 `--name` (default `LEPIC`). `contact label <ID> <LABEL>` gives a contact a name of your own.
-`contact remove <ID>` removes a pairing; the contact is not told.
+`contact remove <ID>` removes a pairing; the contact is not told. An id that is no contact exits 6.
 
 `contact key-check <NEW> <OLD>` asks whether a contact paired again, for example after a restore,
 still holds the keys of the older pairing; `contact collect` takes the answer. Either the keys are
@@ -1160,6 +1170,10 @@ when `serve` stops.
 | `PATCH /v1/contacts/{id}` | `contact label` and `contact allow-invoices`, with `label` or `allow_invoices` |
 | `POST /v1/contacts/invites` | `contact invite` |
 | `POST /v1/contacts/requests` | `contact request` |
+| `GET /v1/contacts/requests` | `contact requests` |
+| `POST /v1/contacts/requests/{id}/accept` | `contact request-accept`, with `name` |
+| `DELETE /v1/contacts/requests/{id}` | `contact request-dismiss` |
+| `DELETE /v1/contacts/{id}/request` | `contact request-cancel` |
 | `POST /v1/contacts/preview` | `contact open`, with the `link` text |
 | `POST /v1/contacts/accept` | `contact accept` |
 | `POST /v1/contacts/enter` | `contact enter`, with one to five `input` words |
