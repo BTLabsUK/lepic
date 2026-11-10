@@ -579,7 +579,7 @@ mod tests {
     }
 
     #[test]
-    fn in_person_epic1_and_profile_commands_stand_for_their_routes() {
+    fn in_person_and_epic1_commands_stand_for_their_routes() {
         let table: &[(&[&str], &str, &str, Option<Value>)] = &[
             (
                 &["in-person", "invoice", "1.5", "--ttl-blocks", "20"],
@@ -657,6 +657,19 @@ mod tests {
                 "/v1/epic1/issue-here",
                 None,
             ),
+        ];
+        for (arguments, method, target, body) in table {
+            assert_eq!(
+                request(arguments),
+                Some(((*method).to_owned(), (*target).to_owned(), body.clone())),
+                "{arguments:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn profile_commands_stand_for_their_routes() {
+        let table: &[(&[&str], &str, &str, Option<Value>)] = &[
             (
                 &["profile", "domain", "show"],
                 "GET",
