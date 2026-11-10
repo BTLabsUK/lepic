@@ -85,6 +85,15 @@ Conventional Commit messages at release time.
   link mailboxes of a restored seed. `epic1 read` shows what a link asks and its relays, `epic1
   pay --hosts-ok` pays it, the amount it asks unless one is given, and `epic1 post-next`
   tries the next relay of the link. The payer's `contact collect` finalizes the answer.
+- Numbered epic1 addresses (RFC 0003 §5.13). Each account has many epic1 addresses, numbered
+  from 0; index 0 is the address earlier builds show, with the same keys. `epic1 new-address`
+  issues the next, `epic1 address --index` shows one, `epic1 addresses` lists them, and a
+  received transaction shows the index it came to. The onion, web and Epicbox seal keys and the
+  adverts peers pinned do not change. A wallet restored from its recovery phrase tries 50
+  indexes past the highest one known and issues no new address until `epic1 issue-here` makes
+  it the install that issues. Listeners open payments sealed to an epic1 address only where
+  `epic1_web_listener` or `epic1_onion_listener` is on (FFI `set_epic1_at_listener`); both are
+  off by default.
 - `lepic epictx open` and `POST /v1/epictx/open`: shows the slate in an `.epictx` file as JSON,
   a `lepic.v1` slate with its network, kernel features, header version and tail (§5.10), and
   takes nothing.
