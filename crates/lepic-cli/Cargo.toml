@@ -19,7 +19,7 @@ path = "src/main.rs"
 clap = { workspace = true, features = ["std", "derive", "help", "usage", "error-context"] }
 futures-util = { workspace = true, features = ["alloc"] }
 http-body-util.workspace = true
-hyper = { workspace = true, features = ["server", "http1"] }
+hyper = { workspace = true, features = ["server", "client", "http1"] }
 hyper-util = { workspace = true, features = ["server", "http1", "tokio"] }
 jiff = { workspace = true, features = ["std"] }
 lepic-epicbox.workspace = true

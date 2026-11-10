@@ -24,13 +24,18 @@ pub(crate) struct Problem {
     /// The error kind, as the CLI reports it; it decides `status`.
     #[schema(schema_with = codes)]
     code: &'static str,
+    /// The causes `detail` ends with, outermost first, as the CLI's JSON error lists them.
+    /// `detail` is the error itself followed by these, joined by `: `.
+    #[serde(skip_serializing_if = "<[String]>::is_empty")]
+    #[schema(value_type = Vec<String>)]
+    causes: Box<[String]>,
     /// The transaction the error is about, when one was stored: a send stopped before its
     /// delivery was known, or a `slate_id` used before.
     #[serde(skip_serializing_if = "Option::is_none")]
     tx_id: Option<u32>,
     /// The methods the route takes, for the `Allow` header of a 405.
     #[serde(skip)]
-    pub(crate) allow: Option<String>,
+    pub(crate) allow: Option<Box<str>>,
 }
 
 impl Problem {
@@ -41,6 +46,7 @@ impl Problem {
             status: status.as_u16(),
             detail: detail.into(),
             code: code.name(),
+            causes: Box::default(),
             tx_id: None,
             allow: None,
         }
@@ -60,7 +66,7 @@ impl Problem {
 
     pub(crate) fn method_not_allowed(allow: String) -> Self {
         Self {
-            allow: Some(allow),
+            allow: Some(allow.into()),
             ..Self::new(
                 StatusCode::METHOD_NOT_ALLOWED,
                 ErrorKind::Usage,
@@ -106,9 +112,11 @@ impl Problem {
 impl From<CliError> for Problem {
     fn from(error: CliError) -> Self {
         let kind = error.kind();
+        let chain = error.chain();
         Self {
             tx_id: error.tx_id(),
-            ..Self::new(status(kind), kind, error.chain().join(": "))
+            causes: chain.get(1..).unwrap_or_default().into(),
+            ..Self::new(status(kind), kind, chain.join(": "))
         }
     }
 }

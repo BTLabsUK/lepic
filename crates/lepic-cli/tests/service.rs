@@ -308,3 +308,67 @@ fn a_listener_with_native_direct_offers_its_native_endpoint() {
         assert!(status.starts_with("HTTP/1.1 200"), "{status}");
     });
 }
+
+/// While serve holds the wallet, a command with a route runs there and prints what it prints on
+/// its own, errors included; a command with no route names the running serve (ADR 0053).
+#[test]
+fn commands_run_through_a_running_serve() {
+    let mut host = TestHost::new();
+    host.fund(SENDER_MNEMONIC, 0, FUNDING, 1);
+    let wallet = Instance::new("serving password");
+    wallet.restore(&host, SENDER_MNEMONIC);
+    let receiver = Instance::new("receiver password");
+    receiver.run(&host, &["wallet", "init"]).ok();
+    let address = receiver.run(&host, &["wallet", "address"]).ok().json();
+    let address = support::text(&address, "address").to_owned();
+    let mut human = wallet.env();
+    human.retain(|(key, _)| key != "LEPIC_OUTPUT");
+    let too_much = ["tx", "send", "1000000", "--to", &address];
+    let direct = [
+        wallet.run(&host, &["wallet", "info"]).ok(),
+        wallet.run(&host, &["tx", "list"]).ok(),
+        wallet
+            .run_with(&host, &["wallet", "info"], human.clone(), "")
+            .ok(),
+        wallet.run(&host, &["tx", "show", "999"]),
+        wallet.run(&host, &too_much),
+    ];
+    assert_eq!(direct[3].code, 6, "{:?}", direct[3]);
+    assert_eq!(direct[4].code, 8, "{:?}", direct[4]);
+
+    let stop = Arc::new(AtomicBool::new(false));
+    let signal = Arc::clone(&stop);
+    host.interrupt_when = Some(Arc::new(move || signal.load(Ordering::SeqCst)));
+    let client = host.without_interrupt();
+    let socket = wallet.data_dir().join("lepic.sock");
+
+    let (through, unrouted, served) = std::thread::scope(|scope| {
+        let server = scope.spawn(|| wallet.run(&host, &["serve"]));
+        wait_for_socket(&socket);
+        let through = [
+            wallet.run(&client, &["wallet", "info"]),
+            wallet.run(&client, &["tx", "list"]),
+            wallet.run_with(&client, &["wallet", "info"], human.clone(), ""),
+            wallet.run(&client, &["tx", "show", "999"]),
+            wallet.run(&client, &too_much),
+        ];
+        let to_file = wallet.path("slate.json");
+        let to_file = to_file.to_str().unwrap();
+        let unrouted = wallet.run(&client, &["tx", "send", "1", "--to-file", to_file]);
+        stop.store(true, Ordering::SeqCst);
+        (through, unrouted, server.join().unwrap())
+    });
+
+    for (direct, through) in direct.iter().zip(&through) {
+        assert_eq!(through.code, direct.code, "{through:?}");
+        assert_eq!(through.stdout, direct.stdout, "{through:?}");
+    }
+    assert_eq!(unrouted.code, 5, "{unrouted:?}");
+    let error = &unrouted.json()["error"];
+    assert_eq!(error["kind"], "wallet_state", "{error}");
+    let message = support::text(error, "message");
+    assert!(message.contains("lepic serve is running"), "{message}");
+    assert!(message.contains(socket.to_str().unwrap()), "{message}");
+    let report = served.ok().json();
+    assert_eq!(report["requests"], 5, "{report}");
+}

@@ -6,6 +6,10 @@
 //! Adding a route: write its handler in `routes`, with `#[utoipa::path]` and a doc comment, and
 //! name it in [`api!`]. The router and the document are both built from that list. A route whose
 //! operation has the [`SOCKET_ONLY`] extension is refused on the TLS listener.
+//!
+//! A request with `Accept: text/plain` gets the report as the text `lepic` prints without
+//! `--output json`; `lepic` asks for it when it runs a command through a running serve
+//! (ADR 0053).
 
 mod events;
 mod openapi;
@@ -63,7 +67,9 @@ macro_rules! api {
                     `lepic --output json` prints. Amounts are decimal strings in EPIC. The owner \
                     routes are answered on the socket to its own user, and with `--owner-tls` \
                     over mutual TLS to the clients `api-clients` lists; an operation marked \
-                    `x-socket-only` is refused over TLS.",
+                    `x-socket-only` is refused over TLS. A request with `Accept: text/plain` \
+                    gets a report as the text `lepic` prints without `--output json`; errors \
+                    are problem documents either way.",
                 license(name = "Apache-2.0"),
             ),
             paths(
@@ -171,6 +177,22 @@ api!(
     epic1_restore,
     epictx_open,
 );
+
+tokio::task_local! {
+    /// Whether the request being answered asked for its report as text (`Accept: text/plain`).
+    static TEXT: bool;
+}
+
+/// Whether `headers` ask for the report as text: `text/plain` is the first media type `Accept`
+/// lists.
+fn wants_text(headers: &hyper::HeaderMap) -> bool {
+    headers
+        .get(header::ACCEPT)
+        .and_then(|accept| accept.to_str().ok())
+        .and_then(|accept| accept.split(',').next())
+        .and_then(|first| first.split(';').next())
+        .is_some_and(|media| media.trim().eq_ignore_ascii_case("text/plain"))
+}
 
 /// The operation extension that keeps a route off the TLS listener.
 const SOCKET_ONLY: &str = "x-socket-only";
@@ -572,8 +594,9 @@ impl<'o> Api<'o> {
             self.router
                 .find(request.method(), request.uri().path(), listener)?;
         let query = request.uri().query().map(str::to_owned);
+        let text = wants_text(request.headers());
         let body = self.body(request).await?;
-        handler(
+        let answer = handler(
             self,
             Request {
                 params,
@@ -582,8 +605,8 @@ impl<'o> Api<'o> {
                 listener,
                 closing,
             },
-        )
-        .await
+        );
+        TEXT.scope(text, answer).await
     }
 
     /// The request body, within the size limit and the body deadline.
@@ -621,8 +644,13 @@ fn response(status: StatusCode, content_type: &'static str, body: Bytes) -> Resp
     response
 }
 
-/// A command's report, as `--output json` prints it.
+/// A command's report, as `--output json` prints it, or as text when the request asked for it.
 fn report(report: &Report) -> Response<Body> {
+    if TEXT.try_with(|text| *text).unwrap_or(false) {
+        let text = render(report, OutputFormat::Human);
+        let body = Bytes::copy_from_slice(text.as_bytes());
+        return response(StatusCode::OK, "text/plain; charset=utf-8", body);
+    }
     let text = render(report, OutputFormat::Json);
     let body = Bytes::copy_from_slice(text.as_bytes());
     response(StatusCode::OK, "application/json", body)

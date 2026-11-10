@@ -2510,12 +2510,22 @@ async fn lock_data_dir(dir: &Path) -> Result<Option<lepic_store::DataDirLock>, C
         Err(DataDirLockError::Open(error)) if error.kind() == std::io::ErrorKind::NotFound => {
             Ok(None)
         }
-        Err(DataDirLockError::Busy) => Err(CliError::DataDirInUse),
+        Err(DataDirLockError::Busy) => Err(in_use(dir).await),
         Err(DataDirLockError::Open(error)) => {
             Err(CliError::io("open the data directory lock")(error))
         }
         Err(DataDirLockError::Lock(error)) => Err(CliError::io("lock the data directory")(error)),
     }
+}
+
+/// Why a locked `dir` cannot be opened: the `lepic serve` that answers on its socket, which
+/// runs the commands its API has a route for, or another holder.
+async fn in_use(dir: &Path) -> CliError {
+    #[cfg(unix)]
+    if let Some(socket) = crate::through_serve::serving(dir).await {
+        return CliError::ServeHoldsWallet { socket };
+    }
+    CliError::DataDirInUse
 }
 
 /// How long a data directory whose holder copies its plain database into an encrypted one is

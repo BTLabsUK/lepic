@@ -23,6 +23,10 @@ use crate::commands::peer::to_hex;
 use crate::exit::{CliError, ErrorKind};
 use crate::settings::Settings;
 
+/// What to do when a command meets the lock of a running `lepic serve` (ADR 0053).
+const SERVE_HOLDS_WALLET: &str = "stop lepic serve to run this command, or call serve's API on \
+     the socket; `lepic serve --http` takes payments over HTTP next to it";
+
 /// What to try next, when there is something better to say than the error itself.
 pub fn hint(error: &CliError, settings: Option<&Settings>) -> Option<String> {
     if let Some((found, supported)) = schema_too_new(error) {
@@ -100,6 +104,7 @@ pub fn hint(error: &CliError, settings: Option<&Settings>) -> Option<String> {
                     .to_owned(),
             );
         }
+        CliError::ServeHoldsWallet { .. } => return Some(SERVE_HOLDS_WALLET.to_owned()),
         CliError::SocketPathTooLong { .. } => {
             return Some("give a shorter path with --socket".to_owned());
         }

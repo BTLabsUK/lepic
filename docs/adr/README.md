@@ -58,6 +58,7 @@ record that supersedes the old one; accepted records are not rewritten.
 | [0050](0050-one-wallet-api.md) | One wallet API, served by `lepic serve` | proposed |
 | [0051](0051-transaction-methods-in-one-crate.md) | Transaction methods in one crate, outside the engine | proposed |
 | [0052](0052-legacy-at-the-edge-native-between-lepic-wallets.md) | Epic compatibility at the edge, a native protocol between LEPIC wallets | accepted |
+| [0053](0053-cli-commands-through-a-running-serve.md) | CLI commands reach a running `lepic serve` through its socket | proposed |
 
 Template:
 
