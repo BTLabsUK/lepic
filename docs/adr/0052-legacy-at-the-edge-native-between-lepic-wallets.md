@@ -59,7 +59,7 @@ The project owner agreed the direction on 2026-11-10. Each item in the first tab
 
 | Item | Answer |
 |---|---|
-| Address index | An account has many epic1 addresses: numbered, per shop, per invoice, one-off. Index 0 is the address earlier builds show. The seal key and the epic1 proof key take `be32(index)` at the end of their context (ADR 0033); the labels stay `v1`. The address format does not change: version `01`, two keys, 115 characters, no index inside. |
+| Address index | An account has many epic1 addresses: numbered, per shop, per invoice, one-off. Index 0 is the address earlier builds show: its seal key and epic1 proof key derive as before. Indexes 1 and above use the labels `lepic-wallet epic1 seal key v1` and `lepic-wallet epic1 indexed proof key v1` with `be32(index)` at the end of their context (ADR 0033). The onion, web and Epicbox seal keys do not change. The address format does not change: version `01`, two keys, 115 characters, no index inside. |
 | Receiving | No static hint: a hint the sender can derive from the address is the same on every message to it, so a relay, or anyone who knows the address, could pick out every payment to it. Envelopes to an epic1 keep the zero hint. A link mailbox is recorded with the address index it was issued for, and opened with that index's key. Files, transaction text and the direct listener use trial decryption over the issued indexes, the most recent payment's index first, stopping at the first key that opens. No per-message hint either. |
 | Wallet state | The highest index issued per account, and the index each payment came to. A restore tries 50 indexes past the highest one known. LEPIC sets no limit on addresses; the app sets policy. |
 | API | The wallet, the CLI and `serve` issue the next address, give the address at an index, and list the issued ones. A received transaction shows its index. |
@@ -68,7 +68,7 @@ Proposed with it, **[Proposed — not yet confirmed]** (RFC 0003 11.0):
 
 | # | Item | Proposal |
 |---|---|---|
-| O-19 | The index on every seal key kind | Index 0 for the onion, web and Epicbox kinds, one fixed-width context for all. It changes those keys from earlier unreleased builds, so an advert pinned from one shows a changed key. |
+| O-19 | The index on every seal key kind | The index only for the epic1 kind, every other key unchanged: the onion, web and Epicbox seal keys and pinned adverts stay as earlier builds derive them, and epic1 index 0 keeps its keys. |
 | O-20 | epic1 envelopes in files and text | Opened by trial, as the receive decision lists, beside the link mailbox route of RFC 0003 6.3. |
 | O-21 | Accounts tried | Every account of the wallet for a file or the direct listener; the account whose key opens receives. |
 | O-22 | First address after a restore | After the gap of 50, then in order. |
@@ -211,8 +211,8 @@ Applied in the specification, within the decisions:
   match the consensus table at the slate's height) and the tail at fixed positions; the `LOCK`
   flag bit is retired because the features byte carries the same fact. Unknown ignorable tail
   records are kept verbatim, so `encode(decode(x)) == x` holds; replies never copy them.
-- The seal key's context is `be32(account) || net || kind || be32(index)` (epic1, onion listener,
-  web listener; the index is the epic1 address index, 0 for the listeners, revision 7).
+- The seal key's context is `be32(account) || net || kind` (epic1, onion listener, web listener).
+  epic1 addresses at index 1 and above use a label of their own (revision 7).
 - Envelopes sealed to an epic1 or a listener key use their own HPKE `info`; shipped envelopes keep
   theirs.
 - An anonymous `0A` is taken only as an S1 or as the answer to a slate this wallet started; an

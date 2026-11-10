@@ -307,35 +307,50 @@ k = BLAKE2b-256(key = seed, msg = "lepic-wallet <purpose> v<n>" || context)
 **Seal keys** — **[Decided]** label; context **[Specified]** here (draft 2):
 
 ```
-seal_sk = BLAKE2b-256(key = seed, msg = "lepic-wallet seal key v1" || be32(account) || net || kind || be32(index))   (X25519)
+seal_sk = BLAKE2b-256(key = seed, msg = "lepic-wallet seal key v1" || be32(account) || net || kind)   (X25519)
 seal_pk = X25519(seal_sk, 9)
 ```
 
 - `kind` (u8): `00` the epic1 address, `01` the onion listener, `02` the plain web listener, `03`
-  the Epicbox payments address (5.15) **[Specified]**. Other values are reserved.
-- `index` (u32) is the number of the epic1 address within the account (5.13). Index 0 is the
-  account's first address. Kinds `01`, `02` and `03` always use index 0. The context is
-  fixed-width (10 bytes), so ADR 0033 rule 4 holds.
+  the Epicbox payments address (5.15) **[Specified]**. Other values are reserved. The context is
+  fixed-width (6 bytes), so ADR 0033 rule 4 holds. This key is the same in every build: the
+  address index (5.13) is not in it (O-19).
 - `net` is in the context so that one seed shows different seal keys on mainnet and floonet, as
   the contact root does (`info = "root" || net`). **[Reasoning]** HPKE `info` already separates the
   networks cryptographically; the byte is there for unlinkability across networks.
 - The 32-byte output is used as the X25519 secret; X25519 clamps it (RFC 7748). Keyed BLAKE2b-256
   as a PRF is the shipped ADR 0033 construction.
-- One epic1 seal key per address index, account and network (D5); one listener seal key per
-  listener kind, account and network (D1). The listener that accepted a connection decides which
-  key is advertised and used (5.15).
+- One listener seal key per listener kind, account and network (D1). The listener that accepted a
+  connection decides which key is advertised and used (5.15).
 - One Epicbox seal key per account and network. It is separate from the epic1 seal key (`00`),
   so a peer that holds both keys cannot tell that a payments address and an epic1 belong to one
   wallet.
 - Vectors under `testdata/vectors/keys/` (rule 8) before any code uses the key.
 
+**epic1 seal key at an address index** — context **[Specified]** (O-19):
+
+```
+index 0:   epic1_seal_sk = seal_sk with kind 00 (above)
+index ≥ 1: epic1_seal_sk = BLAKE2b-256(key = seed, msg = "lepic-wallet epic1 seal key v1" || be32(account) || net || be32(index))   (X25519)
+```
+
+- `index` (u32) is the number of the epic1 address within the account (5.13). Index 0 is the
+  account's first address and keeps the kind-`00` seal key of earlier builds, so that address
+  does not change. The context of the new label is fixed-width (9 bytes); neither label is a
+  prefix of the other followed by its context, so ADR 0033 rule 4 holds.
+- One epic1 seal key per address index, account and network (D5).
+- Vectors: `pairing/epic1_seal_keys.json` (indexes 0, 1, 2 and 2³²−1; index 0 equals the
+  kind-`00` key in `pairing/seal_keys.json`).
+
 **epic1 proof key** — **[Decided]** (O-8, 2026-11-08); context **[Specified]**:
 
 ```
-proof_sk = BLAKE2b-256(key = seed, msg = "lepic-wallet epic1 proof key v1" || be32(account) || net || be32(index))   (Ed25519 seed)
+index 0:   proof_sk = BLAKE2b-256(key = seed, msg = "lepic-wallet epic1 proof key v1" || be32(account) || net)   (Ed25519 seed)
+index ≥ 1: proof_sk = BLAKE2b-256(key = seed, msg = "lepic-wallet epic1 indexed proof key v1" || be32(account) || net || be32(index))   (Ed25519 seed)
 ```
 
-- `index` is the epic1 address index, as in the seal key. The context is fixed-width (9 bytes).
+- `index` is the epic1 address index, as in the epic1 seal key. Index 0 keeps the key of earlier
+  builds. The contexts are fixed-width (5 and 9 bytes).
 - Signs the receiver's payment proof for a slate that came to the epic1 address `index`, the
   rule ADR 0044 set for the onion: "a proof is signed with the key of the address the slate came
   to". A slate that came to an epic1 address and asks for a proof to another key, including the
@@ -346,6 +361,9 @@ proof_sk = BLAKE2b-256(key = seed, msg = "lepic-wallet epic1 proof key v1" || be
   removed. A key of its own removes the last new public use of index 0.
 - The sender's own proof address in a proof stays the payment-proof key at index 0 (ADR 0044,
   unchanged). **[Reasoning]** The receiver learns it, as with every proof today.
+- Vectors: `keys/epic1_proof_key_seed32`, `keys/epic1_proof_key_seed16` (index 0) and
+  `keys/epic1_indexed_proof_key_seed32`, `keys/epic1_indexed_proof_key_seed16` (indexes 1, 2 and
+  2³²−1).
 
 **Epicbox mailbox keys for payments** — **[Decided]** use (owner, after draft 3: a throwaway reply
 mailbox per payment, transport in the link); labels and contexts **[Specified]** (draft 4,
@@ -1792,8 +1810,8 @@ Paths are in the LEPIC repository at `main` `078eadb7` unless marked otherwise.
 | epic1 send with no answer: the same sealed S1 to the next entry on request, cancel and unlock | **[Decided]** (owner, 2026-11-09), not built | 5.14, 6.3 |
 | Default TTLs (epic1 send 24 hours, in person the app's choice, fallback 30 blocks), link-mailbox index spaces, restore and watch time, hyphens in relay domains | **[Decided]** (after drafts 4 and 5), not built | 5.2, 5.9, 5.13, 5.14, 5.18 |
 | Per-class HPKE `info` | **[Specified]** (draft 2), not built | 5.4 |
-| Seal key `lepic-wallet seal key v1` with the address index | **[Decided]** label, context **[Specified]**; implemented **[Unmerged]** on `feat/epic1-indexed-keys`: `crates/lepic-wallet/src/namespace.rs`, vector `pairing/seal_keys.json` | 5.2 |
-| epic1 proof key with the address index | **[Decided]** (O-8), context **[Specified]**; implemented **[Unmerged]** on `feat/epic1-indexed-keys`, vectors `keys/epic1_proof_key_seed32`, `keys/epic1_proof_key_seed16` | 5.2 |
+| Seal key `lepic-wallet seal key v1`, and `lepic-wallet epic1 seal key v1` for epic1 indexes 1 and above | **[Decided]** label, context **[Specified]**; the index label implemented **[Unmerged]** on `feat/epic1-indexed-keys`: `crates/lepic-wallet/src/namespace.rs`, vectors `pairing/seal_keys.json`, `pairing/epic1_seal_keys.json` | 5.2 |
+| epic1 proof key, and `lepic-wallet epic1 indexed proof key v1` for indexes 1 and above | **[Decided]** (O-8), context **[Specified]**; the index label implemented **[Unmerged]** on `feat/epic1-indexed-keys`, vectors `keys/epic1_proof_key_seed32`, `keys/epic1_proof_key_seed16`, `keys/epic1_indexed_proof_key_seed32`, `keys/epic1_indexed_proof_key_seed16` | 5.2 |
 | Numbered epic1 addresses: issue, list, address at an index; zero hint, link mailbox to index, trial decryption elsewhere; index per payment; restore gap of 50 | **[Decided]** (owner, 2026-11-10); implemented **[Unmerged]** on `feat/epic1-indexed-keys`: `crates/lepic-wallet/src/epic1_index.rs`, `crates/lepic-wallet-contacts/src/epic1.rs`, `sealed.rs`, `direct.rs`, `lepic address`, `new-address`, `addresses` | 5.5, 5.13, 6.3 |
 | epic1 two-key address | **[Decided]**, layout **[Specified]**, not built; `bech32` not in workspace dependencies | 5.13 |
 | `check_version` advert, `/v1/peer`, pinning | **[Specified]**, not built | 5.15 |
@@ -1931,7 +1949,7 @@ Owner items O-1 … O-18 and their answers. All are decided or withdrawn; O-18 w
 | O-16 | Two answers to one in-person code | **[Decided]**, rewritten (owner, 2026-11-09). LEPIC accepts and processes raw in-person codes in both directions and never finalizes an in-person answer by itself: it closes the code on the first answer, reports every answer with its check code (and when a second has the same code as the first), and finalizes only the answer the consumer names. **[App]** The app asks the payer to confirm the check code first ("Does Bob's phone show 4821?"); on two answers with one code it cancels both and shows a new code with a new reply key; the hold and the late-answer warning may stay as extras (to explore in the wallet app). Draft 5's 5-second hold with no extra tap is withdrawn | 3.1, 6.7, 10.16, 10.19 |
 | O-17 | LEPIC and the app, for hosts and relays from untrusted input (new in draft 6) | **[Decided]** (owner, 2026-11-09). LEPIC is core only: before posting to a host from untrusted input it reports the host, whether it is in the configured relay list, and its address class; it posts only when the consumer says so, through Tor when Tor is configured; it refuses loopback itself; it never shows or decides a prompt. The prompts (unknown relay, local network, "through Tor") are the app's. The same split applies to every place where draft 5 had LEPIC ask | 3.2, 5.9, 5.14, 5.15, 5.17 |
 | O-18 | Address classes of the host rule | **[Decided]** (owner, 2026-11-09, text as proposed): loopback refused on the resolved address; private and local-network addresses (RFC 1918, link-local, CGNAT, ULA, `.local`) allowed after one app prompt that shows the address; any port | 5.14, Appendix B |
-| O-19 | The index field on every seal key kind | **[Proposed — not yet confirmed]** One context for all kinds, with `be32(index)` last and index 0 for the listener and Epicbox kinds, so the context stays fixed-width (rule 4). This changes the onion, web and Epicbox seal keys from those of earlier unreleased builds: a peer that pinned an advert from one sees a changed key and asks (D1). Alternative: the index only for kind `00`, which needs a second label or a variable context | 5.2 |
+| O-19 | The index field on every seal key kind | **[Proposed — not yet confirmed]** The index only for the epic1 kind, every other key unchanged: the onion, web and Epicbox seal keys and the adverts peers pinned stay as earlier builds derive them. epic1 index 0 keeps the kind-`00` seal key and the epic1 proof key of earlier builds; indexes 1 and above use `lepic-wallet epic1 seal key v1` and `lepic-wallet epic1 indexed proof key v1`, each with a fixed-width context (rule 4). Alternative: `be32(index)` in the context of every kind, which changes the onion, web and Epicbox seal keys | 5.2 |
 | O-20 | epic1 envelopes in files and transaction text | **[Proposed — not yet confirmed]** 6.3 sends an S1 to an epic1 through the link mailbox; the owner's receive decision also opens files and text sealed to an epic1, by trial (5.5). Keep both: a wallet opens an epic1 file it is handed. Alternative: link mailboxes only | 5.5, 6.3 |
 | O-21 | Accounts tried for a file or the direct listener | **[Proposed — not yet confirmed]** Every account of the wallet, each in its own trial order, and the account whose key opens receives it. Alternative: the active account only, which is cheaper and refuses a file to another account | 5.5 |
 | O-22 | The first address after a restore | **[Proposed — not yet confirmed]** It comes after the gap (index 51 on a wallet that knew only index 0), and later ones follow on, so no address handed out before the restore within the gap is handed out again. Alternative: continue from the highest index known and accept that a payer may hold the same address as someone else | 5.13 |
@@ -1992,13 +2010,15 @@ Seed-keyed labels, `BLAKE2b-256(key = seed, label ‖ context)`:
 
 | Label ‖ context | Type | Purpose | Owner | First | Status | Vector |
 |---|---|---|---|---|---|---|
-| `lepic-wallet seal key v1` ‖ be32(account) ‖ net ‖ kind ‖ be32(index) | X25519 | Opens envelopes sealed to the epic1 address `index` (`kind` 00), the onion listener (01), the plain web listener (02) or the Epicbox payments address (03), the last three at index 0 (5.2, 5.15) | `lepic-wallet::namespace` | none | proposed | `pairing/seal_keys.json` |
-| `lepic-wallet epic1 proof key v1` ‖ be32(account) ‖ net ‖ be32(index) | Ed25519 (the 32 bytes are the seed) | The proof key in the epic1 address `index`; signs payment proofs for slates that came to it (O-8, 5.2) | `lepic-wallet::namespace` | none | proposed | `keys/epic1_proof_key_seed32`, `keys/epic1_proof_key_seed16` |
+| `lepic-wallet seal key v1` ‖ be32(account) ‖ net ‖ kind | X25519 | Opens envelopes sealed to the epic1 address at index 0 (`kind` 00), the onion listener (01), the plain web listener (02) or the Epicbox payments address (03) (5.2, 5.15) | `lepic-wallet::namespace` | none | proposed | `pairing/seal_keys.json` |
+| `lepic-wallet epic1 seal key v1` ‖ be32(account) ‖ net ‖ be32(index) | X25519 | Opens envelopes sealed to the epic1 address `index`, index 1 or above (5.2, 5.13) | `lepic-wallet::namespace` | none | proposed | `pairing/epic1_seal_keys.json` |
+| `lepic-wallet epic1 proof key v1` ‖ be32(account) ‖ net | Ed25519 (the 32 bytes are the seed) | The proof key in the epic1 address at index 0; signs payment proofs for slates that came to it (O-8, 5.2) | `lepic-wallet::namespace` | none | proposed | `keys/epic1_proof_key_seed32`, `keys/epic1_proof_key_seed16` |
+| `lepic-wallet epic1 indexed proof key v1` ‖ be32(account) ‖ net ‖ be32(index) | Ed25519 (the 32 bytes are the seed) | The proof key in the epic1 address `index`, index 1 or above (O-8, 5.2, 5.13) | `lepic-wallet::namespace` | none | proposed | `keys/epic1_indexed_proof_key_seed32`, `keys/epic1_indexed_proof_key_seed16` |
 | `lepic-wallet reply mailbox v1` ‖ be32(account) ‖ net ‖ slate_id(16) ‖ ctr | secp256k1 | Throwaway Epicbox mailbox for the answer to one slate; its address goes with the reply key (5.2, 5.6 tag `09`, 5.10 record `02`). Exception class "Epicbox mailbox key" | `lepic-wallet::namespace` | none | proposed | `keys/reply_mailbox_*` (to write) |
 | `lepic-wallet post key v1` ‖ be32(account) ‖ net ‖ slate_id(16) ‖ role ‖ ctr | secp256k1 | Epicbox `from` key of every post to another party's mailbox for one slate; `role` 00 initiator, 01 responder. Nothing is received at it. Exception class "Epicbox mailbox key" | `lepic-wallet::namespace` | none | proposed | `keys/post_key_*` (to write) |
 | `lepic-wallet link mailbox v1` ‖ be32(account) ‖ net ‖ kind ‖ be32(n) ‖ ctr | secp256k1 | Mailbox named by `epicbox=` in an epic1 link; `kind` 00 on screen (`n` 0–49, new per receive session or share, used in turn), 01 printed (`n` 0–31, fixed per code) (5.2, 5.14). Exception class "Epicbox mailbox key" | `lepic-wallet::namespace` | none | proposed | `keys/link_mailbox_*` (to write) |
 
-Context widths: seal key 10, epic1 proof key 9 (6 and 5 before the address index), reply mailbox 22, post key 23, link mailbox 11
+Context widths: seal key 6, epic1 seal key 9, epic1 proof key 5, epic1 indexed proof key 9, reply mailbox 22, post key 23, link mailbox 11
 bytes (10 in draft 5, before the `kind` byte), each fixed, so rule 4 holds. No label is a prefix of another label.
 
 Tags and domains:
