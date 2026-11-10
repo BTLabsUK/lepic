@@ -428,7 +428,8 @@ ct_restore_alice() {
     local name="${E2E_PREFIX}-ct-alice2" phrase
     phrase="$(jq -r .recovery_phrase "${E2E_STATE}/wallets/${CT_KEEP}.init.json")"
     rm -rf "$(wdir "${name}")"
-    w "${name}" wallet restore <<<"${phrase}" >/dev/null || fail "wallet restore of alice failed" || return 1
+    w "${name}" wallet restore <<<"${phrase}" >"${CASE_DIR}/restore-alice.json" ||
+        fail "wallet restore of alice failed: $(tail -c 300 "${CASE_DIR}/restore-alice.json") $(tail -c 300 "${CASE_DIR}/last.err")" || return 1
 }
 
 case_ct_export_import() {
