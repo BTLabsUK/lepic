@@ -107,10 +107,12 @@ case_svc_status() {
     expect_json "$(cat "${CASE_DIR}/info.json")" '.network == "floonet" and (.accounts | length) >= 1' "wallet info through serve" || return 1
     wx 6 "${SVC_BOT}" tx show 999999 || return 1
     expect_json "${LAST_JSON}" '.error.kind == "not_found"' "unknown transaction through serve" || return 1
+    w "${SVC_BOT}" contact list >"${CASE_DIR}/contacts.json" || fail "contact list through serve" || return 1
+    expect_json "$(cat "${CASE_DIR}/contacts.json")" 'has("contacts")' "contact list through serve" || return 1
     wx 5 "${SVC_BOT}" tx send --to-file "${CASE_DIR}/unrouted.slate" 0.01 || return 1
     expect_json "${LAST_JSON}" '.error.kind == "wallet_state" and (.error.message | contains("lepic serve is running"))' "a command with no route names serve" || return 1
     wstop "${SVC_PID}"
-    note "status, wallet, address, epic1, node, methods, problems; CLI through serve, exit 5 with no route"
+    note "status, wallet, address, epic1, node, methods, problems; CLI through serve (wallet, transactions, contacts), exit 5 with no route"
 }
 
 # Three withdrawals at once to three HTTP listeners, then two requests racing under one slate_id.
