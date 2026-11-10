@@ -14,7 +14,7 @@ use lepic_wallet::self_send::SelfSendError;
 use lepic_wallet::send::SendError;
 use lepic_wallet::{FinalizeError, ReceiveError};
 use lepic_wallet_contacts::{
-    ContactError, DirectError, Epic1Refusal, InPersonRefusal, NativeFailure,
+    ContactEncodeError, ContactError, DirectError, Epic1Refusal, InPersonRefusal, NativeFailure,
 };
 
 /// What went wrong, in terms the app can act on. The numbers in [`WalletErrorKind::code`] are
@@ -296,8 +296,8 @@ pub enum WalletErrorKind {
     Epic1NoMoreRelays,
     /// All printed epic1 links are in use: retire one first.
     PrintedLinksFull,
-    /// No printed link with that number is in use, or the wallet holds no epic1 payment or
-    /// answer for the slate.
+    /// No printed link with that number is in use, the wallet holds no epic1 payment or answer
+    /// for the slate, or the address was never handed out by this wallet.
     Epic1NotFound,
     /// The wallet's relay is on this device, so no other device reaches a link to it.
     OwnRelayLocal,
@@ -460,6 +460,10 @@ pub struct WalletError {
     pub pinned_key: Option<String>,
     /// For `PinChanged`: the key the listener shows, 64 hex digits.
     pub shown_key: Option<String>,
+    /// For `NativeExchangeFailed`: the seconds the listener asked the sender to wait before it
+    /// posts again, when it answered that it is not ready or takes no more payments for now.
+    /// A longer wait than `u32` holds reads as `u32::MAX`.
+    pub retry_after_secs: Option<u32>,
 }
 
 impl std::fmt::Display for WalletError {
@@ -481,6 +485,7 @@ impl WalletError {
             origin: None,
             pinned_key: None,
             shown_key: None,
+            retry_after_secs: None,
         }
     }
 
@@ -580,6 +585,7 @@ fn engine_kind(error: &lepic_wallet::WalletError) -> WalletErrorKind {
         E::InPool(_) => WalletErrorKind::InPool,
         E::NotReleasable { .. } => WalletErrorKind::NotReleasable,
         E::AppData(error) => app_data_kind(error),
+        E::InvalidListing => WalletErrorKind::InvalidArgument,
         _ => WalletErrorKind::Other,
     }
 }
@@ -628,7 +634,9 @@ impl WalletError {
             | SendError::PayeeMismatch { .. }
             | SendError::UnknownTransport { .. }
             | SendError::CannotDeliver { .. }
-            | SendError::CannotExport { .. } => WalletErrorKind::InvalidArgument,
+            | SendError::CannotExport { .. }
+            | SendError::SlateIdTaken { .. }
+            | SendError::ProofAddress(_) => WalletErrorKind::InvalidArgument,
             SendError::Undelivered { .. } => WalletErrorKind::TransportFailed,
             SendError::Unrepresentable(_) => WalletErrorKind::InvalidSlate,
             _ => WalletErrorKind::Other,
@@ -647,11 +655,16 @@ impl From<ReceiveError> for WalletError {
             | ReceiveError::AheadOfTip { .. }
             | ReceiveError::FeeBelowMinimum { .. }
             | ReceiveError::MessageSignature { .. }
+            | ReceiveError::ZeroAmount
+            | ReceiveError::FeeOverflow
             | ReceiveError::Slate(_) => WalletErrorKind::InvalidSlate,
             ReceiveError::ForeignProofAddress => WalletErrorKind::ForeignProofAddress,
             ReceiveError::Expired { .. } => WalletErrorKind::PaymentExpired,
             ReceiveError::Node(_) => WalletErrorKind::NodeUnreachable,
             ReceiveError::UnknownTransport { .. } => WalletErrorKind::InvalidArgument,
+            ReceiveError::OpenReceipts(_) => WalletErrorKind::WalletBusy,
+            // The wallet's settings refuse payments nobody asked for.
+            ReceiveError::Refused => WalletErrorKind::Unsupported,
             _ => WalletErrorKind::Other,
         };
         Self::chained(kind, &error)
@@ -687,6 +700,7 @@ impl From<FinalizeError> for WalletError {
             | E::ReceiverSignature(_)
             | E::FeeBelowMinimum { .. }
             | E::InvalidTransaction(_)
+            | E::FeeOverflow
             | E::Slate(_) => WalletErrorKind::InvalidSlate,
             E::Expired { .. } => WalletErrorKind::PaymentExpired,
             E::Node(_) => WalletErrorKind::NodeUnreachable,
@@ -762,6 +776,7 @@ impl From<InvoiceError> for WalletError {
             | E::MessageSignature { .. }
             | E::PayerSignature(_)
             | E::FeeBelowMinimum { .. }
+            | E::FeeOverflow
             | E::InvalidTransaction(_)
             | E::Slate(_)
             | E::Encode(_)
@@ -856,6 +871,7 @@ impl From<ContactError> for WalletError {
                 E::InPerson(refusal) => in_person_kind(*refusal),
                 E::Epic1(refusal) => epic1_kind(*refusal),
                 E::Epic1Link(_) => K::NotAnEpic1Link,
+                E::Encode(inner) => contact_encode_kind(*inner),
                 E::SavedTransaction => K::SavedTransaction,
                 // As the decoder refused such text before the payment-file classifier.
                 E::NotPaymentFile => K::InvalidPairingText,
@@ -863,6 +879,20 @@ impl From<ContactError> for WalletError {
             },
         };
         Self::chained(kind, &error)
+    }
+}
+
+/// The kind of a card or envelope that could not be built. Every variant is named, so a new
+/// one is mapped where it is added.
+const fn contact_encode_kind(error: ContactEncodeError) -> WalletErrorKind {
+    use ContactEncodeError as E;
+    use WalletErrorKind as K;
+    match error {
+        E::FieldTooLong { .. } | E::BodyTooLarge { .. } | E::Oversized { .. } | E::WrongNetwork => {
+            K::InvalidArgument
+        }
+        E::WrongClass => K::WrongPairingClass,
+        E::ReplyMailbox | E::SigningKeyMismatch | E::Encapsulation | E::Encryption => K::Other,
     }
 }
 
@@ -890,7 +920,7 @@ const fn epic1_kind(refusal: Epic1Refusal) -> WalletErrorKind {
         R::CannotPay => K::Epic1CannotPay,
         R::NoMoreEntries => K::Epic1NoMoreRelays,
         R::PrintedFull => K::PrintedLinksFull,
-        R::NotIssued | R::NoPayment => K::Epic1NotFound,
+        R::NotIssued | R::NoPayment | R::AddressNotIssued => K::Epic1NotFound,
         R::RelayNotConfirmed => K::RelayNotConfirmed,
         R::OwnRelayLocal => K::OwnRelayLocal,
         R::LinkRelay | R::TooManyRelays => K::Epic1RelayInvalid,
@@ -942,11 +972,25 @@ impl From<DirectError> for WalletError {
                 } else {
                     K::NativeExchangeFailed
                 };
-                return Self::chained(kind, &error).with_tx(tx_id.0);
+                let mut mapped = Self::chained(kind, &error).with_tx(tx_id.0);
+                mapped.retry_after_secs = retry_after(source)
+                    .map(|wait| u32::try_from(wait.as_secs()).unwrap_or(u32::MAX));
+                return mapped;
             }
             _ => K::Other,
         };
         Self::chained(kind, &error)
+    }
+}
+
+/// How long the listener asked the sender to wait, when it said so.
+const fn retry_after(failure: &NativeFailure) -> Option<std::time::Duration> {
+    match failure {
+        NativeFailure::Post(
+            PeerClientError::NotReady { retry_after }
+            | PeerClientError::RateLimited { retry_after },
+        ) => *retry_after,
+        _ => None,
     }
 }
 
@@ -1600,6 +1644,7 @@ mod tests {
             (R::PrintedFull, K::PrintedLinksFull),
             (R::NotIssued, K::Epic1NotFound),
             (R::NoPayment, K::Epic1NotFound),
+            (R::AddressNotIssued, K::Epic1NotFound),
             (R::RelayNotConfirmed, K::RelayNotConfirmed),
             (R::OwnRelayLocal, K::OwnRelayLocal),
             (R::LinkRelay, K::Epic1RelayInvalid),
@@ -1621,5 +1666,141 @@ mod tests {
             WalletError::from(ContactError::NotPaymentFile).kind,
             K::InvalidPairingText
         );
+    }
+
+    /// Every engine error the wallet can return, one sample per variant, beside its debug text.
+    fn engine_samples() -> Vec<(String, WalletError)> {
+        use lepic_wallet_contacts::error_samples as samples;
+        fn walk<E: std::fmt::Debug + Into<WalletError>>(
+            errors: Vec<E>,
+            prefix: &str,
+            out: &mut Vec<(String, WalletError)>,
+        ) {
+            for error in errors {
+                out.push((format!("{prefix}({error:?})"), error.into()));
+            }
+        }
+        let mut out = Vec::new();
+        walk(samples::wallet_errors(), "Wallet", &mut out);
+        walk(samples::send_errors(), "Send", &mut out);
+        walk(samples::receive_errors(), "Receive", &mut out);
+        walk(samples::finalize_errors(), "Finalize", &mut out);
+        walk(samples::invoice_errors(), "Invoice", &mut out);
+        walk(samples::inbox_errors(), "Inbox", &mut out);
+        walk(samples::contact_errors(), "Contact", &mut out);
+        walk(samples::direct_errors(), "Direct", &mut out);
+        out
+    }
+
+    /// Engine errors that reach the app as `Other`: a defect of the wallet, its storage or its
+    /// keys, never the input, the node or the network. Each entry is the start of the error's
+    /// debug text and names at least one sample.
+    const OTHER: &[&str] = &[
+        "Wallet(StoredSeed(",
+        "Wallet(Keychain(",
+        "Wallet(Identifier(",
+        "Wallet(SecretName(",
+        "Wallet(Balance(",
+        "Wallet(NoValidKey)",
+        "Wallet(Task(",
+        "Send(CodecNotRegistered",
+        "Send(InputKeyMismatch)",
+        "Send(KeyIdentifier(",
+        "Send(Proof(",
+        "Send(Crypto(",
+        "Send(Slate(",
+        "Send(Arithmetic(",
+        "Send(StoredSlate(",
+        "Send(MalformedContext)",
+        "Receive(Output(",
+        "Receive(Signing(",
+        "Receive(Excess(",
+        "Receive(Codecs(",
+        "Receive(Encode(",
+        "Finalize(Signing(",
+        "Finalize(Excess(",
+        "Finalize(Codecs(",
+        "Finalize(Encode(",
+        "Finalize(StoredSlate(",
+        "Finalize(MissingContext",
+        "Finalize(MalformedContext)",
+        "Invoice(InputKeyMismatch)",
+        "Invoice(KeyIdentifier(",
+        "Invoice(Output(",
+        "Invoice(Signing(",
+        "Invoice(Excess(",
+        "Invoice(Arithmetic(",
+        "Invoice(Codecs(",
+        "Invoice(StoredSlate(",
+        "Invoice(MissingContext",
+        "Invoice(MalformedContext)",
+        "Inbox(Identity(",
+        "Contact(Keys(",
+        "Contact(StoredData(",
+        "Contact(NoFreeSlot)",
+        "Contact(Encode(ReplyMailbox)",
+        "Contact(Encode(SigningKeyMismatch)",
+        "Contact(Encode(Encapsulation)",
+        "Contact(Encode(Encryption)",
+        "Contact(InPerson(StoredAnswer)",
+    ];
+
+    #[test]
+    fn only_a_defect_of_the_wallet_is_other() {
+        let samples = engine_samples();
+        let unexpected: Vec<&str> = samples
+            .iter()
+            .filter(|(_, mapped)| mapped.kind == WalletErrorKind::Other)
+            .map(|(debug, _)| debug.as_str())
+            .filter(|debug| !OTHER.iter().any(|prefix| debug.starts_with(prefix)))
+            .collect();
+        assert!(unexpected.is_empty(), "mapped to Other: {unexpected:#?}");
+        for prefix in OTHER {
+            assert!(
+                samples
+                    .iter()
+                    .any(|(debug, mapped)| debug.starts_with(prefix)
+                        && mapped.kind == WalletErrorKind::Other),
+                "no sample maps {prefix} to Other"
+            );
+        }
+    }
+
+    #[test]
+    fn a_card_that_cannot_be_built_says_why() {
+        use ContactEncodeError as E;
+        use WalletErrorKind as K;
+        let cases = [
+            (E::FieldTooLong { tag: 1 }, K::InvalidArgument),
+            (E::BodyTooLarge { limit: 1, found: 2 }, K::InvalidArgument),
+            (E::Oversized { limit: 1, found: 2 }, K::InvalidArgument),
+            (E::WrongNetwork, K::InvalidArgument),
+            (E::WrongClass, K::WrongPairingClass),
+            (E::Encryption, K::Other),
+        ];
+        for (error, kind) in cases {
+            assert_eq!(WalletError::from(ContactError::Encode(error)).kind, kind);
+        }
+    }
+
+    #[test]
+    fn a_listener_that_asks_for_a_wait_says_how_long() {
+        use lepic_wallet_contacts::error_samples::RETRY_AFTER;
+        let mut asked = 0;
+        for (debug, mapped) in engine_samples() {
+            let expect = (debug.contains("NotReady { retry_after: Some(")
+                || debug.contains("RateLimited { retry_after: Some("))
+            .then_some(RETRY_AFTER.as_secs());
+            assert_eq!(mapped.retry_after_secs.map(u64::from), expect, "{debug}");
+            if expect.is_some() {
+                assert_eq!(
+                    mapped.kind,
+                    WalletErrorKind::NativeExchangeFailed,
+                    "{debug}"
+                );
+                asked += 1;
+            }
+        }
+        assert!(asked >= 2, "samples hold both answers that ask for a wait");
     }
 }

@@ -44,6 +44,7 @@ tracing = { workspace = true, features = ["std", "attributes"] }
 zeroize.workspace = true
 
 [dev-dependencies]
+lepic-wallet-contacts = { workspace = true, features = ["test-support"] }
 hmac.workspace = true
 lepic-epicbox = { workspace = true, features = ["mock-relay"] }
 # Without the default features, so `--no-default-features` tests the build without Tor.
