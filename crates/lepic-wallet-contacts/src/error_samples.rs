@@ -485,6 +485,8 @@ pub fn epic1_refusals() -> Vec<Epic1Refusal> {
         R::AmountMismatch,
         R::AddressNotIssued,
         R::NoAddressLeft,
+        R::NotIssuingInstall,
+        R::PaymentPending,
     ]
 }
 
@@ -509,6 +511,8 @@ pub fn in_person_refusals() -> Vec<InPersonRefusal> {
         R::RelayNotConfirmed,
         R::NoMailbox,
         R::UrIncomplete,
+        R::Ended,
+        R::AnswerToCode,
     ]
 }
 
