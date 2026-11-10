@@ -313,6 +313,24 @@ pub(crate) async fn post_frame(
     context: &ClientContext,
     frame: &ClientFrame,
 ) -> Result<(), ClientError> {
+    post_frame_reporting(context, frame)
+        .await
+        .map_err(|failed| failed.error)
+}
+
+/// A post that failed, and whether the frame was written before it did.
+pub(crate) struct PostFailed {
+    pub(crate) error: ClientError,
+    /// The frame was written, or may have been, before the failure; unless the relay
+    /// answered with a refusal, it may hold the message.
+    pub(crate) sent: bool,
+}
+
+/// [`post_frame`], saying whether a failed post wrote its frame.
+pub(crate) async fn post_frame_reporting(
+    context: &ClientContext,
+    frame: &ClientFrame,
+) -> Result<(), PostFailed> {
     let started = Instant::now();
     let settings = &context.settings;
     let mut connection = Connection::open(
@@ -320,19 +338,35 @@ pub(crate) async fn post_frame(
         &settings.endpoint,
         settings.connect_timeout,
     )
-    .await?;
+    .await
+    .map_err(|error| PostFailed { error, sent: false })?;
     let result = async {
-        connection.greet(WalletMode::Send, settings).await?;
+        let unsent = |error| PostFailed { error, sent: false };
+        connection
+            .greet(WalletMode::Send, settings)
+            .await
+            .map_err(unsent)?;
         let deadline = deadline_after(settings.response_timeout);
-        connection.send_before(frame, deadline).await?;
-        connection.answer(deadline).await
+        connection
+            .send_before(frame, deadline)
+            .await
+            .map_err(|error| PostFailed { error, sent: true })?;
+        connection
+            .answer(deadline)
+            .await
+            .map_err(|error| PostFailed { error, sent: true })
     }
     .await;
     connection.close().await;
     let elapsed_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
     match &result {
         Ok(()) => debug!(elapsed_ms, "epicbox message posted"),
-        Err(error) => warn!(elapsed_ms, error = %ErrorChain(error), "epicbox post failed"),
+        Err(failed) => warn!(
+            elapsed_ms,
+            sent = failed.sent,
+            error = %ErrorChain(&failed.error),
+            "epicbox post failed"
+        ),
     }
     result
 }

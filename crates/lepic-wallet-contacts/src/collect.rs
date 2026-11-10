@@ -1895,7 +1895,9 @@ fn chain_passes(error: &(dyn std::error::Error + 'static)) -> bool {
         } else if let Some(error) = error.downcast_ref::<lepic_epicbox::MailboxError>() {
             matches!(
                 error,
-                lepic_epicbox::MailboxError::Unreachable(_) | lepic_epicbox::MailboxError::Lost(_)
+                lepic_epicbox::MailboxError::Unreachable(_)
+                    | lepic_epicbox::MailboxError::Lost(_)
+                    | lepic_epicbox::MailboxError::Unanswered(_)
             )
         } else {
             false

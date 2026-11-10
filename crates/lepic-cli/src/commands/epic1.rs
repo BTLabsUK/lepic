@@ -357,11 +357,13 @@ fn paid_report(paid: Epic1Paid, repeated: bool) -> Report {
             .map(|attempt| Epic1AttemptReport {
                 host: attempt.host,
                 error: attempt.error,
+                uncertain: attempt.uncertain,
             })
             .collect(),
         posted: paid.posted,
         posted_ok: paid.posted.is_some(),
         repeated,
+        uncertain: paid.uncertain,
     })
 }
 
@@ -381,8 +383,10 @@ mod tests {
             attempts: vec![Epic1Attempt {
                 host: "relay.test".into(),
                 error: None,
+                uncertain: false,
             }],
             posted: Some(0),
+            uncertain: None,
         };
         let json = serde_json::to_value(paid_report(paid, false)).unwrap();
         let mut fields: Vec<&str> = json
@@ -401,7 +405,8 @@ mod tests {
                 "posted_ok",
                 "repeated",
                 "slate_id",
-                "tx_id"
+                "tx_id",
+                "uncertain"
             ]
         );
     }

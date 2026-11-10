@@ -94,6 +94,8 @@ pub struct Epic1AttemptReport {
     pub host: String,
     /// Why the post failed; absent when it went through.
     pub error: Option<String>,
+    /// The post failed after the payment was sent: the relay may hold it.
+    pub uncertain: bool,
 }
 
 /// A payment to an epic1 link, from `epic1 pay` and `epic1 post-next`.
@@ -110,6 +112,9 @@ pub struct Epic1PaidReport {
     /// The payment was made before under the same `slate_id`; this run posted nothing, and
     /// `attempts` is empty.
     pub repeated: bool,
+    /// The first relay of the link, from 0, that may hold the payment though its post failed;
+    /// the payee may still take it from there.
+    pub uncertain: Option<usize>,
 }
 
 /// An answer this wallet made for a payment taken at a link mailbox.
@@ -253,11 +258,19 @@ pub(super) fn write_epic1_human(out: &mut Vec<u8>, report: &Report) -> std::io::
                     "Payment {} posted to {}; transaction {}.",
                     r.slate_id, last.host, r.tx_id
                 ),
-                None => writeln!(
-                    out,
-                    "Payment {} not posted; `lepic epic1 post-next` tries the next relay.",
-                    r.slate_id
-                ),
+                None => match r.uncertain.and_then(|n| r.attempts.get(n)) {
+                    Some(attempt) => writeln!(
+                        out,
+                        "Payment {} may have reached {}: it did not answer. Do not pay again; \
+                         `lepic epic1 post-next` posts the same payment to the next relay.",
+                        r.slate_id, attempt.host
+                    ),
+                    None => writeln!(
+                        out,
+                        "Payment {} not posted; `lepic epic1 post-next` tries the next relay.",
+                        r.slate_id
+                    ),
+                },
             }
         }
         Report::Epic1Answers(r) if r.answers.is_empty() => writeln!(out, "No answers."),

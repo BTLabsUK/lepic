@@ -21,7 +21,7 @@ use lepic_crypto::PublicKey;
 use lepic_epic1::{Delivery as LinkDelivery, Epic1Address, Epic1Link, EpicboxTransport};
 use lepic_epicbox::{
     EpicboxAddress, Handled, MAX_MAILBOXES_PER_DRAIN, MailboxContent, MailboxHandler,
-    MailboxMessage, RelayEndpoint,
+    MailboxError, MailboxMessage, RelayEndpoint,
 };
 use lepic_methods::epicbox::relay_network;
 use lepic_native_slate::{NativeSlate, Tail};
@@ -167,6 +167,10 @@ pub enum Epic1Refusal {
     /// the one that issues new addresses ([`ContactBook::epic1_issue_here`]).
     #[error("this install does not issue new epic1 addresses")]
     NotIssuingInstall,
+    /// A payment to the link is waiting for its answer: finalize or cancel it first, or post
+    /// it to the link's next relay.
+    #[error("a payment to this link is waiting for its answer")]
+    PaymentPending,
 }
 
 /// The kind of a link mailbox.
@@ -282,6 +286,9 @@ pub struct Epic1Attempt {
     pub host: String,
     /// Why the post failed; `None` when it went through.
     pub error: Option<String>,
+    /// The post failed after the payment was sent: the relay may hold it, and the payee may
+    /// still take it from there.
+    pub uncertain: bool,
 }
 
 /// A payment this wallet made to an epic1 link.
@@ -294,6 +301,10 @@ pub struct Epic1Paid {
     pub attempts: Vec<Epic1Attempt>,
     /// The transport, from 0, the payment was posted to.
     pub posted: Option<usize>,
+    /// The first transport, from 0, whose relay may hold the payment though its post failed
+    /// ([`Epic1Attempt::uncertain`]). The payment may arrive from there; it is the same
+    /// payment, so posting it to the next relay never pays twice.
+    pub uncertain: Option<usize>,
 }
 
 /// An S2 this wallet made for a payment taken at a link mailbox.
@@ -393,6 +404,9 @@ struct PayState {
     next: usize,
     posted: Option<usize>,
     finalized: bool,
+    /// The first transport whose relay may hold the payment though its post failed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    uncertain: Option<usize>,
 }
 
 /// Whether the relays of a payment are confirmed: the user said so, or every one is in the
@@ -1392,7 +1406,8 @@ where
     ///
     /// Fails as [`ContactBook::epic1_read`] does, with [`ContactError::Epic1`] when a relay is
     /// not in the relay list and `hosts_ok` is false, the wallet's relay is on this device, the
-    /// amount sent is not the one the link asks ([`Epic1Refusal::AmountMismatch`]),
+    /// amount sent is not the one the link asks ([`Epic1Refusal::AmountMismatch`]), a payment to
+    /// the link waits for its answer ([`Epic1Refusal::PaymentPending`]),
     /// [`ContactError::Send`] as sending fails, and [`ContactError::Encode`] with [`lepic_seal::EncodeError::BodyTooLarge`] for
     /// a slate too large to seal; a send that could not be sealed or stored is cancelled.
     #[instrument(skip_all, fields(wallet = %self.wallet.config().name))]
@@ -1416,6 +1431,12 @@ where
             return Err(refused(Epic1Refusal::AmountMismatch));
         }
         let own = own_relay(relays)?.clone();
+        let mailboxes: Vec<String> = usable
+            .iter()
+            .map(|(transport, _)| hex::encode(&transport.mailbox().to_bytes()))
+            .collect();
+        self.refuse_while_pending(link.address.encode(), mailboxes)
+            .await?;
         let mut send = request.send;
         let account = send.account;
         send.ttl_blocks = Some(send.ttl_blocks.unwrap_or(EPIC1_TTL_BLOCKS));
@@ -1458,7 +1479,7 @@ where
             Ok(envelope) => envelope,
             Err(error) => return Err(self.give_up_send(sent.tx_id, error).await),
         };
-        let (attempts, posted) = self
+        let (attempts, posted, uncertain) = self
             .post_payment(relays, sent.slate_id, account, &envelope, &usable, 0)
             .await?;
         Ok(Epic1Paid {
@@ -1467,7 +1488,48 @@ where
             address: link.address.encode(),
             attempts,
             posted,
+            uncertain,
         })
+    }
+
+    /// Refuses with [`Epic1Refusal::PaymentPending`] while a payment this wallet made to
+    /// `address` at one of the link mailboxes `mailboxes` (hex) waits for its answer: sent,
+    /// not finalized and not cancelled. A second payment then would pay twice once the first
+    /// arrives.
+    async fn refuse_while_pending(
+        &self,
+        address: String,
+        mailboxes: Vec<String>,
+    ) -> Result<(), ContactError> {
+        let session = self.wallet.session()?;
+        let pending = self
+            .contact_work(move |_, _| {
+                session.store.read(|repos| {
+                    for (_, text) in repos.settings_with_prefix(PAY_PREFIX)? {
+                        let Ok(state) = from_text::<PayState>(&text, "epic1 payment") else {
+                            continue;
+                        };
+                        let same_link = state.address == address
+                            && state
+                                .entries
+                                .iter()
+                                .any(|entry| mailboxes.contains(&entry.mailbox));
+                        if !same_link || state.finalized {
+                            continue;
+                        }
+                        let tx = repos.transaction(TxId(state.tx_id))?;
+                        if tx.is_some_and(|tx| tx.state == TxState::Sent) {
+                            return Ok::<_, ContactError>(true);
+                        }
+                    }
+                    Ok(false)
+                })
+            })
+            .await?;
+        if pending {
+            return Err(refused(Epic1Refusal::PaymentPending));
+        }
+        Ok(())
     }
 
     /// Seals the stored S1 of `slate_id` to `address` and stores the payment. Returns the
@@ -1528,6 +1590,7 @@ where
             next: 0,
             posted: None,
             finalized: false,
+            uncertain: None,
         };
         let session = self.wallet.session()?;
         self.contact_work(move |_, _| {
@@ -1543,7 +1606,10 @@ where
     }
 
     /// Posts `envelope` to the transports of `usable` from `start` until one takes it, and
-    /// stores how far it got.
+    /// stores how far it got. A post that failed after the payment was sent is recorded as
+    /// uncertain and the next transport is tried: the payee takes a payment once, wherever it
+    /// arrives from. Returns the attempts, the transport posted to and the first uncertain
+    /// one, with any stored before.
     async fn post_payment(
         &self,
         relays: &ContactRelays,
@@ -1552,12 +1618,13 @@ where
         envelope: &[u8],
         usable: &[(EpicboxTransport, HostReport)],
         start: usize,
-    ) -> Result<(Vec<Epic1Attempt>, Option<usize>), ContactError> {
+    ) -> Result<(Vec<Epic1Attempt>, Option<usize>, Option<usize>), ContactError> {
         let network = self.wallet.config().network;
         let net = contact_network(network);
         let armored = armor_tx(envelope);
         let mut attempts = Vec::new();
         let mut posted = None;
+        let mut uncertain = None;
         for (index, (transport, report)) in usable.iter().enumerate().skip(start) {
             let host = transport_host(transport);
             let result = async {
@@ -1580,37 +1647,48 @@ where
             .await;
             match result {
                 Ok(()) => {
-                    attempts.push(Epic1Attempt { host, error: None });
+                    attempts.push(Epic1Attempt {
+                        host,
+                        error: None,
+                        uncertain: false,
+                    });
                     posted = Some(index);
                     break;
                 }
                 Err(error) => {
-                    warn!(relay = %host, error = %ErrorChain(&error), "epic1 payment not posted");
+                    let sent = matches!(error, ContactError::Relay(MailboxError::Unanswered(_)));
+                    warn!(relay = %host, sent, error = %ErrorChain(&error), "epic1 payment not posted");
+                    if sent {
+                        uncertain = uncertain.or(Some(index));
+                    }
                     attempts.push(Epic1Attempt {
                         host,
                         error: Some(ErrorChain(&error).to_string()),
+                        uncertain: sent,
                     });
                 }
             }
         }
         let next = posted.map_or(usable.len(), |index: usize| index.saturating_add(1));
         let session = self.wallet.session()?;
-        self.contact_work(move |_, _| {
-            session.store.write(|repos| {
-                let mut state: PayState = load(repos, &pay_key(slate_id), "epic1 payment")?;
-                state.next = next;
-                if posted.is_some() {
-                    state.posted = posted;
-                }
-                repos.put_setting(&pay_key(slate_id), &to_text(&state, "epic1 payment")?)?;
-                Ok::<_, ContactError>(())
+        let uncertain = self
+            .contact_work(move |_, _| {
+                session.store.write(|repos| {
+                    let mut state: PayState = load(repos, &pay_key(slate_id), "epic1 payment")?;
+                    state.next = next;
+                    if posted.is_some() {
+                        state.posted = posted;
+                    }
+                    state.uncertain = state.uncertain.or(uncertain);
+                    repos.put_setting(&pay_key(slate_id), &to_text(&state, "epic1 payment")?)?;
+                    Ok::<_, ContactError>(state.uncertain)
+                })
             })
-        })
-        .await?;
+            .await?;
         if let Some(index) = posted {
             info!(slate_id = %slate_id, transport = index, "epic1 payment posted");
         }
-        Ok((attempts, posted))
+        Ok((attempts, posted, uncertain))
     }
 
     /// Posts the stored payment `slate_id` again, the same bytes, to the transports of its link
@@ -1647,7 +1725,7 @@ where
             return Err(refused(Epic1Refusal::RelayNotConfirmed));
         }
         let envelope = hex::unhex(&state.envelope).ok_or(corrupt("epic1 payment"))?;
-        let (attempts, posted) = self
+        let (attempts, posted, uncertain) = self
             .post_payment(
                 relays,
                 slate_id,
@@ -1663,6 +1741,7 @@ where
             address: state.address,
             attempts,
             posted,
+            uncertain,
         })
     }
 
@@ -1691,6 +1770,7 @@ where
             address: state.address,
             attempts: Vec::new(),
             posted: state.posted,
+            uncertain: state.uncertain,
         }))
     }
 

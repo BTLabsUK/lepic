@@ -314,6 +314,9 @@ pub enum WalletErrorKind {
     /// The wallet's database was written by a newer LEPIC or app version than this one reads.
     /// Nothing was changed; update the app to open the wallet. Do not delete or restore it.
     WalletTooNew,
+    /// A payment to the epic1 link waits for its answer: finalize or cancel it first, or post
+    /// it to the link's next relay.
+    Epic1PaymentPending,
 }
 
 impl WalletErrorKind {
@@ -428,6 +431,7 @@ impl WalletErrorKind {
             Self::Epic1WrongNetwork => 111,
             Self::NotAnEpic1Link => 112,
             Self::WalletTooNew => 113,
+            Self::Epic1PaymentPending => 114,
         }
     }
 }
@@ -891,6 +895,7 @@ const fn epic1_kind(refusal: Epic1Refusal) -> WalletErrorKind {
         R::Message => K::Epic1MessageInvalid,
         R::Finalized => K::Epic1Finalized,
         R::WrongNetwork => K::Epic1WrongNetwork,
+        R::PaymentPending => K::Epic1PaymentPending,
         _ => K::InvalidSlate,
     }
 }
@@ -1131,6 +1136,7 @@ mod tests {
             (K::Epic1WrongNetwork, 111),
             (K::NotAnEpic1Link, 112),
             (K::WalletTooNew, 113),
+            (K::Epic1PaymentPending, 114),
         ];
         for (kind, code) in expected {
             assert_eq!(kind.code(), code, "{kind:?}");
@@ -1598,6 +1604,7 @@ mod tests {
             (R::Message, K::Epic1MessageInvalid),
             (R::Finalized, K::Epic1Finalized),
             (R::WrongNetwork, K::Epic1WrongNetwork),
+            (R::PaymentPending, K::Epic1PaymentPending),
         ];
         for (refusal, kind) in cases {
             let mapped = WalletError::from(ContactError::Epic1(refusal));

@@ -895,7 +895,10 @@ of the link is in it. `--proof` asks for a payment proof signed with the payee's
 key. The payment
 goes to the first relay of the link; when the post fails, `post-next` tries the next one. In
 JSON, `posted` is the index of the relay it went to and `posted_ok` says whether any post went
-through. The payer's `contact collect` takes the answer at the reply mailbox and finalizes it.
+through. `uncertain` is the index of the first relay that did not answer after the payment was
+sent: it may hold the payment, so do not pay again. A second `pay` to the same link is refused
+while a payment to it waits for its answer; finalize or cancel that one, or `post-next` it. The
+payer's `contact collect` takes the answer at the reply mailbox and finalizes it.
 `--slate-id` works as for `tx send`: a payment already made under that id to the same address,
 from the same account and for the same amount posts nothing and exits 0 with `"repeated": true`
 and the first payment's `tx_id` and `posted`; anything else under that id exits 7.

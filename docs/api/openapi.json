@@ -4496,7 +4496,8 @@
         "type": "object",
         "description": "One post of a payment to a relay of its link.",
         "required": [
-          "host"
+          "host",
+          "uncertain"
         ],
         "properties": {
           "error": {
@@ -4508,6 +4509,10 @@
           },
           "host": {
             "type": "string"
+          },
+          "uncertain": {
+            "type": "boolean",
+            "description": "The post failed after the payment was sent: the relay may hold it."
           }
         }
       },
@@ -4730,6 +4735,14 @@
           "tx_id": {
             "type": "integer",
             "format": "int32",
+            "minimum": 0
+          },
+          "uncertain": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "The first relay of the link, from 0, that may hold the payment though its post failed;\nthe payee may still take it from there.",
             "minimum": 0
           }
         }

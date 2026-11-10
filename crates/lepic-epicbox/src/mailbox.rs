@@ -22,7 +22,8 @@ use tracing::{Instrument, debug, info, info_span, warn};
 
 use crate::address::EpicboxAddress;
 use crate::client::{
-    Awaiting, ClientContext, ClientError, ClientSettings, Identity, TRANSPORT_ID, post_frame, seal,
+    Awaiting, ClientContext, ClientError, ClientSettings, Identity, TRANSPORT_ID,
+    post_frame_reporting, seal,
 };
 use crate::client_inbox::RejectionReason;
 use crate::crypto::ReceivedMessage;
@@ -174,6 +175,9 @@ pub enum MailboxError {
     TooManyMailboxes { count: usize },
     #[error("message could not be prepared")]
     Local(#[source] ClientError),
+    /// A post was sent but the relay's answer did not come: the relay may hold the message.
+    #[error("relay did not answer the message it was sent")]
+    Unanswered(#[source] ClientError),
 }
 
 impl MailboxError {
@@ -281,8 +285,9 @@ impl MailboxClient {
     }
 
     /// Encrypts `plaintext` from `from` to `to`, posts it on a short connection of its own and
-    /// waits for the relay's answer. Any failure to reach the relay or to hear its answer is
-    /// [`MailboxError::Unreachable`].
+    /// waits for the relay's answer. A failure to reach the relay or to send the message is
+    /// [`MailboxError::Unreachable`]; one after the message was sent, other than the relay's
+    /// refusal, is [`MailboxError::Unanswered`], as the relay may hold the message.
     pub async fn post(
         &self,
         from: &Identity,
@@ -302,10 +307,13 @@ impl MailboxClient {
             transport = TRANSPORT_ID.as_str(),
             relay = %self.settings.endpoint.domain(),
         );
-        post_frame(&context, &frame)
+        post_frame_reporting(&context, &frame)
             .instrument(span)
             .await
-            .map_err(MailboxError::setting_up)
+            .map_err(|failed| match MailboxError::setting_up(failed.error) {
+                MailboxError::Unreachable(error) if failed.sent => MailboxError::Unanswered(error),
+                error => error,
+            })
     }
 }
 

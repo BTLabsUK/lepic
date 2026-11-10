@@ -381,6 +381,18 @@ async fn an_unreachable_relay_is_told_apart_from_a_protocol_error() {
     assert!(matches!(old, MailboxError::Protocol(_)), "{old:?}");
 }
 
+#[tokio::test(start_paused = true)]
+async fn a_post_the_relay_took_but_did_not_answer_is_told_apart_from_one_not_sent() {
+    let relay = MockRelay::new(Network::Mainnet);
+    relay.set_unanswered(Unanswered::PostSlate, true);
+    let post = mailbox_client(&relay)
+        .post(&mailbox(THROWAWAY), &address(PAIRING_BOX), "x")
+        .await
+        .unwrap_err();
+    assert!(matches!(post, MailboxError::Unanswered(_)), "{post:?}");
+    assert_eq!(relay.received("PostSlate"), 1);
+}
+
 #[tokio::test]
 async fn refuses_more_mailboxes_than_one_drain_takes() {
     let relay = MockRelay::new(Network::Mainnet);

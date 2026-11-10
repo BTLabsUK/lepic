@@ -123,7 +123,8 @@ impl EpicWallet {
     ///
     /// Fails as [`EpicWallet::epic1_link_read`] does, with `InvalidArgument` for a zero amount
     /// or none when the link asks none, `RelayNotConfirmed` when `hosts_ok` is false,
-    /// `OwnRelayLocal` when the wallet's own relay is on this device, and as `send` fails.
+    /// `OwnRelayLocal` when the wallet's own relay is on this device, `Epic1PaymentPending`
+    /// while an earlier payment to the link waits for its answer, and as `send` fails.
     #[allow(clippy::too_many_arguments)] // The app's send form, one value per field.
     pub async fn epic1_pay(
         &self,

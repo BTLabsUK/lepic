@@ -1101,3 +1101,36 @@ fn a_link_payment_past_the_open_receipt_cap_is_refused_and_leaves_its_link_unuse
     assert!(used.contains(&(Epic1LinkKind::Printed, false)));
     assert_eq!(world.answers_posted(), 1);
 }
+
+#[test]
+fn a_second_payment_to_a_link_is_refused_while_the_first_waits_for_its_answer() {
+    let world = World::new();
+    world.relay.set_domain_refused("down.test");
+    let issued = world.issue_link(
+        &world.issuer,
+        Epic1LinkKind::Printed,
+        &["down.test", "relay.test"],
+    );
+    let other = world.issue_link(&world.issuer, Epic1LinkKind::OnScreen, &[]);
+    let paid = world.pay_link(&issued.link, false).unwrap();
+    assert_eq!(paid.posted, Some(1));
+    assert_eq!(paid.uncertain, None);
+    assert!(paid.attempts.iter().all(|attempt| !attempt.uncertain));
+
+    world.payer.fund(20, FUNDING);
+    assert_eq!(
+        refusal(world.pay_link(&issued.link, false)),
+        Epic1Refusal::PaymentPending
+    );
+    // Another link of the same payee is paid as usual.
+    let paid_other = world.pay_link(&other.link, false).unwrap();
+    assert_eq!(paid_other.posted, Some(0));
+
+    // Once the first payment is cancelled the link is paid again.
+    world
+        .block_on(world.payer.wallet.cancel(paid.tx_id))
+        .unwrap();
+    assert_eq!(world.payer_state(paid.tx_id), TxState::Cancelled);
+    let again = world.pay_link(&issued.link, false).unwrap();
+    assert_eq!(again.posted, Some(1));
+}
