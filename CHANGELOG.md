@@ -13,9 +13,18 @@ Conventional Commit messages at release time.
   inputs. It carries no inputs, so the legacy check priced it at five base fees. A V2 or V3 S1 or
   S2 without inputs now needs one base fee at least; the sender's finalize and the node enforce
   the real minimum. Slates with an input are checked as before.
+- `lepic-console`: the API reference works. The console's own styles reached into it and
+  clipped its examples and buttons, it scrolled away from its sidebar, and a reload or Back
+  inside it landed on the overview. The reference now names serve's socket as the server; the
+  console's proxy, which passes read routes only, is no longer offered as one.
 
 ### Changed
 
+- `lepic-console` has a new page. The overview opens with one sentence on the wallet's state,
+  the balance and a checklist of the services; payments, outputs and events are lists in plain
+  words with amounts without trailing zeros and times as "3 minutes ago". The routine balance
+  event is hidden unless asked for, repeated events fold into one row, and a payment's raw
+  fields sit under "Technical details". Dark by default, with a light theme and a phone layout.
 - The legacy formats have crates of their own (ADR 0052). `lepic-foreign` is renamed
   `lepic-legacy-rpc`; the V2 and V3 JSON codecs move from `lepic-slate`'s `codec::legacy` to
   the new `lepic-legacy-slate`, with the slate marker codecs from `lepic-transport::marker`,

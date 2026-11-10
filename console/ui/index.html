@@ -2,151 +2,202 @@
 <html lang="en" data-theme="dark">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="color-scheme" content="dark light">
-<meta name="theme-color" content="#13171c">
+<meta name="theme-color" content="#08080a">
 <title>LEPIC console</title>
 <link rel="icon" href="data:,">
 <link rel="stylesheet" href="/console.css">
 </head>
 <body>
-<a class="skip" href="#main">Skip to content</a>
+<svg class="lc-sprite" aria-hidden="true" focusable="false" width="0" height="0">
+  <defs>
+    <symbol id="i-overview" viewBox="0 0 24 24"><rect x="3.5" y="3.5" width="7" height="9" rx="1.5"/><rect x="13.5" y="3.5" width="7" height="5" rx="1.5"/><rect x="13.5" y="11.5" width="7" height="9" rx="1.5"/><rect x="3.5" y="15.5" width="7" height="5" rx="1.5"/></symbol>
+    <symbol id="i-transactions" viewBox="0 0 24 24"><path d="M7 4v15"/><path d="m3.5 15.5 3.5 3.5 3.5-3.5"/><path d="M17 20V5"/><path d="m13.5 8.5 3.5-3.5 3.5 3.5"/></symbol>
+    <symbol id="i-outputs" viewBox="0 0 24 24"><ellipse cx="12" cy="6.5" rx="7.5" ry="3"/><path d="M4.5 6.5v5.5c0 1.660 3.360 3 7.5 3s7.5-1.340 7.5-3V6.5"/><path d="M4.5 12v5.5c0 1.660 3.360 3 7.5 3s7.5-1.340 7.5-3V12"/></symbol>
+    <symbol id="i-activity" viewBox="0 0 24 24"><path d="M3 12.5h4l2.5-7 4.5 13 2.5-6H21"/></symbol>
+    <symbol id="i-api" viewBox="0 0 24 24"><path d="M8.5 4c-2 0-3 1-3 3v2.5c0 1.4-.8 2.5-2.2 2.5 1.4 0 2.2 1.1 2.2 2.5V17c0 2 1 3 3 3"/><path d="M15.5 4c2 0 3 1 3 3v2.5c0 1.4.8 2.5 2.2 2.5-1.4 0-2.2 1.1-2.2 2.5V17c0 2-1 3-3 3"/></symbol>
+    <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2.5v2.5M12 19v2.5M2.5 12H5M19 12h2.5M5.3 5.3 7 7M17 17l1.7 1.7M5.3 18.7 7 17M17 7l1.7-1.7"/></symbol>
+    <symbol id="i-moon" viewBox="0 0 24 24"><path d="M20 14.5A8.5 8.5 0 0 1 9.5 4a8.5 8.5 0 1 0 10.5 10.5Z"/></symbol>
+    <symbol id="i-in" viewBox="0 0 24 24"><path d="M17.5 6.5 6.5 17.5"/><path d="M6.5 9v8.5H15"/></symbol>
+    <symbol id="i-out" viewBox="0 0 24 24"><path d="M6.5 17.5 17.5 6.5"/><path d="M9 6.5h8.5V15"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="m8 12.3 2.8 2.7L16 9.5"/></symbol>
+    <symbol id="i-warn" viewBox="0 0 24 24"><path d="M12 3.5 2.5 20h19L12 3.5Z"/><path d="M12 10v4.5M12 17.2v.3"/></symbol>
+    <symbol id="i-stop" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="m9 9 6 6M15 9l-6 6"/></symbol>
+    <symbol id="i-wait" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5.2l3.3 2"/></symbol>
+    <symbol id="i-off" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M8 12h8"/></symbol>
+    <symbol id="i-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v5.5M12 7.5v.3"/></symbol>
+    <symbol id="i-copy" viewBox="0 0 24 24"><rect x="8.5" y="8.5" width="11" height="11" rx="2"/><path d="M15.5 5.5v-.5a1.5 1.5 0 0 0-1.5-1.5H5a1.5 1.5 0 0 0-1.5 1.5v9A1.5 1.5 0 0 0 5 15.5h.5"/></symbol>
+    <symbol id="i-close" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></symbol>
+    <symbol id="i-link" viewBox="0 0 24 24"><path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1"/><path d="M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"/></symbol>
+    <symbol id="i-people" viewBox="0 0 24 24"><circle cx="9" cy="8.5" r="3.5"/><path d="M2.5 19.5c.5-3.5 3-5.5 6.5-5.5s6 2 6.5 5.5"/><path d="M16 5.3a3.5 3.5 0 0 1 0 6.4M18.5 14.5c1.7.8 2.7 2.5 3 5"/></symbol>
+    <symbol id="i-lock" viewBox="0 0 24 24"><rect x="5" y="10.5" width="14" height="10" rx="2"/><path d="M8 10.5V8a4 4 0 0 1 8 0v2.5"/></symbol>
+  </defs>
+</svg>
 
-<header class="top">
-  <div class="brand">
-    <span class="mark" aria-hidden="true"></span>
-    <h1>LEPIC console</h1>
-    <span id="network" class="tag" hidden></span>
-  </div>
-  <p id="link" class="link" role="status">Connecting to lepic serve…</p>
-  <button id="theme" type="button" class="ghost" aria-pressed="false">Use light theme</button>
-</header>
+<a class="lc-skip" href="#main">Skip to content</a>
 
-<div class="shell">
-  <nav class="rail" aria-label="Sections">
-    <div role="tablist" aria-orientation="vertical">
-      <button role="tab" type="button" id="tab-overview" aria-controls="panel-overview" aria-selected="true" tabindex="0">Overview</button>
-      <button role="tab" type="button" id="tab-transactions" aria-controls="panel-transactions" aria-selected="false" tabindex="-1">Transactions</button>
-      <button role="tab" type="button" id="tab-outputs" aria-controls="panel-outputs" aria-selected="false" tabindex="-1">Outputs</button>
-      <button role="tab" type="button" id="tab-events" aria-controls="panel-events" aria-selected="false" tabindex="-1">Events</button>
-      <button role="tab" type="button" id="tab-api" aria-controls="panel-api" aria-selected="false" tabindex="-1">API reference</button>
+<div class="lc-app">
+  <header class="lc-rail">
+    <a class="lc-brand" href="#overview" aria-label="LEPIC console, overview">
+      <svg class="lc-brand-mark" viewBox="0 0 32 32" aria-hidden="true" focusable="false"><rect width="32" height="32" rx="8"/><path d="M11 8v16h11"/></svg>
+      <span class="lc-brand-text">
+        <span class="lc-brand-name" translate="no">LEPIC</span>
+        <span id="network" class="lc-brand-net" hidden></span>
+      </span>
+    </a>
+
+    <nav class="lc-nav" aria-label="Sections">
+      <a class="lc-nav-item" href="#overview" data-view="overview" aria-current="page"><svg class="lc-icon" aria-hidden="true"><use href="#i-overview"/></svg><span>Overview</span></a>
+      <a class="lc-nav-item" href="#transactions" data-view="transactions"><svg class="lc-icon" aria-hidden="true"><use href="#i-transactions"/></svg><span>Payments</span></a>
+      <a class="lc-nav-item" href="#outputs" data-view="outputs"><svg class="lc-icon" aria-hidden="true"><use href="#i-outputs"/></svg><span>Outputs</span></a>
+      <a class="lc-nav-item" href="#events" data-view="events"><svg class="lc-icon" aria-hidden="true"><use href="#i-activity"/></svg><span>Events</span></a>
+      <a class="lc-nav-item" href="#api" data-view="api"><svg class="lc-icon" aria-hidden="true"><use href="#i-api"/></svg><span>API</span></a>
+    </nav>
+
+    <div class="lc-rail-foot">
+      <p id="link" class="lc-conn" role="status" data-state="busy"><span class="lc-conn-dot" aria-hidden="true"></span><span id="link-text">Connecting</span></p>
+      <button id="theme" type="button" class="lc-rail-btn" aria-label="Switch to the light theme">
+        <svg class="lc-icon" aria-hidden="true"><use id="theme-icon" href="#i-sun"/></svg><span id="theme-label">Light</span>
+      </button>
     </div>
-  </nav>
+  </header>
 
-  <main id="main" tabindex="-1">
-    <div id="no-session" class="notice" role="alert" hidden>
-      <div>
-        <strong>This page has no session.</strong>
-        <span>Open the console with the link lepic-console printed in its terminal. A new link is printed each time one is used.</span>
-      </div>
-    </div>
-    <div id="unreachable" class="notice" role="alert" hidden>
-      <div>
-        <strong>lepic serve is not answering.</strong>
-        <span id="unreachable-detail"></span>
-      </div>
-      <button id="retry" type="button">Retry now</button>
-    </div>
-
-    <section role="tabpanel" id="panel-overview" aria-labelledby="tab-overview">
-      <div class="sync" id="sync" aria-live="polite">
-        <p class="sync-word" id="sync-word">Waiting for the first status…</p>
-        <div class="track" aria-hidden="true">
-          <span class="fill" id="sync-fill"></span>
-          <span class="pin wallet" id="sync-wallet-pin"></span>
-          <span class="pin node" id="sync-node-pin"></span>
+  <main id="main" class="lc-main" tabindex="-1">
+    <div class="lc-notices">
+      <div id="no-session" class="lc-notice" role="alert" hidden>
+        <svg class="lc-icon" aria-hidden="true"><use href="#i-lock"/></svg>
+        <div class="lc-notice-text">
+          <strong>This page is not signed in.</strong>
+          <span>Open the console with the link lepic-console printed in its terminal. Each link works once, and a new one is printed after it is used.</span>
         </div>
-        <div class="legend">
-          <span><i class="dot wallet"></i>Wallet height <b class="num" id="sync-wallet">–</b></span>
-          <span><i class="dot node"></i>Node tip <b class="num" id="sync-node">–</b></span>
-        </div>
       </div>
+      <div id="unreachable" class="lc-notice" role="alert" hidden>
+        <svg class="lc-icon" aria-hidden="true"><use href="#i-warn"/></svg>
+        <div class="lc-notice-text">
+          <strong>The wallet service is not answering.</strong>
+          <span id="unreachable-detail"></span>
+        </div>
+        <button id="retry" type="button" class="lc-btn">Try again</button>
+      </div>
+    </div>
 
-      <div class="grid">
-        <section class="facts" aria-labelledby="h-serve">
-          <h2 id="h-serve">serve</h2>
-          <dl id="serve-facts" class="kv"></dl>
-        </section>
+    <section id="view-overview" class="lc-view" aria-labelledby="h-overview">
+      <h1 id="h-overview" class="lc-sr">Overview</h1>
 
-        <section class="facts" aria-labelledby="h-requests">
-          <h2 id="h-requests">Requests</h2>
-          <dl id="request-facts" class="kv kv-figures"></dl>
-        </section>
-
-        <section class="facts" aria-labelledby="h-listeners">
-          <h2 id="h-listeners">Listeners</h2>
-          <dl id="listener-facts" class="kv"></dl>
-        </section>
-
-        <section class="facts" aria-labelledby="h-maint">
-          <h2 id="h-maint">Refresh and collect</h2>
-          <dl id="maintenance-facts" class="kv"></dl>
-        </section>
-
-        <section class="facts wide" aria-labelledby="h-balances">
-          <h2 id="h-balances">Balances</h2>
-          <div id="balances" class="scroll"></div>
-        </section>
-
-        <section class="facts half" aria-labelledby="h-address">
-          <h2 id="h-address">Address</h2>
-          <div class="address-row">
-            <code id="address" class="address" translate="no">–</code>
-            <button id="copy-address" type="button" class="ghost" hidden>Copy</button>
+      <div class="lc-hero">
+        <div class="lc-health" id="health" data-tone="unknown">
+          <svg class="lc-icon lc-health-icon" aria-hidden="true"><use id="health-icon" href="#i-wait"/></svg>
+          <div>
+            <p class="lc-health-line" id="health-line" role="status">Checking the wallet…</p>
+            <p class="lc-health-sub" id="health-sub"></p>
           </div>
-          <p id="copy-note" class="muted small" role="status"></p>
+        </div>
+
+        <section class="lc-balance" aria-labelledby="h-balance">
+          <span class="lc-tick lc-tick-tl" aria-hidden="true"></span><span class="lc-tick lc-tick-tr" aria-hidden="true"></span>
+          <span class="lc-tick lc-tick-bl" aria-hidden="true"></span><span class="lc-tick lc-tick-br" aria-hidden="true"></span>
+          <h2 id="h-balance" class="lc-balance-label">Balance</h2>
+          <p class="lc-balance-total"><span id="balance-total" class="lc-balance-figure">–</span> <span class="lc-balance-unit" translate="no">EPIC</span></p>
+          <p id="balance-note" class="lc-balance-note"></p>
+          <dl id="balance-parts" class="lc-parts" hidden></dl>
+          <div id="balance-accounts" hidden></div>
+        </section>
+      </div>
+
+      <div class="lc-cols">
+        <section class="lc-block" aria-labelledby="h-services">
+          <h2 id="h-services" class="lc-block-title">What is running</h2>
+          <ul id="services" class="lc-checks">
+            <li class="lc-placeholder">Waiting for the first answer…</li>
+          </ul>
         </section>
 
-        <section class="facts half" aria-labelledby="h-node">
-          <h2 id="h-node">Node</h2>
-          <dl id="node-facts" class="kv"></dl>
+        <section class="lc-block" aria-labelledby="h-address">
+          <h2 id="h-address" class="lc-block-title">Receive at this address</h2>
+          <p class="lc-block-lead">Give this address to someone who wants to pay this wallet.</p>
+          <div class="lc-address-row">
+            <code id="address" class="lc-address" translate="no">–</code>
+            <button id="copy-address" type="button" class="lc-btn" hidden><svg class="lc-icon" aria-hidden="true"><use href="#i-copy"/></svg><span id="copy-label">Copy</span></button>
+          </div>
+          <p id="copy-note" class="lc-note" role="status"></p>
+
+          <details id="tech" class="lc-tech">
+            <summary class="lc-tech-summary">Technical details</summary>
+            <dl id="tech-facts" class="lc-facts"></dl>
+          </details>
+        </section>
+
+        <section class="lc-block" aria-labelledby="h-recent">
+          <h2 id="h-recent" class="lc-block-title">Latest payments</h2>
+          <ul id="recent" class="lc-rows">
+            <li class="lc-placeholder">Waiting for the first answer…</li>
+          </ul>
+          <p class="lc-block-more"><a class="lc-link" href="#transactions">See all payments</a></p>
         </section>
       </div>
     </section>
 
-    <section role="tabpanel" id="panel-transactions" aria-labelledby="tab-transactions" hidden>
-      <div class="panel-head">
-        <h2>Transactions</h2>
-        <p class="muted" id="tx-summary"></p>
+    <section id="view-transactions" class="lc-view" aria-labelledby="h-transactions" hidden>
+      <div class="lc-view-head">
+        <h1 id="h-transactions" class="lc-view-title">Payments</h1>
+        <p class="lc-view-lead" id="tx-summary">Every payment this wallet has sent or received, newest first.</p>
       </div>
-      <div id="transactions" class="scroll"></div>
+      <ul id="transactions" class="lc-rows lc-rows-wide">
+        <li class="lc-placeholder">Waiting for the first answer…</li>
+      </ul>
     </section>
 
-    <section role="tabpanel" id="panel-outputs" aria-labelledby="tab-outputs" hidden>
-      <div class="panel-head">
-        <h2>Outputs</h2>
-        <p class="muted" id="outputs-summary"></p>
+    <section id="view-outputs" class="lc-view" aria-labelledby="h-outputs" hidden>
+      <div class="lc-view-head">
+        <h1 id="h-outputs" class="lc-view-title">Outputs</h1>
+        <p class="lc-view-lead">The wallet holds its balance as separate pieces, called outputs. Receiving a payment adds one. Sending spends some and returns the change as a new one.</p>
+        <p class="lc-view-count" id="outputs-summary"></p>
       </div>
-      <div id="outputs" class="scroll"></div>
+      <ul id="outputs" class="lc-rows lc-rows-wide">
+        <li class="lc-placeholder">Waiting for the first answer…</li>
+      </ul>
     </section>
 
-    <section role="tabpanel" id="panel-events" aria-labelledby="tab-events" hidden>
-      <div class="panel-head">
-        <h2>Events</h2>
-        <p class="muted" id="events-state" role="status">Opening the event stream…</p>
-        <button id="events-clear" type="button" class="ghost">Clear</button>
+    <section id="view-events" class="lc-view" aria-labelledby="h-events" hidden>
+      <div class="lc-view-head">
+        <h1 id="h-events" class="lc-view-title">Events</h1>
+        <p class="lc-view-lead">What the wallet does, as it happens. The list starts when this page is opened.</p>
+        <div class="lc-toolbar">
+          <p class="lc-live" id="events-state" role="status" data-state="busy"><span class="lc-conn-dot" aria-hidden="true"></span><span id="events-state-text">Connecting…</span></p>
+          <label class="lc-check"><input type="checkbox" id="events-routine" name="show-routine-checks" autocomplete="off" class="lc-check-box"><span>Show routine checks</span></label>
+          <button id="events-clear" type="button" class="lc-btn">Clear the list</button>
+        </div>
       </div>
-      <ol id="events" class="feed" aria-live="polite" aria-relevant="additions"></ol>
-      <p id="events-empty" class="empty">No events yet. Every engine event serve emits appears here as it happens.</p>
+      <div role="log" aria-label="Wallet events">
+        <ol id="events" class="lc-rows lc-rows-wide lc-feed"></ol>
+      </div>
+      <p id="events-empty" class="lc-empty">Nothing has happened since this page was opened. Payments, connection changes and pairing requests appear here.</p>
     </section>
 
-    <section role="tabpanel" id="panel-api" aria-labelledby="tab-api" hidden>
-      <p id="api-note" class="muted small">The document serve publishes, rendered in this page. Requests from the reference are not sent.</p>
+    <section id="view-api" class="lc-view lc-view-api" aria-labelledby="h-api" hidden>
+      <div class="lc-api-head">
+        <h1 id="h-api" class="lc-view-title">API</h1>
+        <p id="api-note" class="lc-view-lead">Everything lepic serve answers on its socket, for building against it. This page is for reading: it sends no requests. The console itself only reads from the wallet and can cancel a payment.</p>
+      </div>
       <div id="api-doc"></div>
     </section>
   </main>
 </div>
 
-<dialog id="tx-dialog" aria-labelledby="tx-dialog-title">
-  <form method="dialog" class="dialog-head">
-    <h2 id="tx-dialog-title">Transaction</h2>
-    <button type="submit" class="ghost" aria-label="Close">Close</button>
-  </form>
-  <div id="tx-dialog-body" class="dialog-body"></div>
-  <div id="tx-dialog-actions" class="dialog-actions" hidden>
-    <p id="tx-cancel-note" class="muted small" role="status"></p>
-    <button id="tx-cancel" type="button" class="danger">Cancel this transaction</button>
-    <button id="tx-cancel-confirm" type="button" class="danger" hidden>Yes, cancel it</button>
+<dialog id="tx-dialog" class="lc-dlg" aria-labelledby="tx-dialog-title">
+  <div class="lc-dlg-head">
+    <h2 id="tx-dialog-title" class="lc-dlg-title">Payment</h2>
+    <form method="dialog"><button type="submit" class="lc-icon-btn" aria-label="Close"><svg class="lc-icon" aria-hidden="true"><use href="#i-close"/></svg></button></form>
+  </div>
+  <div id="tx-dialog-body" class="lc-dlg-body"></div>
+  <div id="tx-dialog-actions" class="lc-dlg-actions" hidden>
+    <p id="tx-cancel-note" class="lc-note" role="status"></p>
+    <div class="lc-dlg-buttons">
+      <button id="tx-cancel" type="button" class="lc-btn lc-btn-risk">Cancel this payment</button>
+      <button id="tx-cancel-keep" type="button" class="lc-btn" hidden>Keep it</button>
+      <button id="tx-cancel-confirm" type="button" class="lc-btn lc-btn-risk-solid" hidden>Yes, cancel it</button>
+    </div>
   </div>
 </dialog>
 
