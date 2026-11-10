@@ -247,14 +247,14 @@ async fn take<N: lepic_node::NodeApi + 'static>(
     Ok(book.in_person_take(&bytes).await?)
 }
 
-fn code_bytes(code: &InPersonCodeArg) -> Result<Vec<u8>, CliError> {
+pub(super) fn code_bytes(code: &InPersonCodeArg) -> Result<Vec<u8>, CliError> {
     match &code.file {
         Some(path) => read_limited(path),
         None => from_hex(code.hex.as_deref().unwrap_or_default()),
     }
 }
 
-fn read_limited(path: &Path) -> Result<Vec<u8>, CliError> {
+pub(super) fn read_limited(path: &Path) -> Result<Vec<u8>, CliError> {
     use std::io::Read as _;
     let mut bytes = Vec::new();
     std::fs::File::open(path)

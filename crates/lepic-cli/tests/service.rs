@@ -372,3 +372,285 @@ fn commands_run_through_a_running_serve() {
     let report = served.ok().json();
     assert_eq!(report["requests"], 5, "{report}");
 }
+
+/// Stops the serve of a test when it goes out of scope, so a failed assertion ends the test
+/// instead of leaving the scope waiting for a serve that never stops.
+struct StopOnDrop(Arc<AtomicBool>);
+
+impl Drop for StopOnDrop {
+    fn drop(&mut self) {
+        self.0.store(true, Ordering::SeqCst);
+    }
+}
+
+/// A serve on `--socket` names its socket in the data directory, so commands run through it, and
+/// takes the name away when it stops.
+#[test]
+fn commands_find_a_serve_on_another_socket() {
+    let mut host = TestHost::new();
+    host.fund(SENDER_MNEMONIC, 0, FUNDING, 1);
+    let wallet = Instance::new("serving password");
+    wallet.restore(&host, SENDER_MNEMONIC);
+    let direct = wallet.run(&host, &["wallet", "info"]).ok();
+
+    let stop = Arc::new(AtomicBool::new(false));
+    let signal = Arc::clone(&stop);
+    host.interrupt_when = Some(Arc::new(move || signal.load(Ordering::SeqCst)));
+    let client = host.without_interrupt();
+    let dir = tempfile::tempdir().unwrap();
+    let socket = dir.path().join("s.sock");
+    let socket_arg = socket.to_str().unwrap();
+    let pointer = wallet.data_dir().join("serve-socket");
+
+    let (through, unrouted, served) = std::thread::scope(|scope| {
+        let _stop = StopOnDrop(Arc::clone(&stop));
+        let server = scope.spawn(|| wallet.run(&host, &["serve", "--socket", socket_arg]));
+        wait_for_socket(&socket);
+        wait_for_socket(&pointer);
+        assert_eq!(std::fs::read(&pointer).unwrap(), socket_arg.as_bytes());
+        let through = wallet.run(&client, &["wallet", "info"]);
+        let to_file = wallet.path("slate.json");
+        let to_file = to_file.to_str().unwrap();
+        let unrouted = wallet.run(&client, &["tx", "send", "1", "--to-file", to_file]);
+        stop.store(true, Ordering::SeqCst);
+        (through, unrouted, server.join().unwrap())
+    });
+
+    assert_eq!(through.code, 0, "{through:?}");
+    assert_eq!(through.stdout, direct.stdout, "{through:?}");
+    // A command that runs here names the serve it found on the other socket.
+    assert_eq!(unrouted.code, 5, "{unrouted:?}");
+    let message = unrouted.json()["error"]["message"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert!(message.contains(socket_arg), "{message}");
+    assert_eq!(served.ok().json()["requests"], 1);
+    assert!(!pointer.exists());
+    assert!(!socket.exists());
+}
+
+/// A pointer whose socket does not answer names nothing: the default socket is tried next, and
+/// with no serve running the command runs here.
+#[test]
+fn a_stale_pointer_is_ignored() {
+    let mut host = TestHost::new();
+    host.fund(SENDER_MNEMONIC, 0, FUNDING, 1);
+    let wallet = Instance::new("serving password");
+    wallet.restore(&host, SENDER_MNEMONIC);
+    let direct = wallet.run(&host, &["wallet", "info"]).ok();
+    let dir = tempfile::tempdir().unwrap();
+    let dead = dir.path().join("dead.sock");
+    drop(std::os::unix::net::UnixListener::bind(&dead).unwrap());
+    assert!(dead.exists());
+    let pointer = wallet.data_dir().join("serve-socket");
+    std::fs::write(&pointer, dead.to_str().unwrap()).unwrap();
+
+    // No serve: the command runs here and opens the wallet.
+    let alone = wallet.run(&host, &["wallet", "info"]);
+    assert_eq!(alone.stdout, direct.stdout, "{alone:?}");
+
+    // A serve on the default socket answers although the pointer names the dead one.
+    let stop = Arc::new(AtomicBool::new(false));
+    let signal = Arc::clone(&stop);
+    host.interrupt_when = Some(Arc::new(move || signal.load(Ordering::SeqCst)));
+    let client = host.without_interrupt();
+    let socket = wallet.data_dir().join("lepic.sock");
+    let (through, served) = std::thread::scope(|scope| {
+        let _stop = StopOnDrop(Arc::clone(&stop));
+        let server = scope.spawn(|| wallet.run(&host, &["serve"]));
+        wait_for_socket(&socket);
+        wait_for_socket(&pointer);
+        std::fs::write(&pointer, dead.to_str().unwrap()).unwrap();
+        let through = wallet.run(&client, &["wallet", "info"]);
+        stop.store(true, Ordering::SeqCst);
+        (through, server.join().unwrap())
+    });
+    assert_eq!(through.stdout, direct.stdout, "{through:?}");
+    assert_eq!(served.ok().json()["requests"], 1);
+}
+
+/// An error that has a hint prints it through serve as on a direct run, for people; the JSON
+/// error and the JSON problem document carry none.
+#[test]
+fn a_command_through_serve_prints_the_hint_of_a_direct_run() {
+    let mut host = TestHost::new();
+    host.fund(SENDER_MNEMONIC, 0, FUNDING, 1);
+    let wallet = Instance::new("serving password");
+    wallet.restore(&host, SENDER_MNEMONIC);
+    let receiver = Instance::new("receiver password");
+    receiver.run(&host, &["wallet", "init"]).ok();
+    let address = receiver.run(&host, &["wallet", "address"]).ok().json();
+    let address = support::text(&address, "address").to_owned();
+    let mut human = wallet.env();
+    human.retain(|(key, _)| key != "LEPIC_OUTPUT");
+    let too_much = ["tx", "send", "1000000", "--to", &address];
+    let direct = wallet.run_with(&host, &too_much, human.clone(), "");
+    assert_eq!(direct.code, 8, "{direct:?}");
+    assert!(direct.stderr.contains("hint: "), "{direct:?}");
+
+    let stop = Arc::new(AtomicBool::new(false));
+    let signal = Arc::clone(&stop);
+    host.interrupt_when = Some(Arc::new(move || signal.load(Ordering::SeqCst)));
+    let client = host.without_interrupt();
+    let socket = wallet.data_dir().join("lepic.sock");
+    let body = format!(r#"{{"amount":"1000000","to":"{address}"}}"#);
+
+    let (through, as_json, document) = std::thread::scope(|scope| {
+        let _stop = StopOnDrop(Arc::clone(&stop));
+        let server = scope.spawn(|| wallet.run(&host, &["serve"]));
+        wait_for_socket(&socket);
+        let through = wallet.run_with(&client, &too_much, human.clone(), "");
+        let as_json = wallet.run(&client, &too_much);
+        let document = http(&socket, "POST", "/v1/transactions", Some(&body));
+        stop.store(true, Ordering::SeqCst);
+        server.join().unwrap().ok();
+        (through, as_json, document)
+    });
+
+    assert_eq!(through.code, direct.code, "{through:?}");
+    assert_eq!(through.stderr, direct.stderr, "{through:?}");
+    assert_eq!(as_json.code, 8, "{as_json:?}");
+    assert!(!as_json.stdout.contains("hint"), "{as_json:?}");
+    assert_eq!(document.status, 422, "{document:?}");
+    assert!(document.json().get("hint").is_none(), "{document:?}");
+}
+
+/// While serve holds the wallet, the contact, in-person, epic1, epictx and profile domain
+/// commands run there and print what they print on their own, errors included, and a file a
+/// command reads or writes is read and written here (ADR 0053).
+#[test]
+#[allow(clippy::too_many_lines)] // A test reads best as one sequence of steps.
+fn the_route_covered_command_families_run_through_a_running_serve() {
+    let mut host = TestHost::new();
+    host.fund(SENDER_MNEMONIC, 0, FUNDING, 1);
+    let wallet = Instance::new("serving password");
+    wallet.restore(&host, SENDER_MNEMONIC);
+    let mut human = wallet.env();
+    human.retain(|(key, _)| key != "LEPIC_OUTPUT");
+    let payload = wallet.path("payload.bin");
+    std::fs::write(&payload, [0u8, 255]).unwrap();
+    let payload = payload.to_str().unwrap().to_owned();
+    let missing = wallet.path("missing.epictx");
+    let missing = missing.to_str().unwrap().to_owned();
+    let not_sealed = wallet.path("not-sealed.epictx");
+    std::fs::write(&not_sealed, "not a sealed file").unwrap();
+    let not_sealed = not_sealed.to_str().unwrap().to_owned();
+    let backup = wallet.path("contacts.backup");
+    let backup = backup.to_str().unwrap().to_owned();
+    let domain = wallet.path("epic-wallet.json");
+    let domain = domain.to_str().unwrap().to_owned();
+
+    let same: Vec<Vec<&str>> = vec![
+        vec!["contact", "list"],
+        vec!["contact", "requests"],
+        vec!["contact", "invoices"],
+        vec!["contact", "quarantine"],
+        vec!["contact", "payload", "list"],
+        vec!["contact", "payload", "ack", "nosuch"],
+        vec!["contact", "payload", "post", "nosuch", "--hex", "00ff"],
+        vec!["contact", "payload", "post", "nosuch", "--file", &payload],
+        vec!["contact", "remove", "nosuch"],
+        vec!["contact", "sas", "nosuch", "match"],
+        vec!["contact", "label", "nosuch", "x"],
+        vec!["contact", "request-dismiss", "nosuch"],
+        vec!["contact", "import", &missing],
+        vec!["epic1", "address"],
+        vec!["epic1", "links"],
+        vec!["epic1", "answers"],
+        vec!["epic1", "read", "epic:epic1nonsense"],
+        vec!["profile", "domain", "show"],
+        vec!["in-person", "answers", "nosuch"],
+        vec!["in-person", "take", "zz"],
+        vec!["in-person", "read", "--hex", "00"],
+        vec!["epictx", "open", &missing],
+        vec!["epictx", "open", &not_sealed],
+    ];
+    let human_same: Vec<Vec<&str>> = vec![
+        vec!["contact", "list"],
+        vec!["epic1", "address"],
+        vec!["epic1", "links"],
+        vec!["profile", "domain", "show"],
+        vec!["contact", "remove", "nosuch"],
+    ];
+    // The files: the same path on both sides, so the report names the same file.
+    let files: Vec<Vec<&str>> = vec![
+        vec!["contact", "export", &backup],
+        vec!["contact", "import", &backup],
+        vec![
+            "profile",
+            "domain",
+            "file",
+            "--path",
+            &domain,
+            "--relay",
+            "r.example:443",
+        ],
+        vec!["profile", "domain", "file", "--path", &domain],
+    ];
+
+    let run_all = |client: &TestHost| {
+        let same: Vec<Outcome> = same.iter().map(|args| wallet.run(client, args)).collect();
+        let human_same: Vec<Outcome> = human_same
+            .iter()
+            .map(|args| wallet.run_with(client, args, human.clone(), ""))
+            .collect();
+        let mut written = Vec::new();
+        for args in &files {
+            let outcome = wallet.run(client, args);
+            let bytes = [&backup, &domain].map(|path| std::fs::read(path).ok());
+            written.push((outcome, bytes));
+        }
+        for path in [&backup, &domain] {
+            let _ = std::fs::remove_file(path);
+        }
+        (same, human_same, written)
+    };
+    let direct = run_all(&host);
+
+    let stop = Arc::new(AtomicBool::new(false));
+    let signal = Arc::clone(&stop);
+    host.interrupt_when = Some(Arc::new(move || signal.load(Ordering::SeqCst)));
+    let client = host.without_interrupt();
+    let socket = wallet.data_dir().join("lepic.sock");
+    let (through, made, served) = std::thread::scope(|scope| {
+        let _stop = StopOnDrop(Arc::clone(&stop));
+        let server = scope.spawn(|| wallet.run(&host, &["serve"]));
+        wait_for_socket(&socket);
+        let through = run_all(&client);
+        let made = [
+            wallet.run(&client, &["contact", "invite", "--pairing-words"]),
+            wallet.run(&client, &["in-person", "invoice", "1"]),
+        ];
+        stop.store(true, Ordering::SeqCst);
+        (through, made, server.join().unwrap())
+    });
+
+    for (direct, through) in direct.0.iter().zip(&through.0) {
+        assert_eq!(through.code, direct.code, "{through:?} vs {direct:?}");
+        assert_eq!(through.stdout, direct.stdout, "{through:?}");
+    }
+    for (direct, through) in direct.1.iter().zip(&through.1) {
+        assert_eq!(through.code, direct.code, "{through:?} vs {direct:?}");
+        assert_eq!(through.stdout, direct.stdout, "{through:?}");
+        assert_eq!(through.stderr, direct.stderr, "{through:?}");
+    }
+    for ((direct, direct_bytes), (through, through_bytes)) in direct.2.iter().zip(&through.2) {
+        assert_eq!(through.code, direct.code, "{through:?} vs {direct:?}");
+        assert_eq!(through.stdout, direct.stdout, "{through:?}");
+        assert_eq!(through_bytes, direct_bytes);
+    }
+    // The file commands ran: a backup and a domain file came out of them.
+    assert_eq!(direct.2[0].0.code, 0, "{:?}", direct.2[0].0);
+    assert!(direct.2[0].1[0].is_some());
+    assert_eq!(direct.2[2].0.code, 0, "{:?}", direct.2[2].0);
+    assert!(direct.2[2].1[1].is_some());
+    // An existing domain file is not replaced without --force.
+    assert_ne!(direct.2[3].0.code, 0, "{:?}", direct.2[3].0);
+    // Commands whose answers are not repeatable made their records.
+    for outcome in &made {
+        assert_eq!(outcome.code, 0, "{outcome:?}");
+    }
+    assert!(made[1].json()["slate_id"].is_string(), "{:?}", made[1]);
+    served.ok();
+}

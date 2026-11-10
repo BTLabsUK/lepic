@@ -144,15 +144,26 @@ fn write_file(
     key: &lepic_wallet_contacts::VerifyingKey,
     domain: Option<&str>,
 ) -> Result<Report, CliError> {
-    use std::io::Write as _;
-    let path = args
-        .path
-        .clone()
-        .unwrap_or_else(|| std::path::PathBuf::from("epic-wallet.json"));
     let text = domain_file_text(network, key, &args.relay)?;
+    write_text(args.path.as_deref(), args.force, &text, domain_url(domain))
+}
+
+/// Writes the domain file `text` to `path` (`./epic-wallet.json` when none), which must not exist
+/// unless `force`, and reports it.
+pub(super) fn write_text(
+    path: Option<&std::path::Path>,
+    force: bool,
+    text: &str,
+    url: Option<String>,
+) -> Result<Report, CliError> {
+    use std::io::Write as _;
+    let path = path.map_or_else(
+        || std::path::PathBuf::from("epic-wallet.json"),
+        ToOwned::to_owned,
+    );
     let mut options = std::fs::OpenOptions::new();
     options.write(true);
-    if args.force {
+    if force {
         options.create(true).truncate(true);
     } else {
         options.create_new(true);
@@ -172,7 +183,7 @@ fn write_file(
     Ok(Report::ProfileDomainFile(ProfileDomainFileReport {
         path: path.display().to_string(),
         bytes: text.len(),
-        url: domain_url(domain),
+        url,
     }))
 }
 

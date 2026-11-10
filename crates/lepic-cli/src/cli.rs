@@ -5,7 +5,7 @@
 use std::path::PathBuf;
 
 use clap::{Args, Parser, Subcommand, ValueEnum};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
 use crate::exit::EXIT_CODES_HELP;
@@ -1377,7 +1377,9 @@ pub struct ContactPayloadAckArgs {
     pub ids: Vec<String>,
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, ValueEnum, Deserialize, ToSchema)]
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, ValueEnum, Serialize, Deserialize, ToSchema,
+)]
 pub enum InviteExpiryArg {
     #[value(name = "1h")]
     #[serde(rename = "1h")]
@@ -1398,7 +1400,7 @@ pub enum ContactKindArg {
     Exchange,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum, Deserialize, ToSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum SasArg {
     Match,
@@ -1406,7 +1408,7 @@ pub enum SasArg {
     Skip,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum, Deserialize, ToSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum KeysArg {
     /// Keep the old pairing; the new one is deleted

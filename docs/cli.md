@@ -1152,11 +1152,17 @@ when `serve` stops.
 ### Commands while serve runs
 
 While `serve` holds a wallet, a `lepic` command on that wallet that has a route in the API runs on
-serve's wallet through the socket in the data directory (ADR 0053). It prints what it prints when
-it runs on its own: the same JSON with `--output json`, the same text without it, and the same
-error, kind and exit code when it fails. It asks for no password: the socket admits only serve's
-own user, and serve holds the wallet unlocked. It runs with serve's settings, and prints no
-progress lines on stderr.
+serve's wallet through its socket (ADR 0053). `lepic` tries the socket the data directory's
+`serve-socket` file names (`serve --socket <path>` writes it, and removes it on exit), then the
+default `<data dir>/lepic.sock`. A command prints what it prints when it runs on its own: the same
+JSON with `--output json`, the same text without it (including the hint under an error), and the
+same error, kind and exit code when it fails. It asks for no password: the socket admits only
+serve's own user, and serve holds the wallet unlocked. It runs with serve's settings, and prints
+no progress lines on stderr.
+
+Files a command reads (`--file`, payloads, codes, answers, a contact backup) are read by `lepic` and
+sent in the request. Files it writes (`contact export`, `profile domain file`) are written by
+`lepic` from the answer, with the same checks as a direct run (`--force`, owner-only mode).
 
 | Command | Route |
 | --- | --- |
@@ -1172,16 +1178,48 @@ progress lines on stderr.
 | `epicbox status` | `GET /v1/epicbox` |
 | `epicbox peer` | `GET /v1/epicbox/peers/{address}` |
 | `profile show`, `profile set` | `GET`, `PATCH /v1/profile` |
+| `profile domain show`, `attach`, `file` | `GET /v1/profile/domain`, `POST .../attach`, `POST .../file` |
 | `peer pins`, `peer forget` | `GET`, `DELETE /v1/peer-pins` |
+| `contact invite`, `request`, `requests`, `request-accept`, `request-dismiss`, `request-cancel` | `/v1/contacts/invites`, `/v1/contacts/requests`, `/v1/contacts/requests/{id}/accept`, `DELETE /v1/contacts/requests/{id}`, `DELETE /v1/contacts/{id}/request` |
+| `contact open`, `accept`, `enter`, `collect`, `sas`, `show-card`, `scan-card` | `/v1/contacts/preview`, `/accept`, `/enter`, `/collect`, `/{id}/sas`, `/card`, `/cards/scan` |
+| `contact list`, `remove`, `label`, `allow-invoices` | `GET /v1/contacts`, `DELETE /v1/contacts/{id}`, `PATCH /v1/contacts/{id}` |
+| `contact move`, `move-home`, `check`, `key-check`, `keys` | `/v1/contacts/{id}/move`, `/move-home`, `/{id}/check`, `/{id}/key-check`, `/{id}/keys` |
+| `contact invoices`, `quarantine` | `GET /v1/contact-invoices`, `GET /v1/contacts/quarantine` |
+| `contact export`, `import` | `POST /v1/contacts/export`, `/import` |
+| `contact payload post`, `list`, `ack <ID>` | `POST /v1/contacts/{id}/payloads`, `GET /v1/payloads`, `POST /v1/payloads/{id}/ack` |
+| `in-person invoice`, `send`, `read`, `pay`, `receive` | `POST /v1/in-person/invoices`, `/sends`, `/read`, `/pay`, `/receive` |
+| `in-person post`, `take`, `answers`, `finalize` | `POST /v1/in-person/{id}/post`, `POST /v1/in-person/take`, `GET .../{id}/answers`, `POST .../{id}/finalize` |
+| `epic1 address`, `link`, `links`, `retire`, `read`, `pay` | `/v1/epic1/address`, `/links`, `/links/{n}/retire`, `/read`, `/pay` |
+| `epic1 post-next`, `answers`, `post-answer`, `restore` | `/v1/epic1/{id}/post-next`, `/answers`, `/{id}/post-answer`, `/restore` |
+| `epictx open` | `POST /v1/epictx/open` |
 
-`tx send` goes through serve only without `--to-file`, `--to-contact`, `--purpose`,
-`--allow-plain-http`, `--tor-binary`, `--lib-dir`, `--fluff` and `--ttl-blocks`, with the default
-`--selection`, and to an address that is not an onion. `tx show --slate-id` and `epicbox status
---listing` do not go through serve. Every other command, and every command given one of these
-options, exits 5 with `lepic serve is running on this wallet (socket <path>) and this command
-does not go through its API`: stop serve to run it, or call the API. A serve started with
-`--socket` on another path is not found, and commands on its wallet exit 5 with `another lepic
-process is using the data directory`.
+The route names above are shortened; `docs/api/openapi.json` has each in full.
+
+A command given an option its route has no field for runs on its own and meets the lock. These
+options keep a command off serve: `--to-file`, `--to-contact`, `--purpose`, `--allow-plain-http`,
+`--tor-binary`, `--lib-dir`, `--fluff` and `--ttl-blocks` on `tx send` (`--ttl-blocks` also on
+`in-person read`, `in-person pay` and `epic1 pay`), a `--selection` other than the default, `--offline`
+and `--epicbox-off` on the contact, in-person and epic1 commands, `--kind` on `contact invite` and
+`contact show-card`, `--out` on the in-person commands, `contact payload ack` with several ids, and an
+`epictx open` with text on the command line. `tx send` to an onion address, `tx show --slate-id` and
+`epicbox status --listing` do not go through serve either.
+
+Commands that still exit 5 while serve runs, with the reason:
+
+| Command | Reason |
+| --- | --- |
+| `wallet init`, `restore`, `import-seed`, `import-history` | They create or replace the wallet in the directory serve holds. |
+| `wallet password` | The route exists, but the command asks for both passwords on the terminal and `lepic` would hold them in the request; it runs on its own with serve stopped. |
+| `serve`, `epicbox listen`, `epicbox drain`, `http listen`, `tor listen`, `tor address` | They are listeners or take the wallet for their own run. |
+| `api client add`, `list`, `remove` | They edit the client file serve reads at start. |
+| `invoice issue`, `pay`, `list`, `decline` | No route covers them. |
+| `tx receive`, `tx finalize`, `tx resend` | They read or write slate files, or send by a route with no field for their options. |
+| `contact seal`, `open-sealed`, `send-slate`, `plain`, `invoice`, `pay-invoice`, `decline` | No route covers them. |
+
+Any of these exits 5 with `lepic serve is running on this wallet (socket <path>) and this command
+does not go through its API`: stop serve to run it, or call the API. A serve whose socket cannot be
+reached (its pointer file is stale, or the socket is gone) is not found, and the command meets the
+lock: `another lepic process is using the data directory`.
 
 ### The API
 

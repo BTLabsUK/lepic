@@ -29,6 +29,10 @@ const SERVE_HOLDS_WALLET: &str = "stop lepic serve to run this command, or call 
 
 /// What to try next, when there is something better to say than the error itself.
 pub fn hint(error: &CliError, settings: Option<&Settings>) -> Option<String> {
+    // The serve that ran the command computed it with its own settings.
+    if let CliError::Served { hint, .. } = error {
+        return hint.clone();
+    }
     if let Some((found, supported)) = schema_too_new(error) {
         return Some(format!(
             "this wallet was saved by a newer version of lepic (store version {found}; this \

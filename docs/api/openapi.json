@@ -6410,6 +6410,13 @@
             "type": "string",
             "description": "The error and its causes, outermost first."
           },
+          "hint": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What to try next, as `lepic` prints it after the error on stderr (\"hint: ...\"), computed\nwith the settings serve runs with. Present only on a request with `Accept: text/plain`,\nand only when the error has one; a JSON request gets none, as `--output json` prints none."
+          },
           "recovery": {
             "type": [
               "array",

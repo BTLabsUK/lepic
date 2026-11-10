@@ -1103,11 +1103,21 @@ async fn export<N: lepic_node::NodeApi + 'static>(
     args: ContactExportArgs,
 ) -> Result<Report, CliError> {
     let document = export_document(opened).await?;
-    lepic_store::file::write_owner_only_atomic(&args.file, document.as_bytes())
+    write_backup(&args.file, &document)
+}
+
+/// Writes the contact backup `document` to `file` and reports it.
+pub(super) fn write_backup(file: &Path, document: &str) -> Result<Report, CliError> {
+    lepic_store::file::write_owner_only_atomic(file, document.as_bytes())
         .map_err(CliError::io("write the contact backup"))?;
     Ok(Report::ContactExport(ContactExportReport {
-        file: args.file.display().to_string(),
+        file: file.display().to_string(),
     }))
+}
+
+/// The contact backup document in `file`.
+pub(super) fn read_backup(file: &Path) -> Result<String, CliError> {
+    std::fs::read_to_string(file).map_err(CliError::io("read the contact backup"))
 }
 
 /// `lepic contact import`: reads a contact backup.
@@ -1115,8 +1125,7 @@ async fn import<N: lepic_node::NodeApi + 'static>(
     opened: &Opened<N>,
     args: ContactImportArgs,
 ) -> Result<Report, CliError> {
-    let document =
-        std::fs::read_to_string(&args.file).map_err(CliError::io("read the contact backup"))?;
+    let document = read_backup(&args.file)?;
     Ok(Report::ContactImport(
         import_document(opened, document).await?,
     ))
@@ -1176,7 +1185,7 @@ async fn payload<N: lepic_node::NodeApi + 'static>(
 
 /// The bytes `--hex` or `--file` gives. A file is read up to one byte past the largest
 /// payload, so the wallet refuses a larger one without the whole file in memory.
-fn payload_bytes(args: &ContactPayloadPostArgs) -> Result<Vec<u8>, CliError> {
+pub(super) fn payload_bytes(args: &ContactPayloadPostArgs) -> Result<Vec<u8>, CliError> {
     use std::io::Read as _;
     if let Some(path) = &args.file {
         let mut bytes = Vec::new();

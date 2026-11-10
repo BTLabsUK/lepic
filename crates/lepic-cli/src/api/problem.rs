@@ -12,9 +12,9 @@ use crate::exit::{CliError, ErrorKind};
 #[derive(Debug, Serialize, ToSchema)]
 pub(crate) struct Problem {
     /// Always `about:blank`: `code` says what went wrong.
-    #[serde(rename = "type")]
+    #[serde(rename = "type", serialize_with = "about_blank")]
     #[schema(value_type = String)]
-    kind: &'static str,
+    kind: (),
     /// The reason phrase of `status`.
     #[schema(value_type = String)]
     title: &'static str,
@@ -40,6 +40,14 @@ pub(crate) struct Problem {
     // One pointer keeps the `Err` of every route under clippy's size limit.
     #[allow(clippy::box_collection)]
     recovery: Option<Box<Vec<String>>>,
+    /// What to try next, as `lepic` prints it after the error on stderr ("hint: ..."), computed
+    /// with the settings serve runs with. Present only on a request with `Accept: text/plain`,
+    /// and only when the error has one; a JSON request gets none, as `--output json` prints none.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(value_type = Option<String>)]
+    // One pointer, as for `recovery`.
+    #[allow(clippy::box_collection)]
+    hint: Option<Box<String>>,
     /// The methods the route takes, for the `Allow` header of a 405.
     #[serde(skip)]
     // One pointer, as for `recovery`.
@@ -47,10 +55,15 @@ pub(crate) struct Problem {
     pub(crate) allow: Option<Box<String>>,
 }
 
+/// The value of `type`; a field that holds no data keeps `Problem` under clippy's size limit.
+fn about_blank<S: serde::Serializer>(_: &(), serializer: S) -> Result<S::Ok, S::Error> {
+    serializer.serialize_str("about:blank")
+}
+
 impl Problem {
     pub(crate) fn new(status: StatusCode, code: ErrorKind, detail: impl Into<String>) -> Self {
         Self {
-            kind: "about:blank",
+            kind: (),
             title: status.canonical_reason().unwrap_or(""),
             status: status.as_u16(),
             detail: detail.into(),
@@ -58,8 +71,15 @@ impl Problem {
             causes: Box::default(),
             tx_id: None,
             recovery: None,
+            hint: None,
             allow: None,
         }
+    }
+
+    /// This problem with the hint to print after it.
+    pub(crate) fn with_hint(mut self, hint: Option<String>) -> Self {
+        self.hint = hint.map(Box::new);
+        self
     }
 
     pub(crate) fn status(&self) -> StatusCode {
