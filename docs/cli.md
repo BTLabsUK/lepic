@@ -829,12 +829,20 @@ is four digits of the receiver's public excess. `in-person finalize` finalizes t
 
 ### Through an epic1 link
 
-An epic1 address (RFC 0003 §5.13) is the account's for good; a link to it names a mailbox for
-the payment. An on-screen link is for one payment; a printed one is kept until it is retired.
+An epic1 address (RFC 0003 §5.13) is the account's for good. An account has many, each a
+number: number 0, the first, always exists; `epic1 new-address` issues the next one, for a shop,
+an invoice or one payment. Payments to every address come to the same account, and a received
+transaction shows the number its address had. Two addresses of one account do not show that
+they belong together. A link to an address names a mailbox for the payment. An on-screen link is
+for one payment; a printed one is kept until it is retired.
 
 ```
 $ lepic epic1 address
+$ lepic epic1 new-address
+$ lepic epic1 address --index 3
+$ lepic epic1 addresses --from 0 --limit 100
 $ lepic epic1 link 0.8
+$ lepic epic1 link 0.8 --index 3
 $ lepic epic1 link --printed --epicbox relay.example
 $ lepic epic1 links
 $ lepic epic1 retire 1
@@ -847,6 +855,13 @@ the link asked is refused and creates no transaction. `epic1 answers` lists the 
 relay of the reply mailbox, reported as for `in-person read`; `epic1 post-answer <SLATE_ID>
 --relay-ok` posts one to a relay outside the list, and posting again is safe. After a restore, `epic1 restore` reads the link mailboxes of the seed on the wallet's own
 relay; links named on other relays are not found.
+
+`epic1 address --index N` shows an address that was issued or paid, and refuses a higher number.
+`epic1 addresses` lists the issued ones from `--from`, `--limit` at a time, with `highest`, the
+highest number issued or paid. The wallet records the numbers it issued and the ones paid. A
+restore from the phrase tries 50 numbers past the highest it knows, and the first address issued
+after it takes the number after those. A payment sealed to an address at no known number and more
+than 50 past it is not found.
 
 The payer reads the link first, then pays it:
 
@@ -1189,7 +1204,8 @@ sent in the request. Files it writes (`contact export`, `profile domain file`) a
 | `contact payload post`, `list`, `ack <ID>` | `POST /v1/contacts/{id}/payloads`, `GET /v1/payloads`, `POST /v1/payloads/{id}/ack` |
 | `in-person invoice`, `send`, `read`, `pay`, `receive` | `POST /v1/in-person/invoices`, `/sends`, `/read`, `/pay`, `/receive` |
 | `in-person post`, `take`, `answers`, `finalize` | `POST /v1/in-person/{id}/post`, `POST /v1/in-person/take`, `GET .../{id}/answers`, `POST .../{id}/finalize` |
-| `epic1 address`, `link`, `links`, `retire`, `read`, `pay` | `/v1/epic1/address`, `/links`, `/links/{n}/retire`, `/read`, `/pay` |
+| `epic1 address`, `new-address`, `addresses` | `GET /v1/epic1/address`, `POST`, `GET /v1/epic1/addresses` |
+| `epic1 link`, `links`, `retire`, `read`, `pay` | `/v1/epic1/links`, `/links/{n}/retire`, `/read`, `/pay` |
 | `epic1 post-next`, `answers`, `post-answer`, `restore` | `/v1/epic1/{id}/post-next`, `/answers`, `/{id}/post-answer`, `/restore` |
 | `epictx open` | `POST /v1/epictx/open` |
 
@@ -1290,8 +1306,10 @@ lock: `another lepic process is using the data directory`.
 | `POST /v1/in-person/take` | `in-person take`, with `answer`: the hex digits, the armoured text, or the UR parts |
 | `GET /v1/in-person/{slate_id}/answers` | `in-person answers` |
 | `POST /v1/in-person/{slate_id}/finalize` | `in-person finalize`, with `answer` and `fluff` |
-| `GET /v1/epic1/address` | `epic1 address`, with `account` in the query |
-| `POST /v1/epic1/links` | `epic1 link`, with `account`, `amount`, `message`, `printed` and `relays` |
+| `GET /v1/epic1/address` | `epic1 address`, with `account` and `index` in the query |
+| `POST /v1/epic1/addresses` | `epic1 new-address`, with `account` |
+| `GET /v1/epic1/addresses` | `epic1 addresses`, with `account`, `from` and `limit` in the query |
+| `POST /v1/epic1/links` | `epic1 link`, with `account`, `index`, `amount`, `message`, `printed` and `relays` |
 | `GET /v1/epic1/links` | `epic1 links` |
 | `POST /v1/epic1/links/{n}/retire` | `epic1 retire`, with `account` |
 | `POST /v1/epic1/read` | `epic1 read`, with `link` |

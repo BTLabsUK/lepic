@@ -15,7 +15,7 @@ Every normative statement carries one of these marks:
 | Mark | Meaning |
 |---|---|
 | **[Decided]** | Agreed by the project owner on 2026-11-08, or on 2026-11-09 where the text says so. Recorded in ADR 0052. This includes the defaults D1–D6, the owner items O-2 … O-18 (O-15 withdrawn), and the transport model of section 3.1. |
-| **[Proposed — not yet confirmed]** | Put to the project owner and not yet answered. None in this revision. |
+| **[Proposed — not yet confirmed]** | Put to the project owner and not yet answered: O-19 … O-22 (11.0), on indexed epic1 addresses. |
 | **[App]** | Expected behaviour of the wallet app, not a LEPIC rule. LEPIC is core only: it reports facts to its consumer and acts when the consumer calls it; limits, prompts and policy live in the consumer (3.2). Marked "to explore in the wallet app" where the design is not settled. |
 | **[Shipped]** | On LEPIC `main` at commit `078eadb7`, with the path given. |
 | **[Unmerged]** | On the feature branch `feat/wallet-methods` only at `c100d2bc` (the wallet methods refactor); may still move or change. |
@@ -238,7 +238,7 @@ All rows below are **[Decided]** on 2026-11-08 unless marked otherwise.
 | File extension | One extension, `.epictx`, for every stage. The stage is read from inside. Stock `epic-wallet` already writes `.epictx` files of another kind; the owner kept the extension (O-2) and asked for a rule that keeps the two apart (5.12). |
 | Reply file name | The received file's stem, then `-reply`, then `.epictx`: `2d32dd23.epictx` → `2d32dd23-reply.epictx`, whatever the stem. |
 | Text markers | `BEGINEPICTX.` / `ENDEPICTX.` for native (`0A`) slates only (O-4; first decided for every slate). Sealed V3 slates, to contacts and as answers to marked legacy files, keep `BEGINEPICSEALED.` and `.epicsealed` as shipped, because older LEPIC builds read only that. Other envelope bodies (pairing, notices) keep `BEGINEPICSEALED.` (5.11). |
-| epic1 address | Carries both keys: the proof key and the seal key, kept apart to avoid key reuse. About 115 characters in bech32m. For people who are not contacts; contacts have keys from pairing. Envelopes sealed to an address key carry a zero hint. The proof key is an epic1 key of its own, not the index-0 key (O-8, 5.2). Two keys only: no mailbox key and no domain inside (O-14 as replaced). Shown as its own code and link, never inside an Epicbox link (3.1, 5.14). |
+| epic1 address | Carries both keys: the proof key and the seal key, kept apart to avoid key reuse. About 115 characters in bech32m. For people who are not contacts; contacts have keys from pairing. Envelopes sealed to an address key carry a zero hint. The proof key is an epic1 key of its own, not the index-0 key (O-8, 5.2). An account has many epic1 addresses, numbered from 0; the number is not in the address (5.13). Two keys only: no mailbox key and no domain inside (O-14 as replaced). Shown as its own code and link, never inside an Epicbox link (3.1, 5.14). |
 | Unknown receiver | A legacy marked V3 file with a one-time reply key (RFC 0002 §5), as shipped. The reply is sealed only when the receiver is a LEPIC wallet. A stock wallet ignores the marker and answers with a plain V3 S2. EPICTX files go only to receivers whose key is known, so every EPICTX file is sealed. |
 | Payment link | Two separate links, never mixed (3.1): the app's plain `epic:<epicbox address>?…` link, which stock wallets read, and an epic1 link `epic:epic1…?epicbox=<mailbox>@<domain>&…` for LEPIC wallets, whose transport fields (one per method, repeatable, at most 3 used) say how to deliver. No expiry in links. Hosts come from the link, never from code. RFC 0001 §9's card form, the first decision's `native=` parameter, draft 3's first proposal `bind=` (O-1), draft 3's `via=` route hint and its epic1-mailbox options are all dropped (5.14). |
 | Receive screen | One QR code with the plain Epicbox link. "Copy address" copies the Epicbox address. The epic1 has its own code and copy button under "More", labelled for LEPIC wallets. Both means two codes. Replaces C1 (3.1). |
@@ -252,7 +252,7 @@ All rows below are **[Decided]** on 2026-11-08 unless marked otherwise.
 | D2 Replies to marked legacy files | **Withdrawn (O-3).** Draft 1: the marker of a legacy file also lists `lepic.v1` and a LEPIC receiver answers with a `lepic.v1` body. Draft 2 keeps the shipped answer (a sealed V3 S2, envelope type `01`) and the marker frozen (6.4). |
 | D3 Envelope body type | `0A`, fixed in the vectors (5.6). |
 | D4 Media type | `application/vnd.lepic.epictx`. |
-| D5 epic1 per account | One fixed epic1 address per account and network, derived from the seed (5.2, 5.13). |
+| D5 epic1 per account | Numbered epic1 addresses per account and network, derived from the seed; index 0 is the account's first address (5.2, 5.13). |
 | D6 Alphabet | base64url, as `BEGINEPICSEALED.` today. base58 only if the chat paste test (11.2) shows breakage. |
 
 ### 4.6 What these decisions supersede in RFC 0001
@@ -307,19 +307,22 @@ k = BLAKE2b-256(key = seed, msg = "lepic-wallet <purpose> v<n>" || context)
 **Seal keys** — **[Decided]** label; context **[Specified]** here (draft 2):
 
 ```
-seal_sk = BLAKE2b-256(key = seed, msg = "lepic-wallet seal key v1" || be32(account) || net || kind)   (X25519)
+seal_sk = BLAKE2b-256(key = seed, msg = "lepic-wallet seal key v1" || be32(account) || net || kind || be32(index))   (X25519)
 seal_pk = X25519(seal_sk, 9)
 ```
 
 - `kind` (u8): `00` the epic1 address, `01` the onion listener, `02` the plain web listener, `03`
-  the Epicbox payments address (5.15) **[Specified]**. Other values are reserved. The context is fixed-width (6 bytes), so ADR 0033 rule 4 holds.
+  the Epicbox payments address (5.15) **[Specified]**. Other values are reserved.
+- `index` (u32) is the number of the epic1 address within the account (5.13). Index 0 is the
+  account's first address. Kinds `01`, `02` and `03` always use index 0. The context is
+  fixed-width (10 bytes), so ADR 0033 rule 4 holds.
 - `net` is in the context so that one seed shows different seal keys on mainnet and floonet, as
   the contact root does (`info = "root" || net`). **[Reasoning]** HPKE `info` already separates the
   networks cryptographically; the byte is there for unlinkability across networks.
 - The 32-byte output is used as the X25519 secret; X25519 clamps it (RFC 7748). Keyed BLAKE2b-256
   as a PRF is the shipped ADR 0033 construction.
-- One epic1 seal key per account and network (D5); one listener seal key per listener
-  kind, account and network (D1). The listener that accepted a connection decides which
+- One epic1 seal key per address index, account and network (D5); one listener seal key per
+  listener kind, account and network (D1). The listener that accepted a connection decides which
   key is advertised and used (5.15).
 - One Epicbox seal key per account and network. It is separate from the epic1 seal key (`00`),
   so a peer that holds both keys cannot tell that a payments address and an epic1 belong to one
@@ -329,13 +332,14 @@ seal_pk = X25519(seal_sk, 9)
 **epic1 proof key** — **[Decided]** (O-8, 2026-11-08); context **[Specified]**:
 
 ```
-proof_sk = BLAKE2b-256(key = seed, msg = "lepic-wallet epic1 proof key v1" || be32(account) || net)   (Ed25519 seed)
+proof_sk = BLAKE2b-256(key = seed, msg = "lepic-wallet epic1 proof key v1" || be32(account) || net || be32(index))   (Ed25519 seed)
 ```
 
-- Signs the receiver's payment proof for a slate that came to this account's epic1 address, the
+- `index` is the epic1 address index, as in the seal key. The context is fixed-width (9 bytes).
+- Signs the receiver's payment proof for a slate that came to the epic1 address `index`, the
   rule ADR 0044 set for the onion: "a proof is signed with the key of the address the slate came
-  to". A slate that came to the epic1 and asks for a proof to another key is refused with
-  `ForeignProofAddress`.
+  to". A slate that came to an epic1 address and asks for a proof to another key, including the
+  proof key of another index, is refused with `ForeignProofAddress`.
 - Reason: the index-0 Ed25519 key is also the previous onion that the GUI wallet, stock
   `epic-wallet` and LEPIC up to 0.3.1 published (ADR 0044). Putting it in epic1 would link that
   onion to the epic1 and, through the payment link, to the Epicbox address: the link ADR 0044
@@ -515,16 +519,35 @@ version and is **[Open]**.
 | Service with `fixed-hint` cap | `H("epic-seal/1 fixed" || hint_key)[0..8]` (links envelopes to that service) | RFC 0002 §3.2 |
 | One-time reply key | `HMAC-SHA256(key = H("epic-seal/1 reply" || reply_pk), enc)[0..8]` | RFC 0002 §3.2 |
 | Pairing reply | `invite_id = H("epic-pair/1 id" || code)[0..8]` | RFC 0002 §2.4, §3.2 |
-| epic1 seal key | `00 00 00 00 00 00 00 00` | **[Decided]**, not built |
+| epic1 seal key | `00 00 00 00 00 00 00 00` | **[Decided]** (owner, 2026-11-10) |
 | Listener seal key (advert) | `00 00 00 00 00 00 00 00` | **[Specified]** (draft 2): one rule for both new classes, no new hint rule |
 | Epicbox seal key | `00 00 00 00 00 00 00 00` | **[Specified]** (5.15): the same rule |
 
 A recipient computes candidate hints for its live keys and opens only with matching keys
-(RFC 0002 §3.4 step 2). A zero hint means "try the epic1 seal key, or the seal key of the listener
-that received it". **[Reasoning]** Better than a hint derived from the epic1 address, which anyone
-holding the address could test. The cost is no cheap "not for me" filter: one X25519 per
-candidate key per envelope: the epic1 seal key of the account that issued the link mailbox, the
-accepting listener's key on the endpoint.
+(RFC 0002 §3.4 step 2). A zero hint means "try the epic1 seal keys, or the seal key of the
+listener that received it".
+
+**How an envelope to an epic1 address is opened** **[Decided]** (owner, 2026-11-10). The
+envelope carries the zero hint whatever address index it was sealed to. There is no hint derived
+from the address and no per-message hint.
+
+- At a link mailbox: the wallet records which address index each link mailbox it issues belongs
+  to (6.3), and opens with that index's seal key only.
+- Everywhere else (a file, transaction text, the direct listener): trial decryption over the
+  epic1 seal keys the wallet issued, each account in turn. The index of the account's most recent
+  payment is tried first, then index 0, then the rest from the highest index down. The first key
+  that opens is the address the slate came to; the wallet records that index with the
+  transaction, and it is tried first next time.
+
+**[Reasoning]** A hint the sender can derive from the address is the same on every message to it,
+so a relay, or anyone who knows the address, could pick out every payment to it.
+
+The cost is no cheap "not for me" filter: each key tried is one X25519 and one failed AEAD over
+the envelope. A test opens a file sealed to the key tried last among 1,001
+(`trial_decryption_finds_the_address_tried_last_among_a_thousand_and_one`,
+`crates/lepic-wallet/tests/epic1.rs`). In a release build (`opt-level = "s"`, without LTO) on a
+desktop x86-64 CPU it derives the 1,001 keys in 1.5 ms and opens at the last one in 0.13 s, about
+0.13 ms per key tried; a debug build is about 70 times slower.
 
 **[Reasoning]** The reply-key hint is computable by anyone who saw `reply_pk` in a plain marked
 S1 or a raw in-person code. A carrier or onlooker that saw the S1 can therefore link the sealed S2
@@ -653,9 +676,10 @@ and nobody else can open the result.
 ### 5.9 Opening rules — **[Shipped]** (RFC 0002 §3.4); type `0A` rules **[Specified]** (draft 2)
 
 1. Decode the header. Reject another network, an unknown version or suite.
-2. Find candidate keys by hint. None means "not for this install". A zero hint selects the epic1
-   seal key of the account that issued the link mailbox it came from, or the accepting listener's
-   seal key (endpoint).
+2. Find candidate keys by hint. None means "not for this install". A zero hint selects the seal
+   key of the epic1 address index the link mailbox it came from belongs to, or the accepting
+   listener's seal key (endpoint). A zero-hint envelope from a file, transaction text or the
+   direct listener is tried with the issued epic1 seal keys in the order of 5.5.
 3. `OpenBase` (or `OpenPSK` for suite `41`) with each candidate, with the `info` of that key's
    class (5.4). Failure with all is "cannot open".
 4. Decode the TLV. If `FF` is present, verify with `08`'s key. A signed envelope opened with a
@@ -934,7 +958,23 @@ RFC 0001 §8 base, amended:
   `crates/lepic-wallet/src/chain.rs`); a TTL in time is turned into blocks at that rate, rounded up
   to a whole block, and `ttl_cutoff_height` is the wallet's chain height plus that count. Real
   block times vary, so the time is a target: slow blocks make it longer, fast ones shorter.
-- One fixed address per account and network (D5).
+- Numbered addresses per account and network (D5) **[Decided]** (owner, 2026-11-10). The address
+  at index `n` holds the epic1 proof key and the epic1 seal key at index `n` (5.2). Index 0 is the
+  account's first address and the address every earlier build shows. The index is not in the
+  address: a payer cannot tell two addresses of one account apart from two accounts, and the
+  format stays version `01`, 115 characters.
+- The wallet issues addresses in order and keeps, per account, the highest index it issued, the
+  highest index a payment came to, the index of the most recent payment, and the index of each
+  payment. Coins never depend on it; it only says which seal keys to try.
+- A wallet rebuilt from the recovery phrase does not know how far it issued. It tries 50 indexes
+  past the highest one it knows, and its first new address after the restore comes after those
+  50, so it does not hand out an address it may have given out before. A payment found in the
+  gap moves the gap past it, until the account issues its first new address.
+- LEPIC sets no limit on how many addresses an account issues; the app sets any policy. The
+  wallet, the CLI (`address`, `new-address`, `addresses`) and `serve` issue the next address,
+  give the address at an index, and list the issued ones. An index past the highest issued is
+  refused (`AddressNotIssued`); an account at index 2³²−1 issues no more (`NoAddressLeft`). A
+  received transaction shows the index it came to.
 - **Two keys and nothing else** **[Decided]** (O-14 as replaced, owner after draft 3). No mailbox
   key, no domain, no transport of any kind: the epic1 says who is paid and what to seal to. How to
   reach the payee lives in the link (5.14), so a new transport, relay or domain never changes the
@@ -1367,7 +1407,9 @@ Step 10 (O-12: after contacts, in person and epic1).
    `03` = A's reply key for this slate.
 5. A posts the binary envelope to `/v1/peer/slates`.
 6. B opens it with the seal key of the socket that accepted it, runs the engine, seals the S2 to
-   `03`, returns it in the `200` body.
+   `03`, returns it in the `200` body. An envelope that key does not open is tried with B's
+   issued epic1 seal keys (5.5); one that opens is a payment to that epic1 address and index, and
+   its proof is signed with that index's epic1 proof key.
 7. A opens with its reply key, checks the S2, finalizes, posts.
 8. Any error or reset at step 5 or 6 from a pinned peer → stop and report; the app asks; never a
    silent legacy retry (5.15).
@@ -1381,18 +1423,19 @@ Step 10 (O-12: after contacts, in person and epic1).
 
 Step 8, after the payee-shows-I1 codes (4.1).
 
-1. B's wallet issues a link: it takes the next link-mailbox index `n` (5.2), writes
+1. B's wallet issues a link for one of its epic1 addresses, index 0 unless B picks another it
+   issued (5.13): it takes the next link-mailbox index `n` (5.2), writes
    `epic:<B's epic1>?epicbox=<link mailbox>@<B's relay>` with amount and message if set, and
-   stores `n`. A code shown on screen gets a new `n` per receive session, and per share or copy;
+   stores `n` with the address index. A code shown on screen gets a new `n` per receive session, and per share or copy;
    a printed code keeps one from its own index space (5.2, 10.14). B's wallet watches each issued mailbox: live while its code is on screen, by
    draining otherwise (one socket per live address, one draining socket for the rest:
    `docs/compat/epicbox.md` facts 4 and 6).
 2. A scans or opens the link from B's "More" screen, a message or a web page. A's app shows B's
    epic1 as the payee, never the mailbox. A link with no usable transport field is "cannot pay
    this code" (5.14).
-3. A builds a `lepic.v1` S1 with a TTL (5.13), optionally with `PROOF` and B's epic1 proof key as
-   receiver address (O-8). Too large to seal: fewer coins, combine first, or cancel (5.17).
-4. A seals it to B's epic1 seal key: anonymous, zero hint, tag `03` = A's reply key for this slate,
+3. A builds a `lepic.v1` S1 with a TTL (5.13), optionally with `PROOF` and the proof key of B's
+   epic1 as receiver address (O-8). Too large to seal: fewer coins, combine first, or cancel (5.17).
+4. A seals it to the seal key in B's epic1: anonymous, zero hint, tag `03` = A's reply key for this slate,
    tag `09` = A's reply mailbox for this slate on A's own relay (5.2), padding to the floor (5.7).
 5. A posts the armoured envelope (`BEGINEPICTX.` text as the Epicbox plaintext, as contact
    mailboxes carry armour, RFC 0002) to the first usable `epicbox=` entry, from A's post key for
@@ -1401,8 +1444,9 @@ Step 8, after the payee-shows-I1 codes (4.1).
    three (5.14). A then watches its reply mailbox. **[App]** A's app shows a waiting state with
    "Cancel and unlock" from the start; after some minutes with no answer it has LEPIC post the
    same sealed S1 to the next entry (5.14 "No answer").
-6. B drains the link mailbox, opens the envelope with its epic1 seal key (5.9), and runs the
-   engine. B seals the S2 to tag `03` (reply-key hint), and posts it to the mailbox in tag `09`,
+6. B drains the link mailbox, opens the envelope with the seal key of the address index stored
+   with that mailbox (5.5, 5.9), records the index with the transaction, and runs the engine. A
+   proof is signed with that index's epic1 proof key. B seals the S2 to tag `03` (reply-key hint), and posts it to the mailbox in tag `09`,
    through the relay that tag names, from B's post key for this slate. That relay is a host from
    untrusted input: LEPIC reports it with its relay-list flag and address class and posts only
    when B's app says so; the app asks B about a relay not in B's own relay list (5.9, 10.15). B
@@ -1657,6 +1701,12 @@ privacy").
   every slate, and link mailboxes new for every receive session or share shown on screen (5.2), so a relay
   cannot join payments by mailbox, except through a printed code or an on-screen index used again
   after 50 sessions (10.14). No mailbox key is the index-0 key.
+- **epic1 addresses of one account**: each index has its own proof key and seal key, and the
+  address carries no index, so two addresses of one account look like two wallets to whoever holds
+  both. Envelopes to them all carry the zero hint, so a relay or carrier cannot sort payments by
+  address (5.5). What still joins them: link mailboxes are numbered per account, not per address
+  (5.2), and they all sit on the payee's relay; the payee's answers come from the payee's IP
+  address; and a payment proof names the address it was signed for, as any proof does.
 - **Length hiding**: Padmé buckets above the 768 B floor (5.7, O-6): every sealed S1 is one size,
   so its length shows neither "proof requested" nor the message length. This concerns sealed
   slates only; no sealed S1 is shown as a code (5.7).
@@ -1742,8 +1792,9 @@ Paths are in the LEPIC repository at `main` `078eadb7` unless marked otherwise.
 | epic1 send with no answer: the same sealed S1 to the next entry on request, cancel and unlock | **[Decided]** (owner, 2026-11-09), not built | 5.14, 6.3 |
 | Default TTLs (epic1 send 24 hours, in person the app's choice, fallback 30 blocks), link-mailbox index spaces, restore and watch time, hyphens in relay domains | **[Decided]** (after drafts 4 and 5), not built | 5.2, 5.9, 5.13, 5.14, 5.18 |
 | Per-class HPKE `info` | **[Specified]** (draft 2), not built | 5.4 |
-| Seal key `lepic-wallet seal key v1` | **[Decided]** label, context **[Specified]**, not built, no vector | 5.2 |
-| epic1 proof key | **[Decided]** (O-8), not built, no vector | 5.2 |
+| Seal key `lepic-wallet seal key v1` with the address index | **[Decided]** label, context **[Specified]**; implemented **[Unmerged]** on `feat/epic1-indexed-keys`: `crates/lepic-wallet/src/namespace.rs`, vector `pairing/seal_keys.json` | 5.2 |
+| epic1 proof key with the address index | **[Decided]** (O-8), context **[Specified]**; implemented **[Unmerged]** on `feat/epic1-indexed-keys`, vectors `keys/epic1_proof_key_seed32`, `keys/epic1_proof_key_seed16` | 5.2 |
+| Numbered epic1 addresses: issue, list, address at an index; zero hint, link mailbox to index, trial decryption elsewhere; index per payment; restore gap of 50 | **[Decided]** (owner, 2026-11-10); implemented **[Unmerged]** on `feat/epic1-indexed-keys`: `crates/lepic-wallet/src/epic1_index.rs`, `crates/lepic-wallet-contacts/src/epic1.rs`, `sealed.rs`, `direct.rs`, `lepic address`, `new-address`, `addresses` | 5.5, 5.13, 6.3 |
 | epic1 two-key address | **[Decided]**, layout **[Specified]**, not built; `bech32` not in workspace dependencies | 5.13 |
 | `check_version` advert, `/v1/peer`, pinning | **[Specified]**, not built | 5.15 |
 | Two separate links, the epic1 link with transport fields, the receive screen | **[Decided]** (3.1, O-14 as replaced), grammar **[Specified]** (Appendix B), not built | 5.14; app `app/lib/src/scan/scan_router.dart` |
@@ -1836,7 +1887,17 @@ Paths are in the LEPIC repository at `main` `078eadb7` unless marked otherwise.
     word; the app asks for unknown relays and local-network addresses (5.14). The address classes
     are decided (O-18). A user who accepts a local-network prompt lets the code
     reach that host on any port.
-21. **Covered sticker codes.** A printed code can be covered by another sticker, and the payer then
+21. **Trial decryption has no cheap filter.** A file, transaction text or a payment at the
+    direct listener sealed to an epic1 is tried with every issued seal key of every account, each
+    one X25519 and one failed AEAD, until one opens (5.5). The order puts the most recent payment's
+    index and index 0 first. A wallet that issues very many addresses pays for each key on every
+    such envelope, and anyone can post envelopes that open with none (item 7's spam). A payment
+    through a link mailbox is opened with one key.
+22. **An address handed out before a restore, past the gap, is not found.** A restored wallet
+    tries 50 indexes past the highest one it knows (5.13). An address issued beyond that before
+    the restore is no longer tried, and its first new address may be one handed out before. A
+    payment to it is not found until the wallet issues that far.
+23. **Covered sticker codes.** A printed code can be covered by another sticker, and the payer then
     pays whoever printed it. The payer's checks are the amount and the merchant shown before the
     PIN, as with any QR payment; a merchant domain claim (ADR 0043), where there is one, is shown
     larger than the message (6.10).
@@ -1870,6 +1931,10 @@ Owner items O-1 … O-18 and their answers. All are decided or withdrawn; O-18 w
 | O-16 | Two answers to one in-person code | **[Decided]**, rewritten (owner, 2026-11-09). LEPIC accepts and processes raw in-person codes in both directions and never finalizes an in-person answer by itself: it closes the code on the first answer, reports every answer with its check code (and when a second has the same code as the first), and finalizes only the answer the consumer names. **[App]** The app asks the payer to confirm the check code first ("Does Bob's phone show 4821?"); on two answers with one code it cancels both and shows a new code with a new reply key; the hold and the late-answer warning may stay as extras (to explore in the wallet app). Draft 5's 5-second hold with no extra tap is withdrawn | 3.1, 6.7, 10.16, 10.19 |
 | O-17 | LEPIC and the app, for hosts and relays from untrusted input (new in draft 6) | **[Decided]** (owner, 2026-11-09). LEPIC is core only: before posting to a host from untrusted input it reports the host, whether it is in the configured relay list, and its address class; it posts only when the consumer says so, through Tor when Tor is configured; it refuses loopback itself; it never shows or decides a prompt. The prompts (unknown relay, local network, "through Tor") are the app's. The same split applies to every place where draft 5 had LEPIC ask | 3.2, 5.9, 5.14, 5.15, 5.17 |
 | O-18 | Address classes of the host rule | **[Decided]** (owner, 2026-11-09, text as proposed): loopback refused on the resolved address; private and local-network addresses (RFC 1918, link-local, CGNAT, ULA, `.local`) allowed after one app prompt that shows the address; any port | 5.14, Appendix B |
+| O-19 | The index field on every seal key kind | **[Proposed — not yet confirmed]** One context for all kinds, with `be32(index)` last and index 0 for the listener and Epicbox kinds, so the context stays fixed-width (rule 4). This changes the onion, web and Epicbox seal keys from those of earlier unreleased builds: a peer that pinned an advert from one sees a changed key and asks (D1). Alternative: the index only for kind `00`, which needs a second label or a variable context | 5.2 |
+| O-20 | epic1 envelopes in files and transaction text | **[Proposed — not yet confirmed]** 6.3 sends an S1 to an epic1 through the link mailbox; the owner's receive decision also opens files and text sealed to an epic1, by trial (5.5). Keep both: a wallet opens an epic1 file it is handed. Alternative: link mailboxes only | 5.5, 6.3 |
+| O-21 | Accounts tried for a file or the direct listener | **[Proposed — not yet confirmed]** Every account of the wallet, each in its own trial order, and the account whose key opens receives it. Alternative: the active account only, which is cheaper and refuses a file to another account | 5.5 |
+| O-22 | The first address after a restore | **[Proposed — not yet confirmed]** It comes after the gap (index 51 on a wallet that knew only index 0), and later ones follow on, so no address handed out before the restore within the gap is handed out again. Alternative: continue from the highest index known and accept that a payer may hold the same address as someone else | 5.13 |
 
 ### 11.1 Still open
 
@@ -1927,13 +1992,13 @@ Seed-keyed labels, `BLAKE2b-256(key = seed, label ‖ context)`:
 
 | Label ‖ context | Type | Purpose | Owner | First | Status | Vector |
 |---|---|---|---|---|---|---|
-| `lepic-wallet seal key v1` ‖ be32(account) ‖ net ‖ kind | X25519 | Opens envelopes sealed to the epic1 (`kind` 00), the onion listener (01), the plain web listener (02) or the Epicbox payments address (03) (5.2, 5.15) | `lepic-wallet::namespace` | none | proposed | `keys/seal_key_*` (to write) |
-| `lepic-wallet epic1 proof key v1` ‖ be32(account) ‖ net | Ed25519 (the 32 bytes are the seed) | The proof key in the epic1; signs payment proofs for slates that came to it (O-8, 5.2) | `lepic-wallet::namespace` | none | proposed | `keys/epic1_proof_key_*` (to write) |
+| `lepic-wallet seal key v1` ‖ be32(account) ‖ net ‖ kind ‖ be32(index) | X25519 | Opens envelopes sealed to the epic1 address `index` (`kind` 00), the onion listener (01), the plain web listener (02) or the Epicbox payments address (03), the last three at index 0 (5.2, 5.15) | `lepic-wallet::namespace` | none | proposed | `pairing/seal_keys.json` |
+| `lepic-wallet epic1 proof key v1` ‖ be32(account) ‖ net ‖ be32(index) | Ed25519 (the 32 bytes are the seed) | The proof key in the epic1 address `index`; signs payment proofs for slates that came to it (O-8, 5.2) | `lepic-wallet::namespace` | none | proposed | `keys/epic1_proof_key_seed32`, `keys/epic1_proof_key_seed16` |
 | `lepic-wallet reply mailbox v1` ‖ be32(account) ‖ net ‖ slate_id(16) ‖ ctr | secp256k1 | Throwaway Epicbox mailbox for the answer to one slate; its address goes with the reply key (5.2, 5.6 tag `09`, 5.10 record `02`). Exception class "Epicbox mailbox key" | `lepic-wallet::namespace` | none | proposed | `keys/reply_mailbox_*` (to write) |
 | `lepic-wallet post key v1` ‖ be32(account) ‖ net ‖ slate_id(16) ‖ role ‖ ctr | secp256k1 | Epicbox `from` key of every post to another party's mailbox for one slate; `role` 00 initiator, 01 responder. Nothing is received at it. Exception class "Epicbox mailbox key" | `lepic-wallet::namespace` | none | proposed | `keys/post_key_*` (to write) |
 | `lepic-wallet link mailbox v1` ‖ be32(account) ‖ net ‖ kind ‖ be32(n) ‖ ctr | secp256k1 | Mailbox named by `epicbox=` in an epic1 link; `kind` 00 on screen (`n` 0–49, new per receive session or share, used in turn), 01 printed (`n` 0–31, fixed per code) (5.2, 5.14). Exception class "Epicbox mailbox key" | `lepic-wallet::namespace` | none | proposed | `keys/link_mailbox_*` (to write) |
 
-Context widths: seal key 6, epic1 proof key 5, reply mailbox 22, post key 23, link mailbox 11
+Context widths: seal key 10, epic1 proof key 9 (6 and 5 before the address index), reply mailbox 22, post key 23, link mailbox 11
 bytes (10 in draft 5, before the `kind` byte), each fixed, so rule 4 holds. No label is a prefix of another label.
 
 Tags and domains:
@@ -1962,12 +2027,12 @@ Recorded exception to add, beside "index 0" and "the listing key". **[Decided]**
 epic1 address  = hrp "1" data checksum          ; bech32m, BIP 350, lower case only
 hrp            = "epic" (mainnet) / "tepic" (floonet)
 data (65 B)    = version(1) = 0x01
-               ‖ proof key(32)  Ed25519 public key, the epic1 proof key (5.2)
-               ‖ seal key(32)   X25519 public key, seal key kind 00 (5.2)
+               ‖ proof key(32)  Ed25519 public key, the epic1 proof key at the address index (5.2)
+               ‖ seal key(32)   X25519 public key, seal key kind 00 at the same index (5.2)
 characters     = 65 × 8 / 5 = 104 data characters + 6 checksum + "epic1" = 115 (tepic1: 116)
 ```
 
-Nothing else is in the address: no mailbox, domain or transport (5.13). Version `00` is RFC 0001's
+Nothing else is in the address: no mailbox, domain, transport or index (5.13). Version `00` is RFC 0001's
 one-key form and is refused; any version above `01` is refused until defined.
 
 ### B.2 Links (ABNF, RFC 5234)
