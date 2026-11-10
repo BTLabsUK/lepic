@@ -37,6 +37,7 @@ use lepic_wallet::ports::{SecretVault, StoreOpener};
 use tracing::{debug, info, instrument, warn};
 
 use super::keys::contact_network;
+use super::manage::PendingPairingView;
 use super::pairing::{InviteExpiry, InviteOffer, InviteRequest};
 use super::{CLOCK_SKEW, ContactError, ContactRelays, LockedRng};
 use crate::ContactBook;
@@ -414,6 +415,66 @@ where
         .await?;
         info!("pairing request sent");
         Ok(offer)
+    }
+
+    /// The pairing requests this wallet sent that wait for an answer, oldest first. Each is a
+    /// pairing in progress; [`ContactBook::pairing_request_cancel`] withdraws one.
+    pub async fn pairing_requests_sent(&self) -> Result<Vec<PendingPairingView>, ContactError> {
+        let pending = self.pairings_pending().await?;
+        let session = self.wallet.session()?;
+        self.contact_work(move |_, _| {
+            Ok(session.store.read(|repos| {
+                let mut sent = Vec::new();
+                for view in pending {
+                    if repos
+                        .setting(&super::pairing::request_out_key(view.contact_id))?
+                        .is_some()
+                    {
+                        sent.push(view);
+                    }
+                }
+                Ok::<_, StoreError>(sent)
+            })?)
+        })
+        .await
+    }
+
+    /// Withdraws a pairing request this wallet sent and nobody answered: the marker goes and
+    /// the invite is cancelled as [`ContactBook::pairing_cancel`] does, so a late answer is
+    /// refused and a new request to the same address may be sent.
+    ///
+    /// Fails with [`ContactError::UnknownPairing`] when `contact_id` is not a sent request
+    /// still waiting.
+    #[instrument(skip_all, fields(wallet = %self.wallet.config().name))]
+    pub async fn pairing_request_cancel(&self, contact_id: ContactId) -> Result<(), ContactError> {
+        let session = self.wallet.session()?;
+        let known = self
+            .contact_work(move |_, _| {
+                Ok(session.store.write(|repos| {
+                    let key = super::pairing::request_out_key(contact_id);
+                    let waiting = repos.setting(&key)?.is_some()
+                        && repos
+                            .pending_pairing(super::pairing_id_of(contact_id))?
+                            .is_some_and(|pending| {
+                                pending.role == PairingRole::Inviter
+                                    && pending.cancelled_at.is_none()
+                            })
+                        && repos
+                            .contact(contact_id)?
+                            .is_some_and(|record| record.peer.is_none());
+                    if waiting {
+                        repos.delete_setting(&key)?;
+                    }
+                    Ok::<_, StoreError>(waiting)
+                })?)
+            })
+            .await?;
+        if !known {
+            return Err(ContactError::UnknownPairing);
+        }
+        self.pairing_cancel(contact_id).await?;
+        info!("pairing request cancelled");
+        Ok(())
     }
 
     /// The live standing invite, made anew when there is none, when it was answered, when less
