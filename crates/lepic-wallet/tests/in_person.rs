@@ -1080,3 +1080,30 @@ fn an_answer_to_a_cancelled_payment_is_not_posted() {
     );
     assert_eq!(world.collect_with(&world.issuer, &relays(&world.issuer)), 0);
 }
+
+#[test]
+fn an_answer_to_a_code_is_not_finalized_as_plain_sealed_text() {
+    let world = World::new();
+    let code = world.show_send(&offline(&world.payer));
+    let received = world.receive_with(&world.issuer, &code);
+    let text = armored(&received.envelope);
+
+    assert_eq!(
+        refusal(
+            world.block_on(
+                world
+                    .payer
+                    .wallet
+                    .contact_book()
+                    .sealed_finalize(&text, Propagation::Stem)
+            )
+        ),
+        InPersonRefusal::AnswerToCode
+    );
+    assert!(world.node.pushed_transactions().is_empty());
+    let sent = world
+        .payer
+        .read(|repos| repos.transaction(code.tx_id))
+        .unwrap();
+    assert_eq!(sent.state, TxState::Sent);
+}

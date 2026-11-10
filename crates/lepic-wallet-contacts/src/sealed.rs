@@ -29,6 +29,7 @@ use uuid::Uuid;
 
 use super::direct::trial_open_accounts;
 use super::epic1::Epic1Refusal;
+use super::in_person::InPersonRefusal;
 use super::keys::{contact_keys, contact_network, enc_secret, signing_key};
 use super::{ContactError, LockedRng};
 use crate::{ContactBook, file_method};
@@ -801,8 +802,12 @@ where
     /// Finalizes and posts the S2 or I2 in sealed text, as [`Wallet::finalize`] and
     /// [`Wallet::finalize_invoice`] do for a file.
     ///
+    /// An answer to an in-person code this wallet showed is not finalized here: it is taken
+    /// with its check code by [`ContactBook::in_person_take`].
+    ///
     /// Fails as [`Wallet::sealed_open`] does, with [`ContactError::Stage`] for another stage,
-    /// and with [`ContactError::Finalize`] or [`ContactError::Invoice`].
+    /// [`ContactError::InPerson`] with [`InPersonRefusal::AnswerToCode`] for an answer to an
+    /// in-person code, and with [`ContactError::Finalize`] or [`ContactError::Invoice`].
     #[instrument(skip_all, fields(wallet = %self.wallet.config().name))]
     pub async fn sealed_finalize(
         &self,
@@ -810,6 +815,7 @@ where
         propagation: Propagation,
     ) -> Result<Finalized, ContactError> {
         let opened = self.sealed_open(text).await?;
+        self.refuse_answer_to_code(&opened.wire).await?;
         match opened.stage {
             Stage::S2 => self
                 .wallet
@@ -823,6 +829,28 @@ where
                 .map_err(ContactError::Invoice),
             stage => Err(ContactError::Stage(stage)),
         }
+    }
+
+    /// Refuses with [`InPersonRefusal::AnswerToCode`] the slate `wire` when this wallet showed
+    /// an in-person code for it: its answers are finalized only after their check code.
+    async fn refuse_answer_to_code(&self, wire: &WireSlate) -> Result<(), ContactError> {
+        let slate = legacy_codecs(self.wallet.config().network)
+            .map_err(|_| ContactError::NotASlate)?
+            .decode(wire)
+            .map_err(|_| ContactError::NotASlate)?;
+        let slate_id = slate.id();
+        let session = self.wallet.session()?;
+        let answers_code = self
+            .contact_work(move |_, _| {
+                session.store.read(|repos| {
+                    Ok::<_, ContactError>(super::in_person::has_code(repos, slate_id)?)
+                })
+            })
+            .await?;
+        if answers_code {
+            return Err(ContactError::InPerson(InPersonRefusal::AnswerToCode));
+        }
+        Ok(())
     }
 
     /// The answer for a plain S1 or I1 whose LEPIC marker carries a reply key (RFC 0002 5):

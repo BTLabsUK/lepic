@@ -148,6 +148,11 @@ pub enum InPersonRefusal {
     /// The answer's transaction was cancelled or has ended: it is not posted.
     #[error("the transaction was cancelled or has ended")]
     Ended,
+    /// The slate is the answer to an in-person code this wallet showed: it is finalized only
+    /// with its check code, through [`ContactBook::in_person_take`] and
+    /// [`ContactBook::in_person_finalize`].
+    #[error("an answer to an in-person code is finalized with its check code")]
+    AnswerToCode,
 }
 
 /// An in-person invoice to show.
@@ -305,6 +310,11 @@ struct ReplyState {
 
 fn code_key(slate_id: SlateId) -> String {
     format!("{CODE_PREFIX}{slate_id}")
+}
+
+/// Whether this wallet showed an in-person code for `slate_id`.
+pub(crate) fn has_code(repos: &dyn Repositories, slate_id: SlateId) -> Result<bool, StoreError> {
+    Ok(repos.setting(&code_key(slate_id))?.is_some())
 }
 
 fn reply_key(slate_id: SlateId) -> String {
