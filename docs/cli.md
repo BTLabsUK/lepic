@@ -861,6 +861,10 @@ $ lepic epic1 links
 $ lepic epic1 retire 1
 ```
 
+An on-screen link takes the next of 50 mailboxes, which wrap; a printed one the first of 32 not in
+use, until `epic1 retire`. `--epicbox` names up to three relays for the link, and the wallet's relay
+when it is absent; `epic1 pay` posts to at most three relays.
+
 `contact collect` takes the payments at the link mailboxes, stores an answer to each and posts
 it to the payer's reply mailbox when that relay is in the relay list (the wallet's own relay or
 a meeting relay), so the payer's own collect finalizes it. A payment whose amount is not the one
@@ -1231,6 +1235,7 @@ sent in the request. Files it writes (`contact export`, `profile domain file`) a
 | `in-person invoice`, `send`, `read`, `pay`, `receive` | `POST /v1/in-person/invoices`, `/sends`, `/read`, `/pay`, `/receive` |
 | `in-person post`, `take`, `answers`, `finalize` | `POST /v1/in-person/{id}/post`, `POST /v1/in-person/take`, `GET .../{id}/answers`, `POST .../{id}/finalize` |
 | `epic1 address`, `new-address`, `addresses` | `GET /v1/epic1/address`, `POST`, `GET /v1/epic1/addresses` |
+| `epic1 issue-here` | `POST /v1/epic1/issue-here` |
 | `epic1 link`, `links`, `retire`, `read`, `pay` | `/v1/epic1/links`, `/links/{n}/retire`, `/read`, `/pay` |
 | `epic1 post-next`, `answers`, `post-answer`, `restore` | `/v1/epic1/{id}/post-next`, `/answers`, `/{id}/post-answer`, `/restore` |
 | `epictx open` | `POST /v1/epictx/open` |
@@ -1244,9 +1249,10 @@ made, and the same command with `--slate-id <UUID>` pays nothing twice.
 
 A forwarded command tells serve the `lepic` version, data directory, network, `native_direct`,
 `relay_tor` and `node_over_tor` it runs with, as `x-lepic-*` headers. Serve refuses one that
-differs in any of them with exit code 3 and names it, so a command never runs on another wallet
+differs in any of them with HTTP 409 (kind `config`, exit code 3 on the CLI) and names it, so a command never runs on another wallet
 or with other transport settings; a serve of another version, or one too old to say, is named as
-such. Serve answers every request with its version in `x-lepic-version`. A `--socket` that
+such. A client that sends none of these headers, such as `curl`, is not checked. Serve answers
+every request with its version in `x-lepic-version`. A `--socket` that
 another serve answers on is refused; a socket file nobody answers on is replaced.
 
 A command given an option its route has no field for runs on its own and meets the lock. These
@@ -1348,11 +1354,11 @@ lock: `another lepic process is using the data directory`.
 | `POST /v1/epic1/addresses` | `epic1 new-address`, with `account` |
 | `POST /v1/epic1/issue-here` | `epic1 issue-here` |
 | `GET /v1/epic1/addresses` | `epic1 addresses`, with `account`, `from` and `limit` in the query |
-| `POST /v1/epic1/links` | `epic1 link`, with `account`, `index`, `amount`, `message`, `printed` and `relays` |
+| `POST /v1/epic1/links` | `epic1 link`, with `account`, `index`, `amount`, `message`, `printed` and `relays` (up to three; the wallet's relay when empty) |
 | `GET /v1/epic1/links` | `epic1 links` |
 | `POST /v1/epic1/links/{n}/retire` | `epic1 retire`, with `account` |
 | `POST /v1/epic1/read` | `epic1 read`, with `link` |
-| `POST /v1/epic1/pay` | `epic1 pay`, with `link`, `amount`, `account`, `message`, `proof` and `hosts_ok` |
+| `POST /v1/epic1/pay` | `epic1 pay`, with `link`, `amount`, `account`, `message`, `min_confirmations`, `change_outputs`, `proof`, `hosts_ok` and `slate_id`; a repeat under the same `slate_id` posts nothing and reports `repeated: true`; the owner TLS listener requires `slate_id` |
 | `POST /v1/epic1/{slate_id}/post-next` | `epic1 post-next`, with `hosts_ok` |
 | `GET /v1/epic1/answers` | `epic1 answers` |
 | `POST /v1/epic1/{slate_id}/post-answer` | `epic1 post-answer`, with `relay_ok` |
