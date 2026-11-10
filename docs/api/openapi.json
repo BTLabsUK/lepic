@@ -268,6 +268,7 @@
           "contacts"
         ],
         "summary": "The pairing records, as a backup document",
+        "description": "Answered on the socket only: the TLS listener refuses it with a 403 `usage` problem.",
         "operationId": "contact_export",
         "responses": {
           "200": {
@@ -289,7 +290,8 @@
               }
             }
           }
-        }
+        },
+        "x-socket-only": true
       }
     },
     "/v1/contacts/import": {
@@ -298,6 +300,7 @@
           "contacts"
         ],
         "summary": "Restore pairing records from a backup document",
+        "description": "Answered on the socket only: the TLS listener refuses it with a 403 `usage` problem.",
         "operationId": "contact_import",
         "requestBody": {
           "content": {
@@ -329,7 +332,8 @@
               }
             }
           }
-        }
+        },
+        "x-socket-only": true
       }
     },
     "/v1/contacts/invites": {

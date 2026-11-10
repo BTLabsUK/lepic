@@ -1589,23 +1589,29 @@ pub(crate) async fn contact_invoices(api: &Api<'_>, _request: Request) -> Answer
 }
 
 /// The pairing records, as a backup document
+///
+/// Answered on the socket only: the TLS listener refuses it with a 403 `usage` problem.
 #[utoipa::path(
     post,
     path = "/v1/contacts/export",
     tag = "contacts",
     responses((status = 200, body = ContactBackupReport)),
+    extensions(("x-socket-only" = json!(true))),
 )]
 pub(crate) async fn contact_export(api: &Api<'_>, _request: Request) -> Answer {
     api.run(Call::ContactExport).await
 }
 
 /// Restore pairing records from a backup document
+///
+/// Answered on the socket only: the TLS listener refuses it with a 403 `usage` problem.
 #[utoipa::path(
     post,
     path = "/v1/contacts/import",
     tag = "contacts",
     request_body = ImportBody,
     responses((status = 200, body = ContactImportReport)),
+    extensions(("x-socket-only" = json!(true))),
 )]
 pub(crate) async fn contact_import(api: &Api<'_>, request: Request) -> Answer {
     let body: ImportBody = request.json()?;

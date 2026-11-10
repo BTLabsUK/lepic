@@ -788,22 +788,28 @@ mod tests {
     }
 
     #[test]
-    fn the_tls_listener_refuses_only_the_password_route() {
+    fn the_tls_listener_refuses_the_password_and_contact_backup_routes() {
         let router = Router::new(&openapi::document());
-        let path = "/v1/wallet/password";
-        let refused = router
-            .find(&Method::PUT, path, Listener::Tls)
-            .err()
-            .unwrap();
-        assert_eq!(refused.status(), StatusCode::FORBIDDEN);
-        assert!(router.find(&Method::PUT, path, Listener::Socket).is_ok());
+        let routes = [
+            (Method::PUT, "/v1/wallet/password"),
+            (Method::POST, "/v1/contacts/export"),
+            (Method::POST, "/v1/contacts/import"),
+        ];
+        for (method, path) in &routes {
+            let refused = router.find(method, path, Listener::Tls).err().unwrap();
+            assert_eq!(refused.status(), StatusCode::FORBIDDEN, "{path}");
+            assert!(
+                router.find(method, path, Listener::Socket).is_ok(),
+                "{path}"
+            );
+        }
         let socket_only = router
             .0
             .iter()
             .flat_map(|route| &route.operations)
             .filter(|operation| operation.socket_only)
             .count();
-        assert_eq!(socket_only, 1);
+        assert_eq!(socket_only, routes.len());
     }
 
     #[test]

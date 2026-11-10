@@ -1417,9 +1417,10 @@ accepts none and logs a warning. The JSON reports are `{"name", "fingerprint"}` 
 The routes and the `[api]` bounds are those of the socket. Each listener has its own
 `max_connections`, so TLS clients cannot take the socket's connections. A handshake that fails
 or does not end within the header time counts as refused.
-`PUT /v1/wallet/password` is answered on the socket only: over TLS it is a 403 problem with code
-`usage`. `GET /v1/status` then holds the listener's address and the fingerprint of its
-certificate, the value `lepic api client add` lists for `api-tls.pem`:
+`PUT /v1/wallet/password`, `POST /v1/contacts/export` and `POST /v1/contacts/import` are
+answered on the socket only: over TLS each is a 403 problem with code `usage`, and the OpenAPI
+document marks them `x-socket-only`. `GET /v1/status` then holds the listener's address and the
+fingerprint of its certificate, the value `lepic api client add` lists for `api-tls.pem`:
 
 ```
 {"owner_tls": {"address": "192.0.2.10:3420", "fingerprint": "<sha256 hex>"}}
