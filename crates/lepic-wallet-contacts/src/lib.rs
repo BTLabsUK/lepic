@@ -60,12 +60,12 @@ use lepic_wallet::ports::{SecretVault, StoreOpener};
 use thiserror::Error;
 
 pub use collect::{CollectReport, CollectTrigger};
-pub use direct::{Dialect, DirectError, DirectHandler, DirectSent, NativeFailure};
+pub use direct::{Dialect, DirectError, DirectHandler, DirectSent, Epic1Keys, NativeFailure};
 pub use domain::{DOMAIN_FILE_MAX, DomainFile, DomainRefused, DomainSigner, DomainVerdict, verify};
 pub use epic1::{
-    EPIC1_TTL_BLOCKS, Epic1AnswerView, Epic1Attempt, Epic1LinkIssued, Epic1LinkKind,
-    Epic1LinkRequest, Epic1LinkView, Epic1Paid, Epic1PayRequest, Epic1Read, Epic1Refusal,
-    ON_SCREEN_LIVE_FOR,
+    EPIC1_TTL_BLOCKS, Epic1AddressView, Epic1Addresses, Epic1AnswerView, Epic1Attempt,
+    Epic1LinkIssued, Epic1LinkKind, Epic1LinkRequest, Epic1LinkView, Epic1Paid, Epic1PayRequest,
+    Epic1Read, Epic1Refusal, ON_SCREEN_LIVE_FOR,
 };
 pub use in_person::{
     IN_PERSON_TTL_BLOCKS, InPersonAnswerView, InPersonCode, InPersonCodeView,

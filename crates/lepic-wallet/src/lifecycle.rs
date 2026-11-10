@@ -528,6 +528,7 @@ fn require_restore_scan(
         scan_from.value().to_string()
     };
     repos.put_setting(RESTORE_SCAN_SETTING, &value)?;
+    crate::epic1_index::mark_restored(repos)?;
     debug!(height = %scan_from, "restore scan required");
     Ok(())
 }

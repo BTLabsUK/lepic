@@ -122,6 +122,8 @@ impl Session {
                 &contact_relays,
                 Epic1LinkRequest {
                     account: DEFAULT_ACCOUNT,
+                    // The app's link pays the account's first address.
+                    index: 0,
                     amount,
                     message,
                     kind: engine_kind(kind),

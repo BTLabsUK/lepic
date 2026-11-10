@@ -16,12 +16,13 @@ use crate::cli::{
     ContactKeysArgs, ContactLabelArgs, ContactLinkArg, ContactMoveArgs, ContactMoveHomeArgs,
     ContactNameArg, ContactPayloadAckArgs, ContactPayloadArgs, ContactPayloadCommand,
     ContactPayloadPostArgs, ContactRequestAcceptArgs, ContactRequestArgs, ContactRequestIdArg,
-    ContactSasArgs, ContactScanArgs, ContactSwitchArgs, DomainCommand, DomainFileArgs, Epic1Args,
-    Epic1Command, Epic1LinkArg, Epic1LinkArgs, Epic1PayArgs, Epic1PostAnswerArgs,
-    Epic1PostNextArgs, Epic1RetireArgs, EpictxCommand, EpictxOpenArgs, InPersonArgs,
-    InPersonCodeArg, InPersonCommand, InPersonFinalizeArgs, InPersonInvoiceArgs, InPersonPayArgs,
-    InPersonPostArgs, InPersonReadArgs, InPersonReceiveArgs, InPersonSendArgs, InPersonSlateArg,
-    InPersonTakeArgs, MessageArg, OnOffArg, OutFileArg, SelectionArg, SpendArgs,
+    ContactSasArgs, ContactScanArgs, ContactSwitchArgs, DomainCommand, DomainFileArgs,
+    Epic1AddressArgs, Epic1AddressesArgs, Epic1Args, Epic1Command, Epic1LinkArg, Epic1LinkArgs,
+    Epic1PayArgs, Epic1PostAnswerArgs, Epic1PostNextArgs, Epic1RetireArgs, EpictxCommand,
+    EpictxOpenArgs, InPersonArgs, InPersonCodeArg, InPersonCommand, InPersonFinalizeArgs,
+    InPersonInvoiceArgs, InPersonPayArgs, InPersonPostArgs, InPersonReadArgs, InPersonReceiveArgs,
+    InPersonSendArgs, InPersonSlateArg, InPersonTakeArgs, MessageArg, OnOffArg, OutFileArg,
+    SelectionArg, SpendArgs,
 };
 use crate::commands::files;
 
@@ -388,11 +389,27 @@ pub(super) fn epic1(args: &Epic1Args) -> Option<Call> {
         return None;
     }
     match command {
-        Epic1Command::Address(AccountArg { account }) => {
-            get(format!("/v1/epic1/address?account={}", encode(account)))
+        Epic1Command::Address(Epic1AddressArgs {
+            account: AccountArg { account },
+            index,
+        }) => get(format!(
+            "/v1/epic1/address?account={}&index={index}",
+            encode(account)
+        )),
+        Epic1Command::NewAddress(AccountArg { account }) => {
+            post_json("/v1/epic1/addresses", json!({ "account": account }))
         }
+        Epic1Command::Addresses(Epic1AddressesArgs {
+            account: AccountArg { account },
+            from,
+            limit,
+        }) => get(format!(
+            "/v1/epic1/addresses?account={}&from={from}&limit={limit}",
+            encode(account)
+        )),
         Epic1Command::Link(Epic1LinkArgs {
             account: AccountArg { account },
+            index,
             amount,
             message: MessageArg { message },
             printed,
@@ -401,6 +418,7 @@ pub(super) fn epic1(args: &Epic1Args) -> Option<Call> {
             "/v1/epic1/links",
             json!({
                 "account": account,
+                "index": index,
                 "amount": amount,
                 "message": message,
                 "printed": printed,

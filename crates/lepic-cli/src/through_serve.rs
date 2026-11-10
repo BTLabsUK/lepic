@@ -616,7 +616,25 @@ mod tests {
             (
                 &["epic1", "address"],
                 "GET",
-                "/v1/epic1/address?account=default",
+                "/v1/epic1/address?account=default&index=0",
+                None,
+            ),
+            (
+                &["epic1", "address", "--index", "7"],
+                "GET",
+                "/v1/epic1/address?account=default&index=7",
+                None,
+            ),
+            (
+                &["epic1", "new-address"],
+                "POST",
+                "/v1/epic1/addresses",
+                Some(json!({"account": "default"})),
+            ),
+            (
+                &["epic1", "addresses", "--from", "2", "--limit", "5"],
+                "GET",
+                "/v1/epic1/addresses?account=default&from=2&limit=5",
                 None,
             ),
             (&["epic1", "links"], "GET", "/v1/epic1/links", None),

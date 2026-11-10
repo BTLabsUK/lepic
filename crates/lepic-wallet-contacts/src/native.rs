@@ -114,7 +114,7 @@ pub(crate) fn seal_native(
     .map_err(ContactError::Encode)
 }
 
-fn opened_of(opened: TxOpened) -> Opened {
+pub(crate) fn opened_of(opened: TxOpened) -> Opened {
     let content = opened.content;
     Opened {
         content: Content {

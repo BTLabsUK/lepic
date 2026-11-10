@@ -12,6 +12,25 @@ use super::{InPersonHostReport, Report, printable, short_time};
 #[derive(Debug, Serialize, ToSchema)]
 pub struct Epic1AddressReport {
     pub account: String,
+    /// The address's number in the account; 0 is its first address.
+    pub index: u32,
+    pub address: String,
+}
+
+/// The epic1 addresses an account issued, from `epic1 addresses`.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct Epic1AddressesReport {
+    pub account: String,
+    /// The highest number issued or paid; every number up to it is issued.
+    pub highest: u32,
+    /// The addresses of the page, from the lowest number.
+    pub addresses: Vec<Epic1AddressEntryReport>,
+}
+
+/// One address of `epic1 addresses`.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct Epic1AddressEntryReport {
+    pub index: u32,
     pub address: String,
 }
 
@@ -21,6 +40,8 @@ pub struct Epic1LinkReport {
     /// The link text, `epic:epic1…?epicbox=…`.
     pub link: String,
     pub address: String,
+    /// The number of the address in its account.
+    pub index: u32,
     /// `on_screen` or `printed`.
     pub kind: &'static str,
     pub n: u32,
@@ -39,6 +60,8 @@ pub struct Epic1RetireReport {
 pub struct Epic1LinkEntryReport {
     /// The account's index.
     pub account: u32,
+    /// The number of the epic1 address the link pays; absent for a link from before numbers.
+    pub index: Option<u32>,
     pub kind: &'static str,
     pub n: u32,
     pub issued_at: String,
@@ -141,6 +164,10 @@ pub struct EpictxOpenReport {
 pub(super) fn write_epic1_human(out: &mut Vec<u8>, report: &Report) -> std::io::Result<()> {
     match report {
         Report::Epic1Address(r) => writeln!(out, "{}", r.address),
+        Report::Epic1Addresses(r) => r
+            .addresses
+            .iter()
+            .try_for_each(|entry| writeln!(out, "{}  {}", entry.index, entry.address)),
         Report::Epic1Link(r) => writeln!(out, "{}\n{} link {}.", r.link, kind_name(r.kind), r.n),
         Report::Epic1Retire(r) => writeln!(out, "Printed link {} retired.", r.n),
         Report::Epic1Links(r) if r.links.is_empty() => writeln!(out, "No links."),

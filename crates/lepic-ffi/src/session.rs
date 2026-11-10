@@ -2938,6 +2938,7 @@ mod tests {
             sender_reported_posted_at: Some(confirmed),
             sender_reported_cancelled_at: Some(created),
             receiver_declined_at: Some(confirmed),
+            epic1_index: None,
             payer_declined_at: None,
             unverified: true,
             coinbase: true,

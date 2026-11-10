@@ -20,6 +20,7 @@ pub mod config;
 pub mod contact_link;
 pub mod details;
 mod early_notice;
+pub mod epic1_index;
 pub mod epicbox_invoice;
 pub mod error;
 pub mod error_text;
@@ -63,7 +64,7 @@ pub use config::{ConfigError, NodeEndpoint, WalletConfig, WalletName, WalletPoli
 pub use error::WalletError;
 pub use event::{Event, SessionState};
 pub use finalize::{FinalizeError, Finalized};
-pub use in_person_keys::IN_PERSON_REPLY_PREFIX;
+pub use in_person_keys::{Epic1AccountKeys, IN_PERSON_REPLY_PREFIX};
 pub use lifecycle::{Password, RecoveryPhrase, WordCount, store_key};
 pub use native_epicbox::{NativeRefusal, SlateFormat};
 pub use notices::ContactNotice;

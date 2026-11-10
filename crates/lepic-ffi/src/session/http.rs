@@ -26,7 +26,7 @@ use lepic_wallet::ports::SharedRng;
 use lepic_wallet::send::{SendError, SentSlate};
 use lepic_wallet::slate::WireSlate;
 use lepic_wallet::{FinalizeError, ProofKey, ReceiveError, ReceiveRequest, Received, SlateFormat};
-use lepic_wallet_contacts::{Dialect, DirectHandler, WalletContacts};
+use lepic_wallet_contacts::{Dialect, DirectHandler, Epic1Keys, WalletContacts};
 use tokio::net::TcpStream;
 use tracing::{debug, warn};
 
@@ -577,6 +577,7 @@ impl Session {
             report,
             transport,
         });
+        let epic1 = Arc::clone(&host) as Arc<dyn Epic1Keys>;
         let handler = DirectHandler::new(
             host,
             self.receiving_method(transport),
@@ -584,7 +585,8 @@ impl Session {
             key,
             network,
             SharedRng::new(os_rng()?),
-        );
+        )
+        .with_epic1(epic1);
         Ok(Some(Arc::new(PeerEndpoint::new(
             Arc::new(handler),
             seal,
@@ -649,6 +651,33 @@ struct SessionHost {
     session: Weak<Session>,
     report: HttpReport,
     transport: TransportId,
+}
+
+impl Epic1Keys for SessionHost {
+    fn epic1_keys(&self) -> BoxFuture<'_, Vec<lepic_wallet::Epic1AccountKeys>> {
+        Box::pin(async move {
+            let Some(session) = self.session.upgrade() else {
+                return Vec::new();
+            };
+            let boundary = session.runtime().boundary.clone();
+            let keys = boundary
+                .run("http_epic1_keys", async move {
+                    Ok(session.engine.epic1_trial_keys_all().await)
+                })
+                .await;
+            match keys {
+                Ok(Ok(keys)) => keys,
+                Ok(Err(error)) => {
+                    warn!(error = %lepic_telemetry::ErrorChain(&error), "epic1 keys not read");
+                    Vec::new()
+                }
+                Err(error) => {
+                    warn!(error = %error, "epic1 keys not read");
+                    Vec::new()
+                }
+            }
+        })
+    }
 }
 
 impl Host for SessionHost {

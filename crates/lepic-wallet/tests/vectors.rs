@@ -500,17 +500,22 @@ fn assert_mailbox_key(name: &str, case: &Value, key: &lepic_crypto::SecretKey) {
     );
 }
 
-/// `testdata/vectors/keys/epic1_proof_key_*.json`: the epic1 proof key of each account and
-/// network is the generator's Ed25519 key.
+/// `testdata/vectors/keys/epic1_proof_key_*.json`: the epic1 proof key of each account,
+/// network and address index is the generator's Ed25519 key.
 #[test]
 fn epic1_proof_keys_are_the_vectors() {
     for name in ["epic1_proof_key_seed32", "epic1_proof_key_seed16"] {
         let vector = keys_vector(name);
         let seed = seed_of(&vector);
         for case in vector["expected"]["cases"].as_array().unwrap() {
-            let key =
-                lepic_wallet::namespace::epic1_proof_key(&seed, account_of(case), network_of(case))
-                    .unwrap();
+            let index = u32::try_from(case["index"].as_u64().unwrap()).unwrap();
+            let key = lepic_wallet::namespace::epic1_proof_key(
+                &seed,
+                account_of(case),
+                network_of(case),
+                index,
+            )
+            .unwrap();
             assert_eq!(
                 key.to_bytes().as_slice(),
                 hex_bytes(case["ed25519_seed"].as_str().unwrap()),
@@ -546,7 +551,19 @@ fn seal_keys_are_the_vectors() {
             other => panic!("unknown seal key kind {other}"),
         };
         assert_eq!(u64::from(kind.byte()), case["kind"].as_u64().unwrap());
-        let key = seal_key(&seed, account_of(case), network_of(case), kind).unwrap();
+        let index = u32::try_from(case["index"].as_u64().unwrap()).unwrap();
+        let key = if matches!(kind, SealKeyKind::Epic1) {
+            lepic_wallet::namespace::epic1_seal_key(
+                &seed,
+                account_of(case),
+                network_of(case),
+                index,
+            )
+        } else {
+            assert_eq!(index, 0, "{case}");
+            seal_key(&seed, account_of(case), network_of(case), kind)
+        }
+        .unwrap();
         assert_eq!(
             key.expose_bytes().as_slice(),
             hex_bytes(case["seal_sk"].as_str().unwrap()),

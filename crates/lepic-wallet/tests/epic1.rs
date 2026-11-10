@@ -24,15 +24,17 @@ use lepic_contact::{Content, HintRule, MessageType, armor, seal};
 use lepic_epicbox::{Domain, EpicboxAddress, Network as RelayNetwork};
 use lepic_primitives::amount::Amount;
 use lepic_primitives::params::Network;
-use lepic_slate::model::SlateId;
-use lepic_store::TxState;
+use lepic_slate::model::{ProofAddress, SlateId};
+use lepic_store::{TxDirection, TxState};
 use lepic_transport::host_rule::HostClass;
-use lepic_wallet::Event;
+use lepic_transport::transport::Location;
+use lepic_wallet::epic1_index::RESTORE_GAP;
 use lepic_wallet::selection::SelectionStrategy;
-use lepic_wallet::send::SendRequest;
+use lepic_wallet::send::{Delivery, SendRequest};
+use lepic_wallet::{Event, ReceiveRequest};
 use lepic_wallet_contacts::epic1_testing::{
-    for_other_network, link_mailboxes, sealed_to_epic1, with_proof_key_of, without_amount,
-    without_transports,
+    for_other_network, link_mailboxes, native_body_of, sealed_to_epic1, with_proof_key_of,
+    without_amount, without_transports,
 };
 use lepic_wallet_contacts::in_person_testing::{armored, without_tail};
 use lepic_wallet_contacts::{
@@ -52,6 +54,7 @@ fn refusal<T: std::fmt::Debug>(result: Result<T, ContactError>) -> Epic1Refusal 
 fn link_request(kind: Epic1LinkKind, link_relays: &[&str]) -> Epic1LinkRequest {
     Epic1LinkRequest {
         account: ACCOUNT,
+        index: 0,
         amount: Some(Amount::new(AMOUNT)),
         message: Some("coffee".to_owned()),
         kind,
@@ -795,4 +798,212 @@ fn a_refusal_that_comes_after_the_answer_does_not_cancel_the_payment() {
         .block_on(world.payer.wallet.transaction_details(paid.tx_id))
         .unwrap();
     assert_eq!(details.receiver_declined_at, None);
+}
+
+impl World {
+    /// Issues `count` new epic1 addresses of the issuer's account, which follow on from each
+    /// other, and returns them with their indexes. The issuer's wallet was restored from its
+    /// phrase, so the first one comes after the restore gap.
+    fn new_addresses(&self, count: u32) -> Vec<(u32, String)> {
+        let book = self.issuer.wallet.contact_book();
+        let mut issued: Vec<(u32, String)> = Vec::new();
+        for _ in 0..count {
+            let (index, address) = self.block_on(book.epic1_new_address(ACCOUNT)).unwrap();
+            match issued.last() {
+                Some((previous, _)) => assert_eq!(index, previous + 1),
+                None => assert_eq!(index, RESTORE_GAP + 1),
+            }
+            issued.push((index, address.encode()));
+        }
+        issued
+    }
+
+    /// The epic1 index the issuer's only incoming transaction shows.
+    fn received_index(&self) -> Option<u32> {
+        let received: Vec<_> = self
+            .block_on(self.issuer.wallet.transactions(ACCOUNT))
+            .unwrap()
+            .into_iter()
+            .filter(|details| details.transaction.entry.direction == TxDirection::Incoming)
+            .collect();
+        assert_eq!(received.len(), 1);
+        received[0].epic1_index
+    }
+
+    /// The issuer's epic1 address `index`, and its proof key.
+    fn address_at(&self, index: u32) -> (String, [u8; 32]) {
+        let address = self
+            .block_on(
+                self.issuer
+                    .wallet
+                    .contact_book()
+                    .epic1_address_at(ACCOUNT, index),
+            )
+            .unwrap();
+        (address.encode(), address.proof_key().to_bytes())
+    }
+
+    /// An S1 from the payer with a payment proof to the proof key `proof`, sealed to the epic1
+    /// `address` as a file is, armored.
+    fn s1_file(&self, address: &str, proof: [u8; 32], seed: u64) -> String {
+        let path = tempfile::tempdir().unwrap().keep().join("s1.json");
+        self.block_on(self.payer.wallet.send(
+            &support::file(),
+            SendRequest {
+                payment_proof_recipient: Some(ProofAddress::from_bytes(proof).unwrap()),
+                ..send()
+            },
+            Delivery::Export {
+                to: Location::File(path.clone()),
+            },
+        ))
+        .unwrap();
+        let body = native_body_of(Network::Floonet, &std::fs::read(&path).unwrap()).unwrap();
+        let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
+        let sealed =
+            sealed_to_epic1(Network::Floonet, address, body, true, false, &mut rng).unwrap();
+        armored(&sealed)
+    }
+}
+
+#[test]
+fn a_link_to_a_new_address_is_paid_and_proved_at_its_index() {
+    let world = World::new();
+    let book = world.issuer.wallet.contact_book();
+    let first = book.epic1_address(ACCOUNT).unwrap().encode();
+    let (n, address) = world.new_addresses(3).pop().unwrap();
+    assert_ne!(address, first);
+    // The listing runs from index 0 to the last one issued, through the restore gap.
+    let listed = world
+        .block_on(book.epic1_addresses(ACCOUNT, 0, 100))
+        .unwrap();
+    assert_eq!(listed.highest, n);
+    assert_eq!(listed.addresses.len(), n as usize + 1);
+    assert_eq!(listed.addresses[0].address, first);
+    assert_eq!(listed.addresses[n as usize].address, address);
+    assert_eq!(
+        world
+            .block_on(book.epic1_address_at(ACCOUNT, n))
+            .unwrap()
+            .encode(),
+        address
+    );
+    // An address the account did not issue is not handed out.
+    assert_eq!(
+        refusal(world.block_on(book.epic1_address_at(ACCOUNT, n + 1))),
+        Epic1Refusal::AddressNotIssued
+    );
+    let mut unissued = link_request(Epic1LinkKind::OnScreen, &[]);
+    unissued.index = n + 1;
+    assert_eq!(
+        refusal(world.block_on(book.epic1_link(&relays(&world.issuer), unissued))),
+        Epic1Refusal::AddressNotIssued
+    );
+
+    let mut request = link_request(Epic1LinkKind::OnScreen, &[]);
+    request.index = n;
+    let issued = world
+        .block_on(book.epic1_link(&relays(&world.issuer), request))
+        .unwrap();
+    assert_eq!(issued.address, address);
+
+    // The payment proof names the proof key of address n, which the payee signs with.
+    let paid = world.pay_link(&issued.link, true).unwrap();
+    assert_eq!(paid.address, address);
+    assert_eq!(world.taken(&world.issuer), 1);
+    assert_eq!(world.received_index(), Some(n));
+    assert_eq!(world.answers_posted(), 1);
+    world.collect(&world.payer);
+    assert_eq!(world.node.pushed_transactions().len(), 1);
+    let sent = world
+        .block_on(world.payer.wallet.transaction_details(paid.tx_id))
+        .unwrap();
+    assert_eq!(sent.epic1_index, None);
+}
+
+#[test]
+fn a_file_sealed_to_an_issued_address_is_received_at_its_index() {
+    let world = World::new();
+    let book = world.issuer.wallet.contact_book();
+    let n = world.new_addresses(4)[1].0;
+    let (address, proof) = world.address_at(n);
+
+    // Sealed to address n with a proof to address 0: address n's proof key does not match.
+    let (_, first) = world.address_at(0);
+    let mismatched = world.s1_file(&address, first, 1);
+    assert!(
+        world
+            .block_on(book.sealed_receive(&mismatched, ReceiveRequest::default()))
+            .is_err()
+    );
+
+    world.payer.fund(20, FUNDING);
+    let text = world.s1_file(&address, proof, 2);
+    let received = world
+        .block_on(book.sealed_receive(&text, ReceiveRequest::default()))
+        .unwrap();
+    assert_eq!(world.received_index(), Some(n));
+    let details = world
+        .block_on(
+            world
+                .issuer
+                .wallet
+                .transaction_details(received.received.tx_id),
+        )
+        .unwrap();
+    assert_eq!(details.epic1_index, Some(n));
+}
+
+#[test]
+fn trial_decryption_finds_the_address_tried_last_among_a_thousand_and_one() {
+    let world = World::new();
+    // Indexes 1 to 50 are the restore gap; the addresses issued after it reach index 1,000.
+    let started = std::time::Instant::now();
+    let issued = world.new_addresses(1_000 - RESTORE_GAP);
+    assert_eq!(issued.last().unwrap().0, 1_000);
+    eprintln!(
+        "issuing {} addresses took {:?}",
+        issued.len(),
+        started.elapsed()
+    );
+    let book = world.issuer.wallet.contact_book();
+    // Tried first: index 0, then from the highest down, so index 1 is tried last.
+    let (address, proof) = world.address_at(1);
+    let text = world.s1_file(&address, proof, 3);
+
+    let started = std::time::Instant::now();
+    let keys = world
+        .block_on(
+            world
+                .issuer
+                .wallet
+                .epic1_trial_keys(ACCOUNT, lepic_contact::Network::Floonet),
+        )
+        .unwrap();
+    let derived = started.elapsed();
+    assert_eq!(keys.len(), 1_001);
+    assert_eq!(keys.last().unwrap().0, 1);
+
+    let started = std::time::Instant::now();
+    world.block_on(book.sealed_open(&text)).unwrap();
+    let opened = started.elapsed();
+    eprintln!(
+        "deriving 1,001 seal keys took {derived:?}; opening at the last of them, with the \
+         derivation, took {opened:?}"
+    );
+
+    world
+        .block_on(book.sealed_receive(&text, ReceiveRequest::default()))
+        .unwrap();
+    assert_eq!(world.received_index(), Some(1));
+    // The index of the most recent payment is tried first from then on.
+    let keys = world
+        .block_on(
+            world
+                .issuer
+                .wallet
+                .epic1_trial_keys(ACCOUNT, lepic_contact::Network::Floonet),
+        )
+        .unwrap();
+    assert_eq!(keys[0].0, 1);
 }

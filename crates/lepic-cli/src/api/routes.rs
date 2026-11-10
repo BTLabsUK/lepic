@@ -19,16 +19,16 @@ use crate::cli::{
     ContactPayloadAckArgs, ContactPayloadArgs, ContactPayloadCommand, ContactPayloadPostArgs,
     ContactRequestAcceptArgs, ContactRequestArgs, ContactRequestIdArg, ContactSasArgs,
     ContactScanArgs, ContactSwitchArgs, DEFAULT_CHANGE_OUTPUTS, DEFAULT_CONTACT_NAME, DomainArgs,
-    DomainCommand, Epic1Args, Epic1Command, Epic1LinkArg, Epic1LinkArgs, Epic1PayArgs,
-    Epic1PostAnswerArgs, Epic1PostNextArgs, Epic1RetireArgs, EpicboxCommand, EpictxCommand,
-    EpictxOpenArgs, FluffArg, HttpReach, InPersonArgs, InPersonCodeArg, InPersonCommand,
-    InPersonFinalizeArgs, InPersonInvoiceArgs, InPersonPayArgs, InPersonPostArgs, InPersonReadArgs,
-    InPersonReceiveArgs, InPersonSendArgs, InPersonSlateArg, InPersonTakeArgs, InviteExpiryArg,
-    KeysArg, LegacyArg, ListArgs, ListingArgs, MAX_DRAIN_DAYS, MessageArg, NodeCommand, OnOffArg,
-    OutFileArg, PeerArgs, PeerCommand, PeerForgetArgs, PlainHttpArg, PostArgs, ProfileCommand,
-    ProfileSetArgs, RefreshArg, SasArg, SelectionArg, SendArgs, SendDestinationArgs,
-    SendSlateIdArg, SpendArgs, TorBinaryArgs, TxCommand, TxIdArgs, TxShowArgs, WalletCommand,
-    WalletScanArgs,
+    DomainCommand, Epic1AddressArgs, Epic1AddressesArgs, Epic1Args, Epic1Command, Epic1LinkArg,
+    Epic1LinkArgs, Epic1PayArgs, Epic1PostAnswerArgs, Epic1PostNextArgs, Epic1RetireArgs,
+    EpicboxCommand, EpictxCommand, EpictxOpenArgs, FluffArg, HttpReach, InPersonArgs,
+    InPersonCodeArg, InPersonCommand, InPersonFinalizeArgs, InPersonInvoiceArgs, InPersonPayArgs,
+    InPersonPostArgs, InPersonReadArgs, InPersonReceiveArgs, InPersonSendArgs, InPersonSlateArg,
+    InPersonTakeArgs, InviteExpiryArg, KeysArg, LegacyArg, ListArgs, ListingArgs, MAX_DRAIN_DAYS,
+    MessageArg, NodeCommand, OnOffArg, OutFileArg, PeerArgs, PeerCommand, PeerForgetArgs,
+    PlainHttpArg, PostArgs, ProfileCommand, ProfileSetArgs, RefreshArg, SasArg, SelectionArg,
+    SendArgs, SendDestinationArgs, SendSlateIdArg, SpendArgs, TorBinaryArgs, TxCommand, TxIdArgs,
+    TxShowArgs, WalletCommand, WalletScanArgs,
 };
 use crate::commands::is_onion;
 use crate::output::{
@@ -38,15 +38,15 @@ use crate::output::{
     ContactPayloadAckReport, ContactPayloadListReport, ContactPayloadPostReport,
     ContactPreviewReport, ContactQuarantineReport, ContactRemoveReport, ContactReport,
     ContactRequestCancelReport, ContactRequestDismissReport, ContactRequestsReport,
-    Epic1AddressReport, Epic1AnswersReport, Epic1LinkReport, Epic1LinksReport, Epic1PaidReport,
-    Epic1PostReport, Epic1ReadReport, Epic1RestoreReport, Epic1RetireReport, EpicboxStatusReport,
-    EpictxOpenReport, FinalizeReport, InPersonAnswersReport, InPersonCodeReport,
-    InPersonPaidReport, InPersonPostReport, InPersonReadReport, InPersonTakenReport, InfoReport,
-    MethodsReport, NodeStatusReport, OutputsReport, PasswordReport, PeerForgetReport,
-    PeerPinListReport, PeerReport, PostReport, ProfileDomainAttachReport,
-    ProfileDomainDocumentReport, ProfileDomainShowReport, ProfileSetReport, ProfileShowReport,
-    Report, SendReport, ServeStatusReport, SlateReceiveReport, TxListReport, TxReport,
-    TxStateReport, WalletScanReport,
+    Epic1AddressReport, Epic1AddressesReport, Epic1AnswersReport, Epic1LinkReport,
+    Epic1LinksReport, Epic1PaidReport, Epic1PostReport, Epic1ReadReport, Epic1RestoreReport,
+    Epic1RetireReport, EpicboxStatusReport, EpictxOpenReport, FinalizeReport,
+    InPersonAnswersReport, InPersonCodeReport, InPersonPaidReport, InPersonPostReport,
+    InPersonReadReport, InPersonTakenReport, InfoReport, MethodsReport, NodeStatusReport,
+    OutputsReport, PasswordReport, PeerForgetReport, PeerPinListReport, PeerReport, PostReport,
+    ProfileDomainAttachReport, ProfileDomainDocumentReport, ProfileDomainShowReport,
+    ProfileSetReport, ProfileShowReport, Report, SendReport, ServeStatusReport, SlateReceiveReport,
+    TxListReport, TxReport, TxStateReport, WalletScanReport,
 };
 
 type Answer = Result<Response<Body>, Problem>;
@@ -57,6 +57,34 @@ type Answer = Result<Response<Body>, Problem>;
 pub(crate) struct AccountQuery {
     account: Option<String>,
 }
+
+/// An epic1 address of an account.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct Epic1AddressQuery {
+    account: Option<String>,
+    index: Option<u32>,
+}
+
+/// A page of the epic1 addresses of an account.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct Epic1AddressesQuery {
+    account: Option<String>,
+    from: Option<u32>,
+    limit: Option<u32>,
+}
+
+/// The account that issues the next epic1 address.
+#[derive(Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct Epic1NewAddressBody {
+    /// The account label; the default account when absent.
+    account: Option<String>,
+}
+
+/// How many addresses `GET /v1/epic1/addresses` lists when the request does not say.
+const EPIC1_ADDRESS_PAGE: u32 = 100;
 
 /// A send over one of the registered methods.
 #[derive(Deserialize, ToSchema)]
@@ -399,6 +427,8 @@ pub(crate) struct InPersonTakeBody {
 pub(crate) struct Epic1LinkBody {
     /// The account label; the default account when absent.
     account: Option<String>,
+    /// The number of the epic1 address the link pays; 0, the first address, when absent.
+    index: Option<u32>,
     /// The amount to ask for, in EPIC, as a decimal string.
     amount: Option<String>,
     /// A message to the payer.
@@ -1805,18 +1835,63 @@ pub(crate) async fn in_person_finalize(api: &Api<'_>, request: Request) -> Answe
     api.run(in_person(InPersonCommand::Finalize(args))).await
 }
 
-/// The epic1 address of an account
+/// An epic1 address of an account: its first one, or the one at `index`
 #[utoipa::path(
     get,
     path = "/v1/epic1/address",
     tag = "epic1",
-    params(("account" = Option<String>, Query, description = "Account label; the default account when absent")),
+    params(
+        ("account" = Option<String>, Query, description = "Account label; the default account when absent"),
+        ("index" = Option<u32>, Query, description = "The address's number, issued or paid; 0, the first address, when absent"),
+    ),
     responses((status = 200, body = Epic1AddressReport)),
 )]
 pub(crate) async fn epic1_address(api: &Api<'_>, request: Request) -> Answer {
-    let query: AccountQuery = request.query()?;
-    api.run(epic1(Epic1Command::Address(account(query.account))))
+    let query: Epic1AddressQuery = request.query()?;
+    let args = Epic1AddressArgs {
+        account: account(query.account),
+        index: query.index.unwrap_or(0),
+    };
+    api.run(epic1(Epic1Command::Address(args))).await
+}
+
+/// Issue the next epic1 address of an account
+///
+/// Payments to every issued address come to the account; a received transaction shows the
+/// address's number.
+#[utoipa::path(
+    post,
+    path = "/v1/epic1/addresses",
+    tag = "epic1",
+    request_body = Epic1NewAddressBody,
+    responses((status = 200, body = Epic1AddressReport)),
+)]
+pub(crate) async fn epic1_new_address(api: &Api<'_>, request: Request) -> Answer {
+    let body: Epic1NewAddressBody = request.json()?;
+    api.run(epic1(Epic1Command::NewAddress(account(body.account))))
         .await
+}
+
+/// The epic1 addresses an account issued, from the lowest number
+#[utoipa::path(
+    get,
+    path = "/v1/epic1/addresses",
+    tag = "epic1",
+    params(
+        ("account" = Option<String>, Query, description = "Account label; the default account when absent"),
+        ("from" = Option<u32>, Query, description = "The first number listed; 0 when absent"),
+        ("limit" = Option<u32>, Query, description = "How many addresses to list; 100 when absent"),
+    ),
+    responses((status = 200, body = Epic1AddressesReport)),
+)]
+pub(crate) async fn epic1_addresses(api: &Api<'_>, request: Request) -> Answer {
+    let query: Epic1AddressesQuery = request.query()?;
+    let args = Epic1AddressesArgs {
+        account: account(query.account),
+        from: query.from.unwrap_or(0),
+        limit: query.limit.unwrap_or(EPIC1_ADDRESS_PAGE),
+    };
+    api.run(epic1(Epic1Command::Addresses(args))).await
 }
 
 /// Issue a link to the epic1 address of an account
@@ -1833,6 +1908,7 @@ pub(crate) async fn epic1_link(api: &Api<'_>, request: Request) -> Answer {
     let body: Epic1LinkBody = request.json()?;
     let args = Epic1LinkArgs {
         account: account(body.account),
+        index: body.index.unwrap_or(0),
         amount: body.amount,
         message: MessageArg {
             message: body.message,

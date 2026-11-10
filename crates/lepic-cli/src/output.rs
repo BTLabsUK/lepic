@@ -17,9 +17,10 @@ use crate::settings::OutputFormat;
 mod epic1;
 
 pub use epic1::{
-    Epic1AddressReport, Epic1AnswerReport, Epic1AnswersReport, Epic1AttemptReport,
-    Epic1LinkEntryReport, Epic1LinkReport, Epic1LinksReport, Epic1PaidReport, Epic1PostReport,
-    Epic1ReadReport, Epic1RestoreReport, Epic1RetireReport, EpictxOpenReport,
+    Epic1AddressEntryReport, Epic1AddressReport, Epic1AddressesReport, Epic1AnswerReport,
+    Epic1AnswersReport, Epic1AttemptReport, Epic1LinkEntryReport, Epic1LinkReport,
+    Epic1LinksReport, Epic1PaidReport, Epic1PostReport, Epic1ReadReport, Epic1RestoreReport,
+    Epic1RetireReport, EpictxOpenReport,
 };
 
 // One report is built per command and rendered at once, so the size of its largest variant
@@ -103,6 +104,7 @@ pub enum Report {
     PeerPins(PeerPinListReport),
     PeerForget(PeerForgetReport),
     Epic1Address(Epic1AddressReport),
+    Epic1Addresses(Epic1AddressesReport),
     Epic1Link(Epic1LinkReport),
     Epic1Retire(Epic1RetireReport),
     Epic1Links(Epic1LinksReport),
@@ -382,6 +384,10 @@ pub struct TxReport {
     /// that listing; `tx show` only.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub receive_listing: Option<ListingReport>,
+    /// For a payment received at an epic1 address, the address's number in its account;
+    /// `tx show` only.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub epic1_index: Option<u32>,
 }
 
 /// A listing: the service key in hex and the generation.
@@ -1468,6 +1474,7 @@ fn write_expired(out: &mut Vec<u8>, expired: Option<&ExpiredReport>) -> std::io:
     Ok(())
 }
 
+#[expect(clippy::too_many_lines, reason = "one arm per report kind")]
 fn write_human(out: &mut Vec<u8>, report: &Report) -> std::io::Result<()> {
     match report {
         Report::Init(_)
@@ -1540,6 +1547,7 @@ fn write_human(out: &mut Vec<u8>, report: &Report) -> std::io::Result<()> {
         | Report::InPersonTaken(_)
         | Report::InPersonAnswers(_) => write_in_person_human(out, report),
         Report::Epic1Address(_)
+        | Report::Epic1Addresses(_)
         | Report::Epic1Link(_)
         | Report::Epic1Retire(_)
         | Report::Epic1Links(_)
@@ -1860,6 +1868,9 @@ fn write_show(out: &mut Vec<u8>, tx: &TxReport) -> std::io::Result<()> {
     }
     if let Some(origin) = &tx.origin {
         writeln!(out, "{:<12} {origin}", "Origin")?;
+    }
+    if let Some(index) = tx.epic1_index {
+        writeln!(out, "{:<12} epic1 address {index}", "Received at")?;
     }
     if tx.coinbase == Some(true) {
         writeln!(out, "{:<12} mining reward", "Kind")?;
@@ -2571,6 +2582,7 @@ mod tests {
             receiver_declined_at: None,
             payer_declined_at: None,
             receive_listing: None,
+            epic1_index: None,
         }
     }
 

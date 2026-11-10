@@ -37,11 +37,12 @@ pub const API_TLS_KEY_LABEL: &[u8] = b"lepic-wallet api tls v1";
 pub const DEVICE_LINK_TAG: &[u8] = b"lepic/device-link/v1";
 
 /// The X25519 key that opens envelopes sealed to one address of an account: context
-/// `account (u32 BE) || net || kind`, 6 bytes ([`SealKeyKind`]).
+/// `account (u32 BE) || net || kind || index (u32 BE)`, 10 bytes ([`SealKeyKind`]). Each epic1
+/// address of an account has its own index; the other kinds have one key each, at index 0.
 pub const SEAL_KEY_LABEL: &[u8] = b"lepic-wallet seal key v1";
 
-/// The Ed25519 seed of the proof key in an account's epic1 address: context
-/// `account (u32 BE) || net`, 5 bytes. It signs the payment proofs of slates that came to the
+/// The Ed25519 seed of the proof key in an epic1 address: context
+/// `account (u32 BE) || net || index (u32 BE)`, 9 bytes. It signs the payment proofs of slates that came to the
 /// epic1, as the onion key does for slates that came over the onion (ADR 0044).
 pub const EPIC1_PROOF_KEY_LABEL: &[u8] = b"lepic-wallet epic1 proof key v1";
 
@@ -269,33 +270,64 @@ fn first_valid_key(seed: &Seed, label: &[u8], context: &[&[u8]]) -> Result<Secre
     Err(WalletError::NoValidKey)
 }
 
-/// The seal key of `kind` for `account` on `network`; its public key is X25519 of the secret
-/// and the base point. The listener sockets show theirs through
-/// [`crate::Wallet::listener_seal_key`].
+/// The seal key of `kind` for `account` on `network`, at index 0; its public key is X25519 of
+/// the secret and the base point. The listener sockets show theirs through
+/// [`crate::Wallet::listener_seal_key`]; an epic1 address at another index takes
+/// [`epic1_seal_key`].
 pub fn seal_key(
     seed: &Seed,
     account: u32,
     network: Network,
     kind: SealKeyKind,
 ) -> Result<EncSecretKey, WalletError> {
+    seal_key_at(seed, account, network, kind, 0)
+}
+
+/// The seal key of the epic1 address `index` of `account` on `network`.
+pub fn epic1_seal_key(
+    seed: &Seed,
+    account: u32,
+    network: Network,
+    index: u32,
+) -> Result<EncSecretKey, WalletError> {
+    seal_key_at(seed, account, network, SealKeyKind::Epic1, index)
+}
+
+fn seal_key_at(
+    seed: &Seed,
+    account: u32,
+    network: Network,
+    kind: SealKeyKind,
+    index: u32,
+) -> Result<EncSecretKey, WalletError> {
     let bytes = namespace_hash(
         seed,
         SEAL_KEY_LABEL,
-        &[&account.to_be_bytes(), &[network.byte()], &[kind.byte()]],
+        &[
+            &account.to_be_bytes(),
+            &[network.byte()],
+            &[kind.byte()],
+            &index.to_be_bytes(),
+        ],
     )?;
     Ok(EncSecretKey::from_bytes(*bytes))
 }
 
-/// The epic1 proof key of `account` on `network`.
+/// The proof key of the epic1 address `index` of `account` on `network`.
 pub fn epic1_proof_key(
     seed: &Seed,
     account: u32,
     network: Network,
+    index: u32,
 ) -> Result<SigningKey, WalletError> {
     let bytes = namespace_hash(
         seed,
         EPIC1_PROOF_KEY_LABEL,
-        &[&account.to_be_bytes(), &[network.byte()]],
+        &[
+            &account.to_be_bytes(),
+            &[network.byte()],
+            &index.to_be_bytes(),
+        ],
     )?;
     Ok(SigningKey::from_bytes(&bytes))
 }
@@ -515,9 +547,21 @@ mod tests {
     #[test]
     fn a_seal_key_is_the_keyed_hash_of_its_label_and_context() {
         let key = seal_key(&seed(1), 7, Network::Floonet, SealKeyKind::Onion).unwrap();
-        let expected = keyed(b"lepic-wallet seal key v1", &[&[0, 0, 0, 7], &[1], &[1]]);
+        let expected = keyed(
+            b"lepic-wallet seal key v1",
+            &[&[0, 0, 0, 7], &[1], &[1], &[0, 0, 0, 0]],
+        );
         assert_eq!(
             key.public_key(),
+            EncSecretKey::from_bytes(expected).public_key()
+        );
+        let at = epic1_seal_key(&seed(1), 7, Network::Floonet, 0x0102_0304).unwrap();
+        let expected = keyed(
+            b"lepic-wallet seal key v1",
+            &[&[0, 0, 0, 7], &[1], &[0], &[1, 2, 3, 4]],
+        );
+        assert_eq!(
+            at.public_key(),
             EncSecretKey::from_bytes(expected).public_key()
         );
         let public = |account, network, kind| {
@@ -535,12 +579,63 @@ mod tests {
     }
 
     #[test]
-    fn the_epic1_proof_key_is_the_keyed_hash_of_its_label_and_context() {
-        let key = epic1_proof_key(&seed(1), 2, Network::Mainnet).unwrap();
-        let expected = keyed(b"lepic-wallet epic1 proof key v1", &[&[0, 0, 0, 2], &[0]]);
-        assert_eq!(key.to_bytes(), expected);
+    fn epic1_seal_key_index_0_is_the_seal_key_and_each_index_its_own() {
+        let public = |account, network, index| {
+            *epic1_seal_key(&seed(1), account, network, index)
+                .unwrap()
+                .public_key()
+                .as_bytes()
+        };
+        let base = public(0, Network::Mainnet, 0);
+        assert_eq!(
+            base,
+            *seal_key(&seed(1), 0, Network::Mainnet, SealKeyKind::Epic1)
+                .unwrap()
+                .public_key()
+                .as_bytes()
+        );
+        let indexes = [1, 2, 50, u32::MAX];
+        for index in indexes {
+            let key = public(0, Network::Mainnet, index);
+            assert_ne!(key, base);
+            assert_ne!(key, public(1, Network::Mainnet, index));
+            assert_ne!(key, public(0, Network::Floonet, index));
+        }
+        let all: std::collections::BTreeSet<_> = indexes
+            .iter()
+            .map(|index| public(0, Network::Mainnet, *index))
+            .collect();
+        assert_eq!(all.len(), indexes.len());
+        // Account 1 index 0 and account 0 index 1 are apart: the fields have a fixed width.
         assert_ne!(
-            epic1_proof_key(&seed(1), 2, Network::Floonet)
+            public(1, Network::Mainnet, 0),
+            public(0, Network::Mainnet, 1)
+        );
+    }
+
+    #[test]
+    fn the_epic1_proof_key_is_the_keyed_hash_of_its_label_and_context() {
+        let key = epic1_proof_key(&seed(1), 2, Network::Mainnet, 0).unwrap();
+        let expected = keyed(
+            b"lepic-wallet epic1 proof key v1",
+            &[&[0, 0, 0, 2], &[0], &[0, 0, 0, 0]],
+        );
+        assert_eq!(key.to_bytes(), expected);
+        let at = epic1_proof_key(&seed(1), 2, Network::Mainnet, 9).unwrap();
+        let expected_at = keyed(
+            b"lepic-wallet epic1 proof key v1",
+            &[&[0, 0, 0, 2], &[0], &[0, 0, 0, 9]],
+        );
+        assert_eq!(at.to_bytes(), expected_at);
+        assert_ne!(expected_at, expected);
+        assert_ne!(
+            epic1_proof_key(&seed(1), 2, Network::Floonet, 0)
+                .unwrap()
+                .to_bytes(),
+            expected
+        );
+        assert_ne!(
+            epic1_proof_key(&seed(1), 3, Network::Mainnet, 0)
                 .unwrap()
                 .to_bytes(),
             expected

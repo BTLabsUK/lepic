@@ -39,6 +39,7 @@ use lepic_slate::stage::Stage;
 use lepic_store::{AccountIndex, Repositories, SlateStage, TxId, TxState, WalletStore};
 use lepic_transport::host_rule::{self, HostReport};
 use lepic_transport::transport::{BoxFuture, Location};
+use lepic_wallet::epic1_index::{self, trial_open};
 use lepic_wallet::namespace::{LinkMailbox, PostRole};
 use lepic_wallet::notice::{Notice, NoticeKind, Payload, classify_text};
 use lepic_wallet::ports::{SecretVault, StoreOpener};
@@ -156,6 +157,12 @@ pub enum Epic1Refusal {
     /// The amount of a payment is not the one its link asks.
     #[error("the amount is not the one the link asks")]
     AmountMismatch,
+    /// The account did not issue the epic1 address at that index.
+    #[error("the account did not issue that address")]
+    AddressNotIssued,
+    /// The account issued its last address index.
+    #[error("the account has no address index left")]
+    NoAddressLeft,
 }
 
 /// The kind of a link mailbox.
@@ -202,6 +209,8 @@ impl Epic1LinkKind {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Epic1LinkRequest {
     pub account: AccountIndex,
+    /// The index of the account's epic1 address the link pays; 0 for its first address.
+    pub index: u32,
     pub amount: Option<Amount>,
     pub message: Option<String>,
     pub kind: Epic1LinkKind,
@@ -217,6 +226,8 @@ pub struct Epic1LinkIssued {
     pub link: String,
     /// The epic1 address the link pays.
     pub address: String,
+    /// The index of that address in its account.
+    pub index: u32,
     pub kind: Epic1LinkKind,
     pub n: u32,
 }
@@ -225,6 +236,9 @@ pub struct Epic1LinkIssued {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Epic1LinkView {
     pub account: AccountIndex,
+    /// The index of the epic1 address the link pays; `None` when the wallet does not know it,
+    /// as for a link mailbox a restore found in use.
+    pub index: Option<u32>,
     pub kind: Epic1LinkKind,
     pub n: u32,
     pub issued_at: Timestamp,
@@ -301,6 +315,28 @@ struct LinkState {
     /// before the amount was kept.
     #[serde(default)]
     amount: Option<u64>,
+    /// The index of the epic1 address the link pays; `None` when the wallet does not know it.
+    /// A payment at the link mailbox is opened with that address's seal key first.
+    #[serde(default)]
+    index: Option<u32>,
+}
+
+/// An epic1 address an account issued.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Epic1AddressView {
+    pub index: u32,
+    /// The address text, `epic1…`.
+    pub address: String,
+}
+
+/// A page of the epic1 addresses an account issued.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Epic1Addresses {
+    pub account: AccountIndex,
+    /// The highest index issued or paid; every index up to it is issued.
+    pub highest: u32,
+    /// The addresses of the page, from the lowest index.
+    pub addresses: Vec<Epic1AddressView>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -363,6 +399,37 @@ fn hosts_confirmed(hosts_ok: bool, usable: &[(EpicboxTransport, HostReport)]) ->
 
 fn refused(refusal: Epic1Refusal) -> ContactError {
     ContactError::Epic1(refusal)
+}
+
+/// Takes the link mailbox a new link of `kind` names: the next of the on-screen ring, which
+/// wraps, or the first printed one not in use.
+fn take_link_mailbox(
+    repos: &mut dyn Repositories,
+    account: AccountIndex,
+    kind: Epic1LinkKind,
+) -> Result<u32, ContactError> {
+    match kind {
+        Epic1LinkKind::OnScreen => {
+            let n = repos
+                .setting(&ring_key(account))?
+                .and_then(|text| text.parse::<u32>().ok())
+                .filter(|n| *n < LinkMailbox::ON_SCREEN)
+                .unwrap_or(0);
+            let next = n
+                .saturating_add(1)
+                .checked_rem(LinkMailbox::ON_SCREEN)
+                .unwrap_or(0);
+            repos.put_setting(&ring_key(account), &next.to_string())?;
+            Ok(n)
+        }
+        Epic1LinkKind::Printed => (0..LinkMailbox::PRINTED)
+            .find(|n| {
+                repos
+                    .setting(&link_key(account, kind, *n))
+                    .is_ok_and(|state| state.is_none())
+            })
+            .ok_or(refused(Epic1Refusal::PrintedFull)),
+    }
 }
 
 fn link_key(account: AccountIndex, kind: Epic1LinkKind, n: u32) -> String {
@@ -501,21 +568,21 @@ fn read_link(
     Ok((link, usable))
 }
 
-/// The S1 in an envelope that came to a link mailbox, opened with the epic1 seal key `secret`:
-/// the slate's V3 JSON, the reply key and the reply mailbox.
+/// The S1 in an envelope that came to a link mailbox, opened with the first of the epic1 seal
+/// keys `keys`, `(index, key)`, that opens it: the index of the address it was sealed to, the
+/// slate's V3 JSON, the reply key and the reply mailbox.
 fn open_payment(
     network: Network,
     envelope: &[u8],
-    secret: &lepic_seal::EncSecretKey,
-) -> Result<OpenedPayment, ContactError> {
+    keys: &[(u32, lepic_seal::EncSecretKey)],
+) -> Result<(u32, OpenedPayment), ContactError> {
     let net = contact_network(network);
     let sealed = SealedEnvelope::decode(envelope, net).map_err(ContactError::Decode)?;
     if sealed.hint() != Hint::from_bytes([0; 8]) {
         return Err(refused(Epic1Refusal::HintNotZero));
     }
-    let opened = sealed
-        .open_tx(secret, KeyClass::Epic1)
-        .map_err(|_| ContactError::CannotOpen)?;
+    let (index, opened) = trial_open(keys, |key| sealed.open_tx(key, KeyClass::Epic1).ok())
+        .ok_or(ContactError::CannotOpen)?;
     if opened.sender.is_some() {
         return Err(refused(Epic1Refusal::Signed));
     }
@@ -531,13 +598,16 @@ fn open_payment(
     let slate_id = slate.id();
     let amount = slate.amount();
     let v3 = v3_of_native(network, slate, None).ok_or(ContactError::NotASlate)?;
-    Ok(OpenedPayment {
-        slate_id,
-        v3,
-        amount,
-        reply_key,
-        reply_mailbox,
-    })
+    Ok((
+        index,
+        OpenedPayment {
+            slate_id,
+            v3,
+            amount,
+            reply_key,
+            reply_mailbox,
+        },
+    ))
 }
 
 /// What an envelope at a link mailbox holds.
@@ -556,16 +626,116 @@ where
     S: StoreOpener + 'static,
     V: SecretVault + 'static,
 {
-    /// The epic1 address of `account`: its seal key and its epic1 proof key on the wallet's
-    /// network.
+    /// The first epic1 address of `account`, index 0: its seal key and its epic1 proof key on
+    /// the wallet's network.
     ///
     /// Fails with [`ContactError::Wallet`] when the wallet is locked.
     pub fn epic1_address(&self, account: AccountIndex) -> Result<Epic1Address, ContactError> {
+        self.address_at(account, 0)
+    }
+
+    /// The epic1 address `index` of `account`, issued or not.
+    fn address_at(&self, account: AccountIndex, index: u32) -> Result<Epic1Address, ContactError> {
         let network = self.wallet.config().network;
         let net = contact_network(network);
-        let seal = self.wallet.epic1_seal_key(account, net)?.public_key();
-        let proof = self.wallet.epic1_proof_key(account, net)?.verifying_key();
+        let seal = self
+            .wallet
+            .epic1_seal_key(account, net, index)?
+            .public_key();
+        let proof = self
+            .wallet
+            .epic1_proof_key(account, net, index)?
+            .verifying_key();
         Ok(Epic1Address::new(relay_network(network), proof, seal))
+    }
+
+    /// The epic1 address `index` of `account`. The index is one the account issued, or one a
+    /// restored wallet tries.
+    ///
+    /// Fails with [`ContactError::Epic1`] for an index the account did not issue, and
+    /// [`ContactError::Wallet`] when the wallet is locked.
+    pub async fn epic1_address_at(
+        &self,
+        account: AccountIndex,
+        index: u32,
+    ) -> Result<Epic1Address, ContactError> {
+        let session = self.wallet.session()?;
+        let top = self
+            .contact_work(move |_, _| {
+                Ok(session
+                    .store
+                    .read(|repos| epic1_index::highest_tried(repos, account))?)
+            })
+            .await?;
+        if index > top {
+            return Err(refused(Epic1Refusal::AddressNotIssued));
+        }
+        self.address_at(account, index)
+    }
+
+    /// Issues the next epic1 address of `account` and returns its index and the address. The
+    /// wallet tries its seal key on what it receives from then on. There is no limit; an app
+    /// that wants one sets it.
+    ///
+    /// Fails with [`ContactError::Epic1`] when the account issued its last index, and
+    /// [`ContactError::Wallet`] when the wallet is locked.
+    #[instrument(skip_all, fields(wallet = %self.wallet.config().name))]
+    pub async fn epic1_new_address(
+        &self,
+        account: AccountIndex,
+    ) -> Result<(u32, Epic1Address), ContactError> {
+        // Fails on a locked wallet before anything is stored.
+        self.address_at(account, 0)?;
+        let session = self.wallet.session()?;
+        let index = self
+            .contact_work(move |_, _| {
+                Ok(session
+                    .store
+                    .write(|repos| epic1_index::issue_next(repos, account))?)
+            })
+            .await?
+            .ok_or(refused(Epic1Refusal::NoAddressLeft))?;
+        info!(account = account.0, index, "epic1 address issued");
+        Ok((index, self.address_at(account, index)?))
+    }
+
+    /// The epic1 addresses `account` issued, at most `limit` from the index `from`.
+    ///
+    /// Fails with [`ContactError::Wallet`] when the wallet is locked.
+    pub async fn epic1_addresses(
+        &self,
+        account: AccountIndex,
+        from: u32,
+        limit: u32,
+    ) -> Result<Epic1Addresses, ContactError> {
+        let session = self.wallet.session()?;
+        let highest = self
+            .contact_work(move |_, _| {
+                Ok(session.store.read(|repos| {
+                    Ok::<_, lepic_store::StoreError>(
+                        epic1_index::highest_issued(repos, account)?
+                            .max(epic1_index::highest_seen(repos, account)?.unwrap_or(0)),
+                    )
+                })?)
+            })
+            .await?;
+        let mut addresses = Vec::new();
+        if from <= highest {
+            let end = from.saturating_add(limit.saturating_sub(1)).min(highest);
+            if limit > 0 {
+                for index in from..=end {
+                    addresses.push(Epic1AddressView {
+                        index,
+                        address: self.address_at(account, index)?.encode(),
+                    });
+                }
+            }
+        }
+        Ok(Epic1Addresses {
+            account,
+            highest,
+            addresses,
+        })
     }
 
     /// Issues a link to the epic1 address of the request's account. An on-screen link takes
@@ -605,7 +775,8 @@ where
                 .map_err(|_| refused(Epic1Refusal::LinkRelay))?;
             places.push((relay, port));
         }
-        let address = self.epic1_address(request.account)?;
+        let index = request.index;
+        let address = self.address_at(request.account, index)?;
         let account = request.account;
         let kind = request.kind;
         let now = self.wallet.ports().clock.now().as_second();
@@ -615,33 +786,16 @@ where
         let n = self
             .contact_work(move |_, _| {
                 session.store.write(|repos| {
-                    let n = match kind {
-                        Epic1LinkKind::OnScreen => {
-                            let n = repos
-                                .setting(&ring_key(account))?
-                                .and_then(|text| text.parse::<u32>().ok())
-                                .filter(|n| *n < LinkMailbox::ON_SCREEN)
-                                .unwrap_or(0);
-                            let next = n
-                                .saturating_add(1)
-                                .checked_rem(LinkMailbox::ON_SCREEN)
-                                .unwrap_or(0);
-                            repos.put_setting(&ring_key(account), &next.to_string())?;
-                            n
-                        }
-                        Epic1LinkKind::Printed => (0..LinkMailbox::PRINTED)
-                            .find(|n| {
-                                repos
-                                    .setting(&link_key(account, kind, *n))
-                                    .is_ok_and(|state| state.is_none())
-                            })
-                            .ok_or(refused(Epic1Refusal::PrintedFull))?,
-                    };
+                    if index > epic1_index::highest_tried(repos, account)? {
+                        return Err(refused(Epic1Refusal::AddressNotIssued));
+                    }
+                    let n = take_link_mailbox(repos, account, kind)?;
                     let state = LinkState {
                         issued_at: now,
                         used_at: None,
                         relays: stored_hosts,
                         amount: stored_amount,
+                        index: Some(index),
                     };
                     repos.put_setting(
                         &link_key(account, kind, n),
@@ -663,6 +817,7 @@ where
         link.message = request.message;
         info!(
             account = account.0,
+            index,
             kind = kind.key(),
             n,
             "epic1 link issued"
@@ -670,6 +825,7 @@ where
         Ok(Epic1LinkIssued {
             link: link.to_uri(),
             address: link.address.encode(),
+            index,
             kind,
             n,
         })
@@ -713,6 +869,7 @@ where
                 let state = from_text::<LinkState>(&text, "epic1 link").ok()?;
                 Some(Epic1LinkView {
                     account,
+                    index: state.index,
                     kind,
                     n,
                     issued_at: seconds(state.issued_at),
@@ -985,9 +1142,88 @@ where
         }
     }
 
-    /// Takes a payment that came to the link mailbox of `account`: an S1 sealed to the epic1
-    /// seal key, received with the epic1 proof key, its S2 sealed to the slate's reply key and
-    /// stored to post. Returns whether it was new; one taken before changes nothing. A payment
+    /// Opens a payment that came to a link mailbox of `account`. The seal key of the address
+    /// the link was issued for is tried first; when it does not open, or the wallet does not
+    /// know it, the seal keys of every address the account issued are tried, in
+    /// [`epic1_index::trial_order`]. Returns the address index it opened at.
+    async fn open_link_payment(
+        &self,
+        account: AccountIndex,
+        link: Option<(Epic1LinkKind, u32)>,
+        envelope: &[u8],
+    ) -> Result<(u32, OpenedPayment), ContactError> {
+        let network = self.wallet.config().network;
+        let net = contact_network(network);
+        let link_index = match link {
+            Some((kind, n)) => {
+                let session = self.wallet.session()?;
+                self.contact_work(move |_, _| {
+                    Ok(session.store.read(|repos| {
+                        Ok::<_, lepic_store::StoreError>(
+                            repos
+                                .setting(&link_key(account, kind, n))?
+                                .and_then(|text| from_text::<LinkState>(&text, "epic1 link").ok())
+                                .and_then(|state| state.index),
+                        )
+                    })?)
+                })
+                .await?
+            }
+            None => None,
+        };
+        let direct = match link_index {
+            Some(index) => {
+                let key = self.wallet.epic1_seal_key(account, net, index)?;
+                match open_payment(network, envelope, &[(index, key)]) {
+                    Err(ContactError::CannotOpen) => None,
+                    opened => Some(opened?),
+                }
+            }
+            None => None,
+        };
+        match direct {
+            Some(opened) => Ok(opened),
+            None => {
+                let keys = self.wallet.epic1_trial_keys(account, net).await?;
+                open_payment(network, envelope, &keys)
+            }
+        }
+    }
+
+    /// What the wallet knows for a payment of `slate_id` to a link mailbox of `account`:
+    /// whether it was taken before, the account's label, and the amount the link asks.
+    async fn payment_context(
+        &self,
+        account: AccountIndex,
+        link: Option<(Epic1LinkKind, u32)>,
+        slate_id: SlateId,
+    ) -> Result<(bool, Option<String>, Option<u64>), ContactError> {
+        let session = self.wallet.session()?;
+        self.contact_work(move |_, _| {
+            session.store.read(|repos| {
+                let taken = repos.setting(&answer_key(slate_id))?.is_some();
+                let asked = match link {
+                    Some((kind, n)) => repos
+                        .setting(&link_key(account, kind, n))?
+                        .and_then(|text| from_text::<LinkState>(&text, "epic1 link").ok())
+                        .and_then(|state| state.amount),
+                    None => None,
+                };
+                let label = repos
+                    .accounts()?
+                    .into_iter()
+                    .find(|record| record.index == account)
+                    .map(|record| record.label);
+                Ok::<_, ContactError>((taken, label, asked))
+            })
+        })
+        .await
+    }
+
+    /// Takes a payment that came to the link mailbox of `account`: an S1 sealed to the seal key
+    /// of one of its epic1 addresses, received with that address's proof key, its S2 sealed to
+    /// the slate's reply key and stored to post ([`Self::open_link_payment`] says which keys
+    /// are tried). Returns whether it was new; one taken before changes nothing. A payment
     /// whose amount is not the one the link asks is refused with
     /// [`Epic1Refusal::AmountMismatch`] before anything is received, and a notice that says so
     /// is sealed to its reply key and stored to post to its reply mailbox.
@@ -999,35 +1235,17 @@ where
     ) -> Result<bool, ContactError> {
         let network = self.wallet.config().network;
         let net = contact_network(network);
-        let secret = self.wallet.epic1_seal_key(account, net)?;
-        let OpenedPayment {
-            slate_id,
-            v3,
-            amount,
-            reply_key,
-            reply_mailbox,
-        } = open_payment(network, envelope, &secret)?;
-        let session = self.wallet.session()?;
-        let (taken, label, asked) = self
-            .contact_work(move |_, _| {
-                session.store.read(|repos| {
-                    let taken = repos.setting(&answer_key(slate_id))?.is_some();
-                    let asked = match link {
-                        Some((kind, n)) => repos
-                            .setting(&link_key(account, kind, n))?
-                            .and_then(|text| from_text::<LinkState>(&text, "epic1 link").ok())
-                            .and_then(|state| state.amount),
-                        None => None,
-                    };
-                    let label = repos
-                        .accounts()?
-                        .into_iter()
-                        .find(|record| record.index == account)
-                        .map(|record| record.label);
-                    Ok::<_, ContactError>((taken, label, asked))
-                })
-            })
-            .await?;
+        let (
+            index,
+            OpenedPayment {
+                slate_id,
+                v3,
+                amount,
+                reply_key,
+                reply_mailbox,
+            },
+        ) = self.open_link_payment(account, link, envelope).await?;
+        let (taken, label, asked) = self.payment_context(account, link, slate_id).await?;
         if taken {
             debug!(slate_id = %slate_id, "epic1 payment taken before");
             return Ok(false);
@@ -1052,7 +1270,7 @@ where
                 ReceiveRequest {
                     account: label,
                     message: None,
-                    proof_key: ProofKey::Epic1,
+                    proof_key: ProofKey::Epic1 { index },
                 },
             )
             .await
@@ -1093,7 +1311,7 @@ where
             })
         })
         .await?;
-        info!(tx_id = %received.tx_id, "epic1 payment taken");
+        info!(tx_id = %received.tx_id, index, "epic1 payment taken");
         Ok(true)
     }
 
@@ -1829,6 +2047,7 @@ where
                         used_at: Some(now),
                         relays: vec![host],
                         amount: None,
+                        index: None,
                     };
                     repos.put_setting(&key, &to_text(&state, "epic1 link")?)?;
                 }

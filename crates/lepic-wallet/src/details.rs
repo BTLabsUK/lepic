@@ -59,6 +59,9 @@ pub struct TransactionDetails {
     /// For a payment received at a listing address ([`Wallet::drain_epicbox_at`]), that
     /// listing. `None` for every other transaction.
     pub receive_listing: Option<crate::namespace::Listing>,
+    /// For a payment received at an epic1 address, the address index it came to. `None` for
+    /// every other transaction.
+    pub epic1_index: Option<u32>,
     /// The height from which the slate may no longer be completed, as its stored stages carry
     /// it. `None` when the slate sets none or no stage is stored.
     pub ttl_cutoff_height: Option<Height>,
@@ -465,6 +468,7 @@ fn details(
             .as_ref()
             .map(crate::namespace::Listing::from_stored)
             .transpose()?,
+        epic1_index: crate::epic1_index::index_of(repos, tx_id)?,
         ttl_cutoff_height,
         confirmed_at,
         messages,

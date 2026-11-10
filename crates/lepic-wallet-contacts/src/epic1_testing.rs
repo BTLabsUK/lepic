@@ -105,3 +105,10 @@ pub fn sealed_to_epic1<R: rand_core::CryptoRng>(
     )
     .ok()
 }
+
+/// The native body of the V3 JSON slate `v3` for `network`, as a payment to an epic1 address
+/// carries it: the body [`sealed_to_epic1`] seals.
+#[must_use]
+pub fn native_body_of(network: Network, v3: &[u8]) -> Option<Vec<u8>> {
+    super::native::native_body(network, v3).ok()
+}

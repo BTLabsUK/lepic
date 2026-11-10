@@ -2,7 +2,7 @@
   "meta": {
     "generator": "epic-pairing-kit",
     "kit_version": "0.5.0",
-    "git_commit": "67d94e7a4fe1bf619b16e8c7f44ef9ced2e51fef",
+    "git_commit": "ce1f4aae55f883c666257fc44d31feaf0ad8f4c4",
     "rfc": "0003-epictx",
     "file": "seal_keys.json"
   },
@@ -12,320 +12,528 @@
       "account": 0,
       "net": 0,
       "kind": 0,
+      "index": 0,
       "kind_name": "epic1",
-      "message": "6c657069632d77616c6c6574207365616c206b6579207631000000000000",
-      "seal_sk": "edf10d2739b825168379cc5d7c2c371cce7b630652aadc995da4028898000504",
-      "seal_pk": "b3ac7df9060224223d6c399a5d310c2a1b74e3969e014ad705b9d236e3953b3a"
+      "message": "6c657069632d77616c6c6574207365616c206b657920763100000000000000000000",
+      "seal_sk": "512c1f1dccead8acdbd23095bd8a615ea7074b7063c775dfbca19236481eff96",
+      "seal_pk": "c0e85ebba865561f31761519381603cbfb71a5c12e451ac359bdb4bc85f8e279"
+    },
+    {
+      "seed": "a55ac33c9669f00f123456789abcdef0",
+      "account": 0,
+      "net": 0,
+      "kind": 0,
+      "index": 1,
+      "kind_name": "epic1",
+      "message": "6c657069632d77616c6c6574207365616c206b657920763100000000000000000001",
+      "seal_sk": "bff12bf3f304b8fbbda57d7fa5f0ec33ab1332c43be67e0a4866479be73270cb",
+      "seal_pk": "58a8c9a30862c2e85972f57efbaa5cbd55a6a7af776458b5bf1da7e719594203"
+    },
+    {
+      "seed": "a55ac33c9669f00f123456789abcdef0",
+      "account": 0,
+      "net": 0,
+      "kind": 0,
+      "index": 4294967295,
+      "kind_name": "epic1",
+      "message": "6c657069632d77616c6c6574207365616c206b6579207631000000000000ffffffff",
+      "seal_sk": "ad8c6fbecfc4f1d5ec6c621a9a73f45ee5068433c09f78a4f4abaa3ff915eaf0",
+      "seal_pk": "46b1a64cc5d54c10b779cb39031067369c9ce7e222f819783078010db78dd425"
     },
     {
       "seed": "a55ac33c9669f00f123456789abcdef0",
       "account": 0,
       "net": 0,
       "kind": 1,
+      "index": 0,
       "kind_name": "onion",
-      "message": "6c657069632d77616c6c6574207365616c206b6579207631000000000001",
-      "seal_sk": "6e0bc2345cb76199385e6970831a2d0eb9ee09427e1739060cf37d6cbe437e26",
-      "seal_pk": "3016dd5070bb46e8a21c4ee04778d43e5da2a5d5ddc27cb12e08c45b006d0949"
+      "message": "6c657069632d77616c6c6574207365616c206b657920763100000000000100000000",
+      "seal_sk": "fe5807df4cf976d159348b2889037f43e28fdd081238c857a4496b289e9c4ea7",
+      "seal_pk": "6d7dad16daf0df32232f0db79e3ef2d4bc475d9f4f0e693ab7391e967e919b5d"
     },
     {
       "seed": "a55ac33c9669f00f123456789abcdef0",
       "account": 0,
       "net": 0,
       "kind": 2,
+      "index": 0,
       "kind_name": "web",
-      "message": "6c657069632d77616c6c6574207365616c206b6579207631000000000002",
-      "seal_sk": "bf15448ac4e83e252c724dcd560e276a0d1b08a6d0853a21a5a4fafb49d1e264",
-      "seal_pk": "c540807afaa9926487ac0b070513a95ba9e35d078f65544cc443ff595effb004"
+      "message": "6c657069632d77616c6c6574207365616c206b657920763100000000000200000000",
+      "seal_sk": "a3128f514a4c0b6c21048b2cc2981a6c9d232d41a197003eb45320a822d79a2c",
+      "seal_pk": "0c58633357a110567d38fb552e611c121d185647b3264d152c2317121d1fe721"
     },
     {
       "seed": "a55ac33c9669f00f123456789abcdef0",
       "account": 0,
       "net": 0,
       "kind": 3,
+      "index": 0,
       "kind_name": "epicbox",
-      "message": "6c657069632d77616c6c6574207365616c206b6579207631000000000003",
-      "seal_sk": "d8dd5d26ad89c7ef85d3f9ab3f036c89420d6725d114fc16f34549de375de97d",
-      "seal_pk": "db0931f808d543469d942572f2c66f9e23fef5daa265fa5fd59abea978ffb109"
+      "message": "6c657069632d77616c6c6574207365616c206b657920763100000000000300000000",
+      "seal_sk": "0d900c48f178bd676e26dc6a2901a9ab845892dc2b73581aa082cd5da960c252",
+      "seal_pk": "fb229956f0101d1e07ecac06663118a83bd479c2ef97ecd77a0e35dc4e66624d"
     },
     {
       "seed": "a55ac33c9669f00f123456789abcdef0",
       "account": 0,
       "net": 1,
       "kind": 0,
+      "index": 0,
       "kind_name": "epic1",
-      "message": "6c657069632d77616c6c6574207365616c206b6579207631000000000100",
-      "seal_sk": "2823fa3712bc3fcda98455aa14702b4eea934581ffc3473edb703c8045bddc58",
-      "seal_pk": "fcf36dd59fc7d99af7ede00dbb87501f9532634e9329a1dc2e38142755002906"
+      "message": "6c657069632d77616c6c6574207365616c206b657920763100000000010000000000",
+      "seal_sk": "146e79f551d089f37ac32f211df5d0cf584e782638352bc9a2c1f5f3d45a73d7",
+      "seal_pk": "65b650e5df60a83e1c625b8c57fe6c718c078e0a31eda2cb61b513a519972b71"
+    },
+    {
+      "seed": "a55ac33c9669f00f123456789abcdef0",
+      "account": 0,
+      "net": 1,
+      "kind": 0,
+      "index": 1,
+      "kind_name": "epic1",
+      "message": "6c657069632d77616c6c6574207365616c206b657920763100000000010000000001",
+      "seal_sk": "23d651d3dcf3df06ae5c37a1fe4c16346b149ee427a72a7b98d4462a071cf93b",
+      "seal_pk": "1d0a966bd902cc74d73f423c41135c402b0e872465da2bda89725b2d8e923517"
+    },
+    {
+      "seed": "a55ac33c9669f00f123456789abcdef0",
+      "account": 0,
+      "net": 1,
+      "kind": 0,
+      "index": 4294967295,
+      "kind_name": "epic1",
+      "message": "6c657069632d77616c6c6574207365616c206b6579207631000000000100ffffffff",
+      "seal_sk": "7af4266d13e2154409ba04ca94736b30935b1bf4a862a2068602b6a5ad0decca",
+      "seal_pk": "3defe7fa92d1bd201e5d35a50b36b5a47a5ed3f15a2d00420e72a0e876a9e201"
     },
     {
       "seed": "a55ac33c9669f00f123456789abcdef0",
       "account": 0,
       "net": 1,
       "kind": 1,
+      "index": 0,
       "kind_name": "onion",
-      "message": "6c657069632d77616c6c6574207365616c206b6579207631000000000101",
-      "seal_sk": "cce36939589541771f512c889256dc8997ee70aeb98a0ae470f1d418cb163aca",
-      "seal_pk": "7a601a6cce01aafff553c5bb5f84aecf084fd4444bdfc8c3587d16877ef51179"
+      "message": "6c657069632d77616c6c6574207365616c206b657920763100000000010100000000",
+      "seal_sk": "ce40caa800daf686daa9937f9320d547f1d57767051b8ceefa9505720a7e5896",
+      "seal_pk": "54a652b41544bf203436275f6de90bd584570fbaa0416b54ad677ed6c5c44f13"
     },
     {
       "seed": "a55ac33c9669f00f123456789abcdef0",
       "account": 0,
       "net": 1,
       "kind": 2,
+      "index": 0,
       "kind_name": "web",
-      "message": "6c657069632d77616c6c6574207365616c206b6579207631000000000102",
-      "seal_sk": "fd1f01cb66348f48ad0abd698919db45720ea8136bba5ffb8d227df4b0180948",
-      "seal_pk": "ba656b12139fa679cd2afba7e3fe822a289c4e351079f0b3c53d633c726a8737"
+      "message": "6c657069632d77616c6c6574207365616c206b657920763100000000010200000000",
+      "seal_sk": "064069063c2efd5236261935c1ccd3822e4088d1cad4821694b195e55f5a6ee5",
+      "seal_pk": "26ddc514e1f9911969887933ebf1f56c6e9b81d71fcc658def75d880591b8e04"
     },
     {
       "seed": "a55ac33c9669f00f123456789abcdef0",
       "account": 0,
       "net": 1,
       "kind": 3,
+      "index": 0,
       "kind_name": "epicbox",
-      "message": "6c657069632d77616c6c6574207365616c206b6579207631000000000103",
-      "seal_sk": "68074888a9e4939e5c3b3027be98fbc415d3562c34e663bdcb7563c35a2e749a",
-      "seal_pk": "813d77535508cc8e0872bc511cbd954d3aa10d85983b3cafc4d593468072950e"
+      "message": "6c657069632d77616c6c6574207365616c206b657920763100000000010300000000",
+      "seal_sk": "c5c1b25d9792c293bae227dc1f5d89eb8517e8f8d0c55f22f0a33a288c9585ff",
+      "seal_pk": "3db441bd45721bb80862d7dbea65e7b83d1610f454f1b027ed7db79e5984d05a"
     },
     {
       "seed": "a55ac33c9669f00f123456789abcdef0",
       "account": 7,
       "net": 0,
       "kind": 0,
+      "index": 0,
       "kind_name": "epic1",
-      "message": "6c657069632d77616c6c6574207365616c206b6579207631000000070000",
-      "seal_sk": "b8d27323992acb98dc6fd863d52cf1c2d80e54a26e3835b311011ae3ca27bf5c",
-      "seal_pk": "cc75d2b8ed784d2f0420589d69e4cb7570428df3dcc2ccaf6347b812793af93e"
+      "message": "6c657069632d77616c6c6574207365616c206b657920763100000007000000000000",
+      "seal_sk": "75008548c25573a1d29f3bf4c954fcf84df6a7c1699c70f603bf36bb4b511ab5",
+      "seal_pk": "309f34d01606e03d583fd115250b148f05cb8300599575ae076e9ff1b545dc38"
+    },
+    {
+      "seed": "a55ac33c9669f00f123456789abcdef0",
+      "account": 7,
+      "net": 0,
+      "kind": 0,
+      "index": 1,
+      "kind_name": "epic1",
+      "message": "6c657069632d77616c6c6574207365616c206b657920763100000007000000000001",
+      "seal_sk": "16575bf248dc3a6891b98c3e6ffd7f9e04f21b5650651781ec4193bb4d9902c2",
+      "seal_pk": "0aaa454a238371ed47758ee7750876427efb60953d0461e01782bd0989715059"
+    },
+    {
+      "seed": "a55ac33c9669f00f123456789abcdef0",
+      "account": 7,
+      "net": 0,
+      "kind": 0,
+      "index": 4294967295,
+      "kind_name": "epic1",
+      "message": "6c657069632d77616c6c6574207365616c206b6579207631000000070000ffffffff",
+      "seal_sk": "f94f10636f78324865b78336de6d30601e3373dcad155c47c5e1da654fc58466",
+      "seal_pk": "a7915dc3948f12ce14c80fb1250f4526230b7b56c65cad251848f6d519606f14"
     },
     {
       "seed": "a55ac33c9669f00f123456789abcdef0",
       "account": 7,
       "net": 0,
       "kind": 1,
+      "index": 0,
       "kind_name": "onion",
-      "message": "6c657069632d77616c6c6574207365616c206b6579207631000000070001",
-      "seal_sk": "1b16d09c46c81fe0465cc2bf06d8a57982d85c7baacb33a946dad836874cba2f",
-      "seal_pk": "bc55a6b795785e9d0be04dd405320236bdd43ce754a0944e76add3ddf6db5478"
+      "message": "6c657069632d77616c6c6574207365616c206b657920763100000007000100000000",
+      "seal_sk": "e5c2b53e38d72b8445311875a671843b18467ec1c9cfbf307f4e1e999f651161",
+      "seal_pk": "78319d93d7cc21dd797e843bdc240a3df0ed6b0fecd25f650b0c17f5e71f266b"
     },
     {
       "seed": "a55ac33c9669f00f123456789abcdef0",
       "account": 7,
       "net": 0,
       "kind": 2,
+      "index": 0,
       "kind_name": "web",
-      "message": "6c657069632d77616c6c6574207365616c206b6579207631000000070002",
-      "seal_sk": "4b306176c8cb1245b9dee0194d7dec64f807b414f9e63ae22b01c0177d81fff6",
-      "seal_pk": "af27c833463d4a6cebb25077178814dcb48684b2bec1af97633f7bab7a9d2e45"
+      "message": "6c657069632d77616c6c6574207365616c206b657920763100000007000200000000",
+      "seal_sk": "22b0820efe6e814c446592c565f08d130adec7d975201a17ad6638d693b99690",
+      "seal_pk": "f904f9ac88b9f3b6c885fa4e668ba300f3426db467a8673819f2c84d425d3d48"
     },
     {
       "seed": "a55ac33c9669f00f123456789abcdef0",
       "account": 7,
       "net": 0,
       "kind": 3,
+      "index": 0,
       "kind_name": "epicbox",
-      "message": "6c657069632d77616c6c6574207365616c206b6579207631000000070003",
-      "seal_sk": "22adb8a05c906fa09c7d86b5616c0d0eb4f3679e2f0d7631e17d7a2ac9884403",
-      "seal_pk": "2987609c6fd1c9f1a2bd51131f1e5d8f9acc91f1caa397fbb42be0660a2fd121"
+      "message": "6c657069632d77616c6c6574207365616c206b657920763100000007000300000000",
+      "seal_sk": "b9d80549994fc80b89e89f43f867068e3005bc6e0bd9465b082181a1763c030e",
+      "seal_pk": "624db0173406c290d46d55a1d69ee257f2ab80f66ebf6408c7fcf74e3d9a310f"
     },
     {
       "seed": "a55ac33c9669f00f123456789abcdef0",
       "account": 7,
       "net": 1,
       "kind": 0,
+      "index": 0,
       "kind_name": "epic1",
-      "message": "6c657069632d77616c6c6574207365616c206b6579207631000000070100",
-      "seal_sk": "757f2e0b58c974f158fe8f4ea3ff0fa7916e51a53b3b4b2ae74dbee18a7d213d",
-      "seal_pk": "14dbf68bd6cea5e4e09d0d280b0545dedc66cc39f136532ff9a4f1b3ae680448"
+      "message": "6c657069632d77616c6c6574207365616c206b657920763100000007010000000000",
+      "seal_sk": "684d7198415317a8797107d39370a5371f425f59e7326b4b5afa4bf98195419c",
+      "seal_pk": "883721fe7205f9167a4fd3d95a04f24cf5bcd89b900bada2e07ac3cb40efb11d"
+    },
+    {
+      "seed": "a55ac33c9669f00f123456789abcdef0",
+      "account": 7,
+      "net": 1,
+      "kind": 0,
+      "index": 1,
+      "kind_name": "epic1",
+      "message": "6c657069632d77616c6c6574207365616c206b657920763100000007010000000001",
+      "seal_sk": "f0c66e6b98347b049c24a0a90d260915cbabb96d55063231409f4b6ccd0da90f",
+      "seal_pk": "fbc6977e6c778e974bdc5cb45cf26bd5664c63da6f26b30cfb7731710102bf2a"
+    },
+    {
+      "seed": "a55ac33c9669f00f123456789abcdef0",
+      "account": 7,
+      "net": 1,
+      "kind": 0,
+      "index": 4294967295,
+      "kind_name": "epic1",
+      "message": "6c657069632d77616c6c6574207365616c206b6579207631000000070100ffffffff",
+      "seal_sk": "7aa71f170b3efe88f0177d487cc4a5508f042c2c4839b781f3f1357b28f5f023",
+      "seal_pk": "2e82aac59f8df11eb417a06f796e9ff4328a46bb6b5298eb428c12c8d0f4d957"
     },
     {
       "seed": "a55ac33c9669f00f123456789abcdef0",
       "account": 7,
       "net": 1,
       "kind": 1,
+      "index": 0,
       "kind_name": "onion",
-      "message": "6c657069632d77616c6c6574207365616c206b6579207631000000070101",
-      "seal_sk": "84e3bfde1caa55b67afbe177ecc4ccf4975a68871646a15e6a2c2e89a7ed719a",
-      "seal_pk": "965a701587e9b3616809dd48fb0882e63b3c56ff4578f794263e1fd185bdff3a"
+      "message": "6c657069632d77616c6c6574207365616c206b657920763100000007010100000000",
+      "seal_sk": "9d6bdb626919f506ea53291550d311e6943744c7242f43ea29a7f43f0a5ff889",
+      "seal_pk": "a4b0bc4c9c29b0256d178845b2baae3455726eeb57c9ff86f1d3e908ea4dc349"
     },
     {
       "seed": "a55ac33c9669f00f123456789abcdef0",
       "account": 7,
       "net": 1,
       "kind": 2,
+      "index": 0,
       "kind_name": "web",
-      "message": "6c657069632d77616c6c6574207365616c206b6579207631000000070102",
-      "seal_sk": "08bc77b84828b2008cfb8950c21fabbb5f8d22c260f43c87740181e63aecaf4f",
-      "seal_pk": "99e8894548b35edbac1a7db6e8ff6f91818360316315d906c520a9f98a299926"
+      "message": "6c657069632d77616c6c6574207365616c206b657920763100000007010200000000",
+      "seal_sk": "88aa76d7292eb70737aefd9f57a1c4f6226f6a72986bdbb026e5d275fcd3b384",
+      "seal_pk": "415e35a8629d276fafc54fba59834d42b7530855442577bc8c769150d9437b37"
     },
     {
       "seed": "a55ac33c9669f00f123456789abcdef0",
       "account": 7,
       "net": 1,
       "kind": 3,
+      "index": 0,
       "kind_name": "epicbox",
-      "message": "6c657069632d77616c6c6574207365616c206b6579207631000000070103",
-      "seal_sk": "71b7fdddaea1d39911481a01cc0cae901b6ece643b55d77b603db9a3087f4844",
-      "seal_pk": "166c7768e8ec8bd69931cb2607e1b024e9705706533ab9c417ec5847b936ae53"
+      "message": "6c657069632d77616c6c6574207365616c206b657920763100000007010300000000",
+      "seal_sk": "d83ed89c50ae83f00f2c20a2f66db60c6070d2f6980d5dc63fccdc012e22dfab",
+      "seal_pk": "5b6c0021a973d126d47d916784b4bad2aad51b18e762887914ca163cf131203e"
     },
     {
       "seed": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
       "account": 0,
       "net": 0,
       "kind": 0,
+      "index": 0,
       "kind_name": "epic1",
-      "message": "6c657069632d77616c6c6574207365616c206b6579207631000000000000",
-      "seal_sk": "11558e032f42d3439c672b31f09f9e3ce191e3d007d753a216a89146a5fba546",
-      "seal_pk": "801297f8aa4f6b6f4c95f0fe6ea4182c9f9967fca3212c7009af9e4235f93305"
+      "message": "6c657069632d77616c6c6574207365616c206b657920763100000000000000000000",
+      "seal_sk": "2b04151d152559f0af0e44ce2a39e2285810eec12d390d7434548961a6fc511a",
+      "seal_pk": "e647c9cb773961a3293e6b03278a610263c7bed8d707b8ecf52d5e0367fb335b"
+    },
+    {
+      "seed": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      "account": 0,
+      "net": 0,
+      "kind": 0,
+      "index": 1,
+      "kind_name": "epic1",
+      "message": "6c657069632d77616c6c6574207365616c206b657920763100000000000000000001",
+      "seal_sk": "ab16ff9c2742e499524d62e71883a959e752c2cf821917ba89e04b784e13c574",
+      "seal_pk": "1478fff5d54967c7b0d282ad352323ad69c2ec4e6cdbc2c06bf61d251aaaa818"
+    },
+    {
+      "seed": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      "account": 0,
+      "net": 0,
+      "kind": 0,
+      "index": 4294967295,
+      "kind_name": "epic1",
+      "message": "6c657069632d77616c6c6574207365616c206b6579207631000000000000ffffffff",
+      "seal_sk": "b0614e30e8cc0ad609f7529fbf7a01d5905e52dfbed48abe9650dfcb57b43521",
+      "seal_pk": "91991cc80eff60f10d3979072097d7dece9a9055925aaaab11ede558e0ef0668"
     },
     {
       "seed": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
       "account": 0,
       "net": 0,
       "kind": 1,
+      "index": 0,
       "kind_name": "onion",
-      "message": "6c657069632d77616c6c6574207365616c206b6579207631000000000001",
-      "seal_sk": "fe9aa698dba7b527bd17c67129dcca190a3c8087aa93127e207119d797136c82",
-      "seal_pk": "44468cf3acb593e2d0149c76f5d369fb3bf83564270f919cab3990caa54b306f"
+      "message": "6c657069632d77616c6c6574207365616c206b657920763100000000000100000000",
+      "seal_sk": "e5d597f20e0fd3813b8cebdabb9e8543b41010085ddd92c4bccd0de579d35259",
+      "seal_pk": "56253ebb477135ecb6af04a0193ef3abbad27a5017f3c596423321fdc0b0c97d"
     },
     {
       "seed": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
       "account": 0,
       "net": 0,
       "kind": 2,
+      "index": 0,
       "kind_name": "web",
-      "message": "6c657069632d77616c6c6574207365616c206b6579207631000000000002",
-      "seal_sk": "092d29b7118f8c609a9f9b77505226e403f07cb897dcb005566c69203cc0c0a2",
-      "seal_pk": "5087492faac28200e0fbd4962e631056b18d69a39cd5a01b8db678e8c6735139"
+      "message": "6c657069632d77616c6c6574207365616c206b657920763100000000000200000000",
+      "seal_sk": "3e5e57287a88ea810759fd738877e837b53bc70bd78115a1ff73b657d14d173d",
+      "seal_pk": "a5aea284cfe3f2dcc326733bca7ffc8140b72db6d60e69d233837bb7360e2437"
     },
     {
       "seed": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
       "account": 0,
       "net": 0,
       "kind": 3,
+      "index": 0,
       "kind_name": "epicbox",
-      "message": "6c657069632d77616c6c6574207365616c206b6579207631000000000003",
-      "seal_sk": "a06d57aaf0c0c75942d8e2fa8ee5635c625a96d6412911fea9daea393a9f9072",
-      "seal_pk": "fda7dbce7cee2f27d049e6f1efd0604335d6ee4c1ca24486e4b95a1c9bc1fa1b"
+      "message": "6c657069632d77616c6c6574207365616c206b657920763100000000000300000000",
+      "seal_sk": "45d1845c2f4f44f9011cf8f3abea92d13521bc94e1d22d027f713f531aa0eea3",
+      "seal_pk": "7c47056abc03983fb4fc7f42209b08480924d0ffb48077d3ca0301f694946e06"
     },
     {
       "seed": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
       "account": 0,
       "net": 1,
       "kind": 0,
+      "index": 0,
       "kind_name": "epic1",
-      "message": "6c657069632d77616c6c6574207365616c206b6579207631000000000100",
-      "seal_sk": "76d5617d96b89d5858be234a1dbda01218a50a832c07b62a44986fbd49e9e569",
-      "seal_pk": "373d0ede77b3b95025927a0f8491ba2a99d01255a2beecf81fba0ee9a395974f"
+      "message": "6c657069632d77616c6c6574207365616c206b657920763100000000010000000000",
+      "seal_sk": "90cf5e741ac692507f3a6e84875f50211fe7d8a76e4e3470f7f52164b76a2dd3",
+      "seal_pk": "f197d6f17be93fbc36bb807483ba187f436c7fa534dc153de2bbe2a5f73cd230"
+    },
+    {
+      "seed": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      "account": 0,
+      "net": 1,
+      "kind": 0,
+      "index": 1,
+      "kind_name": "epic1",
+      "message": "6c657069632d77616c6c6574207365616c206b657920763100000000010000000001",
+      "seal_sk": "35ec6b391d2a97566ec16eede94a31e1c1656296b1e526a9b23c4a60e92418cb",
+      "seal_pk": "9c40a09bdec075130e4773007b05c8c7bc62af2edb0f325869d6a6c1a3235325"
+    },
+    {
+      "seed": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      "account": 0,
+      "net": 1,
+      "kind": 0,
+      "index": 4294967295,
+      "kind_name": "epic1",
+      "message": "6c657069632d77616c6c6574207365616c206b6579207631000000000100ffffffff",
+      "seal_sk": "115011f0ff2ed48bad7d6010c0b12b0735c89be07536181b96ba5bdd72812ee6",
+      "seal_pk": "11bc324c884084723fa84ebab737e28d35a3588740b071e3c1e9d65b1f1f9e15"
     },
     {
       "seed": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
       "account": 0,
       "net": 1,
       "kind": 1,
+      "index": 0,
       "kind_name": "onion",
-      "message": "6c657069632d77616c6c6574207365616c206b6579207631000000000101",
-      "seal_sk": "c54ab21de8c3cff8ac29447570d8714eba0365ab4609ac3c3406454e649ecc14",
-      "seal_pk": "2a70aff49bf75aadd3028aa77d154f68284b8ec9eb224b04ea01f9e7fd48bb68"
+      "message": "6c657069632d77616c6c6574207365616c206b657920763100000000010100000000",
+      "seal_sk": "2f388cfdbf59e1428ad9fe33d4f95e4cdc84fc01db4787870d9c54e11d6778f9",
+      "seal_pk": "5680740edebb7de51c453de1878c4ac46f5b1d5c020ad30e4b5e60f235a18864"
     },
     {
       "seed": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
       "account": 0,
       "net": 1,
       "kind": 2,
+      "index": 0,
       "kind_name": "web",
-      "message": "6c657069632d77616c6c6574207365616c206b6579207631000000000102",
-      "seal_sk": "06aa45a9d24c169120ef8d131bdd39b6f59be0a4cefd45c22a80aaaa07dda295",
-      "seal_pk": "09d221f55db2544e16afd134ab8892be396193986804d87819780a5985d7e053"
+      "message": "6c657069632d77616c6c6574207365616c206b657920763100000000010200000000",
+      "seal_sk": "17dcdbec648797a3c372e18fb1372861d2209a28df1451e8da60b6ba3ae588a5",
+      "seal_pk": "43fc904f93e539fa061fc22d753bbc537b2609e3dcedb8ed14acc35dd5056a4e"
     },
     {
       "seed": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
       "account": 0,
       "net": 1,
       "kind": 3,
+      "index": 0,
       "kind_name": "epicbox",
-      "message": "6c657069632d77616c6c6574207365616c206b6579207631000000000103",
-      "seal_sk": "8f439536b70ae8cdab4ee53464e336dd73838ecc0b6932473d4e57d13857ee68",
-      "seal_pk": "5e3ac1a6aa2f6d597caa92e9766d51bb2008dd1b4ca163496b3cb3c5a2189c24"
+      "message": "6c657069632d77616c6c6574207365616c206b657920763100000000010300000000",
+      "seal_sk": "7ff55a924d525c9bd3e8869895bbda13b40b23adb0005dcb281ddaa934579f6c",
+      "seal_pk": "47318573ac6061b11186d35f2eec894258b9158024327590f31a32dac59b9368"
     },
     {
       "seed": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
       "account": 7,
       "net": 0,
       "kind": 0,
+      "index": 0,
       "kind_name": "epic1",
-      "message": "6c657069632d77616c6c6574207365616c206b6579207631000000070000",
-      "seal_sk": "691e2ee41f26726b50544f4bfcab77381ea7a0ee91362ec3464af2bf54b46bc5",
-      "seal_pk": "7c4dfbe6c6abb58fbc8fab419a72dc872f3aaadd66cf9967a2453668bb6be82b"
+      "message": "6c657069632d77616c6c6574207365616c206b657920763100000007000000000000",
+      "seal_sk": "8296775e6bb74a8be7d1ed815e5a8538c1ed03b62023838ee0b390af0dca6e7c",
+      "seal_pk": "0697f37dba2cb1de928e13b0f1276076cf9c1af146d1e9395f3f122296e3355b"
+    },
+    {
+      "seed": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      "account": 7,
+      "net": 0,
+      "kind": 0,
+      "index": 1,
+      "kind_name": "epic1",
+      "message": "6c657069632d77616c6c6574207365616c206b657920763100000007000000000001",
+      "seal_sk": "140d89ad07ea5705a8b4886cc2c5cca6af4489b2635ce7d91c5c374ac0ffc189",
+      "seal_pk": "8c4ba528feee34a379dfbf12e0a2156b94682b31de1f2aa4ca8d66d748ead33d"
+    },
+    {
+      "seed": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      "account": 7,
+      "net": 0,
+      "kind": 0,
+      "index": 4294967295,
+      "kind_name": "epic1",
+      "message": "6c657069632d77616c6c6574207365616c206b6579207631000000070000ffffffff",
+      "seal_sk": "2ea7d3fe98fd29e372f9b908066bdb30a90e3cd787f5c907a11f0baa1f377878",
+      "seal_pk": "3598c281b12e3843950cf3d9fb1370d511e5f73aa3055d4834d8b0f6c1a3da68"
     },
     {
       "seed": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
       "account": 7,
       "net": 0,
       "kind": 1,
+      "index": 0,
       "kind_name": "onion",
-      "message": "6c657069632d77616c6c6574207365616c206b6579207631000000070001",
-      "seal_sk": "4d3c9477efa4d813e0335dc9c42e88fd01516761567e5936b97b2d01b751245c",
-      "seal_pk": "f1d48bd71bed4af36a19da5150770ebe3cda4dae3226ac8fafdddd3e5f6e1569"
+      "message": "6c657069632d77616c6c6574207365616c206b657920763100000007000100000000",
+      "seal_sk": "c1d00f733ef144e433aacc717aae7c3d810c3d82ca4b30916d2a7441407c8f6d",
+      "seal_pk": "56eea7d82bcb126d17248d826fe09b3798b7afae10b8fe4740f5c711a9a4aa5c"
     },
     {
       "seed": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
       "account": 7,
       "net": 0,
       "kind": 2,
+      "index": 0,
       "kind_name": "web",
-      "message": "6c657069632d77616c6c6574207365616c206b6579207631000000070002",
-      "seal_sk": "0f936dd4a9552c26537cede47a82109b88d67e45483aaa66017a4c7bec0fbc6c",
-      "seal_pk": "56c816b46aad8e7e74efb47132f16229a6d36ada47028bd474f7a4ad3aa4d114"
+      "message": "6c657069632d77616c6c6574207365616c206b657920763100000007000200000000",
+      "seal_sk": "8cec53aa5e6e260f9a55c72e5aff4f60cc51b0b88f0587470f386fee3a6428da",
+      "seal_pk": "0d024eefeddc3cac50a1428832e3ea9d58723bcb246417b8cb705e5c28602003"
     },
     {
       "seed": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
       "account": 7,
       "net": 0,
       "kind": 3,
+      "index": 0,
       "kind_name": "epicbox",
-      "message": "6c657069632d77616c6c6574207365616c206b6579207631000000070003",
-      "seal_sk": "d71455983daa8f91037b3993328cf4e2917762c722063ee68a81c0797d417b91",
-      "seal_pk": "915cc9872741fad1a882c09c765495d960a0ff7f8bb443cce9136b70ed9a555f"
+      "message": "6c657069632d77616c6c6574207365616c206b657920763100000007000300000000",
+      "seal_sk": "1b5c6d7b6084b11672b9997d844c1b8a593489f2dd94bc3378dd7f9ce3495126",
+      "seal_pk": "037d6b1b13d1d007cfce1cab0582fc635ace1d63e171eeae10a333d55ecee04d"
     },
     {
       "seed": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
       "account": 7,
       "net": 1,
       "kind": 0,
+      "index": 0,
       "kind_name": "epic1",
-      "message": "6c657069632d77616c6c6574207365616c206b6579207631000000070100",
-      "seal_sk": "07d3e94959b38ac8be9eb0a979dc40a8dc8f0219b33f788bf763ebbe9a88918b",
-      "seal_pk": "bddc1a5334767c0e9350828a2fa234f8e2bc6883a8b98d7b14e861a8c662db40"
+      "message": "6c657069632d77616c6c6574207365616c206b657920763100000007010000000000",
+      "seal_sk": "9651171e1e6de0dd87f184d79d53446f81e0c3a17e7a1f103244f59cb8e4e581",
+      "seal_pk": "407b8845823ae5f446d5c6c9349a9eb474bb3bbb743edd88d1f499ff6c69cf66"
+    },
+    {
+      "seed": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      "account": 7,
+      "net": 1,
+      "kind": 0,
+      "index": 1,
+      "kind_name": "epic1",
+      "message": "6c657069632d77616c6c6574207365616c206b657920763100000007010000000001",
+      "seal_sk": "deb884877f1d8f110b531c2403d06af1be412d802b36725568bbf4bedf28c823",
+      "seal_pk": "1c50024514dd91ae859c11ab8f10e414eb40215e7413442750aba2d9f18fd123"
+    },
+    {
+      "seed": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      "account": 7,
+      "net": 1,
+      "kind": 0,
+      "index": 4294967295,
+      "kind_name": "epic1",
+      "message": "6c657069632d77616c6c6574207365616c206b6579207631000000070100ffffffff",
+      "seal_sk": "fd79a014796b88befca8676d1368c8addc7c8235cf3c29cd926e2ea084550c46",
+      "seal_pk": "b43800eb7e309e48e2caa4e8f7cb0d52c21a53e1a5b5bf543d83e725792d9122"
     },
     {
       "seed": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
       "account": 7,
       "net": 1,
       "kind": 1,
+      "index": 0,
       "kind_name": "onion",
-      "message": "6c657069632d77616c6c6574207365616c206b6579207631000000070101",
-      "seal_sk": "a4eace365d1d28e66ba688f7c301b13067cf7b50be2f6adc144944ec034a7ed6",
-      "seal_pk": "df81060ca501e94f14ac9f94949bdfa7a01db88074a2c584e9f4920bf331af32"
+      "message": "6c657069632d77616c6c6574207365616c206b657920763100000007010100000000",
+      "seal_sk": "5ac6c2f1282a15df2af4a69cfc173ba1e1d5430248d0cbc0e35d1766ce514efb",
+      "seal_pk": "c1b3d82076ba545f3a3c547d48f82f739f77734e419e29635fe7be5666df0a10"
     },
     {
       "seed": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
       "account": 7,
       "net": 1,
       "kind": 2,
+      "index": 0,
       "kind_name": "web",
-      "message": "6c657069632d77616c6c6574207365616c206b6579207631000000070102",
-      "seal_sk": "23327e01abda8c6b35f4f0a25f7adf126bc1ecfdbfd132ffaa2b9a900f9593d2",
-      "seal_pk": "4d8f00a95390fe7c74c9b2d883f1b0451593ac9d2e52aa932662c34d9740bf67"
+      "message": "6c657069632d77616c6c6574207365616c206b657920763100000007010200000000",
+      "seal_sk": "37241fe45ff34e683ff479836b2d128b379479b3eed4d5d7cef8f58828b6e964",
+      "seal_pk": "00b70de50b745d51a102548e247a6c79497f38c89719c5690759649c04940b1c"
     },
     {
       "seed": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
       "account": 7,
       "net": 1,
       "kind": 3,
+      "index": 0,
       "kind_name": "epicbox",
-      "message": "6c657069632d77616c6c6574207365616c206b6579207631000000070103",
-      "seal_sk": "882e9b7e4c33d1a02d9aa0caed4ff74e0d6b34fbb11b8cb8ee17a0663c1aa29c",
-      "seal_pk": "265c3d118fbfcce058d18b6c6c3d6bb6e8ba63ea2086268f3e26387874e20150"
+      "message": "6c657069632d77616c6c6574207365616c206b657920763100000007010300000000",
+      "seal_sk": "f1d1d5c92d4c3eb69a808d8e6866eb702c2c895acc7051c7ff2db130a443bbef",
+      "seal_pk": "e31b0caba9c6fb23cd7c46911204cf97fe8cb8ece47c1828edc6f4a4961acd00"
     }
   ]
 }

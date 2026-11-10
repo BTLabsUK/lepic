@@ -17,7 +17,7 @@
 //! - listing signature: ECDSA by the listing key over SHA-256(SHA-256(tag) || SHA-256(tag) ||
 //!   len(domain) (u8) || domain || message), tag "lepic/listing-signature/v1";
 //! - epic1 proof key: Ed25519 from BLAKE2b(key = seed, "lepic-wallet epic1 proof key v1" ||
-//!   account (u32 BE) || net);
+//!   account (u32 BE) || net || index (u32 BE));
 //! - reply mailbox, post key and link mailbox: BLAKE2b(key = seed, label || account (u32 BE) ||
 //!   net || slate_id (16) || counter), with `role` before the counter for a post key, and
 //!   `kind || n (u32 BE)` in place of the slate id for a link mailbox; the counter from 0 up to the
@@ -568,6 +568,7 @@ struct Epic1ProofInputs {
 #[derive(Serialize)]
 struct Epic1ProofCase {
     account: u32,
+    index: u32,
     network: &'static str,
     net: u8,
     ed25519_seed: String,
@@ -580,25 +581,29 @@ fn epic1_proof_keys(pins: &KeysPins<'_>) -> Result<Vec<Rendered>, Error> {
         let mut cases = Vec::new();
         for account in ACCOUNTS {
             for network in Network::ALL {
-                let ed_seed = keyed(
-                    seed.entropy,
-                    &[
-                        EPIC1_PROOF_KEY_LABEL,
-                        &account.to_be_bytes(),
-                        &[net_byte(network)],
-                    ],
-                );
-                let pair =
-                    signature::Ed25519KeyPair::from_seed_unchecked(&ed_seed).map_err(|_| {
-                        Error::reference("epic1 proof key")(Inconsistent("key rejected"))
-                    })?;
-                cases.push(Epic1ProofCase {
-                    account,
-                    network: network.name(),
-                    net: net_byte(network),
-                    ed25519_seed: hex(ed_seed),
-                    public_key: hex(signature::KeyPair::public_key(&pair).as_ref()),
-                });
+                for index in [0u32, 1, u32::MAX] {
+                    let ed_seed = keyed(
+                        seed.entropy,
+                        &[
+                            EPIC1_PROOF_KEY_LABEL,
+                            &account.to_be_bytes(),
+                            &[net_byte(network)],
+                            &index.to_be_bytes(),
+                        ],
+                    );
+                    let pair = signature::Ed25519KeyPair::from_seed_unchecked(&ed_seed)
+                        .map_err(|_| {
+                            Error::reference("epic1 proof key")(Inconsistent("key rejected"))
+                        })?;
+                    cases.push(Epic1ProofCase {
+                        account,
+                        index,
+                        network: network.name(),
+                        net: net_byte(network),
+                        ed25519_seed: hex(ed_seed),
+                        public_key: hex(signature::KeyPair::public_key(&pair).as_ref()),
+                    });
+                }
             }
         }
         let inputs = Epic1ProofInputs {

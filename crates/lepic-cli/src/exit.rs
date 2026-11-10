@@ -574,9 +574,9 @@ fn contact_kind(error: &ContactError) -> ErrorKind {
         ContactError::InPerson(InPersonRefusal::TtlTooShort { .. }) => ErrorKind::Usage,
         ContactError::InPerson(_) => ErrorKind::Rejected,
         ContactError::Epic1Link(_) => ErrorKind::Usage,
-        ContactError::Epic1(Epic1Refusal::NotIssued | Epic1Refusal::NoPayment) => {
-            ErrorKind::NotFound
-        }
+        ContactError::Epic1(
+            Epic1Refusal::NotIssued | Epic1Refusal::NoPayment | Epic1Refusal::AddressNotIssued,
+        ) => ErrorKind::NotFound,
         ContactError::Epic1(_) => ErrorKind::Rejected,
         ContactError::Post(_) => ErrorKind::Transport,
         ContactError::NotCancelled { cause, .. } => contact_kind(cause),

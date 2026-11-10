@@ -1976,7 +1976,9 @@ fn peer_endpoint<N: NodeApi + 'static>(
     let key = opened.wallet.listener_seal_key(kind)?;
     let seal = *key.public_key().as_bytes();
     let network = opened.wallet.config().network;
-    let handler = DirectHandler::new(host, method, proof_key, key, network, system_rng()?);
+    let epic1 = Arc::clone(&host) as Arc<dyn lepic_wallet_contacts::Epic1Keys>;
+    let handler =
+        DirectHandler::new(host, method, proof_key, key, network, system_rng()?).with_epic1(epic1);
     Ok(Some(Arc::new(PeerEndpoint::new(
         Arc::new(handler),
         seal,
@@ -2041,6 +2043,23 @@ impl<N: NodeApi + 'static> ReceiveHost for CliHost<N> {
 
     fn refused(&self, _refusal: Refusal) {
         self.counts.count_refused();
+    }
+}
+
+impl<N: NodeApi + 'static> lepic_wallet_contacts::Epic1Keys for CliHost<N> {
+    fn epic1_keys(&self) -> BoxFuture<'_, Vec<lepic_wallet::Epic1AccountKeys>> {
+        Box::pin(async move {
+            match self.opened.wallet.epic1_trial_keys_all().await {
+                Ok(keys) => keys,
+                Err(error) => {
+                    tracing::warn!(
+                        error = %lepic_telemetry::ErrorChain(&error),
+                        "epic1 keys not read"
+                    );
+                    Vec::new()
+                }
+            }
+        })
     }
 }
 
@@ -2718,6 +2737,7 @@ fn show(repos: &dyn Repositories, details: &TransactionDetails) -> Result<TxRepo
             service_key: listing.service_key().to_hex(),
             generation: listing.generation(),
         }),
+        epic1_index: details.epic1_index,
         messages: Some(
             details
                 .messages
@@ -2815,6 +2835,7 @@ fn tx_report(tx: &StoredTransaction, stages: Option<Vec<String>>) -> TxReport {
         receiver_declined_at: None,
         payer_declined_at: None,
         receive_listing: None,
+        epic1_index: None,
     }
 }
 

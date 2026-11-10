@@ -166,6 +166,8 @@ api!(
     in_person_answers,
     in_person_finalize,
     epic1_address,
+    epic1_new_address,
+    epic1_addresses,
     epic1_link,
     epic1_links,
     epic1_retire,

@@ -88,9 +88,10 @@ pub enum ProofKey {
     Payments,
     /// The wallet's onion key ([`Wallet::onion_key`]): for slates that came to the onion.
     Onion,
-    /// The epic1 proof key of the receiving account on the slate's network
-    /// ([`Wallet::epic1_proof_key`]): for slates that came to the account's epic1 address.
-    Epic1,
+    /// The epic1 proof key of the receiving account on the slate's network at the address
+    /// index the slate came to ([`Wallet::epic1_proof_key`]): for slates that came to one of
+    /// the account's epic1 addresses. The index is stored with the transaction.
+    Epic1 { index: u32 },
 }
 
 /// A received slate: the stored transaction and the S2 reply.
@@ -428,6 +429,9 @@ fn store_reply<N, S: StoreOpener, V>(
         if let Some(listing) = proposal.listing {
             repos.set_receive_listing(tx_id, &listing.to_stored())?;
         }
+        if let ProofKey::Epic1 { index } = request.proof_key {
+            crate::epic1_index::record_payment(repos, tx_id, response.account, index)?;
+        }
         Ok(Answer::Stored {
             received: Received {
                 tx_id,
@@ -593,13 +597,14 @@ fn respond<D>(
         ProofKey::Onion => Some(SigningKey::from_bytes(&*namespace::onion_seed(
             &session.seed,
         )?)),
-        ProofKey::Epic1 => Some(namespace::epic1_proof_key(
+        ProofKey::Epic1 { index } => Some(namespace::epic1_proof_key(
             &session.seed,
             account.index.0,
             match proposal.network {
                 Network::Mainnet => lepic_contact::Network::Mainnet,
                 Network::Floonet => lepic_contact::Network::Floonet,
             },
+            index,
         )?),
     };
     build_response(

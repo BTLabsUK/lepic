@@ -17,10 +17,27 @@ use crate::cli::{Epic1Args, Epic1Command, Epic1LinkArgs, Epic1PayArgs, EpictxCom
 use crate::exit::CliError;
 use crate::host::Host;
 use crate::output::{
-    Epic1AddressReport, Epic1AnswerReport, Epic1AnswersReport, Epic1AttemptReport,
-    Epic1LinkEntryReport, Epic1LinkReport, Epic1LinksReport, Epic1PaidReport, Epic1PostReport,
-    Epic1ReadReport, Epic1RestoreReport, Epic1RetireReport, EpictxOpenReport, Report,
+    Epic1AddressEntryReport, Epic1AddressReport, Epic1AddressesReport, Epic1AnswerReport,
+    Epic1AnswersReport, Epic1AttemptReport, Epic1LinkEntryReport, Epic1LinkReport,
+    Epic1LinksReport, Epic1PaidReport, Epic1PostReport, Epic1ReadReport, Epic1RestoreReport,
+    Epic1RetireReport, EpictxOpenReport, Report,
 };
+
+/// The report of `epic1 addresses` for the account labelled `account`.
+fn addresses_report(account: String, page: lepic_wallet_contacts::Epic1Addresses) -> Report {
+    Report::Epic1Addresses(Epic1AddressesReport {
+        account,
+        highest: page.highest,
+        addresses: page
+            .addresses
+            .into_iter()
+            .map(|view| Epic1AddressEntryReport {
+                index: view.index,
+                address: view.address,
+            })
+            .collect(),
+    })
+}
 
 impl<H: Host> Run<'_, H> {
     pub(super) async fn epic1(&mut self, args: Epic1Args) -> Result<Report, CliError> {
@@ -34,12 +51,28 @@ impl<H: Host> Run<'_, H> {
         );
         let book = wallet.contact_book();
         Ok(match args.command {
-            Epic1Command::Address(account) => {
-                let index = wallet.account(&account.account)?.index;
+            Epic1Command::Address(args) => {
+                let account = wallet.account(&args.account.account)?.index;
+                let address = book.epic1_address_at(account, args.index).await?;
                 Report::Epic1Address(Epic1AddressReport {
-                    account: account.account,
-                    address: book.epic1_address(index)?.encode(),
+                    account: args.account.account,
+                    index: args.index,
+                    address: address.encode(),
                 })
+            }
+            Epic1Command::NewAddress(args) => {
+                let account = wallet.account(&args.account)?.index;
+                let (index, address) = book.epic1_new_address(account).await?;
+                Report::Epic1Address(Epic1AddressReport {
+                    account: args.account,
+                    index,
+                    address: address.encode(),
+                })
+            }
+            Epic1Command::Addresses(args) => {
+                let account = wallet.account(&args.account.account)?.index;
+                let page = book.epic1_addresses(account, args.from, args.limit).await?;
+                addresses_report(args.account.account, page)
             }
             Epic1Command::Link(args) => link(&opened, &relays, args).await?,
             Epic1Command::Retire(args) => {
@@ -130,6 +163,7 @@ async fn link<N: lepic_node::NodeApi + 'static>(
 ) -> Result<Report, CliError> {
     let Epic1LinkArgs {
         account,
+        index,
         amount,
         message,
         printed,
@@ -138,6 +172,7 @@ async fn link<N: lepic_node::NodeApi + 'static>(
     let wallet = &opened.wallet;
     let request = Epic1LinkRequest {
         account: wallet.account(&account.account)?.index,
+        index,
         amount: amount.as_deref().map(parse_amount).transpose()?,
         message: message.message,
         kind: if printed {
@@ -151,6 +186,7 @@ async fn link<N: lepic_node::NodeApi + 'static>(
     Ok(Report::Epic1Link(Epic1LinkReport {
         link: issued.link,
         address: issued.address,
+        index: issued.index,
         kind: kind_name(issued.kind),
         n: issued.n,
     }))
@@ -216,6 +252,7 @@ fn kind_name(kind: Epic1LinkKind) -> &'static str {
 fn link_entry(view: Epic1LinkView) -> Epic1LinkEntryReport {
     Epic1LinkEntryReport {
         account: view.account.0,
+        index: view.index,
         kind: kind_name(view.kind),
         n: view.n,
         issued_at: view.issued_at.to_string(),
@@ -281,7 +318,14 @@ mod tests {
         fields.sort_unstable();
         assert_eq!(
             fields,
-            ["address", "attempts", "posted", "posted_ok", "slate_id", "tx_id"]
+            [
+                "address",
+                "attempts",
+                "posted",
+                "posted_ok",
+                "slate_id",
+                "tx_id"
+            ]
         );
     }
 }

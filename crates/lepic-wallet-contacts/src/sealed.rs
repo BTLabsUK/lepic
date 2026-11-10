@@ -15,7 +15,7 @@ use lepic_contact::{
 };
 use lepic_native_slate::{NativeSlate, SlateView};
 use lepic_node::{NodeApi, Propagation};
-use lepic_seal::{ArmorMarker, ClassifyError, dearmor_marked};
+use lepic_seal::{ArmorMarker, ClassifyError, KeyClass, TxContent, TxKey, dearmor_marked, seal_tx};
 use lepic_slate::codec::{MediaType, WireSlate};
 use lepic_slate::stage::Stage;
 use lepic_store::{
@@ -27,14 +27,16 @@ use lepic_transport::transport::Location;
 use tracing::{info, instrument, warn};
 use uuid::Uuid;
 
+use super::epic1::Epic1Refusal;
 use super::keys::{contact_keys, contact_network, enc_secret, signing_key};
 use super::{ContactError, LockedRng};
 use crate::{ContactBook, file_method};
 use lepic_wallet::SlateFormat;
+use lepic_wallet::epic1_index::trial_open;
 use lepic_wallet::finalize::Finalized;
 use lepic_wallet::invoice::{PaidInvoice, PayRequest};
 use lepic_wallet::ports::{SecretVault, StoreOpener};
-use lepic_wallet::receive::{ReceiveRequest, Received, legacy_codecs};
+use lepic_wallet::receive::{ProofKey, ReceiveRequest, Received, legacy_codecs};
 use lepic_wallet::send::{Delivery, SendError, SendRequest, SentSlate};
 
 /// A contact with no envelope opened for this long is shown as lapsed (RFC 0002 9.4).
@@ -97,6 +99,35 @@ pub struct SealedReceived {
 pub struct SealedPayment {
     pub paid: PaidInvoice,
     pub answer: SealedAnswer,
+}
+
+/// What sealed text opened to.
+struct Envelope {
+    content: Content,
+    /// Whether the body is a `lepic.v1` slate.
+    native: bool,
+    /// The contact whose key signed it.
+    contact: Option<ContactId>,
+    /// The epic1 address it was sealed to, when it was.
+    epic1: Option<Epic1Opening>,
+}
+
+/// The epic1 address an envelope was sealed to.
+#[derive(Debug, Clone)]
+struct Epic1Opening {
+    /// The label of the address's account.
+    label: String,
+    /// The index of the address in its account.
+    index: u32,
+}
+
+/// What [`ContactBook::open_text`] opened.
+struct TextOpened {
+    slate: SealedSlate,
+    native: bool,
+    epic1: Option<Epic1Opening>,
+    /// The key the slate's answer is sealed to, as the envelope named it.
+    reply_key: Option<EncPublicKey>,
 }
 
 /// The key a sealed text may open with.
@@ -484,7 +515,7 @@ where
     /// that holds no slate.
     #[instrument(skip_all, fields(wallet = %self.wallet.config().name))]
     pub async fn sealed_open(&self, text: &str) -> Result<SealedSlate, ContactError> {
-        Ok(self.open_text(text).await?.0)
+        Ok(self.open_text(text).await?.slate)
     }
 
     /// Opens sealed text with this wallet's keys and shows its slate as it arrived: the 1:1
@@ -495,7 +526,12 @@ where
     #[instrument(skip_all, fields(wallet = %self.wallet.config().name))]
     pub async fn epictx_open(&self, text: &str) -> Result<EpictxView, ContactError> {
         let network = self.wallet.config().network;
-        let (content, native, contact) = self.open_envelope(text).await?;
+        let Envelope {
+            content,
+            native,
+            contact,
+            ..
+        } = self.open_envelope(text).await?;
         if content.kind != MessageType::Slate {
             return Err(ContactError::NotASlate);
         }
@@ -520,11 +556,11 @@ where
     }
 
     /// The content of sealed text opened with this wallet's keys, whether its body is a
-    /// `lepic.v1` slate, and the contact whose key signed it.
-    async fn open_envelope(
-        &self,
-        text: &str,
-    ) -> Result<(Content, bool, Option<ContactId>), ContactError> {
+    /// `lepic.v1` slate, and the contact whose key signed it. An envelope with a zero hint that
+    /// no other key opens is tried with the seal keys of the wallet's epic1 addresses
+    /// ([`lepic_wallet::Wallet::epic1_trial_keys_all`]): nothing in it says which address it was
+    /// sealed to.
+    async fn open_envelope(&self, text: &str) -> Result<Envelope, ContactError> {
         let network = self.wallet.config().network;
         let net = contact_network(network);
         payment_file(text.as_bytes())?;
@@ -539,8 +575,13 @@ where
                     .store
                     .read(|repos| find_opening(repos, &session.keychain, network, &hint, &enc))
             })
-            .await?
-            .ok_or(ContactError::NotForThisInstall)?;
+            .await?;
+        let Some(opening) = opening else {
+            if hint != Hint::from_bytes([0; 8]) {
+                return Err(ContactError::NotForThisInstall);
+            }
+            return self.open_epic1(&sealed).await;
+        };
         let (opened, contact) = match opening {
             Opening::Contact { key, records } => {
                 let opened =
@@ -569,13 +610,54 @@ where
             }
         };
         let ((Opened { content, .. }, native), contact) = (opened, contact);
-        Ok((content, native, contact))
+        Ok(Envelope {
+            content,
+            native,
+            contact,
+            epic1: None,
+        })
     }
 
-    /// [`Wallet::sealed_open`], and whether the slate came native.
-    async fn open_text(&self, text: &str) -> Result<(SealedSlate, bool), ContactError> {
+    /// `sealed`, a zero-hint envelope, opened with the seal key of one of the wallet's epic1
+    /// addresses. A payment to an epic1 is anonymous: a signed one is refused.
+    async fn open_epic1(&self, sealed: &SealedEnvelope<'_>) -> Result<Envelope, ContactError> {
+        for account in self.wallet.epic1_trial_keys_all().await? {
+            let Some((index, opened)) = trial_open(&account.keys, |key| {
+                sealed.open_tx(key, KeyClass::Epic1).ok()
+            }) else {
+                continue;
+            };
+            if opened.sender.is_some() {
+                return Err(ContactError::Epic1(Epic1Refusal::Signed));
+            }
+            info!(
+                account = account.account.0,
+                index, "sealed text opened at an epic1 address"
+            );
+            return Ok(Envelope {
+                content: super::native::opened_of(opened).content,
+                native: true,
+                contact: None,
+                epic1: Some(Epic1Opening {
+                    label: account.label,
+                    index,
+                }),
+            });
+        }
+        Err(ContactError::NotForThisInstall)
+    }
+
+    /// [`Wallet::sealed_open`], whether the slate came native, the epic1 address it was sealed
+    /// to, and the reply key it names.
+    async fn open_text(&self, text: &str) -> Result<TextOpened, ContactError> {
         let network = self.wallet.config().network;
-        let (content, native, contact) = self.open_envelope(text).await?;
+        let Envelope {
+            content,
+            native,
+            contact,
+            epic1,
+        } = self.open_envelope(text).await?;
+        let reply_key = content.reply_key;
         if content.kind != MessageType::Slate {
             return Err(ContactError::NotASlate);
         }
@@ -617,30 +699,58 @@ where
             expires: content.expires,
             messages: lepic_wallet::details::verified_messages(&slate),
         };
-        Ok((opened, native))
+        Ok(TextOpened {
+            slate: opened,
+            native,
+            epic1,
+            reply_key,
+        })
     }
 
     /// Receives the S1 in sealed text as [`Wallet::receive`] receives one by file, and answers
     /// on the same channel (RFC 0002 9.2): sealed and signed to the contact that signed it, or
     /// sealed anonymously to its marker's reply key, or else plain.
     ///
-    /// Fails as [`Wallet::sealed_open`] does, with [`ContactError::Stage`] for another stage, and
-    /// with [`ContactError::Receive`] as [`Wallet::receive`] does.
+    /// An S1 sealed to one of the wallet's epic1 addresses is received into that address's
+    /// account with its proof key, whatever account `request` names, and its S2 is sealed to
+    /// the reply key the envelope names.
+    ///
+    /// Fails as [`Wallet::sealed_open`] does, with [`ContactError::Stage`] for another stage,
+    /// [`ContactError::Epic1`] for a payment to an epic1 that names no reply key, and with
+    /// [`ContactError::Receive`] as [`Wallet::receive`] does.
     #[instrument(skip_all, fields(wallet = %self.wallet.config().name))]
     pub async fn sealed_receive(
         &self,
         text: &str,
-        request: ReceiveRequest,
+        mut request: ReceiveRequest,
     ) -> Result<SealedReceived, ContactError> {
-        let (opened, native) = self.open_text(text).await?;
+        let TextOpened {
+            slate: opened,
+            native,
+            epic1,
+            reply_key,
+        } = self.open_text(text).await?;
         if opened.stage != Stage::S1 {
             return Err(ContactError::Stage(opened.stage));
         }
+        let epic1_reply = match epic1 {
+            Some(epic1) => {
+                let reply_key = reply_key.ok_or(ContactError::Epic1(Epic1Refusal::NoReplyKey))?;
+                request.account = Some(epic1.label);
+                request.proof_key = ProofKey::Epic1 { index: epic1.index };
+                Some(reply_key)
+            }
+            None => None,
+        };
         let received = self
             .wallet
             .receive(&file_method(), &opened.wire, request)
             .await
             .map_err(ContactError::Receive)?;
+        if let Some(reply_key) = epic1_reply {
+            let answer = self.epic1_answer(&received.reply, &reply_key)?;
+            return Ok(SealedReceived { received, answer });
+        }
         let answer = self
             .sealed_answer(
                 opened.contact_id,
@@ -665,7 +775,11 @@ where
         text: &str,
         request: PayRequest,
     ) -> Result<SealedPayment, ContactError> {
-        let (opened, native) = self.open_text(text).await?;
+        let TextOpened {
+            slate: opened,
+            native,
+            ..
+        } = self.open_text(text).await?;
         if opened.stage != Stage::I1 {
             return Err(ContactError::Stage(opened.stage));
         }
@@ -842,6 +956,29 @@ where
             Some(armored) => SealedAnswer::Sealed(armored),
             None => SealedAnswer::Plain(reply.clone()),
         })
+    }
+
+    /// `reply`, the S2 for a payment to an epic1 address, as `lepic.v1` sealed anonymously to
+    /// `reply_key`, the key the payment named.
+    fn epic1_answer(
+        &self,
+        reply: &WireSlate,
+        reply_key: &EncPublicKey,
+    ) -> Result<SealedAnswer, ContactError> {
+        let network = self.wallet.config().network;
+        let body = super::native::native_body(network, reply.as_bytes())?;
+        let envelope = seal_tx(
+            contact_network(network),
+            reply_key,
+            TxKey::Seal(HintRule::ReplyKey),
+            &TxContent::new(body),
+            None,
+            &mut LockedRng(&mut **self.wallet.ports().rng.lock()),
+        )
+        .map_err(ContactError::Encode)?;
+        Ok(SealedAnswer::Sealed(super::native::armor_slate(
+            &envelope, true,
+        )))
     }
 
     /// `reply` sealed anonymously to the reply key in the marker of `incoming`, if it has one.

@@ -1088,7 +1088,7 @@
         "tags": [
           "epic1"
         ],
-        "summary": "The epic1 address of an account",
+        "summary": "An epic1 address of an account: its first one, or the one at `index`",
         "operationId": "epic1_address",
         "parameters": [
           {
@@ -1099,8 +1099,121 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "name": "index",
+            "in": "query",
+            "description": "The address's number, issued or paid; 0, the first address, when absent",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
           }
         ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Epic1AddressReport"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error, as RFC 9457 problem details",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/epic1/addresses": {
+      "get": {
+        "tags": [
+          "epic1"
+        ],
+        "summary": "The epic1 addresses an account issued, from the lowest number",
+        "operationId": "epic1_addresses",
+        "parameters": [
+          {
+            "name": "account",
+            "in": "query",
+            "description": "Account label; the default account when absent",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "description": "The first number listed; 0 when absent",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "How many addresses to list; 100 when absent",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Epic1AddressesReport"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error, as RFC 9457 problem details",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "epic1"
+        ],
+        "summary": "Issue the next epic1 address of an account",
+        "description": "Payments to every issued address come to the account; a received transaction shows the\naddress's number.",
+        "operationId": "epic1_new_address",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Epic1NewAddressBody"
+              }
+            }
+          },
+          "required": true
+        },
         "responses": {
           "200": {
             "content": {
@@ -4223,11 +4336,30 @@
         },
         "additionalProperties": false
       },
+      "Epic1AddressEntryReport": {
+        "type": "object",
+        "description": "One address of `epic1 addresses`.",
+        "required": [
+          "index",
+          "address"
+        ],
+        "properties": {
+          "address": {
+            "type": "string"
+          },
+          "index": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          }
+        }
+      },
       "Epic1AddressReport": {
         "type": "object",
         "description": "The epic1 address of an account, from `epic1 address`.",
         "required": [
           "account",
+          "index",
           "address"
         ],
         "properties": {
@@ -4236,6 +4368,39 @@
           },
           "address": {
             "type": "string"
+          },
+          "index": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The address's number in the account; 0 is its first address.",
+            "minimum": 0
+          }
+        }
+      },
+      "Epic1AddressesReport": {
+        "type": "object",
+        "description": "The epic1 addresses an account issued, from `epic1 addresses`.",
+        "required": [
+          "account",
+          "highest",
+          "addresses"
+        ],
+        "properties": {
+          "account": {
+            "type": "string"
+          },
+          "addresses": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Epic1AddressEntryReport"
+            },
+            "description": "The addresses of the page, from the lowest number."
+          },
+          "highest": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The highest number issued or paid; every number up to it is issued.",
+            "minimum": 0
           }
         }
       },
@@ -4329,6 +4494,15 @@
             ],
             "description": "The amount to ask for, in EPIC, as a decimal string."
           },
+          "index": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The number of the epic1 address the link pays; 0, the first address, when absent.",
+            "minimum": 0
+          },
           "message": {
             "type": [
               "string",
@@ -4367,6 +4541,15 @@
             "description": "The account's index.",
             "minimum": 0
           },
+          "index": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The number of the epic1 address the link pays; absent for a link from before numbers.",
+            "minimum": 0
+          },
           "issued_at": {
             "type": "string"
           },
@@ -4399,12 +4582,19 @@
         "required": [
           "link",
           "address",
+          "index",
           "kind",
           "n"
         ],
         "properties": {
           "address": {
             "type": "string"
+          },
+          "index": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The number of the address in its account.",
+            "minimum": 0
           },
           "kind": {
             "type": "string",
@@ -4435,6 +4625,20 @@
             }
           }
         }
+      },
+      "Epic1NewAddressBody": {
+        "type": "object",
+        "description": "The account that issues the next epic1 address.",
+        "properties": {
+          "account": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The account label; the default account when absent."
+          }
+        },
+        "additionalProperties": false
       },
       "Epic1PaidReport": {
         "type": "object",
@@ -7219,6 +7423,15 @@
           },
           "direction": {
             "type": "string"
+          },
+          "epic1_index": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "For a payment received at an epic1 address, the address's number in its account;\n`tx show` only.",
+            "minimum": 0
           },
           "fee": {
             "type": [

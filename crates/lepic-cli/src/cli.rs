@@ -1123,8 +1123,15 @@ pub struct Epic1Args {
 
 #[derive(Debug, Subcommand)]
 pub enum Epic1Command {
-    /// Show the epic1 address of an account
-    Address(AccountArg),
+    /// Show an epic1 address of an account: its first one, or the one at --index
+    Address(Epic1AddressArgs),
+    /// Issue the account's next epic1 address
+    #[command(after_help = "\
+Each address of an account is a number. The account's first address, number 0, always exists. \
+Payments to every issued address come to the same account; the payment shows the number.")]
+    NewAddress(AccountArg),
+    /// List the epic1 addresses the account issued
+    Addresses(Epic1AddressesArgs),
     /// Make a link to the account's epic1 address; payments to it come to a link mailbox
     #[command(after_help = "\
 An on-screen link takes the next of 50 mailboxes, which wrap; a printed one the first of 32 not \
@@ -1153,9 +1160,33 @@ to the next when a post fails, at most three.")]
 }
 
 #[derive(Debug, Args)]
+pub struct Epic1AddressArgs {
+    #[command(flatten)]
+    pub account: AccountArg,
+    /// The address's number, as `epic1 new-address` gave it [default: 0, the first address]
+    #[arg(long, value_name = "N", default_value_t = 0)]
+    pub index: u32,
+}
+
+#[derive(Debug, Args)]
+pub struct Epic1AddressesArgs {
+    #[command(flatten)]
+    pub account: AccountArg,
+    /// The first number listed
+    #[arg(long, value_name = "N", default_value_t = 0)]
+    pub from: u32,
+    /// How many addresses to list
+    #[arg(long, value_name = "N", default_value_t = 100)]
+    pub limit: u32,
+}
+
+#[derive(Debug, Args)]
 pub struct Epic1LinkArgs {
     #[command(flatten)]
     pub account: AccountArg,
+    /// The number of the epic1 address the link pays [default: 0, the first address]
+    #[arg(long, value_name = "N", default_value_t = 0)]
+    pub index: u32,
     /// Amount to ask for, in EPIC [default: the payer chooses]
     #[arg(value_name = "AMOUNT")]
     pub amount: Option<String>,

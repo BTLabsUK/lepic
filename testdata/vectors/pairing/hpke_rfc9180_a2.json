@@ -2,7 +2,7 @@
   "meta": {
     "generator": "epic-pairing-kit",
     "kit_version": "0.5.0",
-    "git_commit": "67d94e7a4fe1bf619b16e8c7f44ef9ced2e51fef",
+    "git_commit": "ce1f4aae55f883c666257fc44d31feaf0ad8f4c4",
     "rfc": "0002-contact-pairing",
     "file": "hpke_rfc9180_a2.json"
   },

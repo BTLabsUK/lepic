@@ -8,16 +8,25 @@ use ed25519_dalek::SigningKey;
 use lepic_contact::{EncSecretKey, Network};
 use lepic_crypto::SecretKey;
 use lepic_node::NodeApi;
-use lepic_store::AccountIndex;
+use lepic_store::{AccountIndex, WalletStore};
 
 use crate::error::WalletError;
-use crate::namespace::{self, LinkMailbox, PostRole, SealKeyKind};
+use crate::namespace::{self, LinkMailbox, PostRole};
 use crate::ports::{SecretVault, StoreOpener};
 use crate::wallet::Wallet;
 
 /// The settings prefix of the answers this wallet made to codes it scanned, by slate id. A
 /// payment with an entry here is released at its TTL like one made over Epicbox.
 pub const IN_PERSON_REPLY_PREFIX: &str = "inperson.reply.";
+
+/// The seal keys of the epic1 addresses of one account, in the order they are tried.
+pub struct Epic1AccountKeys {
+    pub account: AccountIndex,
+    /// The account's label, as a receive names the account.
+    pub label: String,
+    /// `(address index, seal key)`.
+    pub keys: Vec<(u32, EncSecretKey)>,
+}
 
 impl<N, S, V> Wallet<N, S, V>
 where
@@ -52,33 +61,97 @@ where
         namespace::post_key(&self.session()?.seed, account.0, network, slate_id, role)
     }
 
-    /// The seal key of the epic1 address of `account` on `network`: it opens what payers seal
-    /// to the address.
+    /// The seal key of the epic1 address `index` of `account` on `network`: it opens what
+    /// payers seal to the address.
     ///
     /// Fails with [`WalletError::Locked`].
     pub fn epic1_seal_key(
         &self,
         account: AccountIndex,
         network: Network,
+        index: u32,
     ) -> Result<EncSecretKey, WalletError> {
-        namespace::seal_key(
-            &self.session()?.seed,
-            account.0,
-            network,
-            SealKeyKind::Epic1,
-        )
+        namespace::epic1_seal_key(&self.session()?.seed, account.0, network, index)
     }
 
-    /// The proof key of the epic1 address of `account` on `network`: it signs the payment
-    /// proofs of slates that came to the address ([`crate::ProofKey::Epic1`]).
+    /// The proof key of the epic1 address `index` of `account` on `network`: it signs the
+    /// payment proofs of slates that came to the address ([`crate::ProofKey::Epic1`]).
     ///
     /// Fails with [`WalletError::Locked`].
     pub fn epic1_proof_key(
         &self,
         account: AccountIndex,
         network: Network,
+        index: u32,
     ) -> Result<SigningKey, WalletError> {
-        namespace::epic1_proof_key(&self.session()?.seed, account.0, network)
+        namespace::epic1_proof_key(&self.session()?.seed, account.0, network, index)
+    }
+
+    /// The seal keys of the epic1 addresses of `account` on `network` that a zero-hint
+    /// envelope is tried with, each with its address index, in the order
+    /// [`crate::epic1_index::trial_order`] gives: the index of the most recent payment, index
+    /// 0, then the rest from the highest down.
+    ///
+    /// Fails with [`WalletError::Locked`] and [`WalletError::Store`].
+    pub async fn epic1_trial_keys(
+        &self,
+        account: AccountIndex,
+        network: Network,
+    ) -> Result<Vec<(u32, EncSecretKey)>, WalletError> {
+        let session = self.session()?;
+        self.blocking(move |_, _| {
+            let order = session
+                .store
+                .read(|repos| crate::epic1_index::trial_order(repos, account))?;
+            order
+                .into_iter()
+                .map(|index| {
+                    Ok((
+                        index,
+                        namespace::epic1_seal_key(&session.seed, account.0, network, index)?,
+                    ))
+                })
+                .collect()
+        })
+        .await
+    }
+
+    /// [`Wallet::epic1_trial_keys`] of every account of the wallet on its network, by account
+    /// index, for an envelope that may be sealed to any address of the wallet: a file, pasted
+    /// text, or a payment at the direct listener.
+    ///
+    /// Fails with [`WalletError::Locked`] and [`WalletError::Store`].
+    pub async fn epic1_trial_keys_all(&self) -> Result<Vec<Epic1AccountKeys>, WalletError> {
+        let network = crate::native_epicbox::contact_network(self.config().network);
+        let session = self.session()?;
+        self.blocking(move |_, _| {
+            let accounts = session.store.read(|repos| {
+                let mut accounts = Vec::new();
+                for record in repos.accounts()? {
+                    let order = crate::epic1_index::trial_order(repos, record.index)?;
+                    accounts.push((record.index, record.label, order));
+                }
+                Ok::<_, lepic_store::StoreError>(accounts)
+            })?;
+            let mut keys = Vec::with_capacity(accounts.len());
+            for (account, label, order) in accounts {
+                let mut account_keys = Vec::with_capacity(order.len());
+                for index in order {
+                    account_keys.push((
+                        index,
+                        namespace::epic1_seal_key(&session.seed, account.0, network, index)?,
+                    ));
+                }
+                keys.push(Epic1AccountKeys {
+                    account,
+                    label,
+                    keys: account_keys,
+                });
+            }
+            keys.sort_by_key(|entry| entry.account.0);
+            Ok(keys)
+        })
+        .await
     }
 
     /// The key of the link mailbox `mailbox` of `account` on `network`: the mailbox an epic1
