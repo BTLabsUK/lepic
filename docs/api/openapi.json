@@ -4468,13 +4468,6 @@
             "type": "boolean",
             "description": "Whether the payment was posted to any relay; false when every post failed."
           },
-          "proof_address": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "The payment proof address of the recipient, as hex, when `--proof` was asked; absent\notherwise."
-          },
           "slate_id": {
             "type": "string"
           },

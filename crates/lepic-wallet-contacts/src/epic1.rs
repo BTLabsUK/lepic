@@ -276,8 +276,6 @@ pub struct Epic1Paid {
     pub attempts: Vec<Epic1Attempt>,
     /// The transport, from 0, the payment was posted to.
     pub posted: Option<usize>,
-    /// The proof address, hex, the payment's proof is signed for; `None` when none was asked.
-    pub proof_address: Option<String>,
 }
 
 /// An S2 this wallet made for a payment taken at a link mailbox.
@@ -355,9 +353,6 @@ struct PayState {
     next: usize,
     posted: Option<usize>,
     finalized: bool,
-    /// The proof address, hex, when the payment asks a proof.
-    #[serde(default)]
-    proof: Option<String>,
 }
 
 /// Whether the relays of a payment are confirmed: the user said so, or every one is in the
@@ -1161,7 +1156,7 @@ where
         let mut send = request.send;
         let account = send.account;
         send.ttl_blocks = Some(send.ttl_blocks.unwrap_or(EPIC1_TTL_BLOCKS));
-        let send_proof = if request.proof {
+        send.payment_proof_recipient = if request.proof {
             Some(
                 ProofAddress::from_bytes(link.address.proof_key().to_bytes())
                     .map_err(|_| refused(Epic1Refusal::ProofKey))?,
@@ -1169,7 +1164,6 @@ where
         } else {
             None
         };
-        send.payment_proof_recipient = send_proof;
         let delivery = Delivery::Export {
             to: Location::File(request.slate_file),
         };
@@ -1180,7 +1174,6 @@ where
             }
             Err(error) => return Err(ContactError::Send(error)),
         };
-        let proof = send_proof.map(|address| hex::encode(address.as_bytes()));
         let entries: Vec<StoredEntry> = usable
             .iter()
             .map(|(transport, _)| StoredEntry {
@@ -1196,7 +1189,6 @@ where
                 sent.slate_id,
                 account,
                 entries,
-                proof.clone(),
             )
             .await
         {
@@ -1212,7 +1204,6 @@ where
             address: link.address.encode(),
             attempts,
             posted,
-            proof_address: proof,
         })
     }
 
@@ -1227,7 +1218,6 @@ where
         slate_id: SlateId,
         account: AccountIndex,
         entries: Vec<StoredEntry>,
-        proof: Option<String>,
     ) -> Result<Vec<u8>, ContactError> {
         let network = self.wallet.config().network;
         let net = contact_network(network);
@@ -1275,7 +1265,6 @@ where
             next: 0,
             posted: None,
             finalized: false,
-            proof,
         };
         let session = self.wallet.session()?;
         self.contact_work(move |_, _| {
@@ -1411,7 +1400,6 @@ where
             address: state.address,
             attempts,
             posted,
-            proof_address: state.proof,
         })
     }
 

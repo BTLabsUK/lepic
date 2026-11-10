@@ -84,9 +84,6 @@ pub struct Epic1PaidReport {
     pub posted: Option<usize>,
     /// Whether the payment was posted to any relay; false when every post failed.
     pub posted_ok: bool,
-    /// The payment proof address of the recipient, as hex, when `--proof` was asked; absent
-    /// otherwise.
-    pub proof_address: Option<String>,
 }
 
 /// An answer this wallet made for a payment taken at a link mailbox.

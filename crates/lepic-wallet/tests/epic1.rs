@@ -235,7 +235,6 @@ fn a_link_paid_is_answered_through_the_reply_mailbox_and_finalized() {
 
     // The wallet's own relay needs none.
     let paid = world.pay(&issued.link, true, send(), false).unwrap();
-    assert_eq!(paid.proof_address.as_ref().map(String::len), Some(64));
     assert_eq!(paid.address, address);
     assert_eq!(paid.posted, Some(0));
     assert_eq!(paid.attempts.len(), 1);
@@ -303,7 +302,6 @@ fn post_next_posts_the_same_payment_to_the_second_mailbox_answered_once() {
     );
     let paid = world.pay_link(&issued.link, false).unwrap();
     assert_eq!(paid.posted, Some(0));
-    assert_eq!(paid.proof_address, None);
 
     let next = world
         .block_on(world.payer.wallet.contact_book().epic1_post_next(

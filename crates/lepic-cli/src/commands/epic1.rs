@@ -249,6 +249,39 @@ fn paid_report(paid: Epic1Paid) -> Report {
             .collect(),
         posted: paid.posted,
         posted_ok: paid.posted.is_some(),
-        proof_address: paid.proof_address,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use lepic_wallet::event::SlateId;
+    use lepic_wallet_contacts::Epic1Attempt;
+
+    use super::*;
+
+    #[test]
+    fn a_paid_report_names_no_proof_address() {
+        let paid = Epic1Paid {
+            tx_id: lepic_store::TxId(7),
+            slate_id: SlateId::from_bytes([4; 16]),
+            address: "epic1test".into(),
+            attempts: vec![Epic1Attempt {
+                host: "relay.test".into(),
+                error: None,
+            }],
+            posted: Some(0),
+        };
+        let json = serde_json::to_value(paid_report(paid)).unwrap();
+        let mut fields: Vec<&str> = json
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
+        fields.sort_unstable();
+        assert_eq!(
+            fields,
+            ["address", "attempts", "posted", "posted_ok", "slate_id", "tx_id"]
+        );
+    }
 }

@@ -862,7 +862,7 @@ $ lepic epic1 post-next <SLATE_ID>
 a link that asks none takes the amount that follows it. It takes the spending options of `tx
 send`. `--hosts-ok` confirms relays outside the relay list and is not needed when every relay
 of the link is in it. `--proof` asks for a payment proof signed with the payee's epic1 proof
-key; the report's `proof_address` is that key as hex, and absent without `--proof`. The payment
+key. The payment
 goes to the first relay of the link; when the post fails, `post-next` tries the next one. In
 JSON, `posted` is the index of the relay it went to and `posted_ok` says whether any post went
 through. The payer's `contact collect` takes the answer at the reply mailbox and finalizes it.

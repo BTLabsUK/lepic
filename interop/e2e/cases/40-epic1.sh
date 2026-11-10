@@ -243,14 +243,14 @@ case_e1_proof() {
     link="$(w "${E1_PAYEE}" epic1 link 0.01 | jq -r .link)" || fail "epic1 link failed" || return 1
     pay="$(w "${E1_PAYER}" epic1 pay "${link}" --proof --min-confirmations "${E2E_MINCONF}" --ttl-blocks 100)" || fail "epic1 pay --proof failed" || return 1
     printf '%s\n' "${pay}" >"${CASE_DIR}/pay.json"
-    expect_json "${pay}" '(.proof_address | test("^[0-9a-f]{64}$"))' "pay --proof reports the proof address" || return 1
+    expect_json "${pay}" '(has("proof_address") | not)' "pay --proof sends no proof address back" || return 1
     slate="$(jq -r .slate_id <<<"${pay}")"
     e1_collect_until "${E1_PAYEE}" "${slate}" "pending_confirmation received finalized confirmed" || return 1
     e1_collect_until "${E1_PAYER}" "${slate}" "posted confirmed" "${E1_PAYEE}" || return 1
     e1_confirmed "${E1_PAYER}" "${slate}" || return 1
     w "${E1_PAYER}" tx show "$(tx_by_slate "${E1_PAYER}" "${slate}" | jq -r .tx_id)" >"${CASE_DIR}/payer-tx.json" || fail "tx show failed" || return 1
     w "${E1_PAYEE}" tx show "$(tx_by_slate "${E1_PAYEE}" "${slate}" | jq -r .tx_id)" >"${CASE_DIR}/payee-tx.json" || fail "tx show failed" || return 1
-    note "pay --proof reported the proof address, finalized and confirmed"
+    note "pay --proof finalized and confirmed; the report has no proof address"
 }
 
 # A payee restored from its phrase reads the link mailboxes once and takes a payment made while
