@@ -803,9 +803,11 @@ fn a_refusal_that_comes_after_the_answer_does_not_cancel_the_payment() {
 impl World {
     /// Issues `count` new epic1 addresses of the issuer's account, which follow on from each
     /// other, and returns them with their indexes. The issuer's wallet was restored from its
-    /// phrase, so the first one comes after the restore gap.
+    /// phrase, so it is made the install that issues, and the first one comes after the
+    /// restore gap.
     fn new_addresses(&self, count: u32) -> Vec<(u32, String)> {
         let book = self.issuer.wallet.contact_book();
+        self.block_on(book.epic1_issue_here()).unwrap();
         let mut issued: Vec<(u32, String)> = Vec::new();
         for _ in 0..count {
             let (index, address) = self.block_on(book.epic1_new_address(ACCOUNT)).unwrap();
@@ -864,6 +866,30 @@ impl World {
             sealed_to_epic1(Network::Floonet, address, body, true, false, &mut rng).unwrap();
         armored(&sealed)
     }
+}
+
+#[test]
+fn a_restored_wallet_issues_new_addresses_only_once_made_the_issuer() {
+    let world = World::new();
+    let book = world.issuer.wallet.contact_book();
+    assert!(!world.block_on(book.epic1_issuing()).unwrap());
+    assert_eq!(
+        refusal(world.block_on(book.epic1_new_address(ACCOUNT))),
+        Epic1Refusal::NotIssuingInstall
+    );
+    // Index 0 is there all the same.
+    let first = book.epic1_address(ACCOUNT).unwrap().encode();
+    assert_eq!(
+        world
+            .block_on(book.epic1_address_at(ACCOUNT, 0))
+            .unwrap()
+            .encode(),
+        first
+    );
+    world.block_on(book.epic1_issue_here()).unwrap();
+    assert!(world.block_on(book.epic1_issuing()).unwrap());
+    let (index, _) = world.block_on(book.epic1_new_address(ACCOUNT)).unwrap();
+    assert_eq!(index, RESTORE_GAP + 1);
 }
 
 #[test]

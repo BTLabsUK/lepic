@@ -14,8 +14,8 @@ Every normative statement carries one of these marks:
 
 | Mark | Meaning |
 |---|---|
-| **[Decided]** | Agreed by the project owner on 2026-11-08, or on 2026-11-09 where the text says so. Recorded in ADR 0052. This includes the defaults D1–D6, the owner items O-2 … O-18 (O-15 withdrawn), and the transport model of section 3.1. |
-| **[Proposed — not yet confirmed]** | Put to the project owner and not yet answered: O-19 … O-22 (11.0), on indexed epic1 addresses. |
+| **[Decided]** | Agreed by the project owner on 2026-11-08, or on 2026-11-09 or 2026-11-10 where the text says so. Recorded in ADR 0052. This includes the defaults D1–D6, the owner items O-2 … O-22 (O-15 withdrawn), and the transport model of section 3.1. |
+| **[Proposed — not yet confirmed]** | Put to the project owner and not yet answered. None open. |
 | **[App]** | Expected behaviour of the wallet app, not a LEPIC rule. LEPIC is core only: it reports facts to its consumer and acts when the consumer calls it; limits, prompts and policy live in the consumer (3.2). Marked "to explore in the wallet app" where the design is not settled. |
 | **[Shipped]** | On LEPIC `main` at commit `078eadb7`, with the path given. |
 | **[Unmerged]** | On the feature branch `feat/wallet-methods` only at `c100d2bc` (the wallet methods refactor); may still move or change. |
@@ -993,6 +993,12 @@ RFC 0001 §8 base, amended:
   past the highest one it knows, and its first new address after the restore comes after those
   50, so it does not hand out an address it may have given out before. A payment found in the
   gap moves the gap past it, until the account issues its first new address.
+- Another install on the same phrase may still be issuing, and two installs that both issue hand
+  the same index to two payers. A restored wallet therefore issues no new address until the host
+  confirms that this install is the one that issues (`NotIssuingInstall` before that; `epic1
+  issue-here` in the CLI and `serve`, `epic1_issue_here` in the FFI). Until then every payment it
+  opens raises the highest index seen, so its window follows the install that issues. Index 0 is
+  always there. A wallet created fresh issues from the start.
 - LEPIC sets no limit on how many addresses an account issues; the app sets any policy. The
   wallet, the CLI (`address`, `new-address`, `addresses`) and `serve` issue the next address,
   give the address at an index, and list the issued ones. An index past the highest issued is
@@ -1919,7 +1925,8 @@ Paths are in the LEPIC repository at `main` `078eadb7` unless marked otherwise.
 22. **An address handed out before a restore, past the gap, is not found.** A restored wallet
     tries 50 indexes past the highest one it knows (5.13). An address issued beyond that before
     the restore is no longer tried, and its first new address may be one handed out before. A
-    payment to it is not found until the wallet issues that far.
+    payment to it is not found until the wallet issues that far. The host says which install
+    issues; LEPIC cannot tell whether another install on the same phrase still does.
 23. **Covered sticker codes.** A printed code can be covered by another sticker, and the payer then
     pays whoever printed it. The payer's checks are the amount and the merchant shown before the
     PIN, as with any QR payment; a merchant domain claim (ADR 0043), where there is one, is shown
@@ -1954,10 +1961,10 @@ Owner items O-1 … O-18 and their answers. All are decided or withdrawn; O-18 w
 | O-16 | Two answers to one in-person code | **[Decided]**, rewritten (owner, 2026-11-09). LEPIC accepts and processes raw in-person codes in both directions and never finalizes an in-person answer by itself: it closes the code on the first answer, reports every answer with its check code (and when a second has the same code as the first), and finalizes only the answer the consumer names. **[App]** The app asks the payer to confirm the check code first ("Does Bob's phone show 4821?"); on two answers with one code it cancels both and shows a new code with a new reply key; the hold and the late-answer warning may stay as extras (to explore in the wallet app). Draft 5's 5-second hold with no extra tap is withdrawn | 3.1, 6.7, 10.16, 10.19 |
 | O-17 | LEPIC and the app, for hosts and relays from untrusted input (new in draft 6) | **[Decided]** (owner, 2026-11-09). LEPIC is core only: before posting to a host from untrusted input it reports the host, whether it is in the configured relay list, and its address class; it posts only when the consumer says so, through Tor when Tor is configured; it refuses loopback itself; it never shows or decides a prompt. The prompts (unknown relay, local network, "through Tor") are the app's. The same split applies to every place where draft 5 had LEPIC ask | 3.2, 5.9, 5.14, 5.15, 5.17 |
 | O-18 | Address classes of the host rule | **[Decided]** (owner, 2026-11-09, text as proposed): loopback refused on the resolved address; private and local-network addresses (RFC 1918, link-local, CGNAT, ULA, `.local`) allowed after one app prompt that shows the address; any port | 5.14, Appendix B |
-| O-19 | The index field on every seal key kind | **[Proposed — not yet confirmed]** The index only for the epic1 kind, every other key unchanged: the onion, web and Epicbox seal keys and the adverts peers pinned stay as earlier builds derive them. epic1 index 0 keeps the kind-`00` seal key and the epic1 proof key of earlier builds; indexes 1 and above use `lepic-wallet epic1 seal key v1` and `lepic-wallet epic1 indexed proof key v1`, each with a fixed-width context (rule 4). Alternative: `be32(index)` in the context of every kind, which changes the onion, web and Epicbox seal keys | 5.2 |
-| O-20 | epic1 envelopes in files and transaction text | **[Proposed — not yet confirmed]** 6.3 sends an S1 to an epic1 through the link mailbox; the owner's receive decision also opens files and text sealed to an epic1, by trial (5.5). Keep both: a wallet opens an epic1 file it is handed. Alternative: link mailboxes only | 5.5, 6.3 |
-| O-21 | Accounts tried for a file or the direct listener | **[Proposed — not yet confirmed]** Every account of the wallet, each in its own trial order, and the account whose key opens receives it. Alternative: the active account only, which is cheaper and refuses a file to another account | 5.5 |
-| O-22 | The first address after a restore | **[Proposed — not yet confirmed]** It comes after the gap (index 51 on a wallet that knew only index 0), and later ones follow on, so no address handed out before the restore within the gap is handed out again. Alternative: continue from the highest index known and accept that a payer may hold the same address as someone else | 5.13 |
+| O-19 | The index field on every seal key kind | **[Decided]** (owner, 2026-11-10): no index field on the other kinds. The index only for the epic1 kind, every other key unchanged: the onion, web and Epicbox seal keys and the adverts peers pinned stay as earlier builds derive them. epic1 index 0 keeps the kind-`00` seal key and the epic1 proof key of earlier builds; indexes 1 and above use `lepic-wallet epic1 seal key v1` and `lepic-wallet epic1 indexed proof key v1`, each with a fixed-width context (rule 4). Alternative: `be32(index)` in the context of every kind, which changes the onion, web and Epicbox seal keys | 5.2 |
+| O-20 | epic1 envelopes in files and transaction text | **[Decided]** (owner, 2026-11-10, as proposed) 6.3 sends an S1 to an epic1 through the link mailbox; the owner's receive decision also opens files and text sealed to an epic1, by trial (5.5). Keep both: a wallet opens an epic1 file it is handed. Alternative: link mailboxes only | 5.5, 6.3 |
+| O-21 | Accounts tried for a file or the direct listener | **[Decided]** (owner, 2026-11-10, as proposed) Every account of the wallet, each in its own trial order, and the account whose key opens receives it. Alternative: the active account only, which is cheaper and refuses a file to another account | 5.5 |
+| O-22 | The first address after a restore | **[Decided]** (owner, 2026-11-10, as proposed) It comes after the gap (index 51 on a wallet that knew only index 0), and later ones follow on, so no address handed out before the restore within the gap is handed out again. A restored install issues only once the host made it the issuer (5.13). Alternative: continue from the highest index known and accept that a payer may hold the same address as someone else | 5.13 |
 
 ### 11.1 Still open
 

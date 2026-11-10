@@ -220,6 +220,26 @@ impl EpicWallet {
         .await
     }
 
+    /// Whether this install issues new numbered epic1 addresses. A wallet created fresh does;
+    /// one restored from its recovery phrase does once [`EpicWallet::epic1_issue_here`] made it
+    /// the issuer. The address [`EpicWallet::epic1_address`] shows is there either way.
+    pub async fn epic1_issuing(&self) -> Result<bool, WalletError> {
+        self.run("epic1_issuing", |session| async move {
+            session.epic1_issuing().await
+        })
+        .await
+    }
+
+    /// Makes this restored install the one that issues new numbered epic1 addresses. Call it
+    /// once no other install on the same recovery phrase issues them: two installs that both
+    /// issue hand the same address to two payers. Calling it again changes nothing.
+    pub async fn epic1_issue_here(&self) -> Result<(), WalletError> {
+        self.run("epic1_issue_here", |session| async move {
+            session.epic1_issue_here().await
+        })
+        .await
+    }
+
     /// Turns on or off, for the listener `socket`, taking payments sealed to the wallet's epic1
     /// addresses at its native endpoint. It is off for both sockets until this turns it on:
     /// the listener then answers such a payment as one sealed to a key it does not hold, so

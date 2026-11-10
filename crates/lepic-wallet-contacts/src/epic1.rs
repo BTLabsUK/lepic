@@ -39,7 +39,7 @@ use lepic_slate::stage::Stage;
 use lepic_store::{AccountIndex, Repositories, SlateStage, TxId, TxState, WalletStore};
 use lepic_transport::host_rule::{self, HostReport};
 use lepic_transport::transport::{BoxFuture, Location};
-use lepic_wallet::epic1_index::{self, trial_open};
+use lepic_wallet::epic1_index::{self, IssueError, trial_open};
 use lepic_wallet::namespace::{LinkMailbox, PostRole};
 use lepic_wallet::notice::{Notice, NoticeKind, Payload, classify_text};
 use lepic_wallet::ports::{SecretVault, StoreOpener};
@@ -163,6 +163,10 @@ pub enum Epic1Refusal {
     /// The account issued its last address index.
     #[error("the account has no address index left")]
     NoAddressLeft,
+    /// The wallet was restored from its recovery phrase and the host has not made this install
+    /// the one that issues new addresses ([`ContactBook::epic1_issue_here`]).
+    #[error("this install does not issue new epic1 addresses")]
+    NotIssuingInstall,
 }
 
 /// The kind of a link mailbox.
@@ -677,8 +681,10 @@ where
     /// wallet tries its seal key on what it receives from then on. There is no limit; an app
     /// that wants one sets it.
     ///
-    /// Fails with [`ContactError::Epic1`] when the account issued its last index, and
-    /// [`ContactError::Wallet`] when the wallet is locked.
+    /// Fails with [`ContactError::Epic1`] when the account issued its last index, or the
+    /// wallet was restored from its recovery phrase and this install was not made the one that
+    /// issues ([`Self::epic1_issue_here`]), and [`ContactError::Wallet`] when the wallet is
+    /// locked.
     #[instrument(skip_all, fields(wallet = %self.wallet.config().name))]
     pub async fn epic1_new_address(
         &self,
@@ -689,14 +695,48 @@ where
         let session = self.wallet.session()?;
         let index = self
             .contact_work(move |_, _| {
-                Ok(session
+                session
                     .store
-                    .write(|repos| epic1_index::issue_next(repos, account))?)
+                    .write(|repos| epic1_index::issue_next(repos, account))
+                    .map_err(|error| match error {
+                        IssueError::NotIssuingInstall => refused(Epic1Refusal::NotIssuingInstall),
+                        IssueError::Store(error) => error.into(),
+                    })
             })
             .await?
             .ok_or(refused(Epic1Refusal::NoAddressLeft))?;
         info!(account = account.0, index, "epic1 address issued");
         Ok((index, self.address_at(account, index)?))
+    }
+
+    /// Whether this install issues new epic1 addresses. A wallet created fresh does; one
+    /// restored from its recovery phrase does once [`Self::epic1_issue_here`] made it the
+    /// issuer. Index 0 is there either way.
+    ///
+    /// Fails with [`ContactError::Wallet`] when the wallet is locked.
+    pub async fn epic1_issuing(&self) -> Result<bool, ContactError> {
+        let session = self.wallet.session()?;
+        self.contact_work(move |_, _| Ok(session.store.read(epic1_index::issuing)?))
+            .await
+    }
+
+    /// Makes this install the one that issues new epic1 addresses. Call it on a restored wallet
+    /// once no other install on the same recovery phrase issues them: two installs that both
+    /// issue hand the same address to two payers. The first address each account issues after
+    /// it comes after the restore gap. Calling it again changes nothing.
+    ///
+    /// Fails with [`ContactError::Wallet`] when the wallet is locked.
+    #[instrument(skip_all, fields(wallet = %self.wallet.config().name))]
+    pub async fn epic1_issue_here(&self) -> Result<(), ContactError> {
+        let session = self.wallet.session()?;
+        self.contact_work(move |_, _| {
+            Ok(session
+                .store
+                .write(|repos| epic1_index::issue_here(repos))?)
+        })
+        .await?;
+        info!("this install issues epic1 addresses");
+        Ok(())
     }
 
     /// The epic1 addresses `account` issued, at most `limit` from the index `from`.

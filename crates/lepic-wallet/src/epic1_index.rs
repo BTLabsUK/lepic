@@ -9,9 +9,16 @@
 //! issued. It tries [`RESTORE_GAP`] indexes past the highest one it knows, and the first address
 //! an account issues after the restore comes after them, so an address that may have been
 //! handed out is not handed out again. From then on the account counts from that address.
+//!
+//! Another install on the same recovery phrase may still be issuing, and two installs that
+//! both issue would hand the same index to two payers. So a restored wallet issues no address
+//! until the host confirms this install is the one that issues ([`issue_here`]). Until then it
+//! keeps trying the gap past the highest index a payment came to, so its window follows the
+//! install that issues.
 
 use lepic_contact::EncSecretKey;
 use lepic_store::{AccountIndex, Record, Repositories, StoreError, TxId};
+use thiserror::Error;
 
 /// How many indexes past the highest one known a restored wallet tries, and skips before it
 /// issues the next address.
@@ -30,6 +37,19 @@ const RESTORED_SETTING: &str = "epic1.restored";
 /// The settings prefix of the accounts that issued an address since the restore, which ends
 /// their gap.
 const PAST_GAP_PREFIX: &str = "epic1.past_gap.";
+/// Set when the host confirmed that this restored install is the one that issues addresses.
+const ISSUER_SETTING: &str = "epic1.issuer";
+
+/// Why [`issue_next`] issued no address.
+#[derive(Debug, Error)]
+pub enum IssueError {
+    /// The database was rebuilt from the recovery phrase and the host has not confirmed that
+    /// this install is the one that issues addresses ([`issue_here`]).
+    #[error("this install does not issue epic1 addresses")]
+    NotIssuingInstall,
+    #[error(transparent)]
+    Store(#[from] StoreError),
+}
 
 /// The address index stored under `key`. A value that is not one is
 /// [`StoreError::Corrupt`]: read as absent, a damaged count of issued addresses would issue
@@ -72,6 +92,21 @@ pub fn restored(repos: &dyn Repositories) -> Result<bool, StoreError> {
 /// [`RESTORE_GAP`] indexes past the highest one it knows.
 pub(crate) fn mark_restored(repos: &mut dyn Repositories) -> Result<(), StoreError> {
     repos.put_setting(RESTORED_SETTING, "true")
+}
+
+/// Whether this install issues new addresses: a wallet created fresh does, a restored one only
+/// once the host confirmed it with [`issue_here`].
+pub fn issuing(repos: &dyn Repositories) -> Result<bool, StoreError> {
+    Ok(!restored(repos)? || repos.setting(ISSUER_SETTING)?.is_some())
+}
+
+/// Makes this install the one that issues new addresses. Its first address per account comes
+/// after the restore gap. Calling it again changes nothing.
+pub fn issue_here(repos: &mut dyn Repositories) -> Result<(), StoreError> {
+    if repos.setting(ISSUER_SETTING)?.is_none() {
+        repos.put_setting(ISSUER_SETTING, "true")?;
+    }
+    Ok(())
 }
 
 /// Whether `account` is inside its restore gap: the database was rebuilt from the recovery
@@ -117,12 +152,16 @@ pub fn trial_order(
 /// tried. The first one after a restore skips the gap, so an address handed out before the
 /// restore is not issued again; the ones after it follow on.
 ///
-/// Fails with [`StoreError`]; an account that issued `u32::MAX` issues no more and gets
-/// `Ok(None)`.
+/// Fails with [`IssueError::NotIssuingInstall`] on a restored install the host has not made
+/// the issuer, and [`IssueError::Store`]; an account that issued `u32::MAX` issues no more and
+/// gets `Ok(None)`.
 pub fn issue_next(
     repos: &mut dyn Repositories,
     account: AccountIndex,
-) -> Result<Option<u32>, StoreError> {
+) -> Result<Option<u32>, IssueError> {
+    if !issuing(repos)? {
+        return Err(IssueError::NotIssuingInstall);
+    }
     let Some(next) = highest_tried(repos, account)?.checked_add(1) else {
         return Ok(None);
     };
@@ -193,7 +232,7 @@ mod tests {
                 assert_eq!(issue_next(repos, A)?, Some(2));
                 assert_eq!(issue_next(repos, B)?, Some(1));
                 assert_eq!(trial_order(repos, A)?, vec![0, 2, 1]);
-                Ok::<_, StoreError>(())
+                Ok::<_, IssueError>(())
             })
             .unwrap();
     }
@@ -213,7 +252,7 @@ mod tests {
                 record_payment(repos, TxId(8), A, 0)?;
                 assert_eq!(trial_order(repos, A)?, vec![0, 4, 3, 2, 1]);
                 assert_eq!(highest_seen(repos, A)?, Some(2));
-                Ok::<_, StoreError>(())
+                Ok::<_, IssueError>(())
             })
             .unwrap();
     }
@@ -229,6 +268,7 @@ mod tests {
                 // A payment found at 30 moves the window to 80.
                 record_payment(repos, TxId(1), A, 30)?;
                 assert_eq!(highest_tried(repos, A)?, 30 + RESTORE_GAP);
+                issue_here(repos)?;
                 assert_eq!(issue_next(repos, A)?, Some(31 + RESTORE_GAP));
                 // The gap ends with the first address issued: the next ones follow on.
                 assert_eq!(highest_tried(repos, A)?, 31 + RESTORE_GAP);
@@ -238,18 +278,47 @@ mod tests {
                 assert_eq!(issue_next(repos, A)?, Some(33 + RESTORE_GAP));
                 // Another account is still inside its gap.
                 assert_eq!(issue_next(repos, B)?, Some(1 + RESTORE_GAP));
-                Ok::<_, StoreError>(())
+                Ok::<_, IssueError>(())
             })
             .unwrap();
     }
 
-    fn corrupt<T>(result: Result<T, StoreError>) -> bool {
+    #[test]
+    fn a_restored_wallet_issues_only_once_made_the_issuer() {
+        let store = new_store();
+        store
+            .write(|repos| {
+                assert!(issuing(repos)?);
+                mark_restored(repos)?;
+                assert!(!issuing(repos)?);
+                assert!(matches!(
+                    issue_next(repos, A),
+                    Err(IssueError::NotIssuingInstall)
+                ));
+                assert_eq!(repos.setting(&account_key(ISSUED_PREFIX, A))?, None);
+                // Payments the issuing install's addresses bring move the window along.
+                record_payment(repos, TxId(1), A, 40)?;
+                assert_eq!(highest_tried(repos, A)?, 40 + RESTORE_GAP);
+                record_payment(repos, TxId(2), A, 70)?;
+                assert_eq!(highest_tried(repos, A)?, 70 + RESTORE_GAP);
+                assert_eq!(trial_order(repos, A)?[..2], [70, 0]);
+                issue_here(repos)?;
+                issue_here(repos)?;
+                assert!(issuing(repos)?);
+                assert_eq!(issue_next(repos, A)?, Some(71 + RESTORE_GAP));
+                assert_eq!(issue_next(repos, A)?, Some(72 + RESTORE_GAP));
+                Ok::<_, IssueError>(())
+            })
+            .unwrap();
+    }
+
+    fn corrupt<T, E: Into<IssueError>>(result: Result<T, E>) -> bool {
         matches!(
-            result,
-            Err(StoreError::Corrupt {
+            result.map_err(Into::into),
+            Err(IssueError::Store(StoreError::Corrupt {
                 record: Record::Setting,
                 ..
-            })
+            }))
         )
     }
 
@@ -272,7 +341,7 @@ mod tests {
                 // A damaged index kept with a transaction only hides it.
                 repos.put_setting(&format!("{TX_PREFIX}9"), "-1")?;
                 assert_eq!(index_of(repos, TxId(9))?, None);
-                Ok::<_, StoreError>(())
+                Ok::<_, IssueError>(())
             })
             .unwrap();
     }
@@ -284,7 +353,7 @@ mod tests {
             .write(|repos| {
                 repos.put_setting(&account_key(ISSUED_PREFIX, A), &u32::MAX.to_string())?;
                 assert_eq!(issue_next(repos, A)?, None);
-                Ok::<_, StoreError>(())
+                Ok::<_, IssueError>(())
             })
             .unwrap();
     }

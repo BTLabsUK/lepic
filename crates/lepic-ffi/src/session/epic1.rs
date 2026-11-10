@@ -289,6 +289,14 @@ impl Session {
         Ok(u32::try_from(taken).unwrap_or(u32::MAX))
     }
 
+    pub(crate) async fn epic1_issuing(&self) -> Result<bool, WalletError> {
+        Ok(self.engine.contact_book().epic1_issuing().await?)
+    }
+
+    pub(crate) async fn epic1_issue_here(&self) -> Result<(), WalletError> {
+        Ok(self.engine.contact_book().epic1_issue_here().await?)
+    }
+
     pub(crate) async fn epictx_open(&self, text: &str) -> Result<EpictxView, WalletError> {
         let text = bounded(text, MAX_SEALED_TEXT, "sealed text")?;
         let view = self.engine.contact_book().epictx_open(text).await?;
