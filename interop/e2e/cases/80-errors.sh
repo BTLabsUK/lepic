@@ -50,6 +50,8 @@ case_err_bad_input() {
     wx 2 "${ERR_A}" tx send --to-file "${CASE_DIR}/y.slate" abc || return 1
     expect_kind usage || return 1
     wx 2 "${ERR_A}" tx send --to-file "${CASE_DIR}/y.slate" 0 || return 1
+    wx 2 "${ERR_A}" tx send --bogus-flag || return 1
+    expect_kind usage || return 1
     wx 2 "${ERR_A}" tx send --to-file "${CASE_DIR}/y.slate" -- -1 || return 1
     wx 2 "${ERR_A}" tx send --to-file "${CASE_DIR}/y.slate" 0.000000001 || return 1
     wx 6 "${ERR_A}" tx show 99999 || return 1

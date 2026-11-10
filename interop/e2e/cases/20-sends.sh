@@ -246,6 +246,7 @@ case_send_message() {
     expect_json "$(show_by_slate "${PAY_B}" "${slate}")" "[.messages[]? | select(.text == \"${tag}\")] | length >= 1" "payee sees the message" || return 1
     # --purpose belongs to contact sends: with --to it is a usage error.
     wx 2 "${PAY_A}" tx send --to "${HTTP_URL}" --purpose payment 0.01 || return 1
+    expect_json "${LAST_JSON}" '.error.kind == "usage"' "a usage error is the JSON error" || return 1
     note "message '${tag}' on both sides; --purpose with --to is exit 2"
 }
 

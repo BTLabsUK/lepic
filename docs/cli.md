@@ -1309,6 +1309,10 @@ Amounts are strings with eight decimals. The exit code says what kind of failure
 
 | Code | Kind | Meaning |
 |---|---|---|
+A command line that does not parse is an error of kind `usage` too: with `--output json`, or
+`LEPIC_OUTPUT=json`, it prints the same document (exit 2, the parser's message as `message`) and
+nothing on stderr. `--help` and `--version` still print text.
+
 | 0 | | success |
 | 1 | `internal` | an unexpected failure, see the log |
 | 2 | `usage` | invalid arguments or missing input |

@@ -111,6 +111,9 @@ Exit codes:
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum CliError {
+    /// The command line did not parse; the text is clap's own message.
+    #[error("{0}")]
+    Arguments(String),
     #[error("settings are invalid")]
     Settings(#[from] SettingsError),
     #[error("secret input failed")]
@@ -294,7 +297,8 @@ impl CliError {
                 | SecretError::PasswordFile { .. },
             ) => ErrorKind::Config,
             Self::Secret(SecretError::Mismatch | SecretError::EmptyNew) => ErrorKind::Rejected,
-            Self::Secret(_)
+            Self::Arguments(_)
+            | Self::Secret(_)
             | Self::Amount(_)
             | Self::Zero { .. }
             | Self::NoDestination

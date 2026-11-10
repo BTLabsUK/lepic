@@ -12,6 +12,13 @@ use support::{
     FUNDING, Instance, SENDER_MNEMONIC, SilentInput, TestHost, run_in, run_reading, text,
 };
 
+fn error_message(outcome: &support::Outcome) -> String {
+    outcome.json()["error"]["message"]
+        .as_str()
+        .unwrap_or_default()
+        .to_owned()
+}
+
 fn error_kind(outcome: &support::Outcome) -> String {
     let document = outcome.json();
     assert_eq!(
@@ -140,7 +147,7 @@ fn a_send_to_a_contact_this_wallet_does_not_hold_stores_nothing() {
         ],
     );
     assert_eq!(outcome.code, 2);
-    assert!(outcome.stderr.contains("--purpose"), "{}", outcome.stderr);
+    assert!(error_message(&outcome).contains("--purpose"), "{outcome:?}");
     let listed = wallet.run(&host, &["tx", "list"]).json();
     assert_eq!(listed["transactions"].as_array().unwrap().len(), 1);
     let leftovers: Vec<_> = std::fs::read_dir(wallet.data_dir())
@@ -455,7 +462,7 @@ fn usage_errors_exit_with_code_two_and_help_with_zero() {
     let wallet = Instance::new("test password");
     let outcome = wallet.run(&host, &["tx", "send", "1"]);
     assert_eq!(outcome.code, 2);
-    assert!(outcome.stderr.contains("--to"), "{}", outcome.stderr);
+    assert!(error_message(&outcome).contains("--to"), "{outcome:?}");
     let outcome = wallet.run(&host, &["--network", "testnet", "node", "status"]);
     assert_eq!(outcome.code, 2);
     let outcome = wallet.run(&host, &["--help"]);
@@ -663,6 +670,27 @@ fn a_slate_file_error_names_the_file() {
         let message = format!("slate file {}", missing.display());
         assert_eq!(outcome.json()["error"]["message"], message, "{args:?}");
     }
+}
+
+#[test]
+fn a_usage_error_under_json_output_is_a_json_error() {
+    let host = TestHost::new();
+    let wallet = Instance::new("test password");
+    let mut plain = wallet.env();
+    plain.retain(|(key, _)| key != "LEPIC_OUTPUT");
+    for (args, env) in [
+        (&["--output", "json", "tx", "nope"][..], plain.clone()),
+        (&["--output=json", "tx", "send"][..], plain),
+        (&["tx", "send", "--bogus"][..], wallet.env()),
+    ] {
+        let outcome = wallet.run_with(&host, args, env, "");
+        assert_eq!((outcome.code, error_kind(&outcome).as_str()), (2, "usage"));
+        assert!(outcome.stderr.is_empty(), "{outcome:?}");
+    }
+    // Help is not an error and stays text.
+    let outcome = wallet.run(&host, &["tx", "--help"]);
+    assert_eq!(outcome.code, 0);
+    assert!(outcome.stdout.contains("Usage"), "{outcome:?}");
 }
 
 #[test]
