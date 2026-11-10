@@ -1,0 +1,123 @@
+{
+  "schema": 1,
+  "area": "keys",
+  "name": "epic1_indexed_proof_key_seed32",
+  "generator": "conformance/vectors/keys",
+  "upstream": {
+    "repo": "https://github.com/EpicCash/epic-wallet",
+    "commit": "845b3fcf4df12ed0139929c62157015447a9d063"
+  },
+  "inputs": {
+    "seed": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+    "label": "lepic-wallet epic1 indexed proof key v1",
+    "accounts": [
+      0,
+      7
+    ],
+    "indexes": [
+      1,
+      2,
+      4294967295
+    ]
+  },
+  "expected": {
+    "cases": [
+      {
+        "account": 0,
+        "index": 1,
+        "network": "mainnet",
+        "net": 0,
+        "ed25519_seed": "6fda27816649bdfe0674f3c81dab849a06f2c35c9bc0e339c346c47a19e9195d",
+        "public_key": "ed710b9b0a0b1c68fc236443ce70b2afd361c12d314d81b5aa46b4f8cc676817"
+      },
+      {
+        "account": 0,
+        "index": 2,
+        "network": "mainnet",
+        "net": 0,
+        "ed25519_seed": "a42e0f4f893c50d2d565b4c6479aba3ec0d3ab85e451ddcef7f1f33eb321646e",
+        "public_key": "05d0b6a4d9255a6f062141b2aa2cc956bf98849889808c6b6f4e2a00a183fed1"
+      },
+      {
+        "account": 0,
+        "index": 4294967295,
+        "network": "mainnet",
+        "net": 0,
+        "ed25519_seed": "803c4446c7af63a00e0495a0e5d74c11faad762d0dbb769b281afbfd2004e84d",
+        "public_key": "c042c0c36bcc597628e706b6c6c7735cd64c7af9fb533220846e1472d5a5f306"
+      },
+      {
+        "account": 0,
+        "index": 1,
+        "network": "floonet",
+        "net": 1,
+        "ed25519_seed": "9cd075c77d07a6b7af48e546ee7e9edd4377c0ac07e6ae549ab9ac43b9e88510",
+        "public_key": "bd81e694d1ec96c746ee8b3c09e5c9767490ed93cb72ee97d78e7360e057b8e2"
+      },
+      {
+        "account": 0,
+        "index": 2,
+        "network": "floonet",
+        "net": 1,
+        "ed25519_seed": "9bc8783be5200a73623ee32640ca4c2ff0ddf6cd1152ba90e90dfcdeb49b1d86",
+        "public_key": "8f5e10e624f0651e881895259f47cc7f4de6d365f58f6c7a77296528ef62757a"
+      },
+      {
+        "account": 0,
+        "index": 4294967295,
+        "network": "floonet",
+        "net": 1,
+        "ed25519_seed": "9e8d1d7d376403bcc7241384cdc7b4050b0182c06712f69a2e8f6215c7ac9bd3",
+        "public_key": "aaaf19607d7b6afd00300eb4e684b2eff58bb982063f1168246264597c8b6d91"
+      },
+      {
+        "account": 7,
+        "index": 1,
+        "network": "mainnet",
+        "net": 0,
+        "ed25519_seed": "5b787ce90c2025238b18a30b859a800cf36cf8b0dddb04548281c57b557eb6c7",
+        "public_key": "83da93a1a8a9ef9f068861deda49f79d6e60ae26eae036b22ce772169fec4ab9"
+      },
+      {
+        "account": 7,
+        "index": 2,
+        "network": "mainnet",
+        "net": 0,
+        "ed25519_seed": "d5e62b2755c72cdebacbe86d163c1a117d98850f9c924165a987d5aea889c62e",
+        "public_key": "7f4156d44f7d8daa995bdf87814c74cb1109834dbd4a5390b414618832ad8c37"
+      },
+      {
+        "account": 7,
+        "index": 4294967295,
+        "network": "mainnet",
+        "net": 0,
+        "ed25519_seed": "7cece6af0c4196ebece4e4d41a02e958ea9c4dd6a4e222a388d7bfb1e27f1821",
+        "public_key": "6920d173c444c72b4ff8ecf874449efec4e01b5891913ca5acea9679f9463f73"
+      },
+      {
+        "account": 7,
+        "index": 1,
+        "network": "floonet",
+        "net": 1,
+        "ed25519_seed": "98e0c3dbe8102f460cce06adf6594a064bc5514d17f669badc4b7f5e0f7bc8a3",
+        "public_key": "71167e5e635c9006afb3f1fa91e1846191945239f4c05ee239b6e281d0aa8423"
+      },
+      {
+        "account": 7,
+        "index": 2,
+        "network": "floonet",
+        "net": 1,
+        "ed25519_seed": "85d858e1f518457ec0881660decd62fbf3d74c13724fab2f3e97611cc92886a9",
+        "public_key": "70848e1b6bebc74e41c0e26ee144b4b8cff882141bb668aeeed2a9733d83e60c"
+      },
+      {
+        "account": 7,
+        "index": 4294967295,
+        "network": "floonet",
+        "net": 1,
+        "ed25519_seed": "0222be8141356efac46d7fabcbbf23db861bb0532fadd7c57b1f7b50ee6b03fa",
+        "public_key": "0da2e33141058522843088fecc792dced05e2415b11e21246971a457af14b2c2"
+      }
+    ]
+  }
+}

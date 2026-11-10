@@ -1,0 +1,299 @@
+{
+  "meta": {
+    "generator": "epic-pairing-kit",
+    "kit_version": "0.5.0",
+    "git_commit": "c506876dae4fe8ec8efa304c3a9967fb41dc6e90",
+    "rfc": "0003-epictx",
+    "file": "epic1_seal_keys.json"
+  },
+  "vectors": [
+    {
+      "seed": "a55ac33c9669f00f123456789abcdef0",
+      "account": 0,
+      "net": 0,
+      "index": 0,
+      "message": "6c657069632d77616c6c6574207365616c206b6579207631000000000000",
+      "seal_sk": "edf10d2739b825168379cc5d7c2c371cce7b630652aadc995da4028898000504",
+      "seal_pk": "b3ac7df9060224223d6c399a5d310c2a1b74e3969e014ad705b9d236e3953b3a"
+    },
+    {
+      "seed": "a55ac33c9669f00f123456789abcdef0",
+      "account": 0,
+      "net": 0,
+      "index": 1,
+      "message": "6c657069632d77616c6c6574206570696331207365616c206b6579207631000000000000000001",
+      "seal_sk": "ebeaba9daea2516f02c36b098b257377e59a82ff890a91e88a7602d3bca12b29",
+      "seal_pk": "90798a79a5942b3148c258d51c0dee813fb6ccde3e46fa5ab4d907aff893f740"
+    },
+    {
+      "seed": "a55ac33c9669f00f123456789abcdef0",
+      "account": 0,
+      "net": 0,
+      "index": 2,
+      "message": "6c657069632d77616c6c6574206570696331207365616c206b6579207631000000000000000002",
+      "seal_sk": "1fff5875b26d8cc40ac46326a2e22c7c5e0fe8a3c858a9252347def6e4b7334b",
+      "seal_pk": "582533ad59bea5792b79043b90ad06fb9f18090fde4aea1216ecb7097298ac6f"
+    },
+    {
+      "seed": "a55ac33c9669f00f123456789abcdef0",
+      "account": 0,
+      "net": 0,
+      "index": 4294967295,
+      "message": "6c657069632d77616c6c6574206570696331207365616c206b65792076310000000000ffffffff",
+      "seal_sk": "3a32ffce224ecab2fd54d2811461937385dbef626e033f1e33de3266a5daf97c",
+      "seal_pk": "47a673ba2f6032e047176bb02a0d21992dcb0b7ad5a9e871eedd2653d2b66950"
+    },
+    {
+      "seed": "a55ac33c9669f00f123456789abcdef0",
+      "account": 0,
+      "net": 1,
+      "index": 0,
+      "message": "6c657069632d77616c6c6574207365616c206b6579207631000000000100",
+      "seal_sk": "2823fa3712bc3fcda98455aa14702b4eea934581ffc3473edb703c8045bddc58",
+      "seal_pk": "fcf36dd59fc7d99af7ede00dbb87501f9532634e9329a1dc2e38142755002906"
+    },
+    {
+      "seed": "a55ac33c9669f00f123456789abcdef0",
+      "account": 0,
+      "net": 1,
+      "index": 1,
+      "message": "6c657069632d77616c6c6574206570696331207365616c206b6579207631000000000100000001",
+      "seal_sk": "96450e0262861be471026645dceda4cb45bb38995c02f1f6fecdc27de393248c",
+      "seal_pk": "f73e9770dd169bf869f349ceaa3b5ec18ada6b4b8d90f1228c4ccc6852989117"
+    },
+    {
+      "seed": "a55ac33c9669f00f123456789abcdef0",
+      "account": 0,
+      "net": 1,
+      "index": 2,
+      "message": "6c657069632d77616c6c6574206570696331207365616c206b6579207631000000000100000002",
+      "seal_sk": "11619bd682c2163c5c5c85f7971c04d6b4c98f1a3026b894b77c740f3c6e5a96",
+      "seal_pk": "9ffb4d03fde9c472f6e5304d2d733f169632da7fb57c4635e5c1c5aaae031735"
+    },
+    {
+      "seed": "a55ac33c9669f00f123456789abcdef0",
+      "account": 0,
+      "net": 1,
+      "index": 4294967295,
+      "message": "6c657069632d77616c6c6574206570696331207365616c206b65792076310000000001ffffffff",
+      "seal_sk": "3d5ffe81640ab0dbf050bd1f58bb4bf96c3b9b352e19e3c545d0c1c52357edce",
+      "seal_pk": "b23fb7341f984a1b0d56d36ce9e21d67387b3cb85398b6c46cd9e1b9a2cab421"
+    },
+    {
+      "seed": "a55ac33c9669f00f123456789abcdef0",
+      "account": 7,
+      "net": 0,
+      "index": 0,
+      "message": "6c657069632d77616c6c6574207365616c206b6579207631000000070000",
+      "seal_sk": "b8d27323992acb98dc6fd863d52cf1c2d80e54a26e3835b311011ae3ca27bf5c",
+      "seal_pk": "cc75d2b8ed784d2f0420589d69e4cb7570428df3dcc2ccaf6347b812793af93e"
+    },
+    {
+      "seed": "a55ac33c9669f00f123456789abcdef0",
+      "account": 7,
+      "net": 0,
+      "index": 1,
+      "message": "6c657069632d77616c6c6574206570696331207365616c206b6579207631000000070000000001",
+      "seal_sk": "ca8ae227ba096d21a25d118394df4358ebd3fcc47ba24400e2e19e2f4fb77361",
+      "seal_pk": "f9eed501ce2a77de56a0b6841883378d2fa1b35f3711ddd0c95eb0d2e796c004"
+    },
+    {
+      "seed": "a55ac33c9669f00f123456789abcdef0",
+      "account": 7,
+      "net": 0,
+      "index": 2,
+      "message": "6c657069632d77616c6c6574206570696331207365616c206b6579207631000000070000000002",
+      "seal_sk": "f1067b9e049bddeaecc64e3fe06ed5f44038d577ddf16e6237a39be73fbc3910",
+      "seal_pk": "a672920573e605b27cfa0521d3a6ee6e928caf58a99c44e032bceeb6de3f8648"
+    },
+    {
+      "seed": "a55ac33c9669f00f123456789abcdef0",
+      "account": 7,
+      "net": 0,
+      "index": 4294967295,
+      "message": "6c657069632d77616c6c6574206570696331207365616c206b65792076310000000700ffffffff",
+      "seal_sk": "2ff8603920b6c521c15ec112e26ed9478ba79af172849302e51fd2e74e8f3fd7",
+      "seal_pk": "3741aef388d7549bc8699ee70cfd50462a9aa964c127a298024ec810325b0f58"
+    },
+    {
+      "seed": "a55ac33c9669f00f123456789abcdef0",
+      "account": 7,
+      "net": 1,
+      "index": 0,
+      "message": "6c657069632d77616c6c6574207365616c206b6579207631000000070100",
+      "seal_sk": "757f2e0b58c974f158fe8f4ea3ff0fa7916e51a53b3b4b2ae74dbee18a7d213d",
+      "seal_pk": "14dbf68bd6cea5e4e09d0d280b0545dedc66cc39f136532ff9a4f1b3ae680448"
+    },
+    {
+      "seed": "a55ac33c9669f00f123456789abcdef0",
+      "account": 7,
+      "net": 1,
+      "index": 1,
+      "message": "6c657069632d77616c6c6574206570696331207365616c206b6579207631000000070100000001",
+      "seal_sk": "2bb21593c8d12eaa2a23e76b73eb91cee40720e015d1826f5f90ee374bd6912f",
+      "seal_pk": "adc10b4267518d6ea7cee7cf14f38ff1966cbc00788d8ebef1e5b95e9948080d"
+    },
+    {
+      "seed": "a55ac33c9669f00f123456789abcdef0",
+      "account": 7,
+      "net": 1,
+      "index": 2,
+      "message": "6c657069632d77616c6c6574206570696331207365616c206b6579207631000000070100000002",
+      "seal_sk": "c647636292a56c1cf5cfb92369a56ab7c19f0cf16295836a15d116b3b6cd2345",
+      "seal_pk": "cba1381f0d1c0f153ce40dda9e8e128318bfe9b9294534d803f430adb4818a53"
+    },
+    {
+      "seed": "a55ac33c9669f00f123456789abcdef0",
+      "account": 7,
+      "net": 1,
+      "index": 4294967295,
+      "message": "6c657069632d77616c6c6574206570696331207365616c206b65792076310000000701ffffffff",
+      "seal_sk": "deaf3205649cf4161534d005cf29b445c91715ba2beba89f6df9028c005ec8c5",
+      "seal_pk": "dd58de7a2ce4261fb88f4d40d6d8962e7f13c340160d02f6718a3d9294b5a846"
+    },
+    {
+      "seed": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      "account": 0,
+      "net": 0,
+      "index": 0,
+      "message": "6c657069632d77616c6c6574207365616c206b6579207631000000000000",
+      "seal_sk": "11558e032f42d3439c672b31f09f9e3ce191e3d007d753a216a89146a5fba546",
+      "seal_pk": "801297f8aa4f6b6f4c95f0fe6ea4182c9f9967fca3212c7009af9e4235f93305"
+    },
+    {
+      "seed": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      "account": 0,
+      "net": 0,
+      "index": 1,
+      "message": "6c657069632d77616c6c6574206570696331207365616c206b6579207631000000000000000001",
+      "seal_sk": "d37de3fdd7a58ab59dcea61ecb99ac975ba6b5a922dd1777cfd619629f3bd407",
+      "seal_pk": "067dfa8e4edca4357115daf773d017a9b07bbe4b6dd22b8cbc7b27309cc0452d"
+    },
+    {
+      "seed": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      "account": 0,
+      "net": 0,
+      "index": 2,
+      "message": "6c657069632d77616c6c6574206570696331207365616c206b6579207631000000000000000002",
+      "seal_sk": "8d0af56f150bb6b139a2768c132262e6acb37ca8fa47cf6d6374adc20f743baa",
+      "seal_pk": "075a7fb8edc04f0be34a028f4cf674f093f4a35a30c48c1fa31145bbec7d986b"
+    },
+    {
+      "seed": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      "account": 0,
+      "net": 0,
+      "index": 4294967295,
+      "message": "6c657069632d77616c6c6574206570696331207365616c206b65792076310000000000ffffffff",
+      "seal_sk": "f6d1aa4879a3eb84bf0b9a85f188f4080e7e8fb6878395f5ffd4dbb3f4d6450c",
+      "seal_pk": "32a3aa92872fb8bdedfb33dca39f610509cb0c2e74968fe2d01f68e31d3e7114"
+    },
+    {
+      "seed": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      "account": 0,
+      "net": 1,
+      "index": 0,
+      "message": "6c657069632d77616c6c6574207365616c206b6579207631000000000100",
+      "seal_sk": "76d5617d96b89d5858be234a1dbda01218a50a832c07b62a44986fbd49e9e569",
+      "seal_pk": "373d0ede77b3b95025927a0f8491ba2a99d01255a2beecf81fba0ee9a395974f"
+    },
+    {
+      "seed": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      "account": 0,
+      "net": 1,
+      "index": 1,
+      "message": "6c657069632d77616c6c6574206570696331207365616c206b6579207631000000000100000001",
+      "seal_sk": "7051fcb2fb8f32011e581789f42b01640d0dd504af9fef715b34ec07a63e3403",
+      "seal_pk": "0813d524d3463e190ea9327526a357a18f56bec6d860697f148f50d3ac61da43"
+    },
+    {
+      "seed": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      "account": 0,
+      "net": 1,
+      "index": 2,
+      "message": "6c657069632d77616c6c6574206570696331207365616c206b6579207631000000000100000002",
+      "seal_sk": "a9284bb640e259f223c1051946be89e6ace814caa23f95b030117f107c5b87cb",
+      "seal_pk": "013ab4762510d2a4c578cbcd8683d763aaacdcaf5ef619be35d6b424229ca71f"
+    },
+    {
+      "seed": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      "account": 0,
+      "net": 1,
+      "index": 4294967295,
+      "message": "6c657069632d77616c6c6574206570696331207365616c206b65792076310000000001ffffffff",
+      "seal_sk": "3a8a95e9cff9a507f23352899beebc9e0916dd13bafa3d8bb5d19f49ea3be994",
+      "seal_pk": "013b176ac5ead050a2c4d5f66bc4342a90f5ff6c598daeefa4dd04e5cae47238"
+    },
+    {
+      "seed": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      "account": 7,
+      "net": 0,
+      "index": 0,
+      "message": "6c657069632d77616c6c6574207365616c206b6579207631000000070000",
+      "seal_sk": "691e2ee41f26726b50544f4bfcab77381ea7a0ee91362ec3464af2bf54b46bc5",
+      "seal_pk": "7c4dfbe6c6abb58fbc8fab419a72dc872f3aaadd66cf9967a2453668bb6be82b"
+    },
+    {
+      "seed": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      "account": 7,
+      "net": 0,
+      "index": 1,
+      "message": "6c657069632d77616c6c6574206570696331207365616c206b6579207631000000070000000001",
+      "seal_sk": "e9c570c6405c3ebb361d1de48300035736a4d8408d0140ee1eee4696a52e3d48",
+      "seal_pk": "20eaa536bde1c8854d4f66a92345471ac88f6d88a211b15031f097865e389f27"
+    },
+    {
+      "seed": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      "account": 7,
+      "net": 0,
+      "index": 2,
+      "message": "6c657069632d77616c6c6574206570696331207365616c206b6579207631000000070000000002",
+      "seal_sk": "e8cac51dd9958f38bdc85144ca873916f1b8a7d671cb7c50f11f0015831ea848",
+      "seal_pk": "3fd99218ea9d15c1ba7a0097349738e554f9b61a1befb579661a7bdb56e77036"
+    },
+    {
+      "seed": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      "account": 7,
+      "net": 0,
+      "index": 4294967295,
+      "message": "6c657069632d77616c6c6574206570696331207365616c206b65792076310000000700ffffffff",
+      "seal_sk": "ab890687d2bf92ffba7185ea1bd70d3f64c9862dd3dbd9736c7be50064bff645",
+      "seal_pk": "6cdef94eca8898316d5cdffb0bdc649bd21f2f2555c8d65d3b902227e6472e08"
+    },
+    {
+      "seed": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      "account": 7,
+      "net": 1,
+      "index": 0,
+      "message": "6c657069632d77616c6c6574207365616c206b6579207631000000070100",
+      "seal_sk": "07d3e94959b38ac8be9eb0a979dc40a8dc8f0219b33f788bf763ebbe9a88918b",
+      "seal_pk": "bddc1a5334767c0e9350828a2fa234f8e2bc6883a8b98d7b14e861a8c662db40"
+    },
+    {
+      "seed": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      "account": 7,
+      "net": 1,
+      "index": 1,
+      "message": "6c657069632d77616c6c6574206570696331207365616c206b6579207631000000070100000001",
+      "seal_sk": "c0d81f69a29c3ae09c2106dc2b82b5e0a3d5dde40e28a1f41fdbec5d67a7b56a",
+      "seal_pk": "44bc1549a91ac8f8efe4a974d7158c1b6100835fb84fa32717f124adbf206e34"
+    },
+    {
+      "seed": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      "account": 7,
+      "net": 1,
+      "index": 2,
+      "message": "6c657069632d77616c6c6574206570696331207365616c206b6579207631000000070100000002",
+      "seal_sk": "d72a588a3caf80a13fb4d2fe14cbdde82fd462cd282f44ef8558a16156c82441",
+      "seal_pk": "395d26763e0de06ceeeae108c4494120d6f96249445c2cf1b556228580819667"
+    },
+    {
+      "seed": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      "account": 7,
+      "net": 1,
+      "index": 4294967295,
+      "message": "6c657069632d77616c6c6574206570696331207365616c206b65792076310000000701ffffffff",
+      "seal_sk": "755de9b83d69992b530c3b0e0c318f5db6f843090f8570bf7fa843430ba88a3e",
+      "seal_pk": "950cd10d826ee65849f8d3fb9ebeec20e6e252704df467357464f202d976ce3e"
+    }
+  ]
+}

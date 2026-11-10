@@ -31,7 +31,7 @@ use sha2::{Digest, Sha256};
 
 const KIT_GENERATOR: &str = "epic-pairing-kit";
 const KIT_VERSION: &str = "0.5.0";
-const KIT_COMMIT: &str = "ce1f4aae55f883c666257fc44d31feaf0ad8f4c4";
+const KIT_COMMIT: &str = "c506876dae4fe8ec8efa304c3a9967fb41dc6e90";
 
 fn vectors(file: &str) -> Vec<Value> {
     let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))

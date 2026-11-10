@@ -500,15 +500,37 @@ fn assert_mailbox_key(name: &str, case: &Value, key: &lepic_crypto::SecretKey) {
     );
 }
 
-/// `testdata/vectors/keys/epic1_proof_key_*.json`: the epic1 proof key of each account,
-/// network and address index is the generator's Ed25519 key.
+/// `testdata/vectors/keys/epic1_proof_key_*.json`: the proof key of the epic1 address at index 0
+/// of each account and network is the generator's Ed25519 key, and
+/// `epic1_indexed_proof_key_*.json` gives the numbered addresses after it.
 #[test]
 fn epic1_proof_keys_are_the_vectors() {
     for name in ["epic1_proof_key_seed32", "epic1_proof_key_seed16"] {
         let vector = keys_vector(name);
         let seed = seed_of(&vector);
         for case in vector["expected"]["cases"].as_array().unwrap() {
+            assert!(case.get("index").is_none(), "{name} {case}");
+            let key = lepic_wallet::namespace::epic1_proof_key(
+                &seed,
+                account_of(case),
+                network_of(case),
+                0,
+            )
+            .unwrap();
+            assert_proof_key(&key, case, name);
+        }
+    }
+    for name in [
+        "epic1_indexed_proof_key_seed32",
+        "epic1_indexed_proof_key_seed16",
+    ] {
+        let vector = keys_vector(name);
+        let seed = seed_of(&vector);
+        let cases = vector["expected"]["cases"].as_array().unwrap();
+        assert!(!cases.is_empty());
+        for case in cases {
             let index = u32::try_from(case["index"].as_u64().unwrap()).unwrap();
+            assert_ne!(index, 0, "{name} {case}");
             let key = lepic_wallet::namespace::epic1_proof_key(
                 &seed,
                 account_of(case),
@@ -516,18 +538,49 @@ fn epic1_proof_keys_are_the_vectors() {
                 index,
             )
             .unwrap();
-            assert_eq!(
-                key.to_bytes().as_slice(),
-                hex_bytes(case["ed25519_seed"].as_str().unwrap()),
-                "{name} {case}"
-            );
-            assert_eq!(
-                key.verifying_key().as_bytes().as_slice(),
-                hex_bytes(case["public_key"].as_str().unwrap()),
-                "{name} {case}"
-            );
+            assert_proof_key(&key, case, name);
         }
     }
+}
+
+fn assert_proof_key(key: &ed25519_dalek::SigningKey, case: &Value, name: &str) {
+    assert_eq!(
+        key.to_bytes().as_slice(),
+        hex_bytes(case["ed25519_seed"].as_str().unwrap()),
+        "{name} {case}"
+    );
+    assert_eq!(
+        key.verifying_key().as_bytes().as_slice(),
+        hex_bytes(case["public_key"].as_str().unwrap()),
+        "{name} {case}"
+    );
+}
+
+fn pairing_vectors(file: &str) -> Vec<Value> {
+    let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../testdata/vectors/pairing")
+        .join(file);
+    let file: Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+    let cases = file["vectors"].as_array().unwrap().clone();
+    assert!(!cases.is_empty());
+    cases
+}
+
+fn assert_seal_key(key: &lepic_contact::EncSecretKey, case: &Value) {
+    assert_eq!(
+        key.expose_bytes().as_slice(),
+        hex_bytes(case["seal_sk"].as_str().unwrap()),
+        "{case}"
+    );
+    assert_eq!(
+        key.public_key().as_bytes().as_slice(),
+        hex_bytes(case["seal_pk"].as_str().unwrap()),
+        "{case}"
+    );
+}
+
+fn seed_of_case(case: &Value) -> lepic_keychain::Seed {
+    lepic_keychain::Seed::from_entropy(&hex_bytes(case["seed"].as_str().unwrap())).unwrap()
 }
 
 /// `testdata/vectors/pairing/seal_keys.json`, from the pairing kit: the seal key of each
@@ -535,14 +588,7 @@ fn epic1_proof_keys_are_the_vectors() {
 #[test]
 fn seal_keys_are_the_vectors() {
     use lepic_wallet::namespace::{SealKeyKind, seal_key};
-    let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../testdata/vectors/pairing/seal_keys.json");
-    let file: Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
-    let cases = file["vectors"].as_array().unwrap();
-    assert!(!cases.is_empty());
-    for case in cases {
-        let seed =
-            lepic_keychain::Seed::from_entropy(&hex_bytes(case["seed"].as_str().unwrap())).unwrap();
+    for case in pairing_vectors("seal_keys.json") {
         let kind = match case["kind_name"].as_str().unwrap() {
             "epic1" => SealKeyKind::Epic1,
             "onion" => SealKeyKind::Onion,
@@ -551,29 +597,32 @@ fn seal_keys_are_the_vectors() {
             other => panic!("unknown seal key kind {other}"),
         };
         assert_eq!(u64::from(kind.byte()), case["kind"].as_u64().unwrap());
-        let index = u32::try_from(case["index"].as_u64().unwrap()).unwrap();
-        let key = if matches!(kind, SealKeyKind::Epic1) {
-            lepic_wallet::namespace::epic1_seal_key(
-                &seed,
-                account_of(case),
-                network_of(case),
-                index,
-            )
-        } else {
-            assert_eq!(index, 0, "{case}");
-            seal_key(&seed, account_of(case), network_of(case), kind)
-        }
+        assert!(case.get("index").is_none(), "{case}");
+        let key = seal_key(
+            &seed_of_case(&case),
+            account_of(&case),
+            network_of(&case),
+            kind,
+        )
         .unwrap();
-        assert_eq!(
-            key.expose_bytes().as_slice(),
-            hex_bytes(case["seal_sk"].as_str().unwrap()),
-            "{case}"
-        );
-        assert_eq!(
-            key.public_key().as_bytes().as_slice(),
-            hex_bytes(case["seal_pk"].as_str().unwrap()),
-            "{case}"
-        );
+        assert_seal_key(&key, &case);
+    }
+}
+
+/// `testdata/vectors/pairing/epic1_seal_keys.json`, from the pairing kit: the seal key of each
+/// numbered epic1 address; index 0 is the epic1 key of `seal_keys.json`.
+#[test]
+fn epic1_seal_keys_are_the_vectors() {
+    for case in pairing_vectors("epic1_seal_keys.json") {
+        let index = u32::try_from(case["index"].as_u64().unwrap()).unwrap();
+        let key = lepic_wallet::namespace::epic1_seal_key(
+            &seed_of_case(&case),
+            account_of(&case),
+            network_of(&case),
+            index,
+        )
+        .unwrap();
+        assert_seal_key(&key, &case);
     }
 }
 

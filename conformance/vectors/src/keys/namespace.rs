@@ -17,7 +17,9 @@
 //! - listing signature: ECDSA by the listing key over SHA-256(SHA-256(tag) || SHA-256(tag) ||
 //!   len(domain) (u8) || domain || message), tag "lepic/listing-signature/v1";
 //! - epic1 proof key: Ed25519 from BLAKE2b(key = seed, "lepic-wallet epic1 proof key v1" ||
-//!   account (u32 BE) || net || index (u32 BE));
+//!   account (u32 BE) || net) for the address at index 0, and from BLAKE2b(key = seed,
+//!   "lepic-wallet epic1 indexed proof key v1" || account (u32 BE) || net || index (u32 BE)) for
+//!   index 1 and up;
 //! - reply mailbox, post key and link mailbox: BLAKE2b(key = seed, label || account (u32 BE) ||
 //!   net || slate_id (16) || counter), with `role` before the counter for a post key, and
 //!   `kind || n (u32 BE)` in place of the slate id for a link mailbox; the counter from 0 up to the
@@ -49,6 +51,7 @@ const ED25519_SPKI_PREFIX: [u8; 12] = [
     0x30, 0x2a, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x03, 0x21, 0x00,
 ];
 const EPIC1_PROOF_KEY_LABEL: &[u8] = b"lepic-wallet epic1 proof key v1";
+const EPIC1_INDEXED_PROOF_KEY_LABEL: &[u8] = b"lepic-wallet epic1 indexed proof key v1";
 const REPLY_MAILBOX_LABEL: &[u8] = b"lepic-wallet reply mailbox v1";
 const POST_KEY_LABEL: &[u8] = b"lepic-wallet post key v1";
 const LINK_MAILBOX_LABEL: &[u8] = b"lepic-wallet link mailbox v1";
@@ -568,7 +571,6 @@ struct Epic1ProofInputs {
 #[derive(Serialize)]
 struct Epic1ProofCase {
     account: u32,
-    index: u32,
     network: &'static str,
     net: u8,
     ed25519_seed: String,
@@ -581,21 +583,80 @@ fn epic1_proof_keys(pins: &KeysPins<'_>) -> Result<Vec<Rendered>, Error> {
         let mut cases = Vec::new();
         for account in ACCOUNTS {
             for network in Network::ALL {
-                for index in [0u32, 1, u32::MAX] {
+                let ed_seed = keyed(
+                    seed.entropy,
+                    &[
+                        EPIC1_PROOF_KEY_LABEL,
+                        &account.to_be_bytes(),
+                        &[net_byte(network)],
+                    ],
+                );
+                let pair =
+                    signature::Ed25519KeyPair::from_seed_unchecked(&ed_seed).map_err(|_| {
+                        Error::reference("epic1 proof key")(Inconsistent("key rejected"))
+                    })?;
+                cases.push(Epic1ProofCase {
+                    account,
+                    network: network.name(),
+                    net: net_byte(network),
+                    ed25519_seed: hex(ed_seed),
+                    public_key: hex(signature::KeyPair::public_key(&pair).as_ref()),
+                });
+            }
+        }
+        let inputs = Epic1ProofInputs {
+            seed: hex(seed.entropy),
+            label: "lepic-wallet epic1 proof key v1",
+            accounts: ACCOUNTS.to_vec(),
+        };
+        let name = format!("epic1_proof_key_{}", seed.name);
+        vectors.push(render(AREA, &name, &pins.wallet, inputs, Cases { cases })?);
+    }
+    Ok(vectors)
+}
+
+#[derive(Serialize)]
+struct Epic1IndexedProofInputs {
+    seed: String,
+    label: &'static str,
+    accounts: Vec<u32>,
+    indexes: Vec<u32>,
+}
+
+#[derive(Serialize)]
+struct Epic1IndexedProofCase {
+    account: u32,
+    index: u32,
+    network: &'static str,
+    net: u8,
+    ed25519_seed: String,
+    public_key: String,
+}
+
+/// Index 0 is the key of `epic1_proof_keys`; these are the numbered addresses after it.
+const EPIC1_INDEXES: [u32; 3] = [1, 2, u32::MAX];
+
+fn epic1_indexed_proof_keys(pins: &KeysPins<'_>) -> Result<Vec<Rendered>, Error> {
+    let mut vectors = Vec::new();
+    for seed in &SEEDS {
+        let mut cases = Vec::new();
+        for account in ACCOUNTS {
+            for network in Network::ALL {
+                for index in EPIC1_INDEXES {
                     let ed_seed = keyed(
                         seed.entropy,
                         &[
-                            EPIC1_PROOF_KEY_LABEL,
+                            EPIC1_INDEXED_PROOF_KEY_LABEL,
                             &account.to_be_bytes(),
                             &[net_byte(network)],
                             &index.to_be_bytes(),
                         ],
                     );
-                    let pair = signature::Ed25519KeyPair::from_seed_unchecked(&ed_seed)
-                        .map_err(|_| {
+                    let pair =
+                        signature::Ed25519KeyPair::from_seed_unchecked(&ed_seed).map_err(|_| {
                             Error::reference("epic1 proof key")(Inconsistent("key rejected"))
                         })?;
-                    cases.push(Epic1ProofCase {
+                    cases.push(Epic1IndexedProofCase {
                         account,
                         index,
                         network: network.name(),
@@ -606,12 +667,13 @@ fn epic1_proof_keys(pins: &KeysPins<'_>) -> Result<Vec<Rendered>, Error> {
                 }
             }
         }
-        let inputs = Epic1ProofInputs {
+        let inputs = Epic1IndexedProofInputs {
             seed: hex(seed.entropy),
-            label: "lepic-wallet epic1 proof key v1",
+            label: "lepic-wallet epic1 indexed proof key v1",
             accounts: ACCOUNTS.to_vec(),
+            indexes: EPIC1_INDEXES.to_vec(),
         };
-        let name = format!("epic1_proof_key_{}", seed.name);
+        let name = format!("epic1_indexed_proof_key_{}", seed.name);
         vectors.push(render(AREA, &name, &pins.wallet, inputs, Cases { cases })?);
     }
     Ok(vectors)
@@ -821,6 +883,7 @@ pub(super) fn generate(pins: &KeysPins<'_>) -> Result<Vec<Rendered>, Error> {
     vectors.extend(api_tls_keys(pins)?);
     vectors.extend(address_proofs(pins)?);
     vectors.extend(epic1_proof_keys(pins)?);
+    vectors.extend(epic1_indexed_proof_keys(pins)?);
     vectors.extend(epicbox_mailbox_keys(pins)?);
     vectors.extend(check_codes(pins)?);
     Ok(vectors)
