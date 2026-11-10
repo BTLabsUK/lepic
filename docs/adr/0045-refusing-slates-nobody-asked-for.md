@@ -52,11 +52,42 @@ Hosts expose the switches as settings: `refuse_unsolicited_payments` and
 Core sets no limits and ties nothing to the profile; a host that states "takes no payments"
 chooses whether to turn the refusal on too.
 
+## An epic1 payee that refuses the amount
+
+An epic1 payment has no S2 to carry a refusal, and the payer's S1 came through the link mailbox,
+so the payer would wait for its TTL (1,440 blocks) with its inputs locked. When the payee's
+engine refuses an epic1 S1 because the amount is not the one the link issued, the payee seals a
+`declined` notice (message type `0x02`, the shape above, with an extra `reason` key of `amount`
+that readers ignore) to the S1's reply key. The envelope is anonymous, so it needs no contact. It
+is posted armoured (`BEGINEPICSEALED.`) to the S1's reply mailbox.
+
+- The payee keeps the sealed notice in the setting `epic1.refusal.<slate id>` for 7 days and at
+  most 64 at once. It posts only to a reply relay that is in the wallet's relay list, in the same
+  pass that posts trusted S2 answers. For any other relay it posts nothing, and the payer's TTL
+  frees the inputs.
+- The payer reads its reply mailbox as before. An armoured S2 goes to the finalize path. An
+  armoured sealed envelope is opened with the slate's reply key and accepted only when it is a
+  `declined` notice for that slate id. A payer takes it only for its own epic1 payment, only while
+  the send is `sent`, has no S2 stored and is not finalized. It then cancels the send, which
+  frees its inputs, raises `PaymentDeclined` once and records `notice.send_declined.<slate id>`,
+  as for a receiver that answered over HTTP, Tor or a contact mailbox.
+- A notice for another slate or of another kind leaves the payment waiting. A notice that comes
+  after the S2 is noted and cancels nothing.
+
+Limits. The notice is unpadded, so the relay can tell it from an S2 by its size. The relay of the
+reply mailbox knows the reply public key, so it could forge a refusal; it could already drop the
+S2, and the payer's own funds are only released, never moved. A refusal that comes before the S2
+in one drain cancels the send, and the later S2 then fails to finalize.
+
+No store migration, and the wire adds no message type.
+
 ## Consequences
 
 - No store migration: the switches live in the wallet's config, and the sender's record is a
   setting.
-- The wire is unchanged. LEPIC 26.11.3 (b6f5003f) and older acknowledge a `declined` for their
+- The wire adds no type. The `declined` notice of an epic1 refusal is a sealed notice posted to a
+  reply mailbox, where builds that only know S2 answers drop it; their payer waits for the TTL.
+- The wire is unchanged for the refusals above. LEPIC 26.11.3 (b6f5003f) and older acknowledge a `declined` for their
   own S1 and ignore it: their send stays "Sent · Not collected" until their user cancels it.
 - Wallets that never read notices (epic-wallet CLI and GUI, Stack Wallet) send unmarked S1s over
   Epicbox and get no notice; their send waits until their user cancels it. Over HTTP or Tor they

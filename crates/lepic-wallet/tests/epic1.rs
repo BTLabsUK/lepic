@@ -20,9 +20,14 @@ mod support;
 mod world;
 
 use helpers::relays;
+use lepic_contact::{Content, HintRule, MessageType, armor, seal};
+use lepic_epicbox::{Domain, EpicboxAddress, Network as RelayNetwork};
 use lepic_primitives::amount::Amount;
 use lepic_primitives::params::Network;
+use lepic_slate::model::SlateId;
+use lepic_store::TxState;
 use lepic_transport::host_rule::HostClass;
+use lepic_wallet::Event;
 use lepic_wallet::selection::SelectionStrategy;
 use lepic_wallet::send::SendRequest;
 use lepic_wallet_contacts::epic1_testing::{
@@ -125,6 +130,62 @@ impl World {
             .unwrap();
         assert!(answers.iter().all(|answer| answer.posted));
         answers.len()
+    }
+
+    /// The refusal of the payment `slate_id` as the payee seals it: `body` as a notice sealed
+    /// to the payer's reply key for the slate, armored.
+    fn refusal_of(&self, slate_id: SlateId, body: &str) -> String {
+        let reply = lepic_wallet_contacts::contact_root(
+            &self.payer.keychain(),
+            &lepic_keychain::Identifier::new(2, [0, 0, 0, 0]).unwrap(),
+            Network::Floonet,
+        )
+        .unwrap()
+        .reply_key(*slate_id.as_bytes())
+        .unwrap();
+        let key =
+            lepic_contact::EncSecretKey::from_bytes(*reply.expose_x25519_secret()).public_key();
+        let mut rng = rand::rngs::StdRng::seed_from_u64(31);
+        let envelope = seal(
+            lepic_contact::Network::Floonet,
+            &key,
+            HintRule::ReplyKey,
+            &Content::new(MessageType::Notice, body.as_bytes().to_vec()),
+            None,
+            &mut rng,
+        )
+        .unwrap();
+        armor(&envelope)
+    }
+
+    /// The payer's reply mailbox of the payment `slate_id`.
+    fn reply_mailbox(&self, slate_id: SlateId) -> EpicboxAddress {
+        let secret = self
+            .payer
+            .wallet
+            .reply_mailbox_key(
+                ACCOUNT,
+                lepic_contact::Network::Floonet,
+                slate_id.as_bytes(),
+            )
+            .unwrap();
+        EpicboxAddress::new(
+            lepic_crypto::PublicKey::from_secret_key(&secret).unwrap(),
+            RelayNetwork::Floonet,
+            Domain::parse("relay.test").unwrap(),
+            Some(80),
+        )
+    }
+
+    fn payer_state(&self, tx_id: lepic_store::TxId) -> TxState {
+        self.payer
+            .read(|repos| repos.transaction(tx_id))
+            .unwrap()
+            .state
+    }
+
+    fn payer_locked(&self) -> Amount {
+        self.payer.wallet.balance(ACCOUNT).unwrap().locked
     }
 
     /// Posts `text` to the first mailbox of `link` from a peer key.
@@ -624,4 +685,116 @@ fn the_payee_refuses_a_payment_that_is_not_the_amount_it_issued() {
     assert!(links.iter().all(|link| link.used_at.is_none()));
     world.collect(&world.payer);
     assert!(world.node.pushed_transactions().is_empty());
+}
+
+fn declined_events(events: &mut tokio::sync::broadcast::Receiver<Event>) -> usize {
+    std::iter::from_fn(|| events.try_recv().ok())
+        .filter(|event| matches!(event, Event::PaymentDeclined(_)))
+        .count()
+}
+
+fn declined_body(slate_id: SlateId) -> String {
+    format!(r#"{{"lepic":1,"type":"declined","slate_id":"{slate_id}","reason":"amount"}}"#)
+}
+
+#[test]
+fn a_payer_whose_payment_the_payee_refuses_gets_its_inputs_back() {
+    let world = World::new();
+    let issued = world.issue_link(&world.issuer, Epic1LinkKind::OnScreen, &[]);
+    let open = without_amount(&issued.link).unwrap();
+    let paid = world.pay(&open, false, half(), false).unwrap();
+    assert_ne!(world.payer_locked(), Amount::ZERO);
+    let mut events = world.payer.wallet.subscribe();
+
+    // The payee refuses and tells the payer through the reply mailbox the payment named.
+    assert_eq!(world.taken(&world.issuer), 0);
+    assert_eq!(world.relay.pending(&world.reply_mailbox(paid.slate_id)), 1);
+    assert_eq!(world.payer_state(paid.tx_id), TxState::Sent);
+
+    world.collect(&world.payer);
+    assert_eq!(world.payer_state(paid.tx_id), TxState::Cancelled);
+    assert_eq!(world.payer_locked(), Amount::ZERO);
+    assert_eq!(declined_events(&mut events), 1);
+    let details = world
+        .block_on(world.payer.wallet.transaction_details(paid.tx_id))
+        .unwrap();
+    assert!(details.receiver_declined_at.is_some());
+    assert_eq!(world.relay.pending(&world.reply_mailbox(paid.slate_id)), 0);
+
+    // Collecting again changes nothing, and the payee still holds nothing of the payment.
+    world.collect(&world.issuer);
+    world.collect(&world.payer);
+    assert_eq!(declined_events(&mut events), 0);
+    assert_eq!(world.payer_state(paid.tx_id), TxState::Cancelled);
+    assert!(
+        world
+            .block_on(world.issuer.wallet.transactions(ACCOUNT))
+            .unwrap()
+            .is_empty()
+    );
+    assert!(world.node.pushed_transactions().is_empty());
+}
+
+#[test]
+fn a_refusal_that_is_not_for_the_payment_leaves_it_waiting() {
+    let world = World::new();
+    let issued = world.issue_link(&world.issuer, Epic1LinkKind::OnScreen, &[]);
+    let paid = world.pay(&issued.link, false, send(), false).unwrap();
+    let mailbox = world.reply_mailbox(paid.slate_id);
+    let other = SlateId::from_bytes([9; 16]);
+    let not_refusals = [
+        // Names another slate.
+        world.refusal_of(paid.slate_id, &declined_body(other)),
+        // Another notice of the family.
+        world.refusal_of(
+            paid.slate_id,
+            &format!(
+                r#"{{"lepic":1,"type":"cancelled","slate_id":"{}"}}"#,
+                paid.slate_id
+            ),
+        ),
+        // Not a notice.
+        world.refusal_of(paid.slate_id, "no"),
+        // Sealed to a key that is not the payment's reply key.
+        world.refusal_of(other, &declined_body(paid.slate_id)),
+    ];
+    for text in &not_refusals {
+        world.post(7, &mailbox, text, 1);
+    }
+    let mut events = world.payer.wallet.subscribe();
+
+    world.collect(&world.payer);
+    assert_eq!(world.relay.pending(&mailbox), 0);
+    assert_eq!(world.payer_state(paid.tx_id), TxState::Sent);
+    assert_ne!(world.payer_locked(), Amount::ZERO);
+    assert_eq!(declined_events(&mut events), 0);
+
+    // The payment goes on: the payee answers and the payer finalizes.
+    assert_eq!(world.taken(&world.issuer), 1);
+    world.collect(&world.payer);
+    assert_eq!(world.node.pushed_transactions().len(), 1);
+}
+
+#[test]
+fn a_refusal_that_comes_after_the_answer_does_not_cancel_the_payment() {
+    let world = World::new();
+    let issued = world.issue_link(&world.issuer, Epic1LinkKind::OnScreen, &[]);
+    let paid = world.pay(&issued.link, false, send(), false).unwrap();
+    assert_eq!(world.taken(&world.issuer), 1);
+    world.post(
+        7,
+        &world.reply_mailbox(paid.slate_id),
+        &world.refusal_of(paid.slate_id, &declined_body(paid.slate_id)),
+        1,
+    );
+    let mut events = world.payer.wallet.subscribe();
+
+    world.collect(&world.payer);
+    assert_eq!(world.node.pushed_transactions().len(), 1);
+    assert_ne!(world.payer_state(paid.tx_id), TxState::Cancelled);
+    assert_eq!(declined_events(&mut events), 0);
+    let details = world
+        .block_on(world.payer.wallet.transaction_details(paid.tx_id))
+        .unwrap();
+    assert_eq!(details.receiver_declined_at, None);
 }

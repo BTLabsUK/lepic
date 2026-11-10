@@ -30,8 +30,8 @@ use lepic_primitives::amount::Amount;
 use lepic_primitives::error_chain::ErrorChain;
 use lepic_primitives::params::Network;
 use lepic_seal::{
-    ArmorMarker, EncPublicKey, Hint, HintRule, KeyClass, SealedEnvelope, TxContent, TxKey,
-    armor_tx, dearmor_marked, seal_tx,
+    ArmorMarker, Content, EncPublicKey, Hint, HintRule, KeyClass, MessageType, SealedEnvelope,
+    TxContent, TxKey, armor, armor_tx, dearmor_marked, seal, seal_tx,
 };
 use lepic_slate::codec::{MediaType, WireSlate};
 use lepic_slate::model::{ProofAddress, SlateId};
@@ -40,6 +40,7 @@ use lepic_store::{AccountIndex, Repositories, SlateStage, TxId, TxState, WalletS
 use lepic_transport::host_rule::{self, HostReport};
 use lepic_transport::transport::{BoxFuture, Location};
 use lepic_wallet::namespace::{LinkMailbox, PostRole};
+use lepic_wallet::notice::{Notice, NoticeKind, Payload, classify_text};
 use lepic_wallet::ports::{SecretVault, StoreOpener};
 use lepic_wallet::receive::{ProofKey, ReceiveRequest};
 use lepic_wallet::send::{Delivery, SendError, SendRequest};
@@ -77,6 +78,18 @@ const ANSWER_PREFIX: &str = "epic1.answer.";
 
 /// A payment this wallet made to an epic1 link, by slate id.
 const PAY_PREFIX: &str = "epic1.pay.";
+
+/// The refusal this wallet sealed for an S1 taken at a link mailbox and not received, by slate
+/// id.
+const REFUSAL_PREFIX: &str = "epic1.refusal.";
+
+/// How long a refusal is kept after it was sealed. A payment refused again within it, as when
+/// the relay delivers the S1 a second time, is not refused again.
+const REFUSAL_KEPT_FOR: jiff::SignedDuration = jiff::SignedDuration::from_hours(7 * 24);
+
+/// The most refusals kept at once; a payment refused beyond it is dropped without one, and its
+/// payer frees its inputs when its TTL passes.
+const MAX_REFUSALS: usize = 64;
 
 /// Why an epic1 call refused its input.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
@@ -304,6 +317,22 @@ struct AnswerState {
     posted: bool,
 }
 
+/// The refusal of a payment: the notice sealed to the payer's reply key, to post to its reply
+/// mailbox.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct RefusalState {
+    /// The account whose link mailbox the payment came to.
+    account: u32,
+    /// The sealed notice, hex.
+    envelope: String,
+    /// The payer's reply mailbox key, hex, and relay.
+    mailbox_key: String,
+    mailbox: String,
+    posted: bool,
+    /// Unix seconds when it was sealed.
+    at: i64,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct StoredEntry {
     /// The link mailbox key, hex.
@@ -362,6 +391,35 @@ fn ring_key(account: AccountIndex) -> String {
 
 fn answer_key(slate_id: SlateId) -> String {
     format!("{ANSWER_PREFIX}{slate_id}")
+}
+
+fn refusal_key(slate_id: SlateId) -> String {
+    format!("{REFUSAL_PREFIX}{slate_id}")
+}
+
+/// The reason of a refusal for an amount other than the one the link asks.
+const REASON_AMOUNT: &str = "amount";
+
+/// What a refusal says: the `declined` notice of ADR 0016 for `slate_id`, with the reason
+/// beside it. A reader that does not know the reason ignores it.
+#[derive(Serialize)]
+struct RefusalBody {
+    lepic: u64,
+    #[serde(rename = "type")]
+    kind: &'static str,
+    slate_id: String,
+    reason: &'static str,
+}
+
+fn refusal_body(slate_id: SlateId, reason: &'static str) -> Vec<u8> {
+    let body = RefusalBody {
+        lepic: lepic_wallet::notice::NOTICE_VERSION,
+        kind: "declined",
+        slate_id: slate_id.to_string(),
+        reason,
+    };
+    // A struct of strings and a number always serializes.
+    serde_json::to_vec(&body).unwrap_or_default()
 }
 
 fn pay_key(slate_id: SlateId) -> String {
@@ -781,11 +839,163 @@ where
         Ok(())
     }
 
+    /// Seals the refusal of the payment `slate_id` to its reply key and stores it to post. One
+    /// already stored for the slate is kept, as is the store when [`MAX_REFUSALS`] are kept.
+    async fn store_refusal(
+        &self,
+        account: AccountIndex,
+        slate_id: SlateId,
+        reply_key: &EncPublicKey,
+        reply_mailbox: &lepic_seal::ReplyMailbox,
+    ) -> Result<(), ContactError> {
+        let network = self.wallet.config().network;
+        let net = contact_network(network);
+        let body = refusal_body(slate_id, REASON_AMOUNT);
+        let envelope = {
+            let mut rng = LockedRng(&mut **self.wallet.ports().rng.lock());
+            seal(
+                net,
+                reply_key,
+                HintRule::ReplyKey,
+                &Content::new(MessageType::Notice, body),
+                None,
+                &mut rng,
+            )
+            .map_err(ContactError::Encode)?
+        };
+        let state = RefusalState {
+            account: account.0,
+            envelope: hex::encode(&envelope),
+            mailbox_key: hex::encode(reply_mailbox.key()),
+            mailbox: reply_mailbox.relay().to_owned(),
+            posted: false,
+            at: self.wallet.ports().clock.now().as_second(),
+        };
+        let text = to_text(&state, "epic1 refusal")?;
+        let session = self.wallet.session()?;
+        self.contact_work(move |_, _| {
+            session.store.write(|repos| {
+                let key = refusal_key(slate_id);
+                if repos.setting(&key)?.is_some()
+                    || repos.settings_with_prefix(REFUSAL_PREFIX)?.len() >= MAX_REFUSALS
+                {
+                    return Ok::<_, ContactError>(());
+                }
+                repos.put_setting(&key, &text)?;
+                Ok(())
+            })
+        })
+        .await?;
+        info!(slate_id = %slate_id, "epic1 refusal stored");
+        Ok(())
+    }
+
+    /// Posts the stored refusal of `slate_id` to the payer's reply mailbox, from the key the
+    /// answer to the slate would be posted from.
+    async fn post_stored_refusal(
+        &self,
+        relays: &ContactRelays,
+        slate_id: SlateId,
+    ) -> Result<(), ContactError> {
+        let network = self.wallet.config().network;
+        let net = contact_network(network);
+        let session = self.wallet.session()?;
+        let state: RefusalState = self
+            .contact_work(move |_, _| {
+                session
+                    .store
+                    .read(|repos| load(repos, &refusal_key(slate_id), "epic1 refusal"))
+            })
+            .await?;
+        let (endpoint, report) = mailbox_endpoint(&state.mailbox, relays)?;
+        let key = hex::unhex(&state.mailbox_key)
+            .and_then(|key| PublicKey::from_bytes(&key).ok())
+            .ok_or(corrupt("epic1 refusal"))?;
+        let envelope = hex::unhex(&state.envelope).ok_or(corrupt("epic1 refusal"))?;
+        let to = EpicboxAddress::new(
+            key,
+            relay_network(network),
+            endpoint.domain().clone(),
+            Some(endpoint.port()),
+        );
+        let secret = self.wallet.post_key(
+            AccountIndex(state.account),
+            net,
+            slate_id.as_bytes(),
+            PostRole::Responder,
+        )?;
+        let from = identity(secret, network, &endpoint)?;
+        client_for(relays, endpoint, report.in_relay_list)
+            .post(&from, &to, &armor(&envelope))
+            .await
+            .map_err(ContactError::Relay)?;
+        let session = self.wallet.session()?;
+        self.contact_work(move |_, _| {
+            session.store.write(|repos| {
+                let mut state: RefusalState = load(repos, &refusal_key(slate_id), "epic1 refusal")?;
+                state.posted = true;
+                repos.put_setting(&refusal_key(slate_id), &to_text(&state, "epic1 refusal")?)?;
+                Ok::<_, ContactError>(())
+            })
+        })
+        .await?;
+        info!(slate_id = %slate_id, "epic1 refusal posted");
+        Ok(())
+    }
+
+    /// Posts the refusals not posted yet whose reply mailbox is on a relay in the relay list.
+    /// A refusal for any other relay is not posted: the user confirms a relay for an answer,
+    /// and a refusal only spares the payer a wait. One that fails is tried again at the next
+    /// cycle.
+    async fn post_trusted_refusals(&self, relays: &ContactRelays) {
+        let session = match self.wallet.session() {
+            Ok(session) => session,
+            Err(error) => {
+                warn!(error = %ErrorChain(&error), "epic1 refusals not listed");
+                return;
+            }
+        };
+        let stored = self
+            .contact_work(move |_, _| {
+                Ok(session
+                    .store
+                    .read(|repos| repos.settings_with_prefix(REFUSAL_PREFIX))?)
+            })
+            .await;
+        let stored = match stored {
+            Ok(stored) => stored,
+            Err(error) => {
+                warn!(error = %ErrorChain(&error), "epic1 refusals not listed");
+                return;
+            }
+        };
+        for (key, text) in stored {
+            let Some(slate_id) = key
+                .strip_prefix(REFUSAL_PREFIX)
+                .and_then(|id| SlateId::parse(id).ok())
+            else {
+                continue;
+            };
+            let Ok(state) = from_text::<RefusalState>(&text, "epic1 refusal") else {
+                continue;
+            };
+            let trusted = mailbox_endpoint(&state.mailbox, relays)
+                .is_ok_and(|(_, report)| report.in_relay_list);
+            if state.posted || !trusted {
+                continue;
+            }
+            if let Err(error) = self.post_stored_refusal(relays, slate_id).await {
+                warn!(slate_id = %slate_id, error = %ErrorChain(&error), "epic1 refusal not posted");
+            }
+        }
+    }
+
     /// Takes a payment that came to the link mailbox of `account`: an S1 sealed to the epic1
     /// seal key, received with the epic1 proof key, its S2 sealed to the slate's reply key and
     /// stored to post. Returns whether it was new; one taken before changes nothing. A payment
     /// whose amount is not the one the link asks is refused with
-    /// [`Epic1Refusal::AmountMismatch`] before anything is received.
+    /// [`Epic1Refusal::AmountMismatch`] before anything is received, and a notice that says so
+    /// is sealed to its reply key and stored to post to its reply mailbox.
     async fn take_payment(
         &self,
         account: AccountIndex,
@@ -828,6 +1038,15 @@ where
             return Ok(false);
         }
         if asked.is_some_and(|asked| asked != amount.value()) {
+            if let Err(error) = self
+                .store_refusal(account, slate_id, &reply_key, &reply_mailbox)
+                .await
+            {
+                if passes(&error) {
+                    return Err(error);
+                }
+                warn!(slate_id = %slate_id, error = %ErrorChain(&error), "epic1 refusal not stored");
+            }
             return Err(refused(Epic1Refusal::AmountMismatch));
         }
         let received = self
@@ -1196,6 +1415,84 @@ where
         })
     }
 
+    /// The secret of the reply mailbox of `slate_id`, and the payment this wallet made to an
+    /// epic1 link under it, when it holds one.
+    async fn reply_state(
+        &self,
+        slate_id: SlateId,
+        account: AccountIndex,
+    ) -> Result<(lepic_seal::EncSecretKey, Option<PayState>), ContactError> {
+        let network = self.wallet.config().network;
+        let session = self.wallet.session()?;
+        self.contact_work(move |_, _| {
+            let secret = reply_secret(&session.keychain, network, account, slate_id)?;
+            let state = session.store.read(|repos| {
+                Ok::<_, ContactError>(
+                    repos
+                        .setting(&pay_key(slate_id))?
+                        .and_then(|text| from_text::<PayState>(&text, "epic1 payment").ok()),
+                )
+            })?;
+            Ok((secret, state))
+        })
+        .await
+    }
+
+    /// Takes the refusal of the payment `slate_id` that came to its reply mailbox: a sealed
+    /// `declined` notice for the slate, anonymous, sealed to the reply key the S1 gave the payee
+    /// and opened with its secret. The relay of the reply mailbox could forge one, which only
+    /// frees this wallet's inputs (ADR 0045). The wallet cancels the payment, which frees its
+    /// inputs, as it does for a send declined unanswered. A refusal for a payment that is
+    /// finalized, was answered or ended changes nothing. Returns whether the payment was
+    /// cancelled by it.
+    async fn take_epic1_refusal(
+        &self,
+        slate_id: SlateId,
+        account: AccountIndex,
+        envelope: &[u8],
+    ) -> Result<bool, ContactError> {
+        let network = self.wallet.config().network;
+        let net = contact_network(network);
+        let sealed = SealedEnvelope::decode(envelope, net).map_err(ContactError::Decode)?;
+        let (secret, state) = self.reply_state(slate_id, account).await?;
+        let Some(state) = state else {
+            return Ok(false);
+        };
+        if state.finalized {
+            return Ok(false);
+        }
+        let opened = sealed.open(&secret).map_err(|_| ContactError::CannotOpen)?;
+        if opened.sender.is_some() {
+            return Err(refused(Epic1Refusal::Signed));
+        }
+        if opened.content.kind != MessageType::Notice {
+            return Err(refused(Epic1Refusal::WrongStage));
+        }
+        let text = std::str::from_utf8(&opened.content.body)
+            .map_err(|_| refused(Epic1Refusal::WrongStage))?;
+        match classify_text(text) {
+            Payload::Notice(Notice {
+                slate_id: named,
+                kind: NoticeKind::Declined,
+            }) if named == slate_id => {}
+            Payload::Notice(Notice {
+                slate_id: named, ..
+            }) if named != slate_id => {
+                return Err(refused(Epic1Refusal::OtherSlate));
+            }
+            _ => return Err(refused(Epic1Refusal::WrongStage)),
+        }
+        let cancelled = self
+            .wallet
+            .send_refused_by_receiver(slate_id)
+            .await
+            .map_err(ContactError::Wallet)?;
+        if cancelled {
+            info!(slate_id = %slate_id, "epic1 payment refused by its payee");
+        }
+        Ok(cancelled)
+    }
+
     /// Finalizes an S2 that came to the reply mailbox of the payment `slate_id` and posts it.
     /// An envelope at the reply mailbox of a slate that is not an epic1 payment is taken as
     /// the answer to an in-person code. Returns
@@ -1209,20 +1506,7 @@ where
         let network = self.wallet.config().network;
         let net = contact_network(network);
         let sealed = SealedEnvelope::decode(envelope, net).map_err(ContactError::Decode)?;
-        let session = self.wallet.session()?;
-        let (secret, state) = self
-            .contact_work(move |_, _| {
-                let secret = reply_secret(&session.keychain, network, account, slate_id)?;
-                let state = session.store.read(|repos| {
-                    Ok::<_, ContactError>(
-                        repos
-                            .setting(&pay_key(slate_id))?
-                            .and_then(|text| from_text::<PayState>(&text, "epic1 payment").ok()),
-                    )
-                })?;
-                Ok((secret, state))
-            })
-            .await?;
+        let (secret, state) = self.reply_state(slate_id, account).await?;
         let Some(state) = state else {
             return Ok(!self.take_envelope(envelope).await?.duplicate);
         };
@@ -1273,9 +1557,11 @@ where
     }
 
     /// Drains the live link mailboxes and the reply mailboxes of payments waiting for an S2,
-    /// and takes what they hold. Answers and payments whose transaction ended are forgotten,
-    /// as are on-screen links not used for [`ON_SCREEN_LIVE_FOR`]. Returns how many payments
-    /// were taken and S2s finalized.
+    /// and takes what they hold: a payment, an S2, or a refusal of a payment of this wallet.
+    /// Posts the answers and refusals sealed here whose reply relay is in the relay list.
+    /// Answers and payments whose transaction ended are forgotten, as are refusals kept for
+    /// [`REFUSAL_KEPT_FOR`] and on-screen links not used for [`ON_SCREEN_LIVE_FOR`]. Returns
+    /// how many payments were taken and S2s finalized.
     pub(crate) async fn collect_epic1(
         &self,
         relays: &ContactRelays,
@@ -1283,6 +1569,10 @@ where
         let now = self.wallet.ports().clock.now();
         let live_from = now
             .checked_sub(ON_SCREEN_LIVE_FOR)
+            .unwrap_or(Timestamp::UNIX_EPOCH)
+            .as_second();
+        let refusals_from = now
+            .checked_sub(REFUSAL_KEPT_FOR)
             .unwrap_or(Timestamp::UNIX_EPOCH)
             .as_second();
         let session = self.wallet.session()?;
@@ -1335,6 +1625,13 @@ where
                             repos.delete_setting(&key)?;
                         }
                     }
+                    for (key, text) in repos.settings_with_prefix(REFUSAL_PREFIX)? {
+                        let kept = from_text::<RefusalState>(&text, "epic1 refusal")
+                            .is_ok_and(|state| state.at >= refusals_from);
+                        if !kept {
+                            repos.delete_setting(&key)?;
+                        }
+                    }
                     Ok::<_, ContactError>((links, replies))
                 })
             })
@@ -1344,6 +1641,7 @@ where
             taken = taken.saturating_add(self.drain_replies(relays, replies).await?);
         }
         self.post_trusted_answers(relays).await;
+        self.post_trusted_refusals(relays).await;
         Ok(taken)
     }
 
@@ -1689,19 +1987,23 @@ where
             let MailboxContent::Opened(received) = message.into_content() else {
                 return Handled::Stored;
             };
-            let Ok((envelope, ArmorMarker::Tx)) = dearmor_marked(received.plaintext.expose_str())
-            else {
-                info!(
-                    reason = "not a slate envelope",
-                    "reply mailbox message dropped"
-                );
+            let Ok((envelope, marker)) = dearmor_marked(received.plaintext.expose_str()) else {
+                info!(reason = "not an envelope", "reply mailbox message dropped");
                 return Handled::Stored;
             };
-            match self
-                .book
-                .take_epic1_answer(slate_id, account, &envelope)
-                .await
-            {
+            let taken = match marker {
+                ArmorMarker::Tx => {
+                    self.book
+                        .take_epic1_answer(slate_id, account, &envelope)
+                        .await
+                }
+                ArmorMarker::Sealed => {
+                    self.book
+                        .take_epic1_refusal(slate_id, account, &envelope)
+                        .await
+                }
+            };
+            match taken {
                 Ok(new) => {
                     if new {
                         self.taken = self.taken.saturating_add(1);

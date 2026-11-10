@@ -1407,9 +1407,16 @@ Step 8, after the payee-shows-I1 codes (4.1).
    untrusted input: LEPIC reports it with its relay-list flag and address class and posts only
    when B's app says so; the app asks B about a relay not in B's own relay list (5.9, 10.15). B
    never answers to the Epicbox `from` (5.9). An S1 that came to two mailboxes is answered once.
-7. A collects the S2, opens it with its reply key, checks it against the stored S1, finalizes and
-   posts, whenever both have been online. If B never answers, the TTL frees A's inputs (24 hours by
-   default, 5.13), or A cancels and unlocks earlier.
+   When the engine refuses the S1 because its amount is not the one the link issued, B seals a
+   `declined` Notice (type `02`, anonymous, JSON body with `slate_id` and `reason` `amount`) to
+   the same reply key and posts it armoured (`BEGINEPICSEALED.`) to the same mailbox, but only
+   to a relay in B's own relay list; ADR 0045.
+7. A collects the reply mailbox. An S2 (`BEGINEPICTX.`) is opened with the reply key, checked
+   against the stored S1, finalized and posted, whenever both have been online. A sealed
+   envelope is opened with the same key and accepted only as a `declined` Notice for this slate
+   while the send is `sent` with no S2: A cancels the send, frees its inputs and reports the
+   refusal once. If B never answers, the TTL frees A's inputs (24 hours by default, 5.13), or A
+   cancels and unlocks earlier.
 8. An anonymous I1 sealed to an epic1 is refused (5.9). There is no invoice window (6.10).
 
 ### 6.4 Unknown receiver (no key known) — **[Shipped]**, unchanged
