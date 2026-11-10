@@ -157,14 +157,19 @@ ensure_wallet() {
     fi
 }
 
+# The phrase goes in the environment and the password is read from its file, so neither is in
+# any process's argument list.
 testdb_wallet() {
     local name="$1" phrase="$2" address
     address="$(w "${name}" wallet address | jq -r '.address // .epicbox // empty' 2>/dev/null || true)"
-    python3 - "${name}" "${phrase}" "$(cat "${E2E_STATE}/pw")" "${address}" <<'PY' >>"${RUN_LOG}" 2>&1 || true
+    E2E_TESTDB_PHRASE="${phrase}" python3 - "${name}" "${E2E_STATE}/pw" "${address}" <<'PY' >>"${RUN_LOG}" 2>&1 || true
 import sys, os
 sys.path.insert(0, os.path.expanduser("~/wallet-for-epic/tools/rellib/testdb"))
 from client import emit
-name, phrase, password, address = sys.argv[1:5]
+name, password_file, address = sys.argv[1:4]
+phrase = os.environ.pop("E2E_TESTDB_PHRASE")
+with open(password_file, encoding="utf-8") as f:
+    password = f.read().rstrip("\n")
 emit("wallet.put", name=name, role="qa", platform="linux-cli", phrase=phrase, password=password,
      note="epic1 e2e suite (interop/e2e), floonet", origin="lepic interop/e2e", state="active")
 if address:
