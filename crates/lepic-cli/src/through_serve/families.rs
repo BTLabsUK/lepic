@@ -66,6 +66,7 @@ fn owned_code(code: &InPersonCodeArg) -> InPersonCodeArg {
     }
 }
 
+#[allow(clippy::too_many_lines)] // one exhaustive match over the command enum
 pub(super) fn contact(args: &ContactArgs) -> Option<Call> {
     let ContactArgs {
         command,
@@ -233,6 +234,7 @@ fn payload(command: &ContactPayloadCommand) -> Option<Call> {
     }
 }
 
+#[allow(clippy::too_many_lines)] // one exhaustive match over the command enum
 pub(super) fn in_person(args: &InPersonArgs) -> Option<Call> {
     let InPersonArgs {
         command,

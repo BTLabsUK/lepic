@@ -12,9 +12,9 @@ use crate::exit::{CliError, ErrorKind};
 #[derive(Debug, Serialize, ToSchema)]
 pub(crate) struct Problem {
     /// Always `about:blank`: `code` says what went wrong.
-    #[serde(rename = "type")]
+    #[serde(rename = "type", serialize_with = "about_blank")]
     #[schema(value_type = String)]
-    kind: &'static str,
+    kind: (),
     /// The reason phrase of `status`.
     #[schema(value_type = String)]
     title: &'static str,
@@ -55,10 +55,15 @@ pub(crate) struct Problem {
     pub(crate) allow: Option<Box<String>>,
 }
 
+/// The value of `type`; a field that holds no data keeps `Problem` under clippy's size limit.
+fn about_blank<S: serde::Serializer>(_: &(), serializer: S) -> Result<S::Ok, S::Error> {
+    serializer.serialize_str("about:blank")
+}
+
 impl Problem {
     pub(crate) fn new(status: StatusCode, code: ErrorKind, detail: impl Into<String>) -> Self {
         Self {
-            kind: "about:blank",
+            kind: (),
             title: status.canonical_reason().unwrap_or(""),
             status: status.as_u16(),
             detail: detail.into(),

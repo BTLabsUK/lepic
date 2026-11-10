@@ -520,6 +520,7 @@ fn a_command_through_serve_prints_the_hint_of_a_direct_run() {
 /// commands run there and print what they print on their own, errors included, and a file a
 /// command reads or writes is read and written here (ADR 0053).
 #[test]
+#[allow(clippy::too_many_lines)] // A test reads best as one sequence of steps.
 fn the_route_covered_command_families_run_through_a_running_serve() {
     let mut host = TestHost::new();
     host.fund(SENDER_MNEMONIC, 0, FUNDING, 1);

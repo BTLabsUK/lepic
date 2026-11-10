@@ -214,7 +214,10 @@ mod tests {
     fn a_pointer_names_a_socket_to_try_before_the_default() {
         let dir = tempfile::tempdir().unwrap();
         let default = default_socket(dir.path());
-        assert_eq!(candidate_sockets(dir.path()), [default.clone()]);
+        assert_eq!(
+            candidate_sockets(dir.path()),
+            std::slice::from_ref(&default)
+        );
 
         let named = dir.path().join("other.sock");
         std::fs::write(
@@ -229,7 +232,10 @@ mod tests {
             default.as_os_str().as_encoded_bytes(),
         )
         .unwrap();
-        assert_eq!(candidate_sockets(dir.path()), [default.clone()]);
+        assert_eq!(
+            candidate_sockets(dir.path()),
+            std::slice::from_ref(&default)
+        );
     }
 
     #[test]
@@ -241,7 +247,7 @@ mod tests {
             std::fs::write(pointer_file(dir.path()), content).unwrap();
             assert_eq!(
                 candidate_sockets(dir.path()),
-                [default.clone()],
+                std::slice::from_ref(&default),
                 "{content:?}"
             );
         }
