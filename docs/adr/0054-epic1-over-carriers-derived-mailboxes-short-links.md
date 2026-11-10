@@ -272,11 +272,14 @@ late answer the send's state decides), never dropped as unknown.
 ### 9. One relay host, one connector
 
 - **One type.** Every relay host, from a link `r`, tag `09`, record `02`, the pool or the user's
-  settings, is one relay host type: `relay-domain` of RFC 0003 Appendix B.2 (letters, digits,
-  hyphens and dots, labels of 1 to 63 characters), with an optional port, compared and derived in
-  its canonical form (section 2). Numeric IPv4 shorthand (`127.1`, `0x7f000001`, `2130706433`) is
-  not a relay host. A settings value that loaded before this type keeps loading and keeps its
-  spelling on the carrier's wire. The type is carried unchanged from the parser to the connector.
+  settings, is one relay host type: `relay-domain` of RFC 0003 Appendix B.2, with an optional
+  port, compared and derived in its canonical form (section 2). For Epicbox it follows the
+  domain rule of Epicbox addresses, letters, digits and dots, because Epicbox wallets and relays
+  refuse any other character in an address; a carrier with a wider rule widens the type for its
+  own hosts. Numeric IPv4 shorthand (`127.1`, `0x7f000001`, `2130706433`) is not a relay host. A
+  settings value that loaded before this type keeps loading and keeps its spelling on the
+  carrier's wire. The type is carried unchanged from the parser to the connector. Until it
+  exists, each parser applies the same rule and runs the same relay host vectors (section 13).
 - **One connector.** Every outbound connection (carriers, direct sends) resolves through one
   resolver and classifies the resolved address once: loopback and unspecified addresses are
   refused; local-network addresses follow RFC 0003 O-18 for hosts the user entered and are refused
@@ -353,8 +356,8 @@ Required before code uses each part (ADR 0033 rule 8), from `conformance/` or th
   ignored, an epic1 of an unknown version refused as such, and the BIP-350 valid test string
   `11llll…ludsr8`.
 - **Relay hosts**: one vector file run against every parser (link `r`, tag `09`, record `02`, pool
-  entries, the Epicbox address domain): hyphens accepted, upper case folded, trailing dot, ports,
-  numeric IPv4 shorthand and over-long labels refused.
+  entries, the Epicbox address domain): upper case folded, a trailing dot dropped; hyphens,
+  numeric IPv4 shorthand and over-long labels refused; ports with and without the default.
 - **Reply route**: encode and decode, and each refusal of section 5.
 - **Envelopes**: type `0A` with and without `FE` and with a wrong Padmé length (refused), and an
   X25519 key with bit 255 set or `u ≥ p` (refused).
