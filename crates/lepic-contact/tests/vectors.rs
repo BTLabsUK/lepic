@@ -33,7 +33,7 @@ use serde_json::Value;
 
 const KIT_GENERATOR: &str = "epic-pairing-kit";
 const KIT_VERSION: &str = "0.5.0";
-const KIT_COMMIT: &str = "31dc5e4efa48e099f905ef6667c0c6d32679c1af";
+const KIT_COMMIT: &str = "a0ab4a3fe3440a74baa69ab848212644371df97b";
 
 fn vectors(file: &str) -> Vec<Value> {
     let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))

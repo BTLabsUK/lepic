@@ -597,7 +597,7 @@ comes last.
 | `06` | expires | u64 seconds | Advisory |
 | `07` | card | bytes | The sender's contact card (RFC 0002 §6) |
 | `08` | sender key | 32 | Sender's Ed25519 `sig_pk` for this contact; required with `FF` |
-| **`09`** | **reply mailbox** | **34–161** | **[Specified]** (draft 4). The Epicbox mailbox the answer is posted to: a 33-byte compressed secp256k1 key, then the ASCII `domain[:port]` of its relay (1–128 bytes in all; the domain is `relay-domain` of Appendix B.2: letters, digits, dots and hyphens, no hyphen at either end of a label; port 1–65535; 128 is LEPIC's limit, Epicbox sets none). Only with `03`, only in an anonymous S1 or I1 of type `0A`. Unknown to shipped builds, which refuse it (it is below `0x80`); that is intended, since only native readers get a `0A`. Tag `09` is unused at `main` (the envelope test refuses it). |
+| **`09`** | **reply mailbox** | **34–161** | **[Specified]** (draft 4). The Epicbox mailbox the answer is posted to: a 33-byte compressed secp256k1 key, then the ASCII `domain[:port]` of its relay (1–128 bytes in all; the domain is `relay-domain` of Appendix B.2: labels of letters and digits, no hyphens, as Epicbox addresses allow; port 1–65535; 128 is LEPIC's limit, Epicbox sets none). Only with `03`, only in an anonymous S1 or I1 of type `0A`. Unknown to shipped builds, which refuse it (it is below `0x80`); that is intended, since only native readers get a `0A`. Tag `09` is unused at `main` (the envelope test refuses it). |
 | `80` | sent at | u64 seconds | In every signed slate, notice and payload. Refused if over 30 days old or a day ahead |
 | `81`, `82`, `83` | address proof, feature word, domain claim | | ADR 0034, 0041, 0043 |
 | **`FE`** | **padding** | **zero bytes, at most 65,535** | **[Decided]**, not built (5.7) |
@@ -810,7 +810,7 @@ one fuzz corpus for the whole stack. Further:
   | Type | Name | Value | Allowed in |
   |---|---|---|---|
   | `01` | reply key | 32 bytes, an X25519 public key, decoded through `EncPublicKey::from_bytes` | Required in an S1 or I1 shown raw in an in-person code (5.18, O-13). Refused at every other stage, and in any slate inside an envelope, where the reply key is the envelope's tag `03`: one fact, one encoding. |
-  | `02` | reply mailbox | 34–161 bytes: a 33-byte compressed secp256k1 key, then ASCII `domain[:port]` of 1–128 bytes in all, the domain a `relay-domain` (Appendix B.2; hyphens allowed) (the value of envelope tag `09`, 5.6) | Only with `01`, under the same rule; the envelope's tag `09` carries it otherwise. Optional: without it the answer can only be shown as an animated code (offline flow, 6.7). |
+  | `02` | reply mailbox | 34–161 bytes: a 33-byte compressed secp256k1 key, then ASCII `domain[:port]` of 1–128 bytes in all, the domain a `relay-domain` (Appendix B.2; no hyphens) (the value of envelope tag `09`, 5.6) | Only with `01`, under the same rule; the envelope's tag `09` carries it otherwise. Optional: without it the answer can only be shown as an animated code (offline flow, 6.7). |
 
   A slate in an envelope has an empty tail in protocol 1.
 - **[Reasoning]** An in-person code is the one carrier where the slate travels with nothing
@@ -1086,13 +1086,13 @@ the default receive code.
   to refuse it the same way, not tested (**[Open]**, 11.1).
 - **Paypoints** name a mailbox on their own domain. The payer's wallet trusts that domain for
   nothing but delivery.
-- **Relay domains may contain hyphens** **[Decided]** (owner, 2026-11-08): `relay-domain` in Appendix B.2,
-  letters, digits, dots and hyphens, no hyphen at either end of a label. Epicbox upstream allows
-  only `[a-zA-Z0-9.]` in an address's domain (`docs/compat/epicbox.md` "Addresses"). Only LEPIC
-  wallets read epic1 links, tag `09` and record `02`, so this breaks no stock wallet; a stock wallet
-  just cannot name such a relay in its own address. The relay does not check the destination's
-  domain (`docs/compat/epicbox.md`, after "Message format"). The plain Epicbox link keeps the
-  shipped grammar.
+- **Relay domains take Epicbox's address rule** **[Decided]** (2026-11-10, replacing the owner's
+  2026-11-08 entry that allowed hyphens): `relay-domain` in Appendix B.2 is labels of letters and
+  digits, as Epicbox allows in an address's domain (`[a-zA-Z0-9.]`, `docs/compat/epicbox.md`
+  "Addresses"). The earlier entry assumed the relay does not check the destination's domain; it
+  does: an Epicbox relay checks the format of both `from` and `to` of every `PostSlate` with that
+  rule and refuses a hyphenated domain. A relay on a hyphenated domain could never carry the
+  answer, so the epic1 link, tag `09` and record `02` refuse it when read.
 - No expiry parameter. Hosts come from the link, never from code.
 
 **Hosts from untrusted input** — LEPIC part **[Decided]** (owner, 2026-11-09, O-17); address
@@ -1831,7 +1831,7 @@ Paths are in the LEPIC repository at `main` `078eadb7` unless marked otherwise.
 | In-person answers: closed on the first, each reported with its check code, finalized only on the consumer's call; the app's check-code confirmation | LEPIC part implemented **[Unmerged]** on `feat/in-person-invoice` (invoice codes) and `feat/in-person-send` (send codes): `crates/lepic-wallet-contacts/src/in_person.rs`, `lepic in-person`, `/v1/in-person/…`; app part **[App]**, to explore in the wallet app | 6.7 |
 | Hosts from untrusted input: report host, relay-list flag and address class; post on the consumer's word, through Tor when configured; loopback refused on the resolved address | **[Decided]** (O-17), address classes **[Decided]** (O-18); implemented for in-person posts **[Unmerged]** on `feat/in-person-invoice`: `lepic_transport::host_rule`, `Connector::connect_untrusted` in `crates/lepic-epicbox/src/session.rs` | 5.14 |
 | epic1 send with no answer: the same sealed S1 to the next entry on request, cancel and unlock | **[Decided]** (owner, 2026-11-09), not built | 5.14, 6.3 |
-| Default TTLs (epic1 send 24 hours, in person the app's choice, fallback 30 blocks), link-mailbox index spaces, restore and watch time, hyphens in relay domains | **[Decided]** (after drafts 4 and 5), not built | 5.2, 5.9, 5.13, 5.14, 5.18 |
+| Default TTLs (epic1 send 24 hours, in person the app's choice, fallback 30 blocks), link-mailbox index spaces, restore and watch time, relay domains without hyphens | **[Decided]** (after drafts 4 and 5), not built | 5.2, 5.9, 5.13, 5.14, 5.18 |
 | Per-class HPKE `info` | **[Specified]** (draft 2), not built | 5.4 |
 | Seal key `lepic-wallet seal key v1`, and `lepic-wallet epic1 seal key v1` for epic1 indexes 1 and above | **[Decided]** label, context **[Specified]**; the index label implemented **[Unmerged]** on `feat/epic1-indexed-keys`: `crates/lepic-wallet/src/namespace.rs`, vectors `pairing/seal_keys.json`, `pairing/epic1_seal_keys.json` | 5.2 |
 | epic1 proof key, and `lepic-wallet epic1 indexed proof key v1` for indexes 1 and above | **[Decided]** (O-8), context **[Specified]**; the index label implemented **[Unmerged]** on `feat/epic1-indexed-keys`, vectors `keys/epic1_proof_key_seed32`, `keys/epic1_proof_key_seed16`, `keys/epic1_indexed_proof_key_seed32`, `keys/epic1_indexed_proof_key_seed16` | 5.2 |
@@ -2101,12 +2101,11 @@ pay-param       = ( "amount" / "message" / "note" / "memo" / "label" ) "=" value
 other-param     = key "=" value                               ; ignored by readers
 
 domain          = 1*128( ALPHA / DIGIT / "." )                ; Epicbox upstream's characters
-relay-domain    = label *( "." label )                        ; LEPIC only: epic1 link, tag 09,
-                                                              ; record 02; hyphens allowed
-label           = ( ALPHA / DIGIT ) [ *( ALPHA / DIGIT / "-" ) ( ALPHA / DIGIT ) ]
-                                                              ; no hyphen at either end of a label;
-                                                              ; four decimal labels are an IPv4
-                                                              ; literal (host rule, below)
+relay-domain    = label *( "." label )                        ; epic1 link, tag 09, record 02;
+                                                              ; 1-128 octets with the port
+label           = 1*63( ALPHA / DIGIT )                       ; Epicbox's characters, no hyphen;
+                                                              ; a last label led by a digit makes
+                                                              ; the domain an IPv4 literal (below)
 port            = 1*5DIGIT                                    ; 1-65535
 key             = 1*( ALPHA / DIGIT / "_" / "-" )
 value           = *( unreserved / pct-encoded )               ; RFC 3986
@@ -2125,11 +2124,14 @@ network is not usable; `method`, `direct`, `require` and `min` in an epic1 link 
 epic1 link with no usable `epicbox=` is "cannot pay this code"; no parameter of either link is ever
 read as a second payee. `bech32char` is written loosely; the decoder checks the bech32 alphabet
 (`qpzry9x8gf2tvdw0s3jn54khce6mua7l`) and the checksum. `domain` in the plain Epicbox link keeps
-Epicbox upstream's characters (`docs/compat/epicbox.md` "Addresses"). `relay-domain` adds the
-hyphen **[Decided]** (owner, 2026-11-08), so a relay on a domain with a hyphen can be named in an
-epic1 link, tag `09` and record `02`. Only LEPIC wallets read those, so no stock wallet breaks; a
-stock wallet just cannot name such a relay in its own address. `relay-domain` is ABNF over
-characters: as elsewhere in the grammar, ALPHA matches either case.
+Epicbox upstream's characters (`docs/compat/epicbox.md` "Addresses"). `relay-domain` keeps
+the same characters in labels of at most 63 **[Decided]** (2026-11-10, 5.14): an Epicbox relay
+refuses a post whose `from` or `to` names a hyphenated domain. When the last label starts with a
+digit, the domain must be an IPv4 literal of four decimal numbers up to 255 without leading
+zeros; `127.1`, `0x7f.0.0.1` and `relay.example.1a` are refused. Readers compare relay domains
+without case; epic1 writes them in lower case, tag `09` and record `02` keep the spelling given.
+`testdata/vectors/pairing/epictx_relay_hosts.json` holds the cases every reader runs.
+`relay-domain` is ABNF over characters: as elsewhere in the grammar, ALPHA matches either case.
 
 Host rule beside the grammar (5.14 "Hosts from untrusted input"; LEPIC part **[Decided]**, O-17;
 classes **[Decided]**, O-18). It applies to every `relay-domain` in an epic1

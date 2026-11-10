@@ -2,7 +2,7 @@
   "meta": {
     "generator": "epic-pairing-kit",
     "kit_version": "0.5.0",
-    "git_commit": "31dc5e4efa48e099f905ef6667c0c6d32679c1af",
+    "git_commit": "a0ab4a3fe3440a74baa69ab848212644371df97b",
     "rfc": "0003-epictx",
     "file": "epictx_reply_mailbox.json"
   },
@@ -41,7 +41,7 @@
       "name": "hyphen_inside_label",
       "value": "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798657069632d626f782e6578616d706c65",
       "length": 49,
-      "valid": true
+      "valid": false
     },
     {
       "name": "uppercase",

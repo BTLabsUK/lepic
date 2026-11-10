@@ -60,9 +60,27 @@ pub enum AddressError {
     MissingDomain,
 }
 
-/// A relay host name, restricted to the characters `epic-wallet` accepts. Case is kept.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+/// A relay host name, restricted to the characters `epic-wallet` accepts. Case is kept for the
+/// wire; two domains that differ only in case are equal, as host names are.
+#[derive(Debug, Clone)]
 pub struct Domain(String);
+
+impl PartialEq for Domain {
+    fn eq(&self, other: &Self) -> bool {
+        self.0.eq_ignore_ascii_case(&other.0)
+    }
+}
+
+impl Eq for Domain {}
+
+impl std::hash::Hash for Domain {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        for byte in self.0.bytes() {
+            state.write_u8(byte.to_ascii_lowercase());
+        }
+        state.write_u8(0xff);
+    }
+}
 
 impl Domain {
     pub fn parse(text: &str) -> Result<Self, AddressError> {
@@ -296,6 +314,18 @@ mod tests {
 
     fn relay() -> Domain {
         Domain::parse("relay.example.org").unwrap()
+    }
+
+    #[test]
+    fn domains_compare_without_case_and_keep_their_spelling() {
+        use std::hash::BuildHasher;
+        let upper = Domain::parse("Relay.EXAMPLE.org").unwrap();
+        assert_eq!(upper, relay());
+        assert_ne!(upper, Domain::parse("relay.example.com").unwrap());
+        let hasher = std::collections::hash_map::RandomState::new();
+        assert_eq!(hasher.hash_one(&upper), hasher.hash_one(relay()));
+        assert_eq!(upper.as_str(), "Relay.EXAMPLE.org");
+        assert_eq!(upper.to_string(), "Relay.EXAMPLE.org");
     }
 
     #[test]

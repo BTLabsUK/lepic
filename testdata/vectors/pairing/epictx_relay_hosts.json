@@ -1,0 +1,241 @@
+{
+  "meta": {
+    "generator": "epic-pairing-kit",
+    "kit_version": "0.5.0",
+    "git_commit": "a0ab4a3fe3440a74baa69ab848212644371df97b",
+    "rfc": "0003-epictx",
+    "file": "epictx_relay_hosts.json"
+  },
+  "vectors": [
+    {
+      "name": "name",
+      "relay": "relay.example.net",
+      "valid": true
+    },
+    {
+      "name": "name_port",
+      "relay": "relay.example.net:443",
+      "valid": true
+    },
+    {
+      "name": "single_label",
+      "relay": "localhost",
+      "valid": true
+    },
+    {
+      "name": "one_char",
+      "relay": "a",
+      "valid": true
+    },
+    {
+      "name": "digit_first_label",
+      "relay": "1a.example",
+      "valid": true
+    },
+    {
+      "name": "uppercase",
+      "relay": "EPICBOX.Example.COM",
+      "valid": true
+    },
+    {
+      "name": "label_63",
+      "relay": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.example",
+      "valid": true
+    },
+    {
+      "name": "host_128",
+      "relay": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.c",
+      "valid": true
+    },
+    {
+      "name": "ipv4",
+      "relay": "192.0.2.1",
+      "valid": true
+    },
+    {
+      "name": "ipv4_port",
+      "relay": "192.0.2.1:7070",
+      "valid": true
+    },
+    {
+      "name": "ipv4_zero_octet",
+      "relay": "10.0.0.1",
+      "valid": true
+    },
+    {
+      "name": "ipv4_255",
+      "relay": "255.255.255.255",
+      "valid": true
+    },
+    {
+      "name": "digit_label_not_last",
+      "relay": "1.example",
+      "valid": true
+    },
+    {
+      "name": "port_leading_zero",
+      "relay": "relay.example:0443",
+      "valid": true
+    },
+    {
+      "name": "port_65535",
+      "relay": "relay.example:65535",
+      "valid": true
+    },
+    {
+      "name": "hyphen_inside_label",
+      "relay": "epic-box.example",
+      "valid": false
+    },
+    {
+      "name": "leading_hyphen",
+      "relay": "-epicbox.example",
+      "valid": false
+    },
+    {
+      "name": "trailing_hyphen",
+      "relay": "epicbox-.example",
+      "valid": false
+    },
+    {
+      "name": "label_64",
+      "relay": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.example",
+      "valid": false
+    },
+    {
+      "name": "host_129",
+      "relay": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.cc",
+      "valid": false
+    },
+    {
+      "name": "empty",
+      "relay": "",
+      "valid": false
+    },
+    {
+      "name": "empty_label",
+      "relay": "epicbox..example",
+      "valid": false
+    },
+    {
+      "name": "leading_dot",
+      "relay": ".epicbox.example",
+      "valid": false
+    },
+    {
+      "name": "trailing_dot",
+      "relay": "epicbox.example.",
+      "valid": false
+    },
+    {
+      "name": "underscore",
+      "relay": "epic_box.example",
+      "valid": false
+    },
+    {
+      "name": "space",
+      "relay": "epic box.example",
+      "valid": false
+    },
+    {
+      "name": "non_ascii",
+      "relay": "épic.example",
+      "valid": false
+    },
+    {
+      "name": "ipv6_literal",
+      "relay": "[::1]",
+      "valid": false
+    },
+    {
+      "name": "ipv4_short",
+      "relay": "127.1",
+      "valid": false
+    },
+    {
+      "name": "ipv4_three",
+      "relay": "10.0.1",
+      "valid": false
+    },
+    {
+      "name": "ipv4_five",
+      "relay": "1.2.3.4.5",
+      "valid": false
+    },
+    {
+      "name": "ipv4_one_number",
+      "relay": "2130706433",
+      "valid": false
+    },
+    {
+      "name": "ipv4_hex",
+      "relay": "0x7f000001",
+      "valid": false
+    },
+    {
+      "name": "ipv4_hex_dotted",
+      "relay": "0x7f.0.0.1",
+      "valid": false
+    },
+    {
+      "name": "digit_led_tail",
+      "relay": "relay.example.1a",
+      "valid": false
+    },
+    {
+      "name": "single_digit_led_label",
+      "relay": "1a",
+      "valid": false
+    },
+    {
+      "name": "ipv4_octet_256",
+      "relay": "192.0.2.256",
+      "valid": false
+    },
+    {
+      "name": "ipv4_leading_zero",
+      "relay": "192.0.2.010",
+      "valid": false
+    },
+    {
+      "name": "ipv4_digit_tail",
+      "relay": "relay.example.1",
+      "valid": false
+    },
+    {
+      "name": "port_0",
+      "relay": "relay.example:0",
+      "valid": false
+    },
+    {
+      "name": "port_65536",
+      "relay": "relay.example:65536",
+      "valid": false
+    },
+    {
+      "name": "port_six_digits",
+      "relay": "relay.example:000443",
+      "valid": false
+    },
+    {
+      "name": "port_empty",
+      "relay": "relay.example:",
+      "valid": false
+    },
+    {
+      "name": "port_sign",
+      "relay": "relay.example:+443",
+      "valid": false
+    },
+    {
+      "name": "two_ports",
+      "relay": "relay.example:1:2",
+      "valid": false
+    },
+    {
+      "name": "port_only",
+      "relay": ":443",
+      "valid": false
+    }
+  ]
+}

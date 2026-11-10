@@ -21,6 +21,7 @@ const TAG_REPLY_MAILBOX: u8 = 0x09;
 /// A compressed secp256k1 key.
 const REPLY_MAILBOX_KEY_LEN: usize = 33;
 const MAX_RELAY_LEN: usize = 128;
+const MAX_LABEL_LEN: usize = 63;
 
 /// The Epicbox mailbox an answer is posted to (tag 09): a compressed secp256k1 key, whose point
 /// is checked where it is used, and its relay `domain[:port]`.
@@ -32,8 +33,10 @@ pub struct ReplyMailbox {
 
 impl ReplyMailbox {
     /// The mailbox of `key` on `relay`: the key's prefix is 02 or 03, the relay 1 to 128 bytes
-    /// of dot-separated labels of letters, digits and inner hyphens, then an optional port of 1
-    /// to 5 digits with a value of 1 to 65,535.
+    /// of dot-separated labels of 1 to 63 letters and digits (Epicbox's own address rule, so no
+    /// hyphens; case is kept), then an optional port of 1 to 5 digits with a value of 1 to
+    /// 65,535. A host whose last label starts with a digit is an IPv4 literal of four decimal
+    /// numbers up to 255 without leading zeros.
     pub fn new(key: [u8; REPLY_MAILBOX_KEY_LEN], relay: &str) -> Result<Self, Malformed> {
         let invalid = Malformed::FieldValue {
             tag: TAG_REPLY_MAILBOX,
@@ -91,21 +94,18 @@ fn valid_relay(relay: &str) -> bool {
             return false;
         }
     }
-    host.split('.').all(valid_label)
-}
-
-fn valid_label(label: &str) -> bool {
-    let bytes = label.as_bytes();
-    match (bytes.first(), bytes.last()) {
-        (Some(first), Some(last)) => {
-            first.is_ascii_alphanumeric()
-                && last.is_ascii_alphanumeric()
-                && bytes
-                    .iter()
-                    .all(|b| b.is_ascii_alphanumeric() || *b == b'-')
+    let mut last = "";
+    for label in host.split('.') {
+        if label.is_empty()
+            || label.len() > MAX_LABEL_LEN
+            || !label.bytes().all(|b| b.is_ascii_alphanumeric())
+        {
+            return false;
         }
-        _ => false,
+        last = label;
     }
+    // `parse` takes only four decimal numbers up to 255 without leading zeros.
+    !last.starts_with(|c: char| c.is_ascii_digit()) || host.parse::<std::net::Ipv4Addr>().is_ok()
 }
 
 /// The inner content of a `lepic.v1` slate envelope, without the type, the padding and the

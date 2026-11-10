@@ -13,7 +13,7 @@
 use lepic_crypto::PublicKey;
 use lepic_epic1::{
     Delivery, Epic1Address, Epic1Error, Epic1Link, LinkError, Network, Skipped, TransportFault,
-    bech32m::Bech32Error,
+    bech32m::Bech32Error, parse_host_port,
 };
 use lepic_epicbox::EpicboxAddress;
 use serde_json::Value;
@@ -158,5 +158,30 @@ fn links_read_as_the_vectors_say() {
             case["can_pay"].as_bool().unwrap(),
             "{name}: can pay"
         );
+    }
+}
+
+/// The relay hosts every LEPIC parser shares, from the epic-pairing-kit generator. epic1 keeps
+/// the host lower-cased.
+#[test]
+fn relay_hosts_match_the_shared_cases() {
+    let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../testdata/vectors/pairing/epictx_relay_hosts.json");
+    let document: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    let cases = document["vectors"].as_array().unwrap();
+    assert!(!cases.is_empty());
+    for case in cases {
+        let relay = text(case, "relay");
+        let parsed = parse_host_port(relay);
+        assert_eq!(
+            parsed.is_ok(),
+            case["valid"].as_bool().unwrap(),
+            "{}",
+            text(case, "name")
+        );
+        if let Ok((host, _)) = parsed {
+            let name = relay.split(':').next().unwrap();
+            assert_eq!(host.as_str(), name.to_ascii_lowercase());
+        }
     }
 }

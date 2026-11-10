@@ -55,7 +55,9 @@ subscribe.
 ## Addresses
 
 - Text form: `[epicbox://]<52 base58 chars>[@<domain>[:<port>]]`, with the domain limited to
-  `[a-zA-Z0-9.]` upstream. The default domain applies when `@` is absent. `:port` is printed only
+  `[a-zA-Z0-9.]` upstream. The relay checks the format of both `from` and `to` of a `PostSlate`
+  with this rule (`epicboxlib verifyaddress`) and refuses a post that fails it, so a relay on a
+  hyphenated domain cannot carry a message. The default domain applies when `@` is absent. `:port` is printed only
   when it is not 443.
 - Payload: 2 version bytes followed by the 33-byte compressed secp256k1 public key, base58check with
   the Bitcoin alphabet and a 4-byte double-SHA256 checksum.

@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 //! The relay host of an `epicbox=` entry (RFC 0003 Appendix B.2, `relay-domain`): labels of
-//! letters, digits and hyphens, no hyphen at a label's end. Four decimal labels are an IPv4
-//! literal; no IPv6 literal can be written.
+//! letters and digits, the rule Epicbox relays apply to every address they carry, so no hyphens.
+//! A last label that starts with a digit makes the host an IPv4 literal; no IPv6 literal can be
+//! written.
 
 use std::fmt;
 use std::net::Ipv4Addr;
@@ -18,11 +19,9 @@ pub enum RelayHostError {
     #[error("relay host is empty or longer than 128 octets with its port")]
     Length,
     #[error(
-        "relay host has an empty label, a label over 63 octets or a character outside letters, digits, dots and hyphens"
+        "relay host has an empty label, a label over 63 octets or a character outside letters, digits and dots"
     )]
     Label,
-    #[error("relay host has a hyphen at the end of a label")]
-    Hyphen,
     #[error("relay host looks like an IPv4 literal but is not four decimal numbers up to 255")]
     NotAnAddress,
     #[error("relay port is not a number from 1 to 65535")]
@@ -34,9 +33,9 @@ pub enum RelayHostError {
 pub struct RelayHost(String);
 
 impl RelayHost {
-    /// Checks `text` against `relay-domain`. A name whose last label is all digits is read as
-    /// an IPv4 literal and must be exactly four decimal numbers up to 255 without leading
-    /// zeros, so a short or octal form cannot hide an address.
+    /// Checks `text` against `relay-domain`. A name whose last label starts with a digit is read
+    /// as an IPv4 literal and must be exactly four decimal numbers up to 255 without leading
+    /// zeros, so a short, octal or hex form cannot hide an address.
     pub fn parse(text: &str) -> Result<Self, RelayHostError> {
         if text.is_empty() || text.len() > MAX_HOST_PORT_LEN {
             return Err(RelayHostError::Length);
@@ -45,18 +44,13 @@ impl RelayHost {
         for label in text.split('.') {
             let valid = !label.is_empty()
                 && label.len() <= MAX_LABEL_LEN
-                && label
-                    .bytes()
-                    .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-');
+                && label.bytes().all(|byte| byte.is_ascii_alphanumeric());
             if !valid {
                 return Err(RelayHostError::Label);
             }
-            if label.starts_with('-') || label.ends_with('-') {
-                return Err(RelayHostError::Hyphen);
-            }
             last = label;
         }
-        if last.bytes().all(|byte| byte.is_ascii_digit()) && text.parse::<Ipv4Addr>().is_err() {
+        if last.starts_with(|c: char| c.is_ascii_digit()) && text.parse::<Ipv4Addr>().is_err() {
             return Err(RelayHostError::NotAnAddress);
         }
         Ok(Self(text.to_ascii_lowercase()))
@@ -104,10 +98,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn accepts_names_with_inner_hyphens_and_ipv4_literals() {
+    fn accepts_names_and_ipv4_literals() {
         for text in [
             "relay.example",
-            "pay-shop.example.org",
+            "payshop.example.org",
             "a",
             "1a.example",
             "Relay.EXAMPLE",
@@ -134,9 +128,10 @@ mod tests {
             ("a b", RelayHostError::Label),
             ("é.example", RelayHostError::Label),
             ("[::1]", RelayHostError::Label),
-            ("-a.example", RelayHostError::Hyphen),
-            ("a-.example", RelayHostError::Hyphen),
-            ("a.-b", RelayHostError::Hyphen),
+            ("pay-shop.example", RelayHostError::Label),
+            ("-a.example", RelayHostError::Label),
+            ("a-.example", RelayHostError::Label),
+            ("a.-b", RelayHostError::Label),
         ] {
             assert_eq!(RelayHost::parse(text), Err(error), "{text:?}");
         }
@@ -156,6 +151,8 @@ mod tests {
             "010.0.0.1",
             "1.2.3.4.5",
             "example.123",
+            "example.1a",
+            "0x7f.0.0.1",
         ] {
             assert_eq!(
                 RelayHost::parse(text),

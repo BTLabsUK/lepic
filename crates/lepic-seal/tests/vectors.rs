@@ -31,7 +31,7 @@ use sha2::{Digest, Sha256};
 
 const KIT_GENERATOR: &str = "epic-pairing-kit";
 const KIT_VERSION: &str = "0.5.0";
-const KIT_COMMIT: &str = "31dc5e4efa48e099f905ef6667c0c6d32679c1af";
+const KIT_COMMIT: &str = "a0ab4a3fe3440a74baa69ab848212644371df97b";
 
 fn vectors(file: &str) -> Vec<Value> {
     let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -203,6 +203,24 @@ fn reply_mailboxes_match_the_kit() {
                 Some(Malformed::FieldValue { tag: 0x09 }),
                 "{name}"
             );
+        }
+    }
+}
+
+#[test]
+fn relay_hosts_match_the_kit() {
+    let key = {
+        let mut key = [0x02; 33];
+        key[1..].fill(0x11);
+        key
+    };
+    for vector in vectors("epictx_relay_hosts.json") {
+        let name = text(&vector["name"]);
+        let relay = text(&vector["relay"]);
+        let parsed = ReplyMailbox::new(key, relay);
+        assert_eq!(parsed.is_ok(), vector["valid"].as_bool().unwrap(), "{name}");
+        if let Ok(mailbox) = parsed {
+            assert_eq!(mailbox.relay(), relay, "{name}");
         }
     }
 }

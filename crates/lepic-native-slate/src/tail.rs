@@ -46,8 +46,9 @@ pub struct ReplyMailbox {
 }
 
 impl ReplyMailbox {
-    /// Accepts a relay `domain[:port]` of 1–128 ASCII bytes, the domain a `relay-domain` and the
-    /// port 1–65535.
+    /// Accepts a relay `domain[:port]` of 1–128 ASCII bytes, the domain a `relay-domain` (labels
+    /// of letters and digits as Epicbox addresses allow, or an IPv4 literal) and the port
+    /// 1–65535. Case is kept.
     pub fn new(key: PublicKey, address: String) -> Result<Self, TailError> {
         if !is_mailbox_address(&address) {
             return Err(TailError::MailboxAddress);
@@ -264,21 +265,18 @@ fn is_mailbox_address(address: &str) -> bool {
         Some((domain, port)) => (domain, Some(port)),
         None => (address, None),
     };
-    domain.split('.').all(is_label) && port.is_none_or(is_port)
+    if !domain.split('.').all(is_label) || !port.is_none_or(is_port) {
+        return false;
+    }
+    // A last label led by a digit makes the domain an IPv4 literal: four decimal numbers up to
+    // 255 without leading zeros, which is what `Ipv4Addr` parses.
+    let last = domain.rsplit('.').next().unwrap_or(domain);
+    !last.starts_with(|c: char| c.is_ascii_digit()) || domain.parse::<std::net::Ipv4Addr>().is_ok()
 }
 
+/// 1–63 letters and digits: Epicbox's own address rule, which has no hyphens.
 fn is_label(label: &str) -> bool {
-    let bytes = label.as_bytes();
-    match (bytes.first(), bytes.last()) {
-        (Some(first), Some(last)) => {
-            first.is_ascii_alphanumeric()
-                && last.is_ascii_alphanumeric()
-                && bytes
-                    .iter()
-                    .all(|byte| byte.is_ascii_alphanumeric() || *byte == b'-')
-        }
-        _ => false,
-    }
+    (1..=63).contains(&label.len()) && label.bytes().all(|byte| byte.is_ascii_alphanumeric())
 }
 
 fn is_port(port: &str) -> bool {
