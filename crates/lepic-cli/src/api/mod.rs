@@ -11,6 +11,7 @@
 //! `--output json`; `lepic` asks for it when it runs a command through a running serve
 //! (ADR 0053).
 
+mod caller;
 mod events;
 mod openapi;
 mod problem;
@@ -40,6 +41,7 @@ use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::{broadcast, watch};
 use zeroize::Zeroizing;
 
+pub(crate) use caller::{Caller, VERSION, VERSION_HEADER};
 pub(crate) use events::epicbox_state;
 pub(crate) use problem::Problem;
 pub(crate) use tls::OwnerTls;
@@ -455,6 +457,8 @@ pub(crate) struct Api<'o> {
     stop: watch::Receiver<bool>,
     /// The wallet's data directory, where `api-clients` lists the TLS clients.
     data_dir: PathBuf,
+    /// The run a command forwarded to the socket must share.
+    caller: Caller,
     router: Router,
     /// The OpenAPI document, rendered once.
     document: Bytes,
@@ -469,12 +473,14 @@ impl<'o> Api<'o> {
         limits: ApiLimits,
         stop: watch::Receiver<bool>,
         data_dir: PathBuf,
+        caller: Caller,
     ) -> Self {
         Self {
             owner,
             limits,
             stop,
             data_dir,
+            caller,
             router: Router::new(&openapi::document()),
             document: openapi::rendered(),
             served: Cell::new(0),
@@ -572,6 +578,11 @@ impl<'o> Api<'o> {
         };
         drop(guard);
         self.served.set(self.served.get().saturating_add(1));
+        let mut response = response;
+        response.headers_mut().insert(
+            caller::VERSION_HEADER,
+            HeaderValue::from_static(caller::VERSION),
+        );
         response
     }
 
@@ -595,6 +606,9 @@ impl<'o> Api<'o> {
         listener: Listener,
         closing: watch::Receiver<bool>,
     ) -> Result<Response<Body>, Problem> {
+        if listener == Listener::Socket {
+            self.caller.check(request.headers())?;
+        }
         let (handler, params) =
             self.router
                 .find(request.method(), request.uri().path(), listener)?;

@@ -27,6 +27,25 @@ use crate::settings::Settings;
 const SERVE_HOLDS_WALLET: &str = "stop lepic serve to run this command, or call serve's API on \
      the socket; `lepic serve --http` takes payments over HTTP next to it";
 
+/// What to do about an error of `lepic serve`, its socket or a command forwarded to it.
+fn serve_hint(error: &CliError) -> Option<String> {
+    let hint = match error {
+        CliError::ServeHoldsWallet { .. } => SERVE_HOLDS_WALLET,
+        CliError::PaymentUnanswered { slate_id, .. } => {
+            return Some(format!(
+                "`lepic tx show --slate-id {slate_id}` shows whether it was made; running the \
+                 command again with `--slate-id {slate_id}` pays nothing twice"
+            ));
+        }
+        CliError::SocketPathTooLong { .. } => "give a shorter path with --socket",
+        CliError::SocketPathTaken { .. } => "remove the file or give another path with --socket",
+        CliError::ServeVersion { .. } => "restart lepic serve with this lepic",
+        CliError::SocketInUse { .. } => "stop that serve or give another path with --socket",
+        _ => return None,
+    };
+    Some(hint.to_owned())
+}
+
 /// What to try next, when there is something better to say than the error itself.
 pub fn hint(error: &CliError, settings: Option<&Settings>) -> Option<String> {
     // The serve that ran the command computed it with its own settings.
@@ -108,19 +127,12 @@ pub fn hint(error: &CliError, settings: Option<&Settings>) -> Option<String> {
                     .to_owned(),
             );
         }
-        CliError::ServeHoldsWallet { .. } => return Some(SERVE_HOLDS_WALLET.to_owned()),
-        CliError::PaymentUnanswered { slate_id, .. } => {
-            return Some(format!(
-                "`lepic tx show --slate-id {slate_id}` shows whether it was made; running the \
-                 command again with `--slate-id {slate_id}` pays nothing twice"
-            ));
-        }
-        CliError::SocketPathTooLong { .. } => {
-            return Some("give a shorter path with --socket".to_owned());
-        }
-        CliError::SocketPathTaken { .. } => {
-            return Some("remove the file or give another path with --socket".to_owned());
-        }
+        CliError::ServeHoldsWallet { .. }
+        | CliError::PaymentUnanswered { .. }
+        | CliError::SocketPathTooLong { .. }
+        | CliError::SocketPathTaken { .. }
+        | CliError::ServeVersion { .. }
+        | CliError::SocketInUse { .. } => return serve_hint(error),
         CliError::Direct(direct) => return direct_hint(direct),
         CliError::SharedDataDir => {
             return settings.map(|settings| {

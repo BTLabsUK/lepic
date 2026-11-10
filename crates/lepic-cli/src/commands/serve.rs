@@ -461,6 +461,7 @@ impl<H: Host> Run<'_, H> {
             self.host.api_limits(self.settings.tuning.api),
             stop.subscribe(),
             self.settings.data_dir.clone(),
+            crate::api::Caller::of(self.settings),
         );
         let result = self
             .until_interrupted(

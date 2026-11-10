@@ -398,6 +398,43 @@ fn a_removed_client_is_refused_on_its_open_connection() {
 }
 
 #[test]
+fn only_the_socket_compares_a_request_with_the_run_of_serve() {
+    let host = TestHost::new();
+    let wallet = funded_wallet(&host);
+    let laptop = client_key(&wallet, "laptop");
+
+    serving(host, &wallet, |serve| {
+        serve.client(&["add", "laptop", laptop.pem.to_str().unwrap()]);
+        let request = "GET /v1/status HTTP/1.1\r\nHost: lepic\r\nx-lepic-data-dir: /elsewhere\r\n\
+                       Connection: close\r\n\r\n";
+
+        // On the socket, a request naming another data directory is refused, naming it.
+        let mut socket = std::os::unix::net::UnixStream::connect(serve.socket).unwrap();
+        socket.set_read_timeout(Some(PATIENCE)).unwrap();
+        socket.write_all(request.as_bytes()).unwrap();
+        let mut answer = String::new();
+        socket.read_to_string(&mut answer).unwrap();
+        let refused = parse_reply(&answer);
+        assert_eq!(refused.status, 409, "{}", refused.body);
+        assert!(refused.body.contains("/elsewhere"), "{}", refused.body);
+
+        // On the TLS listener the same request is answered: no refusal tells a remote client
+        // serve's settings.
+        let mut tls = serve.connect(Some(&laptop)).unwrap();
+        tls.get_mut().write_all(request.as_bytes()).unwrap();
+        let mut answer = String::new();
+        tls.read_to_string(&mut answer).unwrap();
+        let answered = parse_reply(&answer);
+        assert_eq!(answered.status, 200, "{}", answered.body);
+        assert!(
+            !answered.body.contains("data directory"),
+            "{}",
+            answered.body
+        );
+    });
+}
+
+#[test]
 fn the_tls_listener_has_its_own_connection_cap() {
     let deadline = Duration::from_secs(2);
     let mut host = TestHost::new();

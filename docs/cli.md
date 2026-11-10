@@ -1234,6 +1234,13 @@ The route names above are shortened; `docs/api/openapi.json` has each in full.
 exits 11 and names that id; `lepic tx show --slate-id <UUID>` shows whether the payment was
 made, and the same command with `--slate-id <UUID>` pays nothing twice.
 
+A forwarded command tells serve the `lepic` version, data directory, network, `native_direct`,
+`relay_tor` and `node_over_tor` it runs with, as `x-lepic-*` headers. Serve refuses one that
+differs in any of them with exit code 3 and names it, so a command never runs on another wallet
+or with other transport settings; a serve of another version, or one too old to say, is named as
+such. Serve answers every request with its version in `x-lepic-version`. A `--socket` that
+another serve answers on is refused; a socket file nobody answers on is replaced.
+
 A command given an option its route has no field for runs on its own and meets the lock. These
 options keep a command off serve: `--to-file`, `--to-contact`, `--purpose`, `--allow-plain-http`,
 `--tor-binary`, `--lib-dir`, `--fluff` and `--ttl-blocks` on `tx send` (`--ttl-blocks` also on

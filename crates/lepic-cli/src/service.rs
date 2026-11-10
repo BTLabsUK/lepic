@@ -69,7 +69,12 @@ pub(crate) fn candidate_sockets(data_dir: &Path) -> Vec<PathBuf> {
 /// reached. Only a socket served by this user is used. `None` when no serve answers.
 #[cfg(unix)]
 pub(crate) async fn connect(data_dir: &Path) -> Option<(tokio::net::UnixStream, PathBuf)> {
-    let me = rustix::process::geteuid().as_raw();
+    connect_as(data_dir, rustix::process::geteuid().as_raw()).await
+}
+
+/// [`connect`] for the user `me`.
+#[cfg(unix)]
+async fn connect_as(data_dir: &Path, me: u32) -> Option<(tokio::net::UnixStream, PathBuf)> {
     for socket in candidate_sockets(data_dir) {
         let Ok(stream) = tokio::net::UnixStream::connect(&socket).await else {
             continue;
@@ -98,7 +103,7 @@ pub(crate) use server::{Listening, bind};
 #[cfg(unix)]
 mod server {
     use std::os::unix::ffi::OsStrExt as _;
-    use std::os::unix::fs::{FileTypeExt as _, PermissionsExt as _};
+    use std::os::unix::fs::{FileTypeExt as _, MetadataExt as _, PermissionsExt as _};
     use std::path::{Path, PathBuf};
 
     use tokio::net::{UnixListener, UnixStream};
@@ -107,10 +112,12 @@ mod server {
     use crate::exit::CliError;
 
     /// The socket `lepic serve` listens on. The socket file and the pointer file that names it
-    /// are removed when this is dropped.
+    /// are removed when this is dropped, the socket file only while it is still the one bound.
     pub(crate) struct Listening {
         listener: UnixListener,
         path: PathBuf,
+        /// The device and inode of the socket file bound.
+        file: (u64, u64),
         pointer: PathBuf,
         owner: u32,
     }
@@ -131,18 +138,28 @@ mod server {
     impl Drop for Listening {
         fn drop(&mut self) {
             let _ = std::fs::remove_file(&self.pointer);
-            let _ = std::fs::remove_file(&self.path);
+            if std::fs::symlink_metadata(&self.path)
+                .is_ok_and(|meta| (meta.dev(), meta.ino()) == self.file)
+            {
+                let _ = std::fs::remove_file(&self.path);
+            }
         }
     }
 
     /// Binds `path`, owner-only, and names it in the pointer file of `data_dir`, so commands
     /// find a socket that is not the default one. The caller holds the data directory lock, so
-    /// no other serve owns a socket file left at `path` or a pointer file left in `data_dir`;
-    /// only a socket is replaced.
+    /// no other serve owns a pointer file left in `data_dir`. A serve of another data directory
+    /// can listen at `path`: a socket that answers is refused, and only one that does not is
+    /// replaced.
     pub(crate) fn bind(path: &Path, data_dir: &Path) -> Result<Listening, CliError> {
         check_socket_path(path)?;
         match std::fs::symlink_metadata(path) {
             Ok(meta) if meta.file_type().is_socket() => {
+                if std::os::unix::net::UnixStream::connect(path).is_ok() {
+                    return Err(CliError::SocketInUse {
+                        path: path.to_owned(),
+                    });
+                }
                 std::fs::remove_file(path).map_err(CliError::io("remove the old socket"))?;
             }
             Ok(_) => {
@@ -154,10 +171,12 @@ mod server {
             Err(source) => return Err(CliError::io("check the socket path")(source)),
         }
         let listener = UnixListener::bind(path).map_err(CliError::io("bind the socket"))?;
+        let meta = std::fs::symlink_metadata(path).map_err(CliError::io("check the socket"))?;
         let pointer = pointer_file(data_dir);
         let listening = Listening {
             listener,
             path: path.to_owned(),
+            file: (meta.dev(), meta.ino()),
             pointer: pointer.clone(),
             owner: rustix::process::geteuid().as_raw(),
         };
@@ -189,6 +208,42 @@ mod server {
             assert!(listening.is_this_user(&stream));
             listening.owner = listening.owner.wrapping_add(1);
             assert!(!listening.is_this_user(&stream));
+        }
+
+        #[tokio::test]
+        async fn a_socket_another_serve_answers_on_is_left_alone() {
+            let (first_dir, second_dir) =
+                (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+            let path = first_dir.path().join("s.sock");
+            let first = bind(&path, first_dir.path()).unwrap();
+            assert!(matches!(
+                bind(&path, second_dir.path()),
+                Err(CliError::SocketInUse { .. })
+            ));
+            assert!(UnixStream::connect(&path).await.is_ok());
+            drop(first);
+            assert!(!path.exists());
+        }
+
+        #[tokio::test]
+        async fn a_socket_nobody_answers_on_is_replaced() {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("s.sock");
+            drop(std::os::unix::net::UnixListener::bind(&path).unwrap());
+            assert!(path.exists());
+            let _listening = bind(&path, dir.path()).unwrap();
+            assert!(UnixStream::connect(&path).await.is_ok());
+        }
+
+        #[tokio::test]
+        async fn a_socket_file_bound_again_since_is_not_removed() {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("s.sock");
+            let listening = bind(&path, dir.path()).unwrap();
+            std::fs::remove_file(&path).unwrap();
+            let _other = std::os::unix::net::UnixListener::bind(&path).unwrap();
+            drop(listening);
+            assert!(path.exists());
         }
     }
 }
@@ -253,5 +308,17 @@ mod tests {
         }
         std::fs::write(pointer_file(dir.path()), vec![b'/'; 10_000]).unwrap();
         assert_eq!(candidate_sockets(dir.path()), [default]);
+    }
+
+    /// The serve's uid against the caller's: a second account to serve from is not at hand in
+    /// a test, so the caller's uid is changed instead.
+    #[tokio::test]
+    async fn a_socket_served_by_another_user_is_not_used() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = default_socket(dir.path());
+        let _listening = bind(&path, dir.path()).unwrap();
+        let me = rustix::process::geteuid().as_raw();
+        assert!(connect_as(dir.path(), me).await.is_some());
+        assert!(connect_as(dir.path(), me.wrapping_add(1)).await.is_none());
     }
 }

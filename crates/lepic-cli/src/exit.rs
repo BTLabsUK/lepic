@@ -225,6 +225,14 @@ pub enum CliError {
         #[source]
         source: Box<dyn std::error::Error + Send + Sync>,
     },
+    /// The running `lepic serve` refused a command and runs another version of `lepic`, one
+    /// that names no version when `serve` says "an older version".
+    #[error("lepic serve on {} runs {serve}, and this lepic is version {cli}", socket.display())]
+    ServeVersion {
+        socket: std::path::PathBuf,
+        serve: String,
+        cli: &'static str,
+    },
     /// The running `lepic serve` took a payment and gave no answer, or one that is not the
     /// API's: the payment may have been made under `slate_id`.
     #[error(
@@ -278,6 +286,8 @@ pub enum CliError {
     SocketPathTooLong { path: std::path::PathBuf },
     #[error("{} exists and is not a socket", path.display())]
     SocketPathTaken { path: std::path::PathBuf },
+    #[error("another lepic serve answers on {}", path.display())]
+    SocketInUse { path: std::path::PathBuf },
     #[error("lepic serve needs unix sockets, which this system does not offer")]
     ServiceUnsupported,
     #[error("serve --owner-tls needs an address: set `[api] owner_tls` in settings.toml")]
@@ -368,6 +378,7 @@ impl CliError {
             | Self::DomainFileTooLarge
             | Self::SocketPathTooLong { .. }
             | Self::SocketPathTaken { .. }
+            | Self::SocketInUse { .. }
             | Self::ServiceUnsupported
             | Self::ApiClientName
             | Self::ApiClientCertificate { .. }
@@ -389,6 +400,7 @@ impl CliError {
             Self::DataDirInUse | Self::ServeHoldsWallet { .. } => ErrorKind::WalletState,
             Self::Served { kind, .. } => *kind,
             Self::ServeUnanswered { .. } => ErrorKind::Transport,
+            Self::ServeVersion { .. } => ErrorKind::Config,
             Self::PaymentUnanswered { .. } => ErrorKind::Incomplete,
             Self::SlateIdReused { .. } => ErrorKind::Rejected,
             Self::NoSendWithSlate => ErrorKind::NotFound,

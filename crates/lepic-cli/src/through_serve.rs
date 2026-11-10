@@ -27,6 +27,7 @@ use serde_json::{Value, json};
 use tokio::net::UnixStream;
 use zeroize::Zeroizing;
 
+use crate::api::{Caller, VERSION, VERSION_HEADER};
 use crate::cli::{
     AccountArg, Command, EpicboxCommand, FluffArg, LegacyArg, ListArgs, ListingArgs, MessageArg,
     NodeCommand, PeerCommand, PlainHttpArg, PostArgs, ProfileCommand, SelectionArg, SendArgs,
@@ -137,9 +138,15 @@ pub(crate) async fn run(
     let Some((stream, socket)) = service::connect(&settings.data_dir).await else {
         return Ok(None);
     };
-    exchange(stream, &socket, call, settings.output)
-        .await
-        .map(Some)
+    exchange(
+        stream,
+        &socket,
+        call,
+        settings.output,
+        &Caller::of(settings),
+    )
+    .await
+    .map(Some)
 }
 
 /// The socket serve answers on in `data_dir`, when it runs there: the one its pointer file
@@ -155,6 +162,7 @@ async fn exchange(
     socket: &Path,
     mut call: Call,
     format: OutputFormat,
+    caller: &Caller,
 ) -> Result<Zeroizing<String>, CliError> {
     let slate_id = call.slate_id()?;
     let unanswered = |source: Box<dyn std::error::Error + Send + Sync>| match &slate_id {
@@ -188,6 +196,9 @@ async fn exchange(
         .uri(call.target)
         .header(header::HOST, "lepic")
         .header(header::ACCEPT, accept);
+    for (name, value) in caller.headers() {
+        request = request.header(name, value);
+    }
     if has_body {
         request = request.header(header::CONTENT_TYPE, "application/json");
     }
@@ -202,18 +213,30 @@ async fn exchange(
         let response = sender.send_request(request).await?;
         let status = response.status();
         let content_type = response.headers().get(header::CONTENT_TYPE).cloned();
+        let version = response.headers().get(VERSION_HEADER).cloned();
         let body = Limited::new(response.into_body(), MAX_ANSWER)
             .collect()
             .await?
             .to_bytes();
-        Ok::<_, Box<dyn std::error::Error + Send + Sync>>((status, content_type, body))
+        Ok::<_, Box<dyn std::error::Error + Send + Sync>>((status, content_type, version, body))
     }
     .await;
     connection.abort();
-    let (status, content_type, body) = answered.map_err(unanswered)?;
+    let (status, content_type, version, body) = answered.map_err(unanswered)?;
     let text = Zeroizing::new(String::from_utf8(body.to_vec()).map_err(|e| unanswered(e.into()))?);
     if status.is_success() {
         return finish(call.finish, text, format, &unanswered);
+    }
+    // A serve of another version may not know the route or a field: say so, not what it says.
+    if version.as_ref().is_none_or(|version| version != VERSION) {
+        return Err(CliError::ServeVersion {
+            socket: socket.to_owned(),
+            serve: version.map_or_else(
+                || "an older version".to_owned(),
+                |version| format!("version {}", String::from_utf8_lossy(version.as_bytes())),
+            ),
+            cli: VERSION,
+        });
     }
     if content_type != Some(HeaderValue::from_static("application/problem+json")) {
         return Err(unanswered(
@@ -799,9 +822,15 @@ mod tests {
         let call = Call::new(Method::POST, "/v1/epic1/pay".to_owned())
             .json(json!({ "link": "epic:epic1x", "slate_id": null }))
             .pays();
-        let error = exchange(client, Path::new("lepic.sock"), call, OutputFormat::Json)
-            .await
-            .unwrap_err();
+        let error = exchange(
+            client,
+            Path::new("lepic.sock"),
+            call,
+            OutputFormat::Json,
+            &caller(),
+        )
+        .await
+        .unwrap_err();
         let CliError::PaymentUnanswered { slate_id, .. } = &error else {
             panic!("{error:?}")
         };
@@ -817,10 +846,80 @@ mod tests {
             Path::new("lepic.sock"),
             Call::new(Method::GET, "/v1/wallet".to_owned()),
             OutputFormat::Json,
+            &caller(),
         )
         .await
         .unwrap_err();
         assert_eq!(error.kind(), ErrorKind::Transport, "{error:?}");
+    }
+
+    fn caller() -> Caller {
+        let env = crate::settings::Env::new([
+            ("HOME".to_owned(), "/home/u".to_owned()),
+            ("LEPIC_NETWORK".to_owned(), "floonet".to_owned()),
+            ("LEPIC_DATA_DIR".to_owned(), "/w".to_owned()),
+        ]);
+        Caller::of(&Settings::resolve(&crate::cli::GlobalArgs::default(), &env).unwrap())
+    }
+
+    /// Answers one request on `server` with `answer`, and returns the request's head.
+    async fn answer_once(server: UnixStream, answer: String) -> String {
+        use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+        let mut server = server;
+        let mut head = Vec::new();
+        let mut byte = [0_u8; 1];
+        while !head.ends_with(b"\r\n\r\n") {
+            server.read_exact(&mut byte).await.unwrap();
+            head.push(byte[0]);
+        }
+        server.write_all(answer.as_bytes()).await.unwrap();
+        server.shutdown().await.unwrap();
+        String::from_utf8(head).unwrap()
+    }
+
+    fn problem_answer(version: Option<&str>) -> String {
+        let body = r#"{"type":"about:blank","title":"Not Found","status":404,"detail":"no such route","code":"not_found"}"#;
+        let version = version.map_or_else(String::new, |version| {
+            format!("x-lepic-version: {version}\r\n")
+        });
+        format!(
+            "HTTP/1.1 404 Not Found\r\ncontent-type: application/problem+json\r\n{version}\
+             content-length: {}\r\n\r\n{body}",
+            body.len()
+        )
+    }
+
+    #[tokio::test]
+    async fn a_command_tells_serve_its_run_and_an_older_serve_is_named() {
+        for (version, older) in [(None, true), (Some("0.0.1"), true), (Some(VERSION), false)] {
+            let (client, server) = UnixStream::pair().unwrap();
+            let served = tokio::spawn(answer_once(server, problem_answer(version)));
+            let error = exchange(
+                client,
+                Path::new("lepic.sock"),
+                Call::new(Method::GET, "/v1/epic1/addresses".to_owned()),
+                OutputFormat::Json,
+                &caller(),
+            )
+            .await
+            .unwrap_err();
+            let head = served.await.unwrap().to_ascii_lowercase();
+            for (name, value) in caller().headers() {
+                assert!(
+                    head.contains(&format!("{name}: {}", value.to_ascii_lowercase())),
+                    "{name}"
+                );
+            }
+            if older {
+                assert!(matches!(error, CliError::ServeVersion { .. }), "{error:?}");
+                assert_eq!(error.kind(), ErrorKind::Config);
+                let expected =
+                    version.map_or("an older version".to_owned(), |v| format!("version {v}"));
+                assert!(error.to_string().contains(&expected), "{error}");
+            } else {
+                assert_eq!(error.kind(), ErrorKind::NotFound, "{error:?}");
+            }
+        }
     }
 
     #[test]
