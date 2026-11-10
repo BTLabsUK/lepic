@@ -201,7 +201,7 @@ where
             .send(&carrier, request, delivery)
             .await
             .map_err(DirectError::Send)?;
-        let reply = self
+        let exchanged = self
             .native_exchange(
                 peer,
                 account,
@@ -210,6 +210,9 @@ where
                 capture.take(),
                 sent.slate_id,
             )
+            .await;
+        let reply = self
+            .settle_native(method.id(), sent.tx_id, exchanged)
             .await
             .map_err(|source| DirectError::Native {
                 tx_id: sent.tx_id,
@@ -266,8 +269,11 @@ where
             .slate_id
             .map(|id| SlateId::from_bytes(*id.as_bytes()))
             .ok_or(WalletError::UnknownTransaction(tx_id))?;
-        let reply = self
+        let exchanged = self
             .native_exchange(peer, entry.account, &probe, &advert, wire, slate_id)
+            .await;
+        let reply = self
+            .settle_native(method.id(), tx_id, exchanged)
             .await
             .map_err(|source| DirectError::Native {
                 tx_id,
@@ -323,6 +329,23 @@ where
             }
             (Some(advert), _) => Ok(Route::Native(Box::new((probe, advert)))),
         }
+    }
+
+    /// The engine records the S1 of a native send as delivered once [`Capture`] holds it; a
+    /// failed exchange puts the delivery back to pending, so the send shows as undelivered and
+    /// waits for a resend or a cancel.
+    async fn settle_native(
+        &self,
+        transport: TransportId,
+        tx_id: TxId,
+        exchanged: Result<WireSlate, NativeFailure>,
+    ) -> Result<WireSlate, NativeFailure> {
+        if exchanged.is_err()
+            && let Err(error) = self.wallet.record_undelivered(tx_id, transport).await
+        {
+            warn!(tx_id = %tx_id, error = %error, "failed native send not recorded");
+        }
+        exchanged
     }
 
     /// Seals the stored S1 `wire` to the advertised key, posts it, and opens the S2 the

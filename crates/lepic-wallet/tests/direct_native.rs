@@ -38,6 +38,7 @@ use lepic_primitives::amount::Amount;
 use lepic_primitives::params::Network;
 use lepic_slate::codec::WireSlate;
 use lepic_slate::model::ProofAddress;
+use lepic_store::TxId;
 use lepic_wallet::coinbase::{Coinbase, CoinbaseRequest};
 use lepic_wallet::finalize::Finalized;
 use lepic_wallet::namespace::SealKeyKind;
@@ -234,6 +235,7 @@ fn a_native_send_is_answered_finalized_and_pins_the_key() {
 
     let sent = send(&world, &peer, &http, &to, request(), false).unwrap();
     assert_eq!(sent.dialect, Dialect::Native);
+    assert!(!undelivered(&world, sent.sent.tx_id));
     let finalized = finalize(&world, &http, sent.reply.as_ref().unwrap());
     assert_eq!(finalized.tx_id, sent.sent.tx_id);
     assert!(finalized.pushed);
@@ -484,7 +486,7 @@ fn write_answer(stream: &mut TcpStream, status: u16, body: &[u8]) {
 }
 
 /// A send to a pinned listener whose endpoint answers as `answer` says: a stop, with no
-/// legacy `receive_tx` made.
+/// legacy `receive_tx` made, and the stored send shown as undelivered.
 fn failing_post(answer: Answer) -> PeerClientError {
     let world = world(true);
     let http = http();
@@ -497,11 +499,23 @@ fn failing_post(answer: Answer) -> PeerClientError {
     assert_eq!(fake.receives.load(Ordering::SeqCst), 0);
     match error {
         DirectError::Native {
+            tx_id,
             source: NativeFailure::Post(error),
             ..
-        } => error,
+        } => {
+            assert!(undelivered(&world, tx_id));
+            error
+        }
         other => panic!("{other:?}"),
     }
+}
+
+/// Whether the payer's send `tx_id` waits for a delivery.
+fn undelivered(world: &World, tx_id: TxId) -> bool {
+    world
+        .block_on(world.payer.wallet.transaction_details(tx_id))
+        .unwrap()
+        .undelivered
 }
 
 #[test]

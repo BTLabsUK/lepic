@@ -48,7 +48,7 @@ use lepic_slate::origin::WireOrigin;
 use lepic_slate::stage::{Flow, Stage};
 use lepic_store::{
     AccountIndex, KeyId, OutboxEntry, OutboxId, OutboxStatus, OutputRecord, OutputStatus,
-    ParticipantId, PrivateContext, Repositories, SlateStage, StoreError, StoredSlate,
+    ParticipantId, PrivateContext, Repositories, SlateStage, StoreError, StoredOutbox, StoredSlate,
     TransactionEntry, TxDirection, TxId, TxState, WalletStore,
 };
 use lepic_transport::error::{FormatError, TransportError};
@@ -946,6 +946,42 @@ fn record_attempt(
     Ok(repos.update_outbox(outbox, &attempted.entry)?)
 }
 
+/// Puts the delivery of the S1 of `tx_id` over `transport` back to pending. Leaves the outbox
+/// as it is when the transaction is no longer an outgoing send in state `sent`, or a delivery
+/// of its S1 is pending already.
+fn record_undelivered(
+    repos: &mut dyn Repositories,
+    tx_id: TxId,
+    transport: TransportId,
+    now: Timestamp,
+) -> Result<(), WalletError> {
+    let entry = repos
+        .transaction(tx_id)?
+        .ok_or(WalletError::UnknownTransaction(tx_id))?;
+    let (TxDirection::Outgoing, TxState::Sent, Some(slate_uuid)) =
+        (entry.direction, entry.state, entry.slate_id)
+    else {
+        return Ok(());
+    };
+    let of_slate = |stored: &StoredOutbox| {
+        stored.entry.slate_id == slate_uuid && stored.entry.stage == SlateStage::Standard1
+    };
+    if repos.outbox(OutboxStatus::Pending)?.iter().any(of_slate) {
+        return Ok(());
+    }
+    let delivered = repos
+        .outbox(OutboxStatus::Delivered)?
+        .into_iter()
+        .filter(|stored| of_slate(stored) && stored.entry.transport == transport.as_str())
+        .max_by_key(|stored| stored.entry.updated_at);
+    let Some(mut delivered) = delivered else {
+        return Ok(());
+    };
+    delivered.entry.status = OutboxStatus::Pending;
+    delivered.entry.updated_at = now;
+    Ok(repos.update_outbox(delivered.id, &delivered.entry)?)
+}
+
 /// The stored S1 of a transaction waiting for delivery, encoded for `delivery`.
 fn stored_s1_for_delivery(
     repos: &mut dyn Repositories,
@@ -1277,6 +1313,30 @@ where
         };
         self.deliver(&**method, &stored, &delivery).await?;
         Ok(stored.format)
+    }
+
+    /// Records that the S1 of `tx_id`, which `transport` took as delivered, did not reach its
+    /// peer: the send shows as waiting for delivery again, for [`Wallet::resend`] or
+    /// [`Wallet::cancel`]. For a carrier that only hands the slate on, whose own delivery
+    /// fails afterwards. Does nothing when the transaction is no longer an outgoing send in
+    /// state `sent` or a delivery of its S1 is pending already.
+    ///
+    /// Fails with [`WalletError::Locked`] when the wallet is locked and
+    /// [`WalletError::UnknownTransaction`].
+    #[instrument(skip_all, fields(wallet = %self.config().name, transport = %transport, tx_id = %tx_id))]
+    pub async fn record_undelivered(
+        &self,
+        tx_id: TxId,
+        transport: TransportId,
+    ) -> Result<(), WalletError> {
+        let session = self.session()?;
+        self.blocking(move |ports, _| {
+            let now = ports.clock.now();
+            session
+                .store
+                .write(|repos| record_undelivered(repos, tx_id, transport, now))
+        })
+        .await
     }
 
     /// Hands the wire slate to `method`, then records the attempt in the outbox. A store
