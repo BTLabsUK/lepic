@@ -1134,3 +1134,42 @@ fn a_second_payment_to_a_link_is_refused_while_the_first_waits_for_its_answer() 
     let again = world.pay_link(&issued.link, false).unwrap();
     assert_eq!(again.posted, Some(1));
 }
+
+#[test]
+fn a_payment_is_finalized_from_the_relay_it_named_after_the_relay_setting_changes() {
+    let world = World::new();
+    world.relay.set_relays_apart(true);
+    let issued = world.issue_link(&world.issuer, Epic1LinkKind::OnScreen, &[]);
+    let paid = world.pay_link(&issued.link, false).unwrap();
+    assert_eq!(world.taken(&world.issuer), 1);
+    assert_eq!(world.answers_posted(), 1);
+    assert_eq!(world.relay.pending(&world.reply_mailbox(paid.slate_id)), 1);
+
+    // The payer's wallet now uses another relay; the answer waits on the one the payment named.
+    let mut settings = world::settings();
+    settings.endpoint = lepic_epicbox::RelayEndpoint::new(
+        Domain::parse("moved.test").unwrap(),
+        None,
+        lepic_epicbox::Security::Plain,
+    );
+    let moved = lepic_wallet_contacts::ContactRelays {
+        epicbox: lepic_methods::epicbox::Epicbox::new(
+            settings,
+            RelayNetwork::Floonet,
+            world.relay.connector(),
+        ),
+        ..relays(&world.payer)
+    };
+    world
+        .block_on(
+            world
+                .payer
+                .wallet
+                .contact_book()
+                .contacts_collect(&moved, lepic_wallet_contacts::CollectTrigger::Open),
+        )
+        .unwrap();
+
+    assert_eq!(world.relay.pending(&world.reply_mailbox(paid.slate_id)), 0);
+    assert_eq!(world.node.pushed_transactions().len(), 1);
+}

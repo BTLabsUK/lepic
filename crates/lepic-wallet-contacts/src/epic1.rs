@@ -20,8 +20,8 @@ use jiff::Timestamp;
 use lepic_crypto::PublicKey;
 use lepic_epic1::{Delivery as LinkDelivery, Epic1Address, Epic1Link, EpicboxTransport};
 use lepic_epicbox::{
-    EpicboxAddress, Handled, MAX_MAILBOXES_PER_DRAIN, MailboxContent, MailboxHandler,
-    MailboxError, MailboxMessage, RelayEndpoint,
+    EpicboxAddress, Handled, MAX_MAILBOXES_PER_DRAIN, MailboxContent, MailboxError, MailboxHandler,
+    MailboxMessage, RelayEndpoint,
 };
 use lepic_methods::epicbox::relay_network;
 use lepic_native_slate::{NativeSlate, Tail};
@@ -407,6 +407,10 @@ struct PayState {
     /// The first transport whose relay may hold the payment though its post failed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     uncertain: Option<usize>,
+    /// The relay of the reply mailbox the payment names, as written in it. `None` for a
+    /// payment stored before it was kept: its reply mailbox is on the wallet's own relay.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    reply_relay: Option<String>,
 }
 
 /// Whether the relays of a payment are confirmed: the user said so, or every one is in the
@@ -1552,7 +1556,8 @@ where
         let mailbox_key = PublicKey::from_secret_key(&mailbox_secret)
             .map_err(|_| ContactError::RelayAddress)?
             .to_bytes();
-        let reply_mailbox = lepic_seal::ReplyMailbox::new(mailbox_key, &meeting_host(own))
+        let reply_relay = meeting_host(own);
+        let reply_mailbox = lepic_seal::ReplyMailbox::new(mailbox_key, &reply_relay)
             .map_err(|_| refused(Epic1Refusal::OwnRelayLocal))?;
         let session = self.wallet.session()?;
         let uuid = Uuid::from_bytes(*slate_id.as_bytes());
@@ -1591,6 +1596,7 @@ where
             posted: None,
             finalized: false,
             uncertain: None,
+            reply_relay: Some(reply_relay),
         };
         let session = self.wallet.session()?;
         self.contact_work(move |_, _| {
@@ -1970,7 +1976,11 @@ where
                             None => repos.delete_setting(&key)?,
                             Some(state_now) if ended(state_now) => repos.delete_setting(&key)?,
                             Some(TxState::Sent) if !state.finalized => {
-                                replies.push((slate_id, AccountIndex(state.account)));
+                                replies.push((
+                                    slate_id,
+                                    AccountIndex(state.account),
+                                    state.reply_relay,
+                                ));
                             }
                             Some(_) => {}
                         }
@@ -2072,34 +2082,57 @@ where
         Ok(taken)
     }
 
-    /// Drains the reply mailboxes of the slates `replies` on the wallet's own relay.
+    /// Drains the reply mailboxes of the slates `replies`, `(slate, account, relay)`, by
+    /// relay: the one the payment named, or the wallet's own relay when none is stored. A
+    /// payment keeps the relay it named when the wallet's relay setting changes.
     async fn drain_replies(
         &self,
         relays: &ContactRelays,
-        replies: Vec<(SlateId, AccountIndex)>,
+        replies: Vec<(SlateId, AccountIndex, Option<String>)>,
     ) -> Result<usize, ContactError> {
         let network = self.wallet.config().network;
         let net = contact_network(network);
         let own = relays.epicbox.settings().endpoint.clone();
-        let client = mailbox_client(relays, own.clone(), None);
+        let own_host = meeting_host(&own);
+        let mut by_relay: BTreeMap<String, Vec<(SlateId, AccountIndex)>> = BTreeMap::new();
+        for (slate_id, account, host) in replies {
+            let host = host.unwrap_or_else(|| own_host.clone());
+            by_relay.entry(host).or_default().push((slate_id, account));
+        }
         let mut taken = 0usize;
-        for chunk in replies.chunks(MAX_MAILBOXES_PER_DRAIN) {
-            let mut identities = Vec::with_capacity(chunk.len());
-            for (slate_id, account) in chunk {
-                let secret = self
-                    .wallet
-                    .reply_mailbox_key(*account, net, slate_id.as_bytes())?;
-                identities.push(identity(secret, network, &own)?);
-            }
-            let mut handler = Replies {
-                book: self,
-                slates: chunk.to_vec(),
-                taken: 0,
+        for (host, slates) in by_relay {
+            let (endpoint, client) = if host == own_host {
+                (own.clone(), mailbox_client(relays, own.clone(), None))
+            } else {
+                match watched_endpoint(relays, &host) {
+                    Ok((endpoint, known)) => {
+                        let client = client_for(relays, endpoint.clone(), known);
+                        (endpoint, client)
+                    }
+                    Err(error) => {
+                        warn!(error = %ErrorChain(&error), "epic1 reply mailbox not watched");
+                        continue;
+                    }
+                }
             };
-            let drained = client.drain_once(&identities, &mut handler).await;
-            taken = taken.saturating_add(handler.taken);
-            if let Err(error) = drained {
-                warn!(error = %ErrorChain(&error), "epic1 reply mailboxes not drained");
+            for chunk in slates.chunks(MAX_MAILBOXES_PER_DRAIN) {
+                let mut identities = Vec::with_capacity(chunk.len());
+                for (slate_id, account) in chunk {
+                    let secret =
+                        self.wallet
+                            .reply_mailbox_key(*account, net, slate_id.as_bytes())?;
+                    identities.push(identity(secret, network, &endpoint)?);
+                }
+                let mut handler = Replies {
+                    book: self,
+                    slates: chunk.to_vec(),
+                    taken: 0,
+                };
+                let drained = client.drain_once(&identities, &mut handler).await;
+                taken = taken.saturating_add(handler.taken);
+                if let Err(error) = drained {
+                    warn!(relay = %host, error = %ErrorChain(&error), "epic1 reply mailboxes not drained");
+                }
             }
         }
         Ok(taken)
@@ -2136,7 +2169,11 @@ where
                             if matches!(entry.state, TxState::Sent | TxState::Received)
                                 && let Some(uuid) = entry.slate_id
                             {
-                                pending.push((SlateId::from_bytes(*uuid.as_bytes()), *account));
+                                pending.push((
+                                    SlateId::from_bytes(*uuid.as_bytes()),
+                                    *account,
+                                    None,
+                                ));
                             }
                         }
                     }
