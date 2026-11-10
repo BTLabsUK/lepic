@@ -238,11 +238,11 @@ as anyone runs it:
 
 | Surface | Fixed on the wire | Source |
 |---|---|---|
-| HTTP path | `POST <base>/v2/foreign`, the sender appends `v2/foreign`; default port 3415 | epic `impls/src/adapters/http.rs:171`; LEPIC `crates/lepic-foreign/src/url.rs:12`, `server.rs:52` |
+| HTTP path | `POST <base>/v2/foreign`, the sender appends `v2/foreign`; default port 3415 | epic `impls/src/adapters/http.rs:171`; LEPIC `crates/lepic-legacy-rpc/src/url.rs:12`, `server.rs:52` |
 | JSON-RPC | 2.0 envelope; `check_version`, then `receive_tx` with `[slate, null, null, null]`; answers wrapped in `result.Ok` / `result.Err` | epic `http.rs:115-215`; LEPIC `rpc.rs:216-260, 389-445` |
 | Version answer | `foreign_api_version` >= 2 and `supported_slate_versions` holding `"V3"` or `"V2"`. The sender reads only these two keys through `Value::get`, so extra keys in the answer are ignored | epic `http.rs:26-73` |
 | Slates | V2 and V3 JSON; V2 refuses payment proofs. Unknown top-level keys are accepted and dropped on rewrite | epic `http.rs:173-186`; `docs/compat/epicbox.md` facts 2, "Ordinary sends" |
-| Tor | the same HTTP body to `http://<onion>.onion/v2/foreign`, port 80; the onion is a v3 address from an ed25519 key | epic `impls/src/adapters/mod.rs:91-106`, `controller/src/command.rs:1354`; LEPIC `crates/lepic-tor/src/transport.rs:40` |
+| Tor | the same HTTP body to `http://<onion>.onion/v2/foreign`, port 80; the onion is a v3 address from an ed25519 key | epic `impls/src/adapters/mod.rs:91-106`, `controller/src/command.rs:1354`; LEPIC `crates/lepic-methods/src/tor/mod.rs:51` |
 | Mining | the Epic node calls the wallet's `build_coinbase` on `/v2/foreign` | `docs/compat/foreign-api.md`; ADR 0048 |
 | Epicbox | relay protocol 3.0.0 frames; `key@domain` addresses matched by an anchored pattern; secp256k1 ECDH + ChaCha20-Poly1305 message cipher; stock sends V2 and acknowledges only payloads that parse as a slate | `docs/compat/epicbox.md`; epic `impls/src/adapters/epicbox.rs:258-269` |
 | File | V3 JSON (ADR 0015) | |
@@ -258,7 +258,7 @@ version-free `Slate` (ADR 0002) and the legacy codecs are frozen in `lepic_slate
   `legacy-v2`, `legacy-v3` (`crates/lepic-store/src/sqlite/schema.rs:30, 58, 79, 117`). These are
   data in every installed wallet; they are never renamed.
 - **LEPIC-to-LEPIC traffic still rides legacy bytes.** Between two LEPIC wallets an S1 is a V2
-  JSON slate plus `"lepic":{"version":1,"f":<bits>}` (`crates/lepic-epicbox/src/marker/`); pairing
+  JSON slate plus `"lepic":{"version":1,"f":<bits>}` (`crates/lepic-transport/src/marker/`); pairing
   envelopes wrap V3 JSON (RFC 0002). The native slate of RFC 0001 / ADR 0012 is specified and not
   built; OD-5 is still open.
 - **No native direct protocol.** Over HTTP and Tor a LEPIC wallet talks to another LEPIC wallet
@@ -291,7 +291,7 @@ Two layers with one boundary between them.
   `epic-wallet` speaks it moves under a `legacy` name:
   - `lepic-foreign` is renamed `lepic-legacy-rpc` (the `/v2/foreign` JSON-RPC server and client).
   - `lepic_slate::codec::legacy` becomes the crate `lepic-legacy-slate` (V2/V3 JSON, unchanged
-    bytes, still frozen). The LEPIC marker codecs (`crates/lepic-epicbox/src/marker/` on `main`)
+    bytes, still frozen). The LEPIC marker codecs (`crates/lepic-transport/src/marker/`)
     move next to it: they exist only because legacy slates carry LEPIC facts.
   - In `lepic-methods` (ADR 0051), each of `http`, `tor` and `epicbox` has a `legacy` dialect
     module that depends on these crates, behind a cargo feature `legacy`, on by default.
@@ -338,7 +338,7 @@ Two layers with one boundary between them.
   only, a break is `/v2`) and `formats` (slate encodings). Protocol 1 has no feature bits. If a
   later protocol adds them, they are a field of their own with BOLT 9 rules from bit 0 (odd
   optional, even required; a wallet refuses a peer that claims an even bit it does not know). The
-  existing marker bits (`crates/lepic-epicbox/src/marker/features.rs`) keep their meaning as
+  existing marker bits (`crates/lepic-transport/src/marker/features.rs`) keep their meaning as
   claims without parity.
 - **Discovery, cheapest first:**
   1. *What the sender already knows.* A paired contact's card names its formats and keys. An
@@ -348,7 +348,7 @@ Two layers with one boundary between them.
   2. *The version call it already makes.* A LEPIC listener adds
      `"lepic":{"protocol":1,"formats":["lepic.v1"],"path":"/v1/peer","seal":"<64 hex>"}` to its `check_version`
      answer. Stock senders read only their two keys (epic `http.rs:26-73`) and LEPIC's own
-     decoder ignores unknown keys (`crates/lepic-foreign/src/rpc.rs:484-487`), so neither
+     decoder ignores unknown keys (`crates/lepic-legacy-rpc/src/rpc.rs:484-490`), so neither
      changes behaviour. A LEPIC sender that sees it posts to `/v1/peer/slates`; one that does not
      falls back to `receive_tx`. No extra round trip.
   3. *Epicbox.* A new marker bit `NATIVE_SLATES` (bit 7). A native slate goes to a payments address only

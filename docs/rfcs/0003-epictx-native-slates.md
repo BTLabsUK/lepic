@@ -458,7 +458,7 @@ protocol only (the exception above). The one shared secret is index 0 (Epicbox a
 ECDH, the payment-proof key, the previous onion), inherited from stock. No new protocol in this
 document publishes or uses index 0 (O-8).
 
-### 5.3 Envelope layout, byte by byte — **[Shipped]** (RFC 0002 §3.1), `crates/lepic-contact/src/envelope.rs`
+### 5.3 Envelope layout, byte by byte — **[Shipped]** (RFC 0002 §3.1), `crates/lepic-seal/src/envelope.rs`
 
 | Offset | Size | Field | Value |
 |---|---|---|---|
@@ -614,13 +614,13 @@ it. Only new readers check the zeros.
 
 **[Specified]** (draft 2) Readers that know `FE` must find it whatever its position among the
 extensions. The shipped field list keeps only the first 8 extension fields and skips the rest
-unread (`EXTENSION_SLOTS`, `crates/lepic-contact/src/tlv.rs`); `FE` is therefore read into a slot
+unread (`EXTENSION_SLOTS`, `crates/lepic-seal/src/tlv.rs`); `FE` is therefore read into a slot
 of its own, not into the extension slots. The zero check need not be constant-time: the bytes are
 the sender's, checked after the AEAD.
 
 **[Specified]** (draft 2) A TLV value has a `u16` length and a tag may not repeat, so the body of
 an envelope is at most 65,535 bytes. That is the binding size limit of every sealed slate (5.17).
-`Writer::field` returns `FieldTooLong` past it (tested in `crates/lepic-contact/tests/envelope.rs`);
+`Writer::field` returns `FieldTooLong` past it (`crates/lepic-seal/src/tlv.rs`);
 callers must handle it as section 5.17 says.
 
 ### 5.7 Padding — **[Decided]** rule; input length **[Specified]** (draft 2); floor 768 **[Decided]** (O-6, owner, 2026-11-08)
@@ -863,7 +863,7 @@ carrier this specification defines is an envelope.
 
 ### 5.11 Armour — **[Shipped]** for `BEGINEPICSEALED.`; EPICTX **[Decided]**; which bodies get which marker **[Decided]** (O-4); alphabet **[Decided]** (D6)
 
-Shipped form (RFC 0002 §3.5, `crates/lepic-contact/src/armor.rs`):
+Shipped form (RFC 0002 §3.5, `crates/lepic-seal/src/armor.rs`):
 
 ```
 BEGINEPICSEALED. <payload>. ENDEPICSEALED.
@@ -1182,7 +1182,7 @@ transport entry costs three versions, because a mailbox is an Epicbox address.
 
 - Stock senders read only `foreign_api_version` and `supported_slate_versions`
   (`epic-wallet` `impls/src/adapters/http.rs:26-73`), so the extra key changes nothing for them.
-  LEPIC's decoder ignores unknown keys (`crates/lepic-foreign/src/rpc.rs:484-487`).
+  LEPIC's decoder ignores unknown keys (`crates/lepic-legacy-rpc/src/rpc.rs:484-490`).
 - `seal`: the seal key of the listener that accepted the connection (5.2, kind `01` onion,
   `02` web). It never equals the epic1 seal key, so the advert does not link the listener to the
   epic1 or Epicbox identity.
@@ -1270,7 +1270,7 @@ The carrier **[Specified]** (step 11):
 - The key is kind `03`, separate from the epic1 seal key (`00`), so a payments address and an epic1
   of one wallet cannot be linked through a shared key.
 
-### 5.16 LEPIC marker on legacy slates — **[Shipped]** (RFC 0002 §5), `crates/lepic-epicbox/src/marker/` on `main` (moved to `crates/lepic-transport/src/marker/` **[Unmerged]**)
+### 5.16 LEPIC marker on legacy slates — **[Shipped]** (RFC 0002 §5), `crates/lepic-transport/src/marker/`
 
 ```json
 "lepic": {"version": 1, "reply": "<64 hex of reply_pk>"}

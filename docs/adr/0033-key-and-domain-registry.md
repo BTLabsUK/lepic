@@ -36,7 +36,7 @@ context key and the seed check. `seed` is the BIP39 entropy. No new BIP32 branch
 value that makes a valid key, as `first_valid_key` does. The listing key's counter is one byte, tried from 0 up.
 Each key has one function and one label constant in the crate that owns it, so a path or label is
 changed in one edit and nothing else spells it. The wallet derives its subkeys in
-`lepic_wallet::store_keys` (context key and peer tag key), `lepic_wallet::store_key` (database key,
+`lepic_wallet::lifecycle::store_keys` (context key and peer tag key), `lepic_wallet::store_key` (database key,
 0032) and `lepic_wallet::namespace` (listing keys and the device-link key).
 
 Listing keys take `(service_key, gen)`: the service key (33 bytes) and a generation (u32 big-endian,
@@ -164,8 +164,8 @@ Shipped:
 | Tag | Used with | Covers | Owner | First | Status | Vector |
 |---|---|---|---|---|---|---|
 | `lepic/address-signature/v1` | ECDSA, index 0; `SHA256(SHA256(tag) ‖ SHA256(tag) ‖ msg)` | Device-link hello | `lepic-epicbox` | ≤ 26.10.24-r2 | retired-reserved | none |
-| `epic-card/1` | Ed25519, contact sig key | A contact card | `lepic-contact` | 26.10.20 | live | `pairing/cards_invites.json` |
-| `epic-domain/1` | Ed25519 by the domain key | A contact's domain claim | `lepic-contact` | 26.11.06 | live | `pairing/domain.json` |
+| `epic-card/1` | Ed25519, contact sig key | A contact card | `lepic-seal` (was `lepic-contact`) | 26.10.20 | live | `pairing/cards_invites.json` |
+| `epic-domain/1` | Ed25519 by the domain key | A contact's domain claim | `lepic-seal` | 26.11.06 | live | `pairing/domain.json` |
 | `epic-seal/1` (HPKE info), `epic-seal/1 sig` (Ed25519 signing input), `epic-seal/1 fixed`, `epic-seal/1 reply` (SHA-256 hint domains) | HPKE, Ed25519, SHA-256 | Sealed envelopes and their hints | `lepic-seal` (was `lepic-contact`) | 26.10.20 | live | `pairing/envelopes.json` |
 | `epic-pair/1 id`, `commit`, `sas` (SHA-256), `words` (Argon2id salt prefix), `keycheck` (SHA-256 tag, computed in `lepic-contact` and `lepic-wallet-contacts` as one value), `keycheck found`, `keycheck restored` (Ed25519 proof messages) | as listed | Invite id, commitment, short authentication string, pairing words, key check | `lepic-contact`, `lepic-wallet-contacts` | 26.10.20 | live | `pairing/keycheck.json`, `sas.json`, `words.json` |
 | `epic-private/1` (PSK id), `epic-private/1 reply`, `channel`, `sas` (SHA-256) | HPKE PSK, SHA-256 | Private pairing channel | `lepic-contact` | ≤ 26.10.24-r2 | live | none yet |
