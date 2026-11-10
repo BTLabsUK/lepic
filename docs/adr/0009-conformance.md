@@ -16,6 +16,8 @@ graph (ADR 0001).
   `EpicCash/epic` and `EpicCash/epic-wallet` by tag and commit, and
   `EpicCash/rust-secp256k1-zkp` at the commit the reference lockfile records. Version table:
   see ADR 0020. The `vectors` crate tests that the lockfile resolves to the commits it expects.
+- The product workspace vendors the curve wrapper from `EpicCash/rust-secp256k1-zkp` at
+  `42fcb29d4b635ea771d1984be0d11b0e64b15a93` in `third_party/grin_secp256k1zkp` (ADR 0010).
 - The `vectors` binary runs the pinned reference code and writes golden vectors to
   `testdata/vectors/<area>/<name>.json`. Each file records the generator, the upstream commit,
   the inputs and the expected outputs. Vectors are committed. Areas: `smoke`, `primitives`,
