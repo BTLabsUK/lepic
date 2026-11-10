@@ -302,6 +302,21 @@ miner_start() {
     exec {miner_fd}>&-
 }
 
+# The miner binary pm2 runs. `pm2 delete` can leave it behind: it holds its RandomX dataset and
+# keeps mining. miner_reap ends what is left: TERM, then KILL after 10 s.
+MINER_BIN="${HOME}/epic/floo-miner/bin/epic-miner.real"
+miner_reap() {
+    local i
+    pgrep -f "${MINER_BIN}" >/dev/null || return 0
+    pkill -TERM -f "${MINER_BIN}" || true
+    for ((i = 0; i < 20; i++)); do
+        pgrep -f "${MINER_BIN}" >/dev/null || return 0
+        sleep 0.5
+    done
+    pkill -KILL -f "${MINER_BIN}" || true
+    sleep 1
+}
+
 miner_stop() {
     [[ "${MINER_STARTED}" == true ]] || return 0
     local users="${E2E_STATE}/miner.users" f others=0 allow="${HOME}/.config/lepic-e2e/miner-allow.json"
@@ -314,8 +329,13 @@ miner_stop() {
     done
     if ((others == 0)); then
         pm2 delete floo-miner >>"${RUN_LOG}" 2>&1 || true
+        miner_reap
         grep -q '"by": "interop/e2e"' "${allow}" 2>/dev/null && rm -f "${allow}"
-        log "floo-miner stopped"
+        if pgrep -f "${MINER_BIN}" >/dev/null; then
+            log "epic-miner.real is still running after the stop; see ps aux | grep epic-miner.real"
+        else
+            log "floo-miner stopped"
+        fi
     else
         log "floo-miner left running for ${others} other run(s)"
     fi

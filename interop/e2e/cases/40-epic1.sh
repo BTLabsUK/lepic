@@ -5,6 +5,8 @@
 CASES+=("epic1.address|case_e1_address|crates/lepic-cli crates/lepic-epic1 crates/lepic-wallet-contacts")
 CASES+=("epic1.link-pay|case_e1_link_pay|crates/lepic-cli crates/lepic-epic1 crates/lepic-wallet-contacts crates/lepic-wallet")
 
+CASES+=("epic1.index|case_e1_index|crates/lepic-cli crates/lepic-epic1 crates/lepic-wallet-contacts crates/lepic-wallet")
+
 CASES+=("epic1.no-amount|case_e1_no_amount|crates/lepic-cli crates/lepic-epic1")
 CASES+=("epic1.printed|case_e1_printed|crates/lepic-cli crates/lepic-epic1 crates/lepic-wallet-contacts")
 CASES+=("epic1.epicbox-param|case_e1_epicbox_param|crates/lepic-cli crates/lepic-epic1 crates/lepic-wallet-contacts")
@@ -88,6 +90,35 @@ case_e1_link_pay() {
     e1_confirmed "${E1_PAYEE}" "${slate}" || return 1
     e1_confirmed "${E1_PAYER}" "${slate}" || return 1
     note "confirmed both sides after $((SECONDS - t0))s"
+}
+
+# A numbered address: new-address issues the next number, the listing and `address --index` show
+# it, a higher number is refused, and a payment to a link to it is taken at that number. The
+# payee's index-0 payments are case_e1_link_pay.
+case_e1_index() {
+    local issued n listed a0 an link slate tx
+    e1_setup || return 1
+    issued="$(w "${E1_PAYEE}" epic1 new-address)" || fail "epic1 new-address failed" || return 1
+    printf '%s\n' "${issued}" >"${CASE_DIR}/new-address.json"
+    n="$(jq -r .index <<<"${issued}")"
+    expect_match "${n}" '^[1-9][0-9]*$' "new address number" || return 1
+    an="$(jq -r .address <<<"${issued}")"
+    a0="$(w "${E1_PAYEE}" epic1 address | jq -r .address)" || fail "epic1 address failed" || return 1
+    [[ "${an}" != "${a0}" ]] || fail "address ${n} is address 0" || return 1
+    expect_eq "$(w "${E1_PAYEE}" epic1 address --index "${n}" | jq -r .address)" "${an}" "address --index ${n}" || return 1
+    listed="$(w "${E1_PAYEE}" epic1 addresses --from "${n}" --limit 1)" || fail "epic1 addresses failed" || return 1
+    printf '%s\n' "${listed}" >"${CASE_DIR}/addresses.json"
+    expect_json "${listed}" ".highest == ${n} and (.addresses | length == 1) and .addresses[0].index == ${n} and .addresses[0].address == \"${an}\"" "listing" || return 1
+    wx 6 "${E1_PAYEE}" epic1 address --index "$((n + 1))" || return 1
+    link="$(w "${E1_PAYEE}" epic1 link 0.02 --index "${n}" | jq -r .link)" || fail "epic1 link --index failed" || return 1
+    [[ "${link}" == "epic:${an}"* ]] || fail "link does not name address ${n}: ${link}" || return 1
+    e1_pay_and_take "${link}" || return 1
+    slate="${E1_SLATE}"
+    tx="$(w "${E1_PAYEE}" tx show "$(tx_by_slate "${E1_PAYEE}" "${slate}" | jq -r .tx_id)")" || fail "tx show failed" || return 1
+    printf '%s\n' "${tx}" >"${CASE_DIR}/payee-tx.json"
+    expect_json "${tx}" ".epic1_index == ${n}" "payee tx shows address ${n}" || return 1
+    e1_confirmed "${E1_PAYEE}" "${slate}" || return 1
+    note "address ${n} issued, listed, ${n}+1 refused (exit 6), paid 0.02 and confirmed at index ${n}"
 }
 
 # A payer sends `amount` to a link and the payee's collect takes it; returns the slate in E1_SLATE.
