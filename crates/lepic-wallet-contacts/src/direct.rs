@@ -880,6 +880,75 @@ mod tests {
         assert_eq!(host.refusals.load(Ordering::Relaxed), 1);
     }
 
+    /// The epic1 seal keys of one account, with the address 4 of `key`.
+    struct OneAddress(EncSecretKey);
+
+    impl Epic1Keys for OneAddress {
+        fn epic1_keys(&self) -> BoxFuture<'_, Vec<Epic1AccountKeys>> {
+            let keys = vec![Epic1AccountKeys {
+                account: AccountIndex(0),
+                label: "default".to_owned(),
+                keys: vec![(4, self.0.clone())],
+            }];
+            Box::pin(async move { keys })
+        }
+    }
+
+    /// The answer of a listener with `epic1` keys, or none, to an S1 sealed to `recipient` as
+    /// `kind`, and how many slates reached its host.
+    fn answer_sealed(
+        epic1: Option<EncSecretKey>,
+        recipient: &EncSecretKey,
+        kind: TxKey<'_>,
+    ) -> (Result<Vec<u8>, PeerRefusal>, u32) {
+        let host = Arc::new(Counting::default());
+        let mut handler = DirectHandler::new(
+            Arc::clone(&host),
+            http(),
+            ProofKey::Payments,
+            EncSecretKey::from_bytes([3; 32]),
+            Network::Floonet,
+            SharedRng::new(FixedRng),
+        );
+        if let Some(key) = epic1 {
+            handler = handler.with_epic1(Arc::new(OneAddress(key)));
+        }
+        let body = native_body(Network::Floonet, &vector_v3("send_file_plain_s1_floonet")).unwrap();
+        let content = TxContent {
+            reply_key: Some(EncSecretKey::from_bytes([5; 32]).public_key()),
+            ..TxContent::new(body)
+        };
+        let envelope = seal_tx(
+            contact_network(Network::Floonet),
+            &recipient.public_key(),
+            kind,
+            &content,
+            None,
+            &mut FixedRng,
+        )
+        .unwrap();
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
+        let answer = runtime.block_on(handler.receive(envelope));
+        (answer, host.receives.load(Ordering::Relaxed))
+    }
+
+    #[test]
+    fn a_listener_without_epic1_keys_answers_an_epic1_payment_as_one_it_cannot_open() {
+        let epic1 = EncSecretKey::from_bytes([9; 32]);
+        let other = EncSecretKey::from_bytes([11; 32]);
+        let (to_epic1, reached) = answer_sealed(None, &epic1, TxKey::Epic1);
+        assert!(matches!(to_epic1, Err(PeerRefusal::Refused)));
+        assert_eq!(reached, 0);
+        let (to_nobody, reached) = answer_sealed(None, &other, TxKey::Listener);
+        assert!(matches!(to_nobody, Err(PeerRefusal::Refused)));
+        assert_eq!(reached, 0);
+        // With the keys, the same payment reaches the wallet.
+        let (_, reached) = answer_sealed(Some(epic1.clone()), &epic1, TxKey::Epic1);
+        assert_eq!(reached, 1);
+    }
+
     #[test]
     fn a_proposal_reaches_the_wallet() {
         let body = native_body(Network::Floonet, &vector_v3("send_file_plain_s1_floonet")).unwrap();

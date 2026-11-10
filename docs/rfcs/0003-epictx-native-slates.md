@@ -556,6 +556,10 @@ from the address and no per-message hint.
   payment is tried first, then index 0, then the rest from the highest index down. The first key
   that opens is the address the slate came to; the wallet records that index with the
   transaction, and it is tried first next time.
+- The direct listener tries epic1 seal keys only where the host switched it on for that socket
+  kind, onion or web; the switch is off for both by default. With it off, an envelope sealed to
+  an epic1 gets the answer of an envelope no key opens, so whoever holds an epic1 cannot tell
+  from the answer whether a listener is that wallet.
 
 **[Reasoning]** A hint the sender can derive from the address is the same on every message to it,
 so a relay, or anyone who knows the address, could pick out every payment to it.
@@ -697,7 +701,8 @@ and nobody else can open the result.
 2. Find candidate keys by hint. None means "not for this install". A zero hint selects the seal
    key of the epic1 address index the link mailbox it came from belongs to, or the accepting
    listener's seal key (endpoint). A zero-hint envelope from a file, transaction text or the
-   direct listener is tried with the issued epic1 seal keys in the order of 5.5.
+   direct listener (where the host switched epic1 on for that socket kind) is tried with the
+   issued epic1 seal keys in the order of 5.5.
 3. `OpenBase` (or `OpenPSK` for suite `41`) with each candidate, with the `info` of that key's
    class (5.4). Failure with all is "cannot open".
 4. Decode the TLV. If `FF` is present, verify with `08`'s key. A signed envelope opened with a

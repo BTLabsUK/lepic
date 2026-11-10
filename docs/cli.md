@@ -76,6 +76,8 @@ Each setting comes from, in order: a flag, its environment variable, the config 
 | `refuse_unsolicited_payments` | `LEPIC_REFUSE_UNSOLICITED_PAYMENTS` | | `false` |
 | `refuse_unsolicited_invoices` | `LEPIC_REFUSE_UNSOLICITED_INVOICES` | | `false` |
 | `native_direct` | `LEPIC_NATIVE_DIRECT` | | `false` |
+| `epic1_web_listener` | `LEPIC_EPIC1_WEB_LISTENER` | | `false` |
+| `epic1_onion_listener` | `LEPIC_EPIC1_ONION_LISTENER` | | `false` |
 | `invoice_expiry_hours` | `LEPIC_INVOICE_EXPIRY_HOURS` | | `24` |
 | `host_features` | `LEPIC_HOST_FEATURES` | | none |
 | `profile` | `LEPIC_PROFILE` | `--profile`, `--profile-bits` | `0` |
@@ -643,7 +645,13 @@ that succeeds pins the key under the address's origin: `http://host:port`, `http
 or the onion name alone. A payment proof asked for over the endpoint names the listener's proof
 address, the onion's key on the onion and the payment-proof address over HTTP. With the switch
 off, or to a listener that offers no endpoint and is not pinned, the send goes as before and
-pins nothing. `--output json` reports `dialect`, `native` or `legacy`, for a send or resend to a
+pins nothing.
+
+The endpoint opens payments sealed to the wallet's epic1 addresses only with
+`epic1_web_listener = true` (HTTP listener) or `epic1_onion_listener = true` (onion listener).
+Both are off by default: the listener then answers such a payment as one sealed to a key it does
+not hold, so whoever has one of the wallet's epic1 addresses cannot tell that the listener is the
+same wallet. `--output json` reports `dialect`, `native` or `legacy`, for a send or resend to a
 listener.
 
 A send to a pinned origin never falls back to the V2 or V3 slate by itself. It stops, with

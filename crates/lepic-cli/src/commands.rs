@@ -1961,7 +1961,8 @@ async fn onion_listeners<N: NodeApi + 'static>(
 /// wallet's listener key of `kind`, received through `host` over `method` as the socket's
 /// foreign API receives them, with payment proofs signed by `proof_key`. None unless
 /// `native_direct` is set, so the socket answers as a listener without it does: no advert,
-/// no native routes.
+/// no native routes. Envelopes sealed to the wallet's epic1 addresses are opened only when
+/// `epic1_web_listener` or `epic1_onion_listener` is set for the socket's kind.
 fn peer_endpoint<N: NodeApi + 'static>(
     opened: &Opened<N>,
     settings: &Settings,
@@ -1976,9 +1977,16 @@ fn peer_endpoint<N: NodeApi + 'static>(
     let key = opened.wallet.listener_seal_key(kind)?;
     let seal = *key.public_key().as_bytes();
     let network = opened.wallet.config().network;
-    let epic1 = Arc::clone(&host) as Arc<dyn lepic_wallet_contacts::Epic1Keys>;
-    let handler =
-        DirectHandler::new(host, method, proof_key, key, network, system_rng()?).with_epic1(epic1);
+    let epic1 = match kind {
+        SealKeyKind::Web => settings.epic1_web_listener,
+        SealKeyKind::Onion => settings.epic1_onion_listener,
+        _ => false,
+    };
+    let epic1_keys = Arc::clone(&host) as Arc<dyn lepic_wallet_contacts::Epic1Keys>;
+    let mut handler = DirectHandler::new(host, method, proof_key, key, network, system_rng()?);
+    if epic1 {
+        handler = handler.with_epic1(epic1_keys);
+    }
     Ok(Some(Arc::new(PeerEndpoint::new(
         Arc::new(handler),
         seal,

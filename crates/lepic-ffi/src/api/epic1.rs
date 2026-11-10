@@ -17,10 +17,15 @@
 //! once the user confirmed the payer's relay. After a restore from the phrase,
 //! [`EpicWallet::epic1_restore`] drains every link mailbox once.
 //!
+//! A listener tries the keys of the wallet's epic1 addresses on payments sent to it only where
+//! [`EpicWallet::set_epic1_at_listener`] switched it on for that socket.
+//!
 //! Links and payments belong to the default account. Calls that take a [`ContactRelayMode`]
 //! reach relays as the contact calls do and fail with `ContactsOffline` or `EpicboxOff` before
 //! connecting when the mode does not allow it, and with `Unsupported` when the configuration
 //! names no Epicbox relay. Every call fails with `Locked` on a locked wallet.
+
+use flutter_rust_bridge::frb;
 
 use crate::api::error::WalletError;
 use crate::api::types::{
@@ -28,6 +33,15 @@ use crate::api::types::{
     Epic1Paid, EpictxView, SendOptions, SlateWire,
 };
 use crate::api::wallet::EpicWallet;
+
+/// A listener socket of the wallet.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ListenerSocket {
+    /// The HTTP listener.
+    Web,
+    /// The listener behind the wallet's onion.
+    Onion,
+}
 
 impl EpicWallet {
     /// The epic1 address of the default account: its seal key and its epic1 proof key on the
@@ -204,6 +218,35 @@ impl EpicWallet {
             session.epic1_restore(relay_mode).await
         })
         .await
+    }
+
+    /// Turns on or off, for the listener `socket`, taking payments sealed to the wallet's epic1
+    /// addresses at its native endpoint. It is off for both sockets until this turns it on:
+    /// the listener then answers such a payment as one sealed to a key it does not hold, so
+    /// whoever has one of the wallet's epic1 addresses cannot tell that the listener is the same
+    /// wallet. The setting is kept in the wallet's directory and takes effect when the listener
+    /// next starts. It matters only with native slates on ([`EpicWallet::set_native_direct`]).
+    /// Deleting the wallet removes it.
+    ///
+    /// Fails with `Io` when the setting cannot be written.
+    #[frb(sync)]
+    pub fn set_epic1_at_listener(
+        &self,
+        socket: ListenerSocket,
+        enabled: bool,
+    ) -> Result<(), WalletError> {
+        self.boundary().guard("set_epic1_at_listener", || {
+            self.session.set_epic1_at_listener(socket, enabled)
+        })
+    }
+
+    /// Whether the listener `socket` takes payments sealed to the wallet's epic1 addresses from
+    /// its next start, as [`EpicWallet::set_epic1_at_listener`] last saved it.
+    #[frb(sync)]
+    pub fn epic1_at_listener(&self, socket: ListenerSocket) -> bool {
+        self.boundary().guard_or("epic1_at_listener", false, || {
+            self.session.epic1_at_listener(socket)
+        })
     }
 
     /// Opens sealed text, `BEGINEPICTX.` or `BEGINEPICSEALED.`, with this wallet's keys and

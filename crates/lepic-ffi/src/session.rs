@@ -58,6 +58,7 @@ use tracing::{debug, info, warn};
 use zeroize::Zeroizing;
 
 use crate::api::at_rest::{RetiredPlainStore, StoreAtRest, StoreAtRestState};
+use crate::api::epic1::ListenerSocket;
 use crate::api::error::{WalletError, WalletErrorKind};
 use crate::api::policy::Policy;
 use crate::api::runtime::{ClaimHolder, ClaimedStores, RuntimeInner};
@@ -1044,6 +1045,28 @@ impl Session {
         } else {
             remove_if_present(std::fs::remove_file(&path))
                 .map_err(|error| io("saving native_direct", &error))
+        }
+    }
+
+    /// Whether the listener `socket` opens payments sealed to the wallet's epic1 addresses from
+    /// its next start, as last saved.
+    pub(crate) fn epic1_at_listener(&self, socket: ListenerSocket) -> bool {
+        self.data_dir.join(epic1_listener_file(socket)).exists()
+    }
+
+    /// Saves whether the listener `socket` opens payments sealed to the wallet's epic1
+    /// addresses, for its next start.
+    pub(crate) fn set_epic1_at_listener(
+        &self,
+        socket: ListenerSocket,
+        enabled: bool,
+    ) -> Result<(), WalletError> {
+        let path = self.data_dir.join(epic1_listener_file(socket));
+        if enabled {
+            std::fs::write(&path, []).map_err(|error| io("saving epic1_at_listener", &error))
+        } else {
+            remove_if_present(std::fs::remove_file(&path))
+                .map_err(|error| io("saving epic1_at_listener", &error))
         }
     }
 
@@ -2666,9 +2689,21 @@ pub(crate) const TOR_EXPECTED_FILE: &str = "tor-expected";
 /// sessions opened after it was written. Without it native slates stay off.
 pub(crate) const NATIVE_DIRECT_FILE: &str = "native-direct";
 
+/// The files inside the wallet's data directory that make the HTTP or the onion listener open
+/// payments sealed to the wallet's epic1 addresses. Without one the listener does not.
+const EPIC1_WEB_LISTENER_FILE: &str = "epic1-web-listener";
+const EPIC1_ONION_LISTENER_FILE: &str = "epic1-onion-listener";
+
+const fn epic1_listener_file(socket: ListenerSocket) -> &'static str {
+    match socket {
+        ListenerSocket::Web => EPIC1_WEB_LISTENER_FILE,
+        ListenerSocket::Onion => EPIC1_ONION_LISTENER_FILE,
+    }
+}
+
 /// Removes what a session leaves in the wallet's directory besides the database: scratch slate
-/// files a stopped call did not remove, the tor expectation, the native-direct switch and tor's
-/// own directory. A deleted
+/// files a stopped call did not remove, the tor expectation, the native-direct and epic1
+/// listener switches and tor's own directory. A deleted
 /// wallet leaves nothing of its payments or its connections behind.
 async fn remove_session_files(data_dir: &Path) -> Result<(), WalletError> {
     let dir = data_dir.to_owned();
@@ -2683,6 +2718,8 @@ async fn remove_session_files(data_dir: &Path) -> Result<(), WalletError> {
         }
         remove_if_present(std::fs::remove_file(dir.join(TOR_EXPECTED_FILE)))?;
         remove_if_present(std::fs::remove_file(dir.join(NATIVE_DIRECT_FILE)))?;
+        remove_if_present(std::fs::remove_file(dir.join(EPIC1_WEB_LISTENER_FILE)))?;
+        remove_if_present(std::fs::remove_file(dir.join(EPIC1_ONION_LISTENER_FILE)))?;
         remove_if_present(std::fs::remove_dir_all(dir.join(TOR_DIR)))
     })
     .await

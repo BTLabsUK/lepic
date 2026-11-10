@@ -32,6 +32,7 @@ use tracing::{debug, warn};
 
 use super::contact::hex;
 use super::{DEFAULT_ACCOUNT, Session, invalid, lock, os_rng};
+use crate::api::epic1::ListenerSocket;
 use crate::api::error::{WalletError, WalletErrorKind};
 use crate::api::http::{
     HttpCoinbase, HttpExposure, HttpListenerEvent, HttpListenerEventKind, HttpListenerInfo,
@@ -558,7 +559,8 @@ impl Session {
     /// The native endpoint (ADR 0052) of a listener socket: payments in envelopes sealed to the
     /// wallet's listener key of `kind`, received over `transport` as [`Session::http_receiver`]
     /// receives them, with payment proofs signed by `proof_key`. None while native slates are
-    /// off, so the socket answers as it does without them: no advert, no native routes.
+    /// off, so the socket answers as it does without them: no advert, no native routes. Opens
+    /// envelopes sealed to the wallet's epic1 addresses only where the socket's switch is on.
     pub(crate) fn peer_endpoint(
         self: &Arc<Self>,
         report: HttpReport,
@@ -577,16 +579,23 @@ impl Session {
             report,
             transport,
         });
-        let epic1 = Arc::clone(&host) as Arc<dyn Epic1Keys>;
-        let handler = DirectHandler::new(
+        let epic1 = match kind {
+            SealKeyKind::Web => self.epic1_at_listener(ListenerSocket::Web),
+            SealKeyKind::Onion => self.epic1_at_listener(ListenerSocket::Onion),
+            _ => false,
+        };
+        let epic1_keys = Arc::clone(&host) as Arc<dyn Epic1Keys>;
+        let mut handler = DirectHandler::new(
             host,
             self.receiving_method(transport),
             proof_key,
             key,
             network,
             SharedRng::new(os_rng()?),
-        )
-        .with_epic1(epic1);
+        );
+        if epic1 {
+            handler = handler.with_epic1(epic1_keys);
+        }
         Ok(Some(Arc::new(PeerEndpoint::new(
             Arc::new(handler),
             seal,

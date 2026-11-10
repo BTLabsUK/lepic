@@ -7,6 +7,7 @@
 use super::contact::{EPIC, RELAY, World, pair};
 use super::kind;
 use crate::api::contact::sealed_file_extension;
+use crate::api::epic1::ListenerSocket;
 use crate::api::error::WalletErrorKind;
 use crate::api::secret_store::AppSecretStore;
 use crate::api::types::{
@@ -54,6 +55,49 @@ async fn collect(wallet: &EpicWallet) -> u32 {
         .await
         .unwrap()
         .epic1
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn epic1_at_the_listeners_is_off_by_default_and_saved_per_socket() {
+    let mut world = World::new();
+    let config = world.config(RELAY);
+    let store = AppSecretStore::in_memory();
+    let wallet = native(&mut world, false).await;
+    assert!(!wallet.epic1_at_listener(ListenerSocket::Web));
+    assert!(!wallet.epic1_at_listener(ListenerSocket::Onion));
+    wallet
+        .set_epic1_at_listener(ListenerSocket::Onion, true)
+        .unwrap();
+    assert!(wallet.epic1_at_listener(ListenerSocket::Onion));
+    assert!(!wallet.epic1_at_listener(ListenerSocket::Web));
+    // Setting it twice either way is safe.
+    wallet
+        .set_epic1_at_listener(ListenerSocket::Onion, true)
+        .unwrap();
+    wallet
+        .set_epic1_at_listener(ListenerSocket::Web, false)
+        .unwrap();
+    assert!(wallet.epic1_at_listener(ListenerSocket::Onion));
+    wallet
+        .set_epic1_at_listener(ListenerSocket::Onion, false)
+        .unwrap();
+    assert!(!wallet.epic1_at_listener(ListenerSocket::Onion));
+    // Each wallet keeps its own.
+    wallet
+        .set_epic1_at_listener(ListenerSocket::Web, true)
+        .unwrap();
+    let other = EpicWallet::create(
+        &world.runtime,
+        config,
+        &store,
+        None,
+        None,
+        "password".to_owned(),
+    )
+    .await
+    .unwrap();
+    assert!(!other.epic1_at_listener(ListenerSocket::Web));
+    assert!(wallet.epic1_at_listener(ListenerSocket::Web));
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

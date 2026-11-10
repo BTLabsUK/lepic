@@ -89,6 +89,16 @@ pub const SETTINGS: &[(&str, &str, &str)] = &[
         "true to send lepic.v1 slates to the paired contacts that take them",
     ),
     (
+        "epic1_web_listener",
+        "LEPIC_EPIC1_WEB_LISTENER",
+        "true to take payments to the wallet's epic1 addresses at the http listener",
+    ),
+    (
+        "epic1_onion_listener",
+        "LEPIC_EPIC1_ONION_LISTENER",
+        "true to take payments to the wallet's epic1 addresses at the onion listener",
+    ),
+    (
         "invoice_expiry_hours",
         "LEPIC_INVOICE_EXPIRY_HOURS",
         "hours an unpaid invoice is kept, 1 to 48",
@@ -294,6 +304,12 @@ pub struct Settings {
     pub refuse_unsolicited_invoices: bool,
     /// Send `lepic.v1` slates to the paired contacts that claim them (ADR 0052). Off unless set.
     pub native_direct: bool,
+    /// The HTTP listener's native endpoint also opens envelopes sealed to the wallet's epic1
+    /// addresses. Off unless set: without it the listener answers them as envelopes no key
+    /// opens, so an epic1 does not tell which listener is its wallet.
+    pub epic1_web_listener: bool,
+    /// As `epic1_web_listener`, for the onion listener.
+    pub epic1_onion_listener: bool,
     /// How long an unpaid invoice is kept, on either side.
     pub invoice_expiry: InvoiceExpiry,
     /// The host bits the wallet's marker claims (ADR 0034), only bits of
@@ -416,6 +432,8 @@ impl Settings {
             refuse_unsolicited_payments: lookup.switch("refuse_unsolicited_payments")?,
             refuse_unsolicited_invoices: lookup.switch("refuse_unsolicited_invoices")?,
             native_direct: lookup.switch("native_direct")?,
+            epic1_web_listener: lookup.switch("epic1_web_listener")?,
+            epic1_onion_listener: lookup.switch("epic1_onion_listener")?,
             invoice_expiry,
             host_features,
             profile: profile(args, &lookup)?,
@@ -1012,6 +1030,26 @@ mod tests {
             resolve(&[("LEPIC_NATIVE_DIRECT", "1")]),
             Err(SettingsError::InvalidValue {
                 key: "native_direct",
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn epic1_at_the_listeners_is_off_unless_set() {
+        let none = resolve(&[]).unwrap();
+        assert!(!none.epic1_web_listener);
+        assert!(!none.epic1_onion_listener);
+        let web = resolve(&[("LEPIC_EPIC1_WEB_LISTENER", "true")]).unwrap();
+        assert!(web.epic1_web_listener);
+        assert!(!web.epic1_onion_listener);
+        let onion = resolve(&[("LEPIC_EPIC1_ONION_LISTENER", "true")]).unwrap();
+        assert!(!onion.epic1_web_listener);
+        assert!(onion.epic1_onion_listener);
+        assert!(matches!(
+            resolve(&[("LEPIC_EPIC1_ONION_LISTENER", "on")]),
+            Err(SettingsError::InvalidValue {
+                key: "epic1_onion_listener",
                 ..
             })
         ));
