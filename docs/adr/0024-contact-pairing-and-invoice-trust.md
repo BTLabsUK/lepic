@@ -1,70 +1,63 @@
-# 0024 Contact pairing, sealed slates, and invoice trust on paired contacts
+# ADR 0024: Contact pairing, sealed slates and invoice trust on paired contacts
 
 Status: proposed
-Date: 2026-10-24
 
 ## Context
 
-Slates sent as files or pasted into chats are plain text that every holder of a copy can read.
-Invoices over Epicbox trust senders by an address allowlist: the trust is tied to an
-Epicbox key and a relay, the user has to hand out a separate invoice address, and nothing
-authenticates a request beyond the relay's signature. Exchanges would rather take deposits by
-invoice, because then the exchange, not the phone, finalizes and posts; that needs a trust
-relationship that survives relay changes and a delivery path that survives a sleeping phone.
-
-The envelope research of 2026-10-24 and RFC 0001's draft sections 5 and 6 recommend HPKE with a
-fresh key per message, on keys kept apart from the Epicbox, Tor and payment-proof keys.
+A slate sent as a file or pasted into a chat is plain text that every holder of a copy can read.
+Invoices over Epicbox need a trust relationship between two wallets that does not depend on one
+Epicbox key or one relay, and a delivery path that works while a phone sleeps. Sealing a slate
+needs keys that are kept apart from the Epicbox, Tor and payment-proof keys.
 
 ## Decision
 
-Adopt RFC 0002:
+The design is RFC 0002 ([RFC 0002](../rfcs/0002-contact-pairing.md)).
 
-- A contact-identity branch from the seed (`m/<a>/2/0`, then HKDF), and per contact a numbered
-  slot that derives an X25519 key, an Ed25519 key and a hint key, plus a random salt for its
-  Epicbox mailbox key. None of these is the Epicbox, Tor or payment-proof key. Pairing records
-  go into the `.wfeh` backup; without it, re-pairing finds the old slot, so a restore never
-  changes a contact's keys.
-- A sealed envelope: HPKE base mode, suite `0x0020`/`0x0001`/`0x0003`, a versioned 16-byte
-  header, an 8-byte recipient hint, Ed25519-signed inner fields between paired contacts,
-  armored as `BEGINEPICSEALED. … ENDEPICSEALED.` and stored as `.epicsealed` files. It wraps the
-  V3 JSON slate LEPIC already writes. This amends RFC 0001 D1 (a dedicated key, not the
-  payment-proof key) for the envelope; the `lepic.v1` binary slate stays under OD-5.
-- The LEPIC marker carries a one-time reply key on every S1 and I1, so a LEPIC receiver seals its
-  answer with no setup.
-- Pairing in person by QR, or online by a one-time invite (a link, or five pairing words that
-  find it) and throwaway Epicbox mailboxes derived from the invite, with an inviter commitment and a 32-bit SAS shown as four emoji with names.
-- A home relay per pairing, where each side has a per-contact mailbox; all of the relationship's
-  messages go there, collected by one-off drains on open and in the foreground. A user's own relay
-  switch needs no message.
-- Invoice trust is a per-contact switch, available once the contact is verified. Invoices,
-  withdrawals, notices and their answers between contacts travel sealed and signed through the
-  contact mailboxes.
-- The address allowlist, the invoice address (`m/0/1/<index>`, index 1 and up), its connection,
-  its prefilter and their FFI calls are removed. There are no users of them yet.
-- A reference exchange kit in Python implements the protocol beside `epic-wallet`'s owner API and
-  generates the test vectors LEPIC checks.
+- **Keys.** A contact root derives from the seed, the account and the network
+  (`lepic-wallet-contacts`, `key_schedule.rs`). Per contact a numbered slot below 65,536
+  derives an X25519 encryption key, an Ed25519 signing key and a hint key, and a random 16-byte
+  salt keys the contact's mailbox. None of these is the Epicbox, Tor or payment-proof key. A
+  pairing record holds no secret. A restored wallet finds the slot of a contact again from the
+  contact's card, so keys do not change.
+- **Sealed envelope** (`lepic-seal`). HPKE base mode with DHKEM(X25519, HKDF-SHA256), HKDF-SHA256
+  and ChaCha20-Poly1305 (crate `hpke`), a 16-byte header with a magic, version, network, suite
+  and an 8-byte recipient hint, and inner TLV fields signed with Ed25519 between paired
+  contacts. Armored as `BEGINEPICSEALED. ... ENDEPICSEALED.`, at most 96 KiB, and stored as
+  `.epicsealed` files. An envelope to the one-time reply key in the LEPIC marker (ADR 0015) is
+  anonymous.
+- **Pairing** (`lepic-contact`, `lepic-wallet-contacts`). In person by scanning each other's
+  cards, or online by an invite, which is a link (`epiccash://pair/1/...`) or five pairing words
+  that find it in a rendezvous mailbox on the meeting relays. A request can also go to a
+  contact's Epicbox address. Both screens show a short authentication string of four emoji with
+  names, from a 256-entry table. A private pairing joins two wallets of one owner over a channel
+  key from two secrets.
+- **Home relay.** Each pairing names the home relay of each side. All later messages between the
+  contacts travel sealed and signed through per-contact mailboxes there. Wallets collect them
+  with one-off drains, grouped by relay with backoff, and send through a stored outbox that
+  retries.
+- **Invoice trust** is a per-contact switch, `allow_invoices`, which can be turned on only for a
+  verified contact. Turning it off deletes the contact's unpaid parked invoices and queues a
+  sealed `declined` for each. Invoices, payments, withdrawals and notices between contacts
+  travel through the contact mailboxes (`invoices.rs`).
+- **Removed.** The address allowlist (`allowed_peers` is dropped by the migration to schema
+  version 6 and `lepic-ffi` has no call for it) and the separate invoice address.
+- **Store.** Tables `contacts`, `contact_slot_counters`, `contact_mailboxes`,
+  `contact_relay_backoff`, `pairings`, `contact_outbox`, `contact_seen`, `pair_requests` and
+  `contact_status_out`.
+- **FFI.** Pairing, contact, sealing and outbox calls and events in `crates/lepic-ffi/src/api`
+  (`contact.rs`), with error codes from 56.
 
 ## Consequences
 
-- New dependencies `hpke` (X25519, HKDF-SHA256, ChaCha20-Poly1305 only) and `x25519-dalek`, under
-  ADR 0010's rules; `hkdf`, `hmac`, `sha2`, `ed25519-dalek`, `chacha20poly1305` and `base64` are in
-  the workspace.
-- New store tables (`contact`, `contact_mailbox`, `pairing`, `outbox`), `allowed_peer` dropped: a
-  breaking store migration on unreleased data.
-- Breaking FFI changes: invoice-address and allowlist calls go; pairing, contact, sealing and
-  outbox calls and events come; error codes start at 56 (ADR 0025 takes 51 to 55).
-- Stock wallets are unaffected: sealed data, cards and invites go only to paired contacts, and
-  stock ignores the marker's extra key. Epic Pay's handling of the marker is checked before
-  release.
-- ADR 0016 changes: notices between contacts are sealed and travel through contact mailboxes;
-  "proven peer" becomes "paired contact"; a signed `withdrawn` for a paid invoice cancels it
-  automatically (RFC 0002 OD-P3).
-- ADR 0003's Epicbox format policy is unchanged for person-to-person payments.
-- The earlier invoice-address documentation in `docs/compat/epicbox.md` is replaced when W-30 lands.
+- New dependencies `hpke` and `x25519-dalek`, under ADR 0010's rules. `hkdf`, `ed25519-dalek` and
+  `chacha20poly1305` are shared with the rest of the workspace.
+- Stock wallets are unaffected: sealed data and invites go only to paired contacts, and a stock
+  wallet ignores the extra key in the marker.
+- Pairing records go into the `.wfeh` history payload (`docs/compat/wfeh.md`) and hold no secret.
+- A contact whose key is lost has to be paired again.
+- Epicbox format policy (ADR 0003) is unchanged for person-to-person payments.
 
-## Alternatives considered
+## Related
 
-RFC 0002 "Options considered" lists them: the payment-proof or Epicbox key for encryption, age or
-the Epicbox cipher, HPKE auth mode, a binary slate first, a rendezvous server, SAS without a
-commitment, BIP39 or PGP words, keeping the address allowlist, per-wallet addresses with
-relay-change notices, and LEPIC as the exchange's wallet.
+- ADR 0003, ADR 0010, ADR 0015, ADR 0016, ADR 0034
+- [RFC 0002](../rfcs/0002-contact-pairing.md)

@@ -6,7 +6,7 @@
 // upstream.toml.
 
 //! The three slates of the invoice flow on their own, with the randomness passed in, as
-//! `epic-wallet` `v4.0.2` builds them: `owner::issue_invoice_tx` (I1), `owner::process_invoice_tx`
+//! `epic-wallet` `v4.1.0` builds them: `owner::issue_invoice_tx` (I1), `owner::process_invoice_tx`
 //! (I2) and `foreign::finalize_invoice_tx` (I3).
 
 use lepic_crypto::aggsig::{

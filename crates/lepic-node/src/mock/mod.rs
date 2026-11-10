@@ -2,10 +2,10 @@
 //! An in-memory node for tests of the engine, the CLI and the bindings.
 //!
 //! [`MockNode`] answers at the JSON-RPC level, so every answer passes through the same decoding
-//! and validation as a real node's. It serves either a recorded session (the G-05 golden
-//! vectors, or a fixture under `testdata/node/`) or a scripted [`ChainState`]. Requests it
-//! cannot answer by its rules are failures of the test, collected in
-//! [`MockNode::violations`] and answered with a JSON-RPC error.
+//! and validation as a real node's. It serves either a recorded session (the engine golden
+//! vectors under `testdata/vectors/engine/`, or a fixture under `testdata/node/`) or a scripted
+//! [`ChainState`]. Requests it cannot answer by its rules are failures of the test, collected
+//! in [`MockNode::violations`] and answered with a JSON-RPC error.
 
 mod chain;
 mod recording;

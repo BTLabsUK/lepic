@@ -1,66 +1,61 @@
-# 0010 Latest stable crates and toolchain, banned list, update bots
+# ADR 0010: Dependency and toolchain policy
 
 Status: accepted
-Date: 2026-10-02
 
 ## Context
 
-`epic-wallet` and the node carry deprecated and very old dependencies, which makes every upgrade a
-project. LEPIC starts fresh and must stay current.
+`epic-wallet` and the node carry deprecated and very old dependencies, so every upgrade there is
+a project. LEPIC keeps its dependencies current and its dependency graph small.
 
 ## Decision
 
-- Toolchain: the latest stable Rust, pinned in `rust-toolchain.toml` with the mobile targets. Stable
-  was 1.99.0 on 2026-10-01 (https://blog.rust-lang.org/2026/10/01/Rust-1.99.0/). The pin moves within
-  two weeks of each stable release. Edition 2024.
-- Versions: the latest stable release of each crate at the time it is added, set once in
-  `[workspace.dependencies]`. Dependabot (or Renovate) proposes weekly updates for Cargo and GitHub
-  Actions.
-- `cargo deny` checks advisories, licenses, sources and bans in CI. Allowed licenses: Apache-2.0, MIT,
-  BSD-2/3-Clause, ISC, Unicode-3.0, Zlib, CC0-1.0, MPL-2.0 (file-level), CDLA-Permissive-2.0 (the bundled Mozilla root certificates in
-  `webpki-roots`), BlueOak-1.0.0 (`minicbor`, the CBOR library of the `ur` crate, ADR 0024).
-  No git sources are allowed: the secp256k1-zkp wrapper is vendored in
-  `third_party/grin_secp256k1zkp` (below).
-- The `fuzz/` workspace is test tooling that never ships, so it may also use NCSA-licensed fuzzing
-  crates such as `libfuzzer-sys`, set directly in `fuzz/Cargo.toml`.
-- Banned in the graph: RandomX, ProgPoW, CRoaring, LMDB, OpenSSL, native-tls, and crates that need
-  CMake or bindgen at build time. Not used by LEPIC crates directly: `failure`, `log4rs`,
-  `lazy_static`, `once_cell`, `chrono`, `log`.
-- Release profile: `lto = "fat"`, `codegen-units = 1`, `strip = true`, `overflow-checks = true`,
-  `opt-level = "s"` until measurements say otherwise.
-
-Starting versions, read from crates.io on 2026-10-02. Task F-01 rechecks them before writing the
-workspace table:
-
-| Area | Crate | Version |
-|---|---|---|
-| Async | tokio | 1.53 |
-| Websocket | tokio-tungstenite | 0.30 |
-| TLS | rustls | 0.23 (ring provider) |
-| HTTP | hyper 1.11 with hyper-util 0.1, hyper-rustls 0.27, http-body-util 0.1, webpki-roots 1.0 | ADR 0006 |
-| Serialization | serde 1.0, serde_json 1.0 | |
-| Errors | thiserror 2.0, anyhow 1.0 | |
-| Logging | tracing 0.1, tracing-subscriber 0.3, tracing-appender 0.2 | |
-| CLI | clap 4.6 | |
-| Storage | rusqlite 0.40 (bundled) | |
-| KDF and AEAD | argon2 0.6, pbkdf2 0.13, chacha20poly1305 0.11 | |
-| Hashes and MACs | blake2 0.11, sha2 0.11, hmac 0.13, ripemd 0.2 | |
-| Secrets | zeroize 1.9, secrecy 0.10 | |
-| Encoding | bs58 0.5, base64 0.23 | |
-| Mnemonic | bip39 3.0 | |
-| Payment proofs | ed25519-dalek 3.0 | |
-| Sealed envelopes | hpke 0.14 (X25519, HKDF-SHA256, ChaCha20-Poly1305 only), x25519-dalek 3.0 | RFC 0002 |
-| Ids and time | uuid 1.26, jiff 0.2 | |
-| Randomness | rand 0.10, rand_core 0.10, getrandom 0.4 | |
-| Curve | grin_secp256k1zkp, vendored from `EpicCash/rust-secp256k1-zkp` at `42fcb29d` with upstream C fix `0eefced` | Why vendored, and its diff against upstream: `docs/compat/secp256k1-zkp-fork.md` |
-| Bindings | flutter_rust_bridge 2.13 | ADR 0007 |
-| Tests | proptest 1.11, insta 1.48, tempfile 3.27, libfuzzer-sys 0.4 | |
+- Toolchain. `rust-toolchain.toml` pins a stable Rust release (1.99.0) with the Android and iOS
+  targets. The workspace uses edition 2024 and `rust-version = "1.99"`. `fuzz/` pins a dated
+  nightly in its own `rust-toolchain.toml`, because `cargo-fuzz` needs one.
+- Versions. Each external crate is set once in `[workspace.dependencies]` of `Cargo.toml` with
+  default features off. Member crates enable the features they use. Dependabot proposes weekly
+  updates for Cargo (root, `conformance/`, `fuzz/`) and GitHub Actions.
+- Libraries by area: tokio and tokio-tungstenite (async, websocket); rustls with the `ring`
+  provider, hyper, hyper-rustls and webpki-roots (TLS and HTTP, ADR 0006); rusqlite with the
+  bundled, encrypted SQLite (ADR 0032); argon2, pbkdf2, chacha20poly1305, blake2, sha2, sha3,
+  hmac, hkdf and ripemd (KDFs, AEAD, hashes); zeroize and secrecy (secrets); bip39, bs58,
+  base64; ed25519-dalek, x25519-dalek and hpke (payment proofs, sealed envelopes); ur and
+  minicbor (animated QR, ADR 0025); serde, serde_json, toml; thiserror, anyhow; tracing,
+  tracing-subscriber, tracing-appender; clap; uuid, jiff; rand, rand_core, getrandom;
+  flutter_rust_bridge, pinned to `=2.13.0` (ADR 0007). Exact versions are in the root
+  `Cargo.toml` and `Cargo.lock`.
+- Curve library. `grin_secp256k1zkp` is a vendored copy of `EpicCash/rust-secp256k1-zkp` at
+  `42fcb29d` with upstream backports and build fixes, in `third_party/grin_secp256k1zkp`
+  (`PATCHES.md`; `docs/compat/secp256k1-zkp-fork.md`). A vendored `libsqlite3-sys` in
+  `third_party/libsqlite3-sys` links SQLite3 Multiple Ciphers through `[patch.crates-io]`.
+  `third_party` is excluded from the workspace.
+- `cargo deny check` runs in CI and in `cargo xtask check`, with `all-features = true`:
+  - Advisories: yanked crates are denied.
+  - Licences allowed: Apache-2.0, MIT, BSD-2-Clause, BSD-3-Clause, ISC, Unicode-3.0, Zlib,
+    CC0-1.0, MPL-2.0, CDLA-Permissive-2.0 (the Mozilla root certificates in `webpki-roots`),
+    BlueOak-1.0.0 (`minicbor`). `sqlite3mc-src` has an exception for Unlicense (ADR 0032).
+  - Sources: only crates.io. Git sources are denied.
+  - Bans: a second version of a crate fails unless `deny.toml` lists it in `skip` with the
+    dependency that holds it back. Wildcard versions are denied.
+- Banned crates (`[bans].deny`): RandomX, ProgPoW, CRoaring, every LMDB binding, OpenSSL,
+  native-tls and hyper-tls, aws-lc, and the C++ bridge and build tools (`cmake`, `bindgen`,
+  `cxx`, `autocxx`, `cpp_build` and their helpers). A build needs Rust and a C compiler only.
+  `cargo xtask deps-check` keeps its own copy of the list equal to `deny.toml`.
+- `failure`, `log4rs`, `lazy_static`, `once_cell`, `chrono` and `log` may appear deeper in the
+  graph but are not direct dependencies of a workspace crate. `deps-check` enforces this.
+- The `fuzz/` workspace never ships. It sets the NCSA-licensed `libfuzzer-sys` directly in its
+  own `Cargo.toml`.
+- Release profile: `opt-level = "s"`, `lto = "fat"`, `codegen-units = 1`, `strip = true`,
+  `overflow-checks = true`.
 
 ## Consequences
 
-- Upgrades are small and frequent instead of rare and large.
-- The secp256k1-zkp wrapper may pull older crates; `cargo deny` reports duplicate versions as warnings.
+- Upgrades are small and frequent.
+- The vendored secp256k1-zkp wrapper uses older `rand` and `getrandom` versions. These are
+  listed in `skip` in `deny.toml` until the wrapper moves.
+- A crate that needs OpenSSL, CMake or a C++ toolchain cannot enter the graph.
+- Builds for the mobile targets need no tool besides Rust and a C compiler.
 
-## Alternatives considered
+## Related
 
-- Pin the versions `epic-wallet` uses. Inherits the problem this project exists to avoid.
+- ADR 0006, ADR 0007, ADR 0032

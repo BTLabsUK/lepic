@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
-//! The legacy JSON-RPC dialect: the wallet foreign API of `epic-wallet` over HTTP (ADR 0017,
-//! ADR 0052), the wire side: the JSON-RPC messages, the client that posts a slate to a wallet
-//! listening at an `http(s)://` address, and the listener. The method over it is
-//! `lepic_methods::http`. Wire-compatible with `epic-wallet` `v4.1.0` `send -m http` and `listen -m http`.
+//! The wallet foreign API of `epic-wallet` over HTTP (ADR 0017, ADR 0052): the JSON-RPC
+//! messages, the client that posts a slate to a listening wallet, and the listener, which also
+//! serves the native `/v1/peer` routes. Wire-compatible with `epic-wallet` `v4.1.0`
+//! `send -m http` and `listen -m http`; the method over it is `lepic_methods::http`.
+//!
+//! The crate's `README.md` describes the messages, the addresses and the listener's limits.
 
 pub mod client;
 pub mod dial;

@@ -1,13 +1,13 @@
-<!-- Security problems do not belong here: email support@btlabs.uk or tick "Turn on confidentiality". -->
-<!-- Never paste a recovery phrase, password, PIN, private key or a full slate. -->
+<!-- Security problems do not belong here. Email support@btlabs.uk or turn on confidentiality. -->
+<!-- Never paste a recovery phrase, password, PIN, private key or full slate. -->
 
 ## Version and platform
 
-<!-- LEPIC version or commit, and the host (CLI or BT Wallet). -->
+<!-- The LEPIC version (`lepic --version`) or commit, and the host: the CLI or an app. -->
 
 ## What happened
 
-<!-- What you did, what you expected, what happened instead. -->
+<!-- What you did, what you expected and what happened instead. -->
 
 ## Steps to reproduce
 

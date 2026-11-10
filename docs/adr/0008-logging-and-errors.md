@@ -1,33 +1,36 @@
-# 0008 tracing everywhere, host-installed subscribers, typed errors
+# ADR 0008: tracing everywhere, host-installed subscribers, typed errors
 
 Status: accepted
-Date: 2026-10-02
 
 ## Context
 
-`epic-wallet` logs through `log4rs` initialised by the binary, panics if a logger already exists when
-initialised from a library, has 34 error variants that carry plain strings, and flattens typed errors
-into strings at layer boundaries. Mobile apps cannot install their own logger cleanly.
+`epic-wallet` logs through `log4rs` initialised by the binary, panics if a logger already exists
+when initialised from a library, carries plain strings in its error variants, and flattens typed
+errors into strings at layer boundaries. A mobile app cannot install its own logger cleanly under
+that design.
 
 ## Decision
 
 - Libraries emit `tracing` spans and events and never install a subscriber.
-- `lepic-telemetry` provides subscribers: pretty, compact and JSON output for the CLI, an optional
-  rotating file through `tracing-appender`, and a forwarding layer that hands structured records to a
-  host callback on mobile. The app sends them to Logcat or os_log and to its own log export.
-  Direct Logcat and os_log layers are optional, because the maintained crates for them are small
-  and quiet. (https://github.com/Absolucy/tracing-oslog, https://github.com/raftario/paranoid-android)
-- One field vocabulary and level policy, defined in `docs/logging.md`.
-- Secret types redact themselves; a test asserts known secrets never appear in captured output.
-- Errors: `thiserror` enums per crate with sources kept. The binding exposes one error enum with
-  stable numeric codes, so apps can map errors to messages without parsing text.
+- `lepic-telemetry` provides the subscribers:
+  - `CliTelemetry`: pretty, compact or JSON lines on stderr, and an optional rotating file through
+    `tracing-appender`.
+  - `HostLayer`: hands each record to a `LogSink` the host app implements; the app sends records to
+    Logcat or os_log and to its own log export.
+  - `LogRing`: a `LogSink` that keeps redacted records on the device within a size limit, for the
+    host to package into a support report.
+- One field vocabulary and level policy, in `../logging.md`.
+- Secret types redact themselves. `capture` and `assert_no_secrets` let a test check that known
+  secrets never appear in captured output.
+- Errors are `thiserror` enums per crate with sources kept. The binding exposes one error enum
+  with stable numeric codes (ADR 0007).
 
 ## Consequences
 
-- Each engine operation gets a span, so a log file reads as a sequence of named operations with their
+- Each engine operation has a span, so a log file reads as a sequence of named operations with their
   outcomes.
-- Adding a field name means updating the vocabulary in `docs/logging.md` in the same change.
+- A new field name is added to the vocabulary in `../logging.md` in the same change.
 
-## Alternatives considered
+## Related
 
-- `log` facade with `android_logger`. Loses spans and structured fields.
+- ADR 0007: the binding's error enum.

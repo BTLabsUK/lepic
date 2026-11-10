@@ -1,21 +1,27 @@
 # Security policy
 
-## Reporting a vulnerability
+Report a vulnerability by email to **support@btlabs.uk**. Do not open a public issue or a pull
+request in [BTLabsUK/lepic](https://github.com/BTLabsUK/lepic) for it.
 
-Do not open a public issue, and do not report a vulnerability in the public repository,
-[BTLabsUK/lepic](https://github.com/BTLabsUK/lepic). Email **support@btlabs.uk**.
+## What to include
 
-Include the affected version or commit, what an attacker controls, what happens, and the smallest
-reproduction you have.
+- The affected version or commit.
+- What the attacker controls.
+- What happens as a result.
+- The smallest reproduction you have.
 
 ## Scope
 
-In scope: anything that can lose or lock funds, leak keys or wallet data, make the wallet accept an
-invalid transaction, or crash it from untrusted input (node responses, relay messages, slates, files).
+In scope: anything in LEPIC that can
 
-Issues in the Epic Cash node, the reference wallet or the Epicbox relay belong to those projects. If
-you find one through LEPIC, report it to them privately and tell BT Labs only what is needed to
-protect LEPIC users.
+- lose or lock funds,
+- leak keys or wallet data,
+- make the wallet accept an invalid transaction, or
+- crash it from untrusted input: node answers, relay messages, slates and files.
+
+A problem in the Epic Cash node, the reference wallet or the Epicbox relay belongs to those
+projects. If you find one through LEPIC, report it to them privately. Tell BT Labs only what is
+needed to protect LEPIC users.
 
 ## Supported versions
 

@@ -1,45 +1,51 @@
-# 0022 Node over Tor
+# ADR 0022: Node over Tor
 
 Status: accepted
-Date: 2026-10-23
 
 ## Context
 
-ADR 0021 takes the Epicbox relay connection through the wallet's tor. The node client shows the
-node the wallet's IP address next to every address it asks about, so it needs the same
-protection. the owner decided on 2026-10-23 that, with Tor on, the user's node stays the node the
-user chose and is reached through tor, and that nothing goes through a Tor exit unencrypted.
+The node client shows the node the wallet's IP address next to every address it asks about. A
+wallet that runs tor takes its Epicbox relay connection through it (ADR 0021), and the node
+connection needs the same protection. With Tor on, the node stays the one the user chose and is
+reached through tor. Nothing goes through a Tor exit unencrypted.
 
-The BT Labs node `node.btlabs.uk` (port 443) is also an onion service that presents the same
-TLS certificate as the domain.
+A node can also be an onion service that presents the same TLS certificate as its domain.
 
 ## Decision
 
 - Only the byte stream to the node changes. The TLS server name, the certificate check and the
   `Host` header stay the node's domain.
-- `lepic-node` gains a `NodeDialer` trait and `HttpTransport::with_dialer`; the default
-  transport is unchanged. `lepic-node` depends on neither `lepic-tor` nor `lepic-epicbox`.
-- `lepic-ffi` implements the dialer over a `RelayTor` of its own for the node, attached to the
-  same tor as the relay's but with its own setting. While the setting is on and tor runs or is
-  expected, a connection goes to the node's onion when the shared onion routes (ADR 0021) list
-  it, else to `host:port` through a Tor exit, with tor resolving the name (SOCKS domain address
-  type; the connections of one node backend share credentials, so one circuit, until tor
-  changes or a connection fails, then new ones). It never goes directly then: a connection made
-  while tor starts waits for it, within the request timeout, and a tor that fails is a
-  connection error. Tor off or the setting off: direct. A loopback node is always direct.
-- The built-in onion routes gain `node.btlabs.uk:443`.
-- Plain `http` is refused for any host but loopback, and `.onion` (which tor encrypts), as it
-  already was for the direct client; so nothing leaves a Tor exit unencrypted.
-- `lepic-ffi`: `set_node_over_tor` and `node_over_tor`, on when a wallet opens. `TorStatus` and
-  the `Bootstrapped`, `Publishing` and `Ready` events carry `socks_port`, the loopback port of
-  tor's SOCKS5 proxy, so the app can send its own HTTP through the same tor. `lepic-cli`:
-  `node_over_tor`, using the tor named by the `epicbox_tor_*` settings.
-- The node request timeout grows from 30 to 90 seconds, for a first circuit.
+- `lepic-node` has a `NodeDialer` trait and `HttpTransport::with_dialer`. Without a dialer,
+  hyper's own connector resolves and connects. `lepic-node` depends on neither `lepic-tor` nor
+  `lepic-epicbox`.
+- `lepic-ffi` implements the dialer (`TorNodeDialer`) over a `RelayTor` of its own for the node.
+  It attaches to the same tor as the relay's `RelayTor` and has its own setting. While the
+  setting is on and tor runs or is expected, a connection goes to the node's onion when the
+  shared onion routes (ADR 0021) list the node, else to `host:port` through a Tor exit, with tor
+  resolving the name. The connections of one node backend share tor circuits.
+- A connection made while tor starts waits for it. A tor that fails is a connection error: the
+  dialer does not go around it. With the setting off, or no tor, a node host is reached
+  directly; an onion host has no direct route and fails. A loopback node is always direct.
+- The routes in `[[tor.onions]]` of the CLI's `lepic-config.toml` include the BT Labs node, with
+  the port the node serves TLS on.
+- Plain `http` is refused for any host but loopback, and for `.onion` hosts it is accepted only
+  when a dialer takes the connection to tor, which encrypts it to the onion. So nothing leaves a
+  Tor exit unencrypted.
+- `lepic-ffi`: `set_node_over_tor` and `node_over_tor`, on by default. `TorStatus` carries
+  `socks_port` once tor has bootstrapped, the loopback port of tor's SOCKS5 proxy, so an app can
+  send its own HTTP through the same tor; the `Bootstrapped`, `Publishing` and `Ready` events
+  carry it too. `lepic-cli`: `node_over_tor` in `settings.toml`, which needs one of the
+  `epicbox_tor_*` settings, since it uses the tor those name.
+- The shipped node `request_timeout_s` is 90 seconds, which leaves room for a first circuit.
 
 ## Consequences
 
-- The BT Labs node never sees the wallet's IP address when Tor is on; other `https` nodes see
-  an exit's.
+- A node with an onion route never sees the wallet's IP address when Tor is on. Other `https`
+  nodes see an exit's address.
 - Requests are slower through tor, mostly the first circuit.
-- The proxy is on loopback with any credentials accepted; apps that use it must connect to
-  that address only.
+- The SOCKS proxy listens on loopback only, and its port changes when tor restarts. An app that
+  uses it reads the port from `TorStatus` each time.
+
+## Related
+
+- ADR 0018, ADR 0021, ADR 0030

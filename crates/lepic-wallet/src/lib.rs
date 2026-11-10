@@ -2,12 +2,15 @@
 //! The LEPIC wallet engine.
 //!
 //! A [`Wallet`] is built from a [`WalletConfig`] and the [`Ports`] it runs on: the node, the
-//! database, the secret storage, the transports, a clock, a random number generator and a Tokio
-//! runtime handle. The engine owns none of them and keeps no global state, so several wallets,
-//! on different networks, can run in one process.
+//! database, the secret storage, a clock, a random number generator and a Tokio runtime handle.
+//! The engine owns none of them and keeps no global state, so several wallets, on different
+//! networks, can run in one process. It sends, receives, finalizes, posts, cancels and releases
+//! transactions, refreshes and scans against the node, and reports through [`Event`]s.
 //!
 //! Every public operation runs in a `tracing` span named after it, with the field vocabulary of
-//! `docs/logging.md`. Secrets never appear in spans, events or errors.
+//! `docs/logging.md`. Spans, events and errors carry no secrets.
+//!
+//! The crate's `README.md` describes the transaction states, the ports, the hooks and the events.
 
 pub mod account;
 mod api_tls_key;

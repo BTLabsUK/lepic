@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
-//! The lepic command-line wallet.
+//! The `lepic` binary: runs one command of [`lepic_cli`] on the real process and exits with its
+//! code. `docs/cli.md` lists the commands.
 
 use std::io::{self, IsTerminal as _};
 use std::process::ExitCode;

@@ -6,7 +6,7 @@
 // upstream.toml.
 
 //! Invoice flow: the receiver asks to be paid. The issuer creates I1, the payer adds its
-//! inputs and signs (I2), and the issuer finalizes (I3) and posts, as `epic-wallet` `v4.0.2`
+//! inputs and signs (I2), and the issuer finalizes (I3) and posts, as `epic-wallet` `v4.1.0`
 //! does over the file method (`docs/compat/legacy-slates.md`, "Lifecycle"). Upstream has no
 //! invoice flow over Epicbox.
 //!

@@ -1,6 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Tor on desktop and Android (ADR 0018), the wire side: the wallet's onion service and the
-//! onion client, over a `tor` binary the host bundles and runs as a child process per open wallet.
+//! Tor on desktop and Android (ADR 0018), the wire side: the wallet's onion service, sends to
+//! other onions over SOCKS, and Tor streams for the Epicbox relay and the node. The host bundles
+//! a `tor` binary; [`TorProcess`] runs it as one child process per open wallet and drives it over
+//! its control port.
+//!
+//! The crate's `README.md` describes the process states, the onion keys and [`RelayTor`].
 
 pub mod client;
 pub mod control;

@@ -4,6 +4,6 @@
 
 ## Proposal
 
-<!-- The change you have in mind, and its effect on formats, stored data or the API, if any. -->
+<!-- The change you have in mind, and its effect on wire formats, stored data or the public API. -->
 
 /label ~enhancement

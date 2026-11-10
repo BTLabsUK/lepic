@@ -1,15 +1,16 @@
 # aggsig vectors
 
-Written by `conformance/vectors/src/primitives/aggsig.rs` (task G-02) from `core/src/libtx/aggsig.rs` of the Epic node at the commit in `upstream`.
-Deterministic: all keys and nonces are fixed test values passed in, so `cargo xtask vectors generate
---area aggsig` reproduces the files byte for byte.
+Written by `conformance/vectors/src/primitives/aggsig.rs` from `core/src/libtx/aggsig.rs` of the
+Epic node at the commit in `upstream`. The area is deterministic: all keys and nonces are fixed
+test values passed in, so `cargo xtask vectors generate --area aggsig` reproduces the files byte
+for byte. The envelope and encoding rules are in [../README.md](../README.md).
 
 Signatures are the 64-byte compact form, public keys the 33-byte compressed form.
 
 ## Two-party flow
 
-`two_party_plain` and `two_party_height_locked` follow the call order of `epic-wallet` v4.0.2's
-slate code:
+`two_party_plain` and `two_party_height_locked` follow the call order of the slate code of
+`epic-wallet` v4.1.0:
 
 1. The sender subtracts the offset from its excess (`sender_excess_split`); that is the key it signs
    with and publishes.
@@ -27,11 +28,10 @@ slate code:
 `partial` (`is_partial = true`, as `verify_partial_sig`) or `completed` (`is_partial = false`, the
 rule kernel and participant-message verification apply). `completed` is not upstream's
 `verify_completed_sig`, which passes `is_partial = true`; `completed_and_kernel_rules` records
-that function. A null `pub_nonce_sum` or
-`pubkey_sum` means `None`. The rejected cases cover a partial checked against the wrong key, against
-a nonce sum missing the other party's nonce, against another message, and without the true key sum;
-a final signature checked against another message or key; a partial passed off as final; and
-partials aggregated over the wrong nonce sum.
+that function. A null `pub_nonce_sum` or `pubkey_sum` means `None`. The rejected cases cover a
+partial checked against the wrong key, against a nonce sum that lacks the other party's nonce,
+against another message, and without the true key sum; a final signature checked against another
+message or key; a partial passed off as final; and partials aggregated over the wrong nonce sum.
 
 `expected.commit_checks` are `verify_single_from_commit` calls: the final signature against the
 kernel excess, against another message, and against another commitment.

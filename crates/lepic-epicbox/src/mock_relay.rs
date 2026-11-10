@@ -12,9 +12,9 @@
 //! against the address the socket last subscribed with, as on the public relay. Unlike the
 //! public relay it stores every message itself instead of forwarding to other domains, and its
 //! messages do not expire. All domains share one queue per key, unless
-//! [`MockRelay::set_relays_apart`] makes each domain a relay of its own. Switches make it refuse or stall connections, leave
-//! chosen frames unanswered, or stop reading a connection. Tests wait on its state with
-//! [`MockRelay::wait_until`] instead of polling.
+//! [`MockRelay::set_relays_apart`] makes each domain a relay of its own. Switches make it refuse
+//! or stall connections, leave chosen frames unanswered, or stop reading a connection. Tests
+//! wait on its state with [`MockRelay::wait_until`] instead of polling.
 
 use std::collections::{HashMap, HashSet};
 use std::io;

@@ -135,8 +135,8 @@ where
     /// [`WORDS_DRAIN_TIMEOUT`]. The first invite that opens wins and the drains still going are
     /// dropped; the message it came in is acknowledged, so nobody else finds that copy, and
     /// copies on other relays stay until they expire. Returns the invite as its
-    /// `epiccash://pair/1/` link, for [`Wallet::pairing_preview`] and
-    /// [`Wallet::pairing_accept`].
+    /// `epiccash://pair/1/` link, for [`ContactBook::pairing_preview`] and
+    /// [`ContactBook::pairing_accept`].
     ///
     /// Fails with [`ContactError::Words`] for words not in the table,
     /// [`ContactError::WordsNotFound`] when no meeting relay holds the invite,

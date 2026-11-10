@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
-//! App data files: the host app's encrypted backups, in the `WFEH` version 1 format that its
-//! history export already writes, so files made before the app moved to LEPIC still open.
+//! App data files: the host app's encrypted backups, in the `WFEH` version 1 format of the app's
+//! history export.
 //!
 //! ```text
 //! magic    4  "WFEH"

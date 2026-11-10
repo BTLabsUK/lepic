@@ -45,7 +45,7 @@ const FOUND_PREFIX: &str = "contact.kc.found.";
 const FOLD_PREFIX: &str = "contact.fold.";
 const CHANGED_PREFIX: &str = "contact.kc.changed.";
 
-/// How a key check started by [`Wallet::contact_key_check`] stands.
+/// How a key check started by [`ContactBook::contact_key_check`] stands.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum KeyCheckStart {
     /// The check is on its way, or was already; its answer comes with a collect.
@@ -169,7 +169,7 @@ where
 {
     /// Starts the key check (RFC 0002 7.8): the user added the new pairing `new` to an
     /// address-book contact that already has the pairing `old`. The check goes over the new
-    /// pairing; [`Wallet::contacts_collect`] takes the answer. Found, the old record keeps its
+    /// pairing; [`ContactBook::contacts_collect`] takes the answer. Found, the old record keeps its
     /// keys and trust and the new pairing goes ([`Event::ContactKeysRestored`]); not found or
     /// unanswered within a day, the old record stays and the new pairing shows keys-changed
     /// ([`Event::ContactKeysChanged`]). When no check may run (one a day per slot, within a
@@ -973,7 +973,7 @@ fn restored_mailbox(
 
 /// Ends the open check `sent` on the new pairing `record` as not found: the pairing goes to
 /// keys-changed with its trust reset, and the check is closed, so a later found answer is
-/// refused. The old record's id is kept for [`Wallet::contact_keys_resolve`].
+/// refused. The old record's id is kept for [`ContactBook::contact_keys_resolve`].
 fn end_check(
     repos: &mut dyn Repositories,
     mut record: ContactRecord,

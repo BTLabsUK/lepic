@@ -1,41 +1,39 @@
-# 0007 Mobile bindings with flutter_rust_bridge for the existing Flutter frontend
+# ADR 0007: Mobile bindings with flutter_rust_bridge for the Flutter frontend
 
-Status: accepted, delivery bullet superseded by 0023
-Date: 2026-10-02
+Status: accepted. The secrets line: see ADR 0014. Delivery: see ADR 0023.
 
 ## Context
 
-A Flutter frontend already exists. LEPIC is its backend: the Rust library and the binding layer the
-app calls. Findings, 2026-10-02:
-
-- flutter_rust_bridge 2.13 is the established choice for Flutter, with async Rust, streams to Dart,
-  and Android, iOS and desktop support. (https://cjycode.com/flutter_rust_bridge/)
-- UniFFI 0.32 targets Kotlin and Swift; its Dart support is an experimental community project.
-  (https://mozilla.github.io/uniffi-rs/latest/, https://github.com/Uniffi-Dart/uniffi-dart)
-- The existing Flutter integration of `epic-wallet` uses a hand-written C interface with string
-  arguments and JSON results. A generated, typed binding removes that whole class of glue code.
+The frontend is a Flutter app. LEPIC is its backend: the Rust library and the binding layer the app
+calls. flutter_rust_bridge is the established choice for Flutter, with async Rust, streams to Dart,
+and Android, iOS and desktop support. UniFFI targets Kotlin and Swift, and its Dart support is a
+community project. The existing Flutter integration of `epic-wallet` is a hand-written C interface
+with string arguments and JSON results; a generated, typed binding removes that class of glue code.
 
 ## Decision
 
-- `lepic-ffi` uses flutter_rust_bridge v2 at its latest stable release. It exposes a small,
-  binding-friendly API over `lepic-wallet`; `lepic-wallet` itself knows nothing about Dart.
-- Requirements:
-  - Opaque object handles. No raw pointers or secrets cross the boundary.
-  - One error enum with stable numeric codes, so the app maps errors to messages without parsing
-    text.
+- `lepic-ffi` uses flutter_rust_bridge, pinned exactly (`=2.13.0` in the root `Cargo.toml`). It
+  exposes a binding-friendly API over `lepic-wallet`, in `crates/lepic-ffi/src/api`.
+  `lepic-wallet` knows nothing about Dart.
+- The API has these properties:
+  - Opaque object handles. No raw pointers cross the boundary.
+  - One error enum, `WalletErrorKind`, with stable numeric codes (`code()`), so the app maps errors
+    to messages without parsing text.
   - Async functions, plus Dart streams for wallet events and log records.
-  - Panics are converted to errors at the boundary. The workspace never sets `panic = "abort"`.
-  - The app implements `SecretStore` (for example with `flutter_secure_storage`, which uses Android
-    Keystore and the iOS Keychain) and passes it in.
-- Delivery is a Dart package containing the generated bindings and the native libraries for Android
-  and iOS, which the existing app depends on. No sample or smoke app is built here.
+  - Every call runs as a task on the runtime and a panic in it becomes a `Panic` error instead of
+    unwinding into Dart (`boundary.rs`). The task keeps running if the Dart future is dropped, so
+    a store write is never cut in half.
+  - The app passes in a secret store it implements, for example over Android Keystore or the iOS
+    Keychain (`AppSecretStore`). Secrets that may cross the boundary: see ADR 0014.
+- Delivery of the binding: see ADR 0023.
 
 ## Consequences
 
-- Host-side tests run with `flutter test` against the generated bindings on the Linux build machine.
-- The flutter_rust_bridge code generator version is pinned together with the Rust crate version.
+- The generator version is pinned together with the Rust crate version.
+- Changing `api` changes the generated halves of the binding (ADR 0023).
 
-## Alternatives considered
+## Related
 
-- UniFFI with a community Dart backend: experimental and one release behind UniFFI.
-- A hand-written C interface: the approach the existing integration uses, and the one LEPIC replaces.
+- ADR 0014: secrets across the boundary.
+- ADR 0023: the binding repository.
+- ADR 0008: errors and logging.

@@ -81,7 +81,7 @@ impl std::fmt::Display for PayloadId {
     }
 }
 
-/// A payload a paired contact sent, kept until [`Wallet::contact_payloads_ack`].
+/// A payload a paired contact sent, kept until [`ContactBook::contact_payloads_ack`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ContactPayload {
     pub id: PayloadId,
@@ -462,17 +462,17 @@ where
     S: StoreOpener + 'static,
     V: SecretVault + 'static,
 {
-    /// Sends `payload` through the pairing `contact_id`, a private pairing or a contact: sealed
-    /// to its keys, under its channel key for a private pairing, and signed with ours, queued in the outbox, and posted once when relays may
-    /// be reached; the outbox retries it as it retries slates. Returns the payload's id, under
-    /// which the other wallet keeps it once, and whether the other wallet's recorded features
-    /// are known and lack [`APP_PAYLOADS`]; the payload is queued either way. LEPIC does not
-    /// read the bytes.
+    /// Sends `payload` through the pairing `contact_id`, a private pairing or a contact: sealed to
+    /// its keys, under its channel key for a private pairing, and signed with ours, queued in the
+    /// outbox, and posted once when relays may be reached; the outbox retries it as it retries
+    /// slates. Returns the payload's id, under which the other wallet keeps it once, and whether
+    /// the other wallet's recorded features are known and lack [`APP_PAYLOADS`]; the payload is
+    /// queued either way. LEPIC does not read the bytes.
     ///
     /// Fails with [`ContactError::TooLarge`] for more than [`MAX_APP_PAYLOAD_LEN`] bytes,
     /// [`ContactError::Ended`] for an ended contact pairing, [`ContactError::NotVerified`] for a
-    /// contact pairing not yet paired (pending, or keys changed) and for a private pairing
-    /// before both sides matched the words check, [`ContactError::UnknownContact`] for no such pairing or
+    /// contact pairing not yet paired (pending, or keys changed) and for a private pairing before
+    /// both sides matched the words check, [`ContactError::UnknownContact`] for no such pairing or
     /// one whose secrets do not open, and as the store does.
     #[instrument(skip_all, fields(wallet = %self.wallet.config().name))]
     pub async fn contact_post_payload(

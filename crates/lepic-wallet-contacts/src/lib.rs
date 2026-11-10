@@ -1,15 +1,14 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Contact pairing (RFC 0002 sections 7, 8 and 10): invites, replies and confirms through
-//! throwaway mailboxes on a home relay, in-person pairing by scanning cards, the SAS check, and
-//! the contact mailboxes each side collects.
+//! The contact engine of a LEPIC wallet: pairing (RFC 0002), contact mailboxes, sealed slates,
+//! contact invoices, app payloads, and native slates to listeners, epic1 addresses and in person
+//! (RFC 0003).
 //!
-//! A pairing record holds no secret: our keys for a contact come from the seed, the account, the
-//! record's slot and its box salt. The secrets of a pairing in progress are sealed in the store.
-//! Nothing here touches the wallet's payments address, its listener or the node.
+//! A host borrows a wallet as [`ContactBook`] with [`WalletContacts::contact_book`], and
+//! [`install`] gives the engine of `lepic-wallet` what it takes from this crate. A pairing record
+//! holds no secret: the keys for a contact come from the seed, the account, the record's slot and
+//! its box salt.
 //!
-//! The crate drives the engine of `lepic-wallet` from outside: it borrows a wallet as
-//! [`ContactBook`] with [`WalletContacts::contact_book`], and [`install`] gives the engine the reply key
-//! of file and paste slates. The engine keeps no contact code of its own.
+//! The crate's `README.md` describes pairing, collecting and each way a slate travels.
 
 mod address_proof;
 mod check;
@@ -495,7 +494,6 @@ impl From<StoreError> for ContactError {
     }
 }
 
-/// The ids a pairing hands the host to follow it by.
 /// The method contact slates are encoded and decoded with: sealed text and contact mailboxes
 /// carry them as files do.
 pub(crate) fn file_method() -> Arc<dyn Method> {
