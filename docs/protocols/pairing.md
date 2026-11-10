@@ -346,4 +346,4 @@ lepic contact sas <ID> match
 lepic contact move-home relay.example --drain-days 7
 ```
 
-[docs/cli.md](../cli.md#contacts) has every command.
+[docs/cli.md](../cli.md#contacts-and-pairing) has every command.

@@ -312,6 +312,6 @@ lepic epicbox listen
 lepic epicbox status
 ```
 
-[docs/cli.md](../cli.md#epicbox) has every option, and
-[Epicbox over Tor](../cli.md#epicbox-over-tor) the Tor settings. Relay host names in examples
+[docs/cli.md](../cli.md#receive) has every option, and
+[Tor for the relay and the node](../cli.md#tor-for-the-relay-and-the-node) the Tor settings. Relay host names in examples
 here are placeholders, such as `relay.example`.

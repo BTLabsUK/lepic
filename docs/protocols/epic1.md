@@ -260,5 +260,5 @@ lepic epic1 answers
 lepic epic1 post-answer <SLATE_ID> --relay-ok
 ```
 
-[docs/cli.md](../cli.md#through-an-epic1-link) has every option. Sealing is described in
+[docs/cli.md](../cli.md#epic1-links) has every option. Sealing is described in
 [EPICTX](epictx.md), and the mailboxes and relays in [Epicbox](epicbox.md).

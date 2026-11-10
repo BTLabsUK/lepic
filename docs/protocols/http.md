@@ -347,6 +347,6 @@ lepic peer pins
 lepic peer forget https://wallet.example:443
 ```
 
-The [CLI guide](../cli.md#direct-over-http) covers `--allow-plain-http`, `--internet`, resends and
-the listener's limits; [Pinned keys](../cli.md#pinned-keys) covers `--legacy` and pins; and
-[Block rewards for a mining node](../cli.md#block-rewards-for-a-mining-node) covers `--coinbase`.
+The CLI guide's [Send](../cli.md#send) covers `--allow-plain-http` and `--legacy`,
+[After the send](../cli.md#after-the-send) resends and pins, and
+[HTTP listener](../cli.md#http-listener) `--internet`, the listener's limits and `--coinbase`.

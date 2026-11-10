@@ -371,5 +371,5 @@ lepic tx send 1.5 --to "$ONION" --tor-binary ~/tor/tor --lib-dir ~/tor
 ```
 
 The CLI keeps its tor files in `tor/` inside the data directory, and in `tor-epicbox/` for the
-relay connection. [docs/cli.md](../cli.md#direct-over-tor) has every option, with
-[Epicbox over Tor](../cli.md#epicbox-over-tor) and [Node over Tor](../cli.md#node-over-tor).
+relay connection. [docs/cli.md](../cli.md#tor-listener) has every option, with
+[Tor for the relay and the node](../cli.md#tor-for-the-relay-and-the-node).
