@@ -25,6 +25,7 @@ CASES+=("ct.offline|case_ct_offline|${CT_PATHS} crates/lepic-wallet")
 CT_ALICE="${E2E_PREFIX}-ct-alice"
 CT_BOB="${E2E_PREFIX}-ct-bob"
 CT_SHOP="${E2E_PREFIX}-ct-shop"
+CT_REQUEST_ID="${E2E_STATE}/ct-request.id"   # alice's live pair request, withdrawn by the next run
 CT_KEEP="${E2E_PREFIX}-ct-keep"   # created by the suite, so its phrase is on file for restores
 
 # Helpers ------------------------------------------------------------------------------------
@@ -189,6 +190,12 @@ case_pair_request() {
     ct_fund "${CT_ALICE}" || return 1
     ct_reset "${CT_ALICE}" || return 1
     ct_reset "${CT_BOB}" || return 1
+    # A pending request is not in `contact list`; one a stopped run left would refuse the next
+    # request (in progress), so withdraw it by the id kept for it.
+    if [[ -s "${CT_REQUEST_ID}" ]]; then
+        w "${CT_ALICE}" contact remove "$(cat "${CT_REQUEST_ID}")" >/dev/null || fail "could not withdraw the old request" || return 1
+        rm -f "${CT_REQUEST_ID}"
+    fi
     # Alice pays Bob's payments address, so Bob is a wallet that was paid lately.
     local addr
     addr="$(w_addr "${CT_BOB}")" || fail "wallet address failed" || return 1
@@ -204,14 +211,20 @@ case_pair_request() {
     grep -q "finalized [1-9]" "${BG_LOG}.out" || fail "alice never finalized the payment: $(tail -c 300 "${BG_LOG}.out")" || return 1
     out="$(w "${CT_ALICE}" contact request "${addr}" --name Alice)" || fail "contact request failed" || return 1
     CT_A="$(jq -r .contact_id <<<"${out}")"
+    echo "${CT_A}" >"${CT_REQUEST_ID}"
     echo "${out}" >"${CASE_DIR}/request.json"
     expect_match "$(jq -r .link <<<"${out}")" '^epiccash://pair/1/' "request link" || return 1
-    # Bob collects the request and answers it with its own pairing.
-    ct_wait "bob holds a pairing with alice" 90 "${CT_ALICE},${CT_BOB}" ct_has_contacts "${CT_BOB}" 1 || return 1
-    CT_B="$(w "${CT_BOB}" contact list | jq -r '.contacts[0].contact_id')"
-    ct_wait "alice and bob paired" 90 "${CT_ALICE},${CT_BOB}" ct_both_state_in "${CT_ALICE}" "${CT_A}" "${CT_BOB}" "${CT_B}" "paired verified" || return 1
-    note "request to a wallet paid lately paired both"
+    # Bob's wallet takes the request from its payments inbox as a notice and keeps it for its
+    # user. The CLI has no command to list or answer a kept request (the FFI's
+    # pairing_requests does), so a CLI wallet cannot finish this pairing.
+    wait_until "bob takes the request" 90 ct_took_notice "${CT_BOB}" || return 1
+    expect_json "$(w "${CT_ALICE}" contact remove "${CT_A}")" '.removed == true' "request withdrawn" || return 1
+    rm -f "${CT_REQUEST_ID}"
+    note "request posted ($(jq -r .contact_id <<<"${out}")) and taken by bob as a notice; no CLI command answers it"
 }
+
+# Drains a wallet's payments inbox; true once it took at least one notice.
+ct_took_notice() { (($(w "$1" epicbox drain | jq '.notices // 0') > 0)); }
 
 w_addr() { w "$1" wallet address | jq -r .address; }
 ct_has_contacts() { (($(w "$1" contact list | jq '.contacts | length') >= $2)); }
