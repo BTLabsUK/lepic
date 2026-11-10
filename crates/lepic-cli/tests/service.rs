@@ -469,3 +469,49 @@ fn a_stale_pointer_is_ignored() {
     assert_eq!(through.stdout, direct.stdout, "{through:?}");
     assert_eq!(served.ok().json()["requests"], 1);
 }
+
+/// An error that has a hint prints it through serve as on a direct run, for people; the JSON
+/// error and the JSON problem document carry none.
+#[test]
+fn a_command_through_serve_prints_the_hint_of_a_direct_run() {
+    let mut host = TestHost::new();
+    host.fund(SENDER_MNEMONIC, 0, FUNDING, 1);
+    let wallet = Instance::new("serving password");
+    wallet.restore(&host, SENDER_MNEMONIC);
+    let receiver = Instance::new("receiver password");
+    receiver.run(&host, &["wallet", "init"]).ok();
+    let address = receiver.run(&host, &["wallet", "address"]).ok().json();
+    let address = support::text(&address, "address").to_owned();
+    let mut human = wallet.env();
+    human.retain(|(key, _)| key != "LEPIC_OUTPUT");
+    let too_much = ["tx", "send", "1000000", "--to", &address];
+    let direct = wallet.run_with(&host, &too_much, human.clone(), "");
+    assert_eq!(direct.code, 8, "{direct:?}");
+    assert!(direct.stderr.contains("hint: "), "{direct:?}");
+
+    let stop = Arc::new(AtomicBool::new(false));
+    let signal = Arc::clone(&stop);
+    host.interrupt_when = Some(Arc::new(move || signal.load(Ordering::SeqCst)));
+    let client = host.without_interrupt();
+    let socket = wallet.data_dir().join("lepic.sock");
+    let body = format!(r#"{{"amount":"1000000","to":"{address}"}}"#);
+
+    let (through, as_json, document) = std::thread::scope(|scope| {
+        let _stop = StopOnDrop(Arc::clone(&stop));
+        let server = scope.spawn(|| wallet.run(&host, &["serve"]));
+        wait_for_socket(&socket);
+        let through = wallet.run_with(&client, &too_much, human.clone(), "");
+        let as_json = wallet.run(&client, &too_much);
+        let document = http(&socket, "POST", "/v1/transactions", Some(&body));
+        stop.store(true, Ordering::SeqCst);
+        server.join().unwrap().ok();
+        (through, as_json, document)
+    });
+
+    assert_eq!(through.code, direct.code, "{through:?}");
+    assert_eq!(through.stderr, direct.stderr, "{through:?}");
+    assert_eq!(as_json.code, 8, "{as_json:?}");
+    assert!(!as_json.stdout.contains("hint"), "{as_json:?}");
+    assert_eq!(document.status, 422, "{document:?}");
+    assert!(document.json().get("hint").is_none(), "{document:?}");
+}

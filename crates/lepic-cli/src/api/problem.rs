@@ -40,6 +40,14 @@ pub(crate) struct Problem {
     // One pointer keeps the `Err` of every route under clippy's size limit.
     #[allow(clippy::box_collection)]
     recovery: Option<Box<Vec<String>>>,
+    /// What to try next, as `lepic` prints it after the error on stderr ("hint: ..."), computed
+    /// with the settings serve runs with. Present only on a request with `Accept: text/plain`,
+    /// and only when the error has one; a JSON request gets none, as `--output json` prints none.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(value_type = Option<String>)]
+    // One pointer, as for `recovery`.
+    #[allow(clippy::box_collection)]
+    hint: Option<Box<String>>,
     /// The methods the route takes, for the `Allow` header of a 405.
     #[serde(skip)]
     // One pointer, as for `recovery`.
@@ -58,8 +66,15 @@ impl Problem {
             causes: Box::default(),
             tx_id: None,
             recovery: None,
+            hint: None,
             allow: None,
         }
+    }
+
+    /// This problem with the hint to print after it.
+    pub(crate) fn with_hint(mut self, hint: Option<String>) -> Self {
+        self.hint = hint.map(Box::new);
+        self
     }
 
     pub(crate) fn status(&self) -> StatusCode {

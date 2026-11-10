@@ -221,6 +221,10 @@ impl<H: Host> Owner for Service<'_, H> {
         self.held.wallet.subscribe()
     }
 
+    fn hint(&self, error: &CliError) -> Option<String> {
+        crate::hint::hint(error, Some(self.settings))
+    }
+
     fn status(&self, requests: RequestsReport) -> Result<Report, CliError> {
         let wallet = &self.held.wallet;
         let maintenance = self.maintenance.borrow();

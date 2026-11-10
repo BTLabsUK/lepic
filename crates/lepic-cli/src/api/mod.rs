@@ -243,6 +243,8 @@ pub(crate) enum Call {
 pub(crate) trait Owner {
     fn call(&self, call: Call) -> Pin<Box<dyn Future<Output = Result<Report, CliError>> + '_>>;
     fn events(&self) -> broadcast::Receiver<Event>;
+    /// What to try after `error`, as `lepic` prints it after the error for people.
+    fn hint(&self, error: &CliError) -> Option<String>;
     fn status(&self, requests: RequestsReport) -> Result<Report, CliError>;
 }
 
@@ -630,8 +632,22 @@ impl<'o> Api<'o> {
         }
     }
 
+    /// The problem document for `error`. It carries the hint only when the request asked for
+    /// text: the hint is for people, and the JSON error has none.
+    fn failed(&self, error: CliError) -> Problem {
+        let hint = if TEXT.try_with(|text| *text).unwrap_or(false) {
+            self.owner.hint(&error)
+        } else {
+            None
+        };
+        Problem::from(error).with_hint(hint)
+    }
+
     async fn run(&self, call: Call) -> Result<Response<Body>, Problem> {
-        Ok(report(&self.owner.call(call).await?))
+        match self.owner.call(call).await {
+            Ok(done) => Ok(report(&done)),
+            Err(error) => Err(self.failed(error)),
+        }
     }
 }
 

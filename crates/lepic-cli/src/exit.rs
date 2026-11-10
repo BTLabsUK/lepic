@@ -205,7 +205,7 @@ pub enum CliError {
     )]
     ServeHoldsWallet { socket: std::path::PathBuf },
     /// The error the running `lepic serve` answered for a command it ran (ADR 0053): the kind,
-    /// message, causes, transaction and recovery commands the command reports when it runs on
+    /// message, causes, transaction, recovery commands and hint the command reports when it runs on
     /// its own.
     #[error("{message}")]
     Served {
@@ -215,6 +215,8 @@ pub enum CliError {
         causes: Option<Box<ServedCause>>,
         tx_id: Option<u32>,
         recovery: Box<[String]>,
+        /// The hint serve computed for a request for text.
+        hint: Option<String>,
     },
     /// The running `lepic serve` took a command and gave no answer, or one that is not the API's.
     #[error("lepic serve on {} did not answer the command", socket.display())]
@@ -860,6 +862,7 @@ mod tests {
                     causes: None,
                     tx_id: None,
                     recovery: Box::default(),
+                    hint: None,
                 },
                 ErrorKind::InsufficientFunds,
             ),
