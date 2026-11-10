@@ -31,7 +31,7 @@ use sha2::{Digest, Sha256};
 
 const KIT_GENERATOR: &str = "epic-pairing-kit";
 const KIT_VERSION: &str = "0.5.0";
-const KIT_COMMIT: &str = "b5ab063c6384d4ef6aa08d78742da538dc275749";
+const KIT_COMMIT: &str = "31dc5e4efa48e099f905ef6667c0c6d32679c1af";
 
 fn vectors(file: &str) -> Vec<Value> {
     let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -476,6 +476,7 @@ fn error_matches(code: &str, error: &DecodeError) -> bool {
             D::Malformed(M::FieldValue { .. } | M::FieldLength { .. })
         ),
         "tlv_unknown_tag" => matches!(error, D::Malformed(M::UnknownField { .. })),
+        "tlv_missing_field" => matches!(error, D::Malformed(M::MissingField { .. })),
         "cannot_open" => matches!(error, D::CannotOpen),
         "armor_framing" => matches!(error, D::Malformed(M::Framing)),
         "armor_checksum" => matches!(error, D::Damaged | D::Malformed(M::Truncated)),

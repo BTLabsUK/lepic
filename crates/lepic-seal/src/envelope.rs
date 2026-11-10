@@ -966,6 +966,20 @@ fn padding_len(fields: &Fields<'_>) -> Result<Option<usize>, Malformed> {
         .transpose()
 }
 
+/// Type 0A is always padded (RFC 0003 5.7): the padding field is required, and the inner
+/// content is exactly the padded length of what precedes the padding.
+fn check_tx_padding(inner_len: usize, padding: Option<usize>) -> Result<(), Malformed> {
+    let padding = padding.ok_or(Malformed::MissingField { tag: TAG_PADDING })?;
+    let unpadded = inner_len
+        .checked_sub(padding)
+        .ok_or(Malformed::FieldValue { tag: TAG_PADDING })?;
+    if pad_target(unpadded) == inner_len {
+        Ok(())
+    } else {
+        Err(Malformed::FieldValue { tag: TAG_PADDING })
+    }
+}
+
 fn decode_inner(
     bytes: &[u8],
     network: Network,
@@ -1019,6 +1033,9 @@ fn decode_inner(
         .extension(TAG_DOMAIN)
         .and_then(|bytes| DomainClaim::from_bytes(bytes).ok());
     let padding = padding_len(&fields)?;
+    if reader == Reader::Tx {
+        check_tx_padding(bytes.len(), padding)?;
+    }
 
     let sender = match (
         fields.optional_array::<32>(TAG_SENDER_KEY)?,

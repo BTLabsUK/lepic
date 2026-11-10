@@ -634,8 +634,10 @@ target   = max(FLOOR, padme(L))
 - `L` is the length of the inner content with every field, the 3-byte `FE` header and the `FF`
   field (when signed) included; `FE`'s value is `target - L` zero bytes. `FE` is always written in a
   slate envelope (types `01` and `0A`) by builds that know it, even with an empty value, so a
-  slate envelope has one encoding. Readers check the zeros when `FE` is present and do not require
-  it (older senders). Vectors fix the result.
+  slate envelope has one encoding. Readers check the zeros when `FE` is present. In type `0A`,
+  which every writer pads, readers require `FE` and refuse inner content whose length is not
+  `target` for the `L` it implies (`L` = inner length minus the `FE` value). In type `01` they do
+  not require it (older senders). Vectors fix the result.
 - `FLOOR` is 768 **[Decided]** (owner, 2026-11-08) (O-6; drafts 2 to 4 had 256). Reason: with 256, an S1
   without a proof pads to 256 and one with a proof to 272, and a sender message moves it further,
   so a carrier learns "proof requested" and roughly the message length. The largest S1 (lock, TTL,
