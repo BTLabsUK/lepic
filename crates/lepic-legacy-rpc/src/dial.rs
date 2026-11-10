@@ -225,6 +225,11 @@ mod tests {
             "::ffff:127.0.0.1",
         ] {
             let error = connect_to_other_computer(host, port).await.unwrap_err();
+            // Some resolvers, such as Windows's, do not read `127.1`; a host that does not
+            // resolve fails before any connection too.
+            if tokio::net::lookup_host((host, port)).await.is_err() {
+                continue;
+            }
             assert!(refused_this_computer(&error), "{host}: {error}");
             assert_eq!(error.kind(), io::ErrorKind::PermissionDenied, "{host}");
         }

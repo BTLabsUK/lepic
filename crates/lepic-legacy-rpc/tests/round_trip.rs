@@ -868,6 +868,12 @@ async fn a_client_to_other_computers_does_not_reach_a_wallet_on_this_one() {
     for host in ["localhost", "127.0.0.1", "127.1", "[::ffff:127.0.0.1]"] {
         let url = ListenerUrl::parse(&format!("http://{host}:{port}"), PlainHttp::Allowed).unwrap();
         let refused = guarded.receive_tx(&url, &s1()).await.unwrap_err();
+        // Some resolvers, such as Windows's, do not read `127.1`; a host that does not
+        // resolve fails before any connection too.
+        let name = host.trim_start_matches('[').trim_end_matches(']');
+        if tokio::net::lookup_host((name, port)).await.is_err() {
+            continue;
+        }
         assert!(
             matches!(refused, ClientError::ThisComputer),
             "{host}: {refused:?}"
