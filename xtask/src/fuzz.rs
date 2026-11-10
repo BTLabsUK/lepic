@@ -558,11 +558,13 @@ fn seal_seeds(root: &Path, vectors: &Path, target: &str) -> Result<Option<BTreeS
                     .iter()
                     .map(|envelope| prefixed(&[0], envelope)),
             );
-            seeds.extend(
-                text_fields(&samples, "name")
-                    .iter()
-                    .map(|body| prefixed(&[1], body)),
-            );
+            // Bodies to seal: plain and padded, then type 0A under each key class, unsigned
+            // and signed (the mode bits of the target).
+            for body in text_fields(&samples, "name") {
+                for mode in [1, 9, 5, 13, 21, 29, 7, 15, 23, 31] {
+                    seeds.insert(prefixed(&[mode], &body));
+                }
+            }
         }
         "armor_sealed" => {
             seeds.extend(text_fields(&contact_samples(root)?, "armored"));

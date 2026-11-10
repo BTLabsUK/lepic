@@ -15,13 +15,26 @@ mod common;
 use common::{ScriptedRng, Side, to_hex};
 use lepic_contact::{
     Commitment, ConfirmBody, ConfirmCode, ContactKind, ContactName, Content, EncSecretKey, Invite,
-    InviteFields, MessageType, Network, Nonce, PairingCode, PairingLink, Purpose, Reference,
-    RelayHost, ReplyBody, Sas, SealedEnvelope, armor, pairing_envelope_link, seal, seal_confirm,
-    seal_reply,
+    InviteFields, KeyClass, MessageType, Network, Nonce, PairingCode, PairingLink, Purpose,
+    Reference, RelayHost, ReplyBody, Sas, SealedEnvelope, TxContent, TxKey, armor,
+    pairing_envelope_link, seal, seal_confirm, seal_reply, seal_tx,
 };
 use serde_json::{Value, json};
 
 const NET: Network = Network::Floonet;
+
+/// A type 0A envelope, as [`envelope_entry`] shows an RFC 0002 one.
+fn tx_entry(name: &str, envelope: &[u8], key: &EncSecretKey, class: KeyClass) -> Value {
+    let sealed = SealedEnvelope::decode(envelope, NET).unwrap();
+    let opened = sealed.open_tx(key, class).unwrap();
+    json!({
+        "name": name,
+        "class": format!("{class:?}"),
+        "signed": opened.sender.is_some(),
+        "padding": opened.padding,
+        "bytes": to_hex(envelope),
+    })
+}
 
 fn envelope_entry(name: &str, envelope: &[u8], key: &EncSecretKey) -> Value {
     let sealed = SealedEnvelope::decode(envelope, NET).unwrap();
@@ -143,6 +156,37 @@ fn samples() {
     )
     .unwrap();
 
+    // Type 0A to Bob's key under each class, so the fuzz seeds reach the 0A reader.
+    let mut native = TxContent::new(b"lepic.v1 sample slate".to_vec());
+    native.reply_key = Some(reply_key.public_key());
+    let to_listener = seal_tx(
+        NET,
+        &bob.enc_pk(),
+        TxKey::Listener,
+        &native,
+        None,
+        &mut ScriptedRng::seeded(7),
+    )
+    .unwrap();
+    let to_epic1 = seal_tx(
+        NET,
+        &bob.enc_pk(),
+        TxKey::Epic1,
+        &native,
+        None,
+        &mut ScriptedRng::seeded(8),
+    )
+    .unwrap();
+    let signed_native = seal_tx(
+        NET,
+        &bob.enc_pk(),
+        TxKey::Seal(bob_card_rule(&card_b)),
+        &TxContent::new(b"lepic.v1 sample answer".to_vec()),
+        Some(&alice.sig),
+        &mut ScriptedRng::seeded(9),
+    )
+    .unwrap();
+
     let sas = Sas::compute(NET, &card_a, &card_b, &na, &nb);
     let samples = json!({
         "envelopes": [
@@ -152,6 +196,11 @@ fn samples() {
             envelope_entry("pairing_reply", &reply, &alice.enc),
             envelope_entry("pairing_confirm", &confirm, &bob.enc),
             envelope_entry("signed_contact_update", &contact_update, &bob.enc),
+        ],
+        "tx_envelopes": [
+            tx_entry("type0a_to_listener", &to_listener, &bob.enc, KeyClass::Listener),
+            tx_entry("type0a_to_epic1", &to_epic1, &bob.enc, KeyClass::Epic1),
+            tx_entry("type0a_signed_to_contact", &signed_native, &bob.enc, KeyClass::Seal),
         ],
         "links": {
             "contact": card_a.to_link(),
