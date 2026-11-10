@@ -158,6 +158,38 @@ fn send_receive_and_finalize_through_files() {
     );
 }
 
+/// A file send carries a reply key, so the receiver's reply file is sealed, not plain V3, and
+/// `tx finalize` opens it.
+#[test]
+fn the_reply_to_a_file_with_a_reply_key_is_sealed() {
+    let (host, sender, receiver) = two_wallets();
+    let slate = sender.path("payment.slate");
+    let sent = sender
+        .run(
+            &host,
+            &["tx", "send", "1.5", "--to-file", slate.to_str().unwrap()],
+        )
+        .ok()
+        .json();
+    let received = receiver
+        .run(&host, &["tx", "receive", slate.to_str().unwrap()])
+        .ok()
+        .json();
+    let reply = text(&received, "reply_file").to_owned();
+    let content = std::fs::read_to_string(&reply).unwrap();
+    assert!(
+        serde_json::from_str::<serde_json::Value>(&content).is_err(),
+        "the reply is plain V3 JSON: {content}"
+    );
+
+    let finalized = sender.run(&host, &["tx", "finalize", &reply]).ok().json();
+    assert_eq!(finalized["tx_id"], sent["tx_id"]);
+    assert_eq!(finalized["state"], "posted");
+    assert_eq!(host.node.pushed_transactions().len(), 1);
+}
+
+/// A node that refuses the finalized transaction leaves it stored: the error names it, and
+/// `recovery` lists the commands that post it again or give it up.
 /// A reply file lost after the receive stored it is written again by receiving the same slate,
 /// and the sender finalizes that copy. Another slate under the same id is refused.
 #[test]
@@ -174,7 +206,6 @@ fn receiving_the_same_slate_again_writes_the_same_reply() {
     let receive = ["tx", "receive", slate.to_str().unwrap()];
     let first = receiver.run(&host, &receive).ok().json();
     let reply = text(&first, "reply_file").to_owned();
-    let first_bytes = std::fs::read(&reply).unwrap();
     std::fs::remove_file(&reply).unwrap();
 
     let again = receiver.run(&host, &receive).ok().json();
@@ -183,7 +214,7 @@ fn receiving_the_same_slate_again_writes_the_same_reply() {
     assert_eq!(again["tx_id"], first["tx_id"]);
     assert_eq!(again["slate_id"], first["slate_id"]);
     assert_eq!(again["reply_file"], first["reply_file"]);
-    assert_eq!(std::fs::read(&reply).unwrap(), first_bytes);
+    assert!(std::fs::metadata(&reply).is_ok());
     let finalized = sender.run(&host, &["tx", "finalize", &reply]).ok().json();
     assert_eq!(finalized["tx_id"], sent["tx_id"]);
     assert_eq!(finalized["state"], "posted");

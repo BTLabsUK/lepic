@@ -220,6 +220,7 @@ case_send_file() {
     r="$(w "${PAY_B}" tx receive "${dir}/s1.slate" --reply-file "${dir}/s2.slate")" || fail "tx receive failed" || return 1
     printf '%s\n' "${r}" >"${dir}/receive.json"
     [[ -s "${dir}/s2.slate" ]] || fail "no reply file" || return 1
+    ! jq -e . "${dir}/s2.slate" >/dev/null 2>&1 || fail "the reply to a file with a reply key is plain JSON" || return 1
     expect_eq "$(tx_state "${PAY_B}" "$(jq -r .tx_id <<<"${r}")")" received "payee state after receive" || return 1
     out="$(w "${PAY_A}" tx finalize "${dir}/s2.slate")" || fail "tx finalize failed" || return 1
     expect_json "${out}" '.state == "posted" or .state == "finalized"' "finalize result" || return 1
@@ -390,6 +391,8 @@ case_send_epictx() {
     printf '%s\n' "${r}" >"${dir}/receive.json"
     [[ -s "${dir}/reply.epictx" ]] || fail "no reply file" || return 1
     printf 'reply starts: %s\n' "$(head -c 40 "${dir}/reply.epictx")" >"${dir}/reply.kind"
+    # A file with a reply key is answered sealed, not as V3 JSON.
+    ! jq -e . "${dir}/reply.epictx" >/dev/null 2>&1 || fail "the reply to a file with a reply key is plain JSON" || return 1
     out="$(w "${PAY_A}" tx finalize "${dir}/reply.epictx")" || fail "tx finalize of the reply failed" || return 1
     expect_json "${out}" '.state == "posted" or .state == "finalized"' "finalize result" || return 1
     check_paid_file "${slate}" "${amount}" "${before}" || return 1

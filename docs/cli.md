@@ -409,16 +409,20 @@ Transaction 1 receives 20.00000000 EPIC. Return payment.slate.response to the se
 Slate c3160940-aa63-461b-963b-3cda6d320cf9.
 ```
 
-`--reply-file <FILE>` writes the answer elsewhere. The amount shows under awaiting finalization
+`--reply-file <FILE>` writes the answer elsewhere. A file from a LEPIC wallet carries a one-time
+reply key, and the answer is sealed to it: the `.response` file is armoured text, not V3 JSON,
+and only the sender's `tx finalize` opens it. A file without a reply key, such as one from a
+stock wallet, gets a plain V3 answer. The amount shows under awaiting finalization
 until the sender posts, then under awaiting confirmation until it is mined.
 
 Receiving the same slate file again, for example after the reply file was lost, writes the reply
-stored the first time again, byte for byte, and stores nothing new; the JSON report has
+stored the first time again, as the same answer, and stores nothing new; the JSON report has
 `"repeated": true`. `--message` and `--account` are ignored on a repeat, because the stored
 reply already carries the first ones. A different slate that reuses the slate id is refused, and
 so is the same slate once its transaction was cancelled or expired.
 
-Send. Write S1 to a file, give it to the receiver, and finalize their answer:
+Send. Write S1 to a file, give it to the receiver, and finalize their answer; `tx finalize` takes a
+plain V3 answer and a sealed one alike:
 
 ```
 $ lepic tx send 1.5 --to-file pay-alice.slate -m "for lunch"
