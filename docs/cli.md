@@ -20,7 +20,7 @@ cargo build --release -p lepic-cli
 ```
 
 ```text
-lepic 0.3.1
+lepic 0.4.0
 ```
 
 The workspace needs Rust 1.99 or later (`rust-version` in `Cargo.toml`).

@@ -7,6 +7,8 @@ Conventional Commit messages at release time.
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-11-10
+
 ### Fixed
 
 - A native `lepic.v1` proposal was refused with `FeeBelowMinimum` when the sender spent several
