@@ -554,6 +554,28 @@ pub struct DirectHandler<H: Host> {
     epic1: Option<Arc<dyn Epic1Keys>>,
 }
 
+/// `envelope` tried with the epic1 seal keys of `accounts`, each account in its own trial order,
+/// on the blocking pool: an account can have many addresses, and each key tried is an X25519
+/// operation. Returns the account, its label and the address index of the first key that opens.
+pub(crate) async fn trial_open_accounts(
+    envelope: Vec<u8>,
+    network: lepic_contact::Network,
+    accounts: Vec<Epic1AccountKeys>,
+) -> Option<(AccountIndex, String, u32, TxOpened)> {
+    tokio::task::spawn_blocking(move || {
+        let sealed = SealedEnvelope::decode(&envelope, network).ok()?;
+        accounts.into_iter().find_map(|account| {
+            trial_open(&account.keys, |key| {
+                sealed.open_tx(key, KeyClass::Epic1).ok()
+            })
+            .map(|(index, opened)| (account.account, account.label, index, opened))
+        })
+    })
+    .await
+    .ok()
+    .flatten()
+}
+
 /// The S1 of an envelope a listener took, the key its answer is sealed to, and the epic1
 /// address it was sealed to, if any.
 struct Proposal {
@@ -610,22 +632,20 @@ impl<H: Host> DirectHandler<H> {
         if sealed.hint() != Hint::from_bytes([0; 8]) {
             return Err(PeerRefusal::Refused);
         }
-        for account in source.epic1_keys().await {
-            if let Some((index, opened)) = trial_open(&account.keys, |key| {
-                sealed.open_tx(key, KeyClass::Epic1).ok()
-            }) {
-                // A payment to an epic1 is anonymous.
-                if opened.sender.is_some() {
-                    return Err(PeerRefusal::Refused);
-                }
-                info!(
-                    account = account.account.0,
-                    index, "payment opened at an epic1 address"
-                );
-                return Ok((opened, Some((account.label, index))));
-            }
+        let accounts = source.epic1_keys().await;
+        let found = trial_open_accounts(envelope.to_vec(), contact_network(self.network), accounts)
+            .await
+            .ok_or(PeerRefusal::Refused)?;
+        let (account, label, index, opened) = found;
+        // A payment to an epic1 is anonymous.
+        if opened.sender.is_some() {
+            return Err(PeerRefusal::Refused);
         }
-        Err(PeerRefusal::Refused)
+        info!(
+            account = account.0,
+            index, "payment opened at an epic1 address"
+        );
+        Ok((opened, Some((label, index))))
     }
 
     /// The S1 in `envelope`, the key its answer is sealed to, and the epic1 address it came to.

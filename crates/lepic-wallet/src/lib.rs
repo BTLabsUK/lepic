@@ -21,6 +21,7 @@ pub mod contact_link;
 pub mod details;
 mod early_notice;
 pub mod epic1_index;
+mod epic1_keys;
 pub mod epicbox_invoice;
 pub mod error;
 pub mod error_text;

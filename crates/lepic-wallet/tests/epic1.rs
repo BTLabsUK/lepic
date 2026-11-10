@@ -1007,3 +1007,37 @@ fn trial_decryption_finds_the_address_tried_last_among_a_thousand_and_one() {
         .unwrap();
     assert_eq!(keys[0].0, 1);
 }
+
+#[test]
+fn a_file_sealed_to_another_accounts_address_is_received_into_that_account() {
+    let world = World::new();
+    let book = world.issuer.wallet.contact_book();
+    let savings = world.issuer.wallet.create_account("savings").unwrap();
+    let address = world
+        .block_on(book.epic1_address_at(savings.index, 0))
+        .unwrap();
+    world.payer.fund(20, FUNDING);
+    let text = world.s1_file(&address.encode(), address.proof_key().to_bytes(), 4);
+
+    let received = world
+        .block_on(book.sealed_receive(&text, ReceiveRequest::default()))
+        .unwrap();
+    let details = world
+        .block_on(
+            world
+                .issuer
+                .wallet
+                .transaction_details(received.received.tx_id),
+        )
+        .unwrap();
+    assert_eq!(details.transaction.entry.account, savings.index);
+    assert_eq!(details.epic1_index, Some(0));
+    let into_first = world
+        .block_on(world.issuer.wallet.transactions(ACCOUNT))
+        .unwrap();
+    assert!(
+        into_first
+            .iter()
+            .all(|details| details.transaction.entry.direction != TxDirection::Incoming)
+    );
+}

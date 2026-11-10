@@ -1184,8 +1184,11 @@ where
         match direct {
             Some(opened) => Ok(opened),
             None => {
+                // Every issued address may be tried: off the async workers.
                 let keys = self.wallet.epic1_trial_keys(account, net).await?;
-                open_payment(network, envelope, &keys)
+                let envelope = envelope.to_vec();
+                self.contact_work(move |_, _| Ok(open_payment(network, &envelope, &keys)))
+                    .await?
             }
         }
     }

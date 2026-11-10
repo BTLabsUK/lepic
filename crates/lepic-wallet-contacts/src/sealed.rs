@@ -15,7 +15,7 @@ use lepic_contact::{
 };
 use lepic_native_slate::{NativeSlate, SlateView};
 use lepic_node::{NodeApi, Propagation};
-use lepic_seal::{ArmorMarker, ClassifyError, KeyClass, TxContent, TxKey, dearmor_marked, seal_tx};
+use lepic_seal::{ArmorMarker, ClassifyError, TxContent, TxKey, dearmor_marked, seal_tx};
 use lepic_slate::codec::{MediaType, WireSlate};
 use lepic_slate::stage::Stage;
 use lepic_store::{
@@ -27,12 +27,12 @@ use lepic_transport::transport::Location;
 use tracing::{info, instrument, warn};
 use uuid::Uuid;
 
+use super::direct::trial_open_accounts;
 use super::epic1::Epic1Refusal;
 use super::keys::{contact_keys, contact_network, enc_secret, signing_key};
 use super::{ContactError, LockedRng};
 use crate::{ContactBook, file_method};
 use lepic_wallet::SlateFormat;
-use lepic_wallet::epic1_index::trial_open;
 use lepic_wallet::finalize::Finalized;
 use lepic_wallet::invoice::{PaidInvoice, PayRequest};
 use lepic_wallet::ports::{SecretVault, StoreOpener};
@@ -580,7 +580,7 @@ where
             if hint != Hint::from_bytes([0; 8]) {
                 return Err(ContactError::NotForThisInstall);
             }
-            return self.open_epic1(&sealed).await;
+            return self.open_epic1(envelope.clone(), net).await;
         };
         let (opened, contact) = match opening {
             Opening::Contact { key, records } => {
@@ -618,33 +618,31 @@ where
         })
     }
 
-    /// `sealed`, a zero-hint envelope, opened with the seal key of one of the wallet's epic1
-    /// addresses. A payment to an epic1 is anonymous: a signed one is refused.
-    async fn open_epic1(&self, sealed: &SealedEnvelope<'_>) -> Result<Envelope, ContactError> {
-        for account in self.wallet.epic1_trial_keys_all().await? {
-            let Some((index, opened)) = trial_open(&account.keys, |key| {
-                sealed.open_tx(key, KeyClass::Epic1).ok()
-            }) else {
-                continue;
-            };
-            if opened.sender.is_some() {
-                return Err(ContactError::Epic1(Epic1Refusal::Signed));
-            }
-            info!(
-                account = account.account.0,
-                index, "sealed text opened at an epic1 address"
-            );
-            return Ok(Envelope {
-                content: super::native::opened_of(opened).content,
-                native: true,
-                contact: None,
-                epic1: Some(Epic1Opening {
-                    label: account.label,
-                    index,
-                }),
-            });
+    /// `envelope`, a zero-hint envelope, opened with the seal key of one of the wallet's epic1
+    /// addresses, every account tried in turn. A payment to an epic1 is anonymous: a signed one
+    /// is refused.
+    async fn open_epic1(
+        &self,
+        envelope: Vec<u8>,
+        net: lepic_contact::Network,
+    ) -> Result<Envelope, ContactError> {
+        let accounts = self.wallet.epic1_trial_keys_all().await?;
+        let (account, label, index, opened) = trial_open_accounts(envelope, net, accounts)
+            .await
+            .ok_or(ContactError::NotForThisInstall)?;
+        if opened.sender.is_some() {
+            return Err(ContactError::Epic1(Epic1Refusal::Signed));
         }
-        Err(ContactError::NotForThisInstall)
+        info!(
+            account = account.0,
+            index, "sealed text opened at an epic1 address"
+        );
+        Ok(Envelope {
+            content: super::native::opened_of(opened).content,
+            native: true,
+            contact: None,
+            epic1: Some(Epic1Opening { label, index }),
+        })
     }
 
     /// [`Wallet::sealed_open`], whether the slate came native, the epic1 address it was sealed

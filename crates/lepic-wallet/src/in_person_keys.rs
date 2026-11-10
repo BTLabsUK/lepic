@@ -71,7 +71,10 @@ where
         network: Network,
         index: u32,
     ) -> Result<EncSecretKey, WalletError> {
-        namespace::epic1_seal_key(&self.session()?.seed, account.0, network, index)
+        let session = self.session()?;
+        session
+            .epic1_keys
+            .key(&session.seed, account.0, network, index)
     }
 
     /// The proof key of the epic1 address `index` of `account` on `network`: it signs the
@@ -90,7 +93,7 @@ where
     /// The seal keys of the epic1 addresses of `account` on `network` that a zero-hint
     /// envelope is tried with, each with its address index, in the order
     /// [`crate::epic1_index::trial_order`] gives: the index of the most recent payment, index
-    /// 0, then the rest from the highest down.
+    /// 0, then the rest from the highest down. Keys derived once stay with the unlocked session.
     ///
     /// Fails with [`WalletError::Locked`] and [`WalletError::Store`].
     pub async fn epic1_trial_keys(
@@ -103,15 +106,9 @@ where
             let order = session
                 .store
                 .read(|repos| crate::epic1_index::trial_order(repos, account))?;
-            order
-                .into_iter()
-                .map(|index| {
-                    Ok((
-                        index,
-                        namespace::epic1_seal_key(&session.seed, account.0, network, index)?,
-                    ))
-                })
-                .collect()
+            session
+                .epic1_keys
+                .keys(&session.seed, account.0, network, &order)
         })
         .await
     }
@@ -135,17 +132,12 @@ where
             })?;
             let mut keys = Vec::with_capacity(accounts.len());
             for (account, label, order) in accounts {
-                let mut account_keys = Vec::with_capacity(order.len());
-                for index in order {
-                    account_keys.push((
-                        index,
-                        namespace::epic1_seal_key(&session.seed, account.0, network, index)?,
-                    ));
-                }
                 keys.push(Epic1AccountKeys {
                     account,
                     label,
-                    keys: account_keys,
+                    keys: session
+                        .epic1_keys
+                        .keys(&session.seed, account.0, network, &order)?,
                 });
             }
             keys.sort_by_key(|entry| entry.account.0);

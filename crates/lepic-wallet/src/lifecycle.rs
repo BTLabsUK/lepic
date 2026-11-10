@@ -22,6 +22,7 @@ use tracing::debug;
 use zeroize::Zeroizing;
 
 use crate::account::{ensure_default_account, place_key_counters};
+use crate::epic1_keys::Epic1KeyCache;
 use crate::error::WalletError;
 use crate::ports::{SecretVault, StoreOpener};
 use crate::slate_cache::SlateCache;
@@ -135,6 +136,8 @@ pub struct Session<D> {
     pub store: D,
     /// The stored slates the history read decoded, kept while the wallet is open.
     pub(crate) slates: SlateCache,
+    /// The epic1 seal keys derived while the wallet is unlocked.
+    pub(crate) epic1_keys: Epic1KeyCache,
     /// How the database was found on disk, for an opener that keeps it encrypted at rest.
     pub(crate) at_rest: Option<AtRestReport>,
 }
@@ -224,6 +227,7 @@ pub(crate) fn create<S: StoreOpener, V: SecretVault>(
         seed: seed.clone(),
         store,
         slates: SlateCache::default(),
+        epic1_keys: Epic1KeyCache::default(),
         at_rest,
     })
 }
@@ -287,6 +291,7 @@ pub(crate) fn open<S: StoreOpener, V: SecretVault>(
         seed: seed.clone(),
         store,
         slates: SlateCache::default(),
+        epic1_keys: Epic1KeyCache::default(),
         at_rest,
     })
 }
