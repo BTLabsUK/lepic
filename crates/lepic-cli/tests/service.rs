@@ -515,3 +515,141 @@ fn a_command_through_serve_prints_the_hint_of_a_direct_run() {
     assert_eq!(document.status, 422, "{document:?}");
     assert!(document.json().get("hint").is_none(), "{document:?}");
 }
+
+/// While serve holds the wallet, the contact, in-person, epic1, epictx and profile domain
+/// commands run there and print what they print on their own, errors included, and a file a
+/// command reads or writes is read and written here (ADR 0053).
+#[test]
+fn the_route_covered_command_families_run_through_a_running_serve() {
+    let mut host = TestHost::new();
+    host.fund(SENDER_MNEMONIC, 0, FUNDING, 1);
+    let wallet = Instance::new("serving password");
+    wallet.restore(&host, SENDER_MNEMONIC);
+    let mut human = wallet.env();
+    human.retain(|(key, _)| key != "LEPIC_OUTPUT");
+    let payload = wallet.path("payload.bin");
+    std::fs::write(&payload, [0u8, 255]).unwrap();
+    let payload = payload.to_str().unwrap().to_owned();
+    let missing = wallet.path("missing.epictx");
+    let missing = missing.to_str().unwrap().to_owned();
+    let not_sealed = wallet.path("not-sealed.epictx");
+    std::fs::write(&not_sealed, "not a sealed file").unwrap();
+    let not_sealed = not_sealed.to_str().unwrap().to_owned();
+    let backup = wallet.path("contacts.backup");
+    let backup = backup.to_str().unwrap().to_owned();
+    let domain = wallet.path("epic-wallet.json");
+    let domain = domain.to_str().unwrap().to_owned();
+
+    let same: Vec<Vec<&str>> = vec![
+        vec!["contact", "list"],
+        vec!["contact", "requests"],
+        vec!["contact", "invoices"],
+        vec!["contact", "quarantine"],
+        vec!["contact", "payload", "list"],
+        vec!["contact", "payload", "ack", "nosuch"],
+        vec!["contact", "payload", "post", "nosuch", "--hex", "00ff"],
+        vec!["contact", "payload", "post", "nosuch", "--file", &payload],
+        vec!["contact", "remove", "nosuch"],
+        vec!["contact", "sas", "nosuch", "match"],
+        vec!["contact", "label", "nosuch", "x"],
+        vec!["contact", "request-dismiss", "nosuch"],
+        vec!["contact", "import", &missing],
+        vec!["epic1", "address"],
+        vec!["epic1", "links"],
+        vec!["epic1", "answers"],
+        vec!["epic1", "read", "epic:epic1nonsense"],
+        vec!["profile", "domain", "show"],
+        vec!["in-person", "answers", "nosuch"],
+        vec!["in-person", "take", "zz"],
+        vec!["in-person", "read", "--hex", "00"],
+        vec!["epictx", "open", &missing],
+        vec!["epictx", "open", &not_sealed],
+    ];
+    let human_same: Vec<Vec<&str>> = vec![
+        vec!["contact", "list"],
+        vec!["epic1", "address"],
+        vec!["epic1", "links"],
+        vec!["profile", "domain", "show"],
+        vec!["contact", "remove", "nosuch"],
+    ];
+    // The files: the same path on both sides, so the report names the same file.
+    let files: Vec<Vec<&str>> = vec![
+        vec!["contact", "export", &backup],
+        vec!["contact", "import", &backup],
+        vec![
+            "profile",
+            "domain",
+            "file",
+            "--path",
+            &domain,
+            "--relay",
+            "r.example:443",
+        ],
+        vec!["profile", "domain", "file", "--path", &domain],
+    ];
+
+    let run_all = |client: &TestHost| {
+        let same: Vec<Outcome> = same.iter().map(|args| wallet.run(client, args)).collect();
+        let human_same: Vec<Outcome> = human_same
+            .iter()
+            .map(|args| wallet.run_with(client, args, human.clone(), ""))
+            .collect();
+        let mut written = Vec::new();
+        for args in &files {
+            let outcome = wallet.run(client, args);
+            let bytes = [&backup, &domain].map(|path| std::fs::read(path).ok());
+            written.push((outcome, bytes));
+        }
+        for path in [&backup, &domain] {
+            let _ = std::fs::remove_file(path);
+        }
+        (same, human_same, written)
+    };
+    let direct = run_all(&host);
+
+    let stop = Arc::new(AtomicBool::new(false));
+    let signal = Arc::clone(&stop);
+    host.interrupt_when = Some(Arc::new(move || signal.load(Ordering::SeqCst)));
+    let client = host.without_interrupt();
+    let socket = wallet.data_dir().join("lepic.sock");
+    let (through, made, served) = std::thread::scope(|scope| {
+        let _stop = StopOnDrop(Arc::clone(&stop));
+        let server = scope.spawn(|| wallet.run(&host, &["serve"]));
+        wait_for_socket(&socket);
+        let through = run_all(&client);
+        let made = [
+            wallet.run(&client, &["contact", "invite", "--pairing-words"]),
+            wallet.run(&client, &["in-person", "invoice", "1"]),
+        ];
+        stop.store(true, Ordering::SeqCst);
+        (through, made, server.join().unwrap())
+    });
+
+    for (direct, through) in direct.0.iter().zip(&through.0) {
+        assert_eq!(through.code, direct.code, "{through:?} vs {direct:?}");
+        assert_eq!(through.stdout, direct.stdout, "{through:?}");
+    }
+    for (direct, through) in direct.1.iter().zip(&through.1) {
+        assert_eq!(through.code, direct.code, "{through:?} vs {direct:?}");
+        assert_eq!(through.stdout, direct.stdout, "{through:?}");
+        assert_eq!(through.stderr, direct.stderr, "{through:?}");
+    }
+    for ((direct, direct_bytes), (through, through_bytes)) in direct.2.iter().zip(&through.2) {
+        assert_eq!(through.code, direct.code, "{through:?} vs {direct:?}");
+        assert_eq!(through.stdout, direct.stdout, "{through:?}");
+        assert_eq!(through_bytes, direct_bytes);
+    }
+    // The file commands ran: a backup and a domain file came out of them.
+    assert_eq!(direct.2[0].0.code, 0, "{:?}", direct.2[0].0);
+    assert!(direct.2[0].1[0].is_some());
+    assert_eq!(direct.2[2].0.code, 0, "{:?}", direct.2[2].0);
+    assert!(direct.2[2].1[1].is_some());
+    // An existing domain file is not replaced without --force.
+    assert_ne!(direct.2[3].0.code, 0, "{:?}", direct.2[3].0);
+    // Commands whose answers are not repeatable made their records.
+    for outcome in &made {
+        assert_eq!(outcome.code, 0, "{outcome:?}");
+    }
+    assert!(made[1].json()["slate_id"].is_string(), "{:?}", made[1]);
+    served.ok();
+}

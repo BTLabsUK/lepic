@@ -89,6 +89,8 @@ use crate::vault::{FileVault, VAULT_FILE};
 mod api_client;
 mod contact;
 mod epic1;
+#[cfg(unix)]
+pub(crate) mod files;
 mod in_person;
 pub(crate) mod peer;
 mod profile;

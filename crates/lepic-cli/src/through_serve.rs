@@ -28,10 +28,14 @@ use crate::cli::{
     SendDestinationArgs, SendSlateIdArg, SpendArgs, TorBinaryArgs, TxCommand, TxShowArgs,
     WalletCommand,
 };
+use crate::commands::files;
 use crate::commands::is_onion;
 use crate::exit::{CliError, ErrorKind, ServedCause};
+use crate::output;
 use crate::service;
 use crate::settings::{OutputFormat, Settings};
+
+mod families;
 
 /// Far above any report serve answers with.
 const MAX_ANSWER: usize = 64 * 1024 * 1024;
@@ -41,7 +45,53 @@ struct Call {
     method: Method,
     /// Path and query.
     target: String,
-    body: Option<Value>,
+    body: Body,
+    finish: Finish,
+}
+
+/// What the request carries.
+enum Body {
+    None,
+    Json(Value),
+    /// A body made from a file or standard input, read once serve has answered the connection:
+    /// a command that runs here reads its own files.
+    Read(Box<dyn FnOnce() -> Result<Value, CliError> + Send>),
+}
+
+/// What the command does with the answer.
+enum Finish {
+    /// Print it as the command prints it.
+    Print,
+    /// The answer holds the contact backup; write it to the file and report the file.
+    ContactBackup(PathBuf),
+    /// The answer holds the domain file; write it and report the file.
+    DomainFile { path: Option<PathBuf>, force: bool },
+}
+
+impl Call {
+    fn new(method: Method, target: String) -> Self {
+        Self {
+            method,
+            target,
+            body: Body::None,
+            finish: Finish::Print,
+        }
+    }
+
+    fn json(mut self, body: Value) -> Self {
+        self.body = Body::Json(body);
+        self
+    }
+
+    fn read(mut self, read: impl FnOnce() -> Result<Value, CliError> + Send + 'static) -> Self {
+        self.body = Body::Read(Box::new(read));
+        self
+    }
+
+    fn finish(mut self, finish: Finish) -> Self {
+        self.finish = finish;
+        self
+    }
 }
 
 /// Runs `command` on the wallet serve holds and returns what the command prints, when serve
@@ -78,24 +128,31 @@ async fn exchange(
         socket: socket.to_owned(),
         source,
     };
-    let body = match &call.body {
-        Some(body) => Bytes::from(serde_json::to_vec(body).map_err(|e| unanswered(e.into()))?),
-        None => Bytes::new(),
+    let body = match call.body {
+        Body::None => None,
+        Body::Json(body) => Some(body),
+        Body::Read(read) => Some(read()?),
     };
-    let accept = match format {
-        OutputFormat::Json => "application/json",
-        OutputFormat::Human => "text/plain",
+    let has_body = body.is_some();
+    let body = match body {
+        Some(body) => Zeroizing::new(serde_json::to_vec(&body).map_err(|e| unanswered(e.into()))?),
+        None => Zeroizing::new(Vec::new()),
+    };
+    // A file the answer is written to is made from the JSON report; the rest is printed as it is.
+    let accept = match (&call.finish, format) {
+        (Finish::Print, OutputFormat::Human) => "text/plain",
+        _ => "application/json",
     };
     let mut request = Request::builder()
         .method(call.method)
         .uri(call.target)
         .header(header::HOST, "lepic")
         .header(header::ACCEPT, accept);
-    if call.body.is_some() {
+    if has_body {
         request = request.header(header::CONTENT_TYPE, "application/json");
     }
     let request = request
-        .body(Full::new(body))
+        .body(Full::new(Bytes::from(body.to_vec())))
         .map_err(|e| unanswered(e.into()))?;
     let (mut sender, connection) = hyper::client::conn::http1::handshake(TokioIo::new(stream))
         .await
@@ -116,7 +173,7 @@ async fn exchange(
     let (status, content_type, body) = answered.map_err(unanswered)?;
     let text = Zeroizing::new(String::from_utf8(body.to_vec()).map_err(|e| unanswered(e.into()))?);
     if status.is_success() {
-        return Ok(text);
+        return finish(call.finish, text, format, &unanswered);
     }
     if content_type != Some(HeaderValue::from_static("application/problem+json")) {
         return Err(unanswered(
@@ -125,6 +182,48 @@ async fn exchange(
     }
     let problem: Problem = serde_json::from_str(&text).map_err(|e| unanswered(e.into()))?;
     Err(problem.into_error())
+}
+
+/// Prints `text`, or writes the file it holds and prints the report of that.
+fn finish(
+    finish: Finish,
+    text: Zeroizing<String>,
+    format: OutputFormat,
+    unanswered: &dyn Fn(Box<dyn std::error::Error + Send + Sync>) -> CliError,
+) -> Result<Zeroizing<String>, CliError> {
+    let report = match finish {
+        Finish::Print => return Ok(text),
+        Finish::ContactBackup(file) => {
+            let answer: Backup = serde_json::from_str(&text).map_err(|e| unanswered(e.into()))?;
+            files::save_backup(&file, &answer.backup)?
+        }
+        Finish::DomainFile { path, force } => {
+            let answer: DomainDocument =
+                serde_json::from_str(&text).map_err(|e| unanswered(e.into()))?;
+            files::save_domain_file(path.as_deref(), force, &answer.document, answer.url)?
+        }
+    };
+    Ok(output::render(&report, format))
+}
+
+/// `POST /v1/contacts/export`.
+#[derive(Deserialize)]
+struct Backup {
+    #[serde(deserialize_with = "secret")]
+    backup: Zeroizing<String>,
+}
+
+/// `POST /v1/profile/domain/file`.
+#[derive(Deserialize)]
+struct DomainDocument {
+    document: String,
+    url: Option<String>,
+}
+
+fn secret<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Zeroizing<String>, D::Error> {
+    String::deserialize(deserializer).map(Zeroizing::new)
 }
 
 /// The fields of a problem document the CLI error is built from.
@@ -202,16 +301,14 @@ fn call(command: &Command) -> Option<Call> {
             "/v1/transactions/{tx_id}?refresh={}",
             refresh.refresh
         )),
-        Command::Tx(TxCommand::Cancel(tx)) => Some(Call {
-            method: Method::POST,
-            target: format!("/v1/transactions/{}/cancel", tx.tx_id),
-            body: None,
-        }),
-        Command::Tx(TxCommand::Release(tx)) => Some(Call {
-            method: Method::POST,
-            target: format!("/v1/transactions/{}/release", tx.tx_id),
-            body: None,
-        }),
+        Command::Tx(TxCommand::Cancel(tx)) => Some(Call::new(
+            Method::POST,
+            format!("/v1/transactions/{}/cancel", tx.tx_id),
+        )),
+        Command::Tx(TxCommand::Release(tx)) => Some(Call::new(
+            Method::POST,
+            format!("/v1/transactions/{}/release", tx.tx_id),
+        )),
         Command::Tx(TxCommand::Post(PostArgs {
             tx,
             fluff: FluffArg { fluff },
@@ -235,15 +332,19 @@ fn call(command: &Command) -> Option<Call> {
             json!({ "names": args.names, "bits": args.bits }),
         ),
         Command::Peer(PeerCommand::Pins(account)) => get(accounted("/v1/peer-pins", account)),
-        Command::Peer(PeerCommand::Forget(args)) => Some(Call {
-            method: Method::DELETE,
-            target: format!(
+        Command::Peer(PeerCommand::Forget(args)) => Some(Call::new(
+            Method::DELETE,
+            format!(
                 "/v1/peer-pins?origin={}&account={}",
                 encode(&args.origin),
                 encode(&args.account.account)
             ),
-            body: None,
-        }),
+        )),
+        Command::Profile(ProfileCommand::Domain(args)) => families::domain(&args.command),
+        Command::Contact(args) => families::contact(args),
+        Command::InPerson(args) => families::in_person(args),
+        Command::Epic1(args) => families::epic1(args),
+        Command::Epictx(command) => families::epictx(command),
         _ => None,
     }
 }
@@ -312,19 +413,11 @@ fn send(args: &SendArgs) -> Option<Call> {
 }
 
 fn get(target: String) -> Option<Call> {
-    Some(Call {
-        method: Method::GET,
-        target,
-        body: None,
-    })
+    Some(Call::new(Method::GET, target))
 }
 
 fn with_body(method: Method, target: String, body: Value) -> Option<Call> {
-    Some(Call {
-        method,
-        target,
-        body: Some(body),
-    })
+    Some(Call::new(method, target).json(body))
 }
 
 fn accounted(path: &str, account: &AccountArg) -> String {
@@ -388,6 +481,200 @@ mod tests {
         let error = problem.into_error();
         assert_eq!(error.kind(), ErrorKind::Internal);
         assert_eq!(error.chain(), ["a: b"]);
+    }
+
+    /// The request the arguments stand for: method, target and the body when it needs no file.
+    fn request(arguments: &[&str]) -> Option<(String, String, Option<Value>)> {
+        use clap::Parser as _;
+        let mut line = vec!["lepic"];
+        line.extend_from_slice(arguments);
+        let cli = crate::cli::Cli::try_parse_from(line).unwrap();
+        let call = call(&cli.command)?;
+        let body = match call.body {
+            Body::None => None,
+            Body::Json(body) => Some(body),
+            Body::Read(read) => Some(read().unwrap()),
+        };
+        Some((call.method.to_string(), call.target, body))
+    }
+
+    #[test]
+    fn contact_commands_stand_for_their_routes() {
+        let table: &[(&[&str], &str, &str, Option<Value>)] = &[
+            (
+                &["contact", "invite", "--expiry", "1h", "--pairing-words"],
+                "POST",
+                "/v1/contacts/invites",
+                Some(json!({"name": "LEPIC", "expiry": "1h", "pairing_words": true})),
+            ),
+            (&["contact", "list"], "GET", "/v1/contacts", None),
+            (
+                &["contact", "collect"],
+                "POST",
+                "/v1/contacts/collect",
+                None,
+            ),
+            (
+                &["contact", "remove", "a b"],
+                "DELETE",
+                "/v1/contacts/a%20b",
+                None,
+            ),
+            (
+                &["contact", "allow-invoices", "c1", "on"],
+                "PATCH",
+                "/v1/contacts/c1",
+                Some(json!({"allow_invoices": true})),
+            ),
+            (
+                &["contact", "sas", "c1", "mismatch"],
+                "POST",
+                "/v1/contacts/c1/sas",
+                Some(json!({"result": "mismatch"})),
+            ),
+            (
+                &["contact", "keys", "n1", "keep-old"],
+                "POST",
+                "/v1/contacts/n1/keys",
+                Some(json!({"choice": "keep-old"})),
+            ),
+            (
+                &[
+                    "contact",
+                    "move-home",
+                    "relay.example:443",
+                    "--drain-days",
+                    "3",
+                ],
+                "POST",
+                "/v1/contacts/move-home",
+                Some(json!({"host": "relay.example:443", "drain_days": 3})),
+            ),
+            (
+                &["contact", "payload", "post", "c1", "--hex", "00ff"],
+                "POST",
+                "/v1/contacts/c1/payloads",
+                Some(json!({"payload": "00ff"})),
+            ),
+            (
+                &["contact", "payload", "ack", "p1"],
+                "POST",
+                "/v1/payloads/p1/ack",
+                None,
+            ),
+            (&["contact", "payload", "list"], "GET", "/v1/payloads", None),
+        ];
+        for (arguments, method, target, body) in table {
+            assert_eq!(
+                request(arguments),
+                Some(((*method).to_owned(), (*target).to_owned(), body.clone())),
+                "{arguments:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn in_person_epic1_and_profile_commands_stand_for_their_routes() {
+        let table: &[(&[&str], &str, &str, Option<Value>)] = &[
+            (
+                &["in-person", "invoice", "1.5", "--ttl-blocks", "20"],
+                "POST",
+                "/v1/in-person/invoices",
+                Some(
+                    json!({"amount": "1.5", "account": "default", "message": null, "ttl_blocks": 20}),
+                ),
+            ),
+            (
+                &["in-person", "receive", "--hex", "ab"],
+                "POST",
+                "/v1/in-person/receive",
+                Some(json!({"code": "ab", "account": "default", "message": null})),
+            ),
+            (
+                &["in-person", "take", "ab", "cd"],
+                "POST",
+                "/v1/in-person/take",
+                Some(json!({"answer": ["ab", "cd"]})),
+            ),
+            (
+                &["in-person", "finalize", "s1", "2", "--fluff"],
+                "POST",
+                "/v1/in-person/s1/finalize",
+                Some(json!({"answer": 2, "fluff": true})),
+            ),
+            (
+                &["in-person", "answers", "s1"],
+                "GET",
+                "/v1/in-person/s1/answers",
+                None,
+            ),
+            (
+                &["epic1", "address"],
+                "GET",
+                "/v1/epic1/address?account=default",
+                None,
+            ),
+            (&["epic1", "links"], "GET", "/v1/epic1/links", None),
+            (
+                &["epic1", "retire", "3"],
+                "POST",
+                "/v1/epic1/links/3/retire",
+                Some(json!({"account": "default"})),
+            ),
+            (
+                &["epic1", "post-next", "s1", "--hosts-ok"],
+                "POST",
+                "/v1/epic1/s1/post-next",
+                Some(json!({"hosts_ok": true})),
+            ),
+            (&["epic1", "restore"], "POST", "/v1/epic1/restore", None),
+            (
+                &["profile", "domain", "show"],
+                "GET",
+                "/v1/profile/domain",
+                None,
+            ),
+            (
+                &["profile", "domain", "attach"],
+                "POST",
+                "/v1/profile/domain/attach",
+                None,
+            ),
+            (
+                &["profile", "domain", "file", "--relay", "r.example:443"],
+                "POST",
+                "/v1/profile/domain/file",
+                Some(json!({"relays": ["r.example:443"]})),
+            ),
+        ];
+        for (arguments, method, target, body) in table {
+            assert_eq!(
+                request(arguments),
+                Some(((*method).to_owned(), (*target).to_owned(), body.clone())),
+                "{arguments:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_command_with_an_option_its_route_lacks_runs_here() {
+        let local: &[&[&str]] = &[
+            &["contact", "--offline", "list"],
+            &["contact", "--epicbox-off", "collect"],
+            &["contact", "invite", "--kind", "shop"],
+            &["contact", "payload", "ack", "p1", "p2"],
+            &["contact", "seal", "c1", "4"],
+            &["contact", "decline", "s1"],
+            &["in-person", "invoice", "1", "--out", "code.txt"],
+            &["in-person", "send", "1", "--selection", "all"],
+            &["in-person", "pay", "1", "--hex", "ab", "--ttl-blocks", "5"],
+            &["in-person", "read", "--hex", "ab", "--selection", "all"],
+            &["epic1", "--offline", "links"],
+            &["epic1", "pay", "epic:epic1x", "--ttl-blocks", "5"],
+        ];
+        for arguments in local {
+            assert!(request(arguments).is_none(), "{arguments:?}");
+        }
     }
 
     #[test]
