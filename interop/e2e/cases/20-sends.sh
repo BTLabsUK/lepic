@@ -190,6 +190,11 @@ case_send_native_vs_legacy() {
     expect_json "${out_native}" '.format != "legacy"' "format with native_direct on" || return 1
     out_forced="$(w "${PAY_A}" tx send "${NATIVE_SEND_ARGS[@]}" --to "${HTTP_URL}" --legacy --min-confirmations "${E2E_MINCONF}" 0.01)" || fail "--legacy send failed" || return 1
     expect_eq "$(jq -r .format <<<"${out_forced}")" legacy "format with --legacy" || return 1
+    # A native send to a listener on this device is refused before anything is stored: exit 7.
+    wstop "${HTTP_PID}"
+    http_listen "${PAY_B}" || return 1
+    wx 7 "${PAY_A}" tx send --to "${HTTP_URL}" --min-confirmations "${E2E_MINCONF}" 0.01 || return 1
+    expect_json "${LAST_JSON}" '.error.kind == "rejected"' "native send to this device is rejected" || return 1
     wconfig_reset "${PAY_A}"
     wconfig_reset "${PAY_B}"
     wstop "${HTTP_PID}"

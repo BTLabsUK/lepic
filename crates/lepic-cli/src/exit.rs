@@ -435,7 +435,9 @@ fn direct_kind(error: &DirectError) -> ErrorKind {
         DirectError::Wallet(error) => wallet_kind(error),
         DirectError::Send(error) => send_kind(error),
         DirectError::Probe { .. } => ErrorKind::Transport,
-        DirectError::PinnedNoAdvert { .. } | DirectError::PinChanged { .. } => ErrorKind::Rejected,
+        DirectError::PinnedNoAdvert { .. }
+        | DirectError::PinChanged { .. }
+        | DirectError::ThisDevice { .. } => ErrorKind::Rejected,
         DirectError::Native { .. } => ErrorKind::Incomplete,
         _ => ErrorKind::Internal,
     }

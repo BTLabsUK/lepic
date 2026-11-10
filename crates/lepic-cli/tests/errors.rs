@@ -664,3 +664,12 @@ fn a_slate_file_error_names_the_file() {
         assert_eq!(outcome.json()["error"]["message"], message, "{args:?}");
     }
 }
+
+#[test]
+fn a_native_send_to_this_device_is_a_rejection() {
+    let error = lepic_cli::exit::CliError::from(lepic_wallet_contacts::DirectError::ThisDevice {
+        origin: "http://127.0.0.1:1".to_owned(),
+    });
+    assert_eq!(error.kind(), lepic_cli::exit::ErrorKind::Rejected);
+    assert_eq!(error.kind().exit_code(), 7);
+}

@@ -1363,3 +1363,4 @@ With human output, an error ends with a `hint:` line that names what to try next
 | `finalized but the node did not accept it` (exit 11) | The node neither took the transaction nor holds its kernel. Check the node, then `lepic tx post <ID>`. |
 | `a restore scan must complete before new outputs are created` (exit 5) | The wallet was restored with `--no-scan`, or its database was rebuilt, and its restore scan, from genesis or from the restore's `--from-height`, has not completed since. Run `lepic wallet scan`. |
 | `The node is behind the last refresh; balances not updated.` from `wallet info` | The node is still syncing, or the wallet stored a height this chain does not have. Once the node is synced, `lepic wallet scan --reset-chain` recovers. |
+| `... is on this device, which a native send does not reach` (exit 7) | A native send to a listener on this computer. Nothing was stored; `--legacy` sends the V2 or V3 slate. |
