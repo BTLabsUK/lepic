@@ -190,12 +190,13 @@ case_pair_request() {
     ct_fund "${CT_ALICE}" || return 1
     ct_reset "${CT_ALICE}" || return 1
     ct_reset "${CT_BOB}" || return 1
-    # A pending request is not in `contact list`; one a stopped run left would refuse the next
-    # request (in progress), so withdraw it by the id kept for it.
-    if [[ -s "${CT_REQUEST_ID}" ]]; then
-        w "${CT_ALICE}" contact remove "$(cat "${CT_REQUEST_ID}")" >/dev/null || fail "could not withdraw the old request" || return 1
-        rm -f "${CT_REQUEST_ID}"
-    fi
+    # A request a stopped run left would refuse the next one (in progress): `contact list` shows
+    # it under sent_requests, and request-cancel withdraws it.
+    local stale
+    for stale in $(w "${CT_ALICE}" contact list | jq -r '.sent_requests[].contact_id'); do
+        w "${CT_ALICE}" contact request-cancel "${stale}" >/dev/null || fail "could not withdraw the old request ${stale}" || return 1
+    done
+    rm -f "${CT_REQUEST_ID}"
     # Alice pays Bob's payments address, so Bob is a wallet that was paid lately.
     local addr
     addr="$(w_addr "${CT_BOB}")" || fail "wallet address failed" || return 1
@@ -214,13 +215,21 @@ case_pair_request() {
     echo "${CT_A}" >"${CT_REQUEST_ID}"
     echo "${out}" >"${CASE_DIR}/request.json"
     expect_match "$(jq -r .link <<<"${out}")" '^epiccash://pair/1/' "request link" || return 1
-    # Bob's wallet takes the request from its payments inbox as a notice and keeps it for its
-    # user. The CLI has no command to list or answer a kept request (the FFI's
-    # pairing_requests does), so a CLI wallet cannot finish this pairing.
+    expect_json "$(w "${CT_ALICE}" contact list)" ".sent_requests | length == 1 and .[0].contact_id == \"${CT_A}\"" "alice lists the request she sent" || return 1
+    wx 7 "${CT_ALICE}" contact request "${addr}" || return 1
+    expect_json "${LAST_JSON}" '.error.kind == "rejected"' "a second request is refused while the first waits" || return 1
+    # Bob's wallet takes the request from its payments inbox and keeps it for its user.
     wait_until "bob takes the request" 90 ct_took_notice "${CT_BOB}" || return 1
-    expect_json "$(w "${CT_ALICE}" contact remove "${CT_A}")" '.removed == true' "request withdrawn" || return 1
-    rm -f "${CT_REQUEST_ID}"
-    note "request posted ($(jq -r .contact_id <<<"${out}")) and taken by bob as a notice; no CLI command answers it"
+    out="$(w "${CT_BOB}" contact requests)" || fail "contact requests failed" || return 1
+    echo "${out}" >"${CASE_DIR}/requests.json"
+    expect_json "${out}" '.requests | length == 1 and (.[0].invite_link | startswith("epiccash://pair/")) and .[0].claimed_name == "Alice"' "bob lists the request" || return 1
+    link="$(jq -r '.requests[0].request_id' <<<"${out}")"
+    expect_json "$(w "${CT_BOB}" contact request-dismiss "${link}")" '.dismissed == true' "bob dismisses the request" || return 1
+    expect_json "$(w "${CT_BOB}" contact requests)" '.requests | length == 0' "bob has no request left" || return 1
+    wx 6 "${CT_BOB}" contact request-dismiss "${link}" || return 1
+    expect_json "$(w "${CT_ALICE}" contact request-cancel "${CT_A}")" '.cancelled == true' "alice withdraws her request" || return 1
+    expect_json "$(w "${CT_ALICE}" contact list)" '.sent_requests | length == 0' "alice lists no request" || return 1
+    wx 6 "${CT_ALICE}" contact request-cancel "${CT_A}" || return 1
 }
 
 # Drains a wallet's payments inbox; true once it took at least one notice.
@@ -253,8 +262,9 @@ case_ct_manage() {
     w "${CT_ALICE}" contact collect >/dev/null || fail "collect after remove failed" || return 1
     w "${CT_BOB}" contact collect >/dev/null || fail "collect on bob failed" || return 1
     expect_eq "$(ct_field "${CT_BOB}" "${CT_B}" state)" verified "bob still holds the pairing (not told)" || return 1
-    # Removing an unknown contact is not an error: it reports removed false.
-    expect_json "$(w "${CT_ALICE}" contact remove 00000000000000000000000000000000)" '.removed == false' "remove of an unknown contact" || return 1
+    # Removing an unknown contact is not found.
+    wx 6 "${CT_ALICE}" contact remove 00000000000000000000000000000000 || return 1
+    expect_json "${LAST_JSON}" '.error.kind == "not_found"' "remove of an unknown contact" || return 1
     # Pair again; bob clears its stale record first so only the new pairing exists.
     w "${CT_BOB}" contact remove "${CT_B}" >/dev/null || fail "bob remove failed" || return 1
     ct_pair "${CT_ALICE}" "${CT_BOB}" Alice Bob || return 1

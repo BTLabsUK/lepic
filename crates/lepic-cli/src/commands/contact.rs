@@ -24,12 +24,12 @@ use super::{Opened, Run, Spend};
 use crate::amount::{format_amount, format_fee, parse_amount};
 use crate::cli::{
     ContactAcceptArgs, ContactArgs, ContactCardArgs, ContactCommand, ContactEnterArgs,
-    ContactExportArgs, ContactImportArgs, ContactInviteArgs, ContactInvoiceArgs,
+    ContactExportArgs, ContactIdArg, ContactImportArgs, ContactInviteArgs, ContactInvoiceArgs,
     ContactKeyCheckArgs, ContactKeysArgs, ContactLabelArgs, ContactMoveArgs, ContactMoveHomeArgs,
     ContactOpenSealedArgs, ContactPayArgs, ContactPayloadArgs, ContactPayloadCommand,
-    ContactPayloadPostArgs, ContactPlainArgs, ContactRequestArgs, ContactSasArgs, ContactSealArgs,
-    ContactSendSlateArgs, ContactSlateIdArg, ContactSwitchArgs, InviteExpiryArg, KeysArg, OnOffArg,
-    PurposeArg, SasArg,
+    ContactPayloadPostArgs, ContactPlainArgs, ContactRequestAcceptArgs, ContactRequestArgs,
+    ContactRequestIdArg, ContactSasArgs, ContactSealArgs, ContactSendSlateArgs, ContactSlateIdArg,
+    ContactSwitchArgs, InviteExpiryArg, KeysArg, OnOffArg, PurposeArg, SasArg,
 };
 use crate::exit::CliError;
 use crate::host::Host;
@@ -40,8 +40,9 @@ use crate::output::{
     ContactKeyCheckReport, ContactLinkReport, ContactListReport, ContactMoveHomeReport,
     ContactPayloadAckReport, ContactPayloadListReport, ContactPayloadPostReport,
     ContactPayloadReport, ContactPreviewReport, ContactQuarantineReport, ContactRemoveReport,
-    ContactReport, ContactSlateReport, InvoiceDeclineReport, InvoicePayReport,
-    QuarantinedMessageReport, Report,
+    ContactReport, ContactRequestCancelReport, ContactRequestDismissReport, ContactRequestsReport,
+    ContactSlateReport, InvoiceDeclineReport, InvoicePayReport, PairRequestReport,
+    QuarantinedMessageReport, Report, SentRequestReport,
 };
 
 /// Contacts belong to the default account.
@@ -346,6 +347,10 @@ impl<H: Host> Run<'_, H> {
                 invite(&opened, &relays, args).await?
             }
             ContactCommand::Request(args) => request(&opened, &relays, args).await?,
+            ContactCommand::Requests => requests(&opened).await?,
+            ContactCommand::RequestAccept(args) => request_accept(&opened, &relays, args).await?,
+            ContactCommand::RequestDismiss(args) => request_dismiss(&opened, args).await?,
+            ContactCommand::RequestCancel(args) => request_cancel(&opened, args).await?,
             ContactCommand::Open(args) => {
                 let preview = wallet.contact_book().pairing_preview(&args.link).await?;
                 Report::ContactPreview(ContactPreviewReport {
@@ -377,15 +382,7 @@ impl<H: Host> Run<'_, H> {
                     .await?;
                 Report::Contact(contact_report(&view)?)
             }
-            ContactCommand::List => Report::ContactList(ContactListReport {
-                contacts: wallet
-                    .contact_book()
-                    .contacts()
-                    .await?
-                    .iter()
-                    .map(contact_report)
-                    .collect::<Result<_, _>>()?,
-            }),
+            ContactCommand::List => list(&opened).await?,
             ContactCommand::KeyCheck(args) => key_check(&opened, &relays, args).await?,
             ContactCommand::Keys(args) => resolve_keys(&opened, args).await?,
             ContactCommand::Seal(args) => seal(&opened, args).await?,
@@ -402,13 +399,7 @@ impl<H: Host> Run<'_, H> {
                     contact_id: id.to_string(),
                 })
             }
-            ContactCommand::Remove(args) => {
-                let id = contact_id(&args.contact)?;
-                Report::ContactRemove(ContactRemoveReport {
-                    contact_id: id.to_string(),
-                    removed: wallet.contact_book().contact_remove(id).await?,
-                })
-            }
+            ContactCommand::Remove(args) => remove(&opened, args).await?,
             ContactCommand::AllowInvoices(args) => allow_invoices(&opened, &relays, args).await?,
             ContactCommand::Invoice(args) => issue_invoice(&opened, &relays, args).await?,
             ContactCommand::Invoices => invoices(&opened).await?,
@@ -428,6 +419,79 @@ impl<H: Host> Run<'_, H> {
             }
         })
     }
+}
+
+/// `lepic contact list`: the contacts and the pair requests this wallet sent and still waits on.
+async fn list<N: lepic_node::NodeApi + 'static>(opened: &Opened<N>) -> Result<Report, CliError> {
+    let book = opened.wallet.contact_book();
+    Ok(Report::ContactList(ContactListReport {
+        contacts: book
+            .contacts()
+            .await?
+            .iter()
+            .map(contact_report)
+            .collect::<Result<_, _>>()?,
+        sent_requests: book
+            .pairing_requests_sent()
+            .await?
+            .into_iter()
+            .map(|sent| SentRequestReport {
+                contact_id: sent.contact_id.to_string(),
+                to_address: sent.expect_address,
+                created_at: sent.created_at.to_string(),
+                expires_at: sent.expires_at.to_string(),
+            })
+            .collect(),
+    }))
+}
+
+/// `lepic contact request-dismiss`: drops a received pair request without an answer.
+async fn request_dismiss<N: lepic_node::NodeApi + 'static>(
+    opened: &Opened<N>,
+    args: ContactRequestIdArg,
+) -> Result<Report, CliError> {
+    let id = request_id(&args.request)?;
+    opened
+        .wallet
+        .contact_book()
+        .pairing_request_dismiss(id)
+        .await?;
+    Ok(Report::ContactRequestDismiss(ContactRequestDismissReport {
+        request_id: args.request.trim().to_ascii_lowercase(),
+        dismissed: true,
+    }))
+}
+
+/// `lepic contact request-cancel`: withdraws a pair request this wallet sent.
+async fn request_cancel<N: lepic_node::NodeApi + 'static>(
+    opened: &Opened<N>,
+    args: ContactIdArg,
+) -> Result<Report, CliError> {
+    let id = contact_id(&args.contact)?;
+    opened
+        .wallet
+        .contact_book()
+        .pairing_request_cancel(id)
+        .await?;
+    Ok(Report::ContactRequestCancel(ContactRequestCancelReport {
+        contact_id: id.to_string(),
+        cancelled: true,
+    }))
+}
+
+/// `lepic contact remove`: removes a pairing; an id that is no contact is not found.
+async fn remove<N: lepic_node::NodeApi + 'static>(
+    opened: &Opened<N>,
+    args: ContactIdArg,
+) -> Result<Report, CliError> {
+    let id = contact_id(&args.contact)?;
+    if !opened.wallet.contact_book().contact_remove(id).await? {
+        return Err(lepic_wallet_contacts::ContactError::UnknownContact.into());
+    }
+    Ok(Report::ContactRemove(ContactRemoveReport {
+        contact_id: id.to_string(),
+        removed: true,
+    }))
 }
 
 /// `lepic contact invite`: makes an invite to pair with a contact.
@@ -488,6 +552,83 @@ async fn request<N: lepic_node::NodeApi + 'static>(
         link: offer.link,
         expires_at: offer.expires_at.to_string(),
         words: Vec::new(),
+    }))
+}
+
+/// The invite id of a request, from the 32 hex digits `contact requests` shows.
+fn request_id(text: &str) -> Result<[u8; lepic_store::INVITE_ID_LEN], CliError> {
+    let text = text.trim();
+    let mut id = [0u8; lepic_store::INVITE_ID_LEN];
+    if text.len() != id.len().saturating_mul(2)
+        || !text.bytes().all(|byte| byte.is_ascii_hexdigit())
+    {
+        return Err(CliError::RequestId);
+    }
+    for (slot, pair) in id.iter_mut().zip(text.as_bytes().chunks(2)) {
+        let pair = std::str::from_utf8(pair).map_err(|_| CliError::RequestId)?;
+        *slot = u8::from_str_radix(pair, 16).map_err(|_| CliError::RequestId)?;
+    }
+    Ok(id)
+}
+
+/// `lepic contact requests`: lists the pair requests that arrived.
+async fn requests<N: lepic_node::NodeApi + 'static>(
+    opened: &Opened<N>,
+) -> Result<Report, CliError> {
+    let views = opened.wallet.contact_book().pairing_requests().await?;
+    Ok(Report::ContactRequests(ContactRequestsReport {
+        requests: views
+            .into_iter()
+            .map(|view| PairRequestReport {
+                request_id: view
+                    .request_id
+                    .iter()
+                    .map(|byte| format!("{byte:02x}"))
+                    .collect(),
+                from_address: view.from_address,
+                claimed_name: view.claimed_name,
+                received_at: view.received_at.to_string(),
+                expires_at: view.expires_at.to_string(),
+                invite_link: view.invite_link,
+            })
+            .collect(),
+    }))
+}
+
+/// `lepic contact request-accept`: answers the invite a pair request carries, bound to the
+/// address the request came from.
+async fn request_accept<N: lepic_node::NodeApi + 'static>(
+    opened: &Opened<N>,
+    relays: &ContactRelays,
+    args: ContactRequestAcceptArgs,
+) -> Result<Report, CliError> {
+    let wallet = &opened.wallet;
+    let id = request_id(&args.request)?;
+    let request = wallet
+        .contact_book()
+        .pairing_requests()
+        .await?
+        .into_iter()
+        .find(|view| view.request_id == id)
+        .ok_or(lepic_wallet_contacts::ContactError::UnknownPairing)?;
+    let outcome = wallet
+        .contact_book()
+        .pairing_accept(
+            relays,
+            AcceptRequest {
+                link: request.invite_link,
+                account: CONTACT_ACCOUNT,
+                name: args.name.name,
+                by_hand: false,
+                class: PairingClass::Contact,
+                expect_address: Some(request.from_address),
+            },
+        )
+        .await?;
+    Ok(Report::ContactAccept(ContactAcceptReport {
+        contact_id: outcome.contact_id.to_string(),
+        reply_link: outcome.reply_link,
+        posted: outcome.posted,
     }))
 }
 

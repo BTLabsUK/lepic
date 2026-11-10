@@ -17,17 +17,18 @@ use crate::cli::{
     ContactEnterArgs, ContactIdArg, ContactInviteArgs, ContactKeyCheckArgs, ContactKeysArgs,
     ContactLabelArgs, ContactLinkArg, ContactMoveArgs, ContactMoveHomeArgs, ContactNameArg,
     ContactPayloadAckArgs, ContactPayloadArgs, ContactPayloadCommand, ContactPayloadPostArgs,
-    ContactRequestArgs, ContactSasArgs, ContactScanArgs, ContactSwitchArgs, DEFAULT_CHANGE_OUTPUTS,
-    DEFAULT_CONTACT_NAME, DomainArgs, DomainCommand, Epic1Args, Epic1Command, Epic1LinkArg,
-    Epic1LinkArgs, Epic1PayArgs, Epic1PostAnswerArgs, Epic1PostNextArgs, Epic1RetireArgs,
-    EpicboxCommand, EpictxCommand, EpictxOpenArgs, FluffArg, HttpReach, InPersonArgs,
-    InPersonCodeArg, InPersonCommand, InPersonFinalizeArgs, InPersonInvoiceArgs, InPersonPayArgs,
-    InPersonPostArgs, InPersonReadArgs, InPersonReceiveArgs, InPersonSendArgs, InPersonSlateArg,
-    InPersonTakeArgs, InviteExpiryArg, KeysArg, LegacyArg, ListArgs, ListingArgs, MAX_DRAIN_DAYS,
-    MessageArg, NodeCommand, OnOffArg, OutFileArg, PeerArgs, PeerCommand, PeerForgetArgs,
-    PlainHttpArg, PostArgs, ProfileCommand, ProfileSetArgs, RefreshArg, SasArg, SelectionArg,
-    SendArgs, SendDestinationArgs, SendSlateIdArg, SpendArgs, TorBinaryArgs, TxCommand, TxIdArgs,
-    TxShowArgs, WalletCommand, WalletScanArgs,
+    ContactRequestAcceptArgs, ContactRequestArgs, ContactRequestIdArg, ContactSasArgs,
+    ContactScanArgs, ContactSwitchArgs, DEFAULT_CHANGE_OUTPUTS, DEFAULT_CONTACT_NAME, DomainArgs,
+    DomainCommand, Epic1Args, Epic1Command, Epic1LinkArg, Epic1LinkArgs, Epic1PayArgs,
+    Epic1PostAnswerArgs, Epic1PostNextArgs, Epic1RetireArgs, EpicboxCommand, EpictxCommand,
+    EpictxOpenArgs, FluffArg, HttpReach, InPersonArgs, InPersonCodeArg, InPersonCommand,
+    InPersonFinalizeArgs, InPersonInvoiceArgs, InPersonPayArgs, InPersonPostArgs, InPersonReadArgs,
+    InPersonReceiveArgs, InPersonSendArgs, InPersonSlateArg, InPersonTakeArgs, InviteExpiryArg,
+    KeysArg, LegacyArg, ListArgs, ListingArgs, MAX_DRAIN_DAYS, MessageArg, NodeCommand, OnOffArg,
+    OutFileArg, PeerArgs, PeerCommand, PeerForgetArgs, PlainHttpArg, PostArgs, ProfileCommand,
+    ProfileSetArgs, RefreshArg, SasArg, SelectionArg, SendArgs, SendDestinationArgs,
+    SendSlateIdArg, SpendArgs, TorBinaryArgs, TxCommand, TxIdArgs, TxShowArgs, WalletCommand,
+    WalletScanArgs,
 };
 use crate::commands::is_onion;
 use crate::output::{
@@ -36,6 +37,7 @@ use crate::output::{
     ContactKeyCheckReport, ContactLinkReport, ContactListReport, ContactMoveHomeReport,
     ContactPayloadAckReport, ContactPayloadListReport, ContactPayloadPostReport,
     ContactPreviewReport, ContactQuarantineReport, ContactRemoveReport, ContactReport,
+    ContactRequestCancelReport, ContactRequestDismissReport, ContactRequestsReport,
     Epic1AddressReport, Epic1AnswersReport, Epic1LinkReport, Epic1LinksReport, Epic1PaidReport,
     Epic1PostReport, Epic1ReadReport, Epic1RestoreReport, Epic1RetireReport, EpicboxStatusReport,
     EpictxOpenReport, FinalizeReport, InPersonAnswersReport, InPersonCodeReport,
@@ -1215,6 +1217,80 @@ pub(crate) async fn contact_request(api: &Api<'_>, request: Request) -> Answer {
         name: contact_name(body.name),
     };
     api.run(contact(ContactCommand::Request(args))).await
+}
+
+/// List the pair requests other wallets sent to this one
+///
+/// Oldest first. The accept route answers one; the delete route hides it.
+#[utoipa::path(
+    get,
+    path = "/v1/contacts/requests",
+    tag = "contacts",
+    responses((status = 200, body = ContactRequestsReport)),
+)]
+pub(crate) async fn contact_requests(api: &Api<'_>, _request: Request) -> Answer {
+    api.run(contact(ContactCommand::Requests)).await
+}
+
+/// A pair request answered.
+#[derive(Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct RequestAcceptBody {
+    /// The name this wallet gives itself in the reply; `LEPIC` when absent.
+    name: Option<String>,
+}
+
+/// Answer a pair request that arrived
+///
+/// Answers the invite the request carries, bound to the address the request came from.
+#[utoipa::path(
+    post,
+    path = "/v1/contacts/requests/{id}/accept",
+    tag = "contacts",
+    params(("id" = String, Path, description = "The request's id, as the requests route shows it")),
+    request_body = RequestAcceptBody,
+    responses((status = 200, body = ContactAcceptReport)),
+)]
+pub(crate) async fn contact_request_accept(api: &Api<'_>, request: Request) -> Answer {
+    let request_id = request.param("id")?.to_owned();
+    let body: RequestAcceptBody = request.json()?;
+    let args = ContactRequestAcceptArgs {
+        request: request_id,
+        name: contact_name(body.name),
+    };
+    api.run(contact(ContactCommand::RequestAccept(args))).await
+}
+
+/// Hide a pair request that arrived
+///
+/// The sender is not told.
+#[utoipa::path(
+    delete,
+    path = "/v1/contacts/requests/{id}",
+    tag = "contacts",
+    params(("id" = String, Path, description = "The request's id, as the requests route shows it")),
+    responses((status = 200, body = ContactRequestDismissReport)),
+)]
+pub(crate) async fn contact_request_dismiss(api: &Api<'_>, request: Request) -> Answer {
+    let args = ContactRequestIdArg {
+        request: request.param("id")?.to_owned(),
+    };
+    api.run(contact(ContactCommand::RequestDismiss(args))).await
+}
+
+/// Withdraw a pair request this wallet sent
+///
+/// A new request may then go to the same address; an answer that comes later is refused.
+#[utoipa::path(
+    delete,
+    path = "/v1/contacts/{id}/request",
+    tag = "contacts",
+    params(("id" = String, Path, description = "The contact's id, as the contact list shows it under `sent_requests`")),
+    responses((status = 200, body = ContactRequestCancelReport)),
+)]
+pub(crate) async fn contact_request_cancel(api: &Api<'_>, request: Request) -> Answer {
+    let id = contact_arg(&request)?;
+    api.run(contact(ContactCommand::RequestCancel(id))).await
 }
 
 /// Show what an invite link says, before answering it

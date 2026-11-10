@@ -485,6 +485,35 @@
       }
     },
     "/v1/contacts/requests": {
+      "get": {
+        "tags": [
+          "contacts"
+        ],
+        "summary": "List the pair requests other wallets sent to this one",
+        "description": "Oldest first. The accept route answers one; the delete route hides it.",
+        "operationId": "contact_requests",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ContactRequestsReport"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error, as RFC 9457 problem details",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      },
       "post": {
         "tags": [
           "contacts"
@@ -508,6 +537,100 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ContactInviteReport"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error, as RFC 9457 problem details",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/contacts/requests/{id}": {
+      "delete": {
+        "tags": [
+          "contacts"
+        ],
+        "summary": "Hide a pair request that arrived",
+        "description": "The sender is not told.",
+        "operationId": "contact_request_dismiss",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The request's id, as the requests route shows it",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ContactRequestDismissReport"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error, as RFC 9457 problem details",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/contacts/requests/{id}/accept": {
+      "post": {
+        "tags": [
+          "contacts"
+        ],
+        "summary": "Answer a pair request that arrived",
+        "description": "Answers the invite the request carries, bound to the address the request came from.",
+        "operationId": "contact_request_accept",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The request's id, as the requests route shows it",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RequestAcceptBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ContactAcceptReport"
                 }
               }
             }
@@ -849,6 +972,48 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ContactPayloadPostReport"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error, as RFC 9457 problem details",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/contacts/{id}/request": {
+      "delete": {
+        "tags": [
+          "contacts"
+        ],
+        "summary": "Withdraw a pair request this wallet sent",
+        "description": "A new request may then go to the same address; an answer that comes later is refused.",
+        "operationId": "contact_request_cancel",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The contact's id, as the contact list shows it under `sent_requests`",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ContactRequestCancelReport"
                 }
               }
             }
@@ -3653,7 +3818,8 @@
       "ContactListReport": {
         "type": "object",
         "required": [
-          "contacts"
+          "contacts",
+          "sent_requests"
         ],
         "properties": {
           "contacts": {
@@ -3661,6 +3827,13 @@
             "items": {
               "$ref": "#/components/schemas/ContactReport"
             }
+          },
+          "sent_requests": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SentRequestReport"
+            },
+            "description": "The pair requests this wallet sent that wait for an answer, oldest first."
           }
         }
       },
@@ -3948,6 +4121,53 @@
           "status": {
             "type": "string",
             "description": "`waiting`, `paired`, `verified`, `keys-changed` or `ended`."
+          }
+        }
+      },
+      "ContactRequestCancelReport": {
+        "type": "object",
+        "description": "`lepic contact request-cancel`.",
+        "required": [
+          "contact_id",
+          "cancelled"
+        ],
+        "properties": {
+          "cancelled": {
+            "type": "boolean"
+          },
+          "contact_id": {
+            "type": "string"
+          }
+        }
+      },
+      "ContactRequestDismissReport": {
+        "type": "object",
+        "description": "`lepic contact request-dismiss`.",
+        "required": [
+          "request_id",
+          "dismissed"
+        ],
+        "properties": {
+          "dismissed": {
+            "type": "boolean"
+          },
+          "request_id": {
+            "type": "string"
+          }
+        }
+      },
+      "ContactRequestsReport": {
+        "type": "object",
+        "description": "`lepic contact requests`.",
+        "required": [
+          "requests"
+        ],
+        "properties": {
+          "requests": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PairRequestReport"
+            }
           }
         }
       },
@@ -5838,6 +6058,42 @@
           }
         }
       },
+      "PairRequestReport": {
+        "type": "object",
+        "description": "A pair request another wallet sent to this one.",
+        "required": [
+          "request_id",
+          "from_address",
+          "claimed_name",
+          "received_at",
+          "expires_at",
+          "invite_link"
+        ],
+        "properties": {
+          "claimed_name": {
+            "type": "string",
+            "description": "The name the sender's invite gives it, unverified."
+          },
+          "expires_at": {
+            "type": "string"
+          },
+          "from_address": {
+            "type": "string",
+            "description": "The sender's payments address, as the relay authenticated it."
+          },
+          "invite_link": {
+            "type": "string",
+            "description": "The invite the request carries, for `contact accept`."
+          },
+          "received_at": {
+            "type": "string"
+          },
+          "request_id": {
+            "type": "string",
+            "description": "The id `contact request-accept` and `contact request-dismiss` take."
+          }
+        }
+      },
       "PasswordBody": {
         "type": "object",
         "description": "The vault's password, and the one it is re-encrypted under.",
@@ -6429,6 +6685,20 @@
         "type": "object",
         "description": "`receive_tx`: the reply slate object, in the version it was sent in."
       },
+      "RequestAcceptBody": {
+        "type": "object",
+        "description": "A pair request answered.",
+        "properties": {
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The name this wallet gives itself in the reply; `LEPIC` when absent."
+          }
+        },
+        "additionalProperties": false
+      },
       "RequestBody": {
         "type": "object",
         "description": "A pairing request to a wallet's payments address.",
@@ -6700,6 +6970,35 @@
             "type": "integer",
             "format": "int32",
             "minimum": 0
+          }
+        }
+      },
+      "SentRequestReport": {
+        "type": "object",
+        "description": "A pair request this wallet sent that nobody answered yet.",
+        "required": [
+          "contact_id",
+          "created_at",
+          "expires_at"
+        ],
+        "properties": {
+          "contact_id": {
+            "type": "string",
+            "description": "The id `contact request-cancel` takes."
+          },
+          "created_at": {
+            "type": "string"
+          },
+          "expires_at": {
+            "type": "string",
+            "description": "When the request's invite stops being answerable."
+          },
+          "to_address": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The address the request went to."
           }
         }
       },

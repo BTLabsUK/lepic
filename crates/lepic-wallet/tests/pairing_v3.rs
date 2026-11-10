@@ -314,6 +314,43 @@ fn a_dismissed_request_stays_hidden_and_a_newer_one_shows() {
 }
 
 #[test]
+fn a_sent_request_is_listed_and_withdrawing_it_frees_a_new_one() {
+    let world = World::new();
+    let (anna, ben) = (&world.issuer, &world.payer);
+    proven(anna, ben);
+    let first = send_request(&world, anna, ben).unwrap();
+    let sent = world
+        .block_on(anna.wallet.contact_book().pairing_requests_sent())
+        .unwrap();
+    assert_eq!(sent.len(), 1);
+    assert_eq!(sent[0].contact_id, first);
+    assert_eq!(
+        sent[0].expect_address.as_deref(),
+        Some(ben.address.to_string().as_str())
+    );
+    assert!(matches!(
+        send_request(&world, anna, ben),
+        Err(ContactError::PairingInProgress)
+    ));
+
+    world
+        .block_on(anna.wallet.contact_book().pairing_request_cancel(first))
+        .unwrap();
+    assert!(
+        world
+            .block_on(anna.wallet.contact_book().pairing_requests_sent())
+            .unwrap()
+            .is_empty()
+    );
+    assert!(matches!(
+        world.block_on(anna.wallet.contact_book().pairing_request_cancel(first)),
+        Err(ContactError::UnknownPairing)
+    ));
+    anna.clock.advance(Duration::from_secs(60));
+    send_request(&world, anna, ben).unwrap();
+}
+
+#[test]
 fn crossed_requests_keep_the_invite_of_the_lower_key() {
     let world = World::new();
     let (anna, ben) = (&world.issuer, &world.payer);

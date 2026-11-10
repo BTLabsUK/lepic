@@ -214,6 +214,8 @@ pub enum CliError {
     SasTable,
     #[error("contact id is not 32 hex digits")]
     ContactId,
+    #[error("request id is not 16 hex digits")]
+    RequestId,
     #[error("the domain is not configured: set `domain`, --domain or LEPIC_DOMAIN")]
     DomainNotConfigured,
     #[error("the domain file would be over 4 KiB: name fewer relays")]
@@ -309,6 +311,7 @@ impl CliError {
             | Self::OnionAddress(_)
             | Self::PeerOrigin(_)
             | Self::ContactId
+            | Self::RequestId
             | Self::PayloadId
             | Self::PayloadHex
             | Self::DomainNotConfigured
@@ -785,6 +788,7 @@ mod tests {
             ),
             (CliError::SlateId, ErrorKind::Usage),
             (CliError::PayloadId, ErrorKind::Usage),
+            (CliError::RequestId, ErrorKind::Usage),
             (CliError::PayloadHex, ErrorKind::Usage),
             (
                 CliError::PeerOrigin(lepic_methods::http::OriginError::Port),
