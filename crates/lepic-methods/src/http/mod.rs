@@ -8,7 +8,9 @@
 
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex, PoisonError};
+use std::time::{Duration, Instant};
 
+use lepic_legacy_rpc::rpc::VersionInfo;
 use lepic_legacy_slate::v2_json::LEGACY_V2_JSON;
 use lepic_legacy_slate::v3_json::LEGACY_V3_JSON;
 use lepic_slate::codec::{CodecId, EncodeContext, WireSlate};
@@ -50,6 +52,10 @@ pub const TRANSPORT_ID: TransportId = TransportId::new("http");
 // Answers waiting to be finalized. Each send takes its own at once, so more than a handful
 // means callers stopped taking them; the oldest is dropped and its sender can send again.
 const MAX_HELD_REPLIES: usize = 64;
+
+// How long a probe's `check_version` answer stands in for the one the send that follows it
+// would ask for. A send goes on from its probe at once; an older answer is asked again.
+const PROBE_REUSE: Duration = Duration::from_secs(30);
 
 /// Whether a send over `transport` gets its answer in the same exchange.
 pub fn is_direct(transport: TransportId) -> bool {
@@ -103,11 +109,21 @@ impl FormatPolicy for HttpPolicy {
     }
 }
 
-/// The HTTP method. Clones share the client and the held answers.
+/// The HTTP method. Clones share the client, the held answers and the last probe's answer.
 #[derive(Debug, Clone)]
 pub struct Http {
     client: RpcClient,
     held: Arc<Mutex<VecDeque<Held>>>,
+    probed: Arc<Mutex<Option<Probed>>>,
+}
+
+/// A listener's `check_version` answer as a probe read it, which the send to the same
+/// listener that follows takes instead of asking again.
+#[derive(Debug)]
+struct Probed {
+    url: ListenerUrl,
+    at: Instant,
+    version: VersionInfo,
 }
 
 #[derive(Debug)]
@@ -122,6 +138,7 @@ impl Http {
         Self {
             client,
             held: Arc::new(Mutex::new(VecDeque::new())),
+            probed: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -131,6 +148,7 @@ impl Http {
         Self {
             client,
             held: Arc::clone(&self.held),
+            probed: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -152,6 +170,32 @@ impl Http {
         held.push_back(Held { slate_id, wire });
     }
 
+    /// The `check_version` answer of the listener at `url`, asked for, and kept for the send
+    /// that follows.
+    async fn probe_version(&self, url: &ListenerUrl) -> Result<VersionInfo, ClientError> {
+        let version = self.client.check_version(url).await?;
+        *self.probed.lock().unwrap_or_else(PoisonError::into_inner) = Some(Probed {
+            url: url.clone(),
+            at: Instant::now(),
+            version: version.clone(),
+        });
+        Ok(version)
+    }
+
+    /// The `check_version` answer of the listener at `url`: the one a probe just read, taken
+    /// so no other send reads it, or else asked for.
+    async fn version(&self, url: &ListenerUrl) -> Result<VersionInfo, ClientError> {
+        let probed = self
+            .probed
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take_if(|probed| probed.url == *url && probed.at.elapsed() <= PROBE_REUSE);
+        match probed {
+            Some(probed) => Ok(probed.version),
+            None => self.client.check_version(url).await,
+        }
+    }
+
     /// Sends `wire` and holds the answer under its slate id. An answer for another slate is
     /// refused as malformed and not held.
     async fn post(&self, to: &Destination, wire: &WireSlate) -> Result<(), ClientError> {
@@ -159,7 +203,7 @@ impl Http {
         // typed; what reaches the transport is already consented to.
         let url = ListenerUrl::parse(to.as_str(), PlainHttp::Allowed)?;
         let slate_id = slate_id_of(wire).ok_or(ClientError::Rpc(RpcError::NotJson))?;
-        let version = self.client.check_version(&url).await?;
+        let version = self.version(&url).await?;
         if !version.v2 {
             return Err(ClientError::NoCommonVersion);
         }

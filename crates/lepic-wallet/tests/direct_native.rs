@@ -397,19 +397,22 @@ enum Answer {
     Close,
 }
 
-/// A listener that advertises an endpoint under `seal` and answers posts to it as `answer`
-/// says, counting the `receive_tx` calls its foreign API gets.
+/// A listener that advertises an endpoint under `seal`, if any, and answers posts to it as
+/// `answer` says, counting the `check_version` and `receive_tx` calls its foreign API gets.
 struct Fake {
     address: String,
+    versions: Arc<AtomicU32>,
     receives: Arc<AtomicU32>,
     posts: Arc<AtomicU32>,
 }
 
-fn fake(seal: [u8; 32], answer: Answer) -> Fake {
+fn fake(seal: Option<[u8; 32]>, answer: Answer) -> Fake {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let address = format!("http://{}", listener.local_addr().unwrap());
+    let versions = Arc::new(AtomicU32::new(0));
     let receives = Arc::new(AtomicU32::new(0));
     let posts = Arc::new(AtomicU32::new(0));
+    let counted_versions = Arc::clone(&versions);
     let (counted_receives, counted_posts) = (Arc::clone(&receives), Arc::clone(&posts));
     std::thread::spawn(move || {
         for stream in listener.incoming() {
@@ -424,14 +427,18 @@ fn fake(seal: [u8; 32], answer: Answer) -> Fake {
                     write_answer(&mut stream, 500, b"");
                     continue;
                 }
+                counted_versions.fetch_add(1, Ordering::SeqCst);
+                let mut answered = serde_json::json!({
+                    "foreign_api_version": 2,
+                    "supported_slate_versions": ["V3", "V2"],
+                });
+                if let Some(seal) = seal {
+                    answered["lepic"] = Advert::new(seal).to_json();
+                }
                 let version = serde_json::json!({
                     "id": call["id"],
                     "jsonrpc": "2.0",
-                    "result": {"Ok": {
-                        "foreign_api_version": 2,
-                        "supported_slate_versions": ["V3", "V2"],
-                        "lepic": Advert::new(seal).to_json(),
-                    }},
+                    "result": {"Ok": answered},
                 });
                 write_answer(&mut stream, 200, version.to_string().as_bytes());
             } else {
@@ -445,6 +452,7 @@ fn fake(seal: [u8; 32], answer: Answer) -> Fake {
     });
     Fake {
         address,
+        versions,
         receives,
         posts,
     }
@@ -491,7 +499,7 @@ fn failing_post(answer: Answer) -> PeerClientError {
     let world = world(true);
     let http = http();
     let peer = peer(&http);
-    let fake = fake([4; 32], answer);
+    let fake = fake(Some([4; 32]), answer);
     pin(&world, &peer, &fake.address, [4; 32]);
 
     let error = send(&world, &peer, &http, &fake.address, request(), false).unwrap_err();
@@ -543,4 +551,19 @@ fn a_pinned_listener_closing_the_connection_stops_the_send() {
         matches!(error, PeerClientError::Unreachable(_)),
         "{error:?}"
     );
+}
+
+#[test]
+fn a_legacy_send_after_a_probe_asks_the_listener_for_its_version_once() {
+    let world = world(true);
+    let http = http();
+    let peer = peer(&http);
+    let fake = fake(None, Answer::Status(503));
+
+    // The fake listener refuses every `receive_tx`, so the legacy send fails once it is made.
+    let error = send(&world, &peer, &http, &fake.address, request(), false).unwrap_err();
+    assert!(matches!(error, DirectError::Send(_)), "{error:?}");
+    assert_eq!(fake.versions.load(Ordering::SeqCst), 1);
+    assert_eq!(fake.receives.load(Ordering::SeqCst), 1);
+    assert_eq!(fake.posts.load(Ordering::SeqCst), 0);
 }

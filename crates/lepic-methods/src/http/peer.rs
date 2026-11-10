@@ -131,7 +131,7 @@ impl Http {
     /// The `check_version` answer of the listener at `to`, as a send's first call reads it.
     pub async fn probe(&self, to: &Destination) -> Result<Probe, ProbeError> {
         let url = listener_url(to)?;
-        let version = self.client.check_version(&url).await?;
+        let version = self.probe_version(&url).await?;
         Ok(Probe::new(
             web_scheme(&url),
             url.host(),
