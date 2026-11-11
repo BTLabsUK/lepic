@@ -79,6 +79,7 @@ ed25519-dalek = { version = "3.0.0", default-features = false }
 hpke = { version = "0.14.1", default-features = false }
 x25519-dalek = { version = "3.0.0", default-features = false }
 uuid = { version = "1.26.1", default-features = false }
+unicode-width = { version = "0.2.3", default-features = false }
 jiff = { version = "0.2.37", default-features = false }
 rand = { version = "0.10.3", default-features = false }
 rand_core = { version = "0.10.1", default-features = false }

@@ -86,7 +86,7 @@ impl Spans {
     }
 
     pub(crate) fn width(&self) -> usize {
-        self.0.iter().map(|(text, _)| text.chars().count()).sum()
+        self.0.iter().map(|(text, _)| cells(text)).sum()
     }
 
     /// The row cut to `columns - 1` cells.
@@ -97,8 +97,8 @@ impl Spans {
             if left == 0 {
                 break;
             }
-            let taken: String = text.chars().take(left).collect();
-            left = left.saturating_sub(taken.chars().count());
+            let taken = take_cells(&text, left);
+            left = left.saturating_sub(cells(&taken));
             out.push(taken, tone);
         }
         out
@@ -330,9 +330,40 @@ pub(crate) fn labels(lines: &[String], on: bool) -> Vec<String> {
         .collect()
 }
 
+/// The cells `text` takes on a terminal: wide characters take two, combining marks none.
+pub(crate) fn cells(text: &str) -> usize {
+    unicode_width::UnicodeWidthStr::width(text)
+}
+
+/// The start of `text` that fits in `max` cells; a wide character that would cross the edge is
+/// left out.
+pub(crate) fn take_cells(text: &str, max: usize) -> String {
+    let mut used: usize = 0;
+    let mut out = String::new();
+    for character in text.chars() {
+        let width = unicode_width::UnicodeWidthChar::width(character).unwrap_or(0);
+        match used.checked_add(width) {
+            Some(next) if next <= max => used = next,
+            _ => break,
+        }
+        out.push(character);
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Wide characters count two cells, and a cut never splits one at the edge.
+    #[test]
+    fn widths_count_terminal_cells() {
+        assert_eq!(cells("wallet"), 6);
+        assert_eq!(cells("財布"), 4);
+        assert_eq!(cells("e\u{301}"), 1);
+        assert_eq!(take_cells("財布です", 5), "財布");
+        assert_eq!(take_cells("ab", 0), "");
+    }
 
     #[test]
     fn colour_off_writes_no_escape() {

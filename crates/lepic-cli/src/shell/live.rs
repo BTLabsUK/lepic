@@ -127,10 +127,10 @@ const DROP_ORDER: [Segment; 6] = [
     Segment::Balance,
 ];
 
-/// Visible width of `text`, one cell per character. The live area holds no wide characters.
+/// Visible width of `text` in cells.
 #[cfg(test)]
 pub(crate) fn width(text: &str) -> usize {
-    text.chars().count()
+    super::paint::cells(text)
 }
 
 /// `text` with control characters replaced, so a name cannot move the cursor or set a colour.

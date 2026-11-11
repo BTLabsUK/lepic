@@ -2,6 +2,8 @@
 //! The welcome card the interactive shell prints at start, and the epic1 mark shown beside epic1
 //! addresses. The card carries the LEPIC banner only; the epic1 mark never appears in it.
 
+use super::paint::{cells, take_cells};
+
 /// Which character set the terminal can draw.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Glyphs {
@@ -77,7 +79,7 @@ fn span(text: impl Into<String>, style: Style) -> Span {
 }
 
 fn width(line: &Line) -> usize {
-    line.iter().map(|s| s.text.chars().count()).sum()
+    line.iter().map(|s| cells(&s.text)).sum()
 }
 
 fn render(line: &Line, color: bool) -> String {
@@ -112,20 +114,20 @@ fn fit(line: Line, max: usize, glyphs: Glyphs) -> Line {
         Glyphs::Unicode => "…",
         Glyphs::Ascii => "...",
     };
-    let keep = max.saturating_sub(ellipsis.chars().count());
+    let keep = max.saturating_sub(cells(ellipsis));
     let mut left = keep;
     let mut out = Line::new();
     for s in line {
         if left == 0 {
             break;
         }
-        let taken: String = s.text.chars().take(left).collect();
-        left = left.saturating_sub(taken.chars().count());
+        let taken = take_cells(&s.text, left);
+        left = left.saturating_sub(cells(&taken));
         out.push(span(taken, s.style));
     }
     if keep == 0 {
         out.clear();
-        let cut: String = ellipsis.chars().take(max).collect();
+        let cut = take_cells(ellipsis, max);
         out.push(span(cut, Style::Dim));
     } else {
         out.push(span(ellipsis, Style::Dim));
@@ -134,7 +136,7 @@ fn fit(line: Line, max: usize, glyphs: Glyphs) -> Line {
 }
 
 fn banner_width() -> usize {
-    BANNER.iter().map(|r| r.chars().count()).max().unwrap_or(0)
+    BANNER.iter().map(|r| cells(r)).max().unwrap_or(0)
 }
 
 fn banner_line(index: usize, glyphs: Glyphs) -> Line {

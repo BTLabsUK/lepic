@@ -51,12 +51,13 @@ tokio = { workspace = true, features = ["rt", "time", "net", "signal", "macros",
 tokio-rustls.workspace = true
 toml = { workspace = true, features = ["std", "parse", "serde"] }
 tracing = { workspace = true, features = ["std"] }
+unicode-width.workspace = true
 # Moves to [workspace.dependencies] at merge.
 zeroize = { workspace = true, features = ["std"] }
 
 [target.'cfg(unix)'.dependencies]
 # Moves to [workspace.dependencies] at merge.
-rustix = { version = "1.1.6", default-features = false, features = ["std", "process"] }
+rustix = { version = "1.1.6", default-features = false, features = ["std", "process", "termios"] }
 
 [dev-dependencies]
 lepic-wallet-contacts = { workspace = true, features = ["test-support"] }
