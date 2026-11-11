@@ -145,20 +145,33 @@ impl Clients {
         if u64::try_from(text.len()).unwrap_or(u64::MAX) > MAX_LEN {
             return Err(CliError::ApiClientsTooLarge { path });
         }
-        let lines = text
-            .lines()
-            .enumerate()
-            .map(|(index, line)| {
-                let client = parse_line(line).map_err(|()| CliError::ApiClientsInvalid {
-                    path: path.clone(),
-                    line: index.saturating_add(1),
-                })?;
-                Ok(Line {
-                    text: line.to_owned(),
-                    client,
-                })
-            })
-            .collect::<Result<_, CliError>>()?;
+        Self::parse(path, &text)
+    }
+
+    /// The lines of `text`. A line that is not a client line, or lists a fingerprint an earlier
+    /// line lists, is refused with its number.
+    fn parse(path: PathBuf, text: &str) -> Result<Self, CliError> {
+        let mut lines: Vec<Line> = Vec::new();
+        for (index, line) in text.lines().enumerate() {
+            let number = index.saturating_add(1);
+            let invalid = || CliError::ApiClientsInvalid {
+                path: path.clone(),
+                line: number,
+            };
+            let client = parse_line(line).map_err(|()| invalid())?;
+            if let Some(client) = &client
+                && lines
+                    .iter()
+                    .filter_map(|kept| kept.client.as_ref())
+                    .any(|kept| kept.fingerprint == client.fingerprint)
+            {
+                return Err(invalid());
+            }
+            lines.push(Line {
+                text: line.to_owned(),
+                client,
+            });
+        }
         Ok(Self { path, lines })
     }
 
@@ -351,5 +364,26 @@ mod tests {
                 vector["name"]
             );
         }
+    }
+
+    #[test]
+    fn a_fingerprint_listed_twice_is_refused_at_its_second_line() {
+        let text = format!("till {KEY} receive\n# note\nother {KEY} full\n");
+        let error = Clients::parse(PathBuf::from("api-clients"), &text)
+            .err()
+            .unwrap();
+        assert!(
+            matches!(error, CliError::ApiClientsInvalid { line: 3, .. }),
+            "{error:?}"
+        );
+        let other = KEY.replace('0', "1");
+        let text = format!("till {KEY}\nother {other} full\n");
+        assert_eq!(
+            Clients::parse(PathBuf::from("api-clients"), &text)
+                .unwrap()
+                .clients()
+                .count(),
+            2
+        );
     }
 }
