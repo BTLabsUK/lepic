@@ -104,7 +104,7 @@ a contact for its current card, which comes back as a contact update (RFC 0002 8
 | Route | Calls | Format |
 |---|---|---|
 | Mailbox | `contact_send`, `contact_post_slate` | Sealed envelope through the outbox (ADR 0047) |
-| File or paste | `contact_seal_slate`, `sealed_open`, `sealed_receive`, `sealed_pay`, `sealed_finalize` | `BEGINEPICSEALED.` text, or `lepic.v1` when native |
+| File or paste | `contact_seal_slate`, `sealed_open`, `sealed_peek`, `sealed_receive`, `sealed_pay`, `sealed_finalize` | `BEGINEPICSEALED.` text, or `lepic.v1` when native |
 | Plain fallback | `contact_plain_fallback` | The plain slate, for a contact that cannot open sealed text |
 
 Every contact message is sealed to the pairing's keys and signed. A slate goes native

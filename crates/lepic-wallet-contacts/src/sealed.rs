@@ -519,6 +519,16 @@ where
         Ok(self.open_text(text).await?.slate)
     }
 
+    /// Opens sealed text as [`ContactBook::sealed_open`] does and stores nothing: a newer card
+    /// in it does not refresh the contact, and the contact is not marked as heard from. For a
+    /// look before acting on the text.
+    ///
+    /// Fails as [`ContactBook::sealed_open`] does.
+    #[instrument(skip_all, fields(wallet = %self.wallet.config().name))]
+    pub async fn sealed_peek(&self, text: &str) -> Result<SealedSlate, ContactError> {
+        Ok(self.open_text_storing(text, false).await?.slate)
+    }
+
     /// Opens sealed text with this wallet's keys and shows its slate as it arrived: the 1:1
     /// JSON view of a `lepic.v1` slate (RFC 0003 5.10), or the V3 JSON of any other. Nothing is
     /// stored and no contact is refreshed.
@@ -649,6 +659,11 @@ where
     /// [`ContactBook::sealed_open`], whether the slate came native, the epic1 address it was sealed
     /// to, and the reply key it names.
     async fn open_text(&self, text: &str) -> Result<TextOpened, ContactError> {
+        self.open_text_storing(text, true).await
+    }
+
+    /// [`Self::open_text`]; with `store` false, the contact is neither refreshed nor marked.
+    async fn open_text_storing(&self, text: &str, store: bool) -> Result<TextOpened, ContactError> {
         let network = self.wallet.config().network;
         let Envelope {
             content,
@@ -680,7 +695,9 @@ where
             .map_err(|_| ContactError::NotASlate)?
             .decode(&wire)
             .map_err(|_| ContactError::NotASlate)?;
-        if let Some(contact_id) = contact {
+        if let Some(contact_id) = contact
+            && store
+        {
             if let Some(card) = content.card {
                 self.refresh_card(contact_id, card, None).await?;
             }
