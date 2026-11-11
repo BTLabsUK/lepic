@@ -442,3 +442,81 @@ pub fn parse_reply(answer: &str) -> Reply {
         body: body.to_owned(),
     }
 }
+
+/// Runs `test` against a `lepic serve` of `wallet` on a socket, with `extra` arguments after
+/// `serve --socket <path>`, then stops serve.
+pub fn serving_with<T: Send>(
+    mut host: TestHost,
+    wallet: &Instance,
+    extra: &[&str],
+    test: impl FnOnce(&Path, &TestHost) -> T + Send,
+) -> T {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    struct Stop<'a>(&'a AtomicBool);
+    impl Drop for Stop<'_> {
+        fn drop(&mut self) {
+            self.0.store(true, Ordering::SeqCst);
+        }
+    }
+    let stop = Arc::new(AtomicBool::new(false));
+    let signal = Arc::clone(&stop);
+    host.interrupt_when = Some(Arc::new(move || signal.load(Ordering::SeqCst)));
+    let client = host.without_interrupt();
+    let dir = tempfile::tempdir().unwrap();
+    let socket = dir.path().join("s.sock");
+    let socket_arg = socket.to_str().unwrap();
+    let mut args = vec!["serve", "--socket", socket_arg];
+    args.extend_from_slice(extra);
+    std::thread::scope(|scope| {
+        let server = scope.spawn(|| wallet.run(&host, &args));
+        // Stops serve when the test panics too, or the scope would wait for it forever.
+        let stopping = Stop(&stop);
+        wait_for_socket(&socket);
+        let result = test(&socket, &client);
+        drop(stopping);
+        server.join().unwrap().ok();
+        result
+    })
+}
+
+/// Runs `test` against a `lepic serve` of `wallet` on a socket, then stops serve.
+pub fn serving<T: Send>(
+    host: TestHost,
+    wallet: &Instance,
+    test: impl FnOnce(&Path, &TestHost) -> T + Send,
+) -> T {
+    serving_with(host, wallet, &[], test)
+}
+
+/// The problem document a response carries, checked against the status and code it should
+/// have.
+pub fn problem(reply: &Reply, status: u16, code: &str) -> Value {
+    assert_eq!(reply.status, status, "{reply:?}");
+    assert_eq!(
+        reply.header("content-type"),
+        Some("application/problem+json"),
+        "{reply:?}"
+    );
+    let problem = reply.json();
+    assert_eq!(problem["type"], "about:blank", "{problem}");
+    assert_eq!(problem["status"], status, "{problem}");
+    assert_eq!(problem["code"], code, "{problem}");
+    assert!(problem["detail"].is_string(), "{problem}");
+    problem
+}
+
+/// A restored wallet holding [`FUNDING`] on the mock chain.
+pub fn funded() -> (TestHost, Instance) {
+    let host = TestHost::new();
+    host.fund(SENDER_MNEMONIC, 0, FUNDING, 1);
+    let wallet = Instance::new("serving password");
+    wallet.restore(&host, SENDER_MNEMONIC);
+    (host, wallet)
+}
+
+/// A wallet created from new entropy on `host`'s chain and relay, not served.
+pub fn new_wallet(host: &TestHost, password: &str) -> Instance {
+    let wallet = Instance::new(password);
+    wallet.run(host, &["wallet", "init"]).ok();
+    wallet
+}
