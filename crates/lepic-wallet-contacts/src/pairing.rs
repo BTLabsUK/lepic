@@ -2011,8 +2011,6 @@ fn unexpected(
     }
 }
 
-/// Ends a pairing in progress with nothing stored: its pending pairing, its record and the
-/// record's secrets go together.
 /// Drops the pairings we answered for the key `theirs` that its holder never confirmed, when
 /// the invite `invite_id` we answer now is the live request from that key: the holder asked
 /// again, so it gave up on the old one (deleted it, or its confirm is lost), and the old one
@@ -2058,6 +2056,8 @@ fn replace_unconfirmed(
     Ok(())
 }
 
+/// Ends a pairing in progress with nothing stored: its pending pairing, its record and the
+/// record's secrets go together.
 fn drop_pairing(
     repos: &mut dyn Repositories,
     pairing_id: PairingId,
