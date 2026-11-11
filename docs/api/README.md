@@ -86,6 +86,8 @@ timeout is safe:
 | The same `id` and another body | 409 `idempotency_mismatch` |
 | The same `id` while the first call is still being answered | 409 `in_progress`; wait and ask again |
 
+A create that answers an error made nothing; its `id` can be used again.
+
 Over TLS a payment must carry an `id`, so a client that loses the answer can always ask again.
 
 A real run. An invoice needs no funds, so it is the easy thing to try:
@@ -125,10 +127,10 @@ and `via` filter the list.
 |---|---|
 | `kind` | `send`, `invoice`, `coinbase`, `unknown` (found by a scan). Only `send` and `invoice` can be created. |
 | `direction` | `in`, `out`, `self` (between your own accounts, or splitting your own coins). |
-| `state` | `needs_approval`, `awaiting_answer`, `awaiting_post`, `finalized`, `posted`, `confirmed`, `cancelled`, `declined`, `expired`. |
+| `state` | `needs_approval`, `awaiting_answer`, `awaiting_post`, `finalized`, `posted`, `confirmed`, `cancelled`, `declined`, `expired`. Serve does not set `awaiting_post` yet. |
 | `state_reason` | Why a payment reached an end state: `by_us`, `by_them`, `superseded` and others. Accept values you do not know. |
 | `via` | `epicbox`, `http`, `tor`, `contact`, `link`, `in_person`, `file`, `peer`, `chain`: how the slate travels. |
-| `delivery.state` | `queued`, `sent`, `uncertain`, `held`, `failed`, `refused`, `by_hand`. `uncertain` means the send went out and you do not know it arrived. |
+| `delivery.state` | `queued`, `sent`, `uncertain`, `held`, `failed`, `refused`, `by_hand`. `uncertain` means the send went out and you do not know it arrived. Serve sets only `by_hand`, `uncertain` and `sent`. `queued`, `held`, `failed` and `refused` are in the schema for later; a send the receiver refused reads `sent`. |
 | `actions` | The calls that work on the payment now. |
 
 `actions` is the list to read. A call not in it answers 409 `action_not_available` and changes
@@ -223,6 +225,7 @@ You retype the amount. If it differs from the invoice, the answer is 400 `invali
 `param` `/amount` and the payment stays held. If it matches, serve pays and the answer is the
 payment with a `handoff` to give the issuer when they are not online. `decline` refuses the
 invoice and tells the issuer. After either, the other answers 409 `action_not_available`.
+`deliver:false` on `approve` is not supported yet: it answers 400 `invalid_field` at `/deliver`.
 
 ### Handoff, deliver, post, cancel
 
@@ -235,6 +238,13 @@ invoice and tells the issuer. After either, the other answers 409 `action_not_av
   answers the same payment when repeated.
 - `PATCH /payments/{id}` sets `metadata`: up to 50 local notes, never sent.
 - `deliver:false` on a create makes the payment and returns the `handoff` without sending it.
+
+## Addresses and links
+
+`used` on an address is always `false` for now. A link has an `address_index` when the wallet
+knows the address it pays; a link mailbox that a restore found in use has none, and the field is
+left out. A link issued with the CLI lists with an empty `text`; one issued through the
+API keeps its text.
 
 ## Events
 
@@ -273,6 +283,12 @@ you saw as `Last-Event-ID` (or `?after=`). Without either, the stream starts at 
 curl -N -H 'Accept: text/event-stream' -H 'Last-Event-ID: 42' \
   --unix-socket ./w.sock http://lepic/api/v1/events
 ```
+
+A `contact.state_changed` entry for a pairing that failed carries one of these as its `reason`:
+`changed_on_the_way`, `kind_differs`, `expired`, `not_confirmed`, `refused`, `other_address`,
+`address_proof_missing`, `crossed`. After a restart serve reads the newest logged objects back, so
+`from_state` is present when the log holds the object. When it does not, the entry has `to_state`
+and no `from_state`, and a `contact.updated` entry that does not know the fields has no `changed`.
 
 Events are kept for 30 days by default. A client that falls behind, or asks from an id that is
 pruned, gets an `events.skipped` event with the count and a `reason` of `lagged` or `pruned`.

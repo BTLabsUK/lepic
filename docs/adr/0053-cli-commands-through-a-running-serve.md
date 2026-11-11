@@ -56,6 +56,9 @@ socket, and prints what it prints when it runs on its own.
   the command takes the lock and fails with exit code 5 as before.
 - The problem document gains `causes` (the causes in `detail`, outermost first) and `hint`, and the
   owner routes answer `text/plain` when asked. All three are additions to `/v1`.
+- `POST /cli/run` is outside the API document and the socket only. A failed run answers with the
+  channel's own failure document, not a problem document, and without `Retry-After`. Only the
+  CLI reads it.
 
 The forwarded commands are listed in `docs/cli.md` ("Commands while serve runs"). The same page lists
 the commands that still exit 5 and why. A new route is added to the list when it covers a CLI
