@@ -3,15 +3,17 @@
 //!
 //! A contact is a paired wallet or a pairing on its way; the wallet lists them apart, and this
 //! module lists them together. The wallet keeps a few things the API shows nowhere else, so
-//! serve keeps them beside the contact in the wallet's settings, under `api.`: the link of an
-//! invite or a reply to hand over, a relay move the user refused, the name this wallet gives
-//! itself, and the id a caller chose for a create.
+//! serve keeps them in the wallet's settings. The link of an invite or a reply to hand over, a
+//! label given before the pairing finished and a relay move the user refused sit beside the
+//! contact, under the store's [`CONTACT_EXTRA_PREFIX`], so they go with the contact however it
+//! is removed. The name this wallet gives itself and the id a caller chose for a create sit
+//! under `api.`.
 
 use std::collections::HashMap;
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
-use lepic_store::{AccountIndex, ContactId, WalletStore as _};
+use lepic_store::{AccountIndex, CONTACT_EXTRA_PREFIX, ContactId, WalletStore as _};
 use lepic_wallet_contacts::{
     AcceptRequest, ContactError, ContactKind, ContactRelays, ContactView, InviteExpiry,
     InviteRequest, KeyCheckStart, KeysDecision, MAX_APP_PAYLOAD_LEN, PairingClass,
@@ -41,10 +43,11 @@ const CLASSES: [&str; 2] = ["standard", "private"];
 
 /// The name this wallet gives itself in a card.
 pub(super) const OWN_NAME: &str = "api.own_name";
-const LINK_PREFIX: &str = "api.invite_link.";
-const REFUSED_PREFIX: &str = "api.refused_relay.";
 const CREATED_PREFIX: &str = "api.contact_id.";
-const LABEL_PREFIX: &str = "api.label.";
+/// What serve keeps beside a contact, as names under [`extra_key`].
+const LINK: &str = "api_invite_link";
+const REFUSED: &str = "api_refused_relay";
+const LABEL: &str = "api_label";
 
 /// The longest label the wallet takes, in bytes.
 const LABEL_MAX: usize = 48;
@@ -106,7 +109,13 @@ fn with_prefix<H: Host>(
         .collect())
 }
 
+/// The setting `name` serve keeps beside the contact with API id `id`.
+fn extra_key(id: &str, name: &str) -> String {
+    format!("{CONTACT_EXTRA_PREFIX}{id}.{name}")
+}
+
 /// What serve keeps beside the contacts.
+#[derive(Default)]
 struct Extras {
     links: HashMap<String, String>,
     refused: HashMap<String, String>,
@@ -114,18 +123,27 @@ struct Extras {
 }
 
 fn extras<H: Host>(service: &Service<'_, H>) -> Result<Extras, Problem> {
-    Ok(Extras {
-        links: with_prefix(service, LINK_PREFIX)?,
-        refused: with_prefix(service, REFUSED_PREFIX)?,
-        labels: with_prefix(service, LABEL_PREFIX)?,
-    })
+    let mut extras = Extras::default();
+    for (rest, value) in with_prefix(service, CONTACT_EXTRA_PREFIX)? {
+        let Some((id, name)) = rest.split_once('.') else {
+            continue;
+        };
+        let kept = match name {
+            LINK => &mut extras.links,
+            REFUSED => &mut extras.refused,
+            LABEL => &mut extras.labels,
+            _ => continue,
+        };
+        kept.insert(id.to_owned(), value);
+    }
+    Ok(extras)
 }
 
 /// Forgets what serve kept for the contact `id`.
 fn forget_extras<H: Host>(service: &Service<'_, H>, id: &str) -> Result<(), Problem> {
-    forget(service, &format!("{LINK_PREFIX}{id}"))?;
-    forget(service, &format!("{LABEL_PREFIX}{id}"))?;
-    forget(service, &format!("{REFUSED_PREFIX}{id}"))
+    forget(service, &extra_key(id, LINK))?;
+    forget(service, &extra_key(id, LABEL))?;
+    forget(service, &extra_key(id, REFUSED))
 }
 
 /// The name this wallet gives itself in a card.
@@ -321,8 +339,8 @@ async fn set_label<H: Host>(
         .contact_set_label(contact, label.clone())
         .await
     {
-        Ok(()) => forget(service, &format!("{LABEL_PREFIX}{id}")),
-        Err(ContactError::UnknownContact) => write(service, &format!("{LABEL_PREFIX}{id}"), &label),
+        Ok(()) => forget(service, &extra_key(&id, LABEL)),
+        Err(ContactError::UnknownContact) => write(service, &extra_key(&id, LABEL), &label),
         Err(error) => Err(problem_at(error, "/label")),
     }
 }
@@ -731,7 +749,7 @@ pub(super) async fn create<H: Host>(
     let (new_id, link) = start_pairing(service, &body, class, expiry).await?;
     let id = api_id(new_id);
     if let Some(link) = link {
-        write(service, &format!("{LINK_PREFIX}{id}"), &link)?;
+        write(service, &extra_key(&id, LINK), &link)?;
     }
     if let Some(caller) = &body.id {
         write(service, &format!("{CREATED_PREFIX}{caller}"), &id)?;
@@ -975,7 +993,7 @@ pub(super) async fn move_contact<H: Host>(
             .apply_relay_move(id, &host)
             .await
             .map_err(problem)?;
-        forget(service, &format!("{REFUSED_PREFIX}{}", before.id))?;
+        forget(service, &extra_key(&before.id, REFUSED))?;
         events::contact(
             service,
             &before.id,
@@ -984,7 +1002,7 @@ pub(super) async fn move_contact<H: Host>(
         .await;
     } else {
         // The wallet keeps no refusal of its own and tells nobody.
-        write(service, &format!("{REFUSED_PREFIX}{}", before.id), &host)?;
+        write(service, &extra_key(&before.id, REFUSED), &host)?;
         events::contact(
             service,
             &before.id,

@@ -14,9 +14,12 @@ mod support;
 
 use std::path::Path;
 
+use lepic_keychain::Seed;
+use lepic_store::{CONTACT_EXTRA_PREFIX, WalletStore as _};
+use lepic_wallet::{EncryptedSqliteStores, StoreOpener as _};
 use serde_json::{Value, json};
 use support::{
-    FUNDING, Instance, SENDER_MNEMONIC, TestHost, http, new_wallet, problem, serving, text,
+    FUNDING, Instance, SENDER_MNEMONIC, TestHost, funded, http, new_wallet, problem, serving, text,
     wait_until,
 };
 
@@ -269,6 +272,40 @@ fn a_contact_pairs_is_managed_and_deleted_through_the_api() {
         problem(&http(socket, "GET", &path(&id), None), 404, "not_found");
         problem(&http(socket, "DELETE", &path(&id), None), 404, "not_found");
     });
+}
+
+/// The settings kept beside contact `id` in `wallet`, a wallet of [`SENDER_MNEMONIC`], read
+/// from its store while nothing else has it open.
+fn kept_beside(wallet: &Instance, id: &str) -> Vec<String> {
+    let seed = Seed::from_mnemonic(SENDER_MNEMONIC).unwrap();
+    let store = EncryptedSqliteStores
+        .open(
+            &wallet.data_dir(),
+            lepic_wallet::lifecycle::store_keys(&seed).unwrap(),
+            &lepic_wallet::store_key(&seed).unwrap(),
+        )
+        .unwrap();
+    store
+        .read(|repos| repos.settings_with_prefix(&format!("{CONTACT_EXTRA_PREFIX}{id}.")))
+        .unwrap()
+        .into_iter()
+        .map(|(key, _)| key)
+        .collect()
+}
+
+#[test]
+fn what_serve_keeps_beside_a_contact_goes_with_a_cli_remove() {
+    let (host, shop) = funded();
+    let buyer = new_wallet(&host, "buyer password");
+    let (id, host) = serving(host, &shop, |socket, host| {
+        let (id, _) = pair(socket, host, &buyer);
+        (id, host.without_interrupt())
+    });
+    // The invite's link and the label given while it waited.
+    assert_eq!(kept_beside(&shop, &id).len(), 2, "{id}");
+
+    shop.run(&host, &["contact", "remove", &id]).ok();
+    assert_eq!(kept_beside(&shop, &id), Vec::<String>::new());
 }
 
 #[test]

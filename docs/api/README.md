@@ -283,6 +283,11 @@ request is newer than the pairing.
 A new request from a wallet whose earlier request you answered, and which never confirmed it,
 replaces that pairing, so `acceptPairRequest` takes it.
 
+Serve keeps a contact's `invite_link`, the `label` given while its pairing waited and its
+`refused_relay` beside the contact in the wallet. They go when the wallet removes the contact,
+whichever way it is removed: this API, `lepic contact remove`, the app, or a new pairing that
+replaces it.
+
 ## Events
 
 Serve keeps an event log. Each event has a rising integer `id`, a `type` like

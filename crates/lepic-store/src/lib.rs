@@ -47,13 +47,14 @@ pub use at_rest::{
     MigrationStage, ROLLBACK_SCAN_SETTING, STORE_KEY_LEN, StoreKey,
 };
 pub use contact::{
-    BOX_SALT_LEN, CARD_KEY_LEN, CONTACT_ID_LEN, CONTACT_SLOT_COUNT, ContactCap, ContactId,
-    ContactKind, ContactMailbox, ContactOutboxEntry, ContactOutboxId, ContactOutboxState,
-    ContactRecord, ContactRepository, ContactState, DomainClaimBytes, INVITE_ID_LEN,
-    MAX_CANCELLED_PAIRINGS, MAX_CONTACTS, MAX_PENDING_PAIRINGS, PAYMENTS_KEY_LEN, PRIVATE_SLOT_END,
-    PairRequest, PairingEndReason, PairingFacts, PairingId, PairingRole, PairingSecrets,
-    PairingState, PeerCard, PendingPairing, PreviousHome, RelayBackoff, SAS_LEN, SealMode,
-    StatusKind, StatusNotice, StatusNoticeId, StoredContactOutbox, StoredStatusNotice, VERDICT_LEN,
+    BOX_SALT_LEN, CARD_KEY_LEN, CONTACT_EXTRA_PREFIX, CONTACT_ID_LEN, CONTACT_SLOT_COUNT,
+    ContactCap, ContactId, ContactKind, ContactMailbox, ContactOutboxEntry, ContactOutboxId,
+    ContactOutboxState, ContactRecord, ContactRepository, ContactState, DomainClaimBytes,
+    INVITE_ID_LEN, MAX_CANCELLED_PAIRINGS, MAX_CONTACTS, MAX_PENDING_PAIRINGS, PAYMENTS_KEY_LEN,
+    PRIVATE_SLOT_END, PairRequest, PairingEndReason, PairingFacts, PairingId, PairingRole,
+    PairingSecrets, PairingState, PeerCard, PendingPairing, PreviousHome, RelayBackoff, SAS_LEN,
+    SealMode, StatusKind, StatusNotice, StatusNoticeId, StoredContactOutbox, StoredStatusNotice,
+    VERDICT_LEN, contact_extra_key, contact_extras_prefix,
 };
 #[cfg(feature = "sqlite")]
 pub use contact_backup::{

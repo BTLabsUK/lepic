@@ -166,6 +166,22 @@ struct MemoryRepos<'a> {
 }
 
 impl MemoryRepos<'_> {
+    /// Drops the settings kept beside contact `id` once neither the contact nor a pairing in
+    /// progress for it is stored.
+    fn forget_unused_extras(&mut self, id: ContactId) {
+        let state = &mut *self.state;
+        if state.contacts.contains_key(&id)
+            || state
+                .pairings
+                .values()
+                .any(|stored| stored.fields.contact_id == id)
+        {
+            return;
+        }
+        let prefix = contact::contact_extras_prefix(id);
+        state.settings.retain(|key, _| !key.starts_with(&prefix));
+    }
+
     fn require_account(&self, index: AccountIndex) -> Result<(), StoreError> {
         if self.state.accounts.contains_key(&index) {
             Ok(())
@@ -1245,7 +1261,9 @@ impl ContactRepository for MemoryRepos<'_> {
         self.state
             .contact_outbox
             .retain(|_, entry| entry.contact_id != id);
-        Ok(self.state.contacts.remove(&id).is_some())
+        let removed = self.state.contacts.remove(&id).is_some();
+        self.forget_unused_extras(id);
+        Ok(removed)
     }
 
     fn put_contact_mailbox(&mut self, mailbox: &ContactMailbox) -> Result<(), StoreError> {
@@ -1336,15 +1354,25 @@ impl ContactRepository for MemoryRepos<'_> {
     }
 
     fn delete_pending_pairing(&mut self, id: PairingId) -> Result<bool, StoreError> {
-        Ok(self.state.pairings.remove(&id).is_some())
+        let Some(removed) = self.state.pairings.remove(&id) else {
+            return Ok(false);
+        };
+        self.forget_unused_extras(removed.fields.contact_id);
+        Ok(true)
     }
 
     fn prune_expired_pairings(&mut self, now: Timestamp) -> Result<usize, StoreError> {
-        let before = self.state.pairings.len();
-        self.state
+        let expired: Vec<PairingId> = self
+            .state
             .pairings
-            .retain(|_, stored| stored.fields.expires_at > now);
-        Ok(before.saturating_sub(self.state.pairings.len()))
+            .iter()
+            .filter(|(_, stored)| stored.fields.expires_at <= now)
+            .map(|(id, _)| *id)
+            .collect();
+        for id in &expired {
+            self.delete_pending_pairing(*id)?;
+        }
+        Ok(expired.len())
     }
 
     fn enqueue_contact_outbox(

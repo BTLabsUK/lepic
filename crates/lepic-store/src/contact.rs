@@ -79,6 +79,22 @@ impl fmt::Display for ContactCap {
     }
 }
 
+/// Settings under this prefix belong to one contact record: `contact_extra.<id>.<name>`, with the
+/// id as [`ContactId`] shows it. The store drops a contact's ones once neither the contact nor a
+/// pairing in progress for it is stored, so an app can keep its own data beside a contact
+/// without tracking every way a contact ends.
+pub const CONTACT_EXTRA_PREFIX: &str = "contact_extra.";
+
+/// The prefix of every setting kept beside contact `id`.
+pub fn contact_extras_prefix(id: ContactId) -> String {
+    format!("{CONTACT_EXTRA_PREFIX}{id}.")
+}
+
+/// The setting `name` kept beside contact `id`. `name` must not be empty.
+pub fn contact_extra_key(id: ContactId, name: &str) -> String {
+    format!("{}{name}", contact_extras_prefix(id))
+}
+
 /// Our local id for a contact record. Never sent and never used to derive keys: those come from
 /// the record's account, slot and box salt.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -524,7 +540,8 @@ pub trait ContactRepository {
     ) -> Result<(), StoreError>;
 
     /// Removes the contact with its mailbox and outbox entries, and returns whether it was
-    /// stored. A pairing in progress for it stays, and its slot stays used.
+    /// stored. A pairing in progress for it stays, and its slot stays used. Without such a
+    /// pairing, the settings kept beside the contact ([`contact_extras_prefix`]) go too.
     fn delete_contact(&mut self, id: ContactId) -> Result<bool, StoreError>;
 
     /// Inserts the mailbox, or replaces the contact's one with its backoff. Fails with
@@ -549,10 +566,13 @@ pub trait ContactRepository {
     /// Every pairing in progress, oldest first.
     fn pending_pairings(&self) -> Result<Vec<PendingPairing>, StoreError>;
 
-    /// Removes the pairing, and returns whether it was stored.
+    /// Removes the pairing, and returns whether it was stored. When no contact record and no
+    /// other pairing has its contact id, the settings kept beside that id
+    /// ([`contact_extras_prefix`]) go too.
     fn delete_pending_pairing(&mut self, id: PairingId) -> Result<bool, StoreError>;
 
-    /// Removes every pairing that expired at or before `now`, and returns how many.
+    /// Removes every pairing that expired at or before `now`, and returns how many. Settings
+    /// kept beside their contact ids go as [`ContactRepository::delete_pending_pairing`] says.
     fn prune_expired_pairings(&mut self, now: Timestamp) -> Result<usize, StoreError>;
 
     /// Stores a new outbox entry under the next free id. Fails with [`StoreError::NotFound`]

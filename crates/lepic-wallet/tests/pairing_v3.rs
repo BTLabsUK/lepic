@@ -848,6 +848,11 @@ fn a_new_request_replaces_a_pairing_its_sender_never_confirmed() {
     drain(&world, ben);
     let answered = requests_at(&world, ben);
     let old_side = accept_request(&world, ben, &answered[0].invite_link, anna).unwrap();
+    // Something an app keeps beside Ben's answered pairing.
+    let kept = lepic_store::contact_extra_key(old_side, "app_note");
+    ben.store()
+        .write(|repos| repos.put_setting(&kept, "x"))
+        .unwrap();
     world
         .block_on(anna.wallet.contact_book().pairing_request_cancel(first))
         .unwrap();
@@ -867,6 +872,11 @@ fn a_new_request_replaces_a_pairing_its_sender_never_confirmed() {
             .block_on(ben.wallet.contact_book().contact(old_side))
             .is_err(),
         "the old pairing is gone"
+    );
+    assert_eq!(
+        ben.store().read(|repos| repos.setting(&kept)).unwrap(),
+        None,
+        "what was kept beside it went with it"
     );
 
     world.collect(anna);

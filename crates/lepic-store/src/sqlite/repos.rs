@@ -380,6 +380,23 @@ fn decode_transaction(row: &Row<'_>) -> Result<StoredTransaction, StoreError> {
 }
 
 impl SqliteRepos<'_> {
+    /// Drops the settings kept beside contact `id` once neither the contact nor a pairing in
+    /// progress for it is stored.
+    fn forget_unused_extras(&mut self, id: ContactId) -> Result<(), StoreError> {
+        let used = self.exists(
+            "SELECT EXISTS (SELECT 1 FROM contacts WHERE contact_id = ?1)
+                 OR EXISTS (SELECT 1 FROM pairings WHERE contact_id = ?1)",
+            [&id.0[..]],
+        )?;
+        if !used {
+            self.conn.execute(
+                "DELETE FROM settings WHERE substr(key, 1, length(?1)) = ?1",
+                [contact::contact_extras_prefix(id)],
+            )?;
+        }
+        Ok(())
+    }
+
     fn write_transaction(
         &self,
         sql: &str,
@@ -2341,10 +2358,12 @@ impl ContactRepository for SqliteRepos<'_> {
 
     fn delete_contact(&mut self, id: ContactId) -> Result<bool, StoreError> {
         // The mailbox, its backoff and the outbox entries go with the contact by cascade.
-        Ok(self
+        let removed = self
             .conn
             .execute("DELETE FROM contacts WHERE contact_id = ?1", [&id.0[..]])?
-            > 0)
+            > 0;
+        self.forget_unused_extras(id)?;
+        Ok(removed)
     }
 
     fn put_contact_mailbox(&mut self, mailbox: &ContactMailbox) -> Result<(), StoreError> {
@@ -2528,17 +2547,33 @@ impl ContactRepository for SqliteRepos<'_> {
     }
 
     fn delete_pending_pairing(&mut self, id: PairingId) -> Result<bool, StoreError> {
-        Ok(self
+        let contact: Option<Vec<u8>> = self
             .conn
-            .execute("DELETE FROM pairings WHERE pairing_id = ?1", [&id.0[..]])?
-            > 0)
+            .query_row(
+                "DELETE FROM pairings WHERE pairing_id = ?1 RETURNING contact_id",
+                [&id.0[..]],
+                |row| row.get(0),
+            )
+            .optional()?;
+        let Some(contact) = contact else {
+            return Ok(false);
+        };
+        self.forget_unused_extras(decode_contact_link(&contact)?)?;
+        Ok(true)
     }
 
     fn prune_expired_pairings(&mut self, now: Timestamp) -> Result<usize, StoreError> {
-        Ok(self.conn.execute(
-            "DELETE FROM pairings WHERE expires_at <= ?1",
-            [timestamp_to_column(now)?],
-        )?)
+        let contacts: Vec<Vec<u8>> = {
+            let mut statement = self
+                .conn
+                .prepare("DELETE FROM pairings WHERE expires_at <= ?1 RETURNING contact_id")?;
+            let rows = statement.query_map([timestamp_to_column(now)?], |row| row.get(0))?;
+            rows.collect::<Result<_, _>>()?
+        };
+        for contact in &contacts {
+            self.forget_unused_extras(decode_contact_link(contact)?)?;
+        }
+        Ok(contacts.len())
     }
 
     fn enqueue_contact_outbox(

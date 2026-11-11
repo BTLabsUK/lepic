@@ -1591,6 +1591,66 @@ fn pairings_round_trip_with_their_secrets_and_are_found_by_invite<B: Backend>() 
     assert_eq!(removed, (true, false));
 }
 
+fn settings_beside_a_contact_go_once_nothing_holds_its_id<B: Backend>() {
+    let backend = B::create(context_key(1));
+    let store = backend.store();
+    let kept = |n: u8| lepic_store::contact_extra_key(contact_id(n), "label");
+    let extras = |store: &B::Store| {
+        read(store, |repos| {
+            repos.settings_with_prefix(lepic_store::CONTACT_EXTRA_PREFIX)
+        })
+        .unwrap()
+        .into_iter()
+        .map(|(key, _)| key)
+        .collect::<Vec<_>>()
+    };
+    // Contact 1 is paired and pairing again; 2 is only paired; 3 and 4 are only pairing, and
+    // 4's pairing expires first. A key outside every contact's prefix stays.
+    let mut late = pairing(3, 1_000);
+    late.invite_id = [30; 8];
+    write(store, |repos| {
+        repos.put_contact(&contact(1, 1))?;
+        repos.put_contact(&contact(2, 2))?;
+        repos.put_pending_pairing(&pairing(1, 10))?;
+        repos.put_pending_pairing(&late)?;
+        repos.put_pending_pairing(&pairing(4, 10))?;
+        for n in [1, 2, 3, 4] {
+            repos.put_setting(&kept(n), "x")?;
+        }
+        repos.put_setting("contact_extra.other", "x")
+    })
+    .unwrap();
+    assert_eq!(
+        read(store, |repos| repos.setting(&kept(2)))
+            .unwrap()
+            .as_deref(),
+        Some("x")
+    );
+
+    // A pairing in progress still holds contact 1's id; the contact alone holds 2's.
+    write(store, |repos| repos.delete_contact(contact_id(1)).map(drop)).unwrap();
+    write(store, |repos| repos.delete_contact(contact_id(2)).map(drop)).unwrap();
+    let mut left = vec![kept(1), kept(3), kept(4)];
+    left.sort();
+    let mut wanted = left.clone();
+    wanted.push("contact_extra.other".to_owned());
+    wanted.sort();
+    assert_eq!(extras(store), wanted);
+
+    // An expired pairing lets its id go, and so does a deleted one.
+    write(store, |repos| {
+        repos.prune_expired_pairings(support::time(610)).map(drop)
+    })
+    .unwrap();
+    assert!(!extras(store).contains(&kept(1)));
+    assert!(!extras(store).contains(&kept(4)));
+    write(store, |repos| {
+        repos.delete_pending_pairing(late.pairing_id).map(drop)
+    })
+    .unwrap();
+    assert_eq!(extras(store), vec!["contact_extra.other".to_owned()]);
+}
+
 fn pairing_secrets_cannot_be_read_without_the_key<B: Backend>() {
     let backend = B::create(context_key(1));
     write(backend.store(), |repos| {
@@ -3215,6 +3275,7 @@ for_each_backend!(
     put_contact_replaces_by_id_and_keeps_the_peer_key_unique,
     contacts_stop_at_the_cap,
     mailboxes_need_their_contact_and_go_with_it,
+    settings_beside_a_contact_go_once_nothing_holds_its_id,
     updates_keep_a_contacts_mailbox_backoff_and_outbox,
     seen_envelopes_are_remembered_and_forgotten_by_age,
     pairings_round_trip_with_their_secrets_and_are_found_by_invite,
