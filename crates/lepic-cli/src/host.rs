@@ -58,6 +58,11 @@ pub trait Host {
     fn api_limits(&self, configured: ApiLimits) -> ApiLimits {
         configured
     }
+
+    /// How many invoices opened by hand serve holds for approval at once. Tests lower it.
+    fn max_held_invoices(&self) -> usize {
+        100
+    }
 }
 
 /// The node over HTTP, the relay over TCP and TLS, Ctrl-C.

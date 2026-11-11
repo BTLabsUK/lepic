@@ -9,6 +9,7 @@ use std::collections::BTreeMap;
 use lepic_methods::http::{ListenerUrl, PlainHttp};
 use lepic_store::TxId;
 use lepic_wallet::slate::{MediaType, WireSlate};
+use lepic_wallet_contacts::WalletContacts as _;
 use serde::Deserialize;
 
 pub(super) use create::{create, estimate};
@@ -270,9 +271,9 @@ const fn default_spend() -> SpendArgs {
 #[serde(deny_unknown_fields)]
 struct ApproveBody {
     amount: String,
-    /// Taken, not used yet: the answer is handed back.
-    #[serde(default, rename = "deliver")]
-    _deliver: Option<bool>,
+    /// Only `true` is taken: the answer is handed back. `false` is refused.
+    #[serde(default)]
+    deliver: Option<bool>,
     #[serde(default)]
     account: Option<String>,
     #[serde(default)]
@@ -286,6 +287,12 @@ pub(super) async fn approve<H: Host>(
 ) -> Reply {
     request.require(Role::Full)?;
     let body: ApproveBody = request.json()?;
+    if body.deliver == Some(false) {
+        return Err(Problem::invalid(
+            "/deliver",
+            "deliver: false is not supported yet; the answer is handed back",
+        ));
+    }
     let (payment, waiting) = found(service, request.param("id")?).await?;
     let Some(waiting) = waiting else {
         return Err(Problem::action_not_available("approve").with_payment(payment.id));
@@ -368,20 +375,19 @@ async fn pay_held<H: Host>(
         .map_err(CliError::from)?
         .index;
     let spend = crate::commands::Spend::from_args(&default_spend())?;
-    let incoming = WireSlate::text(MediaType::JSON, held.wire);
-    let paid = Box::pin(opened.wallet.pay_invoice(
-        &opened.file,
-        &incoming,
-        spend.pay_request(index, amount, message),
-    ))
-    .await
-    .map_err(CliError::from)?;
-    let answer = crate::commands::answer_wire(opened, &incoming, &paid.reply)?;
-    let handoff = Handoff {
-        format: "slate".to_owned(),
-        text: answer.as_text().unwrap_or_default().to_owned(),
-        file_name: Some(format!("{id}.slate.response")),
-        qr_frames: None,
+    let pay = spend.pay_request(index, amount, message);
+    let handoff = if held.sealed {
+        // Paid as `contact open-sealed` pays it, answered sealed on the channel it came by.
+        let paid = Box::pin(opened.wallet.contact_book().sealed_pay(&held.wire, pay))
+            .await
+            .map_err(CliError::from)?;
+        super::handed::answer_handoff(id, paid.answer, false)
+    } else {
+        let incoming = WireSlate::text(MediaType::JSON, held.wire);
+        let paid = Box::pin(opened.wallet.pay_invoice(&opened.file, &incoming, pay))
+            .await
+            .map_err(CliError::from)?;
+        super::handed::plain_answer_handoff(service, id, &incoming, &paid.reply, false)?
     };
     view::delete_held(service, id)?;
     let mut note = view::note(service, id)?;

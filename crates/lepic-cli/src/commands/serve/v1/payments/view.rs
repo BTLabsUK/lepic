@@ -40,8 +40,14 @@ pub(in super::super) struct Note {
 /// An invoice slate opened by hand, held until approved or declined.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(in super::super) struct Held {
-    /// The I1 as it was handed over.
+    /// The I1 as it was handed over: the armour text when `sealed`.
     pub(in super::super) wire: String,
+    /// The invoice came sealed by a contact and is paid sealed.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(in super::super) sealed: bool,
+    /// The contact that sealed it, when it was signed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(in super::super) contact_id: Option<String>,
     pub(in super::super) amount: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(in super::super) message: Option<String>,
@@ -112,6 +118,26 @@ pub(in super::super) fn delete_held<H: Host>(
     id: &str,
 ) -> Result<(), CliError> {
     delete_setting(service, &format!("{HELD}{id}"))
+}
+
+/// The invoices held for approval, after dropping each whose `expires_at_height` is below the
+/// wallet's last known tip. The node is not asked; with no known tip every invoice is kept.
+pub(in super::super) fn live_held<H: Host>(
+    service: &Service<'_, H>,
+) -> Result<Vec<(String, Held)>, CliError> {
+    let tip = service
+        .held
+        .wallet
+        .last_confirmed_height()?
+        .map(lepic_primitives::amount::Height::value);
+    let mut live = Vec::new();
+    for (id, held) in all_held(service)? {
+        match (held.expires_at_height, tip) {
+            (Some(expires), Some(tip)) if expires < tip => delete_held(service, &id)?,
+            _ => live.push((id, held)),
+        }
+    }
+    Ok(live)
 }
 
 fn all_held<H: Host>(service: &Service<'_, H>) -> Result<Vec<(String, Held)>, CliError> {
@@ -575,10 +601,13 @@ pub(in super::super) async fn waiting<H: Host>(
 ) -> Result<Vec<(Payment, Waiting)>, CliError> {
     let opened = &*service.held;
     let mut all = Vec::new();
-    for (id, held) in all_held(service)? {
+    for (id, held) in live_held(service)? {
         let mut payment = waiting_payment(id, held.amount, "file", held.received_at.clone());
         payment.their_message.clone_from(&held.message);
         payment.expires_at_height = held.expires_at_height;
+        if let Some(contact) = &held.contact_id {
+            payment.counterparty_mut().contact_id = Some(contact.clone());
+        }
         all.push((payment, Waiting::Held(held)));
     }
     for invoice in opened

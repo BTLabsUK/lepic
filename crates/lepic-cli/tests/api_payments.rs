@@ -294,7 +294,8 @@ fn a_slate_handed_here_is_received_and_its_answer_handed_back() {
         assert_eq!(opened["payment"]["id"], sent["slate_id"], "{opened}");
         assert_eq!(opened["payment"]["direction"], "in", "{opened}");
         assert_eq!(epic(&opened["payment"]["amount"]), 1.5, "{opened}");
-        assert_eq!(opened["handoff"]["format"], "slate", "{opened}");
+        // The slate carries the payer's LEPIC marker: the answer is sealed to its reply key.
+        assert_eq!(opened["handoff"]["format"], "sealed", "{opened}");
         let answer = text(&opened["handoff"], "text").to_owned();
 
         let again = post(socket, "/api/v1/open", &json!({ "text": slate_text })).ok();
