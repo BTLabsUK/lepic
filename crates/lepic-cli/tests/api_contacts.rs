@@ -100,7 +100,7 @@ fn a_contact_pairs_is_managed_and_deleted_through_the_api() {
             &path(&id),
             Some(r#"{"allow_invoices":true}"#),
         );
-        problem(&early, 409, "not_verified");
+        problem(&early, 409, "contact_not_verified");
 
         // Rename.
         let renamed = http(

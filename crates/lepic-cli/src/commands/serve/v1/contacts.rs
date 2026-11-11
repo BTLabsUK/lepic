@@ -152,13 +152,13 @@ pub(super) fn problem_at(error: ContactError, param: &str) -> Problem {
         ContactError::AlreadyPaired => {
             Problem::conflict("already_paired", "already paired with this wallet")
         }
-        ContactError::Ended => Problem::conflict("contact_ended", "the pairing ended"),
+        ContactError::Ended => Problem::conflict("pairing_ended", "the pairing ended"),
         ContactError::NotVerified => Problem::conflict(
-            "not_verified",
+            "contact_not_verified",
             "the contact is not verified; compare the words first",
         ),
         ContactError::Waiting => Problem::conflict(
-            "contact_waiting",
+            "pairing_waiting",
             "the pairing waits for the contact's wallet",
         ),
         ContactError::KeyCheckRefused => Problem::conflict(
@@ -176,8 +176,9 @@ pub(super) fn problem_at(error: ContactError, param: &str) -> Problem {
             "relay_changed",
             "the contact asked for no move to this relay",
         ),
-        ContactError::WrongClass => Problem::conflict(
-            "wrong_class",
+        ContactError::WrongClass => Problem::of(
+            Category::Usage,
+            "wrong_pairing_class",
             "this does not apply to a pairing of this class",
         ),
         ContactError::InviteDismissed => {
