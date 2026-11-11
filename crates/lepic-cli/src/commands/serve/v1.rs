@@ -38,6 +38,21 @@ impl<H: Host> Owner for Service<'_, H> {
 
     fn operate<'a>(&'a self, op: Op, request: Request, context: &'a Context) -> Answer<'a> {
         Box::pin(async move {
+            let (reply, fresh) = idempotency::track(self.dispatch(op, request, context)).await;
+            // A create that answers an error made nothing: its id can be used again.
+            if let (Err(problem), Some((scope, id))) = (&reply, fresh)
+                && idempotency::made_nothing(problem)
+            {
+                let _ = self.held.wallet.delete_api_request(scope, &id);
+            }
+            reply
+        })
+    }
+}
+
+impl<H: Host> Service<'_, H> {
+    async fn dispatch(&self, op: Op, request: Request, context: &Context) -> Reply {
+        {
             let s = self;
             let (r, c) = (request, context);
             match op {
@@ -100,7 +115,7 @@ impl<H: Host> Owner for Service<'_, H> {
                 Op::GetProfileDomainFile => network::domain_file(s, r, c).await,
                 Op::ListEvents => events::list(s, r, c).await,
             }
-        })
+        }
     }
 }
 
@@ -136,6 +151,7 @@ pub(super) fn begin<'c, H: Host>(
             wallet
                 .put_api_request(scope, id, digest)
                 .map_err(CliError::from)?;
+            idempotency::note_fresh(scope, id);
             false
         }
     };

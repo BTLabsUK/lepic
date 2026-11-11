@@ -478,3 +478,159 @@ fn inspect_names_each_kind_it_reads_and_changes_nothing() {
         );
     });
 }
+
+/// The `payment.created` events listed so far.
+fn created_events(socket: &Path) -> usize {
+    let listed = http(socket, "GET", "/api/v1/events?types=payment.created", None).ok();
+    listed["items"].as_array().unwrap().len()
+}
+
+/// A send by hand, without an id: its id.
+fn send_by_hand(socket: &Path) -> String {
+    let sent = post(
+        socket,
+        "/api/v1/payments",
+        &json!({ "amount": "1", "via": "file" }),
+    );
+    assert_eq!(sent.status, 201, "{sent:?}");
+    text(&sent.json(), "id").to_owned()
+}
+
+#[test]
+fn an_invoice_with_the_id_of_a_payment_is_refused_and_leaves_it_alone() {
+    let (host, wallet) = funded();
+    serving(host, &wallet, |socket, _| {
+        let id = send_by_hand(socket);
+        let path = format!("/api/v1/payments/{id}");
+        let max = |socket: &Path| {
+            post(
+                socket,
+                "/api/v1/payments/estimate",
+                &json!({ "amount": "max" }),
+            )
+            .json()
+        };
+        let before = max(socket);
+        let body = json!({ "id": id, "kind": "invoice", "amount": "2", "via": "file" });
+        let refused = problem(
+            &post(socket, "/api/v1/payments", &body),
+            409,
+            "idempotency_mismatch",
+        );
+        assert_eq!(refused["param"], "/id", "{refused}");
+        // No record was left: the refusal is the same again.
+        problem(
+            &post(socket, "/api/v1/payments", &body),
+            409,
+            "idempotency_mismatch",
+        );
+
+        let read = http(socket, "GET", &path, None).ok();
+        assert_eq!(read["id"], id, "{read}");
+        assert_eq!(read["kind"], "send", "{read}");
+        let cancelled = post(socket, &format!("{path}/cancel"), &json!({})).ok();
+        assert_eq!(cancelled["id"], id, "{cancelled}");
+        assert_eq!(cancelled["kind"], "send", "{cancelled}");
+        assert_eq!(cancelled["state"], "cancelled", "{cancelled}");
+        assert_ne!(max(socket), before, "the send's coins are free again");
+    });
+}
+
+#[test]
+fn a_send_with_the_id_of_a_payment_is_not_created_again() {
+    let (host, wallet) = funded();
+    serving(host, &wallet, |socket, _| {
+        let id = send_by_hand(socket);
+        let events = created_events(socket);
+        let body = json!({ "id": id, "amount": "100", "via": "file" });
+        let reply = post(socket, "/api/v1/payments", &body);
+        assert_eq!(reply.status, 409, "{reply:?}");
+        assert_eq!(created_events(socket), events);
+        let read = http(socket, "GET", &format!("/api/v1/payments/{id}"), None).ok();
+        assert_eq!(read["amount"], "1.00000000", "{read}");
+    });
+}
+
+#[test]
+fn an_invoice_with_a_caller_id_is_read_by_either_id() {
+    let (host, wallet) = funded();
+    serving(host, &wallet, |socket, _| {
+        let caller = "7c1e9a3b-2d4f-4a6b-8c0d-1e2f3a4b5c6d";
+        let body = json!({ "id": caller, "kind": "invoice", "amount": "2", "via": "file" });
+        let created = post(socket, "/api/v1/payments", &body);
+        assert_eq!(created.status, 201, "{created:?}");
+        let made = text(&created.json(), "id").to_owned();
+        let repeated = post(socket, "/api/v1/payments", &body);
+        assert_eq!(repeated.status, 200, "{repeated:?}");
+        assert_eq!(repeated.json()["id"], made.as_str());
+        for id in [caller, made.as_str()] {
+            let path = format!("/api/v1/payments/{id}");
+            let read = http(socket, "GET", &path, None).ok();
+            assert_eq!(read["id"], made.as_str(), "{read}");
+            let handoff = http(socket, "GET", &format!("{path}/handoff"), None);
+            assert_eq!(handoff.status, 200, "{handoff:?}");
+        }
+        let cancelled = post(
+            socket,
+            &format!("/api/v1/payments/{caller}/cancel"),
+            &json!({}),
+        )
+        .ok();
+        assert_eq!(cancelled["id"], made.as_str(), "{cancelled}");
+        assert_eq!(cancelled["state"], "cancelled", "{cancelled}");
+    });
+}
+
+#[test]
+fn a_failed_create_leaves_its_id_free() {
+    let (host, wallet) = funded();
+    serving(host, &wallet, |socket, _| {
+        let id = "8d2f0b4c-3e5a-4b7c-9d1e-2f3a4b5c6d7e";
+        let big = json!({ "id": id, "amount": "100000", "via": "file" });
+        problem(
+            &post(socket, "/api/v1/payments", &big),
+            422,
+            "insufficient_funds",
+        );
+        // The same body fails the same way; a smaller amount is a new create.
+        problem(
+            &post(socket, "/api/v1/payments", &big),
+            422,
+            "insufficient_funds",
+        );
+        let small = json!({ "id": id, "amount": "1", "via": "file" });
+        let made = post(socket, "/api/v1/payments", &small);
+        assert_eq!(made.status, 201, "{made:?}");
+        // Once made, the id is kept: the repeat is 200, another body is a mismatch.
+        assert_eq!(post(socket, "/api/v1/payments", &small).status, 200);
+        problem(
+            &post(socket, "/api/v1/payments", &big),
+            409,
+            "idempotency_mismatch",
+        );
+    });
+}
+
+#[test]
+fn a_create_is_remembered_across_a_restart() {
+    let (host, wallet) = funded();
+    let again = host.without_interrupt();
+    let id = "9e3a1c5d-4f6b-4c8d-ae2f-3a4b5c6d7e8f";
+    let body = json!({ "id": id, "amount": "1", "via": "file" });
+    let made = serving(host, &wallet, |socket, _| {
+        let created = post(socket, "/api/v1/payments", &body);
+        assert_eq!(created.status, 201, "{created:?}");
+        created.json()
+    });
+    serving(again, &wallet, |socket, _| {
+        let repeated = post(socket, "/api/v1/payments", &body);
+        assert_eq!(repeated.status, 200, "{repeated:?}");
+        assert_eq!(repeated.json()["id"], made["id"]);
+        let changed = json!({ "id": id, "amount": "2", "via": "file" });
+        problem(
+            &post(socket, "/api/v1/payments", &changed),
+            409,
+            "idempotency_mismatch",
+        );
+    });
+}

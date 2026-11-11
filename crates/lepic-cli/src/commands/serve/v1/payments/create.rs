@@ -248,6 +248,7 @@ fn field(report: &Report, name: &str) -> Option<String> {
         .map(str::to_owned)
 }
 
+#[allow(clippy::too_many_lines)] // validate, record, run and answer in one pass
 pub(in super::super) async fn create<H: Host>(
     service: &Service<'_, H>,
     request: Request,
@@ -284,6 +285,22 @@ pub(in super::super) async fn create<H: Host>(
     }
     let _create = match &id {
         Some(id) => {
+            // A new id must not name a payment or an alias already: the call would take that
+            // payment over. A repeat (its record exists) is checked by `begin` as before.
+            if service
+                .held
+                .wallet
+                .api_request(idempotency::PAYMENT, id)
+                .map_err(CliError::from)?
+                .is_none()
+                && view::find(service, id).await?.is_some()
+            {
+                return Err(Problem::conflict(
+                    "idempotency_mismatch",
+                    "this id already names a payment",
+                )
+                .with_param("/id"));
+            }
             let create = super::super::begin(service, context, idempotency::PAYMENT, id, &value)?;
             if create.repeat
                 && let Some(payment) = super::object(service, id).await?
@@ -304,9 +321,14 @@ pub(in super::super) async fn create<H: Host>(
     } else {
         send_command(&body, destination, purpose, spend, id.clone(), reach)
     };
+    // Whether a payment had the id before this call: if so, this call made nothing.
+    let existed = match id.as_deref() {
+        Some(id) => super::object(service, id).await?.is_some(),
+        None => false,
+    };
     let report = match super::run(service, command).await {
         Ok(report) => report,
-        Err(error) => return failed(service, id.as_deref(), error).await,
+        Err(error) => return failed(service, id.as_deref(), existed, error).await,
     };
     let slate_id = field(&report, "slate_id").ok_or_else(|| {
         Problem::of(
@@ -430,8 +452,13 @@ fn send_command(
 
 /// The answer to a send that failed: when the payment was made but its delivery failed, 201
 /// with the delivery `uncertain`; otherwise the failure.
-async fn failed<H: Host>(service: &Service<'_, H>, id: Option<&str>, error: CliError) -> Reply {
-    let Some(id) = id else {
+async fn failed<H: Host>(
+    service: &Service<'_, H>,
+    id: Option<&str>,
+    existed: bool,
+    error: CliError,
+) -> Reply {
+    let Some(id) = id.filter(|_| !existed) else {
         return Err(error.into());
     };
     let Some(mut payment) = super::object(service, id).await? else {

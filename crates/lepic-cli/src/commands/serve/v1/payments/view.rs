@@ -154,15 +154,19 @@ pub(in super::super) fn put_alias<H: Host>(
     put_setting(service, &format!("{ALIAS}{alias}"), id)
 }
 
-/// The slate id a caller's id stands for: itself, unless an alias maps it.
+/// The slate id a caller's id stands for: itself when a payment, a declined invoice or a
+/// waiting invoice has that id (a real slate id wins over an alias), else the alias if one is
+/// stored, else itself.
 pub(in super::super) fn resolve<H: Host>(
     service: &Service<'_, H>,
     id: &str,
+    known: impl Fn(&str) -> bool,
 ) -> Result<String, CliError> {
-    Ok(
-        setting(service, &format!("{ALIAS}{}", id.to_ascii_lowercase()))?
-            .unwrap_or_else(|| id.to_ascii_lowercase()),
-    )
+    let id = id.to_ascii_lowercase();
+    if known(&id) {
+        return Ok(id);
+    }
+    Ok(setting(service, &format!("{ALIAS}{id}"))?.unwrap_or(id))
 }
 
 /// The id of the payment a transaction belongs to: its slate id, or for a transaction without
@@ -631,16 +635,18 @@ pub(in super::super) async fn find<H: Host>(
     service: &Service<'_, H>,
     id: &str,
 ) -> Result<Option<(Payment, Option<Waiting>)>, CliError> {
-    let id = resolve(service, id)?;
     let book = Book::load(service).await?;
+    let waiting = waiting(service).await?;
+    let declined = declined(service, &waiting)?;
+    let id = resolve(service, id, |id| {
+        book.find(id).is_some()
+            || declined.iter().any(|payment| payment.id == id)
+            || waiting.iter().any(|(payment, _)| payment.id == id)
+    })?;
     if let Some(details) = book.find(&id) {
         return Ok(Some((book.payment(service, details).await?, None)));
     }
-    let waiting = waiting(service).await?;
-    if let Some(found) = declined(service, &waiting)?
-        .into_iter()
-        .find(|payment| payment.id == id)
-    {
+    if let Some(found) = declined.into_iter().find(|payment| payment.id == id) {
         return Ok(Some((found, None)));
     }
     Ok(waiting

@@ -7,11 +7,43 @@
 
 use std::cell::RefCell;
 use std::collections::HashSet;
+use std::rc::Rc;
 
 use serde_json::Value;
 use sha2::{Digest as _, Sha256};
 
 use super::problem::Problem;
+
+/// The record a call wrote for its create: `(scope, id)`.
+pub(crate) type Fresh = Rc<RefCell<Option<(&'static str, String)>>>;
+
+tokio::task_local! {
+    /// Set around each operation by [`track`]; [`begin`](crate::commands::serve) notes in it
+    /// the record it wrote.
+    static FRESH: Fresh;
+}
+
+/// Runs `call` with a slot for the record it writes, and returns its output with the slot.
+pub(crate) async fn track<T>(
+    call: impl std::future::Future<Output = T>,
+) -> (T, Option<(&'static str, String)>) {
+    let slot = Fresh::default();
+    let out = FRESH.scope(slot.clone(), call).await;
+    let record = slot.borrow_mut().take();
+    (out, record)
+}
+
+/// Notes that this call wrote the record `(scope, id)`.
+pub(crate) fn note_fresh(scope: &'static str, id: &str) {
+    let _ = FRESH.try_with(|slot| *slot.borrow_mut() = Some((scope, id.to_owned())));
+}
+
+/// Whether an error answer means the create made nothing, so its record can go. A 500 or 503
+/// may come after the object was made, so those keep the record.
+pub(crate) fn made_nothing(problem: &Problem) -> bool {
+    let status = problem.status();
+    status.is_client_error() || status == hyper::StatusCode::BAD_GATEWAY
+}
 
 /// The scopes of the creates: what each creates.
 pub(crate) const PAYMENT: &str = "payment";

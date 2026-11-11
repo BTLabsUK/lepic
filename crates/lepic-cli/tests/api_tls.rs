@@ -797,3 +797,48 @@ fn each_role_reaches_the_calls_it_names() {
         problem(&export, 403, "socket_only");
     });
 }
+
+#[test]
+fn a_payment_made_on_the_socket_to_this_computer_is_not_delivered_over_tls() {
+    let host = TestHost::new();
+    let wallet = funded_wallet(&host);
+    let laptop = client_key(&wallet, "laptop");
+    let target = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    target.set_nonblocking(true).unwrap();
+    let port = target.local_addr().unwrap().port();
+
+    serving(host, &wallet, |serve| {
+        serve.add("laptop", &laptop, "full");
+        std::thread::scope(|scope| {
+            let body = json!({
+                "amount": "1",
+                "to": format!("http://127.0.0.1:{port}"),
+                "via": "http",
+                "id": "0b6c1f3e-5a2d-4e8b-9c7a-1d3f5b7e9a30",
+            })
+            .to_string();
+            let sending =
+                scope.spawn(move || http(serve.socket, "POST", "/api/v1/payments", Some(&body)));
+            wait_until("the send connects", || target.accept().map(drop).is_ok());
+            let sent = sending.join().unwrap();
+            assert_eq!(sent.status, 201, "{sent:?}");
+        });
+        let id = "0b6c1f3e-5a2d-4e8b-9c7a-1d3f5b7e9a30";
+        let reply = serve.post(
+            &laptop,
+            &format!("/api/v1/payments/{id}/deliver"),
+            &json!({}),
+        );
+        assert_eq!(reply.status, 400, "{reply:?}");
+        let detail = reply.json()["detail"].as_str().unwrap().to_owned();
+        assert!(
+            detail.contains("this computer's own addresses"),
+            "{reply:?}"
+        );
+    });
+    assert_eq!(
+        target.accept().unwrap_err().kind(),
+        std::io::ErrorKind::WouldBlock,
+        "deliver connected to this computer"
+    );
+}
