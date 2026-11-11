@@ -7,6 +7,8 @@ use std::io::{self, BufRead, Read as _, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError};
 
+use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use crossterm::terminal;
 use tokio::sync::oneshot;
 
 use thiserror::Error;
@@ -30,6 +32,8 @@ pub enum SecretError {
     TooLong { what: &'static str },
     #[error("the {what} is not valid utf-8")]
     NotUtf8 { what: &'static str },
+    #[error("the {what} prompt was cancelled")]
+    Cancelled { what: &'static str },
     #[error("the two passwords differ")]
     Mismatch,
     #[error("a new wallet password cannot be empty")]
@@ -143,6 +147,10 @@ impl SecretInput {
         what: &'static str,
         prompt: &str,
     ) -> Result<Zeroizing<String>, SecretError> {
+        #[cfg(not(unix))]
+        if self.terminal {
+            return self.read_typed(what, prompt).await;
+        }
         let _echo = if self.terminal {
             let io_error = |source| SecretError::Io { what, source };
             let guard = EchoGuard::off().ok_or(SecretError::NoHiddenPrompt { what })?;
@@ -157,6 +165,28 @@ impl SecretInput {
             // The newline the user typed was not echoed.
             let _ = self.prompt.write_all(b"\n");
         }
+        line
+    }
+
+    /// Reads a key at a time on a thread of its own, where the terminal has no echo to turn off.
+    #[cfg(not(unix))]
+    async fn read_typed(
+        &mut self,
+        what: &'static str,
+        prompt: &str,
+    ) -> Result<Zeroizing<String>, SecretError> {
+        let io_error = |source| SecretError::Io { what, source };
+        self.prompt.write_all(prompt.as_bytes()).map_err(io_error)?;
+        self.prompt.flush().map_err(io_error)?;
+        let (sender, receiver) = oneshot::channel();
+        std::thread::Builder::new()
+            .name("lepic-secret-input".to_owned())
+            .spawn(move || {
+                let _ = sender.send(read_keys(what));
+            })
+            .map_err(io_error)?;
+        let line = receiver.await.map_err(|_| SecretError::Missing { what })?;
+        let _ = self.prompt.write_all(b"\n");
         line
     }
 
@@ -253,8 +283,136 @@ fn line_buffer() -> Zeroizing<Vec<u8>> {
     Zeroizing::new(Vec::with_capacity(MAX_SECRET_LEN.saturating_add(1)))
 }
 
+/// Reads one secret from the terminal key by key with nothing echoed, whatever the platform:
+/// `prompt` goes to standard error and a newline follows the Enter. For the shell's `unlock`.
+#[cfg_attr(unix, allow(dead_code))]
+pub(crate) fn read_hidden_line(prompt: &str) -> Result<Zeroizing<String>, SecretError> {
+    const WHAT: &str = "password";
+    let io_error = |source| SecretError::Io { what: WHAT, source };
+    let mut stderr = io::stderr();
+    stderr.write_all(prompt.as_bytes()).map_err(io_error)?;
+    stderr.flush().map_err(io_error)?;
+    let line = read_keys(WHAT);
+    let _ = stderr.write_all(b"\n");
+    line
+}
+
+/// Raw mode until dropped, on error and panic too.
+struct RawMode;
+
+impl RawMode {
+    fn enable() -> io::Result<Self> {
+        terminal::enable_raw_mode()?;
+        Ok(Self)
+    }
+}
+
+impl Drop for RawMode {
+    fn drop(&mut self) {
+        let _ = terminal::disable_raw_mode();
+    }
+}
+
+fn read_keys(what: &'static str) -> Result<Zeroizing<String>, SecretError> {
+    let _raw = RawMode::enable().map_err(|source| SecretError::Io { what, source })?;
+    let mut line = TypedLine::new();
+    loop {
+        let event = event::read().map_err(|source| SecretError::Io { what, source })?;
+        match line.apply(event) {
+            Typed::More => {}
+            Typed::Done => return Ok(line.text),
+            Typed::Cancelled => return Err(SecretError::Cancelled { what }),
+            Typed::Ended => return Err(SecretError::Missing { what }),
+            Typed::TooLong => return Err(SecretError::TooLong { what }),
+        }
+    }
+}
+
+/// What a terminal event did to the line being typed.
+#[derive(Debug, PartialEq, Eq)]
+enum Typed {
+    More,
+    Done,
+    Cancelled,
+    /// Ctrl-D on an empty line: no input, as the end of a stream.
+    Ended,
+    TooLong,
+}
+
+/// The line typed so far. The text is reserved at its longest from the start, so it never
+/// moves and leaves no copy for `Zeroizing` to miss.
+struct TypedLine {
+    text: Zeroizing<String>,
+}
+
+impl TypedLine {
+    fn new() -> Self {
+        Self {
+            text: Zeroizing::new(String::with_capacity(MAX_SECRET_LEN.saturating_add(1))),
+        }
+    }
+
+    fn apply(&mut self, event: Event) -> Typed {
+        match event {
+            Event::Key(key) => self.key(key),
+            Event::Paste(pasted) => self.paste(&Zeroizing::new(pasted)),
+            _ => Typed::More,
+        }
+    }
+
+    fn key(&mut self, key: KeyEvent) -> Typed {
+        // Windows reports the release of every key as well.
+        if key.kind == KeyEventKind::Release {
+            return Typed::More;
+        }
+        // AltGr arrives as Ctrl and Alt together and types a character.
+        let control = key.modifiers.contains(KeyModifiers::CONTROL)
+            && !key.modifiers.contains(KeyModifiers::ALT);
+        match key.code {
+            KeyCode::Char('c') if control => Typed::Cancelled,
+            KeyCode::Char('d') if control => {
+                if self.text.is_empty() {
+                    Typed::Ended
+                } else {
+                    Typed::More
+                }
+            }
+            KeyCode::Esc => Typed::Cancelled,
+            KeyCode::Enter => Typed::Done,
+            KeyCode::Backspace => {
+                self.text.pop();
+                Typed::More
+            }
+            KeyCode::Char(typed) if !control => self.push(typed),
+            _ => Typed::More,
+        }
+    }
+
+    /// Takes the text up to its first line ending, which ends the line.
+    fn paste(&mut self, pasted: &str) -> Typed {
+        for typed in pasted.chars() {
+            if matches!(typed, '\r' | '\n') {
+                return Typed::Done;
+            }
+            if self.push(typed) == Typed::TooLong {
+                return Typed::TooLong;
+            }
+        }
+        Typed::More
+    }
+
+    fn push(&mut self, typed: char) -> Typed {
+        let length = self.text.len().saturating_add(typed.len_utf8());
+        if length > MAX_SECRET_LEN {
+            return Typed::TooLong;
+        }
+        self.text.push(typed);
+        Typed::More
+    }
+}
+
 /// Turns terminal echo off until dropped. `unsafe` is denied, so this asks `stty`, which every
-/// Unix has, instead of calling `tcsetattr`.
+/// Unix has, instead of calling `tcsetattr`. Elsewhere the prompt reads keys itself.
 struct EchoGuard;
 
 impl EchoGuard {
@@ -262,16 +420,11 @@ impl EchoGuard {
     fn off() -> Option<Self> {
         stty("-echo").then_some(Self)
     }
-
-    #[cfg(not(unix))]
-    fn off() -> Option<Self> {
-        None
-    }
 }
 
+#[cfg(unix)]
 impl Drop for EchoGuard {
     fn drop(&mut self) {
-        #[cfg(unix)]
         stty("echo");
     }
 }
@@ -531,5 +684,146 @@ mod tests {
             tokio::time::timeout(std::time::Duration::from_millis(50), input.read("p", "")).await
         });
         assert!(outcome.is_err(), "the read finished: {outcome:?}");
+    }
+
+    fn key(code: KeyCode, modifiers: KeyModifiers, kind: KeyEventKind) -> Event {
+        let mut key = KeyEvent::new(code, modifiers);
+        key.kind = kind;
+        Event::Key(key)
+    }
+
+    fn typed(text: &str) -> Vec<Event> {
+        text.chars()
+            .map(|c| key(KeyCode::Char(c), KeyModifiers::NONE, KeyEventKind::Press))
+            .collect()
+    }
+
+    fn press(code: KeyCode) -> Event {
+        key(code, KeyModifiers::NONE, KeyEventKind::Press)
+    }
+
+    fn run(events: Vec<Event>) -> (TypedLine, Typed) {
+        let mut line = TypedLine::new();
+        for event in events {
+            let step = line.apply(event);
+            if step != Typed::More {
+                return (line, step);
+            }
+        }
+        (line, Typed::More)
+    }
+
+    #[test]
+    fn typed_keys_build_the_line_until_enter() {
+        let mut events = typed("abc");
+        events.push(press(KeyCode::Enter));
+        events.extend(typed("ignored"));
+        let (line, step) = run(events);
+        assert_eq!(step, Typed::Done);
+        assert_eq!(*line.text, "abc");
+    }
+
+    #[test]
+    fn backspace_removes_one_character_and_is_harmless_on_an_empty_line() {
+        let mut events = vec![press(KeyCode::Backspace)];
+        events.extend(typed("a\u{e9}x"));
+        events.extend([press(KeyCode::Backspace), press(KeyCode::Backspace)]);
+        events.extend(typed("b"));
+        events.push(press(KeyCode::Enter));
+        let (line, step) = run(events);
+        assert_eq!(step, Typed::Done);
+        assert_eq!(*line.text, "ab");
+    }
+
+    #[test]
+    fn release_events_are_ignored() {
+        let release = key(
+            KeyCode::Char('x'),
+            KeyModifiers::NONE,
+            KeyEventKind::Release,
+        );
+        let enter = key(KeyCode::Enter, KeyModifiers::NONE, KeyEventKind::Release);
+        let (line, step) = run(vec![press(KeyCode::Char('a')), release, enter]);
+        assert_eq!(step, Typed::More);
+        assert_eq!(*line.text, "a");
+    }
+
+    #[test]
+    fn control_c_and_escape_cancel() {
+        let ctrl = |c| key(KeyCode::Char(c), KeyModifiers::CONTROL, KeyEventKind::Press);
+        assert_eq!(run(vec![ctrl('c')]).1, Typed::Cancelled);
+        assert_eq!(run(vec![press(KeyCode::Esc)]).1, Typed::Cancelled);
+        let mut events = typed("abc");
+        events.push(ctrl('c'));
+        assert_eq!(run(events).1, Typed::Cancelled);
+    }
+
+    #[test]
+    fn control_d_ends_only_an_empty_line() {
+        let ctrl_d = || {
+            key(
+                KeyCode::Char('d'),
+                KeyModifiers::CONTROL,
+                KeyEventKind::Press,
+            )
+        };
+        assert_eq!(run(vec![ctrl_d()]).1, Typed::Ended);
+        let mut events = typed("ab");
+        events.push(ctrl_d());
+        events.push(press(KeyCode::Enter));
+        let (line, step) = run(events);
+        assert_eq!(step, Typed::Done);
+        assert_eq!(*line.text, "ab");
+    }
+
+    #[test]
+    fn other_control_keys_and_altgr_characters() {
+        let ctrl_a = key(
+            KeyCode::Char('a'),
+            KeyModifiers::CONTROL,
+            KeyEventKind::Press,
+        );
+        let altgr = key(
+            KeyCode::Char('@'),
+            KeyModifiers::CONTROL | KeyModifiers::ALT,
+            KeyEventKind::Press,
+        );
+        let (line, _) = run(vec![
+            ctrl_a,
+            altgr,
+            press(KeyCode::Tab),
+            press(KeyCode::Left),
+        ]);
+        assert_eq!(*line.text, "@");
+    }
+
+    #[test]
+    fn a_paste_is_appended_and_a_line_ending_in_it_ends_the_line() {
+        let (line, step) = run(vec![
+            Event::Paste("ab".to_owned()),
+            Event::Paste("cd\r\nrest".to_owned()),
+        ]);
+        assert_eq!(step, Typed::Done);
+        assert_eq!(*line.text, "abcd");
+    }
+
+    #[test]
+    fn the_limit_is_kept_by_keys_and_by_pastes_without_moving_the_text() {
+        let exact = "x".repeat(MAX_SECRET_LEN);
+        let mut line = TypedLine::new();
+        let start = line.text.as_ptr();
+        assert_eq!(line.apply(Event::Paste(exact)), Typed::More);
+        assert_eq!(line.text.len(), MAX_SECRET_LEN);
+        assert_eq!(line.apply(press(KeyCode::Char('y'))), Typed::TooLong);
+        assert_eq!(line.apply(Event::Paste("z".to_owned())), Typed::TooLong);
+        assert_eq!(line.text.len(), MAX_SECRET_LEN);
+        assert_eq!(line.text.as_ptr(), start);
+
+        let (_, step) = run(vec![Event::Paste("x".repeat(MAX_SECRET_LEN + 1))]);
+        assert_eq!(step, Typed::TooLong);
+        // A two-byte character that would cross the limit is refused whole.
+        let mut line = TypedLine::new();
+        line.apply(Event::Paste("x".repeat(MAX_SECRET_LEN - 1)));
+        assert_eq!(line.apply(press(KeyCode::Char('\u{e9}'))), Typed::TooLong);
     }
 }
