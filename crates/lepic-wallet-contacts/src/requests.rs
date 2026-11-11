@@ -136,17 +136,6 @@ pub(crate) fn address_key(
         .map_err(|_| ContactError::RelayAddress)
 }
 
-/// Whether a pairing with the key `key` is live: stored and not ended.
-pub(crate) fn live_pairing_with(
-    repos: &dyn Repositories,
-    key: &[u8; PAYMENTS_KEY_LEN],
-) -> Result<bool, StoreError> {
-    Ok(repos
-        .contacts_by_payments_key(key)?
-        .iter()
-        .any(|record| record.facts.ended_reason.is_none()))
-}
-
 /// The unheard records whose proven key is `key`: pairings whose contact did not answer yet.
 fn unheard_with(
     repos: &dyn Repositories,
@@ -190,8 +179,83 @@ fn bound_requests(repos: &mut dyn Repositories, now: Timestamp) -> Result<(), St
 
 /// What became of a request that arrived.
 enum Arrived {
-    Stored([u8; INVITE_ID_LEN]),
-    Dropped,
+    /// Kept under its invite id; `ended` are the pairings with its sender it ended.
+    Stored {
+        request_id: [u8; INVITE_ID_LEN],
+        ended: Vec<ContactId>,
+    },
+    Dropped(Dropped),
+}
+
+/// Why a request that arrived was dropped, as the log names it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Dropped {
+    /// Its invite expired.
+    Expired,
+    /// Its invite was dismissed or answered here, or came from another sender before.
+    Settled,
+    /// It is the request kept from that sender, again.
+    Replayed,
+    /// The request kept from that sender is newer.
+    Older,
+    /// A pairing with the sender is live and the request cannot say it ended: the contact was
+    /// not heard from yet, or the pairing is not older than the request.
+    LivePairing,
+}
+
+impl Dropped {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Expired => "expired",
+            Self::Settled => "settled",
+            Self::Replayed => "replayed",
+            Self::Older => "older",
+            Self::LivePairing => "live_pairing",
+        }
+    }
+}
+
+/// Whether the request kept from a sender stays when `invite_id`, expiring at `expires_at`,
+/// arrives from that sender, and why. A kept request that is not live gives way to any request
+/// that is not older; a live one to another request that is not older.
+fn kept_stays(
+    kept: &PairRequest,
+    invite_id: &[u8; INVITE_ID_LEN],
+    expires_at: Timestamp,
+) -> Option<Dropped> {
+    if kept.live() && kept.invite_id == *invite_id {
+        Some(Dropped::Replayed)
+    } else if kept.expires_at > expires_at {
+        Some(Dropped::Older)
+    } else {
+        None
+    }
+}
+
+/// The live pairings with `key` that a request from that key, issued at `issued_at`, ends;
+/// `Err` when one of them it cannot end: a pairing whose contact was not heard from yet, or one
+/// made after the request was issued (an old request a relay delivers again).
+///
+/// The relay delivers a request only under a signature by `key` and sealed to us with a key
+/// agreement only `key` can make, so a request from `key` says its holder dropped the pairing.
+fn pairings_ended_by(
+    repos: &dyn Repositories,
+    key: &[u8; PAYMENTS_KEY_LEN],
+    issued_at: Timestamp,
+) -> Result<Result<Vec<ContactId>, Dropped>, StoreError> {
+    let mut ended = Vec::new();
+    for record in repos.contacts_by_payments_key(key)? {
+        if record.facts.ended_reason.is_some() {
+            continue;
+        }
+        if record.facts.peer_heard_at.is_none()
+            || record.created_at.as_second() > issued_at.as_second()
+        {
+            return Ok(Err(Dropped::LivePairing));
+        }
+        ended.push(record.contact_id);
+    }
+    Ok(Ok(ended))
 }
 
 impl<N, S, V> ContactBook<'_, N, S, V>
@@ -201,9 +265,12 @@ where
     V: SecretVault + 'static,
 {
     /// Takes a pairing request from `sender`, the address the relay authenticated: it is kept,
-    /// or dropped when its invite is expired or of another network, when a live pairing with
-    /// the sender's key exists, when its invite was dismissed or answered here, or when it is not
-    /// newer than the request kept from that key. A kept one raises
+    /// or dropped when its invite is expired or of another network, when its invite was
+    /// dismissed or answered here, when it is the live request kept from that key again, or
+    /// when it is older than the request kept from that key. A request from the key of a live
+    /// pairing says the contact dropped it: the pairing ends as unpaired, raising
+    /// [`Event::ContactUnpaired`], unless the contact was not heard from yet or the pairing is
+    /// newer than the request, which is then dropped. A kept one raises
     /// [`Event::PairingRequested`].
     pub(crate) async fn take_pair_request(
         &self,
@@ -231,19 +298,30 @@ where
                     bound_requests(repos, now)?;
                     let expires_at = timestamp(invite.fields().expires);
                     let invite_id = *invite.id().as_bytes();
-                    if expires_at.checked_add(CLOCK_SKEW).unwrap_or(Timestamp::MAX) <= now
-                        || live_pairing_with(repos, &sender_key)?
-                        || repos
-                            .pair_request_by_invite(&invite_id)?
-                            .is_some_and(|known| !known.live() || known.sender_key != sender_key)
-                    {
-                        return Ok::<_, StoreError>(Arrived::Dropped);
+                    if expires_at.checked_add(CLOCK_SKEW).unwrap_or(Timestamp::MAX) <= now {
+                        return Ok::<_, StoreError>(Arrived::Dropped(Dropped::Expired));
                     }
                     if repos
-                        .pair_request(&sender_key)?
-                        .is_some_and(|kept| kept.expires_at >= expires_at)
+                        .pair_request_by_invite(&invite_id)?
+                        .is_some_and(|known| !known.live() || known.sender_key != sender_key)
                     {
-                        return Ok(Arrived::Dropped);
+                        return Ok(Arrived::Dropped(Dropped::Settled));
+                    }
+                    if let Some(why) = repos
+                        .pair_request(&sender_key)?
+                        .and_then(|kept| kept_stays(&kept, &invite_id, expires_at))
+                    {
+                        return Ok(Arrived::Dropped(why));
+                    }
+                    let issued_at = expires_at
+                        .checked_sub(REQUEST_EXPIRY)
+                        .unwrap_or(Timestamp::MIN);
+                    let ended = match pairings_ended_by(repos, &sender_key, issued_at)? {
+                        Ok(ended) => ended,
+                        Err(why) => return Ok(Arrived::Dropped(why)),
+                    };
+                    for contact_id in &ended {
+                        super::manage::end_as_unpaired(repos, *contact_id, now)?;
                     }
                     repos.put_pair_request(&PairRequest {
                         sender_key,
@@ -256,19 +334,31 @@ where
                         answered_at: None,
                     })?;
                     bound_requests(repos, now)?;
-                    Ok(Arrived::Stored(invite_id))
+                    Ok(Arrived::Stored {
+                        request_id: invite_id,
+                        ended,
+                    })
                 })?)
             })
             .await?;
         match arrived {
-            Arrived::Stored(request_id) => {
+            Arrived::Stored { request_id, ended } => {
+                if !ended.is_empty() {
+                    info!(
+                        count = ended.len(),
+                        "pairing request from a paired contact ended its pairing"
+                    );
+                }
+                for contact_id in ended {
+                    self.emit_unpaired(contact_id);
+                }
                 info!("pairing request stored");
                 self.wallet.emit(Event::PairingRequested(PairRequestNews {
                     request_id,
                     sender: address,
                 }));
             }
-            Arrived::Dropped => debug!("pairing request dropped"),
+            Arrived::Dropped(why) => info!(reason = why.as_str(), "pairing request dropped"),
         }
         Ok(())
     }

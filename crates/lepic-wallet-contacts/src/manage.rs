@@ -444,27 +444,24 @@ where
         let first = self
             .contact_work(move |ports, _| {
                 let now = ports.clock.now();
-                Ok(session.store.write(|repos| {
-                    let Some(mut record) = repos.contact(contact_id)? else {
-                        return Ok::<_, StoreError>(false);
-                    };
-                    if !super::status::end_record(&mut record, PairingEndReason::Unpaired, now) {
-                        return Ok(false);
-                    }
-                    super::invoices::drop_contact_invoices(repos, contact_id)?;
-                    repos.put_contact(&record)?;
-                    Ok(true)
-                })?)
+                Ok(session
+                    .store
+                    .write(|repos| end_as_unpaired(repos, contact_id, now))?)
             })
             .await?;
         if first {
             info!("contact removed the pairing");
-            self.wallet
-                .emit(lepic_wallet::event::Event::ContactUnpaired(
-                    lepic_wallet::event::ContactEvent { contact_id },
-                ));
+            self.emit_unpaired(contact_id);
         }
         Ok(())
+    }
+
+    /// Tells the host the pairing with `contact_id` ended on the contact's side.
+    pub(crate) fn emit_unpaired(&self, contact_id: ContactId) {
+        self.wallet
+            .emit(lepic_wallet::event::Event::ContactUnpaired(
+                lepic_wallet::event::ContactEvent { contact_id },
+            ));
     }
 
     /// Gives every contact pairing that has not ended our card again, naming us `name`, as a
@@ -996,4 +993,22 @@ where
         info!(count = summary.imported, "contacts imported");
         Ok(summary)
     }
+}
+
+/// Ends the record `contact_id` as an `unpaired` notice from its contact would: once, keeping
+/// the record and dropping its invoices. False when there is no such record or it had ended.
+pub(crate) fn end_as_unpaired(
+    repos: &mut dyn lepic_store::Repositories,
+    contact_id: ContactId,
+    now: jiff::Timestamp,
+) -> Result<bool, StoreError> {
+    let Some(mut record) = repos.contact(contact_id)? else {
+        return Ok(false);
+    };
+    if !super::status::end_record(&mut record, PairingEndReason::Unpaired, now) {
+        return Ok(false);
+    }
+    super::invoices::drop_contact_invoices(repos, contact_id)?;
+    repos.put_contact(&record)?;
+    Ok(true)
 }
