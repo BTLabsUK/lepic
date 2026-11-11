@@ -322,10 +322,14 @@ fn a_listed_client_is_answered_until_it_is_removed() {
         );
         serve.client(&["remove", "server"]);
 
+        // The same wallet on both listeners. The height may move between the two reads: serve
+        // refreshes in the background.
         let info = http(serve.socket, "GET", "/api/v1/wallet", None).ok();
+        let over_tls = serve.get(Some(&laptop), "/api/v1/wallet").unwrap().ok();
+        assert_eq!(over_tls["network"], info["network"], "{over_tls}");
         assert_eq!(
-            serve.get(Some(&laptop), "/api/v1/wallet").unwrap().ok(),
-            info
+            over_tls["issues_addresses"], info["issues_addresses"],
+            "{over_tls}"
         );
 
         let removed = serve.client(&["remove", "laptop"]);
