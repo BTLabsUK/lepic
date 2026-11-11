@@ -584,9 +584,15 @@ Besides the commands, the shell knows these words:
 
 `tx send` shows what it will do first: the address, the amount, the fee, the total, the
 spendable balance after it, how it is delivered and the network, then asks `Send 1.50800000 EPIC
-in total? [y/N]`. Only `y` then Enter sends; Enter alone, Esc and Ctrl+C do not. `--yes` on the line skips the question; it exists in the shell
-only. A reviewed send that would now take a different amount or a higher fee, because the
+in total? [y/N]`. Only `y` then Enter sends; Enter alone, Esc and Ctrl+C do not. `--yes` on the
+line skips the question; it exists in the shell only. A reviewed send that would now take a different amount or a higher fee, because the
 wallet's outputs changed in between, is refused with nothing sent (exit code 7).
+
+An epic1 payment (`epic1 pay`, `tx send --to-contact`) draws a short seal animation while the
+send runs, then one line says the payment was sealed (`Sealed with epic1 · only the other
+wallet can read it`). It never holds the send back, and any key or Ctrl+C skips it; the question
+before the send is still asked. Without colour, on `TERM=dumb` and in a small window there is
+only the line; with `--output json` there is neither.
 
 The wallet locks after `shell_idle_lock_minutes` minutes with no line entered (15 by default, 0
 turns it off), never while serve runs; a command that needs it asks for the password again.
@@ -600,6 +606,9 @@ session's settings.
 The lines go to `shell-history` in the data directory, readable by its owner only. Lines that may
 hold secrets are left out: anything naming a password or secret, seed imports, `epiccash:` links
 and `--hex` payloads.
+
+At start the shell prints a card with the lepic wordmark, the version, the wallet and the
+network; a narrow window gets the one-line mark `▌epic` instead.
 
 The shell draws with Unicode; on Windows outside Windows Terminal, or with `LEPIC_ASCII=1`, it
 uses ASCII. It draws in the sixteen basic terminal colours: commands in the input line, the
