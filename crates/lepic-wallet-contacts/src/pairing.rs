@@ -1572,28 +1572,7 @@ fn store_answer(
         confirm_code: rc.clone(),
         card: card.clone(),
     };
-    let extras = PairingExtras {
-        address_proof: at.payments.and_then(|payments| {
-            payments.prove(
-                &invite_mailbox_key(invite)?,
-                &ProofBinding {
-                    network: invite.network(),
-                    step: ProofStep::Reply,
-                    prover_card: &card,
-                    verifier_card: None,
-                    invite: Some(invite.as_bytes()),
-                },
-            )
-        }),
-        features: Some(at.features),
-        domain: at.domain.map(|domain| {
-            domain.claim(
-                invite.network(),
-                &signing_key(&keys).verifying_key(),
-                u64::try_from(at.now.as_second()).unwrap_or(0),
-            )
-        }),
-    };
+    let extras = answer_extras(at, invite, &card, &keys);
     let envelope = seal_answer(invite, &body, &card, &extras, &mut private, &mut rng)?;
     if let Some(secrets) = &private {
         super::private::put_secrets(repos, new.contact_id, secrets)?;
@@ -1641,6 +1620,38 @@ fn store_answer(
         cancelled_at: None,
     })?;
     Ok((new.contact_id, envelope, reply_from, to))
+}
+
+/// What an answer to `invite` carries beside its card: the address proof, our features and the
+/// domain claim.
+fn answer_extras(
+    at: &NewPairing<'_>,
+    invite: &Invite,
+    card: &ContactCard,
+    keys: &crate::key_schedule::ContactKeys,
+) -> PairingExtras {
+    PairingExtras {
+        address_proof: at.payments.and_then(|payments| {
+            payments.prove(
+                &invite_mailbox_key(invite)?,
+                &ProofBinding {
+                    network: invite.network(),
+                    step: ProofStep::Reply,
+                    prover_card: card,
+                    verifier_card: None,
+                    invite: Some(invite.as_bytes()),
+                },
+            )
+        }),
+        features: Some(at.features),
+        domain: at.domain.map(|domain| {
+            domain.claim(
+                invite.network(),
+                &signing_key(keys).verifying_key(),
+                u64::try_from(at.now.as_second()).unwrap_or(0),
+            )
+        }),
+    }
 }
 
 /// Seals the reply `body` to `invite`. A private pairing's reply carries a fresh joiner secret,
