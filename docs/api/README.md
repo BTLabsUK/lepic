@@ -45,7 +45,8 @@ The role limits what the client may call:
 A call above the role answers 403 `role_required`. Three operations are socket-only and answer 403
 `socket_only` over TLS: `PUT /wallet/password`, `POST /contacts/export` and `POST /contacts/import`.
 Each operation's role is its `x-role` in the document. A payment created over TLS must carry an
-`id` (see [Creating safely twice](#creating-safely-twice)).
+`id` (see [Creating safely twice](#creating-safely-twice)). Over TLS, a send or a `deliver` to an
+address of the computer serve runs on answers 400 `invalid_request`.
 
 The file format and the commands are in [cli.md](../cli.md#owner-api-over-tls).
 
@@ -207,8 +208,21 @@ nothing changes.
 `outcome` says what happened: `received` (a payment was handed to you and `handoff` is the answer
 to give back), `finished` (the answer to your payment arrived and it was posted),
 `answer_added`, `invoice_parked`, `pairing_advanced` or `already_done` (you opened it before).
+`already_done` hands back the answer stored the first time. An item given as `qr_frames` is
+answered with `qr_frames` too, on a repeat as well.
 
 Open never pays, which is the rule of ADR 0055 (D5).
+
+A sealed file from a contact (`BEGINEPICSEALED.` text) is opened with this wallet's keys.
+`inspect` answers `type: "sealed"` with the amount, the `contact_id` when the contact signed it,
+the message and the next step, and stores nothing. `open` goes by what is inside: a send is
+received and answered sealed (`receive`), an invoice is held for approval (`receive`), and the
+answer to your own payment is finished (`full`). A sealed file that does not open with this
+wallet's keys answers 409 `nothing_to_open`.
+
+A plain slate that carries a LEPIC wallet's reply key is answered sealed to that key, so its
+`handoff` has `format: "sealed"`. A sealed answer has no QR frames: `?qr=true` on its handoff
+answers 409 `format_not_available`.
 
 ### An invoice that asks you to pay
 
@@ -232,6 +246,11 @@ You retype the amount. If it differs from the invoice, the answer is 400 `invali
 payment with a `handoff` to give the issuer when they are not online. `decline` refuses the
 invoice and tells the issuer. After either, the other answers 409 `action_not_available`.
 `deliver:false` on `approve` is not supported yet: it answers 400 `invalid_field` at `/deliver`.
+
+At most 100 invoices wait for approval. One more answers 409 `too_many_held`; approve or decline
+one first. Opening an invoice that is already held again does not count. A held invoice whose
+`expires_at_height` is below the wallet's last known height drops out of the list; serve does
+not ask the node for this.
 
 ### Handoff, deliver, post, cancel
 
@@ -384,7 +403,8 @@ category unless the table says another; `Retry-After` is set on 502, 503 and 504
 | `action_not_available` | 409 | The payment's `actions` do not list the call. |
 | `format_not_available` | 409 | The handoff is not available in that `format`. |
 | `no_handoff` | 409 | The payment has nothing to hand over. |
-| `nothing_to_open` | 409 | The text is already finished or needs nothing from this wallet. |
+| `nothing_to_open` | 409 | The text is already finished, needs nothing from this wallet, or is sealed for another wallet. |
+| `too_many_held` | 409 | 100 invoices already wait for approval. |
 | `unexpected_input` | 422 | `POST /open` found a kind not named in `expect`. |
 | `insufficient_funds` | 422 | The account cannot pay the amount and the fee. |
 | `change_too_small`, `too_heavy`, `nothing_to_consolidate` | by category | The coins cannot make this payment. |
