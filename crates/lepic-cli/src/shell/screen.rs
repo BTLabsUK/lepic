@@ -11,7 +11,10 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use crossterm::cursor::{Hide, MoveUp, Show};
 use crossterm::queue;
 use crossterm::style::Print;
-use crossterm::terminal::{BeginSynchronizedUpdate, Clear, ClearType, EndSynchronizedUpdate};
+use crossterm::terminal::{
+    BeginSynchronizedUpdate, Clear, ClearType, DisableLineWrap, EnableLineWrap,
+    EndSynchronizedUpdate,
+};
 use lepic_telemetry::{LogRecord, LogSink};
 use reedline::{ExternalOutput, RepaintSignal};
 use zeroize::Zeroizing;
@@ -182,7 +185,9 @@ impl Inner {
 
     /// Clears the footer, prints `text` where it was and draws the art and the footer under it,
     /// in one synchronized write. The cursor rests on their first row, a blank one, so a resize
-    /// that rewraps the rows below it is cleared by the next paint.
+    /// that rewraps the rows below it is cleared by the next paint. The art and the footer are
+    /// drawn with autowrap off: rows cut for a width the terminal has just left are clipped
+    /// instead of wrapped, so the move back up lands on the first row.
     fn paint(&mut self, text: Option<&str>) -> io::Result<()> {
         let mut buffer = Zeroizing::new(Vec::new());
         queue!(
@@ -204,12 +209,13 @@ impl Inner {
             .map(String::as_str)
             .collect();
         if !rows.is_empty() {
+            queue!(buffer, DisableLineWrap)?;
             buffer.extend_from_slice(rows.join("\r\n").as_bytes());
             let up = u16::try_from(rows.len().saturating_sub(1)).unwrap_or(0);
             if up > 0 {
                 queue!(buffer, MoveUp(up))?;
             }
-            queue!(buffer, Print("\r"))?;
+            queue!(buffer, Print("\r"), EnableLineWrap)?;
         }
         queue!(buffer, EndSynchronizedUpdate)?;
         self.out.write_all(&buffer)?;
@@ -355,8 +361,15 @@ mod tests {
             painted.starts_with("\u{1b}[?2026h\r\u{1b}[J"),
             "{painted:?}"
         );
-        assert!(painted.ends_with("\u{1b}[3A\r\u{1b}[?2026l"), "{painted:?}");
-        assert!(painted.contains("scanned to height 10\r\n\r\n>\r\n-- status --"));
+        assert!(
+            painted.ends_with("\u{1b}[3A\r\u{1b}[?7h\u{1b}[?2026l"),
+            "{painted:?}"
+        );
+        assert!(
+            painted.contains("scanned to height 10\r\n\u{1b}[?7l\r\n>"),
+            "the footer is drawn with autowrap off, the output above it is not: {painted:?}"
+        );
+        assert!(painted.contains("\r\n>\r\n-- status --"));
         assert_eq!(painted.matches("scanned").count(), 1);
         screen.direct();
         let cleared = out.take();
@@ -371,14 +384,17 @@ mod tests {
         let screen = Screen::new(Box::new(out.clone()));
         screen.art(vec![String::new(), "seal".to_owned()]);
         let alone = out.take();
-        assert!(alone.contains("\r\nseal\u{1b}[1A\r"), "{alone:?}");
+        assert!(alone.contains("\r\nseal\u{1b}[1A\r\u{1b}[?7h"), "{alone:?}");
         screen.running(footer());
         let both = out.take();
         assert!(!both.contains("\r\u{1b}[J\u{1b}[?25h"), "{both:?}");
         assert!(both.contains("seal\r\n\r\n>\r\n"), "{both:?}");
-        assert!(both.ends_with("\u{1b}[5A\r\u{1b}[?2026l"), "{both:?}");
+        assert!(
+            both.ends_with("\u{1b}[5A\r\u{1b}[?7h\u{1b}[?2026l"),
+            "{both:?}"
+        );
         screen.print("posted");
-        assert!(out.take().contains("posted\r\n\r\nseal\r\n"));
+        assert!(out.take().contains("posted\r\n\u{1b}[?7l\r\nseal\r\n"));
         screen.direct();
         assert!(out.take().starts_with("\r\u{1b}[J"));
         screen.running(footer());
