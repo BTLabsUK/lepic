@@ -13,6 +13,7 @@
 //! The crate's `README.md` describes the transaction states, the ports, the hooks and the events.
 
 pub mod account;
+pub mod api_log;
 mod api_tls_key;
 mod app_data;
 mod cancel;
