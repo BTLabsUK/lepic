@@ -642,6 +642,11 @@ columns the code needs; widen it and run the command again. Where the shell draw
 above) each module is two characters wide on a line of its own, so the code needs twice the
 columns.
 
+An epic1 address or link drawn in colour carries the epic1 mark, its block "1" in amber, on a
+clear patch in the middle. Those codes are drawn at level H, which reads with 30% of the code
+lost; the patch covers at most 8%. A window too narrow for the code at H gets the plain code
+at M instead, and a code without colour (`NO_COLOR`) is always plain.
+
 With colour the code is black on a white field, which scans on dark and light themes. With
 `NO_COLOR` or `TERM=dumb` the terminal's own text colour draws the light modules, which is right
 on a dark theme; on a light theme that code comes out inverted, and not every scanner reads it.

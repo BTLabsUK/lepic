@@ -22,6 +22,8 @@ Conventional Commit messages at release time.
   a by-hand `contact accept` and a confirm link from `contact enter`), and `--qr` on those
   commands draws it outside the shell. Never with `--output json` or when standard output is not
   a terminal.
+  An epic1 code in colour carries the epic1 mark in amber in its middle, at error correction
+  level H.
 - The shell's welcome card draws the lepic wordmark from the LEPIC branding pack: the l as a bar
   in Phosphor green and `epic` in the terminal's text colour, or the one-line `▌epic` mark where
   the window is narrow.
