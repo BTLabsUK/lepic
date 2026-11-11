@@ -483,7 +483,7 @@ where
                 };
                 session.store.write(|repos| {
                     if let (Some(theirs), Some(ours)) = (expect_key, &ours) {
-                        free_to_answer(repos, ours, &theirs, at.now)?;
+                        free_to_answer(repos, ours, &theirs, &invite.id(), at.now)?;
                     }
                     store_answer(repos, &ports.rng, &at, &invite, &request)
                 })
@@ -1967,8 +1967,10 @@ fn free_to_answer(
     repos: &mut dyn Repositories,
     ours: &[u8; 33],
     theirs: &[u8; 33],
+    invite_id: &InviteId,
     now: Timestamp,
 ) -> Result<(), ContactError> {
+    replace_unconfirmed(repos, theirs, invite_id)?;
     if let Some(own) = super::requests::own_request_to(repos, theirs)? {
         if !super::requests::theirs_survives(ours, theirs) {
             return Err(ContactError::Crossed);
@@ -2011,6 +2013,51 @@ fn unexpected(
 
 /// Ends a pairing in progress with nothing stored: its pending pairing, its record and the
 /// record's secrets go together.
+/// Drops the pairings we answered for the key `theirs` that its holder never confirmed, when
+/// the invite `invite_id` we answer now is the live request from that key: the holder asked
+/// again, so it gave up on the old one (deleted it, or its confirm is lost), and the old one
+/// would hold every answer to that key off until it expired. Pairings it confirmed, or whose
+/// contact was heard from, stay.
+fn replace_unconfirmed(
+    repos: &mut dyn Repositories,
+    theirs: &[u8; 33],
+    invite_id: &InviteId,
+) -> Result<(), ContactError> {
+    let id = *invite_id.as_bytes();
+    if !repos
+        .pair_request(theirs)?
+        .is_some_and(|request| request.live() && request.invite_id == id)
+    {
+        return Ok(());
+    }
+    let mut dropped = 0_u32;
+    for pending in repos.pending_pairings()? {
+        if pending.role != PairingRole::Invitee
+            || pending.state != PairingState::PendingReply
+            || pending.cancelled_at.is_some()
+            || pending.expect_key.as_ref() != Some(theirs)
+            || pending.invite_id == id
+        {
+            continue;
+        }
+        let heard = repos
+            .contact(pending.contact_id)?
+            .is_some_and(|record| record.peer.is_some() || record.facts.peer_heard_at.is_some());
+        if heard {
+            continue;
+        }
+        drop_pairing(repos, pending.pairing_id, pending.contact_id)?;
+        dropped = dropped.saturating_add(1);
+    }
+    if dropped > 0 {
+        info!(
+            count = dropped,
+            "unconfirmed pairing replaced by a new request from its contact"
+        );
+    }
+    Ok(())
+}
+
 fn drop_pairing(
     repos: &mut dyn Repositories,
     pairing_id: PairingId,
