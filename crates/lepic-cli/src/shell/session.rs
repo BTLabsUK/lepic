@@ -6,7 +6,7 @@
 use std::future::Future;
 use std::io::{self, BufReader, Write as _};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
 
 use clap::error::ErrorKind as ClapErrorKind;
@@ -48,6 +48,10 @@ const WALLET: &str = "default";
 const TICK: Duration = Duration::from_millis(100);
 /// How often a prompt on its own thread looks whether it is still waited for.
 const PROMPT_POLL: Duration = Duration::from_millis(100);
+/// A cancelled step waits for its prompt's thread to give the terminal back in steps of
+/// `PROMPT_RELEASE`, at most `PROMPT_RELEASE_TRIES` of them (one second).
+const PROMPT_RELEASE: Duration = Duration::from_millis(10);
+const PROMPT_RELEASE_TRIES: u32 = 100;
 /// A command that ends sooner shows no footer.
 const FOOTER_AFTER: Duration = Duration::from_millis(200);
 /// How often an unlocked wallet is brought up to the node's tip for the status line.
@@ -415,23 +419,30 @@ impl<'a, H: Host> Shell<'a, H> {
         work: impl Future<Output = T>,
     ) -> Option<T> {
         live.ctrl_c.clear();
-        let mut work = std::pin::pin!(work);
-        let done = loop {
-            tokio::select! {
-                done = &mut work => break Some(done),
-                background = self.next_background(live, false) => {
-                    if matches!(background, Background::Interrupt) {
-                        break None;
-                    }
-                    self.on_background(live, background);
-                    if live.leaving {
-                        break None;
+        // The work is dropped at the end of this block, which stops its prompt thread, before
+        // the wait for that thread below.
+        let done = {
+            let mut work = std::pin::pin!(work);
+            loop {
+                tokio::select! {
+                    done = &mut work => break Some(done),
+                    background = self.next_background(live, false) => {
+                        if matches!(background, Background::Interrupt) {
+                            break None;
+                        }
+                        self.on_background(live, background);
+                        if live.leaving {
+                            break None;
+                        }
                     }
                 }
             }
         };
-        if done.is_none() && !live.leaving {
-            self.screen.print(cancelled);
+        if done.is_none() {
+            prompts_ended().await;
+            if !live.leaving {
+                self.screen.print(cancelled);
+            }
         }
         done
     }
@@ -508,6 +519,8 @@ impl<'a, H: Host> Shell<'a, H> {
         }
         self.status.update(|status| status.locked = false);
         self.read_balance();
+        // The idle clock starts at the unlock, not at the prompt before it.
+        live.last_command = Instant::now();
         let minutes_idle = self.settings.shell_idle_lock_minutes;
         self.screen.print(&if minutes_idle == 0 {
             format!("Wallet {WALLET} unlocked.")
@@ -1035,6 +1048,38 @@ impl<'a, H: Host> Shell<'a, H> {
     }
 }
 
+/// The prompt threads still running. Each holds the terminal, in raw mode or with echo off,
+/// until it ends.
+static PROMPTS_RUNNING: AtomicUsize = AtomicUsize::new(0);
+
+/// Counts one prompt thread for as long as it lives.
+struct PromptRunning;
+
+impl PromptRunning {
+    fn start() -> Self {
+        PROMPTS_RUNNING.fetch_add(1, Ordering::SeqCst);
+        Self
+    }
+}
+
+impl Drop for PromptRunning {
+    fn drop(&mut self) {
+        PROMPTS_RUNNING.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
+/// Waits until every prompt thread has ended and given the terminal back, so the line editor
+/// does not read under a terminal mode a dropped prompt restores late. A prompt checks its stop
+/// flag every `PROMPT_POLL`; after one second this stops waiting.
+async fn prompts_ended() {
+    for _ in 0..PROMPT_RELEASE_TRIES {
+        if PROMPTS_RUNNING.load(Ordering::SeqCst) == 0 {
+            return;
+        }
+        tokio::time::sleep(PROMPT_RELEASE).await;
+    }
+}
+
 /// Turns true when dropped: a prompt's thread watches it, so a prompt nobody waits for any
 /// more ends and leaves raw mode.
 struct StopOnDrop(Arc<AtomicBool>);
@@ -1060,7 +1105,9 @@ async fn ask_password() -> Result<Zeroizing<String>, SecretError> {
     let prompt = format!("Password for wallet {WALLET}: ");
     let stop = StopOnDrop::new();
     let flag = stop.flag();
+    let running = PromptRunning::start();
     let read = tokio::task::spawn_blocking(move || {
+        let _running = running;
         read_hidden_line(&prompt, &|| flag.load(Ordering::SeqCst))
     });
     let password = read.await.unwrap_or(Err(SecretError::Cancelled {
@@ -1074,9 +1121,13 @@ async fn ask_password() -> Result<Zeroizing<String>, SecretError> {
 async fn ask_yes(question: String) -> bool {
     let stop = StopOnDrop::new();
     let flag = stop.flag();
-    let answer = tokio::task::spawn_blocking(move || confirm(&question, &flag))
-        .await
-        .unwrap_or(false);
+    let running = PromptRunning::start();
+    let answer = tokio::task::spawn_blocking(move || {
+        let _running = running;
+        confirm(&question, &flag)
+    })
+    .await
+    .unwrap_or(false);
     drop(stop);
     answer
 }
@@ -1140,6 +1191,7 @@ fn idle_lock_at(minutes: u64, serving: bool, unlocked: bool, last: Instant) -> O
 }
 
 /// The first global flag `global` gives, as typed.
+#[cfg(unix)]
 fn given_flag(global: &GlobalArgs) -> Option<&'static str> {
     [
         (global.data_dir.is_some(), "--data-dir"),
@@ -1212,6 +1264,7 @@ mod tests {
         assert_eq!(at(u64::MAX, false, true), None);
     }
 
+    #[cfg(unix)]
     #[test]
     fn serve_start_names_the_first_global_flag_given() {
         assert_eq!(given_flag(&GlobalArgs::default()), None);
