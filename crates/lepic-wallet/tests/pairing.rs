@@ -1829,6 +1829,7 @@ fn every_contact_future_is_send() {
             reference: None,
             expires: None,
         },
+        None,
     ));
     assert_send(wallet.contact_book().contact_invoices());
     assert_send(wallet.contact_book().contact_pay_invoice(

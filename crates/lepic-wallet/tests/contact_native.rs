@@ -232,6 +232,7 @@ fn issue(world: &World, shop_side: ContactId) -> IssuedInvoice {
                 reference: Some("deposit".to_owned()),
                 expires: Some(1_800_000_000),
             },
+            None,
         ))
         .unwrap()
 }

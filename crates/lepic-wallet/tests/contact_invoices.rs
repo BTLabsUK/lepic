@@ -103,6 +103,7 @@ impl World {
                 reference: Some(reference.to_owned()),
                 expires: Some(1_800_000_000),
             },
+            None,
         ))
         .unwrap()
     }
@@ -1548,6 +1549,7 @@ fn a_contact_invoice_carries_the_issuers_message_only_when_it_verifies() {
                 reference: None,
                 expires: None,
             },
+            None,
         ))
         .unwrap();
 

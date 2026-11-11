@@ -1108,6 +1108,7 @@ impl Session {
                     reference,
                     expires,
                 },
+                None,
             )
             .await?;
         Ok(IssuedInvoice {

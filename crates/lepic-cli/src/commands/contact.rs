@@ -924,6 +924,7 @@ async fn issue_invoice<N: lepic_node::NodeApi + 'static>(
                 reference: args.reference,
                 expires: None,
             },
+            None,
         )
         .await?;
     let view = wallet.contact_book().contact(id).await.ok();

@@ -256,7 +256,8 @@ where
     /// changed, [`ContactError::Waiting`] before the contact was heard in the pairing,
     /// [`ContactError::Ended`] once it ended, [`ContactError::DoesNotPayInvoices`] when its card
     /// says it does not pay invoices,
-    /// and [`ContactError::Invoice`] as [`Wallet::issue_invoice`] does.
+    /// and [`ContactError::Invoice`] as [`Wallet::issue_invoice_as`] does. `slate_id` is the
+    /// caller's slate id for the invoice, as [`Wallet::issue_invoice_as`] takes it.
     #[instrument(skip_all, fields(wallet = %self.wallet.config().name))]
     pub async fn contact_issue_invoice(
         &self,
@@ -264,6 +265,7 @@ where
         contact_id: ContactId,
         request: InvoiceRequest,
         details: InvoiceDetails,
+        slate_id: Option<SlateId>,
     ) -> Result<IssuedInvoice, ContactError> {
         let net = contact_network(self.wallet.config().network);
         let session = self.wallet.session()?;
@@ -294,12 +296,13 @@ where
         }
         let (tx_id, slate, wire) = self
             .wallet
-            .issue_unsent(
+            .issue_unsent_as(
                 &file_method(),
                 request,
                 lepic_wallet::send::Delivery::Deliver {
                     to: Destination::new(peer_mailbox),
                 },
+                slate_id,
             )
             .await
             .map_err(ContactError::Invoice)?;
