@@ -18,6 +18,8 @@ path = "src/main.rs"
 [dependencies]
 base64 = { workspace = true, features = ["alloc"] }
 clap = { workspace = true, features = ["std", "derive", "help", "usage", "error-context"] }
+clap_complete = { workspace = true, features = ["unstable-dynamic"] }
+crossterm = { workspace = true, features = ["events", "windows", "bracketed-paste"] }
 futures-util = { workspace = true, features = ["alloc"] }
 http-body-util.workspace = true
 hyper = { workspace = true, features = ["server", "client", "http1"] }
@@ -34,6 +36,7 @@ lepic-transport.workspace = true
 lepic-wallet.workspace = true
 lepic-wallet-contacts.workspace = true
 rand = { workspace = true, features = ["std", "std_rng", "sys_rng"] }
+reedline = { workspace = true, features = ["external_printer"] }
 # Moves to [workspace.dependencies] at merge.
 rcgen = { version = "0.14.10", default-features = false, features = ["ring", "pem", "zeroize"] }
 rustls = { workspace = true, features = ["std"] }
