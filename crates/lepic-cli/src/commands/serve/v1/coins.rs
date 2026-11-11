@@ -397,6 +397,7 @@ struct CreateLinkBody {
     relays: Vec<String>,
 }
 
+#[allow(clippy::too_many_lines)] // Checks, a repeated create, the issue, then the stored record.
 pub(super) async fn create_link<H: Host>(
     service: &Service<'_, H>,
     request: Request,

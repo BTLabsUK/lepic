@@ -301,22 +301,12 @@ impl Problem {
         self
     }
 
-    /// This problem, with one entry per bad field.
-    pub(crate) fn with_errors(mut self, errors: Vec<FieldError>) -> Self {
-        self.0.errors = errors;
-        self
-    }
-
     pub(crate) fn status(&self) -> StatusCode {
         StatusCode::from_u16(self.0.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR)
     }
 
     pub(crate) fn code(&self) -> &'static str {
         self.0.code
-    }
-
-    pub(crate) fn category(&self) -> Category {
-        self.0.category
     }
 
     pub(crate) fn allow(&self) -> Option<&str> {

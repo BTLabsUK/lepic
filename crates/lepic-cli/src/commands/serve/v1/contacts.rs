@@ -480,25 +480,6 @@ fn payload_of(kept: &lepic_wallet_contacts::ContactPayload) -> Payload {
     }
 }
 
-pub(super) async fn payload_object<H: Host>(
-    service: &Service<'_, H>,
-    id: &str,
-) -> Result<Option<Payload>, Problem> {
-    let Some(wanted) = PayloadId::parse(id.trim()) else {
-        return Ok(None);
-    };
-    Ok(service
-        .held
-        .wallet
-        .contact_book()
-        .contact_payloads()
-        .await
-        .map_err(problem)?
-        .iter()
-        .find(|kept| kept.id == wanted)
-        .map(payload_of))
-}
-
 fn quarantined_of(kept: &lepic_wallet_contacts::QuarantinedMessage) -> Quarantined {
     Quarantined {
         id: kept.id.clone(),

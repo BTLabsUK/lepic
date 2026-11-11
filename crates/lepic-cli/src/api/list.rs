@@ -118,15 +118,6 @@ impl ListQuery {
         })
     }
 
-    /// A query with the default limit and no cursor.
-    pub(crate) fn first() -> Self {
-        Self {
-            limit: DEFAULT_LIMIT,
-            after: None,
-            filter: filter_digest(std::iter::empty()),
-        }
-    }
-
     fn cursor(&self, key: &str) -> String {
         let mut bytes = self.filter.to_vec();
         bytes.extend_from_slice(key.as_bytes());
@@ -190,14 +181,6 @@ impl<T> Page<T> {
             _ => None,
         };
         Self { items, next_cursor }
-    }
-
-    /// A page that already is the whole list.
-    pub(crate) fn all(items: Vec<T>) -> Self {
-        Self {
-            items,
-            next_cursor: None,
-        }
     }
 }
 

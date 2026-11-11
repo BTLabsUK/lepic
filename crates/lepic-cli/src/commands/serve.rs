@@ -83,7 +83,6 @@ struct Service<'a, H: Host> {
     /// The owner TLS listener, when serve runs with `--owner-tls`.
     owner_tls: Option<&'a OwnerTls>,
     started: Instant,
-    socket: String,
     /// The Epicbox listener's latest state.
     epicbox: Cell<Option<&'static str>>,
     /// The API's event log.
@@ -344,7 +343,6 @@ impl<H: Host> Run<'_, H> {
             http: http.as_ref(),
             owner_tls: owner_tls.as_ref(),
             started: Instant::now(),
-            socket: path.display().to_string(),
             epicbox: Cell::new(None),
             log: v1::Log::new(opened.wallet.api_event_last_id()?),
             scans: v1::Scans::default(),

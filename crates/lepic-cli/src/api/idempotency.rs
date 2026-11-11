@@ -18,7 +18,6 @@ pub(crate) const PAYMENT: &str = "payment";
 pub(crate) const ADDRESS: &str = "address";
 pub(crate) const LINK: &str = "link";
 pub(crate) const CONTACT: &str = "contact";
-pub(crate) const ACCOUNT: &str = "account";
 
 /// The digest of a create's body: SHA-256 of its JSON with object keys sorted, so the same
 /// request in another key order or spacing has the same digest.

@@ -46,8 +46,7 @@ pub(crate) use events::{epicbox_state, keep_alive_frame, sse_frame};
 pub(crate) use idempotency::InProgress;
 pub(crate) use list::{ListQuery, Order, Page, Query};
 pub(crate) use ops::Op;
-#[allow(unused_imports)] // FieldError: until a handler checks several fields at once.
-pub(crate) use problem::{Category, FieldError, Problem};
+pub(crate) use problem::{Category, Problem};
 pub(crate) use tls::{OwnerTls, Shaken};
 
 use crate::api_clients::{Clients, Fingerprint, Role};
@@ -122,15 +121,6 @@ impl Request {
             .map_err(|error| Problem::bad_request("invalid_body", format!("request body: {error}")))
     }
 
-    pub(crate) fn body(&self) -> &[u8] {
-        &self.body
-    }
-
-    /// The caller's role: `full` on the socket, the listed one over TLS.
-    pub(crate) const fn role(&self) -> Role {
-        self.role
-    }
-
     /// 403 `role_required` unless the caller has `role`. For calls whose body decides the role
     /// they need (`x-role-note`).
     pub(crate) fn require(&self, role: Role) -> Result<(), Problem> {
@@ -201,10 +191,6 @@ pub(crate) struct Context {
 }
 
 impl Context {
-    pub(crate) const fn limits(&self) -> &ApiLimits {
-        &self.limits
-    }
-
     pub(crate) fn requests(&self) -> RequestsReport {
         RequestsReport {
             served: self.served.get(),

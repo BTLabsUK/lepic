@@ -174,6 +174,7 @@ impl Router {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn operations(&self) -> impl Iterator<Item = &Operation> {
         self.0.iter().flat_map(|route| &route.operations)
     }
