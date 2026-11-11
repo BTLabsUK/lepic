@@ -318,6 +318,11 @@ pub enum CliError {
         path: std::path::PathBuf,
         line: usize,
     },
+    #[error("{} line {line} lists a fingerprint an earlier line lists", path.display())]
+    ApiClientsDuplicate {
+        path: std::path::PathBuf,
+        line: usize,
+    },
     #[error("{} is over 64 KiB", path.display())]
     ApiClientsTooLarge { path: std::path::PathBuf },
     #[error(
@@ -350,6 +355,7 @@ impl CliError {
             | Self::SharedDataDir
             | Self::OwnerTlsNotConfigured
             | Self::ApiClientsInvalid { .. }
+            | Self::ApiClientsDuplicate { .. }
             | Self::ApiClientsTooLarge { .. }
             | Self::Secret(
                 SecretError::PasswordFileOpen { .. }

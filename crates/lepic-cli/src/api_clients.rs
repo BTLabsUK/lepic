@@ -154,18 +154,20 @@ impl Clients {
         let mut lines: Vec<Line> = Vec::new();
         for (index, line) in text.lines().enumerate() {
             let number = index.saturating_add(1);
-            let invalid = || CliError::ApiClientsInvalid {
+            let client = parse_line(line).map_err(|()| CliError::ApiClientsInvalid {
                 path: path.clone(),
                 line: number,
-            };
-            let client = parse_line(line).map_err(|()| invalid())?;
+            })?;
             if let Some(client) = &client
                 && lines
                     .iter()
                     .filter_map(|kept| kept.client.as_ref())
                     .any(|kept| kept.fingerprint == client.fingerprint)
             {
-                return Err(invalid());
+                return Err(CliError::ApiClientsDuplicate {
+                    path: path.clone(),
+                    line: number,
+                });
             }
             lines.push(Line {
                 text: line.to_owned(),
@@ -373,7 +375,7 @@ mod tests {
             .err()
             .unwrap();
         assert!(
-            matches!(error, CliError::ApiClientsInvalid { line: 3, .. }),
+            matches!(error, CliError::ApiClientsDuplicate { line: 3, .. }),
             "{error:?}"
         );
         let other = KEY.replace('0', "1");
