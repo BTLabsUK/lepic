@@ -135,44 +135,88 @@ impl Host for ProcessHost {
     /// waited for.
     #[cfg(unix)]
     fn interrupted(&self) -> Interrupt {
-        use tokio::signal::unix::{SignalKind, signal};
-        let mut interrupt = signal(SignalKind::interrupt()).ok();
-        let mut terminate = signal(SignalKind::terminate()).ok();
-        Box::pin(async move {
-            tokio::select! {
-                Some(()) = next_signal(interrupt.as_mut()) => {}
-                Some(()) = next_signal(terminate.as_mut()) => {}
-                else => std::future::pending::<()>().await,
-            }
-        })
+        Box::pin(first_signal(vec![
+            unix_signal(tokio::signal::unix::SignalKind::interrupt()),
+            unix_signal(tokio::signal::unix::SignalKind::terminate()),
+        ]))
     }
 
     /// SIGTERM, with its handler installed here as [`Self::interrupted`] does.
     #[cfg(unix)]
     fn terminated(&self) -> Interrupt {
-        use tokio::signal::unix::{SignalKind, signal};
-        let mut terminate = signal(SignalKind::terminate()).ok();
-        Box::pin(async move {
-            if next_signal(terminate.as_mut()).await.is_none() {
-                std::future::pending::<()>().await;
-            }
-        })
+        Box::pin(first_signal(vec![unix_signal(
+            tokio::signal::unix::SignalKind::terminate(),
+        )]))
     }
 
+    /// Ctrl+C, or a console event that ends the process ([`Self::terminated`]), with the
+    /// handlers installed here as on Unix. While one is installed, an event no longer ends the
+    /// process at once and the command can restore the console.
     #[cfg(not(unix))]
     fn interrupted(&self) -> Interrupt {
-        Box::pin(async {
-            if tokio::signal::ctrl_c().await.is_err() {
-                std::future::pending::<()>().await;
-            }
-        })
+        let mut signals = console_endings();
+        signals.push(console_ctrl_c());
+        Box::pin(first_signal(signals))
+    }
+
+    /// The console events Windows ends a process with, as SIGTERM does on Unix. Windows ends
+    /// the process a few seconds after a close, logoff or shutdown event whatever the handler
+    /// does, so the shell has that long to leave.
+    #[cfg(not(unix))]
+    fn terminated(&self) -> Interrupt {
+        Box::pin(first_signal(console_endings()))
     }
 }
 
-/// The next delivery of `signal`; `None` when it has no handler or its stream ended.
+/// One signal's next delivery: `None` when its handler could not be installed or its stream
+/// ended.
+type Signal = Pin<Box<dyn Future<Output = Option<()>> + Send>>;
+
+/// Resolves on the first delivery of any of `signals`, and never when none can be delivered.
+async fn first_signal(signals: Vec<Signal>) {
+    use futures_util::StreamExt as _;
+    let mut waiting: futures_util::stream::FuturesUnordered<Signal> = signals.into_iter().collect();
+    while let Some(delivered) = waiting.next().await {
+        if delivered.is_some() {
+            return;
+        }
+    }
+    std::future::pending::<()>().await;
+}
+
 #[cfg(unix)]
-async fn next_signal(signal: Option<&mut tokio::signal::unix::Signal>) -> Option<()> {
-    signal?.recv().await
+fn unix_signal(kind: tokio::signal::unix::SignalKind) -> Signal {
+    let signal = tokio::signal::unix::signal(kind).ok();
+    Box::pin(async move { signal?.recv().await })
+}
+
+/// The next event of a tokio console event stream, its handler installed now. The streams
+/// share a `recv` but no trait.
+#[cfg(not(unix))]
+macro_rules! console_signal {
+    ($install:expr) => {{
+        let installed = $install.ok();
+        let signal: Signal = Box::pin(async move { installed?.recv().await });
+        signal
+    }};
+}
+
+/// Ctrl+Break, the console being closed, the user logging off and the system shutting down.
+/// Ctrl+Break is also what a process manager sends a console process group to stop it.
+#[cfg(not(unix))]
+fn console_endings() -> Vec<Signal> {
+    use tokio::signal::windows::{ctrl_break, ctrl_close, ctrl_logoff, ctrl_shutdown};
+    vec![
+        console_signal!(ctrl_break()),
+        console_signal!(ctrl_close()),
+        console_signal!(ctrl_logoff()),
+        console_signal!(ctrl_shutdown()),
+    ]
+}
+
+#[cfg(not(unix))]
+fn console_ctrl_c() -> Signal {
+    console_signal!(tokio::signal::windows::ctrl_c())
 }
 
 /// The directory inside the data directory that holds the files of the relay's tor, apart from
@@ -349,5 +393,51 @@ mod tests {
             read_api_secret(&path),
             Err(CliError::Io { source, .. }) if source.kind() == std::io::ErrorKind::InvalidData
         ));
+    }
+
+    /// A signal whose handler is missing or whose stream ended leaves the others waited for.
+    #[test]
+    fn the_first_delivered_signal_resolves_past_an_ended_one() {
+        use futures_util::FutureExt as _;
+        let (deliver, delivery) = tokio::sync::oneshot::channel::<()>();
+        let ended: Signal = Box::pin(std::future::ready(None));
+        let pending: Signal = Box::pin(async move { delivery.await.ok() });
+        let mut waiting = Box::pin(first_signal(vec![ended, pending]));
+        assert!(waiting.as_mut().now_or_never().is_none());
+        deliver.send(()).unwrap();
+        assert!(waiting.as_mut().now_or_never().is_some());
+    }
+
+    #[test]
+    fn no_deliverable_signal_never_resolves() {
+        use futures_util::FutureExt as _;
+        let ended = || -> Signal { Box::pin(std::future::ready(None)) };
+        let mut waiting = Box::pin(first_signal(vec![ended(), ended()]));
+        assert!(waiting.as_mut().now_or_never().is_none());
+        assert!(
+            Box::pin(first_signal(Vec::new()))
+                .as_mut()
+                .now_or_never()
+                .is_none()
+        );
+    }
+
+    /// Each console event gets its handler: one that failed would read as ended at once.
+    #[cfg(not(unix))]
+    #[test]
+    fn every_console_event_handler_installs() {
+        use futures_util::FutureExt as _;
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            let mut signals = console_endings();
+            signals.push(console_ctrl_c());
+            assert_eq!(signals.len(), 5);
+            for mut signal in signals {
+                assert!(signal.as_mut().now_or_never().is_none());
+            }
+        });
     }
 }
