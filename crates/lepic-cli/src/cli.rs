@@ -205,8 +205,8 @@ pub enum ApiCommand {
 pub enum ApiClientCommand {
     /// Accept a client by the key of its certificate
     #[command(after_help = "\
-Lists the SHA-256 of the certificate's public key in api-clients in the data directory. The key \
-must be Ed25519. A running serve reads the file at each connection.")]
+Lists the SHA-256 of the certificate's public key in api-clients in the data directory, with the \
+client's role. The key must be Ed25519. A running serve reads the file at each request.")]
     Add(ApiClientAddArgs),
     /// List the accepted clients
     List,
@@ -220,6 +220,10 @@ pub struct ApiClientAddArgs {
     pub name: String,
     /// The client's certificate, PEM
     pub certificate: PathBuf,
+    /// What the client may do: read (calls that change nothing), receive (also invoices,
+    /// addresses, links and receiving; never spends) or full (everything the TLS listener answers)
+    #[arg(long, default_value = "read", value_parser = ["read", "receive", "full"])]
+    pub role: String,
 }
 
 #[derive(Debug, Args)]

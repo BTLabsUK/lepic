@@ -16,6 +16,7 @@ name = "lepic"
 path = "src/main.rs"
 
 [dependencies]
+base64 = { workspace = true, features = ["alloc"] }
 clap = { workspace = true, features = ["std", "derive", "help", "usage", "error-context"] }
 futures-util = { workspace = true, features = ["alloc"] }
 http-body-util.workspace = true

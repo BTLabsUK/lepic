@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 //! The clients `serve --owner-tls` accepts (ADR 0050): the data directory's `api-clients` file,
-//! one `<name> <fingerprint>` per line, where `#` starts a comment. A fingerprint is the SHA-256
-//! of a certificate's SubjectPublicKeyInfo, in hex, so a client keeps its pin when it renews its
-//! certificate with the same key.
+//! one `<name> <fingerprint> [<role>]` per line, where `#` starts a comment. A fingerprint is the
+//! SHA-256 of a certificate's SubjectPublicKeyInfo, in hex, so a client keeps its pin when it
+//! renews its certificate with the same key. The role is `read`, `receive` or `full`; a line
+//! without one gives the client `read` (ADR 0055).
 
 use std::fmt;
 use std::io::Read as _;
@@ -70,10 +71,45 @@ pub(crate) fn check_name(name: &str) -> Result<(), CliError> {
     valid.then_some(()).ok_or(CliError::ApiClientName)
 }
 
+/// What a TLS client may do through the API: each operation names the least role it needs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub(crate) enum Role {
+    /// Calls that change nothing.
+    Read,
+    /// `Read`, plus being paid: invoices, addresses, links, sync, and opening what pays this
+    /// wallet. Never spends.
+    Receive,
+    /// Everything the TLS listener answers. The socket always has it.
+    Full,
+}
+
+impl Role {
+    pub(crate) const ALL: [Self; 3] = [Self::Read, Self::Receive, Self::Full];
+
+    pub(crate) const fn name(self) -> &'static str {
+        match self {
+            Self::Read => "read",
+            Self::Receive => "receive",
+            Self::Full => "full",
+        }
+    }
+
+    pub(crate) fn parse(text: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|role| role.name() == text)
+    }
+}
+
+impl fmt::Display for Role {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.name())
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Client {
     pub(crate) name: String,
     pub(crate) fingerprint: Fingerprint,
+    pub(crate) role: Role,
 }
 
 /// A line of the file, kept as written so comments survive an edit.
@@ -131,8 +167,14 @@ impl Clients {
     }
 
     pub(crate) fn lists(&self, fingerprint: Fingerprint) -> bool {
+        self.role(fingerprint).is_some()
+    }
+
+    /// The role of the client with `fingerprint`; `None` when the file does not list it.
+    pub(crate) fn role(&self, fingerprint: Fingerprint) -> Option<Role> {
         self.clients()
-            .any(|client| client.fingerprint == fingerprint)
+            .find(|client| client.fingerprint == fingerprint)
+            .map(|client| client.role)
     }
 
     /// Adds `client`, whose name and key must both be new.
@@ -146,7 +188,7 @@ impl Clients {
             });
         }
         self.lines.push(Line {
-            text: format!("{} {}", client.name, client.fingerprint),
+            text: format!("{} {} {}", client.name, client.fingerprint, client.role),
             client: Some(client),
         });
         Ok(())
@@ -189,12 +231,17 @@ fn parse_line(line: &str) -> Result<Option<Client>, ()> {
         return Ok(None);
     };
     let fingerprint = fields.next().and_then(Fingerprint::parse).ok_or(())?;
+    let role = match fields.next() {
+        Some(role) => Role::parse(role).ok_or(())?,
+        None => Role::Read,
+    };
     if fields.next().is_some() || check_name(name).is_err() {
         return Err(());
     }
     Ok(Some(Client {
         name: name.to_owned(),
         fingerprint,
+        role,
     }))
 }
 
@@ -221,11 +268,25 @@ mod tests {
     }
 
     #[test]
+    fn a_line_without_a_role_reads_only() {
+        assert_eq!(client_role(&format!("laptop {KEY}")), Role::Read);
+        for role in Role::ALL {
+            assert_eq!(client_role(&format!("till {KEY} {role} # shop")), role);
+        }
+    }
+
+    fn client_role(line: &str) -> Role {
+        parse_line(line).unwrap().unwrap().role
+    }
+
+    #[test]
     fn a_malformed_line_is_refused() {
         for line in [
             "laptop".to_owned(),
             format!("laptop {}", &KEY[1..]),
             format!("laptop {KEY} extra"),
+            format!("laptop {KEY} full extra"),
+            format!("laptop {KEY} Full"),
             format!("lap/top {KEY}"),
             format!("laptop {}g", &KEY[1..]),
             format!("{} {KEY}", "a".repeat(MAX_NAME_LEN + 1)),
@@ -243,6 +304,7 @@ mod tests {
         let listed = |name: &str, fingerprint| Client {
             name: name.to_owned(),
             fingerprint,
+            role: Role::Receive,
         };
         assert!(matches!(
             clients.add(listed("old", fingerprint)),
@@ -260,8 +322,10 @@ mod tests {
         ));
         clients.write().unwrap();
         let text = std::fs::read_to_string(dir.path().join(FILE)).unwrap();
-        assert_eq!(text, format!("# phones\nnew {fingerprint}\n"));
-        assert!(Clients::read(dir.path()).unwrap().lists(fingerprint));
+        assert_eq!(text, format!("# phones\nnew {fingerprint} receive\n"));
+        let read = Clients::read(dir.path()).unwrap();
+        assert!(read.lists(fingerprint));
+        assert_eq!(read.role(fingerprint), Some(Role::Receive));
     }
 
     #[test]

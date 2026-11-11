@@ -1,21 +1,23 @@
 // SPDX-License-Identifier: Apache-2.0
-//! The wallet API `lepic serve` answers on its socket, and with `--owner-tls` on a TLS listener
-//! too: HTTP/1.1 with JSON bodies, described by one OpenAPI document (ADR 0050). A handler turns
-//! a request into the arguments of a CLI command and answers with that command's JSON report.
+//! The wallet API `lepic serve` answers under `/api/v1` on its socket, and with `--owner-tls` on
+//! a TLS listener too: HTTP/1.1 with JSON bodies (ADR 0055). `docs/api/openapi.json` is the
+//! contract and the router is built from it ([`spec`]); the handler of each operation is serve's
+//! ([`Owner::operate`]).
 //!
-//! Adding a route: write its handler in `routes`, with `#[utoipa::path]` and a doc comment, and
-//! name it in [`api!`]. The router and the document are both built from that list. A route whose
-//! operation has the [`SOCKET_ONLY`] extension is refused on the TLS listener.
-//!
-//! A request with `Accept: text/plain` gets the report as the text `lepic` prints without
-//! `--output json`; `lepic` asks for it when it runs a command through a running serve
-//! (ADR 0053).
+//! The socket answers its own user with the `full` role. The TLS listener answers the clients
+//! `api-clients` lists, each with its role, read again on every request. An operation above the
+//! caller's role is refused with 403 `role_required`, one marked `x-socket-only` with 403
+//! `socket_only` over TLS, both before the body is read.
 
 mod caller;
+mod codes;
 mod events;
-mod openapi;
+pub(crate) mod idempotency;
+pub(crate) mod list;
+pub(crate) mod model;
+mod ops;
 mod problem;
-mod routes;
+pub(crate) mod spec;
 mod tls;
 
 use std::cell::Cell;
@@ -26,179 +28,31 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use http_body_util::combinators::UnsyncBoxBody;
 use http_body_util::{BodyExt as _, Full, LengthLimitError, Limited};
 use hyper::body::{Bytes, Incoming};
-use hyper::header::{self, HeaderValue};
+use hyper::header::{self, HeaderMap, HeaderValue};
 use hyper::server::conn::http1;
 use hyper::service::service_fn;
-use hyper::{Method, Response, StatusCode};
+use hyper::{Response, StatusCode};
 use hyper_util::rt::{TokioIo, TokioTimer};
-use lepic_wallet::event::Event;
-use lepic_wallet::slate::WireSlate;
+use serde::Serialize;
 use serde::de::DeserializeOwned;
 use tokio::io::{AsyncRead, AsyncWrite};
-use tokio::sync::{broadcast, watch};
+use tokio::sync::watch;
 use zeroize::Zeroizing;
 
 pub(crate) use caller::{Caller, VERSION, VERSION_HEADER};
-pub(crate) use events::epicbox_state;
-pub(crate) use problem::Problem;
+pub(crate) use events::{epicbox_state, keep_alive_frame, sse_frame};
+pub(crate) use idempotency::InProgress;
+pub(crate) use list::{ListQuery, Order, Page, Query};
+pub(crate) use ops::Op;
+#[allow(unused_imports)] // FieldError: until a handler checks several fields at once.
+pub(crate) use problem::{Category, FieldError, Problem};
 pub(crate) use tls::{OwnerTls, Shaken};
 
-use openapi::{Problems, Security};
-
-use crate::api_clients::{Clients, Fingerprint};
+use crate::api_clients::{Clients, Fingerprint, Role};
 use crate::app_config::ApiLimits;
-use crate::cli::Command;
-use crate::exit::CliError;
-use crate::output::{Report, RequestsReport, render};
-use crate::settings::OutputFormat;
-
-/// The routes, in the order the document lists their operations.
-macro_rules! api {
-    ($($route:ident),* $(,)?) => {
-        /// The OpenAPI document of the wallet API.
-        #[derive(utoipa::OpenApi)]
-        #[openapi(
-            info(
-                title = "LEPIC wallet API",
-                version = "1.0.0",
-                description = "The owner API of `lepic serve`, on its Unix socket, and the \
-                    payment endpoint of `lepic serve --http`. Response bodies are the JSON \
-                    `lepic --output json` prints. Amounts are decimal strings in EPIC. The owner \
-                    routes are answered on the socket to its own user, and with `--owner-tls` \
-                    over mutual TLS to the clients `api-clients` lists; an operation marked \
-                    `x-socket-only` is refused over TLS. A request with `Accept: text/plain` \
-                    gets a report as the text `lepic` prints without `--output json`; errors \
-                    are problem documents either way.",
-                license(name = "Apache-2.0"),
-            ),
-            paths(
-                openapi::foreign::foreign,
-                openapi::peer::peer_info,
-                openapi::peer::peer_slates,
-                $(routes::$route),*
-            ),
-            tags(
-                (
-                    name = "legacy",
-                    description = "Receiving V2 and V3 slates from Epic wallets over the \
-                        JSON-RPC foreign API (ADR 0052), and slate envelopes from LEPIC wallets \
-                        at the native endpoint.",
-                ),
-            ),
-            components(schemas(Problem)),
-            modifiers(&Problems, &Security),
-        )]
-        pub(crate) struct Document;
-
-        const HANDLERS: &[(&str, Handler)] = &[$((stringify!($route), {
-            fn handler<'a>(api: &'a Api<'a>, request: Request) -> Answer<'a> {
-                Box::pin(routes::$route(api, request))
-            }
-            handler
-        })),*];
-    };
-}
-
-api!(
-    openapi_document,
-    status,
-    methods,
-    events,
-    wallet_info,
-    wallet_address,
-    change_password,
-    outputs,
-    node_status,
-    transactions,
-    transaction,
-    send,
-    receive,
-    finalize,
-    transaction_cancel,
-    transaction_release,
-    transaction_post,
-    wallet_scan,
-    epicbox_status,
-    epicbox_peer,
-    peer_pins,
-    peer_pin_forget,
-    profile_show,
-    profile_set,
-    profile_domain,
-    profile_domain_file,
-    profile_domain_attach,
-    contacts,
-    contact_remove,
-    contact_update,
-    contact_invite,
-    contact_request,
-    contact_requests,
-    contact_request_accept,
-    contact_request_dismiss,
-    contact_request_cancel,
-    contact_preview,
-    contact_accept,
-    contact_enter,
-    contact_collect,
-    contact_sas,
-    contact_check,
-    contact_key_check,
-    contact_keys,
-    contact_move,
-    contact_move_home,
-    contact_quarantine,
-    contact_invoices,
-    contact_export,
-    contact_import,
-    payload_post,
-    payloads,
-    payload_ack,
-    in_person_invoice,
-    in_person_send,
-    in_person_read,
-    in_person_pay,
-    in_person_receive,
-    in_person_post,
-    in_person_take,
-    in_person_answers,
-    in_person_finalize,
-    epic1_address,
-    epic1_new_address,
-    epic1_issue_here,
-    epic1_addresses,
-    epic1_link,
-    epic1_links,
-    epic1_retire,
-    epic1_read,
-    epic1_pay,
-    epic1_post_next,
-    epic1_answers,
-    epic1_post_answer,
-    epic1_restore,
-    epictx_open,
-);
-
-tokio::task_local! {
-    /// Whether the request being answered asked for its report as text (`Accept: text/plain`).
-    static TEXT: bool;
-}
-
-/// Whether `headers` ask for the report as text: `text/plain` is the first media type `Accept`
-/// lists.
-fn wants_text(headers: &hyper::HeaderMap) -> bool {
-    headers
-        .get(header::ACCEPT)
-        .and_then(|accept| accept.to_str().ok())
-        .and_then(|accept| accept.split(',').next())
-        .and_then(|first| first.split(';').next())
-        .is_some_and(|media| media.trim().eq_ignore_ascii_case("text/plain"))
-}
-
-/// The operation extension that keeps a route off the TLS listener.
-const SOCKET_ONLY: &str = "x-socket-only";
+use crate::output::RequestsReport;
 
 /// Where a connection came in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -207,56 +61,26 @@ pub(crate) enum Listener {
     Tls,
 }
 
-type Body = UnsyncBoxBody<Bytes, Infallible>;
-type Answer<'a> = Pin<Box<dyn Future<Output = Result<Response<Body>, Problem>> + 'a>>;
-type Handler = for<'a> fn(&'a Api<'a>, Request) -> Answer<'a>;
-
-/// What a request asks of the wallet serve holds.
-pub(crate) enum Call {
-    /// A CLI command, run as `lepic` runs it.
-    Command(Command),
-    Receive {
-        wire: WireSlate,
-        account: String,
-        message: Option<String>,
-    },
-    Finalize {
-        wire: WireSlate,
-        fluff: bool,
-    },
-    Password {
-        current: Zeroizing<String>,
-        new: Zeroizing<String>,
-    },
-    /// `contact export`, answering the backup document instead of writing a file.
-    ContactExport,
-    /// `contact import`, from the backup document instead of a file.
-    ContactImport {
-        document: String,
-    },
-    /// The methods the registry holds, read when asked.
-    Methods,
-    /// `profile domain file`, answering the file's text instead of writing it.
-    DomainFile {
-        relays: Vec<String>,
-    },
-}
+/// A response body. Not `Send`: serve answers on one thread, and an event stream holds the
+/// wallet.
+pub(crate) type Body = Pin<Box<dyn hyper::body::Body<Data = Bytes, Error = Infallible>>>;
+pub(crate) type Answer<'a> = Pin<Box<dyn Future<Output = Result<Response<Body>, Problem>> + 'a>>;
 
 /// The wallet behind the API.
 pub(crate) trait Owner {
-    fn call(&self, call: Call) -> Pin<Box<dyn Future<Output = Result<Report, CliError>> + '_>>;
-    fn events(&self) -> broadcast::Receiver<Event>;
-    /// What to try after `error`, as `lepic` prints it after the error for people.
-    fn hint(&self, error: &CliError) -> Option<String>;
-    fn status(&self, requests: RequestsReport) -> Result<Report, CliError>;
+    /// Answers `request`, routed to `op`, whose least role the caller has.
+    fn operate<'a>(&'a self, op: Op, request: Request, context: &'a Context) -> Answer<'a>;
 }
 
-/// A request, routed: its path parameters, query and body, and the listener it came in on.
+/// A request, routed: its path parameters, query, headers and body, the caller's role and the
+/// listener it came in on.
 pub(crate) struct Request {
     params: Vec<(String, String)>,
-    query: Option<String>,
+    query: Query,
+    headers: HeaderMap,
     /// Wiped when the request is done: a body can hold a password or a slate.
     body: Zeroizing<Vec<u8>>,
+    role: Role,
     listener: Listener,
     /// Turns true when its connection is closing: serve stops, or a TLS connection reached its
     /// age limit.
@@ -264,41 +88,66 @@ pub(crate) struct Request {
 }
 
 impl Request {
-    fn param(&self, name: &str) -> Result<&str, Problem> {
+    /// The path parameter `name`.
+    pub(crate) fn param(&self, name: &str) -> Result<&str, Problem> {
         self.params
             .iter()
             .find_map(|(key, value)| (key == name).then_some(value.as_str()))
             .ok_or_else(|| Problem::usage(format!("missing path parameter {name}")))
     }
 
-    /// The query string, as `T`'s fields; every value is a string.
-    fn query<T: DeserializeOwned>(&self) -> Result<T, Problem> {
-        let mut fields = serde_json::Map::new();
-        for pair in self.query.iter().flat_map(|query| query.split('&')) {
-            if pair.is_empty() {
-                continue;
-            }
-            let (key, value) = pair.split_once('=').unwrap_or((pair, ""));
-            let (key, value) = (decode(key)?, decode(value)?);
-            if fields.contains_key(&key) {
-                return Err(Problem::usage(format!("query parameter {key} given twice")));
-            }
-            fields.insert(key, serde_json::Value::String(value));
-        }
-        serde_json::from_value(serde_json::Value::Object(fields))
-            .map_err(|error| Problem::usage(format!("query: {error}")))
+    pub(crate) const fn query(&self) -> &Query {
+        &self.query
     }
 
-    /// The body, as JSON `T`.
-    fn json<T: DeserializeOwned>(&self) -> Result<T, Problem> {
-        serde_json::from_slice(&self.body)
-            .map_err(|error| Problem::usage(format!("request body: {error}")))
+    /// The header `name`, when it is visible ASCII.
+    pub(crate) fn header(&self, name: &str) -> Option<&str> {
+        self.headers.get(name)?.to_str().ok()
+    }
+
+    /// The body as JSON `T`; an empty body is `{}`.
+    pub(crate) fn json<T: DeserializeOwned>(&self) -> Result<T, Problem> {
+        let body: &[u8] = if self.body.iter().all(u8::is_ascii_whitespace) {
+            b"{}"
+        } else {
+            &self.body
+        };
+        serde_json::from_slice(body)
+            .map_err(|error| Problem::bad_request("invalid_body", format!("request body: {error}")))
+    }
+
+    pub(crate) fn body(&self) -> &[u8] {
+        &self.body
+    }
+
+    /// The caller's role: `full` on the socket, the listed one over TLS.
+    pub(crate) const fn role(&self) -> Role {
+        self.role
+    }
+
+    /// 403 `role_required` unless the caller has `role`. For calls whose body decides the role
+    /// they need (`x-role-note`).
+    pub(crate) fn require(&self, role: Role) -> Result<(), Problem> {
+        if self.role >= role {
+            Ok(())
+        } else {
+            Err(Problem::role_required(role))
+        }
+    }
+
+    pub(crate) const fn listener(&self) -> Listener {
+        self.listener
+    }
+
+    /// Turns true when the connection is closing; an event stream ends on it.
+    pub(crate) fn closing(&self) -> watch::Receiver<bool> {
+        self.closing.clone()
     }
 }
 
-/// Percent-decodes a query key or value, with `+` for a space.
+/// Percent-decodes a path segment, or a query key or value, with `+` for a space.
 fn decode(text: &str) -> Result<String, Problem> {
-    let invalid = || Problem::usage("the query is not percent-encoded UTF-8");
+    let invalid = || Problem::usage("the path or query is not percent-encoded UTF-8");
     let mut bytes = Vec::with_capacity(text.len());
     let mut rest = text.bytes();
     while let Some(byte) = rest.next() {
@@ -320,117 +169,6 @@ fn decode(text: &str) -> Result<String, Problem> {
     String::from_utf8(bytes).map_err(|_| invalid())
 }
 
-enum Segment {
-    Literal(String),
-    Param(String),
-}
-
-struct Operation {
-    method: Method,
-    handler: Handler,
-    socket_only: bool,
-}
-
-struct Route {
-    segments: Vec<Segment>,
-    operations: Vec<Operation>,
-}
-
-impl Route {
-    /// The path parameters, when `path` is this route's.
-    fn matches(&self, path: &str) -> Option<Vec<(String, String)>> {
-        let mut parts = path.strip_prefix('/')?.split('/');
-        let mut params = Vec::new();
-        for segment in &self.segments {
-            let part = parts.next()?;
-            match segment {
-                Segment::Literal(literal) if literal == part => {}
-                Segment::Literal(_) => return None,
-                Segment::Param(_) if part.is_empty() => return None,
-                Segment::Param(name) => params.push((name.clone(), decode(part).ok()?)),
-            }
-        }
-        parts.next().is_none().then_some(params)
-    }
-}
-
-/// The handlers by path and method, from the document's operations.
-struct Router(Vec<Route>);
-
-impl Router {
-    fn new(document: &utoipa::openapi::OpenApi) -> Self {
-        let operation = |method, operation: &Option<utoipa::openapi::path::Operation>| {
-            let operation = operation.as_ref()?;
-            let id = operation.operation_id.as_deref()?;
-            let handler = HANDLERS
-                .iter()
-                .find_map(|(name, handler)| (*name == id).then_some(*handler))?;
-            let socket_only = operation
-                .extensions
-                .as_ref()
-                .and_then(|extensions| extensions.get(SOCKET_ONLY))
-                .is_some_and(|value| *value == serde_json::Value::Bool(true));
-            Some(Operation {
-                method,
-                handler,
-                socket_only,
-            })
-        };
-        let routes = document.paths.paths.iter().filter_map(|(path, item)| {
-            let operations: Vec<_> = [
-                (Method::GET, &item.get),
-                (Method::PUT, &item.put),
-                (Method::POST, &item.post),
-                (Method::DELETE, &item.delete),
-                (Method::PATCH, &item.patch),
-            ]
-            .into_iter()
-            .filter_map(|(method, item)| operation(method, item))
-            .collect();
-            let segments = path
-                .trim_start_matches('/')
-                .split('/')
-                .map(|segment| match segment.strip_prefix('{') {
-                    Some(param) => Segment::Param(param.trim_end_matches('}').to_owned()),
-                    None => Segment::Literal(segment.to_owned()),
-                })
-                .collect();
-            (!operations.is_empty()).then_some(Route {
-                segments,
-                operations,
-            })
-        });
-        Self(routes.collect())
-    }
-
-    fn find(
-        &self,
-        method: &Method,
-        path: &str,
-        listener: Listener,
-    ) -> Result<(Handler, Vec<(String, String)>), Problem> {
-        let (route, params) = self
-            .0
-            .iter()
-            .find_map(|route| Some((route, route.matches(path)?)))
-            .ok_or_else(Problem::not_found)?;
-        match route.operations.iter().find(|known| known.method == method) {
-            Some(operation) if operation.socket_only && listener == Listener::Tls => {
-                Err(Problem::socket_only())
-            }
-            Some(operation) => Ok((operation.handler, params)),
-            None => {
-                let allow: Vec<_> = route
-                    .operations
-                    .iter()
-                    .map(|known| known.method.as_str())
-                    .collect();
-                Err(Problem::method_not_allowed(allow.join(", ")))
-            }
-        }
-    }
-}
-
 /// Counts a request, or an event stream, while it is answered.
 pub(crate) struct InFlight(Arc<AtomicU64>);
 
@@ -447,46 +185,16 @@ impl Drop for InFlight {
     }
 }
 
-/// The API over the wallet `owner` holds, with its counts.
-pub(crate) struct Api<'o> {
-    owner: &'o dyn Owner,
+/// What handlers share: the limits, the counts and the creates in progress.
+pub(crate) struct Context {
     limits: ApiLimits,
-    /// Turns true when serve stops: connections close once their answer is out.
-    stop: watch::Receiver<bool>,
-    /// The wallet's data directory, where `api-clients` lists the TLS clients.
-    data_dir: PathBuf,
-    /// The run a command forwarded to the socket must share.
-    caller: Caller,
-    router: Router,
-    /// The OpenAPI document, rendered once.
-    document: Bytes,
     served: Cell<u64>,
     in_flight: Arc<AtomicU64>,
     refused: Cell<u64>,
+    in_progress: InProgress,
 }
 
-impl<'o> Api<'o> {
-    pub(crate) fn new(
-        owner: &'o dyn Owner,
-        limits: ApiLimits,
-        stop: watch::Receiver<bool>,
-        data_dir: PathBuf,
-        caller: Caller,
-    ) -> Self {
-        Self {
-            owner,
-            limits,
-            stop,
-            data_dir,
-            caller,
-            router: Router::new(&openapi::document()),
-            document: openapi::rendered(),
-            served: Cell::new(0),
-            in_flight: Arc::new(AtomicU64::new(0)),
-            refused: Cell::new(0),
-        }
-    }
-
+impl Context {
     pub(crate) const fn limits(&self) -> &ApiLimits {
         &self.limits
     }
@@ -499,9 +207,66 @@ impl<'o> Api<'o> {
         }
     }
 
+    /// Counts an answer that goes on after its handler returned, an event stream, until the
+    /// guard drops.
+    pub(crate) fn in_flight(&self) -> InFlight {
+        InFlight::new(&self.in_flight)
+    }
+
+    pub(crate) const fn in_progress(&self) -> &InProgress {
+        &self.in_progress
+    }
+}
+
+/// The API over the wallet `owner` holds.
+pub(crate) struct Api<'o, O: Owner> {
+    owner: &'o O,
+    context: Context,
+    /// Turns true when serve stops: connections close once their answer is out.
+    stop: watch::Receiver<bool>,
+    /// The wallet's data directory, where `api-clients` lists the TLS clients.
+    data_dir: PathBuf,
+    /// The run a command forwarded to the socket must share.
+    caller: Caller,
+    router: spec::Router,
+}
+
+impl<'o, O: Owner> Api<'o, O> {
+    pub(crate) fn new(
+        owner: &'o O,
+        limits: ApiLimits,
+        stop: watch::Receiver<bool>,
+        data_dir: PathBuf,
+        caller: Caller,
+    ) -> Self {
+        Self {
+            owner,
+            context: Context {
+                limits,
+                served: Cell::new(0),
+                in_flight: Arc::new(AtomicU64::new(0)),
+                refused: Cell::new(0),
+                in_progress: InProgress::default(),
+            },
+            stop,
+            data_dir,
+            caller,
+            router: spec::Router::new(),
+        }
+    }
+
+    pub(crate) const fn limits(&self) -> &ApiLimits {
+        &self.context.limits
+    }
+
+    pub(crate) const fn context(&self) -> &Context {
+        &self.context
+    }
+
     /// Counts a connection closed unanswered.
     pub(crate) fn refuse(&self) {
-        self.refused.set(self.refused.get().saturating_add(1));
+        let refused = &self.context.refused;
+        refused.set(refused.get().saturating_add(1));
     }
 
     /// Answers the requests on `stream` until the client closes it or serve stops, and on the
@@ -522,13 +287,13 @@ impl<'o> Api<'o> {
         });
         let connection = http1::Builder::new()
             .timer(TokioTimer::new())
-            .header_read_timeout(self.limits.header_timeout)
+            .header_read_timeout(self.limits().header_timeout)
             .serve_connection(TokioIo::new(stream), service);
         tokio::pin!(connection);
         let mut stop = self.stop.clone();
         let aged = async {
             match listener {
-                Listener::Tls => tokio::time::sleep(self.limits.tls_max_age).await,
+                Listener::Tls => tokio::time::sleep(self.limits().tls_max_age).await,
                 Listener::Socket => std::future::pending().await,
             }
         };
@@ -560,23 +325,27 @@ impl<'o> Api<'o> {
         client: Option<Fingerprint>,
         closing: watch::Receiver<bool>,
     ) -> Response<Body> {
-        let guard = InFlight::new(&self.in_flight);
-        let response = match client {
-            Some(client) if !self.lists(client) => {
+        let guard = self.context.in_flight();
+        let role = match client {
+            None => Some(Role::Full),
+            Some(client) => self.role_of(client),
+        };
+        let mut response = match role {
+            None => {
                 let mut response = problem(&Problem::no_longer_listed());
                 response
                     .headers_mut()
                     .insert(header::CONNECTION, HeaderValue::from_static("close"));
                 response
             }
-            _ => self
-                .route(request, listener, closing)
+            Some(role) => self
+                .route(request, listener, role, closing)
                 .await
                 .unwrap_or_else(|error| problem(&error)),
         };
         drop(guard);
-        self.served.set(self.served.get().saturating_add(1));
-        let mut response = response;
+        let served = &self.context.served;
+        served.set(served.get().saturating_add(1));
         response.headers_mut().insert(
             caller::VERSION_HEADER,
             HeaderValue::from_static(caller::VERSION),
@@ -584,16 +353,17 @@ impl<'o> Api<'o> {
         response
     }
 
-    /// Whether `api-clients` still lists the TLS client `client`. An unreadable file lists none.
-    fn lists(&self, client: Fingerprint) -> bool {
+    /// The role `api-clients` gives the TLS client `client`; `None` when it does not list it.
+    /// An unreadable file lists none.
+    fn role_of(&self, client: Fingerprint) -> Option<Role> {
         match Clients::read(&self.data_dir) {
-            Ok(clients) => clients.lists(client),
+            Ok(clients) => clients.role(client),
             Err(error) => {
                 tracing::warn!(
                     error = %lepic_telemetry::ErrorChain(&error),
                     "api-clients is unreadable, so every client is refused"
                 );
-                false
+                None
             }
         }
     }
@@ -602,33 +372,38 @@ impl<'o> Api<'o> {
         &self,
         request: hyper::Request<Incoming>,
         listener: Listener,
+        role: Role,
         closing: watch::Receiver<bool>,
     ) -> Result<Response<Body>, Problem> {
         if listener == Listener::Socket {
             self.caller.check(request.headers())?;
         }
-        let (handler, params) =
-            self.router
-                .find(request.method(), request.uri().path(), listener)?;
-        let query = request.uri().query().map(str::to_owned);
-        let text = wants_text(request.headers());
+        let (operation, params) = self.router.find(request.method(), request.uri().path())?;
+        if operation.socket_only && listener == Listener::Tls {
+            return Err(Problem::socket_only());
+        }
+        if role < operation.role {
+            return Err(Problem::role_required(operation.role));
+        }
+        let op = operation.op;
+        let query = Query::parse(request.uri().query())?;
+        let headers = request.headers().clone();
         let body = self.body(request).await?;
-        let answer = handler(
-            self,
-            Request {
-                params,
-                query,
-                body,
-                listener,
-                closing,
-            },
-        );
-        TEXT.scope(text, answer).await
+        let request = Request {
+            params,
+            query,
+            headers,
+            body,
+            role,
+            listener,
+            closing,
+        };
+        self.owner.operate(op, request, &self.context).await
     }
 
     /// The request body, within the size limit and the body deadline.
     async fn body(&self, request: hyper::Request<Incoming>) -> Result<Zeroizing<Vec<u8>>, Problem> {
-        let max = self.limits.max_body;
+        let max = self.limits().max_body;
         let declared = request
             .headers()
             .get(header::CONTENT_LENGTH)
@@ -637,7 +412,7 @@ impl<'o> Api<'o> {
             return Err(Problem::too_large());
         }
         let body = Limited::new(request.into_body(), max).collect();
-        match tokio::time::timeout(self.limits.body_timeout, body).await {
+        match tokio::time::timeout(self.limits().body_timeout, body).await {
             Ok(Ok(collected)) => Ok(Zeroizing::new(collected.to_bytes().to_vec())),
             Ok(Err(error)) if error.downcast_ref::<LengthLimitError>().is_some() => {
                 Err(Problem::too_large())
@@ -646,28 +421,15 @@ impl<'o> Api<'o> {
             Err(_) => Err(Problem::too_slow()),
         }
     }
-
-    /// The problem document for `error`. It carries the hint only when the request asked for
-    /// text: the hint is for people, and the JSON error has none.
-    fn failed(&self, error: CliError) -> Problem {
-        let hint = if TEXT.try_with(|text| *text).unwrap_or(false) {
-            self.owner.hint(&error)
-        } else {
-            None
-        };
-        Problem::from(error).with_hint(hint)
-    }
-
-    async fn run(&self, call: Call) -> Result<Response<Body>, Problem> {
-        match self.owner.call(call).await {
-            Ok(done) => Ok(report(&done)),
-            Err(error) => Err(self.failed(error)),
-        }
-    }
 }
 
-fn response(status: StatusCode, content_type: &'static str, body: Bytes) -> Response<Body> {
-    let mut response = Response::new(Full::new(body).boxed_unsync());
+/// A response with `body` of `content_type`.
+pub(crate) fn response(
+    status: StatusCode,
+    content_type: &'static str,
+    body: Bytes,
+) -> Response<Body> {
+    let mut response: Response<Body> = Response::new(Box::pin(Full::new(body)));
     *response.status_mut() = status;
     response
         .headers_mut()
@@ -675,152 +437,52 @@ fn response(status: StatusCode, content_type: &'static str, body: Bytes) -> Resp
     response
 }
 
-/// A command's report, as `--output json` prints it, or as text when the request asked for it.
-fn report(report: &Report) -> Response<Body> {
-    if TEXT.try_with(|text| *text).unwrap_or(false) {
-        let text = render(report, OutputFormat::Human);
-        let body = Bytes::copy_from_slice(text.as_bytes());
-        return response(StatusCode::OK, "text/plain; charset=utf-8", body);
-    }
-    let text = render(report, OutputFormat::Json);
-    let body = Bytes::copy_from_slice(text.as_bytes());
-    response(StatusCode::OK, "application/json", body)
+/// `value` as JSON, with `status`.
+pub(crate) fn json(status: StatusCode, value: &impl Serialize) -> Result<Response<Body>, Problem> {
+    let mut body = serde_json::to_vec(value)
+        .map_err(|error| Problem::of(Category::Internal, "internal", format!("answer: {error}")))?;
+    body.push(b'\n');
+    Ok(response(status, "application/json", body.into()))
 }
 
-fn problem(problem: &Problem) -> Response<Body> {
+/// 200 with `value`.
+pub(crate) fn ok(value: &impl Serialize) -> Result<Response<Body>, Problem> {
+    json(StatusCode::OK, value)
+}
+
+/// 201 with the object a create made.
+pub(crate) fn created(value: &impl Serialize) -> Result<Response<Body>, Problem> {
+    json(StatusCode::CREATED, value)
+}
+
+/// 202 with the object of work that goes on.
+pub(crate) fn accepted(value: &impl Serialize) -> Result<Response<Body>, Problem> {
+    json(StatusCode::ACCEPTED, value)
+}
+
+/// 204.
+pub(crate) fn no_content() -> Result<Response<Body>, Problem> {
+    let mut response: Response<Body> = Response::new(Box::pin(Full::new(Bytes::new())));
+    *response.status_mut() = StatusCode::NO_CONTENT;
+    Ok(response)
+}
+
+/// The problem document of `problem`, with `Allow` on a 405 and `Retry-After` when it is worth
+/// trying again.
+pub(crate) fn problem(problem: &Problem) -> Response<Body> {
     // Serializing this plain struct cannot fail.
     let mut body = serde_json::to_vec(problem).unwrap_or_default();
     body.push(b'\n');
     let mut response = response(problem.status(), "application/problem+json", body.into());
+    let headers = response.headers_mut();
     if let Some(allow) = problem
-        .allow
-        .as_deref()
+        .allow()
         .and_then(|allow| HeaderValue::from_str(allow).ok())
     {
-        response.headers_mut().insert(header::ALLOW, allow);
+        headers.insert(header::ALLOW, allow);
+    }
+    if let Some(seconds) = problem.retry_after() {
+        headers.insert(header::RETRY_AFTER, HeaderValue::from(seconds));
     }
     response
-}
-
-#[cfg(test)]
-mod tests {
-    // Tests may unwrap (docs/rules.md).
-    #![allow(clippy::unwrap_used)]
-
-    use super::*;
-
-    #[test]
-    fn every_handler_has_a_route_and_only_the_payment_endpoints_have_none() {
-        let document = openapi::document();
-        let router = Router::new(&document);
-        for (name, _) in HANDLERS {
-            let routed = document.paths.paths.values().any(|item| {
-                [&item.get, &item.put, &item.post, &item.delete, &item.patch]
-                    .into_iter()
-                    .flatten()
-                    .any(|operation| operation.operation_id.as_deref() == Some(*name))
-            });
-            assert!(routed, "{name} is not in the document");
-        }
-        let unrouted: Vec<_> = document
-            .paths
-            .paths
-            .keys()
-            .filter(|path| {
-                router
-                    .find(&Method::GET, path, Listener::Socket)
-                    .is_err_and(|p| p.status() == StatusCode::NOT_FOUND)
-            })
-            .filter(|path| {
-                router
-                    .find(&Method::POST, path, Listener::Socket)
-                    .is_err_and(|p| p.status() == StatusCode::NOT_FOUND)
-            })
-            .collect();
-        assert_eq!(unrouted, ["/v1/peer", "/v1/peer/slates", "/v2/foreign"]);
-    }
-
-    #[test]
-    fn a_path_parameter_is_matched_and_a_wrong_method_names_the_allowed_ones() {
-        let router = Router::new(&openapi::document());
-        let (_, params) = router
-            .find(&Method::GET, "/v1/transactions/7", Listener::Socket)
-            .unwrap();
-        assert_eq!(params, [("tx_id".to_owned(), "7".to_owned())]);
-        let refused = router
-            .find(&Method::DELETE, "/v1/transactions", Listener::Socket)
-            .err()
-            .unwrap();
-        assert_eq!(refused.status(), StatusCode::METHOD_NOT_ALLOWED);
-        assert_eq!(
-            refused.allow.as_deref().map(String::as_str),
-            Some("GET, POST")
-        );
-        assert!(
-            router
-                .find(&Method::GET, "/v1/transactions/", Listener::Socket)
-                .is_err()
-        );
-        assert!(
-            router
-                .find(&Method::GET, "/v1/nothing", Listener::Socket)
-                .is_err()
-        );
-    }
-
-    #[test]
-    fn a_literal_contact_route_wins_over_the_id_route() {
-        let router = Router::new(&openapi::document());
-        let (_, params) = router
-            .find(&Method::GET, "/v1/contacts/quarantine", Listener::Socket)
-            .unwrap();
-        assert!(params.is_empty());
-        let (_, params) = router
-            .find(&Method::DELETE, "/v1/contacts/ab12", Listener::Socket)
-            .unwrap();
-        assert_eq!(params, [("id".to_owned(), "ab12".to_owned())]);
-        let (_, params) = router
-            .find(&Method::PATCH, "/v1/contacts/ab12", Listener::Socket)
-            .unwrap();
-        assert_eq!(params, [("id".to_owned(), "ab12".to_owned())]);
-    }
-
-    #[test]
-    fn the_tls_listener_refuses_the_password_and_contact_backup_routes() {
-        let router = Router::new(&openapi::document());
-        let routes = [
-            (Method::PUT, "/v1/wallet/password"),
-            (Method::POST, "/v1/contacts/export"),
-            (Method::POST, "/v1/contacts/import"),
-        ];
-        for (method, path) in &routes {
-            let refused = router.find(method, path, Listener::Tls).err().unwrap();
-            assert_eq!(refused.status(), StatusCode::FORBIDDEN, "{path}");
-            assert!(
-                router.find(method, path, Listener::Socket).is_ok(),
-                "{path}"
-            );
-        }
-        let socket_only = router
-            .0
-            .iter()
-            .flat_map(|route| &route.operations)
-            .filter(|operation| operation.socket_only)
-            .count();
-        assert_eq!(socket_only, routes.len());
-    }
-
-    #[test]
-    fn a_query_is_percent_decoded() {
-        let request = Request {
-            params: Vec::new(),
-            query: Some("account=my+savings%21".to_owned()),
-            body: Zeroizing::new(Vec::new()),
-            listener: Listener::Socket,
-            closing: watch::channel(false).1,
-        };
-        let fields: std::collections::BTreeMap<String, String> = request.query().unwrap();
-        assert_eq!(fields["account"], "my savings!");
-        assert!(decode("%zz").is_err());
-    }
 }

@@ -8,8 +8,7 @@
 use hyper::HeaderMap;
 use hyper::StatusCode;
 
-use super::problem::Problem;
-use crate::exit::ErrorKind;
+use super::problem::{Category, Problem};
 use crate::settings::{RelayTor, Settings};
 
 /// The version of this `lepic`.
@@ -107,9 +106,15 @@ impl Caller {
                     fact.name, fact.value
                 )
             };
+            let code = if fact.header == VERSION_HEADER {
+                "serve_version_differs"
+            } else {
+                "serve_settings_differ"
+            };
             return Err(Problem::new(
                 StatusCode::CONFLICT,
-                ErrorKind::Config,
+                Category::Config,
+                code,
                 detail,
             ));
         }

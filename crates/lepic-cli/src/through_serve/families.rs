@@ -16,13 +16,13 @@ use crate::cli::{
     ContactKeysArgs, ContactLabelArgs, ContactLinkArg, ContactMoveArgs, ContactMoveHomeArgs,
     ContactNameArg, ContactPayloadAckArgs, ContactPayloadArgs, ContactPayloadCommand,
     ContactPayloadPostArgs, ContactRequestAcceptArgs, ContactRequestArgs, ContactRequestIdArg,
-    ContactSasArgs, ContactSwitchArgs, DomainCommand, DomainFileArgs,
-    Epic1AddressArgs, Epic1AddressesArgs, Epic1Args, Epic1Command, Epic1LinkArg, Epic1LinkArgs,
-    Epic1PayArgs, Epic1PostAnswerArgs, Epic1PostNextArgs, Epic1RetireArgs, EpictxCommand,
-    EpictxOpenArgs, InPersonArgs, InPersonCodeArg, InPersonCommand, InPersonFinalizeArgs,
-    InPersonInvoiceArgs, InPersonPayArgs, InPersonPostArgs, InPersonReadArgs, InPersonReceiveArgs,
-    InPersonSendArgs, InPersonSlateArg, InPersonTakeArgs, MessageArg, OnOffArg, OutFileArg,
-    SelectionArg, SendSlateIdArg, SpendArgs,
+    ContactSasArgs, ContactSwitchArgs, DomainCommand, DomainFileArgs, Epic1AddressArgs,
+    Epic1AddressesArgs, Epic1Args, Epic1Command, Epic1LinkArg, Epic1LinkArgs, Epic1PayArgs,
+    Epic1PostAnswerArgs, Epic1PostNextArgs, Epic1RetireArgs, EpictxCommand, EpictxOpenArgs,
+    InPersonArgs, InPersonCodeArg, InPersonCommand, InPersonFinalizeArgs, InPersonInvoiceArgs,
+    InPersonPayArgs, InPersonPostArgs, InPersonReadArgs, InPersonReceiveArgs, InPersonSendArgs,
+    InPersonSlateArg, InPersonTakeArgs, MessageArg, OnOffArg, OutFileArg, SelectionArg,
+    SendSlateIdArg, SpendArgs,
 };
 use crate::commands::files;
 

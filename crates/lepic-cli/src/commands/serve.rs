@@ -2,11 +2,12 @@
 //! `lepic serve`: holds one unlocked wallet, does what `epicbox listen` does, and answers the
 //! wallet API on a local socket, and with `--owner-tls` over TLS too.
 
+mod v1;
+
 use std::cell::{Cell, RefCell};
 use std::convert::Infallible;
 use std::future::Future;
 use std::io::BufReader;
-use std::pin::Pin;
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
@@ -16,10 +17,7 @@ use futures_util::stream::FuturesUnordered;
 use futures_util::{FutureExt as _, StreamExt as _};
 use jiff::Timestamp;
 use lepic_epicbox::RelayEndpoint;
-use lepic_methods::http::CoinbaseAccess;
 use lepic_node::NodeApi;
-use lepic_primitives::amount::Height;
-use lepic_transport::method::Method;
 use lepic_wallet::ApiTlsKey;
 use lepic_wallet::event::Event;
 use lepic_wallet::inbox::{InboxError, InboxSummary, ListenHandle};
@@ -29,21 +27,16 @@ use tokio::sync::{broadcast, watch};
 use tokio::time::MissedTickBehavior;
 
 use super::{
-    HttpListener, InvoiceSweep, Opened, Run, abort_on, contact, finalize_slate, finish_listen,
-    inbox_report, listen_and_sweep, profile, receive_slate, rekey,
+    HttpListener, InvoiceSweep, Opened, Run, abort_on, contact, finish_listen, inbox_report,
+    listen_and_sweep,
 };
 use crate::Console;
-use crate::amount::format_amount;
-use crate::api::{Api, Call, Listener, Owner, OwnerTls, Shaken, epicbox_state};
+use crate::api::{Api, Listener, OwnerTls, Shaken, epicbox_state};
 use crate::cli::{Command, ServeArgs};
 use crate::exit::CliError;
 use crate::host::{Host, HostNode};
-use crate::output::{
-    CarriesReport, ContactBackupReport, MaintenanceReport, MethodReport, MethodsReport,
-    OwnerTlsStatus, Report, RequestsReport, ServeHttpStatus, ServeReport, ServeStatusReport,
-    SlateReceiveReport,
-};
-use crate::secret::{SecretError, SecretInput};
+use crate::output::{Report, ServeReport};
+use crate::secret::SecretInput;
 use crate::service::{self, Listening};
 use crate::settings::{Env, Settings};
 
@@ -66,14 +59,6 @@ impl TaskStatus {
                 self.failures = self.failures.saturating_add(1);
                 self.error = Some(lepic_telemetry::ErrorChain(&error).to_string());
             }
-        }
-    }
-
-    fn report(&self) -> MaintenanceReport {
-        MaintenanceReport {
-            consecutive_failures: self.failures,
-            last_error: self.error.clone(),
-            last_success: self.succeeded_at.map(|at| at.to_string()),
         }
     }
 }
@@ -100,11 +85,14 @@ struct Service<'a, H: Host> {
     socket: String,
     /// The Epicbox listener's latest state.
     epicbox: Cell<Option<&'static str>>,
+    /// The API's event log.
+    log: v1::Log,
 }
 
 impl<H: Host> Service<'_, H> {
     /// Runs `command` as `lepic` runs it, with a console that has no input and discards output,
-    /// so a command that asks for a secret fails.
+    /// so a command that asks for a secret fails. A handler may run one to reuse its work.
+    #[allow(dead_code)] // Until a handler runs one.
     async fn command(&self, command: Command) -> Result<Report, CliError> {
         let mut console = Console {
             env: Env::new(std::iter::empty()),
@@ -130,126 +118,6 @@ impl<H: Host> Service<'_, H> {
             result = run.dispatch(command) => result,
             () = abort_on(self.interrupt.clone(), &graceful) => Err(CliError::Interrupted),
         }
-    }
-
-    async fn answer(&self, call: Call) -> Result<Report, CliError> {
-        match call {
-            Call::Command(command) => self.command(command).await,
-            Call::Receive {
-                wire,
-                account,
-                message,
-            } => {
-                let received = receive_slate(&self.held, &wire, account, message).await?;
-                Ok(Report::SlateReceive(SlateReceiveReport {
-                    tx_id: received.tx_id.0,
-                    slate_id: received.slate.id().to_string(),
-                    amount: format_amount(received.slate.amount()),
-                    slate: received.reply.as_text().unwrap_or_default().to_owned(),
-                    repeated: received.repeated,
-                }))
-            }
-            Call::Finalize { wire, fluff } => finalize_slate(&self.held, &wire, fluff).await,
-            // Serve holds the data directory lock, and `rekey` runs one change at a time, so the
-            // vault cannot change under the rekey. Argon2id would hold the runtime thread, and every connection with it.
-            Call::Password { current, new } => {
-                if new.is_empty() {
-                    return Err(SecretError::EmptyNew.into());
-                }
-                let kdf = self.host.vault_kdf();
-                let data_dir = self.settings.data_dir.clone();
-                tokio::task::spawn_blocking(move || rekey(kdf, &data_dir, current, new))
-                    .await
-                    .map_err(|error| CliError::Io {
-                        what: "change the password",
-                        source: std::io::Error::other(error),
-                    })?
-            }
-            Call::ContactExport => Ok(Report::ContactBackup(ContactBackupReport {
-                backup: contact::export_document(&self.held).await?,
-            })),
-            Call::ContactImport { document } => Ok(Report::ContactImport(
-                contact::import_document(&self.held, document).await?,
-            )),
-            Call::Methods => Ok(Report::Methods(MethodsReport {
-                methods: self
-                    .held
-                    .methods
-                    .iter()
-                    .map(|method| method_report(method.as_ref(), self.listens_on(method.as_ref())))
-                    .collect(),
-            })),
-            Call::DomainFile { relays } => {
-                profile::domain_document(&self.held, self.settings, &relays)
-            }
-        }
-    }
-}
-
-/// What `method` can do, from its capabilities and from whether this serve receives slates
-/// over it; nothing here connects anywhere.
-fn method_report(method: &dyn Method, listens: bool) -> MethodReport {
-    MethodReport {
-        id: method.id().to_string(),
-        delivers: method.outbound().is_some(),
-        listens,
-        exchanges: method.exchange().is_some(),
-        notices: !method.notice_lengths().is_empty(),
-        carries: CarriesReport {
-            reply_key: method.carries().reply_key,
-        },
-    }
-}
-
-impl<H: Host> Service<'_, H> {
-    /// Whether this serve receives slates over `method`: it always runs the Epicbox listener,
-    /// and the HTTP listener when it runs with `--http`.
-    fn listens_on(&self, method: &dyn Method) -> bool {
-        let id = method.id();
-        method.inbound().is_some()
-            || id == lepic_epicbox::TRANSPORT_ID
-            || (id == lepic_methods::http::TRANSPORT_ID && self.http.is_some())
-    }
-}
-
-impl<H: Host> Owner for Service<'_, H> {
-    fn call(&self, call: Call) -> Pin<Box<dyn Future<Output = Result<Report, CliError>> + '_>> {
-        Box::pin(self.answer(call))
-    }
-
-    fn events(&self) -> broadcast::Receiver<Event> {
-        self.held.wallet.subscribe()
-    }
-
-    fn hint(&self, error: &CliError) -> Option<String> {
-        crate::hint::hint(error, Some(self.settings))
-    }
-
-    fn status(&self, requests: RequestsReport) -> Result<Report, CliError> {
-        let wallet = &self.held.wallet;
-        let maintenance = self.maintenance.borrow();
-        Ok(Report::ServeStatus(ServeStatusReport {
-            socket: self.socket.clone(),
-            uptime_s: self.started.elapsed().as_secs(),
-            requests,
-            epicbox: self.epicbox.get(),
-            height: wallet.last_confirmed_height()?.map(Height::value),
-            node_tip: wallet.confirmed_tip()?.map(|tip| tip.height.value()),
-            refresh: maintenance.refresh.report(),
-            collect: maintenance.collect.report(),
-            http: self.http.map(|http| ServeHttpStatus {
-                listener: http.report(),
-                coinbase: match http.coinbase {
-                    CoinbaseAccess::Off => "off",
-                    CoinbaseAccess::LocalOnly => "local",
-                    CoinbaseAccess::Remote => "remote",
-                },
-            }),
-            owner_tls: self.owner_tls.map(|tls| OwnerTlsStatus {
-                address: tls.address.to_string(),
-                fingerprint: tls.fingerprint.to_string(),
-            }),
-        }))
     }
 }
 
@@ -309,7 +177,7 @@ const ACCEPT_PAUSE: Duration = Duration::from_millis(100);
 /// so connections that never finish one do not hold the slots of listed clients.
 async fn serving<H: Host>(
     service: &Service<'_, H>,
-    api: &Api<'_>,
+    api: &Api<'_, Service<'_, H>>,
     listening: &Listening,
     handle: &ListenHandle,
     swept: &Mutex<Option<InvoiceSweep>>,
@@ -323,7 +191,8 @@ async fn serving<H: Host>(
         service.host.maintenance_interval(),
         &service.maintenance,
     );
-    tokio::pin!(listener, maintenance);
+    let writer = v1::event_writer(service);
+    tokio::pin!(listener, maintenance, writer);
     let tls = service.owner_tls;
     let mut sockets = FuturesUnordered::<LocalBoxFuture<'_, ()>>::new();
     let mut tls_connections = FuturesUnordered::<LocalBoxFuture<'_, ()>>::new();
@@ -350,6 +219,7 @@ async fn serving<H: Host>(
                 stop.send_replace(true);
             }
             never = &mut maintenance, if !stopping => match never {},
+            never = &mut writer, if !stopping => match never {},
             Ok(_) = stopped.wait_for(|stopped| *stopped), if !stopping => {}
             event = recv(events.as_mut()), if events.is_some() => match event {
                 Ok(event) => {
@@ -472,6 +342,7 @@ impl<H: Host> Run<'_, H> {
             started: Instant::now(),
             socket: path.display().to_string(),
             epicbox: Cell::new(None),
+            log: v1::Log::new(opened.wallet.api_event_last_id()?),
         };
         let api = Api::new(
             &service,
@@ -490,7 +361,7 @@ impl<H: Host> Run<'_, H> {
                 },
             )
             .await;
-        let requests = api.requests().served;
+        let requests = api.context().requests().served;
         drop(api);
         drop(service);
         let http = match http {

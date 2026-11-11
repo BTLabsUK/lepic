@@ -14,35 +14,34 @@ use lepic_wallet::invoice::InvoiceRequest;
 use lepic_wallet::send::{SendRequest, SentSlate};
 use lepic_wallet::slate::Stage;
 use lepic_wallet_contacts::{
-    AcceptRequest, CollectTrigger, ContactKind, ContactRelays, ContactView,
-    InviteExpiry, InviteRequest, InvoiceDetails, KeysDecision, LinkOutcome, MAX_APP_PAYLOAD_LEN,
-    PairingClass, PairingEndReason, PairingFailure, PairingStatus, PayloadId, Purpose, Refusal,
-    RelayMode, SasDecision, SasSymbol, SealedAnswer, WalletContacts,
+    AcceptRequest, CollectTrigger, ContactKind, ContactRelays, ContactView, InviteExpiry,
+    InviteRequest, InvoiceDetails, KeysDecision, LinkOutcome, MAX_APP_PAYLOAD_LEN, PairingClass,
+    PairingEndReason, PairingFailure, PairingStatus, PayloadId, Purpose, Refusal, RelayMode,
+    SasDecision, SasSymbol, SealedAnswer, WalletContacts,
 };
 
 use super::{Opened, Run, Spend};
 use crate::amount::{format_amount, format_fee, parse_amount};
 use crate::cli::{
-    ContactAcceptArgs, ContactArgs, ContactCommand, ContactEnterArgs,
-    ContactExportArgs, ContactIdArg, ContactImportArgs, ContactInviteArgs, ContactInvoiceArgs,
-    ContactKeyCheckArgs, ContactKeysArgs, ContactLabelArgs, ContactMoveArgs, ContactMoveHomeArgs,
-    ContactOpenSealedArgs, ContactPayArgs, ContactPayloadArgs, ContactPayloadCommand,
-    ContactPayloadPostArgs, ContactPlainArgs, ContactRequestAcceptArgs, ContactRequestArgs,
-    ContactRequestIdArg, ContactSasArgs, ContactSealArgs, ContactSendSlateArgs, ContactSlateIdArg,
-    ContactSwitchArgs, InviteExpiryArg, KeysArg, OnOffArg, PurposeArg, SasArg,
+    ContactAcceptArgs, ContactArgs, ContactCommand, ContactEnterArgs, ContactExportArgs,
+    ContactIdArg, ContactImportArgs, ContactInviteArgs, ContactInvoiceArgs, ContactKeyCheckArgs,
+    ContactKeysArgs, ContactLabelArgs, ContactMoveArgs, ContactMoveHomeArgs, ContactOpenSealedArgs,
+    ContactPayArgs, ContactPayloadArgs, ContactPayloadCommand, ContactPayloadPostArgs,
+    ContactPlainArgs, ContactRequestAcceptArgs, ContactRequestArgs, ContactRequestIdArg,
+    ContactSasArgs, ContactSealArgs, ContactSendSlateArgs, ContactSlateIdArg, ContactSwitchArgs,
+    InviteExpiryArg, KeysArg, OnOffArg, PurposeArg, SasArg,
 };
 use crate::exit::CliError;
 use crate::host::Host;
 use crate::output::{
-    ContactAcceptReport, ContactCheckReport, ContactCollectReport,
-    ContactExportReport, ContactFailureReport, ContactImportReport, ContactInviteReport,
-    ContactInvoiceIssueReport, ContactInvoiceListReport, ContactInvoiceReport,
-    ContactKeyCheckReport, ContactLinkReport, ContactListReport, ContactMoveHomeReport,
-    ContactPayloadAckReport, ContactPayloadListReport, ContactPayloadPostReport,
-    ContactPayloadReport, ContactPreviewReport, ContactQuarantineReport, ContactRemoveReport,
-    ContactReport, ContactRequestCancelReport, ContactRequestDismissReport, ContactRequestsReport,
-    ContactSlateReport, InvoiceDeclineReport, InvoicePayReport, PairRequestReport,
-    QuarantinedMessageReport, Report, SentRequestReport,
+    ContactAcceptReport, ContactCheckReport, ContactCollectReport, ContactExportReport,
+    ContactFailureReport, ContactImportReport, ContactInviteReport, ContactInvoiceIssueReport,
+    ContactInvoiceListReport, ContactInvoiceReport, ContactKeyCheckReport, ContactLinkReport,
+    ContactListReport, ContactMoveHomeReport, ContactPayloadAckReport, ContactPayloadListReport,
+    ContactPayloadPostReport, ContactPayloadReport, ContactPreviewReport, ContactQuarantineReport,
+    ContactRemoveReport, ContactReport, ContactRequestCancelReport, ContactRequestDismissReport,
+    ContactRequestsReport, ContactSlateReport, InvoiceDeclineReport, InvoicePayReport,
+    PairRequestReport, QuarantinedMessageReport, Report, SentRequestReport,
 };
 
 /// Contacts belong to the default account.

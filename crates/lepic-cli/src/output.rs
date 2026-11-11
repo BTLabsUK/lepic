@@ -1003,6 +1003,8 @@ pub struct ApiClientReport {
     pub name: String,
     /// The SHA-256 of the client certificate's public key info, in hex.
     pub fingerprint: String,
+    /// `read`, `receive` or `full`.
+    pub role: &'static str,
 }
 
 /// The clients the owner TLS listener accepts, in file order.
@@ -3313,8 +3315,9 @@ mod tests {
                 Report::ApiClientAdd(ApiClientReport {
                     name: text("n"),
                     fingerprint: text("f"),
+                    role: "read",
                 }),
-                vec!["fingerprint", "name"],
+                vec!["fingerprint", "name", "role"],
             ),
             (
                 Report::ApiClientList(ApiClientListReport { clients: vec![] }),

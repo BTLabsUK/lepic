@@ -8,7 +8,7 @@ use rustls::pki_types::CertificateDer;
 use rustls::pki_types::pem::PemObject as _;
 
 use super::Run;
-use crate::api_clients::{Client, Clients, Fingerprint, check_name};
+use crate::api_clients::{Client, Clients, Fingerprint, Role, check_name};
 use crate::cli::ApiClientCommand;
 use crate::exit::CliError;
 use crate::host::Host;
@@ -26,6 +26,8 @@ impl<H: Host> Run<'_, H> {
                 let client = Client {
                     name: args.name,
                     fingerprint: certificate_fingerprint(&args.certificate)?,
+                    // clap allows only the three names.
+                    role: Role::parse(&args.role).unwrap_or(Role::Read),
                 };
                 let report = report(&client);
                 clients.add(client)?;
@@ -48,6 +50,7 @@ fn report(client: &Client) -> ApiClientReport {
     ApiClientReport {
         name: client.name.clone(),
         fingerprint: client.fingerprint.to_string(),
+        role: client.role.name(),
     }
 }
 

@@ -25,7 +25,7 @@ use tokio_rustls::TlsAcceptor;
 use tokio_rustls::server::TlsStream;
 use zeroize::Zeroizing;
 
-use super::{Api, Listener};
+use super::{Api, Listener, Owner};
 use crate::api_clients::{Clients, Fingerprint};
 use crate::exit::CliError;
 
@@ -97,7 +97,7 @@ pub(crate) struct Shaken {
     client: Fingerprint,
 }
 
-impl Api<'_> {
+impl<O: Owner> Api<'_, O> {
     /// The handshake of `stream`, within [`HANDSHAKE_TIMEOUT`] and the header deadline. A
     /// failed handshake counts as a refused connection.
     pub(crate) async fn tls_handshake(&self, tls: &OwnerTls, stream: TcpStream) -> Option<Shaken> {
