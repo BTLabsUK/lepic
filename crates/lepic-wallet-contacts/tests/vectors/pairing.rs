@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Replays the RFC 0002 key vectors in `testdata/vectors/pairing`, written by the independent
 //! pairing kit: contact roots and slot keys, the slot search, one-time reply keys, and the
-//! pairing mailbox keys of codes and of pairing words, and the key check's tag and slot search.
+//! pairing mailbox keys of codes, and the key check's tag and slot search.
 
 use lepic_primitives::params::Network;
 use lepic_wallet_contacts::{ContactRoot, key_check_tag, pairing_mailbox_keys};
@@ -13,7 +13,7 @@ use super::{bytes, hex};
 
 pub(crate) const KIT_GENERATOR: &str = "epic-pairing-kit";
 pub(crate) const KIT_VERSION: &str = "0.5.0";
-pub(crate) const KIT_COMMIT: &str = "a0ab4a3fe3440a74baa69ab848212644371df97b";
+pub(crate) const KIT_COMMIT: &str = "d508766545e3c65f415631df93df09780e1329fc";
 
 fn vectors(file: &str) -> Vec<Value> {
     let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -135,17 +135,6 @@ fn pairing_mailbox_keys_match_the_kit() {
         }
     }
     assert!(real > 0);
-}
-
-#[test]
-fn pairing_words_rendezvous_mailboxes_match_the_kit() {
-    for vector in vectors("words.json") {
-        check_mailbox(
-            array(&vector["mailbox_seed"]),
-            &vector["net"],
-            &vector["rendezvous_mailbox"],
-        );
-    }
 }
 
 /// The kit's key check between X and Y: the keys of both pairings come from the raw keys and

@@ -60,7 +60,6 @@ const TARGETS: &[&str] = &[
     "contact_card",
     "pair_invite",
     "armor_sealed",
-    "pair_words",
     "envelope_inner",
     "pair_answers",
     "app_data_open",
@@ -615,31 +614,6 @@ fn contact_seeds(root: &Path, vectors: &Path, target: &str) -> Result<Option<BTr
             seeds.extend(hex_fields(&samples, "invite"));
             seeds.extend(text_fields(&samples, "pair"));
             seeds.extend(text_fields(&samples, "pair_reply"));
-        }
-        "pair_words" => {
-            let path = vectors.join("pairing").join("words.json");
-            let text = fs::read_to_string(&path)
-                .with_context(|| format!("could not read {}", path.display()))?;
-            let words: Value = serde_json::from_str(&text)
-                .with_context(|| format!("could not parse {}", path.display()))?;
-            for vector in values_of(&words, "vectors")
-                .into_iter()
-                .filter_map(Value::as_array)
-                .flatten()
-            {
-                for list in ["names", "emoji"] {
-                    let typed: Vec<&str> = vector[list]
-                        .as_array()
-                        .into_iter()
-                        .flatten()
-                        .filter_map(Value::as_str)
-                        .collect();
-                    seeds.insert(prefixed(&[0], typed.join("\n").as_bytes()));
-                }
-                if let Some(posted) = vector["posted"].as_str() {
-                    seeds.insert(prefixed(&[1], posted.as_bytes()));
-                }
-            }
         }
         "pair_answers" => {
             let pairings = read_pairing(vectors, "cards_invites.json")?;

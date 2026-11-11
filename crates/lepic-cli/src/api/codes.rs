@@ -397,7 +397,6 @@ fn contact(error: &ContactError) -> Option<&'static str> {
         E::NotASlate | E::Stage(_) | E::Native(_) => "invalid_slate",
         E::KeyCheckRefused => "key_check_refused",
         E::WordsNotFound => "pairing_words_not_found",
-        E::Words(_) => "invalid_pairing_words",
         E::DoesNotPayInvoices => "contact_refuses_invoices",
         E::WrongClass => "wrong_pairing_class",
         E::OtherAddress => "other_address",

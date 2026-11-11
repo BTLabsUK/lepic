@@ -443,6 +443,8 @@ The exchange deposit and withdrawal timings are in RFC 0002 section 12.6.
 
 ### C-33 Pairing words typed wrong, guessed, or used twice
 
+> Removed (2026-11-11): LEPIC no longer offers pairing words; this case is kept as a record.
+
 - **What happens.** Wrong words derive other mailboxes, which hold nothing; B drains each built-in
   relay once and stops. Guessing is costly (7.7). The first B that opens the words acknowledges the
   message, so a second finds nothing; a party that read the invite first is in the position of a

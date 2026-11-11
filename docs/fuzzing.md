@@ -73,7 +73,6 @@ them equal.
 | `onion_parse` | Onion addresses and the head of a SOCKS reply |
 | `pair_answers` | Bodies of the pairing answer messages |
 | `pair_invite` | Pairing invites, the `epiccash://pair/1/` link, reply and confirm bodies |
-| `pair_words` | Typed pairing words and the rendezvous mailbox text |
 | `payment_file` | The payment file classifier and its armor |
 | `relay_discovery` | A relay's onion discovery answer |
 | `seal_open` | Decoding and opening sealed envelopes |

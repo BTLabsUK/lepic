@@ -22,18 +22,17 @@ use hpke::{Kem, Serializable};
 use lepic_contact::{
     Confirm, ConfirmBody, ContactCard, Content, DecodeError, DomainClaim, DomainKey, EncSecretKey,
     Hint, HintKey, HintRule, Invite, InviteId, KeyCheck, KeyCheckAnswer, Malformed, MessageType,
-    Network, Nonce, PairingCode, PairingLink, PairingWords, Purpose, Refusal, ReplyBody, Sas,
-    SealedEnvelope, SigningKey, VerifyingKey, WordsError, WordsKey, WordsWindow, accept_found,
-    accept_restored, armor, dearmor, key_check_tag, open_confirm, open_contact_update,
-    open_key_check, open_key_check_answer, open_reply, pairing_envelope_from_link,
-    pairing_envelope_link, seal, seal_confirm, seal_found, seal_key_check, seal_not_found,
-    seal_refusal, seal_reply, seal_restored,
+    Network, Nonce, PairingCode, PairingLink, Purpose, Refusal, ReplyBody, Sas, SealedEnvelope,
+    SigningKey, VerifyingKey, accept_found, accept_restored, armor, dearmor, key_check_tag,
+    open_confirm, open_contact_update, open_key_check, open_key_check_answer, open_reply,
+    pairing_envelope_from_link, pairing_envelope_link, seal, seal_confirm, seal_found,
+    seal_key_check, seal_not_found, seal_refusal, seal_reply, seal_restored,
 };
 use serde_json::Value;
 
 const KIT_GENERATOR: &str = "epic-pairing-kit";
 const KIT_VERSION: &str = "0.5.0";
-const KIT_COMMIT: &str = "a0ab4a3fe3440a74baa69ab848212644371df97b";
+const KIT_COMMIT: &str = "d508766545e3c65f415631df93df09780e1329fc";
 
 fn vectors(file: &str) -> Vec<Value> {
     let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -551,69 +550,6 @@ fn sas_matches_the_kit() {
     }
 }
 
-#[test]
-fn pairing_words_match_the_kit() {
-    for vector in vectors("words.json") {
-        let name = text(&vector["name"]);
-        let net = network(&vector["net"]);
-        let words = PairingWords::from_bytes(array(&vector["words"]));
-        let symbols = words.symbols().unwrap();
-        for (index, entry) in symbols.iter().enumerate() {
-            assert_eq!(entry.emoji, vector["emoji"][index], "{name}");
-            assert_eq!(entry.name, vector["names"][index], "{name}");
-        }
-        let names: Vec<&str> = symbols.iter().map(|entry| entry.name).collect();
-        let emoji: Vec<&str> = symbols.iter().map(|entry| entry.emoji).collect();
-        assert_eq!(PairingWords::parse(&names).unwrap(), words);
-        assert_eq!(PairingWords::parse(&emoji).unwrap(), words);
-
-        let argon2 = &vector["argon2id"];
-        assert_eq!(argon2["iterations"], 3);
-        assert_eq!(argon2["memory_kib"], 65_536);
-        assert_eq!(argon2["lanes"], 1);
-        assert_eq!(argon2["version"], 19);
-        assert_eq!(argon2["length"], 32);
-        let window = WordsWindow::from_value(vector["window"].as_u64().unwrap());
-        let unix = vector["unix"].as_u64().unwrap();
-        assert_eq!(WordsWindow::at(unix), window, "{name}");
-        assert_eq!(WordsWindow::to_try(unix).next(), Some(window), "{name}");
-        let salt = format!(
-            "{}{}",
-            text(&vector["aad"]),
-            to_hex(&window.value().to_be_bytes())
-        );
-        assert_eq!(argon2["salt"], salt, "{name}");
-        let key = words.stretch(net, window).unwrap();
-        assert_eq!(to_hex(key.expose_bytes()), vector["k"], "{name}");
-        assert_eq!(
-            to_hex(&*key.mailbox_seed()),
-            vector["mailbox_seed"],
-            "{name}"
-        );
-
-        let invite = Invite::decode(&bytes(&vector["invite"]), net).unwrap();
-        let nonce = bytes(&vector["nonce"]);
-        assert_eq!(nonce.len(), 12);
-        let posted = key
-            .seal_invite(&invite, &mut ScriptedRng::new(&nonce))
-            .unwrap();
-        assert_eq!(posted, text(&vector["posted"]), "{name}");
-        assert_eq!(
-            key.open_invite(net, text(&vector["posted"])).unwrap(),
-            invite.as_bytes()
-        );
-        // The invite opens only with the key of the window it was made in.
-        let before = WordsWindow::from_value(window.value() - 1);
-        assert_eq!(
-            words
-                .stretch(net, before)
-                .unwrap()
-                .open_invite(net, &posted),
-            Err(WordsError::CannotOpen)
-        );
-    }
-}
-
 /// The contact root the kit recorded for a raw account key on a network.
 fn contact_root(raw: &Value, net: &Value) -> [u8; 32] {
     let vector = vectors("contact_keys.json")
@@ -942,11 +878,6 @@ fn open_malformed(vector: &Value, input: &[u8], text: &str) -> DecodeError {
         .unwrap_or_else(|| panic!("{} was accepted", vector["name"]))
 }
 
-/// The window the kit's malformed words cases use unless they name another.
-fn words_vector_window() -> u64 {
-    vectors("words.json")[0]["window"].as_u64().unwrap()
-}
-
 fn text_kind(vector: &Value) -> &str {
     vector["kind"].as_str().unwrap()
 }
@@ -959,37 +890,12 @@ fn every_malformed_input_gives_its_typed_error() {
         let name = text(&vector["name"]);
         let code = text(&vector["expected_error"]);
         let (input, input_text) = malformed_input(&vector);
-        if text_kind(&vector) == "words_open" {
-            assert_eq!(code, "words_cannot_open", "{name}");
-            let net = network(&vector["net"]);
-            let words = PairingWords::from_bytes(array(&vector["words"]));
-            let window = vector
-                .get("window")
-                .map_or(words_vector_window(), |window| window.as_u64().unwrap());
-            let error = words
-                .stretch(net, WordsWindow::from_value(window))
-                .unwrap()
-                .open_invite(net, &input_text)
-                .unwrap_err();
-            assert_eq!(error, WordsError::CannotOpen, "{name}");
-        } else {
-            let error = open_malformed(&vector, &input, &input_text);
-            if !decode_error_matches(code, &error) {
-                mismatches.push(format!("{name}: kit says {code}, LEPIC gave {error:?}"));
-            }
+        let error = open_malformed(&vector, &input, &input_text);
+        if !decode_error_matches(code, &error) {
+            mismatches.push(format!("{name}: kit says {code}, LEPIC gave {error:?}"));
         }
         checked += 1;
     }
     assert!(mismatches.is_empty(), "{}", mismatches.join("\n"));
     assert!(checked > 80);
-}
-
-#[test]
-fn posted_text_over_the_limit_is_not_opened() {
-    let key = WordsKey::from_bytes([7; 32]);
-    let too_long = "A".repeat(lepic_contact::MAX_POSTED_LEN + 1);
-    assert_eq!(
-        key.open_invite(Network::Mainnet, &too_long).unwrap_err(),
-        WordsError::CannotOpen
-    );
 }

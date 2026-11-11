@@ -413,8 +413,6 @@ pub enum ContactError {
     /// No invite opened with these words on any meeting relay.
     #[error("no invite found for these words")]
     WordsNotFound,
-    #[error("pairing words are not valid")]
-    Words(#[source] lepic_contact::WordsError),
     /// The contact's card says it does not pay invoices.
     #[error("the contact does not pay invoices")]
     DoesNotPayInvoices,

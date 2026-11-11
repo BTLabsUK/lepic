@@ -193,13 +193,6 @@ doc = false
 bench = false
 
 [[bin]]
-name = "pair_words"
-path = "fuzz_targets/pair_words.rs"
-test = false
-doc = false
-bench = false
-
-[[bin]]
 name = "envelope_inner"
 path = "fuzz_targets/envelope_inner.rs"
 test = false

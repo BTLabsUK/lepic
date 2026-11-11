@@ -231,7 +231,7 @@ Branch on `kind` or `code`, never on `message`. A code never changes meaning. Co
 | 69 | `SealedUnopenable` | The sealed text was changed on the way |
 | 70 | `KeyCheckRefused` | A key check is not allowed for this pairing now |
 | 71 | `PairingWordsNotFound` | No invite for these words |
-| 72 | `InvalidPairingWords` | Not five words from the table |
+| 72 | `InvalidPairingWords` | No longer produced; kept for its number |
 | 73 | `ContactRefusesInvoices` | The contact does not pay invoices |
 | 74 | `PhraseMismatch` | The phrase belongs to another wallet |
 | 75 | `InvoiceNotForThisChain` | The invoice is for another network or has wrong heights |

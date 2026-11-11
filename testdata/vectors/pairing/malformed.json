@@ -2,7 +2,7 @@
   "meta": {
     "generator": "epic-pairing-kit",
     "kit_version": "0.5.0",
-    "git_commit": "a0ab4a3fe3440a74baa69ab848212644371df97b",
+    "git_commit": "d508766545e3c65f415631df93df09780e1329fc",
     "rfc": "0002-contact-pairing",
     "file": "malformed.json"
   },
@@ -1093,61 +1093,6 @@
       "note": "the card is valid but carries another sig key than the envelope's sender",
       "expected_error": "key_check_bad",
       "input_hex": "894553450100010001010101010101010bf9a9f040a0a8669640d045e030c5b3d52697b37892ac2a4e51df3f414e820d5fdc0aca83f3ad5d808614742d18b20902f04547c72c4940e8e570ee7d419ad558d00202ef1a127b7198c2328b06a435bab955a22f2d221e7c279887a26e2b06531c250ae0111ad62b72b54812667b0eabdfa474732724c5043a40f150ae6d860360b7292997ddd98145f857e0ed4d377b0646d818d653b5f61efd5af7e2c4bed51f6f50317457a519cbcd1ef47116fc7c21ebb6cd50f0238debca073add1f7051170af8d937f4280a527fe365ffc754a9c1ddac1d606cb7a58d106c9d01a7fa7d03106b6271c6afe4211a3c00c3a5b9963a6f083b4ac6b00e1d5ef5c071b19b481e952e73bd6810d49f0f482252d45988f4d5cf5c130062e101a9f72918c26ab6f5e33087c97b090f948d03d6bf2562b696c87131bfce91111554152ab5e2d0a8877c94ca2bde71ca4a475e55deede3d58a0887c567418a2090cfacc9202230757ba4b63b14b7521811d50b544a27f7a974bd5835292a8c6d88c6497f186d6690edad8aa1aab137a753c6ef56c3d4"
-    },
-    {
-      "name": "words_wrong_words",
-      "section": "7.7",
-      "kind": "words_open",
-      "net": 0,
-      "input_text": "AAECAwQFBgcICQoLx2lUCJEZEv4yz7jCuilQf72x_EQJ0BS8W7osqZlRNpTdgSRzeMAEuCMtgF-ar05senh8ZmJBxi9RyTsdDmfJcnKRJjDk_lOfYP_Hf8vohOg9q_WfIKQGbAKL9q6XIdc-lcLWo2zSfN7pEJvq428Ui9KwHhhH54AXxYlC3tABIeYlDEmZXa7r3xp7irPSW8S-GAVbjesTzuwT7Lxl",
-      "words": "fffefdfcfb",
-      "expected_error": "words_cannot_open"
-    },
-    {
-      "name": "words_other_network",
-      "section": "7.7",
-      "kind": "words_open",
-      "net": 1,
-      "input_text": "AAECAwQFBgcICQoLx2lUCJEZEv4yz7jCuilQf72x_EQJ0BS8W7osqZlRNpTdgSRzeMAEuCMtgF-ar05senh8ZmJBxi9RyTsdDmfJcnKRJjDk_lOfYP_Hf8vohOg9q_WfIKQGbAKL9q6XIdc-lcLWo2zSfN7pEJvq428Ui9KwHhhH54AXxYlC3tABIeYlDEmZXa7r3xp7irPSW8S-GAVbjesTzuwT7Lxl",
-      "words": "0102030405",
-      "expected_error": "words_cannot_open"
-    },
-    {
-      "name": "words_flipped_text",
-      "section": "7.7",
-      "kind": "words_open",
-      "net": 0,
-      "input_text": "AAECAwQFBgcICQoLx2lUCJEZEv4yz7jCuilQf72x_EQJ0BS8W7osqZlRNpTdgSRzeMAEuCMtgF-ar05senh8ZmJBxi9RyTsdDmfJcnKRJjDk_lOfYP_Hf8vohOg9q_WfIKQGbAKL9q6XIdc-lcLWo2zSfN7pEJvq428Ui9KwHhhH54AXxYlC3tABIeYlDEmZXa7r3xp7irPSW8S-GAVbjesTzuwT7LAl",
-      "words": "0102030405",
-      "expected_error": "words_cannot_open"
-    },
-    {
-      "name": "words_not_base64url",
-      "section": "7.7",
-      "kind": "words_open",
-      "net": 0,
-      "input_text": "AAECAwQFBgcICQoLx2lUCJEZEv4yz7jCuilQf72x_EQJ0BS8W7osqZlRNpTdgSRzeMAEuCMtgF-ar05senh8ZmJBxi9RyTsdDmfJcnKRJjDk_lOfYP_Hf8vohOg9q_WfIKQGbAKL9q6XIdc-lcLWo2zSfN7pEJvq428Ui9KwHhhH54AXxYlC3tABIeYlDEmZXa7r3xp7irPSW8S-GAVbjesTzuwT7Lxl=",
-      "words": "0102030405",
-      "expected_error": "words_cannot_open"
-    },
-    {
-      "name": "words_other_window",
-      "section": "7.7",
-      "kind": "words_open",
-      "net": 0,
-      "input_text": "AAECAwQFBgcICQoLx2lUCJEZEv4yz7jCuilQf72x_EQJ0BS8W7osqZlRNpTdgSRzeMAEuCMtgF-ar05senh8ZmJBxi9RyTsdDmfJcnKRJjDk_lOfYP_Hf8vohOg9q_WfIKQGbAKL9q6XIdc-lcLWo2zSfN7pEJvq428Ui9KwHhhH54AXxYlC3tABIeYlDEmZXa7r3xp7irPSW8S-GAVbjesTzuwT7Lxl",
-      "words": "0102030405",
-      "window": 3000001,
-      "expected_error": "words_cannot_open"
-    },
-    {
-      "name": "words_too_short",
-      "section": "7.7",
-      "kind": "words_open",
-      "net": 0,
-      "input_text": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
-      "words": "0102030405",
-      "expected_error": "words_cannot_open"
     }
   ]
 }

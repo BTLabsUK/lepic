@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Contact pairing (RFC 0002): invites, the pairing reply and confirm, private pairing, the key
-//! check, the SAS and pairing words. Pure: callers pass keys, the RNG and the time in.
+//! check and the SAS. Pure: callers pass keys, the RNG and the time in.
 //!
 //! The sealed envelope, its armor, contact cards and the other formats the envelope carries
 //! live in `lepic-seal`, so the direct endpoint and epic1 use them without the pairing flows.
@@ -12,11 +12,8 @@ mod keycheck;
 mod pairing;
 mod private;
 mod sas;
-mod words;
 
-pub use error::{
-    DecodeError, EncodeError, KeyError, Malformed, SasTableError, TextError, WordsError,
-};
+pub use error::{DecodeError, EncodeError, KeyError, Malformed, SasTableError, TextError};
 pub use invite::{INVITE_FORMAT, Invite, InviteFields, MAILBOX_KEY_LEN, MAX_INVITE_LEN};
 pub use keycheck::{
     KeyCheck, KeyCheckAnswer, KeyCheckProof, accept_found, accept_restored, key_check_tag,
@@ -46,4 +43,3 @@ pub use private::{
     seal_private_reply,
 };
 pub use sas::{Sas, SasSymbol, symbol};
-pub use words::{MAX_POSTED_LEN, PairingWords, WORD_COUNT, WordsKey, WordsWindow};

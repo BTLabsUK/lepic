@@ -224,7 +224,7 @@ pub(super) fn problem_at(error: ContactError, param: &str) -> Problem {
         ),
         ContactError::Name(_) => Problem::invalid(param, "not a name a contact card can carry"),
         ContactError::RelayAddress => Problem::invalid(param, "not the name of a relay"),
-        ContactError::Decode(_) | ContactError::Words(_) | ContactError::WordsNotFound => {
+        ContactError::Decode(_) | ContactError::WordsNotFound => {
             Problem::invalid(param, "not a pairing invite this wallet can read")
         }
         ContactError::TooLarge { max } => {

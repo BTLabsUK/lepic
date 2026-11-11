@@ -561,7 +561,6 @@ pub fn contact_errors() -> Vec<ContactError> {
         ContactError::StoredData(Decode::Damaged),
         ContactError::KeyCheckRefused,
         ContactError::WordsNotFound,
-        ContactError::Words(lepic_contact::WordsError::Unknown),
         ContactError::DoesNotPayInvoices,
         ContactError::WrongClass,
         ContactError::NoFreeSlot,

@@ -182,7 +182,7 @@ pub enum WalletErrorKind {
     KeyCheckRefused,
     /// No invite was found for these words: they are wrong, expired, or were used.
     PairingWordsNotFound,
-    /// A word is not in the pairing words table, or there are not five.
+    /// No longer produced; kept for its number.
     InvalidPairingWords,
     /// The contact's wallet says it does not pay invoices. Nothing was sent.
     ContactRefusesInvoices,
@@ -853,7 +853,6 @@ impl From<ContactError> for WalletError {
                 E::NotASlate | E::Stage(_) => K::InvalidSlate,
                 E::KeyCheckRefused => K::KeyCheckRefused,
                 E::WordsNotFound => K::PairingWordsNotFound,
-                E::Words(_) => K::InvalidPairingWords,
                 E::DoesNotPayInvoices => K::ContactRefusesInvoices,
                 E::WrongClass => K::WrongPairingClass,
                 E::OtherAddress => K::OtherAddress,

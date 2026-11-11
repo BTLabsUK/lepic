@@ -586,7 +586,6 @@ fn contact_kind(error: &ContactError) -> ErrorKind {
         | ContactError::Name(_)
         | ContactError::RelayAddress
         | ContactError::WordsUnavailable
-        | ContactError::Words(_)
         | ContactError::Domain(_)
         | ContactError::NoDomainConfigured
         | ContactError::TooLarge { .. }

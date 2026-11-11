@@ -626,6 +626,8 @@ changes nothing. A wallet that does not know the notice ignores it (ADR 0016).
 
 #### 7.7 Pairing words
 
+> Removed (2026-11-11): LEPIC no longer offers pairing words, and the `words.json` vectors are gone.
+
 Five entries of the SAS table replace a link when there is nothing to scan or paste: read out on a
 call, or typed from the other screen. They look like the SAS check, each emoji with its name, and
 the user types the names (the field completes them from the table; pasting the emoji also works).
