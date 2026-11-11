@@ -82,6 +82,24 @@ pub fn errors(method: &str, path: &str, reply: &Reply) -> Vec<String> {
     }
 }
 
+/// The `operationId` of `method` on `path` (below `/api/v1`, query included), if the document has
+/// it.
+pub fn operation_id(method: &str, path: &str) -> Option<String> {
+    let path = path.split_once('?').map_or(path, |(path, _)| path);
+    operation(method, path).map(|operation| operation["operationId"].as_str().unwrap().to_owned())
+}
+
+/// Every `operationId` in the document.
+pub fn operation_ids() -> Vec<String> {
+    SPEC["paths"]
+        .as_object()
+        .unwrap()
+        .values()
+        .flat_map(|item| item.as_object().unwrap().values())
+        .filter_map(|operation| operation.get("operationId")?.as_str().map(str::to_owned))
+        .collect()
+}
+
 /// The problems the document's description lets any call answer, besides the statuses each
 /// operation lists: a body read too slowly or too large, a bug, and a forwarded CLI command whose
 /// caller headers differ from serve's.
