@@ -584,7 +584,7 @@ Besides the commands, the shell knows these words:
 
 `tx send` shows what it will do first: the address, the amount, the fee, the total, the
 spendable balance after it, how it is delivered and the network, then asks `Send 1.50800000 EPIC
-in total? [y/N]`. Only `y` sends. `--yes` on the line skips the question; it exists in the shell
+in total? [y/N]`. Only `y` then Enter sends; Enter alone, Esc and Ctrl+C do not. `--yes` on the line skips the question; it exists in the shell
 only. A reviewed send that would now take a different amount or a higher fee, because the
 wallet's outputs changed in between, is refused with nothing sent (exit code 7).
 

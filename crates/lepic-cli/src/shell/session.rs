@@ -67,6 +67,7 @@ pub(crate) fn run<H: Host>(
     console: &mut Console,
 ) -> u8 {
     let screen = Screen::new(Box::new(io::stdout()));
+    let _echo = QuietControlKeys::start();
     match start(host, global, settings, console, &screen) {
         Ok(()) => 0,
         Err(error) => {
@@ -270,6 +271,54 @@ impl CtrlC {
     async fn next(&mut self) {
         (&mut self.0).await;
         self.clear();
+    }
+}
+
+/// While the shell runs, the terminal does not echo control keys such as `^C`: Ctrl+C during a
+/// step would otherwise leave `^C` in the middle of the output. The setting comes back on drop.
+struct QuietControlKeys {
+    #[cfg(unix)]
+    before: Option<rustix::termios::Termios>,
+}
+
+impl QuietControlKeys {
+    fn start() -> Self {
+        #[cfg(unix)]
+        {
+            use rustix::termios::{LocalModes, OptionalActions, tcgetattr, tcsetattr};
+            let stdin = io::stdin();
+            let before = tcgetattr(&stdin).ok().filter(|termios| {
+                termios.local_modes.contains(LocalModes::ECHOCTL) && {
+                    let mut quiet = termios.clone();
+                    quiet.local_modes.remove(LocalModes::ECHOCTL);
+                    tcsetattr(&stdin, OptionalActions::Now, &quiet).is_ok()
+                }
+            });
+            Self { before }
+        }
+        #[cfg(not(unix))]
+        {
+            // The Windows console does not echo Ctrl+C.
+            Self {}
+        }
+    }
+}
+
+impl Drop for QuietControlKeys {
+    fn drop(&mut self) {
+        #[cfg(unix)]
+        if let Some(before) = &self.before {
+            use rustix::termios::{LocalModes, OptionalActions, tcgetattr, tcsetattr};
+            let stdin = io::stdin();
+            // Only the one flag goes back; anything else changed since stays as it is.
+            if let Ok(mut now) = tcgetattr(&stdin) {
+                now.local_modes.set(
+                    LocalModes::ECHOCTL,
+                    before.local_modes.contains(LocalModes::ECHOCTL),
+                );
+                let _ = tcsetattr(&stdin, OptionalActions::Now, &now);
+            }
+        }
     }
 }
 
@@ -1174,7 +1223,7 @@ async fn ask_password() -> Result<Zeroizing<String>, SecretError> {
     password
 }
 
-/// Asks `question` on a thread of its own and reads one key: only `y` answers yes.
+/// Asks `question` on a thread of its own and reads the answer: only `y` answers yes.
 async fn ask_yes(question: String) -> bool {
     let stop = StopOnDrop::new();
     let flag = stop.flag();
@@ -1189,8 +1238,9 @@ async fn ask_yes(question: String) -> bool {
     answer
 }
 
-/// Asks `question` and reads one key: only `y` answers yes. Keys typed before the question do
-/// not answer it. Once `stop` turns true it ends with no answer.
+/// Asks `question` and reads an answer up to Enter: only `y` answers yes. Esc or Ctrl+C
+/// answers no at once. Keys typed before the question do not answer it. Once `stop` turns true
+/// it ends with no answer.
 fn confirm(question: &str, stop: &AtomicBool) -> bool {
     let mut out = io::stdout();
     let Ok(raw) = RawMode::enable() else {
@@ -1206,6 +1256,7 @@ fn confirm(question: &str, stop: &AtomicBool) -> bool {
     }
     let _ = out.write_all(question.as_bytes());
     let _ = out.flush();
+    let mut answer = Answer::default();
     let yes = loop {
         if stop.load(Ordering::SeqCst) {
             break None;
@@ -1218,10 +1269,13 @@ fn confirm(question: &str, stop: &AtomicBool) -> bool {
         match event::read() {
             Ok(TermEvent::Key(key)) if key.kind == KeyEventKind::Press => {
                 let control = key.modifiers.contains(KeyModifiers::CONTROL);
-                match key.code {
-                    KeyCode::Char('y' | 'Y') if !control => break Some(true),
-                    KeyCode::Char(_) | KeyCode::Enter | KeyCode::Esc => break Some(false),
-                    _ => {}
+                match answer.key(key.code, control) {
+                    Step::Echo(text) => {
+                        let _ = out.write_all(text.as_bytes());
+                        let _ = out.flush();
+                    }
+                    Step::Done(yes) => break Some(yes),
+                    Step::Nothing => {}
                 }
             }
             Ok(_) => {}
@@ -1229,13 +1283,60 @@ fn confirm(question: &str, stop: &AtomicBool) -> bool {
         }
     };
     drop(raw);
-    let _ = out.write_all(match yes {
-        Some(true) => b"y\n",
-        Some(false) => b"N\n",
-        None => b"\n",
-    });
+    let _ = out.write_all(answer.ending(yes).as_bytes());
     let _ = out.flush();
     yes == Some(true)
+}
+
+/// The answer typed so far at a `[y/N]` question: one character, shown after the question.
+#[derive(Default)]
+struct Answer {
+    typed: Option<char>,
+}
+
+/// What a key does to an [`Answer`].
+#[derive(Debug, PartialEq, Eq)]
+enum Step {
+    /// Write this after the question.
+    Echo(&'static str),
+    /// The question is answered.
+    Done(bool),
+    Nothing,
+}
+
+impl Answer {
+    fn key(&mut self, code: KeyCode, control: bool) -> Step {
+        match code {
+            KeyCode::Char('c' | 'd') if control => Step::Done(false),
+            KeyCode::Char(character) if !control && !character.is_control() => {
+                let again = self.typed.replace(character).is_some();
+                // A y shows as typed; anything else reads as a no and shows as n.
+                let yes = matches!(character, 'y' | 'Y');
+                Step::Echo(match (again, yes) {
+                    (false, true) => "y",
+                    (false, false) => "n",
+                    (true, true) => "\u{8}y",
+                    (true, false) => "\u{8}n",
+                })
+            }
+            KeyCode::Backspace if self.typed.take().is_some() => Step::Echo("\u{8} \u{8}"),
+            KeyCode::Enter => Step::Done(matches!(self.typed, Some('y' | 'Y'))),
+            KeyCode::Esc => Step::Done(false),
+            _ => Step::Nothing,
+        }
+    }
+
+    /// What ends the question's line: the answer when it was not typed, then a new line.
+    fn ending(&self, yes: Option<bool>) -> &'static str {
+        match (yes, self.typed) {
+            (None, _) => "\n",
+            (Some(true), _) => "\n",
+            (Some(false), Some(typed)) if !matches!(typed, 'y' | 'Y') => "\n",
+            // Esc or Ctrl+C after a typed y: the y is replaced.
+            (Some(false), Some(_)) => "\u{8}N\n",
+            (Some(false), None) => "N\n",
+        }
+    }
 }
 
 /// When the idle lock fires, `minutes` after the `last` line: never while serve runs or the
@@ -1391,6 +1492,46 @@ mod tests {
                 "the cleared Ctrl+C is not seen"
             );
         });
+    }
+
+    /// `n` then Enter answers no and the Enter ends the question, so no empty line follows.
+    #[test]
+    fn a_yes_no_answer_ends_at_enter() {
+        let mut answer = Answer::default();
+        assert_eq!(answer.key(KeyCode::Char('n'), false), Step::Echo("n"));
+        assert_eq!(answer.key(KeyCode::Enter, false), Step::Done(false));
+        assert_eq!(answer.ending(Some(false)), "\n");
+
+        let mut answer = Answer::default();
+        assert_eq!(answer.key(KeyCode::Char('y'), false), Step::Echo("y"));
+        assert_eq!(answer.key(KeyCode::Enter, false), Step::Done(true));
+        assert_eq!(answer.ending(Some(true)), "\n");
+
+        // A changed mind: y, Backspace, x reads as no; n then y reads as yes.
+        let mut answer = Answer::default();
+        answer.key(KeyCode::Char('y'), false);
+        assert_eq!(
+            answer.key(KeyCode::Backspace, false),
+            Step::Echo("\u{8} \u{8}")
+        );
+        assert_eq!(answer.key(KeyCode::Char('x'), false), Step::Echo("n"));
+        assert_eq!(answer.key(KeyCode::Enter, false), Step::Done(false));
+        let mut answer = Answer::default();
+        answer.key(KeyCode::Char('n'), false);
+        assert_eq!(answer.key(KeyCode::Char('Y'), false), Step::Echo("\u{8}y"));
+        assert_eq!(answer.key(KeyCode::Enter, false), Step::Done(true));
+
+        // Enter alone, Esc and Ctrl+C answer no; after a y the shown y becomes N.
+        let mut answer = Answer::default();
+        assert_eq!(answer.key(KeyCode::Enter, false), Step::Done(false));
+        assert_eq!(answer.ending(Some(false)), "N\n");
+        let mut answer = Answer::default();
+        answer.key(KeyCode::Char('y'), false);
+        assert_eq!(answer.key(KeyCode::Char('c'), true), Step::Done(false));
+        assert_eq!(answer.ending(Some(false)), "\u{8}N\n");
+        let mut answer = Answer::default();
+        assert_eq!(answer.key(KeyCode::Esc, false), Step::Done(false));
+        assert_eq!(answer.key(KeyCode::Backspace, false), Step::Nothing);
     }
 
     #[test]
