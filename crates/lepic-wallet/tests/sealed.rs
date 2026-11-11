@@ -168,7 +168,7 @@ fn a_payment_goes_sealed_and_signed_both_ways_and_is_attributed() {
 #[test]
 fn a_peek_at_sealed_text_stores_nothing() {
     let world = World::new();
-    let (anna_side, ben_side) = world.pair_by_link();
+    let (_, ben_side) = world.pair_by_link();
     let tx_id = world.payer_sends();
     let sealed = world
         .block_on(
@@ -179,20 +179,34 @@ fn a_peek_at_sealed_text_stores_nothing() {
                 .contact_seal_slate(ben_side, tx_id, None),
         )
         .unwrap();
-    let book = world.issuer.wallet.contact_book();
+    let received = world
+        .block_on(
+            world
+                .issuer
+                .wallet
+                .contact_book()
+                .sealed_receive(&sealed, ReceiveRequest::default()),
+        )
+        .unwrap();
+    let SealedAnswer::Sealed(answer) = received.answer else {
+        panic!("the answer went plain");
+    };
+    // The payer has not opened anything sealed from the issuer yet.
+    let book = world.payer.wallet.contact_book();
     let heard = || {
         world
-            .block_on(book.contact(anna_side))
+            .block_on(book.contact(ben_side))
             .unwrap()
             .last_sealed_in
     };
+    assert_eq!(heard(), None);
 
-    let peeked = world.block_on(book.sealed_peek(&sealed)).unwrap();
-    assert_eq!(peeked.contact_id, Some(anna_side));
-    assert_eq!(peeked.stage, Stage::S1);
+    let peeked = world.block_on(book.sealed_peek(&answer)).unwrap();
+    assert_eq!(peeked.contact_id, Some(ben_side));
+    assert_eq!(peeked.stage, Stage::S2);
     assert_eq!(heard(), None, "a peek marked the contact heard from");
 
-    let opened = world.block_on(book.sealed_open(&sealed)).unwrap();
+    let opened = world.block_on(book.sealed_open(&answer)).unwrap();
     assert_eq!(opened.wire, peeked.wire);
     assert!(heard().is_some());
 }
