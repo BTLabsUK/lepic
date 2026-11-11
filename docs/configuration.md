@@ -80,6 +80,7 @@ Switches take `true` or `false` and default to `false`.
 | `host_features` | `LEPIC_HOST_FEATURES` | Host feature bits the wallet claims, comma-separated: `device-forwarding`, `name-service`. Default none |
 | `profile` | `LEPIC_PROFILE` | Profile bits told to paired contacts: `no-payments`, `automated`, or a number 0 to 65535. Default 0 |
 | `domain` | `LEPIC_DOMAIN` | A domain the wallet claims to paired contacts, proven by its well-known file. Default none |
+| `shell_idle_lock_minutes` | `LEPIC_SHELL_IDLE_LOCK_MINUTES` | Minutes with no line entered before the interactive shell locks the wallet; 0 never locks it. Default 15 |
 | `settings_file` | `LEPIC_SETTINGS` | The settings file. Default `~/.lepic/settings.toml` |
 
 The Tor keys go together as follows:

@@ -205,3 +205,20 @@ fn without_a_home_the_data_directory_must_be_given() {
         Err(SettingsError::NoHome)
     ));
 }
+
+#[test]
+fn the_shell_idle_lock_defaults_to_fifteen_minutes_and_zero_turns_it_off() {
+    let home = tempfile::tempdir().unwrap();
+    let resolve =
+        |vars: &[(&str, &str)]| Settings::resolve(&GlobalArgs::default(), &env(home.path(), vars));
+    assert_eq!(resolve(&[]).unwrap().shell_idle_lock_minutes, 15);
+    let off = resolve(&[("LEPIC_SHELL_IDLE_LOCK_MINUTES", "0")]).unwrap();
+    assert_eq!(off.shell_idle_lock_minutes, 0);
+    assert!(matches!(
+        resolve(&[("LEPIC_SHELL_IDLE_LOCK_MINUTES", "soon")]),
+        Err(SettingsError::InvalidValue {
+            key: "shell_idle_lock_minutes",
+            origin: Origin::Env("LEPIC_SHELL_IDLE_LOCK_MINUTES")
+        })
+    ));
+}

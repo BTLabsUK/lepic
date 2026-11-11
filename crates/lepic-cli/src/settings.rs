@@ -122,11 +122,19 @@ pub const SETTINGS: &[(&str, &str, &str)] = &[
          proves the claim",
     ),
     (
+        "shell_idle_lock_minutes",
+        "LEPIC_SHELL_IDLE_LOCK_MINUTES",
+        "minutes without input before the interactive shell locks the wallet; 0 never",
+    ),
+    (
         "settings_file",
         "LEPIC_SETTINGS",
         "settings.toml with the servers: [node] servers, [epicbox] servers, [api] owner_tls",
     ),
 ];
+
+/// Minutes without input before the interactive shell locks the wallet, unless set.
+pub const DEFAULT_SHELL_IDLE_LOCK_MINUTES: u64 = 15;
 
 /// The variable a config file path comes from when `--config` is not given.
 pub const CONFIG_ENV: &str = "LEPIC_CONFIG";
@@ -145,7 +153,11 @@ impl Env {
     pub fn from_process() -> Self {
         Self::new(std::env::vars_os().filter_map(|(key, value)| {
             let key = key.into_string().ok()?;
-            let wanted = key.starts_with("LEPIC_") || key == "HOME" || key == "USERPROFILE";
+            let wanted = key.starts_with("LEPIC_")
+                || matches!(
+                    key.as_str(),
+                    "HOME" | "USERPROFILE" | "NO_COLOR" | "WT_SESSION"
+                );
             wanted.then_some((key, value.into_string().ok()?))
         }))
     }
@@ -319,6 +331,8 @@ pub struct Settings {
     pub profile: u16,
     /// The domain claimed to paired contacts, normalized; none unless `domain` says so.
     pub domain: Option<String>,
+    /// Minutes without input before the interactive shell locks the wallet; 0 never.
+    pub shell_idle_lock_minutes: u64,
 }
 
 /// The output format alone, for reporting errors that happen before the rest resolves.
@@ -438,8 +452,16 @@ impl Settings {
             host_features,
             profile: profile(args, &lookup)?,
             domain: domain(args, &lookup)?,
+            shell_idle_lock_minutes: shell_idle_lock_minutes(&lookup)?,
         })
     }
+}
+
+/// The minutes without input before the shell locks the wallet; 0 never.
+fn shell_idle_lock_minutes(lookup: &Lookup<'_>) -> Result<u64, SettingsError> {
+    Ok(lookup
+        .parse("shell_idle_lock_minutes", |text| text.parse::<u64>().ok())?
+        .unwrap_or(DEFAULT_SHELL_IDLE_LOCK_MINUTES))
 }
 
 /// The servers of the settings file a flag, its variable or the config file names, else of
