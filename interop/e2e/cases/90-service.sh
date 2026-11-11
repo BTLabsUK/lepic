@@ -212,7 +212,7 @@ svc_tx_state_in() {
 # Three deposits at once to serve's HTTP listener (native, LEPIC to LEPIC through /api/v1/inbox),
 # seen in the event stream.
 case_svc_deposit_burst() {
-    local i port pids=() slate events_pid got
+    local i port ip pids=() slate events_pid got
     ensure_wallet "${SVC_BOT}" || return 1
     wconfig_set "${SVC_BOT}" 'native_direct = true'
     for i in "${!SVC_USERS[@]}"; do
@@ -220,7 +220,10 @@ case_svc_deposit_burst() {
         ensure_funds "${SVC_USERS[i]}" 0.3 1 || return 1
         wconfig_set "${SVC_USERS[i]}" 'native_direct = true'
     done
-    svc_start --http --port 0 || return 1
+    # A native send to a listener on the sender's own device is refused (ADR 0052), so serve listens
+    # on the LAN and the payers send to the LAN address, as native_listen in 20-sends.sh does.
+    ip="$(svc_lan_ip)" || return 1
+    svc_start --http --port 0 --internet || return 1
     api GET /api/v1/status || return 1
     port="$(jq -r '.listeners.http.port // empty' <<<"${API_BODY}")"
     [[ "${port}" =~ ^[0-9]+$ ]] || fail "no http port in status: ${API_BODY}" || return 1
@@ -228,7 +231,7 @@ case_svc_deposit_burst() {
     events_pid=$!
     E2E_BG[${events_pid}]="${CASE_DIR}/events"
     for i in "${!SVC_USERS[@]}"; do
-        (lepic_env "${SVC_USERS[i]}" --output json tx send --allow-plain-http --to "http://127.0.0.1:${port}" \
+        (lepic_env "${SVC_USERS[i]}" --output json tx send --allow-plain-http --to "http://${ip}:${port}" \
             --min-confirmations "${E2E_MINCONF}" -m "e2e deposit ${i}" "${SVC_AMOUNT}" \
             >"${CASE_DIR}/deposit.${i}.json" 2>"${CASE_DIR}/deposit.${i}.err"
          echo $? >"${CASE_DIR}/deposit.${i}.exit") &
@@ -253,6 +256,14 @@ case_svc_deposit_burst() {
         wait_until "deposit ${i} confirmed" 240 svc_tx_state_is "${slate}" confirmed || fail "deposit ${i} not confirmed" || return 1
     done
     note "3 native deposits at once over serve --http posted, evented and confirmed; events: $(grep -c '^event:' "${CASE_DIR}/events.txt")"
+}
+# This machine's LAN address, picked as native_listen does.
+svc_lan_ip() {
+    local ip
+    ip="$(hostname -I | tr ' ' '\n' | grep -E '^(192\.168|10\.)' | head -n 1)"
+    [[ -n "${ip}" ]] || ip="$(hostname -I | awk '{print $1}')"
+    [[ -n "${ip}" ]] || fail "this machine has no network address" || return 1
+    printf '%s\n' "${ip}"
 }
 # True when the event stream file holds a payment.created event for the payment id.
 svc_created_event() {
