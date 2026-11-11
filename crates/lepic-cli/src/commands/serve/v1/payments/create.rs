@@ -31,6 +31,7 @@ use crate::output::Report;
 
 /// The body of `POST /payments` and `POST /payments/estimate`.
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct CreateBody {
     #[serde(default)]
     id: Option<String>,
@@ -59,6 +60,9 @@ struct CreateBody {
     purpose: Option<String>,
     #[serde(default)]
     allow_plain_http: bool,
+    /// Taken, not used yet: a send goes to the relay the address names.
+    #[serde(default, rename = "relay_ok")]
+    _relay_ok: Option<bool>,
     #[serde(default)]
     legacy: bool,
     #[serde(default = "yes")]

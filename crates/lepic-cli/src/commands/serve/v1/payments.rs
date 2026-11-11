@@ -225,6 +225,7 @@ pub(super) async fn get<H: Host>(
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct PatchBody {
     #[serde(default)]
     metadata: Option<BTreeMap<String, String>>,
@@ -266,8 +267,12 @@ const fn default_spend() -> SpendArgs {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct ApproveBody {
     amount: String,
+    /// Taken, not used yet: the answer is handed back.
+    #[serde(default, rename = "deliver")]
+    _deliver: Option<bool>,
     #[serde(default)]
     account: Option<String>,
     #[serde(default)]
@@ -431,6 +436,7 @@ pub(super) async fn decline<H: Host>(
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct FinalizeBody {
     #[serde(default)]
     answer_id: Option<String>,
@@ -453,7 +459,11 @@ pub(super) async fn finalize<H: Host>(
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct DeliverBody {
+    /// Taken, not used yet.
+    #[serde(default, rename = "relay_ok")]
+    _relay_ok: Option<bool>,
     #[serde(default)]
     relay: Option<String>,
     #[serde(default)]
@@ -534,6 +544,7 @@ pub(super) async fn deliver<H: Host>(
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct PostBody {
     #[serde(default)]
     fluff: bool,

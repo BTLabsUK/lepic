@@ -20,7 +20,14 @@ use crate::output::Report;
 
 /// The body of `POST /inspect` and `POST /open`.
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct Handed {
+    /// Taken, not used yet: an answer is handed back.
+    #[serde(default, rename = "deliver")]
+    _deliver: Option<bool>,
+    /// Taken, not used yet.
+    #[serde(default, rename = "relay_ok")]
+    _relay_ok: Option<bool>,
     #[serde(default)]
     text: Option<String>,
     #[serde(default)]
