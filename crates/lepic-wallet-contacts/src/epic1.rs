@@ -804,9 +804,26 @@ where
         relays: &ContactRelays,
         request: Epic1LinkRequest,
     ) -> Result<Epic1LinkIssued, ContactError> {
+        self.epic1_link_recorded(relays, request, |_| Vec::new())
+            .await
+    }
+
+    /// Issues a link as [`Self::epic1_link`] does, and stores the settings `record` returns
+    /// for the link's number in the same store transaction as the link mailbox, so that a
+    /// caller's own record of the link exists exactly when the link does.
+    ///
+    /// Fails as [`Self::epic1_link`] does; nothing is stored then.
+    #[instrument(skip_all, fields(wallet = %self.wallet.config().name))]
+    pub async fn epic1_link_recorded<F>(
+        &self,
+        relays: &ContactRelays,
+        request: Epic1LinkRequest,
+        record: F,
+    ) -> Result<Epic1LinkIssued, ContactError>
+    where
+        F: FnOnce(u32) -> Vec<(String, String)> + Send + 'static,
+    {
         self.check_contact_network(relays)?;
-        let network = self.wallet.config().network;
-        let net = contact_network(network);
         if request.relays.len() > lepic_epic1::MAX_TRANSPORTS {
             return Err(refused(Epic1Refusal::TooManyRelays));
         }
@@ -820,13 +837,11 @@ where
         } else {
             request.relays.clone()
         };
-        let mut places = Vec::with_capacity(hosts.len());
         for host in &hosts {
-            let (relay, port) =
+            let (relay, _) =
                 lepic_epic1::parse_host_port(host).map_err(|_| refused(Epic1Refusal::LinkRelay))?;
             host_rule::classify_name(relay.as_str())
                 .map_err(|_| refused(Epic1Refusal::LinkRelay))?;
-            places.push((relay, port));
         }
         let index = request.index;
         let address = self.address_at(request.account, index)?;
@@ -854,20 +869,22 @@ where
                         &link_key(account, kind, n),
                         &to_text(&state, "epic1 link")?,
                     )?;
+                    for (key, value) in record(n) {
+                        repos.put_setting(&key, &value)?;
+                    }
                     Ok::<_, ContactError>(n)
                 })
             })
             .await?;
-        let mailbox = kind.mailbox(n).ok_or(refused(Epic1Refusal::NotIssued))?;
-        let secret = self.wallet.link_mailbox_key(account, net, mailbox)?;
-        let public = PublicKey::from_secret_key(&secret).map_err(|_| ContactError::RelayAddress)?;
-        let mut link = Epic1Link::new(address);
-        link.transports = places
-            .into_iter()
-            .map(|(relay, port)| EpicboxTransport::new(public, relay, port))
-            .collect();
-        link.amount = request.amount;
-        link.message = request.message;
+        let link = self.link_at(
+            account,
+            kind,
+            n,
+            address,
+            &hosts,
+            request.amount,
+            request.message,
+        )?;
         info!(
             account = account.0,
             index,
@@ -882,6 +899,75 @@ where
             kind,
             n,
         })
+    }
+
+    /// The text of the link `n` of `kind` of `account` as it was issued with `message`: the
+    /// address, relays and amount are the ones stored with the link mailbox; the message is
+    /// not stored there, so the caller gives the one it kept. `None` when no such link is in
+    /// use, or the wallet does not know the address it pays (a link mailbox a restore found).
+    ///
+    /// Fails with [`ContactError::Wallet`] when the wallet is locked, and
+    /// [`ContactError::Epic1`] when a stored relay no longer parses.
+    pub async fn epic1_link_text(
+        &self,
+        account: AccountIndex,
+        kind: Epic1LinkKind,
+        n: u32,
+        message: Option<String>,
+    ) -> Result<Option<String>, ContactError> {
+        let key = link_key(account, kind, n);
+        let session = self.wallet.session()?;
+        let stored = self
+            .contact_work(move |_, _| Ok(session.store.read(|repos| repos.setting(&key))?))
+            .await?;
+        let Some(state) = stored.and_then(|text| from_text::<LinkState>(&text, "epic1 link").ok())
+        else {
+            return Ok(None);
+        };
+        let Some(index) = state.index else {
+            return Ok(None);
+        };
+        let address = self.address_at(account, index)?;
+        let link = self.link_at(
+            account,
+            kind,
+            n,
+            address,
+            &state.relays,
+            state.amount.map(Amount::new),
+            message,
+        )?;
+        Ok(Some(link.to_uri()))
+    }
+
+    /// The link `n` of `kind` of `account` to `address`, naming its mailbox on each of `hosts`.
+    #[allow(clippy::too_many_arguments)] // the parts of one link
+    fn link_at(
+        &self,
+        account: AccountIndex,
+        kind: Epic1LinkKind,
+        n: u32,
+        address: Epic1Address,
+        hosts: &[String],
+        amount: Option<Amount>,
+        message: Option<String>,
+    ) -> Result<Epic1Link, ContactError> {
+        let net = contact_network(self.wallet.config().network);
+        let mailbox = kind.mailbox(n).ok_or(refused(Epic1Refusal::NotIssued))?;
+        let secret = self.wallet.link_mailbox_key(account, net, mailbox)?;
+        let public = PublicKey::from_secret_key(&secret).map_err(|_| ContactError::RelayAddress)?;
+        let mut link = Epic1Link::new(address);
+        link.transports = hosts
+            .iter()
+            .map(|host| {
+                let (relay, port) = lepic_epic1::parse_host_port(host)
+                    .map_err(|_| refused(Epic1Refusal::LinkRelay))?;
+                Ok(EpicboxTransport::new(public, relay, port))
+            })
+            .collect::<Result<_, ContactError>>()?;
+        link.amount = amount;
+        link.message = message;
+        Ok(link)
     }
 
     /// Frees the printed link `n` of `account`: its mailbox is no longer drained and the next
