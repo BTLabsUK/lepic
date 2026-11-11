@@ -32,6 +32,10 @@ pub(super) use wallet::{Scans, drive as scan_driver};
 type Reply = Result<Response<Body>, Problem>;
 
 impl<H: Host> Owner for Service<'_, H> {
+    fn command_line<'a>(&'a self, request: Request) -> Answer<'a> {
+        Box::pin(super::cli::run(self, request))
+    }
+
     fn operate<'a>(&'a self, op: Op, request: Request, context: &'a Context) -> Answer<'a> {
         Box::pin(async move {
             let s = self;

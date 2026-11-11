@@ -95,26 +95,26 @@ pub struct GlobalArgs {
     pub domain: Option<String>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum, Serialize, Deserialize)]
 pub enum NetworkArg {
     Mainnet,
     Floonet,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum, Serialize, Deserialize)]
 pub enum LogFormatArg {
     Pretty,
     Compact,
     Json,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum, Serialize, Deserialize)]
 pub enum OutputArg {
     Human,
     Json,
 }
 
-#[derive(Debug, Subcommand)]
+#[derive(Debug, Clone, Subcommand, Serialize, Deserialize)]
 pub enum Command {
     /// Create, restore and inspect the wallet
     #[command(subcommand)]
@@ -173,7 +173,7 @@ in settings.toml, to the clients `lepic api client add` lists. It writes its cer
 api-tls.pem in the data directory; clients trust that file, issued to `lepic-wallet`, and present
 their own certificate. Changing the password stays on the socket.";
 
-#[derive(Debug, Args)]
+#[derive(Debug, Clone, Args, Serialize, Deserialize)]
 #[command(
     mut_arg("port", |arg| arg.requires("http")),
     mut_arg("internet", |arg| arg.requires("http")),
@@ -193,14 +193,14 @@ pub struct ServeArgs {
     pub listen: HttpListenArgs,
 }
 
-#[derive(Debug, Subcommand)]
+#[derive(Debug, Clone, Subcommand, Serialize, Deserialize)]
 pub enum ApiCommand {
     /// List, add and remove the clients `serve --owner-tls` accepts
     #[command(subcommand)]
     Client(ApiClientCommand),
 }
 
-#[derive(Debug, Subcommand)]
+#[derive(Debug, Clone, Subcommand, Serialize, Deserialize)]
 pub enum ApiClientCommand {
     /// Accept a client by the key of its certificate
     #[command(after_help = "\
@@ -213,7 +213,7 @@ client's role. The key must be Ed25519. A running serve reads the file at each r
     Remove(ApiClientNameArg),
 }
 
-#[derive(Debug, Args)]
+#[derive(Debug, Clone, Args, Serialize, Deserialize)]
 pub struct ApiClientAddArgs {
     /// Name to list the client under: letters, digits, `.`, `-` and `_`
     pub name: String,
@@ -225,13 +225,13 @@ pub struct ApiClientAddArgs {
     pub role: String,
 }
 
-#[derive(Debug, Args)]
+#[derive(Debug, Clone, Args, Serialize, Deserialize)]
 pub struct ApiClientNameArg {
     /// Name the client is listed under
     pub name: String,
 }
 
-#[derive(Debug, Subcommand)]
+#[derive(Debug, Clone, Subcommand, Serialize, Deserialize)]
 pub enum WalletCommand {
     /// Create a wallet from new entropy and print its recovery phrase
     #[command(after_help = NEW_PASSWORD_HELP)]
@@ -271,7 +271,7 @@ database is copied and read from the copy; nothing in DIR is changed. Run it aft
 `wallet import-seed` or `wallet restore` with the same seed, before or after the scan. Funds
 and balances still come from the scan.";
 
-#[derive(Debug, Args)]
+#[derive(Debug, Clone, Args, Serialize, Deserialize)]
 pub struct ImportHistoryArgs {
     /// The old wallet's folder
     #[arg(value_name = "DIR")]
@@ -283,7 +283,7 @@ Without options the scan starts shortly before the last completed scan, or at ge
 scan has completed or a restore scan is still pending. It ends at the node's tip. Ctrl-C stops
 it and keeps what it found; the next scan with the same options continues from there.";
 
-#[derive(Debug, Args)]
+#[derive(Debug, Clone, Args, Serialize, Deserialize)]
 pub struct WalletScanArgs {
     /// Start at this height; 0 scans the whole chain
     #[arg(long, value_name = "HEIGHT", conflicts_with = "reset_chain")]
@@ -298,14 +298,14 @@ pub struct WalletScanArgs {
     pub reset_chain: bool,
 }
 
-#[derive(Debug, Args)]
+#[derive(Debug, Clone, Args, Serialize, Deserialize)]
 pub struct InitArgs {
     /// Words in the recovery phrase
     #[arg(long, value_name = "COUNT", default_value = "24")]
     pub words: WordsArg,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum, Serialize, Deserialize)]
 pub enum WordsArg {
     #[value(name = "12")]
     Twelve,
@@ -319,7 +319,7 @@ pub enum WordsArg {
     TwentyFour,
 }
 
-#[derive(Debug, Args)]
+#[derive(Debug, Clone, Args, Serialize, Deserialize)]
 pub struct RestoreArgs {
     /// Start the restore scan at this block height instead of genesis; outputs below it are
     /// not found
@@ -329,7 +329,7 @@ pub struct RestoreArgs {
     pub scan: ScanArgs,
 }
 
-#[derive(Debug, Args)]
+#[derive(Debug, Clone, Args, Serialize, Deserialize)]
 pub struct ImportSeedArgs {
     /// The wallet.seed file to read
     #[arg(value_name = "FILE")]
@@ -338,14 +338,14 @@ pub struct ImportSeedArgs {
     pub scan: ScanArgs,
 }
 
-#[derive(Debug, Args)]
+#[derive(Debug, Clone, Args, Serialize, Deserialize)]
 pub struct ScanArgs {
     /// Do not scan the chain after restoring
     #[arg(long)]
     pub no_scan: bool,
 }
 
-#[derive(Debug, Subcommand)]
+#[derive(Debug, Clone, Subcommand, Serialize, Deserialize)]
 pub enum TxCommand {
     /// Create a transaction and deliver its first slate
     #[command(after_help = SEND_HTTP_HELP)]
@@ -399,7 +399,7 @@ queued in its mailbox, then posted at once when the relay answers; `lepic contac
 what is still queued and takes the answer. A send the contact cannot take locks nothing, and one
 that cannot be queued is cancelled.";
 
-#[derive(Debug, Args)]
+#[derive(Debug, Clone, Args, Serialize, Deserialize)]
 pub struct SendArgs {
     /// Amount in EPIC, for example 1.5
     #[arg(value_name = "AMOUNT")]
@@ -431,7 +431,7 @@ pub struct SendArgs {
 }
 
 /// Which computers an HTTP send may connect to.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum HttpReach {
     /// Any computer, this one included.
     #[default]
@@ -442,7 +442,7 @@ pub enum HttpReach {
 }
 
 /// The slate id a caller gives a send so that sending again cannot pay twice.
-#[derive(Debug, Args)]
+#[derive(Debug, Clone, Args, Serialize, Deserialize)]
 pub struct SendSlateIdArg {
     /// Slate id of the send: a random version-4 UUID the caller stores before sending
     #[arg(long, value_name = "SLATE_ID")]
@@ -452,7 +452,7 @@ pub struct SendSlateIdArg {
 pub const DEFAULT_CHANGE_OUTPUTS: usize = 1;
 
 /// How a payment chooses and spends its inputs.
-#[derive(Debug, Args)]
+#[derive(Debug, Clone, Args, Serialize, Deserialize)]
 pub struct SpendArgs {
     /// Confirmations an output needs before it is spent
     #[arg(
@@ -472,7 +472,7 @@ pub struct SpendArgs {
     pub ttl_blocks: Option<u64>,
 }
 
-#[derive(Debug, Args)]
+#[derive(Debug, Clone, Args, Serialize, Deserialize)]
 pub struct ResendArgs {
     #[command(flatten)]
     pub tx: TxIdArgs,
@@ -488,7 +488,7 @@ pub struct ResendArgs {
     pub legacy: LegacyArg,
 }
 
-#[derive(Debug, Args)]
+#[derive(Debug, Clone, Args, Serialize, Deserialize)]
 pub struct PlainHttpArg {
     /// Allow an http:// address on another computer, so the slate travels unencrypted
     #[arg(long)]
@@ -496,7 +496,7 @@ pub struct PlainHttpArg {
 }
 
 /// Where a send goes: the destinations of [`DestinationArgs`], or a paired contact.
-#[derive(Debug, Args)]
+#[derive(Debug, Clone, Args, Serialize, Deserialize)]
 #[group(required = true, multiple = false)]
 pub struct SendDestinationArgs {
     /// Epicbox address the slate goes to, or for a send the http(s):// or onion address of a
@@ -511,7 +511,7 @@ pub struct SendDestinationArgs {
     pub to_contact: Option<String>,
 }
 
-#[derive(Debug, Args)]
+#[derive(Debug, Clone, Args, Serialize, Deserialize)]
 #[group(required = true, multiple = false)]
 pub struct DestinationArgs {
     /// Epicbox address the slate goes to, or for a send the http(s):// or onion address of a
@@ -523,7 +523,7 @@ pub struct DestinationArgs {
     pub to_file: Option<PathBuf>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum, Serialize, Deserialize)]
 pub enum SelectionArg {
     /// Spend every eligible output, which locks the whole balance until the send confirms
     All,
@@ -532,7 +532,7 @@ pub enum SelectionArg {
     Smallest,
 }
 
-#[derive(Debug, Args)]
+#[derive(Debug, Clone, Args, Serialize, Deserialize)]
 pub struct AccountArg {
     /// Account label
     #[arg(
@@ -544,21 +544,21 @@ pub struct AccountArg {
     pub account: String,
 }
 
-#[derive(Debug, Args)]
+#[derive(Debug, Clone, Args, Serialize, Deserialize)]
 pub struct MessageArg {
     /// Message to the other party, signed with the slate
     #[arg(short = 'm', long, value_name = "TEXT")]
     pub message: Option<String>,
 }
 
-#[derive(Debug, Args)]
+#[derive(Debug, Clone, Args, Serialize, Deserialize)]
 pub struct SlateFileArg {
     /// The slate file to read, V2 or V3 slate JSON
     #[arg(value_name = "FILE")]
     pub file: PathBuf,
 }
 
-#[derive(Debug, Args)]
+#[derive(Debug, Clone, Args, Serialize, Deserialize)]
 pub struct ReceiveArgs {
     #[command(flatten)]
     pub slate: SlateFileArg,
@@ -570,14 +570,14 @@ pub struct ReceiveArgs {
     pub message: MessageArg,
 }
 
-#[derive(Debug, Args)]
+#[derive(Debug, Clone, Args, Serialize, Deserialize)]
 pub struct ReplyFileArg {
     /// Where the reply goes, as V3 slate JSON [default: <FILE>.response]
     #[arg(long, value_name = "FILE")]
     pub reply_file: Option<PathBuf>,
 }
 
-#[derive(Debug, Args)]
+#[derive(Debug, Clone, Args, Serialize, Deserialize)]
 pub struct FinalizeArgs {
     #[command(flatten)]
     pub slate: SlateFileArg,
@@ -585,7 +585,7 @@ pub struct FinalizeArgs {
     pub fluff: FluffArg,
 }
 
-#[derive(Debug, Args)]
+#[derive(Debug, Clone, Args, Serialize, Deserialize)]
 pub struct LegacyArg {
     /// Send an http(s):// or onion payee the V2 or V3 slate every wallet takes, even when its
     /// listener offers native slates
@@ -593,7 +593,7 @@ pub struct LegacyArg {
     pub legacy: bool,
 }
 
-#[derive(Debug, Args)]
+#[derive(Debug, Clone, Args, Serialize, Deserialize)]
 pub struct FluffArg {
     /// Broadcast to all peers at once instead of through the stem phase, when the transaction
     /// is posted
@@ -601,7 +601,7 @@ pub struct FluffArg {
     pub fluff: bool,
 }
 
-#[derive(Debug, Args)]
+#[derive(Debug, Clone, Args, Serialize, Deserialize)]
 pub struct TxShowArgs {
     /// Local transaction id, as `tx list` shows it
     #[arg(value_name = "TX_ID", required_unless_present = "slate_id")]
@@ -612,14 +612,14 @@ pub struct TxShowArgs {
     pub refresh: RefreshArg,
 }
 
-#[derive(Debug, Args)]
+#[derive(Debug, Clone, Args, Serialize, Deserialize)]
 pub struct TxIdArgs {
     /// Local transaction id, as `tx list` shows it
     #[arg(value_name = "TX_ID")]
     pub tx_id: u32,
 }
 
-#[derive(Debug, Args)]
+#[derive(Debug, Clone, Args, Serialize, Deserialize)]
 pub struct PostArgs {
     #[command(flatten)]
     pub tx: TxIdArgs,
@@ -627,7 +627,7 @@ pub struct PostArgs {
     pub fluff: FluffArg,
 }
 
-#[derive(Debug, Args)]
+#[derive(Debug, Clone, Args, Serialize, Deserialize)]
 pub struct ListArgs {
     #[command(flatten)]
     pub account: AccountArg,
@@ -635,7 +635,7 @@ pub struct ListArgs {
     pub refresh: RefreshArg,
 }
 
-#[derive(Debug, Args)]
+#[derive(Debug, Clone, Args, Serialize, Deserialize)]
 pub struct RefreshArg {
     /// Refresh from the node first, as `wallet info` does, so confirmations and states are
     /// current; without it the listing reads what the last refresh stored
@@ -643,7 +643,7 @@ pub struct RefreshArg {
     pub refresh: bool,
 }
 
-#[derive(Debug, Subcommand)]
+#[derive(Debug, Clone, Subcommand, Serialize, Deserialize)]
 pub enum InvoiceCommand {
     /// Ask a payer for an amount over Epicbox or through a slate file
     #[command(after_help = "\
@@ -670,7 +670,7 @@ listen.")]
     Decline(SlateIdArg),
 }
 
-#[derive(Debug, Args)]
+#[derive(Debug, Clone, Args, Serialize, Deserialize)]
 pub struct IssueArgs {
     /// Amount to ask for, in EPIC; the payer adds the fee
     #[arg(value_name = "AMOUNT")]
@@ -683,7 +683,7 @@ pub struct IssueArgs {
     pub message: MessageArg,
 }
 
-#[derive(Debug, Args)]
+#[derive(Debug, Clone, Args, Serialize, Deserialize)]
 pub struct PayArgs {
     /// Slate id of a parked invoice, as `invoice list` shows it, or an invoice slate file, V2
     /// or V3 slate JSON
@@ -702,14 +702,14 @@ pub struct PayArgs {
     pub spend: SpendArgs,
 }
 
-#[derive(Debug, Args)]
+#[derive(Debug, Clone, Args, Serialize, Deserialize)]
 pub struct SlateIdArg {
     /// Slate id of the parked invoice, as `invoice list` shows it
     #[arg(value_name = "SLATE_ID")]
     pub slate_id: String,
 }
 
-#[derive(Debug, Subcommand)]
+#[derive(Debug, Clone, Subcommand, Serialize, Deserialize)]
 pub enum EpicboxCommand {
     /// Stay connected and handle slates as they arrive, until interrupted
     #[command(after_help = "\
@@ -733,7 +733,7 @@ without it or an invoice came back unpaid, unknown before either. Nothing is sen
 }
 
 /// A listing address of this wallet, for a name service.
-#[derive(Debug, Args)]
+#[derive(Debug, Clone, Args, Serialize, Deserialize)]
 pub struct ListingArgs {
     /// The service key of a listing, a compressed secp256k1 key in hex: act on that listing's
     /// address instead of the wallet's own
@@ -744,14 +744,14 @@ pub struct ListingArgs {
     pub generation: u32,
 }
 
-#[derive(Debug, Args)]
+#[derive(Debug, Clone, Args, Serialize, Deserialize)]
 pub struct PeerArgs {
     /// Full Epicbox address of the peer
     #[arg(value_name = "ADDRESS")]
     pub address: String,
 }
 
-#[derive(Debug, Subcommand)]
+#[derive(Debug, Clone, Subcommand, Serialize, Deserialize)]
 pub enum HttpCommand {
     /// Answer payments sent to this wallet over HTTP, until interrupted
     #[command(after_help = "\
@@ -770,7 +770,7 @@ port gets a reward built, up to the listener's limits.")]
     Listen(HttpListenArgs),
 }
 
-#[derive(Debug, Args)]
+#[derive(Debug, Clone, Args, Serialize, Deserialize)]
 pub struct HttpListenArgs {
     /// Port to listen on, else the configured listen port; 0 lets the system pick one
     #[arg(long, value_name = "PORT")]
@@ -790,7 +790,7 @@ pub struct HttpListenArgs {
 }
 
 /// The tor binary the wallet runs for Tor.
-#[derive(Debug, Args)]
+#[derive(Debug, Clone, Args, Serialize, Deserialize)]
 pub struct TorBinaryArgs {
     /// The tor binary to run, as the Tor Expert Bundle ships it
     #[arg(long, value_name = "PATH")]
@@ -800,7 +800,7 @@ pub struct TorBinaryArgs {
     pub lib_dir: Option<PathBuf>,
 }
 
-#[derive(Debug, Subcommand)]
+#[derive(Debug, Clone, Subcommand, Serialize, Deserialize)]
 pub enum PeerCommand {
     /// List the pinned keys of the LEPIC wallets this account paid directly
     #[command(after_help = "\
@@ -812,7 +812,7 @@ key, until the pin is forgotten.")]
     Forget(PeerForgetArgs),
 }
 
-#[derive(Debug, Args)]
+#[derive(Debug, Clone, Args, Serialize, Deserialize)]
 pub struct PeerForgetArgs {
     /// The origin as `lepic peer pins` shows it: `http://host:port`, `https://host:port` or an
     /// onion name
@@ -821,7 +821,7 @@ pub struct PeerForgetArgs {
     pub account: AccountArg,
 }
 
-#[derive(Debug, Subcommand)]
+#[derive(Debug, Clone, Subcommand, Serialize, Deserialize)]
 pub enum TorCommand {
     /// Show the wallet's onion address, which tor listen publishes
     #[command(after_help = "\
@@ -842,14 +842,14 @@ have it; proofs asked for there are signed with the payment-proof key.")]
     Listen(TorListenArgs),
 }
 
-#[derive(Debug, Args)]
+#[derive(Debug, Clone, Args, Serialize, Deserialize)]
 pub struct TorAddressArgs {
     /// Show the previous onion address, the payment-proof address in onion form
     #[arg(long)]
     pub previous: bool,
 }
 
-#[derive(Debug, Args)]
+#[derive(Debug, Clone, Args, Serialize, Deserialize)]
 pub struct TorListenArgs {
     #[command(flatten)]
     pub tor: TorBinaryArgs,
@@ -858,13 +858,13 @@ pub struct TorListenArgs {
     pub previous_onion: bool,
 }
 
-#[derive(Debug, Subcommand)]
+#[derive(Debug, Clone, Subcommand, Serialize, Deserialize)]
 pub enum NodeCommand {
     /// Show the node's version and chain tip
     Status,
 }
 
-#[derive(Debug, Subcommand)]
+#[derive(Debug, Clone, Subcommand, Serialize, Deserialize)]
 pub enum ProfileCommand {
     /// Show the profile this wallet tells its contacts
     Show,
@@ -877,13 +877,13 @@ Set `profile` in the config file too, or later updates tell the configured value
     Domain(DomainArgs),
 }
 
-#[derive(Debug, Args)]
+#[derive(Debug, Clone, Args, Serialize, Deserialize)]
 pub struct DomainArgs {
     #[command(subcommand)]
     pub command: DomainCommand,
 }
 
-#[derive(Debug, Subcommand)]
+#[derive(Debug, Clone, Subcommand, Serialize, Deserialize)]
 pub enum DomainCommand {
     /// Show the configured domain and this wallet's domain key
     Show,
@@ -899,7 +899,7 @@ Needs the `domain` setting. Pairings made while `domain` is set carry the claim 
     Attach,
 }
 
-#[derive(Debug, Args)]
+#[derive(Debug, Clone, Args, Serialize, Deserialize)]
 pub struct DomainFileArgs {
     /// Where to write the file [default: ./epic-wallet.json]
     #[arg(long, value_name = "PATH")]
@@ -912,7 +912,7 @@ pub struct DomainFileArgs {
     pub force: bool,
 }
 
-#[derive(Debug, Args)]
+#[derive(Debug, Clone, Args, Serialize, Deserialize)]
 pub struct ProfileSetArgs {
     /// Bit names: no-payments, automated; "" (an empty value, given explicitly) clears the profile
     #[arg(
@@ -926,7 +926,7 @@ pub struct ProfileSetArgs {
     pub bits: Option<String>,
 }
 
-#[derive(Debug, Args)]
+#[derive(Debug, Clone, Args, Serialize, Deserialize)]
 pub struct ContactArgs {
     #[command(subcommand)]
     pub command: ContactCommand,
@@ -938,7 +938,7 @@ pub struct ContactArgs {
     pub epicbox_off: bool,
 }
 
-#[derive(Debug, Args)]
+#[derive(Debug, Clone, Args, Serialize, Deserialize)]
 pub struct InPersonArgs {
     #[command(subcommand)]
     pub command: InPersonCommand,
@@ -950,7 +950,7 @@ pub struct InPersonArgs {
     pub epicbox_off: bool,
 }
 
-#[derive(Debug, Subcommand)]
+#[derive(Debug, Clone, Subcommand, Serialize, Deserialize)]
 pub enum InPersonCommand {
     /// Make an invoice code to show, for one scan; its answer comes to this wallet's relay
     #[command(after_help = "\
@@ -995,7 +995,7 @@ code is flagged by `lepic in-person answers`.")]
     Finalize(InPersonFinalizeArgs),
 }
 
-#[derive(Debug, Args)]
+#[derive(Debug, Clone, Args, Serialize, Deserialize)]
 pub struct InPersonInvoiceArgs {
     /// Amount to ask for, in EPIC; the payer adds the fee
     #[arg(value_name = "AMOUNT")]
@@ -1012,7 +1012,7 @@ pub struct InPersonInvoiceArgs {
 }
 
 /// A scanned code: its raw bytes as hex, or a file holding them.
-#[derive(Debug, Args)]
+#[derive(Debug, Clone, Args, Serialize, Deserialize)]
 #[command(group(clap::ArgGroup::new("bytes").required(true).args(["hex", "file"])))]
 pub struct InPersonCodeArg {
     /// The payload as hex digits
@@ -1023,7 +1023,7 @@ pub struct InPersonCodeArg {
     pub file: Option<PathBuf>,
 }
 
-#[derive(Debug, Args)]
+#[derive(Debug, Clone, Args, Serialize, Deserialize)]
 pub struct InPersonReadArgs {
     #[command(flatten)]
     pub code: InPersonCodeArg,
@@ -1033,7 +1033,7 @@ pub struct InPersonReadArgs {
     pub spend: SpendArgs,
 }
 
-#[derive(Debug, Args)]
+#[derive(Debug, Clone, Args, Serialize, Deserialize)]
 pub struct InPersonSendArgs {
     /// Amount to send, in EPIC; the fee is added
     #[arg(value_name = "AMOUNT")]
@@ -1048,7 +1048,7 @@ pub struct InPersonSendArgs {
     pub out: OutFileArg,
 }
 
-#[derive(Debug, Args)]
+#[derive(Debug, Clone, Args, Serialize, Deserialize)]
 pub struct InPersonReceiveArgs {
     #[command(flatten)]
     pub code: InPersonCodeArg,
@@ -1060,7 +1060,7 @@ pub struct InPersonReceiveArgs {
     pub out: OutFileArg,
 }
 
-#[derive(Debug, Args)]
+#[derive(Debug, Clone, Args, Serialize, Deserialize)]
 pub struct InPersonPayArgs {
     /// The amount the invoice asks for, in EPIC
     #[arg(value_name = "AMOUNT")]
@@ -1077,14 +1077,14 @@ pub struct InPersonPayArgs {
     pub out: OutFileArg,
 }
 
-#[derive(Debug, Args)]
+#[derive(Debug, Clone, Args, Serialize, Deserialize)]
 pub struct InPersonSlateArg {
     /// Slate id of the code, as `in-person invoice`, `send`, `pay` or `receive` printed it
     #[arg(value_name = "SLATE_ID")]
     pub slate_id: String,
 }
 
-#[derive(Debug, Args)]
+#[derive(Debug, Clone, Args, Serialize, Deserialize)]
 pub struct InPersonPostArgs {
     #[command(flatten)]
     pub slate: InPersonSlateArg,
@@ -1093,7 +1093,7 @@ pub struct InPersonPostArgs {
     pub relay_ok: bool,
 }
 
-#[derive(Debug, Args)]
+#[derive(Debug, Clone, Args, Serialize, Deserialize)]
 #[command(group(clap::ArgGroup::new("answer").required(true).args(["input", "file"])))]
 pub struct InPersonTakeArgs {
     /// The answer: hex digits, armoured text, or its UR parts
@@ -1104,7 +1104,7 @@ pub struct InPersonTakeArgs {
     pub file: Option<PathBuf>,
 }
 
-#[derive(Debug, Args)]
+#[derive(Debug, Clone, Args, Serialize, Deserialize)]
 pub struct InPersonFinalizeArgs {
     #[command(flatten)]
     pub slate: InPersonSlateArg,
@@ -1115,7 +1115,7 @@ pub struct InPersonFinalizeArgs {
     pub fluff: FluffArg,
 }
 
-#[derive(Debug, Args)]
+#[derive(Debug, Clone, Args, Serialize, Deserialize)]
 pub struct Epic1Args {
     #[command(subcommand)]
     pub command: Epic1Command,
@@ -1127,7 +1127,7 @@ pub struct Epic1Args {
     pub epicbox_off: bool,
 }
 
-#[derive(Debug, Subcommand)]
+#[derive(Debug, Clone, Subcommand, Serialize, Deserialize)]
 pub enum Epic1Command {
     /// Show an epic1 address of an account: its first one, or the one at --index
     Address(Epic1AddressArgs),
@@ -1172,7 +1172,7 @@ to the next when a post fails, at most three.")]
     Restore,
 }
 
-#[derive(Debug, Args)]
+#[derive(Debug, Clone, Args, Serialize, Deserialize)]
 pub struct Epic1AddressArgs {
     #[command(flatten)]
     pub account: AccountArg,
@@ -1182,7 +1182,7 @@ pub struct Epic1AddressArgs {
     pub index: u32,
 }
 
-#[derive(Debug, Args)]
+#[derive(Debug, Clone, Args, Serialize, Deserialize)]
 pub struct Epic1AddressesArgs {
     #[command(flatten)]
     pub account: AccountArg,
@@ -1194,7 +1194,7 @@ pub struct Epic1AddressesArgs {
     pub limit: u32,
 }
 
-#[derive(Debug, Args)]
+#[derive(Debug, Clone, Args, Serialize, Deserialize)]
 pub struct Epic1LinkArgs {
     #[command(flatten)]
     pub account: AccountArg,
@@ -1215,7 +1215,7 @@ pub struct Epic1LinkArgs {
     pub epicbox: Vec<String>,
 }
 
-#[derive(Debug, Args)]
+#[derive(Debug, Clone, Args, Serialize, Deserialize)]
 pub struct Epic1RetireArgs {
     #[command(flatten)]
     pub account: AccountArg,
@@ -1224,14 +1224,14 @@ pub struct Epic1RetireArgs {
     pub n: u32,
 }
 
-#[derive(Debug, Args)]
+#[derive(Debug, Clone, Args, Serialize, Deserialize)]
 pub struct Epic1LinkArg {
     /// The link, `epic:epic1…`
     #[arg(value_name = "LINK")]
     pub link: String,
 }
 
-#[derive(Debug, Args)]
+#[derive(Debug, Clone, Args, Serialize, Deserialize)]
 pub struct Epic1PayArgs {
     #[command(flatten)]
     pub link: Epic1LinkArg,
@@ -1251,7 +1251,7 @@ pub struct Epic1PayArgs {
     pub slate_id: SendSlateIdArg,
 }
 
-#[derive(Debug, Args)]
+#[derive(Debug, Clone, Args, Serialize, Deserialize)]
 pub struct Epic1PostNextArgs {
     /// Slate id of the payment, as `epic1 pay` printed it
     #[arg(value_name = "SLATE_ID")]
@@ -1261,7 +1261,7 @@ pub struct Epic1PostNextArgs {
     pub hosts_ok: bool,
 }
 
-#[derive(Debug, Args)]
+#[derive(Debug, Clone, Args, Serialize, Deserialize)]
 pub struct Epic1PostAnswerArgs {
     /// Slate id of the payment, as `epic1 answers` lists it
     #[arg(value_name = "SLATE_ID")]
@@ -1271,7 +1271,7 @@ pub struct Epic1PostAnswerArgs {
     pub relay_ok: bool,
 }
 
-#[derive(Debug, Subcommand)]
+#[derive(Debug, Clone, Subcommand, Serialize, Deserialize)]
 pub enum EpictxCommand {
     /// Open an .epictx file with this wallet's keys and print its slate as JSON; nothing is
     /// stored
@@ -1281,7 +1281,7 @@ tail; any other slate as its V3 JSON.")]
     Open(EpictxOpenArgs),
 }
 
-#[derive(Debug, Args)]
+#[derive(Debug, Clone, Args, Serialize, Deserialize)]
 pub struct EpictxOpenArgs {
     /// The .epictx file, or - to read the text from standard input
     #[arg(value_name = "FILE|-")]
@@ -1291,7 +1291,7 @@ pub struct EpictxOpenArgs {
     pub text: Option<String>,
 }
 
-#[derive(Debug, Subcommand)]
+#[derive(Debug, Clone, Subcommand, Serialize, Deserialize)]
 pub enum ContactCommand {
     /// Make an invite to pair with a contact, as a link to share
     #[command(after_help = "\
@@ -1378,13 +1378,13 @@ payloads; they wait in `contact payload list` until acknowledged.")]
     Quarantine,
 }
 
-#[derive(Debug, Args)]
+#[derive(Debug, Clone, Args, Serialize, Deserialize)]
 pub struct ContactPayloadArgs {
     #[command(subcommand)]
     pub command: ContactPayloadCommand,
 }
 
-#[derive(Debug, Subcommand)]
+#[derive(Debug, Clone, Subcommand, Serialize, Deserialize)]
 pub enum ContactPayloadCommand {
     /// Send bytes to a paired contact through its mailbox; prints the payload's id
     Post(ContactPayloadPostArgs),
@@ -1394,7 +1394,7 @@ pub enum ContactPayloadCommand {
     Ack(ContactPayloadAckArgs),
 }
 
-#[derive(Debug, Args)]
+#[derive(Debug, Clone, Args, Serialize, Deserialize)]
 #[command(group(clap::ArgGroup::new("bytes").required(true).args(["hex", "file"])))]
 pub struct ContactPayloadPostArgs {
     #[command(flatten)]
@@ -1407,7 +1407,7 @@ pub struct ContactPayloadPostArgs {
     pub file: Option<PathBuf>,
 }
 
-#[derive(Debug, Args)]
+#[derive(Debug, Clone, Args, Serialize, Deserialize)]
 pub struct ContactPayloadAckArgs {
     /// Payload ids, as `contact payload list` shows them
     #[arg(value_name = "ID", required = true, num_args = 1..)]
@@ -1428,7 +1428,7 @@ pub enum InviteExpiryArg {
     Week,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum, Serialize, Deserialize)]
 pub enum ContactKindArg {
     Person,
     Shop,
@@ -1452,13 +1452,13 @@ pub enum KeysArg {
     UseNew,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum, Serialize, Deserialize)]
 pub enum OnOffArg {
     On,
     Off,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum, Serialize, Deserialize)]
 pub enum PurposeArg {
     Payment,
     Deposit,
@@ -1473,14 +1473,14 @@ pub const DEFAULT_CONTACT_NAME: &str = "LEPIC";
 /// The most days `contact move-home` keeps reading the old mailboxes.
 pub const MAX_DRAIN_DAYS: i64 = 365;
 
-#[derive(Debug, Args)]
+#[derive(Debug, Clone, Args, Serialize, Deserialize)]
 pub struct ContactNameArg {
     /// The name this wallet gives itself in its card
     #[arg(long, value_name = "NAME", default_value = DEFAULT_CONTACT_NAME)]
     pub name: String,
 }
 
-#[derive(Debug, Args)]
+#[derive(Debug, Clone, Args, Serialize, Deserialize)]
 pub struct ContactInviteArgs {
     #[command(flatten)]
     pub name: ContactNameArg,
@@ -1492,7 +1492,7 @@ pub struct ContactInviteArgs {
     pub kind: Option<ContactKindArg>,
 }
 
-#[derive(Debug, Args)]
+#[derive(Debug, Clone, Args, Serialize, Deserialize)]
 pub struct ContactRequestArgs {
     /// The wallet's Epicbox address
     #[arg(value_name = "ADDRESS")]
@@ -1501,14 +1501,14 @@ pub struct ContactRequestArgs {
     pub name: ContactNameArg,
 }
 
-#[derive(Debug, Args)]
+#[derive(Debug, Clone, Args, Serialize, Deserialize)]
 pub struct ContactRequestIdArg {
     /// The request's id, as `contact requests` shows it
     #[arg(value_name = "REQUEST")]
     pub request: String,
 }
 
-#[derive(Debug, Args)]
+#[derive(Debug, Clone, Args, Serialize, Deserialize)]
 pub struct ContactRequestAcceptArgs {
     /// The request's id, as `contact requests` shows it
     #[arg(value_name = "REQUEST")]
@@ -1517,21 +1517,21 @@ pub struct ContactRequestAcceptArgs {
     pub name: ContactNameArg,
 }
 
-#[derive(Debug, Args)]
+#[derive(Debug, Clone, Args, Serialize, Deserialize)]
 pub struct ContactLinkArg {
     /// The epiccash:// link
     #[arg(value_name = "LINK")]
     pub link: String,
 }
 
-#[derive(Debug, Args)]
+#[derive(Debug, Clone, Args, Serialize, Deserialize)]
 pub struct ContactEnterArgs {
     /// The epiccash:// link
     #[arg(value_name = "LINK")]
     pub input: String,
 }
 
-#[derive(Debug, Args)]
+#[derive(Debug, Clone, Args, Serialize, Deserialize)]
 pub struct ContactKeyCheckArgs {
     /// The new pairing's id, as `contact list` shows it
     #[arg(value_name = "NEW")]
@@ -1541,7 +1541,7 @@ pub struct ContactKeyCheckArgs {
     pub old: String,
 }
 
-#[derive(Debug, Args)]
+#[derive(Debug, Clone, Args, Serialize, Deserialize)]
 pub struct ContactKeysArgs {
     /// The new pairing's id, in keys-changed
     #[arg(value_name = "NEW")]
@@ -1550,14 +1550,14 @@ pub struct ContactKeysArgs {
     pub choice: KeysArg,
 }
 
-#[derive(Debug, Args)]
+#[derive(Debug, Clone, Args, Serialize, Deserialize)]
 pub struct OutFileArg {
     /// Write to this file instead of printing
     #[arg(long, value_name = "FILE")]
     pub out: Option<PathBuf>,
 }
 
-#[derive(Debug, Args)]
+#[derive(Debug, Clone, Args, Serialize, Deserialize)]
 pub struct ContactSendSlateArgs {
     #[command(flatten)]
     pub contact: ContactIdArg,
@@ -1568,7 +1568,7 @@ pub struct ContactSendSlateArgs {
     pub purpose: Option<PurposeArg>,
 }
 
-#[derive(Debug, Args)]
+#[derive(Debug, Clone, Args, Serialize, Deserialize)]
 pub struct ContactSealArgs {
     #[command(flatten)]
     pub slate: ContactSendSlateArgs,
@@ -1576,7 +1576,7 @@ pub struct ContactSealArgs {
     pub out: OutFileArg,
 }
 
-#[derive(Debug, Args)]
+#[derive(Debug, Clone, Args, Serialize, Deserialize)]
 pub struct ContactOpenSealedArgs {
     /// The sealed file, or - to read the text from standard input
     #[arg(value_name = "FILE|-")]
@@ -1597,7 +1597,7 @@ pub struct ContactOpenSealedArgs {
     pub fluff: FluffArg,
 }
 
-#[derive(Debug, Args)]
+#[derive(Debug, Clone, Args, Serialize, Deserialize)]
 pub struct ContactPlainArgs {
     #[command(flatten)]
     pub tx: TxIdArgs,
@@ -1605,7 +1605,7 @@ pub struct ContactPlainArgs {
     pub out: OutFileArg,
 }
 
-#[derive(Debug, Args)]
+#[derive(Debug, Clone, Args, Serialize, Deserialize)]
 pub struct ContactAcceptArgs {
     #[command(flatten)]
     pub link: ContactLinkArg,
@@ -1616,14 +1616,14 @@ pub struct ContactAcceptArgs {
     pub by_hand: bool,
 }
 
-#[derive(Debug, Args)]
+#[derive(Debug, Clone, Args, Serialize, Deserialize)]
 pub struct ContactIdArg {
     /// The contact's id, as `contact list` shows it
     #[arg(value_name = "CONTACT")]
     pub contact: String,
 }
 
-#[derive(Debug, Args)]
+#[derive(Debug, Clone, Args, Serialize, Deserialize)]
 pub struct ContactLabelArgs {
     #[command(flatten)]
     pub contact: ContactIdArg,
@@ -1632,7 +1632,7 @@ pub struct ContactLabelArgs {
     pub label: String,
 }
 
-#[derive(Debug, Args)]
+#[derive(Debug, Clone, Args, Serialize, Deserialize)]
 pub struct ContactMoveArgs {
     #[command(flatten)]
     pub contact: ContactIdArg,
@@ -1641,7 +1641,7 @@ pub struct ContactMoveArgs {
     pub apply: String,
 }
 
-#[derive(Debug, Args)]
+#[derive(Debug, Clone, Args, Serialize, Deserialize)]
 pub struct ContactMoveHomeArgs {
     /// The relay to move to, `domain[:port]`; set it as the wallet's Epicbox relay too
     #[arg(value_name = "HOST")]
@@ -1657,7 +1657,7 @@ pub struct ContactMoveHomeArgs {
     pub drain_days: u16,
 }
 
-#[derive(Debug, Args)]
+#[derive(Debug, Clone, Args, Serialize, Deserialize)]
 pub struct ContactSasArgs {
     #[command(flatten)]
     pub contact: ContactIdArg,
@@ -1665,7 +1665,7 @@ pub struct ContactSasArgs {
     pub result: SasArg,
 }
 
-#[derive(Debug, Args)]
+#[derive(Debug, Clone, Args, Serialize, Deserialize)]
 pub struct ContactSwitchArgs {
     #[command(flatten)]
     pub contact: ContactIdArg,
@@ -1673,7 +1673,7 @@ pub struct ContactSwitchArgs {
     pub state: OnOffArg,
 }
 
-#[derive(Debug, Args)]
+#[derive(Debug, Clone, Args, Serialize, Deserialize)]
 pub struct ContactInvoiceArgs {
     #[command(flatten)]
     pub contact: ContactIdArg,
@@ -1690,7 +1690,7 @@ pub struct ContactInvoiceArgs {
     pub account: AccountArg,
 }
 
-#[derive(Debug, Args)]
+#[derive(Debug, Clone, Args, Serialize, Deserialize)]
 pub struct ContactPayArgs {
     /// Slate id of the invoice, as `contact invoices` shows it
     #[arg(value_name = "SLATE_ID")]
@@ -1706,21 +1706,21 @@ pub struct ContactPayArgs {
     pub spend: SpendArgs,
 }
 
-#[derive(Debug, Args)]
+#[derive(Debug, Clone, Args, Serialize, Deserialize)]
 pub struct ContactSlateIdArg {
     /// Slate id of the invoice, as `contact invoices` shows it
     #[arg(value_name = "SLATE_ID")]
     pub slate_id: String,
 }
 
-#[derive(Debug, Args)]
+#[derive(Debug, Clone, Args, Serialize, Deserialize)]
 pub struct ContactExportArgs {
     /// The file to write
     #[arg(value_name = "FILE")]
     pub file: PathBuf,
 }
 
-#[derive(Debug, Args)]
+#[derive(Debug, Clone, Args, Serialize, Deserialize)]
 pub struct ContactImportArgs {
     /// A file `contact export` wrote
     #[arg(value_name = "FILE")]

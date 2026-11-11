@@ -280,8 +280,8 @@ fn a_contact_check_is_answered_by_a_serving_wallet() {
             let now = &listed(&buyer, &client, &shop_id)["last_heard"];
             now.is_string() && *now != heard
         });
-        let status = http(&socket, "GET", "/v1/status", None).ok();
-        assert_eq!(status["collect"]["consecutive_failures"], 0, "{status}");
+        let status = http(&socket, "GET", "/api/v1/status", None).ok();
+        assert_eq!(status["collect"]["failures"], 0, "{status}");
         stop.store(true, Ordering::SeqCst);
         server.join().unwrap()
     });

@@ -28,7 +28,6 @@ fn serve_answers_the_api_and_stops_on_interrupt() {
     let wallet = Instance::new("serving password");
     wallet.restore(&host, SENDER_MNEMONIC);
     let info = wallet.run(&host, &["wallet", "info"]).ok().json();
-    let listed = wallet.run(&host, &["tx", "list"]).ok().json();
 
     let stop = Arc::new(AtomicBool::new(false));
     let signal = Arc::clone(&stop);
@@ -39,12 +38,15 @@ fn serve_answers_the_api_and_stops_on_interrupt() {
 
     let served: Outcome = std::thread::scope(|scope| {
         let server = scope.spawn(|| wallet.run(&host, &["serve", "--socket", socket_arg]));
+        let _stop = StopOnDrop(Arc::clone(&stop));
         wait_for_socket(&socket);
 
-        assert_eq!(http(&socket, "GET", "/v1/wallet", None).ok(), info);
-        assert_eq!(http(&socket, "GET", "/v1/transactions", None).ok(), listed);
-        let garbled = http(&socket, "POST", "/v1/transactions", Some("not json"));
-        assert_eq!(garbled.status, 400, "{garbled:?}");
+        let wallet_document = http(&socket, "GET", "/api/v1/wallet", None).ok();
+        assert!(wallet_document.is_object(), "{wallet_document}");
+        let payments = http(&socket, "GET", "/api/v1/payments", None).ok();
+        assert!(payments.is_object(), "{payments}");
+        let garbled = http(&socket, "POST", "/api/v1/payments", Some("not json"));
+        support::problem(&garbled, 400, "invalid_body");
 
         stop.store(true, Ordering::SeqCst);
         server.join().unwrap()
@@ -106,8 +108,9 @@ fn serve_answers_a_request_in_flight_before_it_stops() {
 
     let (sent, served) = std::thread::scope(|scope| {
         let server = scope.spawn(|| wallet.run(&host, &["serve", "--socket", socket_arg]));
+        let _stop = StopOnDrop(Arc::clone(&stop));
         wait_for_socket(&socket);
-        let sending = scope.spawn(|| http(&socket, "POST", "/v1/transactions", Some(&send)));
+        let sending = scope.spawn(|| http(&socket, "POST", "/api/v1/payments", Some(&send)));
         support::wait_until("the send posted", || {
             client.relay.received("PostSlate") >= 1
         });
@@ -115,17 +118,21 @@ fn serve_answers_a_request_in_flight_before_it_stops() {
         (sending.join().unwrap(), server.join().unwrap())
     });
 
-    assert_eq!(sent.status, 503, "{sent:?}");
-    let problem = sent.json();
-    assert_eq!(problem["code"], "interrupted", "{problem}");
-    let tx_id = problem["tx_id"].as_u64().unwrap().to_string();
+    support::problem(&sent, 503, "interrupted");
     let report = served.ok().json();
     assert_eq!(report["requests"], 1, "{report}");
-    let shown = wallet.run(&client, &["tx", "show", &tx_id]).ok().json();
-    assert_eq!(shown["state"], "sent", "{shown}");
+    // The payment the stop interrupted was stored, and is told apart from none by its state.
+    let listed = wallet.run(&client, &["tx", "list"]).ok().json();
+    let sent_states: Vec<&serde_json::Value> = listed["transactions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|tx| &tx["state"])
+        .collect();
+    assert_eq!(sent_states, ["sent"], "{listed}");
 }
 
-/// `GET /v1/status` counts refreshes that fail in a row with the latest error, and starts again
+/// `GET /api/v1/status` counts refreshes that fail in a row with the latest error, and starts again
 /// from zero at the next success while keeping that error.
 #[test]
 fn serve_status_reports_refreshes_failing_in_a_row() {
@@ -140,13 +147,13 @@ fn serve_status_reports_refreshes_failing_in_a_row() {
     let dir = tempfile::tempdir().unwrap();
     let socket = dir.path().join("s.sock");
     let socket_arg = socket.to_str().unwrap();
-    let status = || http(&socket, "GET", "/v1/status", None).ok();
+    let status = || http(&socket, "GET", "/api/v1/status", None).ok();
 
     let served = std::thread::scope(|scope| {
         let server = scope.spawn(|| wallet.run(&host, &["serve", "--socket", socket_arg]));
         wait_for_socket(&socket);
         support::wait_until("a first refresh", || {
-            status()["refresh"]["last_success"].is_string()
+            status()["refresh"]["last_success_at"].is_string()
         });
         // Enough failures for the count to be seen above one between two status requests.
         for _ in 0..20 {
@@ -156,20 +163,20 @@ fn serve_status_reports_refreshes_failing_in_a_row() {
         }
         support::wait_until("two refreshes failed in a row", || {
             let refresh = &status()["refresh"];
-            refresh["consecutive_failures"].as_u64() >= Some(2) && refresh["last_error"].is_string()
+            refresh["failures"].as_u64() >= Some(2) && refresh["last_error"].is_string()
         });
         support::wait_until("a refresh after the failures", || {
             let refresh = &status()["refresh"];
-            refresh["consecutive_failures"] == 0 && refresh["last_error"].is_string()
+            refresh["failures"] == 0 && refresh["last_error"].is_string()
         });
-        assert_eq!(status()["collect"]["consecutive_failures"], 0);
+        assert_eq!(status()["collect"]["failures"], 0);
         stop.store(true, Ordering::SeqCst);
         server.join().unwrap()
     });
     served.ok();
 }
 
-/// `serve --http` answers the foreign API on a port the system picked, `GET /v1/status` shows the
+/// `serve --http` answers the foreign API on a port the system picked, `GET /api/v1/status` shows the
 /// listener, and serve's report ends with its counts.
 #[test]
 fn serve_with_http_answers_the_foreign_api() {
@@ -192,8 +199,8 @@ fn serve_with_http_answers_the_foreign_api() {
             )
         });
         wait_for_socket(&socket);
-        let status = http(&socket, "GET", "/v1/status", None).ok();
-        let listener = &status["http"];
+        let status = http(&socket, "GET", "/api/v1/status", None).ok();
+        let listener = &status["listeners"]["http"];
         assert_eq!(listener["exposure"], "local", "{status}");
         assert_eq!(listener["coinbase"], "off", "{status}");
         assert_eq!(listener["received"], 0, "{status}");
@@ -248,8 +255,8 @@ fn with_listener(native_direct: bool, ask: impl FnOnce(u16)) {
     let served = std::thread::scope(|scope| {
         let server = scope.spawn(|| wallet.run_with(&host, &args, env, ""));
         wait_for_socket(&socket);
-        let status = http(&socket, "GET", "/v1/status", None).ok();
-        ask(u16::try_from(status["http"]["port"].as_u64().unwrap()).unwrap());
+        let status = http(&socket, "GET", "/api/v1/status", None).ok();
+        ask(u16::try_from(status["listeners"]["http"]["port"].as_u64().unwrap()).unwrap());
         stop.store(true, Ordering::SeqCst);
         server.join().unwrap()
     });
@@ -502,7 +509,7 @@ fn a_command_through_serve_prints_the_hint_of_a_direct_run() {
         wait_for_socket(&socket);
         let through = wallet.run_with(&client, &too_much, human.clone(), "");
         let as_json = wallet.run(&client, &too_much);
-        let document = http(&socket, "POST", "/v1/transactions", Some(&body));
+        let document = http(&socket, "POST", "/api/v1/payments", Some(&body));
         stop.store(true, Ordering::SeqCst);
         server.join().unwrap().ok();
         (through, as_json, document)
@@ -512,8 +519,8 @@ fn a_command_through_serve_prints_the_hint_of_a_direct_run() {
     assert_eq!(through.stderr, direct.stderr, "{through:?}");
     assert_eq!(as_json.code, 8, "{as_json:?}");
     assert!(!as_json.stdout.contains("hint"), "{as_json:?}");
-    assert_eq!(document.status, 422, "{document:?}");
-    assert!(document.json().get("hint").is_none(), "{document:?}");
+    let document = support::problem(&document, 422, "insufficient_funds");
+    assert!(document.get("hint").is_none(), "{document}");
 }
 
 /// While serve holds the wallet, the contact, in-person, epic1, epictx and profile domain
@@ -654,5 +661,124 @@ fn the_route_covered_command_families_run_through_a_running_serve() {
         assert_eq!(outcome.code, 0, "{outcome:?}");
     }
     assert!(made[1].json()["slate_id"].is_string(), "{:?}", made[1]);
+    served.ok();
+}
+
+/// `POST /cli/run` is the CLI's private channel on the socket. A body that is not a call is a 400
+/// there; over owner TLS the path is no route, whatever the body (ADR 0053).
+#[test]
+#[allow(clippy::too_many_lines)] // A test reads best as one sequence of steps.
+fn the_cli_channel_is_on_the_socket_only() {
+    use rcgen::{CertificateParams, KeyPair, PKCS_ED25519};
+    use rustls::pki_types::pem::PemObject as _;
+    use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer, ServerName};
+    use rustls::{ClientConfig, ClientConnection, RootCertStore, StreamOwned};
+    use std::io::Read as _;
+
+    let mut host = TestHost::new();
+    let wallet = Instance::new("channel password");
+    wallet.run(&host, &["wallet", "init"]).ok();
+    let key = KeyPair::generate_for(&PKCS_ED25519).unwrap();
+    let certificate = CertificateParams::new(vec!["laptop".to_owned()])
+        .unwrap()
+        .self_signed(&key)
+        .unwrap();
+    let pem = wallet.path("laptop.pem");
+    std::fs::write(&pem, certificate.pem()).unwrap();
+
+    let stop = Arc::new(AtomicBool::new(false));
+    let signal = Arc::clone(&stop);
+    host.interrupt_when = Some(Arc::new(move || signal.load(Ordering::SeqCst)));
+    let client = host.without_interrupt();
+    let dir = tempfile::tempdir().unwrap();
+    let socket = dir.path().join("s.sock");
+    let socket_arg = socket.to_str().unwrap();
+    let settings = wallet.path("settings.toml");
+    std::fs::write(
+        &settings,
+        include_str!("../settings.default.toml")
+            .replace("# owner_tls = \"ip:port\"", "owner_tls = \"127.0.0.1:0\""),
+    )
+    .unwrap();
+    let mut env = wallet.env();
+    env.push(("LEPIC_SETTINGS".to_owned(), settings.display().to_string()));
+
+    let served = std::thread::scope(|scope| {
+        let server = scope.spawn(|| {
+            wallet.run_with(
+                &host,
+                &["serve", "--socket", socket_arg, "--owner-tls"],
+                env,
+                "",
+            )
+        });
+        let _stop = StopOnDrop(Arc::clone(&stop));
+        wait_for_socket(&socket);
+        wallet
+            .run(&client, &["api", "client", "add", "laptop", pem.to_str().unwrap()])
+            .ok();
+        let status = http(&socket, "GET", "/api/v1/status", None).ok();
+        let address = status["owner_tls"]["address"].as_str().unwrap().to_owned();
+        let served_before = status["requests"]["served"].as_u64().unwrap();
+
+        // Over TLS the path is no route, for a body that is a call as for one that is not.
+        let trusted = CertificateDer::from_pem_slice(
+            &std::fs::read(wallet.data_dir().join("api-tls.pem")).unwrap(),
+        )
+        .unwrap();
+        let tls = |body: &str| {
+            let mut roots = RootCertStore::empty();
+            roots.add(trusted.clone()).unwrap();
+            let provider = Arc::new(rustls::crypto::ring::default_provider());
+            let config = ClientConfig::builder_with_provider(provider)
+                .with_protocol_versions(&[&rustls::version::TLS13])
+                .unwrap()
+                .with_root_certificates(roots)
+                .with_client_auth_cert(
+                    vec![certificate.der().clone()],
+                    PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(key.serialize_der())),
+                )
+                .unwrap();
+            let connection = ClientConnection::new(
+                Arc::new(config),
+                ServerName::try_from("lepic-wallet").unwrap(),
+            )
+            .unwrap();
+            let tcp = std::net::TcpStream::connect(&address).unwrap();
+            tcp.set_read_timeout(Some(support::PATIENCE)).unwrap();
+            let mut stream = StreamOwned::new(connection, tcp);
+            write!(
+                stream,
+                "POST /cli/run HTTP/1.1\r\nHost: lepic\r\nContent-Type: application/json\r\n\
+                 Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            )
+            .unwrap();
+            let mut answer = String::new();
+            stream.read_to_string(&mut answer).unwrap();
+            support::parse_reply(&answer)
+        };
+        let call = serde_json::to_string(&"contact_export").unwrap();
+        support::problem(&tls(&call), 404, "no_route");
+        support::problem(&tls("not a call"), 404, "no_route");
+
+        // On the socket a body that is not a call is refused, and a call runs.
+        for body in ["not json", r#"{"nothing":1}"#, r#"{"command":"nothing"}"#, "{}"] {
+            let reply = http(&socket, "POST", "/cli/run", Some(body));
+            support::problem(&reply, 400, "invalid_body");
+        }
+        let exported = http(&socket, "POST", "/cli/run", Some(&call));
+        assert_eq!(exported.status, 200, "{exported:?}");
+        assert!(exported.json()["backup"].is_string(), "{exported:?}");
+        // The route is not an operation of the API document.
+        let get = http(&socket, "GET", "/cli/run", None);
+        support::problem(&get, 404, "no_route");
+        // Each of the six calls on the socket counts in the status.
+        let status = http(&socket, "GET", "/api/v1/status", None).ok();
+        let served = status["requests"]["served"].as_u64().unwrap();
+        assert!(served >= served_before + 6, "{served_before} {status}");
+        stop.store(true, Ordering::SeqCst);
+        server.join().unwrap()
+    });
     served.ok();
 }

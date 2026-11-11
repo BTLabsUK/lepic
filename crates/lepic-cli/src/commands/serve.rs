@@ -2,6 +2,7 @@
 //! `lepic serve`: holds one unlocked wallet, does what `epicbox listen` does, and answers the
 //! wallet API on a local socket, and with `--owner-tls` over TLS too.
 
+mod cli;
 mod v1;
 
 use std::cell::{Cell, RefCell};
@@ -93,7 +94,6 @@ struct Service<'a, H: Host> {
 impl<H: Host> Service<'_, H> {
     /// Runs `command` as `lepic` runs it, with a console that has no input and discards output,
     /// so a command that asks for a secret fails. A handler may run one to reuse its work.
-    #[allow(dead_code)] // Until a handler runs one.
     async fn command(&self, command: Command) -> Result<Report, CliError> {
         let mut console = Console {
             env: Env::new(std::iter::empty()),

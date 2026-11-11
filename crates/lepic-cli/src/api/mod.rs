@@ -33,7 +33,7 @@ use hyper::body::{Bytes, Incoming};
 use hyper::header::{self, HeaderMap, HeaderValue};
 use hyper::server::conn::http1;
 use hyper::service::service_fn;
-use hyper::{Response, StatusCode};
+use hyper::{Method, Response, StatusCode};
 use hyper_util::rt::{TokioIo, TokioTimer};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -61,6 +61,9 @@ pub(crate) enum Listener {
     Tls,
 }
 
+/// The path of the CLI's private channel on the socket (ADR 0053).
+const CLI_RUN: &str = "/cli/run";
+
 /// A response body. Not `Send`: serve answers on one thread, and an event stream holds the
 /// wallet.
 pub(crate) type Body = Pin<Box<dyn hyper::body::Body<Data = Bytes, Error = Infallible>>>;
@@ -70,6 +73,9 @@ pub(crate) type Answer<'a> = Pin<Box<dyn Future<Output = Result<Response<Body>, 
 pub(crate) trait Owner {
     /// Answers `request`, routed to `op`, whose least role the caller has.
     fn operate<'a>(&'a self, op: Op, request: Request, context: &'a Context) -> Answer<'a>;
+
+    /// Runs the command the CLI sent on `POST /cli/run`, a private route of the socket.
+    fn command_line<'a>(&'a self, request: Request) -> Answer<'a>;
 }
 
 /// A request, routed: its path parameters, query, headers and body, the caller's role and the
@@ -377,6 +383,11 @@ impl<'o, O: Owner> Api<'o, O> {
     ) -> Result<Response<Body>, Problem> {
         if listener == Listener::Socket {
             self.caller.check(request.headers())?;
+            // The CLI's private channel: not an operation of the API document.
+            if request.method() == Method::POST && request.uri().path() == CLI_RUN {
+                let request = self.request(request, Vec::new(), role, listener, closing).await?;
+                return self.owner.command_line(request).await;
+            }
         }
         let (operation, params) = self.router.find(request.method(), request.uri().path())?;
         if operation.socket_only && listener == Listener::Tls {
@@ -386,10 +397,23 @@ impl<'o, O: Owner> Api<'o, O> {
             return Err(Problem::role_required(operation.role));
         }
         let op = operation.op;
+        let request = self.request(request, params, role, listener, closing).await?;
+        self.owner.operate(op, request, &self.context).await
+    }
+
+    /// `request` with its query and body read, as a routed request.
+    async fn request(
+        &self,
+        request: hyper::Request<Incoming>,
+        params: Vec<(String, String)>,
+        role: Role,
+        listener: Listener,
+        closing: watch::Receiver<bool>,
+    ) -> Result<Request, Problem> {
         let query = Query::parse(request.uri().query())?;
         let headers = request.headers().clone();
         let body = self.body(request).await?;
-        let request = Request {
+        Ok(Request {
             params,
             query,
             headers,
@@ -397,8 +421,7 @@ impl<'o, O: Owner> Api<'o, O> {
             role,
             listener,
             closing,
-        };
-        self.owner.operate(op, request, &self.context).await
+        })
     }
 
     /// The request body, within the size limit and the body deadline.
