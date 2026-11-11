@@ -313,6 +313,19 @@ fn a_listener_with_native_direct_offers_its_native_endpoint() {
         assert!(advert.is_object(), "{version}");
         let (status, _) = ask_listener(port, "GET", "/api/v1/inbox", "");
         assert!(status.starts_with("HTTP/1.1 200"), "{status}");
+        // The public listener answers the inbox and the foreign API only, never the wallet API
+        // or the CLI's channel.
+        let send = r#"{"amount":"1","to":"x"}"#;
+        for (method, path, body) in [
+            ("GET", "/api/v1/status", ""),
+            ("GET", "/api/v1/openapi.json", ""),
+            ("POST", "/api/v1/payments", send),
+            ("PUT", "/api/v1/wallet/password", "{}"),
+            ("POST", "/cli/run", "{}"),
+        ] {
+            let (status, _) = ask_listener(port, method, path, body);
+            assert!(status.starts_with("HTTP/1.1 404"), "{method} {path}: {status}");
+        }
     });
 }
 
