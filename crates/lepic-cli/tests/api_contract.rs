@@ -66,6 +66,16 @@ fn the_checker_finds_drift() {
     assert!(errors.iter().any(|e| e.contains("code")), "{errors:?}");
     // The wrong media type.
     assert!(!contract::errors("GET", "/payments/x", &reply(404, "text/plain", &good)).is_empty());
+    // A problem any call may answer, though the operation does not list its status.
+    let mut large = good.clone();
+    large["status"] = json!(413);
+    large["code"] = json!("body_too_large");
+    large["title"] = json!("Payload Too Large");
+    let errors = contract::errors("GET", "/status", &reply(413, problem_json, &large));
+    assert_eq!(errors, Vec::<String>::new());
+    // Not with another code.
+    large["code"] = json!("not_found");
+    assert!(!contract::errors("GET", "/status", &reply(413, problem_json, &large)).is_empty());
     // A wrong type deep inside.
     let status = json!({"version": 1});
     let errors = contract::errors("GET", "/status", &reply(200, "application/json", &status));

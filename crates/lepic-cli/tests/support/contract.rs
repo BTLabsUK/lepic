@@ -64,6 +64,9 @@ pub fn errors(method: &str, path: &str, reply: &Reply) -> Vec<String> {
     };
     let responses = &operation["responses"];
     let status = reply.status.to_string();
+    if responses.get(&status).is_none() && any_call_may_answer(reply) {
+        return body(&problem_content(), reply);
+    }
     let Some(response) = responses.get(&status).or_else(|| responses.get("default")) else {
         let documented: Vec<&String> = responses.as_object().unwrap().keys().collect();
         return vec![format!(
@@ -77,6 +80,24 @@ pub fn errors(method: &str, path: &str, reply: &Reply) -> Vec<String> {
         None if reply.body.is_empty() => Vec::new(),
         None => vec![format!("a {status} has no body, got {:?}", reply.body)],
     }
+}
+
+/// The problems the document's description lets any call answer, besides the statuses each
+/// operation lists: a body read too slowly or too large, a bug, and a forwarded CLI command whose
+/// caller headers differ from serve's.
+const ANY_CALL: &[(u16, &str)] = &[
+    (408, "body_too_slow"),
+    (413, "body_too_large"),
+    (500, "internal"),
+    (409, "serve_version_differs"),
+    (409, "serve_settings_differ"),
+];
+
+fn any_call_may_answer(reply: &Reply) -> bool {
+    let code = serde_json::from_str::<Value>(&reply.body)
+        .ok()
+        .and_then(|body| body["code"].as_str().map(str::to_owned));
+    code.is_some_and(|code| ANY_CALL.contains(&(reply.status, code.as_str())))
 }
 
 /// The operation `method` on `path` maps to: the template that matches with the most literal
