@@ -48,7 +48,8 @@ Funds come only from the QA funder, through one bank wallet (`e1s-bank`):
 
 The runner starts the floonet miner to move blocks while cases run, shares it between parallel
 runs, and stops it when the last one ends; blocks are never mined to fund a wallet. Sends use
-`--min-confirmations 1`.
+`--min-confirmations 1`. Where a host guard asks for a time-boxed allow file before a miner runs,
+`LEPIC_E2E_MINER_ALLOW` names it: the runner writes it while the miner runs and removes it after.
 
 ## Writing a case
 

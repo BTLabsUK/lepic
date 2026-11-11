@@ -15,6 +15,9 @@ E2E_MINCONF="${LEPIC_E2E_MINCONF:-1}"
 # The QA funder and the lock that serialises its use across parallel runs.
 E2E_FUNDER="${LEPIC_E2E_FUNDER:-${HOME}/epic/qa-funder/fund.sh}"
 E2E_FUNDER_LOCK="${HOME}/.cache/lepic-e2e-funder.lock"
+# A file a host's mining guard reads before it lets a miner start. When set, the runner writes it
+# for the miner's lifetime and removes it after; unset, it writes nothing.
+E2E_MINER_ALLOW="${LEPIC_E2E_MINER_ALLOW:-}"
 E2E_TOR_DIR="${LEPIC_E2E_TOR_DIR:-${HOME}/.cache/wfe-linux-build/work/tor-bundle}"
 # Wallet names start with this, so the test database and the state directory show what they are.
 E2E_PREFIX="e1s"
@@ -283,7 +286,7 @@ fund_bank() {
 MINER_STARTED=false
 miner_start() {
     [[ "${E2E_MINE:-true}" == true ]] || return 0
-    local users="${E2E_STATE}/miner.users" allow="${HOME}/.config/lepic-e2e/miner-allow.json"
+    local users="${E2E_STATE}/miner.users" allow="${E2E_MINER_ALLOW}"
     mkdir -p "${users}"
     exec {miner_fd}>>"${E2E_STATE}/miner.lock"
     flock "${miner_fd}"
@@ -293,7 +296,7 @@ miner_start() {
     if pm2 pid floo-miner 2>/dev/null | grep -Eq '^[1-9]'; then
         log "floo-miner already running; sharing it"
     else
-        if [[ ! -f "${allow}" ]]; then
+        if [[ -n "${allow}" && ! -f "${allow}" ]]; then
             mkdir -p "$(dirname "${allow}")"
             printf '{"until": "%s", "reason": "LEPIC epic1 e2e suite: confirm test transactions (interop/e2e)", "by": "interop/e2e"}\n' \
                 "$(date -d '+5 hours' --iso-8601=seconds)" >"${allow}"
@@ -324,7 +327,7 @@ miner_reap() {
 
 miner_stop() {
     [[ "${MINER_STARTED}" == true ]] || return 0
-    local users="${E2E_STATE}/miner.users" f others=0 allow="${HOME}/.config/lepic-e2e/miner-allow.json"
+    local users="${E2E_STATE}/miner.users" f others=0 allow="${E2E_MINER_ALLOW}"
     exec {miner_fd}>>"${E2E_STATE}/miner.lock"
     flock "${miner_fd}"
     rm -f "${users}/$$"
@@ -335,7 +338,7 @@ miner_stop() {
     if ((others == 0)); then
         pm2 delete floo-miner >>"${RUN_LOG}" 2>&1 || true
         miner_reap
-        grep -q '"by": "interop/e2e"' "${allow}" 2>/dev/null && rm -f "${allow}"
+        [[ -z "${allow}" ]] || { grep -q '"by": "interop/e2e"' "${allow}" 2>/dev/null && rm -f "${allow}"; }
         if pgrep -f "${MINER_BIN}" >/dev/null; then
             log "epic-miner.real is still running after the stop; see ps aux | grep epic-miner.real"
         else

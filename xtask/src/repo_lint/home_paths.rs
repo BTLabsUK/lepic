@@ -17,15 +17,8 @@ const PLACEHOLDERS: &[&str] = &[
     "a", "alice", "bob", "dev", "example", "me", "runner", "test", "u", "user", "you",
 ];
 
-/// Audit reports quote the findings they record, local paths included; plans, reviews and process
-/// notes are working documents that the public copy of the repository leaves out.
-const EXEMPT_PREFIXES: &[&str] = &[
-    "docs/audit/",
-    "docs/drafts/",
-    "docs/drafts/",
-    "docs/process/",
-    "docs/reviews/",
-];
+/// Audit reports quote the findings they record, local paths included.
+const EXEMPT_PREFIXES: &[&str] = &["docs/audit/"];
 
 const PREFIXES: &[&str] = &["/home/", "/Users/", "C:\\Users\\", "C:\\\\Users\\\\"];
 

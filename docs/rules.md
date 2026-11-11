@@ -52,7 +52,7 @@ engine reads (ADR 0031).
   no build output. `cargo xtask repo-lint` refuses `/home/<name>/`, `/Users/<name>/` and
   `C:\Users\<name>\` paths in tracked `.md`, `.rs`, `.toml`, `.sh`, `.yml`, `.yaml`, `.txt`,
   `.dart` and `.ps1` files, except the placeholder names `a`, `alice`, `bob`, `dev`, `example`,
-  `me`, `runner`, `test`, `u`, `user` and `you`, and except working documents under `docs/audit/`.
+  `me`, `runner`, `test`, `u`, `user` and `you`, and except the audit reports under `docs/audit/`.
 
 ## When facts disagree
 
