@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
-//! The owner TLS listener of `lepic serve --owner-tls`: which clients it lets in and what it
-//! answers them, in one process with a mock node and a mock relay.
+//! The owner TLS listener of `lepic serve --owner-tls`: which clients it lets in, what each
+//! client's role reaches, and what it answers, in one process with a mock node and a mock relay.
+//! Every `/api/v1` answer read here is checked against `docs/api/openapi.json`.
 
 // Tests may unwrap, index and panic (docs/rules.md).
 #![cfg(unix)]
@@ -20,9 +21,10 @@ use rcgen::{CertificateParams, KeyPair, PKCS_ECDSA_P256_SHA256, PKCS_ED25519, Si
 use rustls::pki_types::pem::PemObject as _;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer, ServerName};
 use rustls::{AlertDescription, ClientConfig, ClientConnection, RootCertStore, StreamOwned};
-use serde_json::Value;
+use serde_json::{Value, json};
 use support::{
-    FUNDING, Instance, PATIENCE, Reply, SENDER_MNEMONIC, TestHost, http, parse_reply, wait_until,
+    FUNDING, Instance, PATIENCE, Reply, SENDER_MNEMONIC, TestHost, contract, http, parse_reply,
+    problem, wait_until,
 };
 
 /// The shipped settings with the TLS listener on a free local port.
@@ -72,7 +74,7 @@ fn serving<T: Send>(
         });
         let stopping = Stop(&stop);
         support::wait_for_socket(&socket);
-        let status = http(&socket, "GET", "/v1/status", None).ok();
+        let status = http(&socket, "GET", "/api/v1/status", None).ok();
         let pem = std::fs::read(wallet.data_dir().join("api-tls.pem")).unwrap();
         let serving = Serving {
             socket: &socket,
@@ -143,6 +145,11 @@ impl Serving<'_> {
         self.wallet.run(self.host, &args).ok().json()
     }
 
+    /// Lists `client` in api-clients under `name` with `role`.
+    fn add(&self, name: &str, client: &ClientKey, role: &str) -> Value {
+        self.client(&["add", name, client.pem.to_str().unwrap(), "--role", role])
+    }
+
     /// A TLS connection as `client`, or with no client certificate.
     fn connect(&self, client: Option<&ClientKey>) -> std::io::Result<Tls> {
         let mut roots = RootCertStore::empty();
@@ -186,7 +193,12 @@ impl Serving<'_> {
         )?;
         let mut answer = String::new();
         stream.read_to_string(&mut answer)?;
-        Ok(parse_reply(&answer))
+        Ok(checked(method, path, parse_reply(&answer)))
+    }
+
+    fn post(&self, client: &ClientKey, path: &str, body: &Value) -> Reply {
+        self.request(Some(client), "POST", path, &body.to_string())
+            .unwrap()
     }
 
     fn get(&self, client: Option<&ClientKey>, path: &str) -> std::io::Result<Reply> {
@@ -194,8 +206,16 @@ impl Serving<'_> {
     }
 
     fn status(&self) -> Value {
-        http(self.socket, "GET", "/v1/status", None).ok()
+        http(self.socket, "GET", "/api/v1/status", None).ok()
     }
+}
+
+/// `reply`, checked against the API's contract when `path` is one of its calls.
+fn checked(method: &str, path: &str, reply: Reply) -> Reply {
+    if let Some(below) = path.strip_prefix("/api/v1") {
+        contract::check(method, below, &reply);
+    }
+    reply
 }
 
 type Tls = BufReader<StreamOwned<ClientConnection, TcpStream>>;
@@ -227,10 +247,8 @@ fn keep_alive_get(stream: &mut Tls, path: &str) -> std::io::Result<Reply> {
         .unwrap();
     let mut body = vec![0; length];
     stream.read_exact(&mut body)?;
-    Ok(parse_reply(&format!(
-        "{head}{}",
-        String::from_utf8(body).unwrap()
-    )))
+    let reply = parse_reply(&format!("{head}{}", String::from_utf8(body).unwrap()));
+    Ok(checked("GET", path, reply))
 }
 
 /// Checks that serve closed `stream`: a read ends, cleanly or with the TCP connection's end,
@@ -287,7 +305,6 @@ fn funded_wallet(host: &TestHost) -> Instance {
 fn a_listed_client_is_answered_until_it_is_removed() {
     let host = TestHost::new();
     let wallet = funded_wallet(&host);
-    let info = wallet.run(&host, &["wallet", "info"]).ok().json();
     let laptop = client_key(&wallet, "laptop");
 
     serving(host, &wallet, |serve| {
@@ -305,15 +322,19 @@ fn a_listed_client_is_answered_until_it_is_removed() {
         );
         serve.client(&["remove", "server"]);
 
-        assert_eq!(serve.get(Some(&laptop), "/v1/wallet").unwrap().ok(), info);
+        let info = http(serve.socket, "GET", "/api/v1/wallet", None).ok();
+        assert_eq!(
+            serve.get(Some(&laptop), "/api/v1/wallet").unwrap().ok(),
+            info
+        );
 
         let removed = serve.client(&["remove", "laptop"]);
         assert_eq!(removed, added);
         refused(
-            serve.get(Some(&laptop), "/v1/wallet"),
+            serve.get(Some(&laptop), "/api/v1/wallet"),
             AlertDescription::AccessDenied,
         );
-        let status = http(serve.socket, "GET", "/v1/status", None).ok();
+        let status = http(serve.socket, "GET", "/api/v1/status", None).ok();
         assert_eq!(status["requests"]["refused"], 1, "{status}");
     });
 }
@@ -328,19 +349,22 @@ fn an_unlisted_client_or_one_without_a_certificate_is_refused_at_the_handshake()
     serving(host, &wallet, |serve| {
         // No api-clients file lists no client.
         refused(
-            serve.get(Some(&laptop), "/v1/wallet"),
+            serve.get(Some(&laptop), "/api/v1/wallet"),
             AlertDescription::AccessDenied,
         );
         serve.client(&["add", "laptop", laptop.pem.to_str().unwrap()]);
         refused(
-            serve.get(Some(&stranger), "/v1/wallet"),
+            serve.get(Some(&stranger), "/api/v1/wallet"),
             AlertDescription::AccessDenied,
         );
         refused(
-            serve.get(None, "/v1/wallet"),
+            serve.get(None, "/api/v1/wallet"),
             AlertDescription::CertificateRequired,
         );
-        assert_eq!(serve.get(Some(&laptop), "/v1/status").unwrap().status, 200);
+        assert_eq!(
+            serve.get(Some(&laptop), "/api/v1/status").unwrap().status,
+            200
+        );
     });
 }
 
@@ -351,13 +375,13 @@ fn the_password_route_is_refused_over_tls() {
     let laptop = client_key(&wallet, "laptop");
 
     serving(host, &wallet, |serve| {
-        serve.client(&["add", "laptop", laptop.pem.to_str().unwrap()]);
-        let body = r#"{"current_password":"tls password","new_password":"other password"}"#;
+        // Even a client with every role: the password is the socket's alone.
+        serve.add("laptop", &laptop, "full");
+        let body = r#"{"current":"tls password","new":"other password"}"#;
         let reply = serve
-            .request(Some(&laptop), "PUT", "/v1/wallet/password", body)
+            .request(Some(&laptop), "PUT", "/api/v1/wallet/password", body)
             .unwrap();
-        assert_eq!(reply.status, 403, "{reply:?}");
-        assert_eq!(reply.json()["code"], "usage", "{reply:?}");
+        problem(&reply, 403, "socket_only");
     });
     // The password is unchanged.
     let host = TestHost::new();
@@ -379,17 +403,17 @@ fn a_removed_client_is_refused_on_its_open_connection() {
         serve.client(&["add", "laptop", laptop.pem.to_str().unwrap()]);
         let mut stream = serve.connect(Some(&laptop)).unwrap();
         assert_eq!(
-            keep_alive_get(&mut stream, "/v1/wallet").unwrap().status,
+            keep_alive_get(&mut stream, "/api/v1/wallet")
+                .unwrap()
+                .status,
             200
         );
 
         serve.client(&["remove", "laptop"]);
-        let reply = keep_alive_get(&mut stream, "/v1/wallet").unwrap();
-        assert_eq!(reply.status, 403, "{reply:?}");
-        assert_eq!(reply.json()["code"], "usage", "{reply:?}");
+        let reply = keep_alive_get(&mut stream, "/api/v1/wallet").unwrap();
+        let refused = problem(&reply, 403, "client_not_listed");
         assert_eq!(
-            reply.json()["detail"],
-            "this client is no longer listed",
+            refused["detail"], "this client is no longer listed in api-clients",
             "{reply:?}"
         );
         assert_eq!(reply.header("connection"), Some("close"), "{reply:?}");
@@ -405,7 +429,7 @@ fn only_the_socket_compares_a_request_with_the_run_of_serve() {
 
     serving(host, &wallet, |serve| {
         serve.client(&["add", "laptop", laptop.pem.to_str().unwrap()]);
-        let request = "GET /v1/status HTTP/1.1\r\nHost: lepic\r\nx-lepic-data-dir: /elsewhere\r\n\
+        let request = "GET /api/v1/status HTTP/1.1\r\nHost: lepic\r\nx-lepic-data-dir: /elsewhere\r\n\
                        Connection: close\r\n\r\n";
 
         // On the socket, a request naming another data directory is refused, naming it.
@@ -415,8 +439,11 @@ fn only_the_socket_compares_a_request_with_the_run_of_serve() {
         let mut answer = String::new();
         socket.read_to_string(&mut answer).unwrap();
         let refused = parse_reply(&answer);
-        assert_eq!(refused.status, 409, "{}", refused.body);
-        assert!(refused.body.contains("/elsewhere"), "{}", refused.body);
+        let settings = problem(&refused, 409, "serve_settings_differ");
+        assert!(
+            settings["detail"].as_str().unwrap().contains("/elsewhere"),
+            "{settings}"
+        );
 
         // On the TLS listener the same request is answered: no refusal tells a remote client
         // serve's settings.
@@ -424,7 +451,7 @@ fn only_the_socket_compares_a_request_with_the_run_of_serve() {
         tls.get_mut().write_all(request.as_bytes()).unwrap();
         let mut answer = String::new();
         tls.read_to_string(&mut answer).unwrap();
-        let answered = parse_reply(&answer);
+        let answered = checked("GET", "/api/v1/status", parse_reply(&answer));
         assert_eq!(answered.status, 200, "{}", answered.body);
         assert!(
             !answered.body.contains("data directory"),
@@ -450,7 +477,7 @@ fn the_tls_listener_has_its_own_connection_cap() {
             .collect();
         // Both TLS slots are taken, so a third connection is closed unanswered; the socket
         // still answers.
-        assert!(serve.get(Some(&laptop), "/v1/status").is_err());
+        assert!(serve.get(Some(&laptop), "/api/v1/status").is_err());
         let status = serve.status();
         assert!(started.elapsed() < deadline, "{:?}", started.elapsed());
         assert_eq!(status["requests"]["refused"], 1, "{status}");
@@ -464,7 +491,10 @@ fn the_tls_listener_has_its_own_connection_cap() {
         wait_until("both idle connections count as refused", || {
             serve.status()["requests"]["refused"] == 3
         });
-        assert_eq!(serve.get(Some(&laptop), "/v1/status").unwrap().status, 200);
+        assert_eq!(
+            serve.get(Some(&laptop), "/api/v1/status").unwrap().status,
+            200
+        );
     });
 }
 
@@ -479,7 +509,10 @@ fn a_handshake_has_its_own_deadline_and_takes_no_connection_slot() {
         serve.client(&["add", "laptop", laptop.pem.to_str().unwrap()]);
         // A listed client holds the only connection slot.
         let mut held = serve.connect(Some(&laptop)).unwrap();
-        assert_eq!(keep_alive_get(&mut held, "/v1/status").unwrap().status, 200);
+        assert_eq!(
+            keep_alive_get(&mut held, "/api/v1/status").unwrap().status,
+            200
+        );
         // A connection that never starts its handshake is not refused for want of a slot: it
         // waits for its handshake, and is closed when the handshake deadline, shorter than
         // the header time, passes.
@@ -491,7 +524,10 @@ fn a_handshake_has_its_own_deadline_and_takes_no_connection_slot() {
         let waited = started.elapsed();
         assert!(waited >= Duration::from_secs(4), "{waited:?}");
         assert!(waited < PATIENCE - Duration::from_secs(5), "{waited:?}");
-        assert_eq!(keep_alive_get(&mut held, "/v1/status").unwrap().status, 200);
+        assert_eq!(
+            keep_alive_get(&mut held, "/api/v1/status").unwrap().status,
+            200
+        );
     });
 }
 
@@ -508,12 +544,17 @@ fn a_tls_connection_closes_at_its_age_limit() {
         let started = Instant::now();
         let mut stream = serve.connect(Some(&laptop)).unwrap();
         assert_eq!(
-            keep_alive_get(&mut stream, "/v1/status").unwrap().status,
+            keep_alive_get(&mut stream, "/api/v1/status")
+                .unwrap()
+                .status,
             200
         );
         closed(&mut stream);
         assert!(started.elapsed() >= age, "{:?}", started.elapsed());
-        assert_eq!(serve.get(Some(&laptop), "/v1/status").unwrap().status, 200);
+        assert_eq!(
+            serve.get(Some(&laptop), "/api/v1/status").unwrap().status,
+            200
+        );
     });
 }
 
@@ -525,70 +566,55 @@ fn a_client_key_that_is_not_ed25519_is_refused_at_the_handshake() {
 
     serving(host, &wallet, |serve| {
         refused(
-            serve.get(Some(&laptop), "/v1/wallet"),
+            serve.get(Some(&laptop), "/api/v1/wallet"),
             AlertDescription::CertificateRequired,
         );
     });
 }
 
+fn receiver_address(host: &TestHost) -> String {
+    let receiver = Instance::new("receiver password");
+    receiver.run(host, &["wallet", "init"]).ok();
+    let address = receiver.run(host, &["wallet", "address"]).ok().json();
+    support::text(&address, "address").to_owned()
+}
+
 #[test]
-fn a_send_over_tls_needs_a_slate_id() {
+fn a_payment_over_tls_needs_an_id() {
     let host = TestHost::new();
     let wallet = funded_wallet(&host);
     let laptop = client_key(&wallet, "laptop");
-    let receiver = Instance::new("receiver password");
-    receiver.run(&host, &["wallet", "init"]).ok();
-    let address = receiver.run(&host, &["wallet", "address"]).ok().json();
-    let address = support::text(&address, "address").to_owned();
+    let address = receiver_address(&host);
 
     serving(host, &wallet, |serve| {
-        serve.client(&["add", "laptop", laptop.pem.to_str().unwrap()]);
-        let send = |body: &str| {
-            serve
-                .request(Some(&laptop), "POST", "/v1/transactions", body)
-                .unwrap()
-        };
-        let without = send(&format!(r#"{{"amount":"1","to":"{address}"}}"#));
-        assert_eq!(without.status, 400, "{without:?}");
-        assert_eq!(without.json()["code"], "usage", "{without:?}");
-        assert!(
-            without.json()["detail"]
-                .as_str()
-                .unwrap()
-                .contains("slate_id"),
-            "{without:?}"
+        serve.add("laptop", &laptop, "full");
+        let without = serve.post(
+            &laptop,
+            "/api/v1/payments",
+            &json!({"amount": "1", "to": address}),
         );
+        let refused = problem(&without, 400, "invalid_argument");
+        assert_eq!(refused["param"], "/id", "{refused}");
+        assert_eq!(sends(serve), Vec::<Value>::new());
 
-        let slate_id = "6b2d4f8a-1c3e-4a5b-9d7f-0e2c4a6b8d1f";
-        let with = send(&format!(
-            r#"{{"amount":"1","to":"{address}","slate_id":"{slate_id}"}}"#
-        ))
-        .ok();
-        assert_eq!(with["slate_id"], slate_id, "{with}");
-        assert_eq!(with["delivered"], true, "{with}");
-
-        let pay = serve
-            .request(
-                Some(&laptop),
-                "POST",
-                "/v1/epic1/pay",
-                r#"{"link":"epic:epic1x","amount":"1"}"#,
-            )
-            .unwrap();
-        assert_eq!(pay.status, 400, "{pay:?}");
-        assert!(
-            pay.json()["detail"].as_str().unwrap().contains("slate_id"),
-            "{pay:?}"
+        let id = "6b2d4f8a-1c3e-4a5b-9d7f-0e2c4a6b8d1f";
+        let with = serve.post(
+            &laptop,
+            "/api/v1/payments",
+            &json!({"amount": "1", "to": address, "id": id}),
         );
+        assert_eq!(with.status, 201, "{with:?}");
+        assert_eq!(with.json()["id"], id, "{with:?}");
+        assert_eq!(with.json()["direction"], "out", "{with:?}");
     });
 }
 
 /// The sends of `serve`'s wallet, read over the socket.
 fn sends(serve: &Serving<'_>) -> Vec<Value> {
-    let list = http(serve.socket, "GET", "/v1/transactions", None).ok();
-    let all = list["transactions"].as_array().unwrap();
+    let list = http(serve.socket, "GET", "/api/v1/payments", None).ok();
+    let all = list["items"].as_array().unwrap();
     all.iter()
-        .filter(|tx| tx["direction"] == "outgoing")
+        .filter(|payment| payment["direction"] == "out")
         .cloned()
         .collect()
 }
@@ -604,15 +630,8 @@ fn an_http_send_over_tls_does_not_reach_this_computer() {
     let port = target.local_addr().unwrap().port();
 
     serving(host, &wallet, |serve| {
-        serve.client(&["add", "laptop", laptop.pem.to_str().unwrap()]);
-        let send = |to: &str, slate_id: &str| {
-            let body =
-                format!(r#"{{"amount":"1","to":"{to}","method":"http","slate_id":"{slate_id}"}}"#);
-            serve
-                .request(Some(&laptop), "POST", "/v1/transactions", &body)
-                .unwrap()
-        };
-        for (to, slate_id) in [
+        serve.add("laptop", &laptop, "full");
+        for (to, id) in [
             (
                 format!("http://127.0.0.1:{port}"),
                 "0b6c1f3e-5a2d-4e8b-9c7a-1d3f5b7e9a20",
@@ -626,15 +645,13 @@ fn an_http_send_over_tls_does_not_reach_this_computer() {
                 "0b6c1f3e-5a2d-4e8b-9c7a-1d3f5b7e9a22",
             ),
         ] {
-            let refused = send(&to, slate_id);
-            assert_eq!(refused.status, 400, "{to}: {refused:?}");
-            assert_eq!(refused.json()["code"], "usage", "{to}: {refused:?}");
+            let body = json!({"amount": "1", "to": to, "via": "http", "id": id});
+            let reply = serve.post(&laptop, "/api/v1/payments", &body);
+            assert_eq!(reply.status, 400, "{to}: {reply:?}");
+            let detail = reply.json()["detail"].as_str().unwrap().to_owned();
             assert!(
-                refused.json()["detail"]
-                    .as_str()
-                    .unwrap()
-                    .contains("does not send to this computer's own addresses"),
-                "{to}: {refused:?}"
+                detail.contains("does not send to this computer's own addresses"),
+                "{to}: {reply:?}"
             );
         }
         assert_eq!(sends(serve), Vec::<Value>::new());
@@ -656,23 +673,20 @@ fn an_http_send_over_the_socket_may_reach_this_computer() {
 
     serving(host, &wallet, |serve| {
         std::thread::scope(|scope| {
-            let body = format!(
-                r#"{{"amount":"1","to":"http://127.0.0.1:{port}","method":"http","slate_id":"0b6c1f3e-5a2d-4e8b-9c7a-1d3f5b7e9a24"}}"#
-            );
+            let body = json!({
+                "amount": "1",
+                "to": format!("http://127.0.0.1:{port}"),
+                "via": "http",
+                "id": "0b6c1f3e-5a2d-4e8b-9c7a-1d3f5b7e9a24",
+            })
+            .to_string();
             let sending =
-                scope.spawn(move || http(serve.socket, "POST", "/v1/transactions", Some(&body)));
-            // Takes the connection and closes it unanswered, so the send fails at once.
+                scope.spawn(move || http(serve.socket, "POST", "/api/v1/payments", Some(&body)));
+            // Takes the connection and closes it unanswered, so the delivery fails at once.
             wait_until("the send connects", || target.accept().map(drop).is_ok());
             let sent = sending.join().unwrap();
-            assert_eq!(sent.status, 502, "{sent:?}");
-            assert_eq!(sent.json()["code"], "incomplete", "{sent:?}");
-            assert!(
-                !sent.json()["detail"]
-                    .as_str()
-                    .unwrap()
-                    .contains("this computer's own"),
-                "{sent:?}"
-            );
+            assert_ne!(sent.status, 400, "{sent:?}");
+            assert!(!sent.body.contains("this computer's own"), "{sent:?}");
         });
     });
 }
@@ -702,4 +716,84 @@ fn owner_tls_needs_an_address_in_the_settings() {
     let outcome = wallet.run(&host, &["serve", "--owner-tls"]);
     assert_eq!(outcome.code, 3, "{outcome:?}");
     assert!(outcome.stdout.contains("owner_tls"), "{outcome:?}");
+}
+
+#[test]
+fn a_client_listed_without_a_role_reads_only() {
+    let host = TestHost::new();
+    let wallet = funded_wallet(&host);
+    let laptop = client_key(&wallet, "laptop");
+
+    serving(host, &wallet, |serve| {
+        let added = serve.client(&["add", "laptop", laptop.pem.to_str().unwrap()]);
+        assert_eq!(added["role"], "read", "{added}");
+        assert_eq!(
+            serve.get(Some(&laptop), "/api/v1/wallet").unwrap().status,
+            200
+        );
+        assert_eq!(
+            serve.get(Some(&laptop), "/api/v1/payments").unwrap().status,
+            200
+        );
+        let sync = serve.post(&laptop, "/api/v1/sync", &json!({}));
+        let refused = problem(&sync, 403, "role_required");
+        assert_eq!(
+            refused["detail"], "this call needs the receive role",
+            "{refused}"
+        );
+        // The role is checked before the body is read: a body that is not even JSON is
+        // refused for the role, not for its shape.
+        let garbage = serve
+            .request(Some(&laptop), "POST", "/api/v1/payments", "not json")
+            .unwrap();
+        problem(&garbage, 403, "role_required");
+    });
+}
+
+#[test]
+fn each_role_reaches_the_calls_it_names() {
+    let host = TestHost::new();
+    let wallet = funded_wallet(&host);
+    let till = client_key(&wallet, "till");
+    let owner = client_key(&wallet, "owner");
+    let address = receiver_address(&host);
+
+    serving(host, &wallet, |serve| {
+        serve.add("till", &till, "receive");
+        serve.add("owner", &owner, "full");
+
+        // receive: syncs and issues invoices, never spends or changes the wallet.
+        assert_eq!(serve.post(&till, "/api/v1/sync", &json!({})).status, 200);
+        let invoice = serve.post(
+            &till,
+            "/api/v1/payments",
+            &json!({
+                "kind": "invoice",
+                "amount": "1",
+                "via": "file",
+                "id": "3f1c2b4a-7d6e-4f80-9a1b-2c3d4e5f6a70",
+            }),
+        );
+        assert_eq!(invoice.status, 201, "{invoice:?}");
+        assert_eq!(invoice.json()["kind"], "invoice", "{invoice:?}");
+        let send = serve.post(
+            &till,
+            "/api/v1/payments",
+            &json!({"amount": "1", "to": address, "id": "3f1c2b4a-7d6e-4f80-9a1b-2c3d4e5f6a71"}),
+        );
+        let refused = problem(&send, 403, "role_required");
+        assert_eq!(
+            refused["detail"], "this call needs the full role",
+            "{refused}"
+        );
+        assert_eq!(sends(serve), Vec::<Value>::new());
+        let account = serve.post(&till, "/api/v1/accounts", &json!({"label": "savings"}));
+        problem(&account, 403, "role_required");
+
+        // full: everything the TLS listener answers, and nothing marked for the socket.
+        let account = serve.post(&owner, "/api/v1/accounts", &json!({"label": "savings"}));
+        assert_eq!(account.status, 201, "{account:?}");
+        let export = serve.post(&owner, "/api/v1/contacts/export", &json!({}));
+        problem(&export, 403, "socket_only");
+    });
 }
