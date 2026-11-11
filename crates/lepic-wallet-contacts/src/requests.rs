@@ -378,7 +378,6 @@ where
                     name: name.to_owned(),
                     kind: ContactKind::Person,
                     expiry: InviteExpiry::SevenDays,
-                    offer_words: false,
                     home_relay: None,
                     class: PairingClass::Contact,
                     expect_address: Some(to_address.to_owned()),
@@ -529,7 +528,6 @@ where
                         contact_id: id,
                         link: invite.to_link(),
                         expires_at: pairing.expires_at,
-                        words: None,
                     }))
                 })?)
             })
@@ -550,7 +548,6 @@ where
                     name: name.to_owned(),
                     kind: ContactKind::Person,
                     expiry: InviteExpiry::SevenDays,
-                    offer_words: false,
                     home_relay: None,
                     class: PairingClass::Contact,
                     expect_address: None,

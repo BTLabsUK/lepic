@@ -30,11 +30,6 @@ pub(super) const EPIC: u64 = 100_000_000;
 /// serves it.
 pub(super) const RELAY: &str = "relay.example.org";
 
-/// The meeting relays every pairing call names, as the app's settings would.
-fn meeting() -> Vec<String> {
-    vec![RELAY.to_owned()]
-}
-
 pub(super) struct World {
     pub(super) chain: MockChain,
     pub(super) runtime: LepicRuntime,
@@ -116,9 +111,7 @@ pub(super) async fn pair(anna: &EpicWallet, ben: &EpicWallet) -> (String, String
             "Anna".to_owned(),
             ContactKind::Person,
             InviteExpiry::OneDay,
-            false,
             Online,
-            meeting(),
             None,
             PairingClass::Contact,
             None,
@@ -183,9 +176,7 @@ async fn a_payload_goes_to_the_paired_contact_and_waits_for_its_ack() {
             "Phone".to_owned(),
             ContactKind::Person,
             InviteExpiry::OneDay,
-            false,
             Online,
-            meeting(),
             None,
             PairingClass::Private,
             None,
@@ -298,9 +289,7 @@ async fn two_wallets_pair_by_link_and_show_the_same_words() {
             "Anna".to_owned(),
             ContactKind::Shop,
             InviteExpiry::OneHour,
-            false,
             Online,
-            meeting(),
             None,
             PairingClass::Contact,
             None,
@@ -308,7 +297,6 @@ async fn two_wallets_pair_by_link_and_show_the_same_words() {
         .await
         .unwrap();
     assert!(invite.link.starts_with("epiccash://pair/1/"));
-    assert!(invite.words.is_empty());
     let preview = ben.pairing_preview(invite.link.clone()).await.unwrap();
     assert_eq!(preview.claimed_name, "Anna");
     assert_eq!(preview.kind, ContactKind::Person);
@@ -405,9 +393,7 @@ async fn a_pairing_by_hand_needs_no_relay() {
             "Anna".to_owned(),
             ContactKind::Person,
             InviteExpiry::SevenDays,
-            false,
             Offline,
-            meeting(),
             None,
             PairingClass::Contact,
             None,
@@ -457,164 +443,6 @@ async fn a_pairing_by_hand_needs_no_relay() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn two_phones_pair_in_person_offline() {
-    let mut world = World::new();
-    let anna = world.wallet().await;
-    let ben = world.wallet().await;
-    let anna_card = anna
-        .pairing_show_card("Anna".to_owned(), ContactKind::Person, Offline, None)
-        .await
-        .unwrap();
-    let ben_card = ben
-        .pairing_show_card("Ben".to_owned(), ContactKind::Person, Offline, None)
-        .await
-        .unwrap();
-    assert!(anna_card.link.starts_with("epiccash://contact/1/"));
-
-    let anna_view = anna
-        .pairing_scan_card(anna_card.contact_id.clone(), ben_card.link.clone(), Offline)
-        .await
-        .unwrap();
-    let ben_view = ben
-        .pairing_scan_card(ben_card.contact_id.clone(), anna_card.link.clone(), Offline)
-        .await
-        .unwrap();
-    assert_eq!(anna_view.state, PairingState::Paired);
-    assert_eq!(anna_view.claimed_name.as_deref(), Some("Ben"));
-    assert_eq!(anna_view.sas, ben_view.sas);
-    assert_eq!(
-        kind(
-            anna.pairing_scan_card(anna_card.contact_id, ben_card.link, Offline)
-                .await
-        ),
-        WalletErrorKind::ContactNotFound
-    );
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn pairing_words_find_the_invite_once() {
-    let mut world = World::new();
-    let anna = world.wallet().await;
-    let ben = world.wallet().await;
-    let invite = anna
-        .pairing_invite(
-            "Anna".to_owned(),
-            ContactKind::Person,
-            InviteExpiry::OneDay,
-            true,
-            Online,
-            meeting(),
-            None,
-            PairingClass::Contact,
-            None,
-        )
-        .await
-        .unwrap();
-    assert_eq!(invite.words.len(), 5);
-    assert!(invite.words.iter().all(|word| !word.emoji.is_empty()));
-    let words: Vec<String> = invite.words.iter().map(|word| word.name.clone()).collect();
-
-    assert_eq!(
-        kind(
-            ben.pairing_find_words(vec!["nonsense".to_owned(); 5], Online, meeting())
-                .await
-        ),
-        WalletErrorKind::InvalidPairingWords
-    );
-    assert_eq!(
-        kind(
-            ben.pairing_find_words(words.clone(), Offline, meeting())
-                .await
-        ),
-        WalletErrorKind::ContactsOffline
-    );
-    let found = ben
-        .pairing_find_words(words.clone(), Online, meeting())
-        .await
-        .unwrap();
-    assert_eq!(found.preview.claimed_name, "Anna");
-    assert_eq!(
-        kind(ben.pairing_find_words(words, Online, meeting()).await),
-        WalletErrorKind::PairingWordsNotFound
-    );
-    ben.pairing_accept(
-        found.link,
-        "Ben".to_owned(),
-        false,
-        Online,
-        PairingClass::Contact,
-        None,
-    )
-    .await
-    .unwrap();
-    anna.contacts_collect(CollectTrigger::Push, Online, None)
-        .await
-        .unwrap();
-    assert_eq!(
-        anna.contact(invite.contact_id).await.unwrap().state,
-        PairingState::Paired
-    );
-}
-
-/// Words go to the built-in relays whatever relay the wallet uses (the owner's report utc3fhjj:
-/// a wallet on another relay was refused words, read as "can't reach the relay"); the reply
-/// still comes back on the inviter's own relay.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn words_are_offered_whatever_relay_the_wallet_uses() {
-    let mut world = World::new();
-    let config = world.config("relay.example");
-    let anna = EpicWallet::create(
-        &world.runtime,
-        config,
-        &AppSecretStore::in_memory(),
-        None,
-        None,
-        "password".to_owned(),
-    )
-    .await
-    .unwrap();
-    let ben = world.wallet().await;
-    let invite = anna
-        .pairing_invite(
-            "Anna".to_owned(),
-            ContactKind::Person,
-            InviteExpiry::OneDay,
-            true,
-            Online,
-            meeting(),
-            None,
-            PairingClass::Contact,
-            None,
-        )
-        .await
-        .unwrap();
-    let words: Vec<String> = invite.words.iter().map(|word| word.name.clone()).collect();
-    assert_eq!(words.len(), 5);
-    let found = ben
-        .pairing_find_words(words, Online, meeting())
-        .await
-        .unwrap();
-    assert_eq!(found.preview.home_relay, "relay.example:443");
-    ben.pairing_accept(
-        found.link,
-        "Ben".to_owned(),
-        false,
-        Online,
-        PairingClass::Contact,
-        None,
-    )
-    .await
-    .unwrap();
-    anna.contacts_collect(CollectTrigger::Push, Online, None)
-        .await
-        .unwrap();
-    assert_eq!(
-        anna.contact(invite.contact_id).await.unwrap().state,
-        PairingState::Paired
-    );
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_pending_invite_is_listed_until_cancelled() {
     let mut world = World::new();
     let anna = world.wallet().await;
@@ -623,9 +451,7 @@ async fn a_pending_invite_is_listed_until_cancelled() {
             "Anna".to_owned(),
             ContactKind::Person,
             InviteExpiry::OneDay,
-            false,
             EpicboxOff,
-            meeting(),
             None,
             PairingClass::Contact,
             None,
@@ -699,9 +525,7 @@ async fn the_relay_mode_and_bad_input_are_refused_before_anything_happens() {
                 String::new(),
                 ContactKind::Person,
                 InviteExpiry::OneDay,
-                false,
                 Online,
-                meeting(),
                 None,
                 PairingClass::Contact,
                 None
@@ -1085,9 +909,7 @@ async fn a_refused_reply_is_named_in_the_collect_report() {
             "Anna".to_owned(),
             ContactKind::Person,
             InviteExpiry::OneDay,
-            false,
             Online,
-            meeting(),
             None,
             PairingClass::Contact,
             None,
@@ -1439,9 +1261,7 @@ async fn a_preview_knows_this_wallets_own_invites_after_a_reopen() {
             "Anna".to_owned(),
             ContactKind::Person,
             InviteExpiry::OneDay,
-            false,
             Online,
-            meeting(),
             None,
             PairingClass::Contact,
             None,
@@ -1454,9 +1274,7 @@ async fn a_preview_knows_this_wallets_own_invites_after_a_reopen() {
             "Ben".to_owned(),
             ContactKind::Person,
             InviteExpiry::OneDay,
-            false,
             Online,
-            meeting(),
             None,
             PairingClass::Contact,
             None,

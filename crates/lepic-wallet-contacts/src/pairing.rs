@@ -37,7 +37,7 @@ use super::keys::{
 use super::private::{PrivateSecrets, RecordClass, class_of, record_keys};
 use super::relay::{endpoint_for, host_text, post_envelope};
 use super::{
-    CLOCK_SKEW, CONFIRM_WAIT, ContactError, ContactRelays, ContactView, LATE_DRAIN_WAIT, LockedRng,
+    CLOCK_SKEW, CONFIRM_WAIT, ContactError, ContactRelays, LATE_DRAIN_WAIT, LockedRng,
     PairingFailure, new_id, pairing_id_of, same_secret,
 };
 use crate::ContactBook;
@@ -80,12 +80,10 @@ pub struct InviteRequest {
     /// to be removed (docs/adr/0041 or RFC 0002 6.1).
     pub kind: ContactKind,
     pub expiry: InviteExpiry,
-    /// Also offer five pairing words that find the invite (RFC 0002 7.7).
-    pub offer_words: bool,
     /// Where the pairing's mailboxes live, `domain[:port]`; `None` is the wallet's own relay.
     pub home_relay: Option<String>,
     /// A contact, or a private pairing of two wallets of one owner, which carries only the host
-    /// app's payloads and never offers words.
+    /// app's payloads.
     pub class: PairingClass,
     /// The payments address, `key@relay`, the reply must prove; a reply that proves none or
     /// another key is refused with nothing stored.
@@ -99,8 +97,6 @@ pub struct InviteOffer {
     /// `epiccash://pair/1/...`.
     pub link: String,
     pub expires_at: Timestamp,
-    /// The five pairing words, when they were offered and the invite was posted for them.
-    pub words: Option<[lepic_contact::SasSymbol; lepic_contact::WORD_COUNT]>,
 }
 
 /// What an invite claims, for the user to decide on before answering it.
@@ -147,26 +143,6 @@ pub struct AcceptOutcome {
     pub reply_link: String,
     /// The reply reached the relay.
     pub posted: bool,
-}
-
-/// What a card shown for pairing in person says about its owner.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CardRequest {
-    pub account: AccountIndex,
-    pub name: String,
-    /// Deprecated: always written for wallets that read it, never to be read for meaning;
-    /// to be removed (docs/adr/0041 or RFC 0002 6.1).
-    pub kind: ContactKind,
-    /// Where the pairing's mailboxes live, `domain[:port]`; `None` is the wallet's own relay.
-    pub home_relay: Option<String>,
-}
-
-/// A card shown for pairing in person.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CardOffer {
-    pub contact_id: ContactId,
-    /// `epiccash://contact/1/...`.
-    pub link: String,
 }
 
 /// What a link entered by hand did (RFC 0002 7.2 and 7.3, manual mode).
@@ -241,22 +217,6 @@ pub(crate) fn same_keys(stored: &PeerCard, card: &ContactCard) -> bool {
     stored.sig_key == fresh.sig_key
         && stored.enc_key == fresh.enc_key
         && stored.hint_key == fresh.hint_key
-}
-
-/// The relay of a card's mailbox, as `domain:port`.
-fn mailbox_relay(card: &ContactCard, relays: &ContactRelays) -> Result<String, ContactError> {
-    let address = mailbox_address(card, relays)?;
-    Ok(host_text(&super::relay::endpoint_of_address(
-        &address, relays,
-    )?))
-}
-
-pub(crate) fn mailbox_address(
-    card: &ContactCard,
-    relays: &ContactRelays,
-) -> Result<EpicboxAddress, ContactError> {
-    EpicboxAddress::parse(card.fields().mailbox.as_str(), relays.epicbox.network())
-        .map_err(|_| ContactError::RelayAddress)
 }
 
 /// The home relay `host` names, or the relay of `relays` for none.
@@ -380,15 +340,7 @@ where
     /// Makes an invite to pair with a contact (RFC 0002 7.1). Its home relay, where the reply
     /// mailbox and later both contact mailboxes live, is the request's or else the relay of
     /// `relays`; another relay is reached over TLS through the wallet's connector. The pending
-    /// pairing is stored; [`ContactBook::contacts_collect`] takes the reply. Without words nothing
-    /// is sent.
-    ///
-    /// With `offer_words` the invite lasts 10 minutes and is also posted, sealed with five
-    /// pairing words, to a rendezvous mailbox on each meeting relay (RFC 0002 7.7), whatever
-    /// the home relay is; the reply still goes to the home relay. With no meeting relay named
-    /// this fails with [`ContactError::WordsUnavailable`]; Offline or Epicbox off fail
-    /// before anything is stored, and when no meeting relay takes the post this is
-    /// [`ContactError::Relay`], with the invite withdrawn.
+    /// pairing is stored; [`ContactBook::contacts_collect`] takes the reply. Nothing is sent.
     ///
     /// Fails with [`ContactError::Name`] for a name the card cannot carry, with
     /// [`ContactError::NetworkMismatch`], and as the store does, for example when every slot of
@@ -402,14 +354,13 @@ where
         self.check_contact_network(relays)?;
         let network = self.wallet.config().network;
         let home = home_relay(request.home_relay.as_deref(), relays)?;
-        let offer_words = request.offer_words;
-        let lifetime = invite_lifetime(relays, &request)?;
+        let lifetime = request.expiry.duration();
         let session = self.wallet.session()?;
         let payments = (request.class == PairingClass::Contact)
             .then(|| Payments::of(&session.keychain, network, relays))
             .transpose()?;
         let features = self.wallet.config().pairing_features();
-        let mut offer = self
+        let offer = self
             .contact_work(move |ports, _| {
                 let now = ports.clock.now();
                 let expires_at = now
@@ -431,30 +382,7 @@ where
             })
             .await?;
         info!("pairing invite made");
-        if offer_words {
-            self.offer_invite_words(relays, &mut offer).await?;
-        }
         Ok(offer)
-    }
-
-    /// Posts a new invite for its pairing words and puts them in `offer`.
-    async fn offer_invite_words(
-        &self,
-        relays: &ContactRelays,
-        offer: &mut InviteOffer,
-    ) -> Result<(), ContactError> {
-        let invite = Invite::from_link(&offer.link, contact_network(self.wallet.config().network))
-            .map_err(ContactError::StoredData)?;
-        match self.post_invite_words(relays, &invite).await {
-            Ok(words) => offer.words = Some(words),
-            Err(error) => {
-                // An invite nobody can find by its words is withdrawn at once, so it does
-                // not hold a pending pairing until it expires.
-                self.contact_remove(offer.contact_id).await?;
-                return Err(error);
-            }
-        }
-        Ok(())
     }
 
     /// Reads an invite link for the user to decide on (RFC 0002 7.2), and tells whether this
@@ -584,150 +512,6 @@ where
             reply_link,
             posted,
         })
-    }
-
-    /// Shows a card to pair in person (RFC 0002 7.4): a fresh slot whose mailbox is on the
-    /// request's home relay or else the relay of `relays`. [`ContactBook::pairing_scan_card`]
-    /// finishes the pairing with the other phone's card. Nothing is sent, so this works offline.
-    ///
-    /// Fails as [`ContactBook::pairing_invite`] does.
-    #[instrument(skip_all, fields(wallet = %self.wallet.config().name))]
-    pub async fn pairing_show_card(
-        &self,
-        relays: &ContactRelays,
-        request: CardRequest,
-    ) -> Result<CardOffer, ContactError> {
-        self.check_contact_network(relays)?;
-        let network = self.wallet.config().network;
-        let home = home_relay(request.home_relay.as_deref(), relays)?;
-        let session = self.wallet.session()?;
-        self.contact_work(move |ports, _| {
-            let now = ports.clock.now();
-            session.store.write(|repos| {
-                let new = take_slot(
-                    repos,
-                    &mut LockedRng(&mut **ports.rng.lock()),
-                    request.account,
-                )?;
-                let keys = contact_keys(
-                    &session.keychain,
-                    network,
-                    request.account,
-                    new.slot,
-                    new.box_salt,
-                )?;
-                let mailbox = box_identity(&keys, network, &home)?;
-                let card = our_card(
-                    &keys,
-                    network,
-                    mailbox.address(),
-                    &CardDetails {
-                        kind: WRITTEN_KIND,
-                        name: &request.name,
-                        seq: 1,
-                        payments_address: None,
-                    },
-                )?;
-                repos.put_contact(&pending_record(
-                    new.contact_id,
-                    request.account,
-                    new.slot,
-                    new.box_salt,
-                    &card,
-                    ContactState::PendingInvite,
-                    now,
-                ))?;
-                Ok(CardOffer {
-                    contact_id: new.contact_id,
-                    link: card.to_link(),
-                })
-            })
-        })
-        .await
-    }
-
-    /// Finishes an in-person pairing with the card the other phone shows (RFC 0002 7.4): both
-    /// nonces are zero and the cards are ordered by sig key for the SAS. The contact is paired,
-    /// not verified, until [`ContactBook::pairing_sas`] confirms the check.
-    ///
-    /// Fails with [`ContactError::UnknownContact`] when `contact_id` is not a card this wallet
-    /// shows, [`ContactError::Decode`] for a link that is not a card on the wallet's network,
-    /// and [`ContactError::AlreadyPaired`] for a card of a contact this wallet holds or its own.
-    #[instrument(skip_all, fields(wallet = %self.wallet.config().name))]
-    pub async fn pairing_scan_card(
-        &self,
-        relays: &ContactRelays,
-        contact_id: ContactId,
-        link: &str,
-    ) -> Result<ContactView, ContactError> {
-        let network = self.wallet.config().network;
-        let native_direct = self.wallet.config().native_direct;
-        let peer =
-            ContactCard::from_link(link, contact_network(network)).map_err(ContactError::Decode)?;
-        let peer_relay = mailbox_relay(&peer, relays)?;
-        let session = self.wallet.session()?;
-        let view = self
-            .contact_work(move |ports, _| {
-                let now = ports.clock.now();
-                session.store.write(|repos| {
-                    let mut record = repos
-                        .contact(contact_id)?
-                        .filter(|record| {
-                            record.peer.is_none() && record.state == ContactState::PendingInvite
-                        })
-                        .ok_or(ContactError::UnknownContact)?;
-                    if repos.pending_pairing(pairing_id_of(contact_id))?.is_some() {
-                        return Err(ContactError::UnknownContact);
-                    }
-                    let own = ContactCard::decode(&record.own_card, contact_network(network))
-                        .map_err(ContactError::StoredData)?;
-                    refuse_known_card(repos, &peer, &own)?;
-                    let home = EpicboxAddress::parse(
-                        own.fields().mailbox.as_str(),
-                        relays_network(network),
-                    )
-                    .map(|address| {
-                        format!(
-                            "{}:{}",
-                            address.domain(),
-                            address.port().unwrap_or(lepic_epicbox::DEFAULT_PORT)
-                        )
-                    })
-                    .map_err(|_| ContactError::RelayAddress)?;
-                    let sas = Sas::in_person(contact_network(network), &own, &peer);
-                    record.peer = Some(peer_card(&peer));
-                    record.state = ContactState::Paired;
-                    record.sas = Some(*sas.as_bytes());
-                    record.updated_at = now;
-                    super::status::heard_now(&mut record, now);
-                    repos.put_contact(&record)?;
-                    let mailbox = ContactMailbox {
-                        contact_id,
-                        peer_mailbox: peer.fields().mailbox.as_str().to_owned(),
-                        our_mailbox: own.fields().mailbox.as_str().to_owned(),
-                        home_relay: home,
-                        onion: None,
-                        previous: None,
-                        backoff: Vec::new(),
-                    };
-                    repos.put_contact_mailbox(&mailbox)?;
-                    // A card QR is seen by anyone nearby: the first collect moves our mailbox.
-                    repos.put_setting(&super::collect::in_person_key(contact_id), "1")?;
-                    debug!(peer_relay = %peer_relay, "in-person pairing stored");
-                    Ok(super::manage::view(
-                        &record,
-                        Some(&mailbox),
-                        network,
-                        native_direct,
-                        now,
-                    ))
-                })
-            })
-            .await?;
-        info!("contact paired in person");
-        self.wallet
-            .emit(Event::PairingConfirmed(ContactEvent { contact_id }));
-        Ok(view)
     }
 
     /// Records the user's SAS check (RFC 0002 7.5), also while the pairing waits for the
@@ -1620,29 +1404,6 @@ fn new_keys(
     }
 }
 
-/// How long a new invite lasts. Words are posted, so offering them needs a relay reachable
-/// before anything is stored and a meeting relay to post to.
-fn invite_lifetime(
-    relays: &ContactRelays,
-    request: &InviteRequest,
-) -> Result<Duration, ContactError> {
-    // A private pairing's invite travels out of band only.
-    if request.offer_words && request.class == PairingClass::Private {
-        return Err(ContactError::WrongClass);
-    }
-    if request.offer_words {
-        super::relay::check_online(relays)?;
-        if relays.meeting.is_empty() {
-            return Err(ContactError::WordsUnavailable);
-        }
-    }
-    Ok(if request.offer_words {
-        super::words::WORDS_INVITE_EXPIRY
-    } else {
-        request.expiry.duration()
-    })
-}
-
 /// The kind every new invite and card writes. The request's `kind` is deprecated and ignored: a
 /// reader refuses a confirm or card update whose kind differs from the invite's or the stored
 /// one, so the invite and the pairing's cards must agree, and every later card clones this one
@@ -1761,7 +1522,6 @@ fn store_invite(
         contact_id: new.contact_id,
         link: invite.to_link(),
         expires_at,
-        words: None,
     })
 }
 

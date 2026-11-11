@@ -19,9 +19,8 @@ mod support;
 #[path = "epicbox_invoices/world.rs"]
 mod world;
 
-use std::time::Duration;
 
-use helpers::{HOUR, MINUTE, accept, events, invite_request, relays, relays_with_words};
+use helpers::{HOUR, MINUTE, accept, events, invite_request, relays};
 use lepic_contact::{
     ContactCard, ContactKind, EncSecretKey, Invite, InviteFields, Network as ContactNetwork,
     PairingLink, SealedEnvelope, open_reply, pairing_envelope_from_link, seal_reply,
@@ -32,7 +31,7 @@ use lepic_store::{AccountIndex, ContactId, ContactState, WalletStore};
 use lepic_wallet::Event;
 use lepic_wallet::event::{ContactChange, ContactEvent, ContactUpdate, FailedPairing};
 use lepic_wallet_contacts::{
-    AcceptRequest, CardRequest, CollectTrigger, ContactError, ContactRelays, InviteExpiry,
+    AcceptRequest, CollectTrigger, ContactError, ContactRelays, InviteExpiry,
     InviteRequest, KeyCheckStart, KeysDecision, LinkOutcome, PairingClass, PairingEndReason,
     PairingFailure, PairingStatus, PayloadId, RelayMode, SasDecision, WalletContacts,
 };
@@ -130,64 +129,6 @@ fn a_pairing_by_hand_needs_no_relay() {
         world.sas(&world.issuer, contact_id),
         world.sas(&world.payer, answered.contact_id)
     );
-}
-
-#[test]
-fn two_phones_pair_in_person_by_scanning_each_others_card() {
-    let world = World::new();
-    let show = |party: &Party, name: &str| {
-        world
-            .block_on(party.wallet.contact_book().pairing_show_card(
-                &relays(party),
-                CardRequest {
-                    account: AccountIndex(0),
-                    name: name.to_owned(),
-                    kind: ContactKind::Person,
-                    home_relay: None,
-                },
-            ))
-            .unwrap()
-    };
-    let anna = show(&world.issuer, "Anna");
-    let ben = show(&world.payer, "Ben");
-
-    let on_issuer = world
-        .block_on(world.issuer.wallet.contact_book().pairing_scan_card(
-            &relays(&world.issuer),
-            anna.contact_id,
-            &ben.link,
-        ))
-        .unwrap();
-    let on_payer = world
-        .block_on(world.payer.wallet.contact_book().pairing_scan_card(
-            &relays(&world.payer),
-            ben.contact_id,
-            &anna.link,
-        ))
-        .unwrap();
-
-    assert_eq!(on_issuer.state, ContactState::Paired);
-    assert_eq!(on_issuer.sas, on_payer.sas);
-    assert!(on_issuer.sas.is_some());
-    // A card already paired is not taken twice.
-    let again = show(&world.issuer, "Anna");
-    assert!(matches!(
-        world.block_on(world.issuer.wallet.contact_book().pairing_scan_card(
-            &relays(&world.issuer),
-            again.contact_id,
-            &ben.link,
-        )),
-        Err(ContactError::AlreadyPaired)
-    ));
-    // Nor is a wallet's own card.
-    assert!(matches!(
-        world.block_on(world.issuer.wallet.contact_book().pairing_scan_card(
-            &relays(&world.issuer),
-            again.contact_id,
-            &again.link,
-        )),
-        Err(ContactError::AlreadyPaired)
-    ));
 }
 
 #[test]
@@ -1528,277 +1469,6 @@ fn cross_invites_fold_into_the_older_pairing() {
     assert_eq!(payer_record.peer.unwrap().bytes, after.own_card);
 }
 
-/// 7.4: a card QR is seen by anyone nearby, so each side's first collect moves its mailbox to a
-/// new box salt and tells the other with a contact update; the old mailbox is still read.
-#[test]
-fn an_in_person_pairing_moves_both_mailboxes_on_the_first_collect() {
-    let world = World::new();
-    let show = |party: &Party, name: &str| {
-        world
-            .block_on(party.wallet.contact_book().pairing_show_card(
-                &relays(party),
-                CardRequest {
-                    account: AccountIndex(0),
-                    name: name.to_owned(),
-                    kind: ContactKind::Person,
-                    home_relay: None,
-                },
-            ))
-            .unwrap()
-    };
-    let anna = show(&world.issuer, "Anna");
-    let ben = show(&world.payer, "Ben");
-    world
-        .block_on(world.issuer.wallet.contact_book().pairing_scan_card(
-            &relays(&world.issuer),
-            anna.contact_id,
-            &ben.link,
-        ))
-        .unwrap();
-    world
-        .block_on(world.payer.wallet.contact_book().pairing_scan_card(
-            &relays(&world.payer),
-            ben.contact_id,
-            &anna.link,
-        ))
-        .unwrap();
-    let mailbox = |party: &Party, contact: ContactId| {
-        party.read(|repos| repos.contact_mailbox(contact)).unwrap()
-    };
-    let shown = mailbox(&world.issuer, anna.contact_id).our_mailbox;
-    let hint = world
-        .payer
-        .read(|repos| repos.contact(ben.contact_id))
-        .unwrap();
-
-    // The payer moves before it reads the issuer's update, so its own update goes to the
-    // issuer's old mailbox, which the issuer still drains.
-    for _ in 0..2 {
-        world.collect(&world.issuer);
-        world.collect(&world.payer);
-    }
-
-    let issuer_side = mailbox(&world.issuer, anna.contact_id);
-    let payer_side = mailbox(&world.payer, ben.contact_id);
-    assert_ne!(issuer_side.our_mailbox, shown);
-    assert_eq!(payer_side.peer_mailbox, issuer_side.our_mailbox);
-    assert_eq!(issuer_side.peer_mailbox, payer_side.our_mailbox);
-    assert_ne!(
-        world
-            .payer
-            .read(|repos| repos.contact(ben.contact_id))
-            .unwrap()
-            .box_salt,
-        hint.box_salt
-    );
-    // The move happens once. The payer's update reached the issuer's new mailbox, which shows
-    // it took the new card, so the issuer reads only that one; nothing has reached the payer's
-    // new mailbox yet, so the payer still reads its old one beside it.
-    assert_eq!(world.collect(&world.issuer).mailboxes, 1);
-    assert_eq!(world.collect(&world.payer).mailboxes, 2);
-    assert_eq!(
-        mailbox(&world.issuer, anna.contact_id).our_mailbox,
-        issuer_side.our_mailbox
-    );
-}
-
-fn invite_with_words(world: &World, party: &Party) -> Vec<&'static str> {
-    world
-        .block_on(party.wallet.contact_book().pairing_invite(
-            &relays_with_words(party),
-            InviteRequest {
-                offer_words: true,
-                ..invite_request("Anna")
-            },
-        ))
-        .unwrap()
-        .words
-        .unwrap()
-        .iter()
-        .map(|symbol| symbol.name)
-        .collect()
-}
-
-fn find_words(world: &World, party: &Party, words: &[&str]) -> Result<String, ContactError> {
-    world.block_on(
-        party
-            .wallet
-            .contact_book()
-            .pairing_find_words(&relays_with_words(party), words),
-    )
-}
-
-/// C-33: words are offered only on a built-in relay; wrong words find nothing; the right words
-/// open the invite and pairing completes; a second use finds nothing.
-#[test]
-fn pairing_words_find_the_invite_once() {
-    let world = World::new();
-    assert!(matches!(
-        world.block_on(world.issuer.wallet.contact_book().pairing_invite(
-            &relays(&world.issuer),
-            InviteRequest {
-                offer_words: true,
-                ..invite_request("Anna")
-            },
-        )),
-        Err(ContactError::WordsUnavailable)
-    ));
-    let words = invite_with_words(&world, &world.issuer);
-    let mut wrong = words.clone();
-    wrong.rotate_left(1);
-    assert!(matches!(
-        find_words(&world, &world.payer, &wrong),
-        Err(ContactError::WordsNotFound)
-    ));
-
-    let link = find_words(&world, &world.payer, &words).unwrap();
-    let answered = world
-        .block_on(
-            world
-                .payer
-                .wallet
-                .contact_book()
-                .pairing_accept(&relays(&world.payer), accept(&link, "Ben", false)),
-        )
-        .unwrap();
-    assert!(answered.posted);
-    assert_eq!(world.collect(&world.issuer).paired, 1);
-    assert_eq!(world.collect(&world.payer).paired, 1);
-
-    let second = world.payer_twin();
-    assert!(matches!(
-        find_words(&world, &second, &words),
-        Err(ContactError::WordsNotFound)
-    ));
-}
-
-/// C-33, the window edge: an invite made just before a 10-minute window ends is still found in
-/// the next one.
-#[test]
-fn pairing_words_are_found_in_the_next_window() {
-    let world = World::new();
-    // The test clock starts 200 s into a window.
-    world.issuer.clock.advance(Duration::from_secs(390));
-    let words = invite_with_words(&world, &world.issuer);
-    world.payer.clock.advance(Duration::from_secs(420));
-
-    let link = find_words(&world, &world.payer, &words).unwrap();
-    assert!(link.starts_with("epiccash://pair/1/"));
-}
-
-/// The built-in relays of [`words_relays`]: the first refuses posts, as a relay a network
-/// blocks does; the party's own relay is neither.
-fn words_relays(party: &Party) -> ContactRelays {
-    let relay =
-        |domain: &str| RelayEndpoint::new(Domain::parse(domain).unwrap(), Some(443), Security::Tls);
-    ContactRelays {
-        meeting: vec![relay("blocked.test"), relay("other.test")],
-        ..relays(party)
-    }
-}
-
-/// C-33 (report utc3fhjj): a wallet whose own relay is not built in still offers words. They go
-/// to every built-in relay, so one that refuses is skipped on both sides; the reply comes back
-/// on the inviter's own relay.
-#[test]
-fn pairing_words_work_on_any_relay_and_skip_a_refusing_one() {
-    let world = World::new();
-    world.relay.set_domain_refused("blocked.test");
-    let posts = world.relay.received("PostSlate");
-    let words: Vec<&str> = world
-        .block_on(world.issuer.wallet.contact_book().pairing_invite(
-            &words_relays(&world.issuer),
-            InviteRequest {
-                offer_words: true,
-                ..invite_request("Anna")
-            },
-        ))
-        .unwrap()
-        .words
-        .unwrap()
-        .iter()
-        .map(|symbol| symbol.name)
-        .collect();
-    // Both built-in relays were asked, the refusing one too.
-    assert_eq!(world.relay.received("PostSlate") - posts, 2);
-    let link = world
-        .block_on(
-            world
-                .payer
-                .wallet
-                .contact_book()
-                .pairing_find_words(&words_relays(&world.payer), &words),
-        )
-        .unwrap();
-    let answered = world
-        .block_on(
-            world
-                .payer
-                .wallet
-                .contact_book()
-                .pairing_accept(&relays(&world.payer), accept(&link, "Ben", false)),
-        )
-        .unwrap();
-    assert!(answered.posted);
-    world.collect(&world.issuer);
-    world.collect(&world.payer);
-    for party in [&world.issuer, &world.payer] {
-        assert!(
-            world
-                .block_on(party.wallet.contact_book().pairings_pending())
-                .unwrap()
-                .is_empty()
-        );
-    }
-}
-
-fn meeting(party: &Party, hosts: &[&str]) -> ContactRelays {
-    relays(party).with_meeting(lepic_wallet_contacts::meeting_relays(hosts).unwrap())
-}
-
-/// Words go to the meeting relays the inviter names, and are found by a wallet that asks
-/// several relays at once: the first invite that opens wins and is taken, so asking again
-/// finds nothing.
-#[test]
-fn pairing_words_meet_on_any_shared_relay_of_the_named_sets() {
-    let world = World::new();
-    world.relay.set_domain_refused("blocked.test");
-    let words: Vec<&str> = world
-        .block_on(world.issuer.wallet.contact_book().pairing_invite(
-            &meeting(
-                &world.issuer,
-                &["Other.test", "other.test:443", "blocked.test"],
-            ),
-            InviteRequest {
-                offer_words: true,
-                ..invite_request("Anna")
-            },
-        ))
-        .unwrap()
-        .words
-        .unwrap()
-        .iter()
-        .map(|symbol| symbol.name)
-        .collect();
-    let link = world
-        .block_on(world.payer.wallet.contact_book().pairing_find_words(
-            &meeting(&world.payer, &["blocked.test", "third.test", "other.test"]),
-            &words,
-        ))
-        .unwrap();
-    assert!(link.starts_with("epiccash://pair/1/"));
-    assert!(matches!(
-        world.block_on(
-            world
-                .payer
-                .wallet
-                .contact_book()
-                .pairing_find_words(&meeting(&world.payer, &["other.test"]), &words)
-        ),
-        Err(ContactError::WordsNotFound)
-    ));
-}
-
 #[test]
 fn meeting_relays_are_validated_lowercased_and_deduplicated() {
     use lepic_wallet_contacts::{MAX_MEETING_RELAYS, meeting_host, meeting_relays};
@@ -1828,43 +1498,6 @@ fn meeting_relays_are_validated_lowercased_and_deduplicated() {
     assert!(matches!(
         meeting_relays(&many),
         Err(ContactError::RelayAddress)
-    ));
-}
-
-/// When no built-in relay takes the words the invite is withdrawn with the relay's error, and
-/// words looked for where no relay answers are a relay error, not "no invite found".
-#[test]
-fn pairing_words_with_no_relay_are_a_relay_error() {
-    let world = World::new();
-    world.relay.set_domain_refused("blocked.test");
-    world.relay.set_domain_refused("other.test");
-    assert!(matches!(
-        world.block_on(world.issuer.wallet.contact_book().pairing_invite(
-            &words_relays(&world.issuer),
-            InviteRequest {
-                offer_words: true,
-                ..invite_request("Anna")
-            },
-        )),
-        Err(ContactError::Relay(_))
-    ));
-    assert!(
-        world
-            .block_on(world.issuer.wallet.contact_book().pairings_pending())
-            .unwrap()
-            .is_empty()
-    );
-    let words = invite_with_words(&world, &world.issuer);
-    world.relay.set_refusing(true);
-    assert!(matches!(
-        world.block_on(
-            world
-                .payer
-                .wallet
-                .contact_book()
-                .pairing_find_words(&words_relays(&world.payer), &words)
-        ),
-        Err(ContactError::Relay(_))
     ));
 }
 
@@ -2135,7 +1768,6 @@ fn every_contact_future_is_send() {
     let id = ContactId([1; 16]);
     let slate_id = lepic_wallet::event::SlateId::from_bytes([2; 16]);
     let tx_id = lepic_store::TxId(1);
-    let words: [&str; 5] = ["a", "b", "c", "d", "e"];
     assert_send(
         wallet
             .contact_book()
@@ -2147,22 +1779,11 @@ fn every_contact_future_is_send() {
             .pairing_accept(&relays, accept("link", "Ben", false)),
     );
     assert_send(wallet.contact_book().pairing_enter_link(&relays, "link"));
-    assert_send(wallet.contact_book().pairing_show_card(
-        &relays,
-        CardRequest {
-            account: AccountIndex(0),
-            name: "Anna".to_owned(),
-            kind: ContactKind::Person,
-            home_relay: None,
-        },
-    ));
-    assert_send(wallet.contact_book().pairing_scan_card(&relays, id, "link"));
     assert_send(
         wallet
             .contact_book()
             .pairing_sas(&relays, id, SasDecision::Match),
     );
-    assert_send(wallet.contact_book().pairing_find_words(&relays, &words));
     assert_send(wallet.contact_book().pairings_pending());
     assert_send(
         wallet
@@ -2339,74 +1960,6 @@ fn a_found_answer_after_not_found_is_refused() {
     assert_eq!(world.contact_ids(&world.issuer), vec![new_on_issuer]);
 }
 
-/// R2-08: a slot a record holds, here a card shown in person and never scanned back, is
-/// never taken a second time by a key check.
-#[test]
-fn a_key_check_never_takes_a_slot_a_shown_card_holds() {
-    let world = World::new();
-    let stranger = world.stranger();
-    let card_request = |name: &str| CardRequest {
-        account: AccountIndex(0),
-        name: name.to_owned(),
-        kind: ContactKind::Person,
-        home_relay: None,
-    };
-    let shown = world
-        .block_on(
-            world
-                .payer
-                .wallet
-                .contact_book()
-                .pairing_show_card(&relays(&world.payer), card_request("Ben")),
-        )
-        .unwrap();
-    let own = world
-        .block_on(
-            stranger
-                .wallet
-                .contact_book()
-                .pairing_show_card(&relays(&stranger), card_request("Cleo")),
-        )
-        .unwrap();
-    // Only the stranger scans: it holds the payer's shown card as a contact.
-    let old = world
-        .block_on(stranger.wallet.contact_book().pairing_scan_card(
-            &relays(&stranger),
-            own.contact_id,
-            &shown.link,
-        ))
-        .unwrap()
-        .contact_id;
-    let (new_on_payer, _) = world.pair(&world.payer, &stranger);
-    let before = world.payer.read(|repos| repos.contacts()).len();
-
-    let new_on_stranger = world.only_new(&stranger, old);
-    key_check(&world, &stranger, new_on_stranger, old);
-    settle(&world, &stranger, &world.payer);
-
-    // The payer answered not found, so the stranger's new pairing shows keys-changed.
-    assert_eq!(
-        stranger
-            .read(|repos| repos.contact(new_on_stranger))
-            .unwrap()
-            .state,
-        ContactState::KeysChanged
-    );
-
-    let records = world.payer.read(|repos| repos.contacts());
-    assert_eq!(records.len(), before);
-    let slot = world
-        .payer
-        .read(|repos| repos.contact(shown.contact_id))
-        .unwrap()
-        .slot;
-    assert_eq!(
-        records.iter().filter(|record| record.slot == slot).count(),
-        1
-    );
-    assert!(world.contact_ids(&world.payer).contains(&new_on_payer));
-}
-
 /// R2-11: junk in a contact's mailbox raises one event a cycle, however much there is.
 #[test]
 fn junk_in_a_contact_mailbox_raises_one_event_a_cycle() {
@@ -2456,19 +2009,21 @@ fn a_used_invite_sends_at_most_three_refusals() {
         .unwrap();
     assert_eq!(world.collect(&world.issuer).paired, 1);
     let invite = Invite::from_link(&link, ContactNetwork::Floonet).unwrap();
+    // Replies to the used invite carry another wallet's card; the stranger answers by hand, which
+    // sends nothing, and its record holds the card.
     let stranger = world.stranger();
-    let shown = world
-        .block_on(stranger.wallet.contact_book().pairing_show_card(
-            &relays(&stranger),
-            CardRequest {
-                account: AccountIndex(0),
-                name: "Cleo".to_owned(),
-                kind: ContactKind::Person,
-                home_relay: None,
-            },
-        ))
+    let by_hand = world
+        .block_on(
+            stranger
+                .wallet
+                .contact_book()
+                .pairing_accept(&relays(&stranger), accept(&link, "Cleo", true)),
+        )
         .unwrap();
-    let card = ContactCard::from_link(&shown.link, ContactNetwork::Floonet).unwrap();
+    let record = stranger
+        .read(|repos| repos.contact(by_hand.contact_id))
+        .unwrap();
+    let card = ContactCard::decode(&record.own_card, ContactNetwork::Floonet).unwrap();
     let (reply_box, reply_from) = pairing_identities(*invite.fields().code.expose_bytes());
     let client = lepic_epicbox::MailboxClient::new(world::settings(), world.relay.connector());
     let codes: Vec<[u8; 16]> = (0..5u8).map(|n| [40 + n; 16]).collect();
@@ -2506,33 +2061,6 @@ fn a_used_invite_sends_at_most_three_refusals() {
         refused += collected.0.len();
     }
     assert_eq!(refused, 3);
-}
-
-/// R2-13: words cannot be offered offline, and nothing is left pending when they are not.
-#[test]
-fn a_words_invite_offline_stores_nothing() {
-    let world = World::new();
-    let offline = ContactRelays {
-        mode: RelayMode::Offline,
-        ..relays_with_words(&world.issuer)
-    };
-    assert!(matches!(
-        world.block_on(world.issuer.wallet.contact_book().pairing_invite(
-            &offline,
-            InviteRequest {
-                offer_words: true,
-                ..invite_request("Anna")
-            },
-        )),
-        Err(ContactError::Offline)
-    ));
-    assert!(
-        world
-            .block_on(world.issuer.wallet.contact_book().pairings_pending())
-            .unwrap()
-            .is_empty()
-    );
-    assert!(world.issuer.read(|repos| repos.contacts()).is_empty());
 }
 
 /// R2-14: a backup restores only records whose own card this seed derives, and their mailbox
@@ -3118,17 +2646,6 @@ fn two_installs_of_one_phrase_pair_privately_and_pass_payloads_both_ways() {
             phone,
             lepic_store::TxId(1),
             None
-        )),
-        Err(ContactError::WrongClass)
-    ));
-    assert!(matches!(
-        world.block_on(world.issuer.wallet.contact_book().pairing_invite(
-            &relays_with_words(&world.issuer),
-            InviteRequest {
-                class: PairingClass::Private,
-                offer_words: true,
-                ..invite_request("Phone")
-            },
         )),
         Err(ContactError::WrongClass)
     ));

@@ -9,13 +9,12 @@ use lepic_wallet::event::{ContactEvent, ContactSlateEvent, OutboxNews, SlateId};
 use lepic_wallet::invoice::InvoiceRequest;
 use lepic_wallet::slate::{Slate, Stage, WireSlate};
 use lepic_wallet_contacts::{
-    AcceptRequest, CardRequest, CollectTrigger as EngineTrigger, ContactKind as EngineKind,
-    ContactRelays, ContactView as EngineContactView, InviteExpiry as EngineExpiry,
-    InvitePreview as EnginePreview, InviteRequest, InvoiceDetails,
-    KeyCheckStart as EngineKeyCheckStart, KeysDecision as EngineKeysDecision, LinkOutcome,
-    PairingClass as EngineClass, PairingFailure, PairingRole, Purpose, RelayMode,
-    SasDecision as EngineSasDecision, SasSymbol, SealedAnswer as EngineAnswer, WalletContacts,
-    is_epictx,
+    AcceptRequest, CollectTrigger as EngineTrigger, ContactKind as EngineKind, ContactRelays,
+    ContactView as EngineContactView, InviteExpiry as EngineExpiry, InvitePreview as EnginePreview,
+    InviteRequest, InvoiceDetails, KeyCheckStart as EngineKeyCheckStart,
+    KeysDecision as EngineKeysDecision, LinkOutcome, PairingClass as EngineClass, PairingFailure,
+    PairingRole, Purpose, RelayMode, SasDecision as EngineSasDecision, SasSymbol,
+    SealedAnswer as EngineAnswer, WalletContacts, is_epictx,
 };
 
 use super::http::slate_wire;
@@ -24,14 +23,13 @@ use crate::api::error::{WalletError, WalletErrorKind};
 use crate::api::types::{
     CollectTrigger, ContactChange as FfiChange, ContactCollectReport, ContactImportSummary,
     ContactInvoiceView, ContactKind, ContactPayloadView, ContactRelayMode, ContactView,
-    DomainVerdict, EndedPairing, FailedPairing, FinalizedTx, FoundInvite, InviteExpiry,
-    InvitePreview, IssuedInvoice, KeyCheckStart, KeysDecision, OutboxEntryView, OutboxReport,
-    OutboxState, PaidInvoice, PairRequestView, PairingAnswer, PairingCard, PairingClass,
-    PairingEndReason as FfiEndReason, PairingFailureReason, PairingInvite, PairingLinkOutcome,
-    PairingLinkResult, PairingState, PairingStatus as FfiStatus, PendingPairingView,
-    QuarantineRetryReport, QuarantinedMessageView, SasDecision, SasEntry, SealState, SealedAnswer,
-    SealedSlateView, SendOptions, SentTx, SlateMessage, SlatePurpose, SlateStage, SlateWire,
-    WalletEvent, WalletEventKind,
+    DomainVerdict, EndedPairing, FailedPairing, FinalizedTx, InviteExpiry, InvitePreview,
+    IssuedInvoice, KeyCheckStart, KeysDecision, OutboxEntryView, OutboxReport, OutboxState,
+    PaidInvoice, PairRequestView, PairingAnswer, PairingClass, PairingEndReason as FfiEndReason,
+    PairingFailureReason, PairingInvite, PairingLinkOutcome, PairingLinkResult, PairingState,
+    PairingStatus as FfiStatus, PendingPairingView, QuarantineRetryReport, QuarantinedMessageView,
+    SasDecision, SasEntry, SealState, SealedAnswer, SealedSlateView, SendOptions, SentTx,
+    SlateMessage, SlatePurpose, SlateStage, SlateWire, WalletEvent, WalletEventKind,
 };
 
 /// The longest sealed text taken from the app: a slate with its envelope and armor fits many
@@ -48,7 +46,6 @@ const MAX_COLLECT_ONLY: usize = 64;
 const MAX_RELAY_HOST: usize = 260;
 
 /// Pairing words a user types; more is never a pairing.
-const MAX_TYPED_WORDS: usize = 16;
 
 /// Refuses an address that is not an Epicbox address of `network`.
 fn check_address(
@@ -385,46 +382,20 @@ impl Session {
         Ok(ContactRelays::new(self.epicbox()?, relay_mode(mode)))
     }
 
-    /// The relays contact calls reach, with `meeting` as the meeting relays. With none the
-    /// engine refuses pairing words after its online checks.
-    fn meeting_relays(
-        &self,
-        mode: ContactRelayMode,
-        meeting: &[String],
-    ) -> Result<ContactRelays, WalletError> {
-        let relays = self.contact_relays(mode)?;
-        if meeting.is_empty() {
-            return Ok(relays);
-        }
-        if meeting.iter().any(|host| host.len() > MAX_RELAY_HOST) {
-            return Err(WalletError::new(
-                WalletErrorKind::InvalidArgument,
-                "meeting relay too long",
-            ));
-        }
-        Ok(relays.with_meeting(lepic_wallet_contacts::meeting_relays(meeting)?))
-    }
-
     #[allow(clippy::too_many_arguments)] // One argument per choice of the Dart call.
     pub(crate) async fn pairing_invite(
         &self,
         name: String,
         kind: ContactKind,
         expiry: InviteExpiry,
-        offer_words: bool,
         mode: ContactRelayMode,
-        meeting: Vec<String>,
         home_relay: Option<String>,
         class: PairingClass,
         expect_address: Option<String>,
     ) -> Result<PairingInvite, WalletError> {
         check_home_relay(home_relay.as_deref())?;
         check_address(expect_address.as_deref(), self.network)?;
-        let relays = if offer_words {
-            self.meeting_relays(mode, &meeting)?
-        } else {
-            self.contact_relays(mode)?
-        };
+        let relays = self.contact_relays(mode)?;
         let offer = self
             .engine
             .contact_book()
@@ -439,7 +410,6 @@ impl Session {
                         InviteExpiry::OneDay => EngineExpiry::OneDay,
                         InviteExpiry::SevenDays => EngineExpiry::SevenDays,
                     },
-                    offer_words,
                     home_relay,
                     class: engine_class(class),
                     expect_address,
@@ -450,11 +420,6 @@ impl Session {
             contact_id: offer.contact_id.to_string(),
             link: offer.link,
             expires_at_ms: ms(offer.expires_at),
-            words: offer
-                .words
-                .as_ref()
-                .map(|words| sas_entries(words))
-                .unwrap_or_default(),
         })
     }
 
@@ -463,28 +428,6 @@ impl Session {
         Ok(preview(
             self.engine.contact_book().pairing_preview(link).await?,
         ))
-    }
-
-    pub(crate) async fn pairing_find_words(
-        &self,
-        words: Vec<String>,
-        mode: ContactRelayMode,
-        meeting: Vec<String>,
-    ) -> Result<FoundInvite, WalletError> {
-        if words.len() > MAX_TYPED_WORDS || words.iter().any(|word| word.len() > MAX_LINK_TEXT) {
-            return Err(WalletError::new(
-                WalletErrorKind::InvalidPairingWords,
-                "too many or too long pairing words",
-            ));
-        }
-        let relays = self.meeting_relays(mode, &meeting)?;
-        let link = self
-            .engine
-            .contact_book()
-            .pairing_find_words(&relays, &words)
-            .await?;
-        let preview = preview(self.engine.contact_book().pairing_preview(&link).await?);
-        Ok(FoundInvite { link, preview })
     }
 
     pub(crate) async fn pairing_accept(
@@ -552,51 +495,6 @@ impl Session {
                 },
             },
         )
-    }
-
-    pub(crate) async fn pairing_show_card(
-        &self,
-        name: String,
-        kind: ContactKind,
-        mode: ContactRelayMode,
-        home_relay: Option<String>,
-    ) -> Result<PairingCard, WalletError> {
-        check_home_relay(home_relay.as_deref())?;
-        let relays = self.contact_relays(mode)?;
-        let offer = self
-            .engine
-            .contact_book()
-            .pairing_show_card(
-                &relays,
-                CardRequest {
-                    account: DEFAULT_ACCOUNT,
-                    name,
-                    kind: engine_kind(kind),
-                    home_relay,
-                },
-            )
-            .await?;
-        Ok(PairingCard {
-            contact_id: offer.contact_id.to_string(),
-            link: offer.link,
-        })
-    }
-
-    pub(crate) async fn pairing_scan_card(
-        &self,
-        contact_id: &str,
-        link: &str,
-        mode: ContactRelayMode,
-    ) -> Result<ContactView, WalletError> {
-        let id = self::contact_id(contact_id)?;
-        let link = bounded(link, MAX_LINK_TEXT, "link")?;
-        let relays = self.contact_relays(mode)?;
-        Ok(view(
-            self.engine
-                .contact_book()
-                .pairing_scan_card(&relays, id, link)
-                .await?,
-        ))
     }
 
     pub(crate) async fn pairing_sas(
@@ -750,7 +648,6 @@ impl Session {
             contact_id: offer.contact_id.to_string(),
             link: offer.link,
             expires_at_ms: ms(offer.expires_at),
-            words: Vec::new(),
         })
     }
 

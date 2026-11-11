@@ -212,7 +212,6 @@ async fn pay<N: lepic_node::NodeApi + 'static>(
         account,
         message,
         spend,
-        proof,
         hosts_ok,
         slate_id,
     } = args;
@@ -259,7 +258,6 @@ async fn pay<N: lepic_node::NodeApi + 'static>(
             Epic1PayRequest {
                 link: link.link.clone(),
                 send,
-                proof,
                 slate_file: slate_file.path.clone(),
             },
             hosts_ok,

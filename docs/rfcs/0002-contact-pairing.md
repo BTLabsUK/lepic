@@ -3,6 +3,10 @@
 Status: accepted. Decision record: [ADR 0024](../adr/0024-contact-pairing-and-invoice-trust.md). Edge cases:
 [0002-contact-pairing-cases.md](0002-contact-pairing-cases.md).
 
+> **Note (2026-11-11).** LEPIC no longer implements pairing by card or by the five spoken pairing
+> words: no function, command or route is left for either. Pairing is by invite, reply and confirm
+> link, and the four SAS words stay. Sections 7.4 and 7.7 are kept as the record of the design.
+
 Two LEPIC wallets pair once: in person by scanning each other's QR code, or online through a
 one-time invite link or five pairing words and a throwaway Epicbox mailbox. Each side then holds
 keys made for that one contact, derived from the seed in a numbered slot and shared with nothing

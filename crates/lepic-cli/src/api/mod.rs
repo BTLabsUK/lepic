@@ -149,8 +149,6 @@ api!(
     contact_keys,
     contact_move,
     contact_move_home,
-    contact_card,
-    contact_scan_card,
     contact_quarantine,
     contact_invoices,
     contact_export,

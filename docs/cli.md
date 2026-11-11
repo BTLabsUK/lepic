@@ -376,18 +376,15 @@ Two flags apply to every `contact`, `in-person` and `epic1` command:
    It expires at 2026-01-02 12:00:00. Contact 00000000000000000000000000000000.
    ```
 
-   `--expiry` is `1h`, `24h` or `7d`; default `24h`. `--pairing-words` also prints five words
-   that find the invite.
+   `--expiry` is `1h`, `24h` or `7d`; default `24h`.
 
 2. The other side reads it with `contact open LINK`, then answers it with `contact accept LINK`.
    The reply goes to the inviter's relay, or with `--by-hand` it is printed as a link to send by
-   other means. `contact enter` takes such a reply link, a confirm link, or the five pairing
-   words.
+   other means. `contact enter` takes such a reply link or a confirm link.
 3. Both sides run `contact collect` to fetch pairing messages and send what waits.
 4. Both compare the four SAS words on the two screens, and each records the result with
    `contact sas CONTACT match|mismatch|skip`.
 
-In person, one phone runs `contact show-card` and the other `contact scan-card CONTACT LINK`.
 `contact request ADDRESS` asks a wallet that paid or was paid lately to pair, at its payments
 address. The request waits up to 7 days for the answer, listed under `sent_requests` in `contact
 list`; a second request to that address is refused while it waits, and `contact request-cancel
@@ -468,7 +465,7 @@ two addresses of one account do not show that they belong together.
 | `epic1 links`, `retire N` | Lists link mailboxes in use; frees a printed link's mailbox |
 | `epic1 answers`, `post-answer SLATE_ID` | Lists answers to payments taken; posts one to a relay outside the relay list |
 | `epic1 read LINK` | Shows what a link asks and the relays a payment would go to |
-| `epic1 pay LINK [AMOUNT] [--hosts-ok] [--proof]` | Pays a link |
+| `epic1 pay LINK [AMOUNT] [--hosts-ok]` | Pays a link |
 | `epic1 post-next SLATE_ID` | Posts the same payment to the link's next relay |
 | `epic1 restore` | After a restore, reads every link mailbox on the wallet's relay once |
 
@@ -483,8 +480,7 @@ again is safe. The payer's `contact collect` takes the answer and finalizes it.
 
 `epic1 pay` pays the amount the link asks and refuses another; a link that asks none takes the
 amount after it. It takes the spending options of `tx send`. `--hosts-ok` confirms relays outside
-the relay list, after `epic1 read` showed them. `--proof` asks for a payment proof signed with
-the payee's epic1 proof key. The payment goes to the link's first relay, and `post-next` tries
+the relay list, after `epic1 read` showed them. The payment goes to the link's first relay, and `post-next` tries
 the next when a post fails, at most three. In JSON, `posted` is the index of the relay it went
 to, `posted_ok` says whether any post went through, and `uncertain` is the first relay that did
 not answer after the payment was sent: it may hold the payment, so do not pay again. A second
@@ -601,7 +597,7 @@ A command given an option its route has no field for runs on its own and meets t
 keep a command off serve: `--to-file`, `--to-contact`, `--purpose`, `--allow-plain-http`,
 `--tor-binary`, `--lib-dir`, `--fluff` and `--ttl-blocks` on `tx send` (`--ttl-blocks` also on
 `in-person read`, `in-person pay` and `epic1 pay`), a non-default `--selection`, `--offline` and
-`--epicbox-off`, `--kind` on `contact invite` and `contact show-card`, `--out` on the in-person
+`--epicbox-off`, `--kind` on `contact invite`, `--out` on the in-person
 commands, `contact payload ack` with several ids, and `epictx open` with text on the command
 line. `tx send` to an onion, `tx show --slate-id` and `epicbox status --listing` do not go
 through serve either.

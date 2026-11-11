@@ -14,7 +14,7 @@ use lepic_wallet::invoice::InvoiceRequest;
 use lepic_wallet::send::{SendRequest, SentSlate};
 use lepic_wallet::slate::Stage;
 use lepic_wallet_contacts::{
-    AcceptRequest, CardRequest, CollectTrigger, ContactKind, ContactRelays, ContactView,
+    AcceptRequest, CollectTrigger, ContactKind, ContactRelays, ContactView,
     InviteExpiry, InviteRequest, InvoiceDetails, KeysDecision, LinkOutcome, MAX_APP_PAYLOAD_LEN,
     PairingClass, PairingEndReason, PairingFailure, PairingStatus, PayloadId, Purpose, Refusal,
     RelayMode, SasDecision, SasSymbol, SealedAnswer, WalletContacts,
@@ -23,7 +23,7 @@ use lepic_wallet_contacts::{
 use super::{Opened, Run, Spend};
 use crate::amount::{format_amount, format_fee, parse_amount};
 use crate::cli::{
-    ContactAcceptArgs, ContactArgs, ContactCardArgs, ContactCommand, ContactEnterArgs,
+    ContactAcceptArgs, ContactArgs, ContactCommand, ContactEnterArgs,
     ContactExportArgs, ContactIdArg, ContactImportArgs, ContactInviteArgs, ContactInvoiceArgs,
     ContactKeyCheckArgs, ContactKeysArgs, ContactLabelArgs, ContactMoveArgs, ContactMoveHomeArgs,
     ContactOpenSealedArgs, ContactPayArgs, ContactPayloadArgs, ContactPayloadCommand,
@@ -34,7 +34,7 @@ use crate::cli::{
 use crate::exit::CliError;
 use crate::host::Host;
 use crate::output::{
-    ContactAcceptReport, ContactCardReport, ContactCheckReport, ContactCollectReport,
+    ContactAcceptReport, ContactCheckReport, ContactCollectReport,
     ContactExportReport, ContactFailureReport, ContactImportReport, ContactInviteReport,
     ContactInvoiceIssueReport, ContactInvoiceListReport, ContactInvoiceReport,
     ContactKeyCheckReport, ContactLinkReport, ContactListReport, ContactMoveHomeReport,
@@ -370,18 +370,6 @@ impl<H: Host> Run<'_, H> {
                 report
             }
             ContactCommand::Sas(args) => sas(&opened, &relays, args).await?,
-            ContactCommand::ShowCard(args) => {
-                self.note_ignored_kind(args.kind);
-                show_card(&opened, &relays, args).await?
-            }
-            ContactCommand::ScanCard(args) => {
-                let id = contact_id(&args.contact.contact)?;
-                let view = wallet
-                    .contact_book()
-                    .pairing_scan_card(&relays, id, &args.link)
-                    .await?;
-                Report::Contact(contact_report(&view)?)
-            }
             ContactCommand::List => list(&opened).await?,
             ContactCommand::KeyCheck(args) => key_check(&opened, &relays, args).await?,
             ContactCommand::Keys(args) => resolve_keys(&opened, args).await?,
@@ -514,7 +502,6 @@ async fn invite<N: lepic_node::NodeApi + 'static>(
                     InviteExpiryArg::Day => InviteExpiry::OneDay,
                     InviteExpiryArg::Week => InviteExpiry::SevenDays,
                 },
-                offer_words: args.pairing_words,
                 home_relay: None,
                 class: PairingClass::Contact,
                 expect_address: None,
@@ -525,12 +512,6 @@ async fn invite<N: lepic_node::NodeApi + 'static>(
         contact_id: offer.contact_id.to_string(),
         link: offer.link,
         expires_at: offer.expires_at.to_string(),
-        words: offer
-            .words
-            .iter()
-            .flatten()
-            .map(|symbol| format!("{} {}", symbol.emoji, symbol.name))
-            .collect(),
     }))
 }
 
@@ -551,7 +532,6 @@ async fn request<N: lepic_node::NodeApi + 'static>(
         contact_id: offer.contact_id.to_string(),
         link: offer.link,
         expires_at: offer.expires_at.to_string(),
-        words: Vec::new(),
     }))
 }
 
@@ -660,30 +640,16 @@ async fn accept<N: lepic_node::NodeApi + 'static>(
     }))
 }
 
-/// `lepic contact enter`: takes a pairing link entered by hand, or finds an invite by its pairing words.
+/// `lepic contact enter`: takes a pairing link entered by hand.
 async fn enter<N: lepic_node::NodeApi + 'static>(
     opened: &Opened<N>,
     relays: &ContactRelays,
     args: ContactEnterArgs,
 ) -> Result<Report, CliError> {
     let wallet = &opened.wallet;
-    let link = match args.input.as_slice() {
-        [link] if link.trim_start().starts_with("epiccash:") => link.clone(),
-        words => {
-            let link = wallet
-                .contact_book()
-                .pairing_find_words(relays, words)
-                .await?;
-            return Ok(Report::ContactLink(ContactLinkReport {
-                outcome: "invite",
-                contact_id: None,
-                link: Some(link),
-            }));
-        }
-    };
     let outcome = wallet
         .contact_book()
-        .pairing_enter_link(relays, &link)
+        .pairing_enter_link(relays, &args.input)
         .await?;
     Ok(Report::ContactLink(match outcome {
         LinkOutcome::Confirm { contact_id, link } => ContactLinkReport {
@@ -729,31 +695,6 @@ async fn sas<N: lepic_node::NodeApi + 'static>(
     } else {
         Report::Contact(contact_report(&wallet.contact_book().contact(id).await?)?)
     })
-}
-
-/// `lepic contact show-card`: shows a card to pair in person.
-async fn show_card<N: lepic_node::NodeApi + 'static>(
-    opened: &Opened<N>,
-    relays: &ContactRelays,
-    args: ContactCardArgs,
-) -> Result<Report, CliError> {
-    let wallet = &opened.wallet;
-    let offer = wallet
-        .contact_book()
-        .pairing_show_card(
-            relays,
-            CardRequest {
-                account: CONTACT_ACCOUNT,
-                name: args.name.name,
-                kind: ContactKind::Person,
-                home_relay: None,
-            },
-        )
-        .await?;
-    Ok(Report::ContactCard(ContactCardReport {
-        contact_id: offer.contact_id.to_string(),
-        link: offer.link,
-    }))
 }
 
 /// `lepic contact key-check`: starts the key check of a contact paired again.

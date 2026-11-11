@@ -67,8 +67,6 @@ pairing in progress are sealed in the store.
 | Way | Calls | RFC 0002 |
 |---|---|---|
 | Invite link | `pairing_invite`, `pairing_preview`, `pairing_accept`, `pairing_enter_link` | 7.1 to 7.3 |
-| In person | `pairing_show_card`, `pairing_scan_card` | 7.4 |
-| Pairing words | `pairing_invite` with `offer_words`, `pairing_find_words` | 7.7 |
 | Request over Epicbox | `pairing_request_send`, `pairing_requests`, `pairing_request_dismiss`, `pairing_standing_invite` | 7.1; ADR 0034 |
 
 An invite names a home relay. The invitee posts its reply to a throwaway mailbox there, the

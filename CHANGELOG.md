@@ -7,6 +7,18 @@ Conventional Commit messages at release time.
 
 ## [Unreleased]
 
+### Removed
+
+- Pairing by card and by spoken pairing words: `contact show-card`, `contact scan-card`,
+  `contact invite --pairing-words`, the words form of `contact enter`, the owner API routes
+  `/v1/contacts/card` and `/v1/contacts/cards/scan`, and the matching library and binding
+  functions (`pairing_show_card`, `pairing_scan_card`, `pairing_find_words`, `FoundInvite`,
+  `PairingCard`, the `offer_words` and meeting-relay arguments of `pairing_invite`).
+  Pairing by invite, reply and confirm link and the four SAS words stay.
+- `epic1 pay --proof`, the `proof` field of the owner API's `epic1/pay` body and the `proof`
+  parameter of the binding's `epic1Pay`. Payment proofs a stock wallet puts in a slate are still
+  kept.
+
 ## [0.4.0] - 2026-11-10
 
 ### Fixed

@@ -194,7 +194,6 @@ impl Session {
         minimum_confirmations: u64,
         message: Option<String>,
         options: Option<SendOptions>,
-        proof: bool,
         hosts_ok: bool,
         mode: ContactRelayMode,
     ) -> Result<Epic1Paid, WalletError> {
@@ -225,7 +224,6 @@ impl Session {
                 Epic1PayRequest {
                     link,
                     send,
-                    proof,
                     slate_file: scratch.path.clone(),
                 },
                 hosts_ok,

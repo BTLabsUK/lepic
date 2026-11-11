@@ -111,87 +111,6 @@
         }
       }
     },
-    "/v1/contacts/card": {
-      "post": {
-        "tags": [
-          "contacts"
-        ],
-        "summary": "Show a card to pair in person",
-        "description": "Makes a pairing; the other phone scans the card.",
-        "operationId": "contact_card",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/CardBody"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ContactCardReport"
-                }
-              }
-            }
-          },
-          "default": {
-            "description": "An error, as RFC 9457 problem details",
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/v1/contacts/cards/scan": {
-      "post": {
-        "tags": [
-          "contacts"
-        ],
-        "summary": "Pair in person with the card the other phone shows",
-        "operationId": "contact_scan_card",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/ScanCardBody"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ContactReport"
-                }
-              }
-            }
-          },
-          "default": {
-            "description": "An error, as RFC 9457 problem details",
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
     "/v1/contacts/collect": {
       "post": {
         "tags": [
@@ -3512,20 +3431,6 @@
           }
         }
       },
-      "CardBody": {
-        "type": "object",
-        "description": "The name a card carries.",
-        "properties": {
-          "name": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "The name this wallet gives itself; `LEPIC` when absent."
-          }
-        },
-        "additionalProperties": false
-      },
       "CarriesReport": {
         "type": "object",
         "description": "What a slate over a method may carry.",
@@ -3674,21 +3579,6 @@
         ],
         "properties": {
           "backup": {
-            "type": "string"
-          }
-        }
-      },
-      "ContactCardReport": {
-        "type": "object",
-        "required": [
-          "contact_id",
-          "link"
-        ],
-        "properties": {
-          "contact_id": {
-            "type": "string"
-          },
-          "link": {
             "type": "string"
           }
         }
@@ -3846,13 +3736,6 @@
           },
           "link": {
             "type": "string"
-          },
-          "words": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            },
-            "description": "The five pairing words as `emoji name`, when they were offered."
           }
         }
       },
@@ -4362,11 +4245,8 @@
         ],
         "properties": {
           "input": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            },
-            "description": "One link, or the five pairing words."
+            "type": "string",
+            "description": "The pairing link."
           }
         },
         "additionalProperties": false
@@ -4799,10 +4679,6 @@
             "format": "int64",
             "description": "Confirmations an output needs before it is spent.",
             "minimum": 0
-          },
-          "proof": {
-            "type": "boolean",
-            "description": "Ask the payee for a payment proof signed with its epic1 proof key."
           },
           "slate_id": {
             "type": [
@@ -5987,10 +5863,6 @@
               "null"
             ],
             "description": "The name this wallet gives itself in the invite; `LEPIC` when absent."
-          },
-          "pairing_words": {
-            "type": "boolean",
-            "description": "Also offer five pairing words that find the invite."
           }
         },
         "additionalProperties": false
@@ -7124,25 +6996,6 @@
             "format": "int64",
             "description": "Start at this height; 0 scans the whole chain. Not with `reset_chain`.",
             "minimum": 0
-          }
-        },
-        "additionalProperties": false
-      },
-      "ScanCardBody": {
-        "type": "object",
-        "description": "The other phone's card.",
-        "required": [
-          "contact",
-          "link"
-        ],
-        "properties": {
-          "contact": {
-            "type": "string",
-            "description": "The id the card route answered on this wallet."
-          },
-          "link": {
-            "type": "string",
-            "description": "The other phone's `epiccash://contact/` link."
           }
         },
         "additionalProperties": false

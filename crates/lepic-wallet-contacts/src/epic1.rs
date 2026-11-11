@@ -34,7 +34,7 @@ use lepic_seal::{
     TxContent, TxKey, armor, armor_tx, dearmor_marked, seal, seal_tx,
 };
 use lepic_slate::codec::{MediaType, WireSlate};
-use lepic_slate::model::{ProofAddress, SlateId};
+use lepic_slate::model::SlateId;
 use lepic_slate::stage::Stage;
 use lepic_store::{AccountIndex, Repositories, SlateStage, TxId, TxState, WalletStore};
 use lepic_transport::host_rule::{self, HostReport};
@@ -148,9 +148,6 @@ pub enum Epic1Refusal {
     /// The message is longer than a link carries or holds control characters.
     #[error("the message does not fit in a link")]
     Message,
-    /// The address's proof key is not a payment proof address.
-    #[error("the address's proof key is not usable")]
-    ProofKey,
     /// The payment was finalized already.
     #[error("the payment was finalized already")]
     Finalized,
@@ -271,11 +268,9 @@ pub struct Epic1Read {
 pub struct Epic1PayRequest {
     /// The link text.
     pub link: String,
-    /// The send. Its TTL is [`EPIC1_TTL_BLOCKS`] when it sets none; a payment proof it asks
-    /// for is replaced by the epic1 proof key.
+    /// The send. Its TTL is [`EPIC1_TTL_BLOCKS`] when it sets none; it asks for no payment
+    /// proof.
     pub send: SendRequest,
-    /// Ask the payee for a payment proof signed with the epic1 proof key.
-    pub proof: bool,
     /// A path in the wallet's directory the S1 is written to on the way; the caller removes it.
     pub slate_file: PathBuf,
 }
@@ -1400,7 +1395,7 @@ where
     }
 
     /// Pays an epic1 link: sends the request's S1 with a TTL ([`EPIC1_TTL_BLOCKS`] by default),
-    /// asking for a payment proof signed with the epic1 proof key when the request says so,
+    /// asking for no payment proof,
     /// and seals it to the address in an anonymous, padded envelope with a zero hint. The
     /// envelope names the slate's reply key and a reply mailbox on the wallet's own relay. The
     /// payment is stored, then posted to the link's first transport, and to the next when a
@@ -1444,14 +1439,7 @@ where
         let mut send = request.send;
         let account = send.account;
         send.ttl_blocks = Some(send.ttl_blocks.unwrap_or(EPIC1_TTL_BLOCKS));
-        send.payment_proof_recipient = if request.proof {
-            Some(
-                ProofAddress::from_bytes(link.address.proof_key().to_bytes())
-                    .map_err(|_| refused(Epic1Refusal::ProofKey))?,
-            )
-        } else {
-            None
-        };
+        send.payment_proof_recipient = None;
         let delivery = Delivery::Export {
             to: Location::File(request.slate_file),
         };

@@ -33,21 +33,12 @@ pub fn relays(party: &Party) -> ContactRelays {
     }
 }
 
-/// As [`relays`], with the party's relay among the built-in ones, where words are offered.
-pub fn relays_with_words(party: &Party) -> ContactRelays {
-    ContactRelays {
-        meeting: vec![party.epicbox.settings().endpoint.clone()],
-        ..relays(party)
-    }
-}
-
 pub fn invite_request(name: &str) -> InviteRequest {
     InviteRequest {
         account: AccountIndex(0),
         name: name.to_owned(),
         kind: ContactKind::Person,
         expiry: InviteExpiry::OneDay,
-        offer_words: false,
         home_relay: None,
         class: PairingClass::Contact,
         expect_address: None,

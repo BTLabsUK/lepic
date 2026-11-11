@@ -570,10 +570,10 @@ mod tests {
     fn contact_commands_stand_for_their_routes() {
         let table: &[(&[&str], &str, &str, Option<Value>)] = &[
             (
-                &["contact", "invite", "--expiry", "1h", "--pairing-words"],
+                &["contact", "invite", "--expiry", "1h"],
                 "POST",
                 "/v1/contacts/invites",
-                Some(json!({"name": "LEPIC", "expiry": "1h", "pairing_words": true})),
+                Some(json!({"name": "LEPIC", "expiry": "1h"})),
             ),
             (&["contact", "list"], "GET", "/v1/contacts", None),
             (
