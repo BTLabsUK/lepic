@@ -87,6 +87,7 @@ struct Service<'a, H: Host> {
     epicbox: Cell<Option<&'static str>>,
     /// The API's event log.
     log: v1::Log,
+    scans: v1::Scans,
 }
 
 impl<H: Host> Service<'_, H> {
@@ -192,7 +193,8 @@ async fn serving<H: Host>(
         &service.maintenance,
     );
     let writer = v1::event_writer(service);
-    tokio::pin!(listener, maintenance, writer);
+    let scanner = v1::scan_driver(service);
+    tokio::pin!(listener, maintenance, writer, scanner);
     let tls = service.owner_tls;
     let mut sockets = FuturesUnordered::<LocalBoxFuture<'_, ()>>::new();
     let mut tls_connections = FuturesUnordered::<LocalBoxFuture<'_, ()>>::new();
@@ -220,6 +222,7 @@ async fn serving<H: Host>(
             }
             never = &mut maintenance, if !stopping => match never {},
             never = &mut writer, if !stopping => match never {},
+            never = &mut scanner, if !stopping => match never {},
             Ok(_) = stopped.wait_for(|stopped| *stopped), if !stopping => {}
             event = recv(events.as_mut()), if events.is_some() => match event {
                 Ok(event) => {
@@ -343,6 +346,7 @@ impl<H: Host> Run<'_, H> {
             socket: path.display().to_string(),
             epicbox: Cell::new(None),
             log: v1::Log::new(opened.wallet.api_event_last_id()?),
+            scans: v1::Scans::default(),
         };
         let api = Api::new(
             &service,

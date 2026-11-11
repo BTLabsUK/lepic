@@ -26,6 +26,7 @@ use crate::exit::CliError;
 use crate::host::Host;
 
 pub(super) use events::{Log, writer as event_writer};
+pub(super) use wallet::{Scans, drive as scan_driver};
 
 /// What a handler answers.
 type Reply = Result<Response<Body>, Problem>;
