@@ -98,5 +98,9 @@ fn failure<H: Host>(service: &Service<'_, H>, error: &CliError) -> Response<Body
 
 /// `text`, as it is, with `status` and `content_type`.
 fn text(status: StatusCode, content_type: &'static str, text: &str) -> Response<Body> {
-    response(status, content_type, Bytes::copy_from_slice(text.as_bytes()))
+    response(
+        status,
+        content_type,
+        Bytes::copy_from_slice(text.as_bytes()),
+    )
 }

@@ -77,7 +77,12 @@ pub(crate) struct PairRequest {
 
 impl Contact {
     /// This contact with what it told this wallet about itself.
-    pub(crate) fn with_profile(mut self, flags: Vec<String>, domain: Option<String>, proven: bool) -> Self {
+    pub(crate) fn with_profile(
+        mut self,
+        flags: Vec<String>,
+        domain: Option<String>,
+        proven: bool,
+    ) -> Self {
         self.profile = Some(ContactProfile {
             flags,
             domain,

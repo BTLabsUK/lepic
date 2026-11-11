@@ -98,7 +98,12 @@ fn peers_are_listed_and_unknown_ones_are_not_found() {
         assert_eq!(peers["items"], json!([]), "{peers}");
         assert!(peers["next_cursor"].is_null(), "{peers}");
         problem(
-            &http(socket, "DELETE", "/api/v1/peers/https%3A%2F%2Fpeer.example", None),
+            &http(
+                socket,
+                "DELETE",
+                "/api/v1/peers/https%3A%2F%2Fpeer.example",
+                None,
+            ),
             404,
             "not_found",
         );
@@ -169,19 +174,26 @@ fn the_domain_file_exists_when_a_domain_is_set() {
         );
         host.without_interrupt()
     });
-    serving_with(host, &wallet, &["--domain", "shop.example.org"], |socket, _| {
-        let profile = http(socket, "GET", "/api/v1/profile", None).ok();
-        assert_eq!(profile["domain"], "shop.example.org", "{profile}");
-        let file = http(socket, "GET", "/api/v1/profile/domain-file", None);
-        assert_eq!(file.status, 200, "{file:?}");
-        assert!(
-            file.header("content-type").unwrap().starts_with("text/plain"),
-            "{file:?}"
-        );
-        assert!(!file.body.trim().is_empty(), "{file:?}");
-        assert_eq!(profile["domain_proof"], file.body.as_str(), "{profile}");
-        let blank = http(socket, "GET", "/api/v1/profile/domain-file?relay=", None);
-        let blank = problem(&blank, 400, "invalid_field");
-        assert_eq!(blank["param"], "/relay", "{blank}");
-    });
+    serving_with(
+        host,
+        &wallet,
+        &["--domain", "shop.example.org"],
+        |socket, _| {
+            let profile = http(socket, "GET", "/api/v1/profile", None).ok();
+            assert_eq!(profile["domain"], "shop.example.org", "{profile}");
+            let file = http(socket, "GET", "/api/v1/profile/domain-file", None);
+            assert_eq!(file.status, 200, "{file:?}");
+            assert!(
+                file.header("content-type")
+                    .unwrap()
+                    .starts_with("text/plain"),
+                "{file:?}"
+            );
+            assert!(!file.body.trim().is_empty(), "{file:?}");
+            assert_eq!(profile["domain_proof"], file.body.as_str(), "{profile}");
+            let blank = http(socket, "GET", "/api/v1/profile/domain-file?relay=", None);
+            let blank = problem(&blank, 400, "invalid_field");
+            assert_eq!(blank["param"], "/relay", "{blank}");
+        },
+    );
 }

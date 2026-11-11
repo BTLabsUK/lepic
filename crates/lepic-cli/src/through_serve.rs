@@ -146,9 +146,7 @@ impl Call {
         }
     }
 
-    fn read(
-        read: impl FnOnce() -> Result<CliCall, CliError> + Send + 'static,
-    ) -> Self {
+    fn read(read: impl FnOnce() -> Result<CliCall, CliError> + Send + 'static) -> Self {
         Self {
             send: Body::Read(Box::new(read)),
             finish: Finish::Print,
@@ -413,12 +411,11 @@ fn send(command: &Command, args: &SendArgs) -> Option<Call> {
             lib_dir,
         },
         fluff: FluffArg { fluff },
-        spend:
-            SpendArgs {
-                selection,
-                ttl_blocks,
-                ..
-            },
+        spend: SpendArgs {
+            selection,
+            ttl_blocks,
+            ..
+        },
         ..
     } = args;
     let to = to.as_ref()?;
@@ -522,7 +519,15 @@ mod tests {
             &["tx", "release", "7"],
             &["tx", "post", "7", "--fluff"],
             &["tx", "send", "1", "--to", "a@relay.example"],
-            &["tx", "send", "1", "--to", "https://h.example/x", "--message", "m"],
+            &[
+                "tx",
+                "send",
+                "1",
+                "--to",
+                "https://h.example/x",
+                "--message",
+                "m",
+            ],
             &["epicbox", "status"],
             &["epicbox", "peer", "a@relay.example"],
             &["profile", "show"],
@@ -538,7 +543,13 @@ mod tests {
             &["contact", "allow-invoices", "c1", "on"],
             &["contact", "sas", "c1", "mismatch"],
             &["contact", "keys", "n1", "keep-old"],
-            &["contact", "move-home", "relay.example:443", "--drain-days", "3"],
+            &[
+                "contact",
+                "move-home",
+                "relay.example:443",
+                "--drain-days",
+                "3",
+            ],
             &["contact", "payload", "post", "c1", "--hex", "00ff"],
             &["contact", "payload", "ack", "p1"],
             &["contact", "payload", "list"],
@@ -583,10 +594,31 @@ mod tests {
     fn a_command_with_an_option_serve_lacks_runs_here() {
         let local: &[&[&str]] = &[
             &["wallet", "init"],
-            &["tx", "show", "--slate-id", "8a6e2f0c-4b1d-4c3e-9f2a-7d5b6c8e9f01"],
+            &[
+                "tx",
+                "show",
+                "--slate-id",
+                "8a6e2f0c-4b1d-4c3e-9f2a-7d5b6c8e9f01",
+            ],
             &["tx", "send", "1", "--to", "a@relay.example", "--fluff"],
-            &["tx", "send", "1", "--to", "a@relay.example", "--ttl-blocks", "5"],
-            &["tx", "send", "1", "--to", "a@relay.example", "--selection", "all"],
+            &[
+                "tx",
+                "send",
+                "1",
+                "--to",
+                "a@relay.example",
+                "--ttl-blocks",
+                "5",
+            ],
+            &[
+                "tx",
+                "send",
+                "1",
+                "--to",
+                "a@relay.example",
+                "--selection",
+                "all",
+            ],
             &["tx", "send", "1", "--to-contact", "c1"],
             &["contact", "--offline", "list"],
             &["contact", "--epicbox-off", "collect"],
@@ -614,7 +646,14 @@ mod tests {
         // A file read here is sent as the command's inline form, and serve refuses the path form.
         let payload = path("payload.bin");
         std::fs::write(&payload, [0x00, 0xff, 0x10]).unwrap();
-        let arguments = ["contact", "payload", "post", "c1", "--file", payload.as_str()];
+        let arguments = [
+            "contact",
+            "payload",
+            "post",
+            "c1",
+            "--file",
+            payload.as_str(),
+        ];
         assert!(!forwarded(&parse(&arguments)));
         let Command::Contact(crate::cli::ContactArgs {
             command:
@@ -638,11 +677,10 @@ mod tests {
             else {
                 panic!("{command}")
             };
-            let (crate::cli::InPersonCommand::Read(crate::cli::InPersonReadArgs {
-                code, ..
-            })
+            let (crate::cli::InPersonCommand::Read(crate::cli::InPersonReadArgs { code, .. })
             | crate::cli::InPersonCommand::Receive(crate::cli::InPersonReceiveArgs {
-                code, ..
+                code,
+                ..
             })) = sent
             else {
                 panic!("{command}")
@@ -666,22 +704,41 @@ mod tests {
         let arguments = ["epictx", "open", sealed.as_str()];
         assert!(!forwarded(&parse(&arguments)));
         let error = call(&parse(&arguments));
-        assert!(matches!(error, Some(Call { send: Body::Read(_), .. })));
+        assert!(matches!(
+            error,
+            Some(Call {
+                send: Body::Read(_),
+                ..
+            })
+        ));
 
         // A file a command writes is not sent: serve answers with the content.
         let out = path("contacts.backup");
         let export = call(&parse(&["contact", "export", out.as_str()])).unwrap();
         assert!(matches!(export.send, Body::Ready(CliCall::ContactExport)));
-        assert!(matches!(export.finish, Finish::ContactBackup(file) if file.ends_with("contacts.backup")));
+        assert!(
+            matches!(export.finish, Finish::ContactBackup(file) if file.ends_with("contacts.backup"))
+        );
         let domain = call(&parse(&[
-            "profile", "domain", "file", "--relay", "r.example:443", "--force",
+            "profile",
+            "domain",
+            "file",
+            "--relay",
+            "r.example:443",
+            "--force",
         ]))
         .unwrap();
         let Body::Ready(CliCall::DomainFile { relays }) = domain.send else {
             panic!("not a domain file call")
         };
         assert_eq!(relays, ["r.example:443"]);
-        assert!(matches!(domain.finish, Finish::DomainFile { path: None, force: true }));
+        assert!(matches!(
+            domain.finish,
+            Finish::DomainFile {
+                path: None,
+                force: true
+            }
+        ));
     }
 
     #[test]

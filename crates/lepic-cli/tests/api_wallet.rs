@@ -21,7 +21,12 @@ fn get(socket: &std::path::Path, path: &str) -> support::Reply {
 }
 
 fn send(socket: &std::path::Path, method: &str, path: &str, body: &Value) -> support::Reply {
-    http(socket, method, &format!("{API}{path}"), Some(&body.to_string()))
+    http(
+        socket,
+        method,
+        &format!("{API}{path}"),
+        Some(&body.to_string()),
+    )
 }
 
 #[test]
@@ -58,7 +63,11 @@ fn an_account_is_created_once_per_label() {
             409,
             "account_exists",
         );
-        problem(&send(socket, "POST", "/accounts", &json!({})), 400, "invalid_body");
+        problem(
+            &send(socket, "POST", "/accounts", &json!({})),
+            400,
+            "invalid_body",
+        );
     });
 }
 
@@ -80,12 +89,26 @@ fn outputs_page_and_filter() {
         let cursor = first["next_cursor"].as_str().unwrap();
         let second = get(socket, &format!("/outputs?limit=1&cursor={cursor}")).ok();
         assert_eq!(second["items"].as_array().unwrap().len(), 1);
-        assert_ne!(second["items"][0]["commitment"], first["items"][0]["commitment"]);
-        assert!(second.get("next_cursor").is_none_or(Value::is_null), "{second}");
+        assert_ne!(
+            second["items"][0]["commitment"],
+            first["items"][0]["commitment"]
+        );
+        assert!(
+            second.get("next_cursor").is_none_or(Value::is_null),
+            "{second}"
+        );
         let none = get(socket, "/outputs?state=spent").ok();
         assert!(none["items"].as_array().unwrap().is_empty());
-        problem(&get(socket, "/outputs?state=nonsense"), 400, "invalid_field");
-        problem(&get(socket, "/outputs?account=nobody"), 400, "invalid_field");
+        problem(
+            &get(socket, "/outputs?state=nonsense"),
+            400,
+            "invalid_field",
+        );
+        problem(
+            &get(socket, "/outputs?account=nobody"),
+            400,
+            "invalid_field",
+        );
     });
 }
 
@@ -109,7 +132,12 @@ fn addresses_are_made_and_listed() {
         assert_eq!(again.json()["text"], text.as_str());
 
         problem(
-            &send(socket, "POST", "/addresses", &json!({"id": "addr-one", "account": "default"})),
+            &send(
+                socket,
+                "POST",
+                "/addresses",
+                &json!({"id": "addr-one", "account": "default"}),
+            ),
             409,
             "idempotency_mismatch",
         );
@@ -147,9 +175,8 @@ fn serving_public<T: Send>(
         }
     }
     std::thread::scope(|scope| {
-        let server = scope.spawn(|| {
-            wallet.run_with(&host, &["serve", "--socket", socket_arg], env, "")
-        });
+        let server =
+            scope.spawn(|| wallet.run_with(&host, &["serve", "--socket", socket_arg], env, ""));
         support::wait_for_socket(&socket);
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| test(&socket)));
         stop.store(true, Ordering::SeqCst);
@@ -203,13 +230,22 @@ fn links_are_made_listed_and_retired() {
         let retired = http(socket, "POST", &format!("{API}/links/{id}/retire"), None);
         assert_eq!(retired.status, 200, "{retired:?}");
         assert!(retired.json()["retired_at"].is_string());
-        assert!(get(socket, "/links").ok()["items"].as_array().unwrap().is_empty());
+        assert!(
+            get(socket, "/links").ok()["items"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
         problem(
             &http(socket, "POST", &format!("{API}/links/{id}/retire"), None),
             404,
             "not_found",
         );
-        problem(&http(socket, "POST", &format!("{API}/links/nope/retire"), None), 404, "not_found");
+        problem(
+            &http(socket, "POST", &format!("{API}/links/nope/retire"), None),
+            404,
+            "not_found",
+        );
 
         problem(
             &send(socket, "POST", "/links", &json!({"kind": "poster"})),
@@ -217,7 +253,12 @@ fn links_are_made_listed_and_retired() {
             "invalid_field",
         );
         problem(
-            &send(socket, "POST", "/links", &json!({"relays": ["a", "b", "c", "d"]})),
+            &send(
+                socket,
+                "POST",
+                "/links",
+                &json!({"relays": ["a", "b", "c", "d"]}),
+            ),
             400,
             "invalid_field",
         );
@@ -225,7 +266,13 @@ fn links_are_made_listed_and_retired() {
 }
 
 fn issue(socket: &std::path::Path) {
-    send(socket, "PATCH", "/wallet", &json!({"issues_addresses": true})).ok_status(200);
+    send(
+        socket,
+        "PATCH",
+        "/wallet",
+        &json!({"issues_addresses": true}),
+    )
+    .ok_status(200);
 }
 
 trait Status {
@@ -282,7 +329,12 @@ fn a_scan_runs_in_the_background() {
             "invalid_field",
         );
         problem(
-            &send(socket, "POST", "/wallet/scan", &json!({"from_height": 99_999_999})),
+            &send(
+                socket,
+                "POST",
+                "/wallet/scan",
+                &json!({"from_height": 99_999_999}),
+            ),
             400,
             "invalid_field",
         );
@@ -293,10 +345,21 @@ fn a_scan_runs_in_the_background() {
 fn the_address_flag_is_switched_on_only() {
     let (host, wallet) = funded();
     serving(host, &wallet, |socket, _| {
-        let on = send(socket, "PATCH", "/wallet", &json!({"issues_addresses": true})).ok_status(200);
+        let on = send(
+            socket,
+            "PATCH",
+            "/wallet",
+            &json!({"issues_addresses": true}),
+        )
+        .ok_status(200);
         assert_eq!(on["issues_addresses"], true);
         problem(
-            &send(socket, "PATCH", "/wallet", &json!({"issues_addresses": false})),
+            &send(
+                socket,
+                "PATCH",
+                "/wallet",
+                &json!({"issues_addresses": false}),
+            ),
             400,
             "invalid_field",
         );
@@ -325,7 +388,12 @@ fn the_password_changes_over_the_socket() {
         );
         assert_eq!(changed.status, 204, "{changed:?}");
         problem(
-            &send(socket, "PUT", "/wallet/password", &json!({"current": "another password", "new": ""})),
+            &send(
+                socket,
+                "PUT",
+                "/wallet/password",
+                &json!({"current": "another password", "new": ""}),
+            ),
             400,
             "invalid_field",
         );

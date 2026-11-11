@@ -27,9 +27,7 @@ use super::{Reply, begin};
 use crate::api::list::{ListQuery, Order, Page, number_key};
 use crate::api::model::{Contact, ContactKeys, ContactsBackup, ImportResult, PairRequest};
 use crate::api::model::{Payload, Quarantined};
-use crate::api::{
-    Category, Context, Problem, Request, created, idempotency, no_content, ok,
-};
+use crate::api::{Category, Context, Problem, Request, created, idempotency, no_content, ok};
 use crate::cli::DEFAULT_CONTACT_NAME;
 use crate::commands::contact::{contact_id, to_hex};
 use crate::exit::CliError;
@@ -59,7 +57,10 @@ pub(super) fn api_id(id: ContactId) -> String {
 // ----------------------------------------------------------------------------------------------
 // Settings
 
-pub(super) fn read<H: Host>(service: &Service<'_, H>, key: &str) -> Result<Option<String>, Problem> {
+pub(super) fn read<H: Host>(
+    service: &Service<'_, H>,
+    key: &str,
+) -> Result<Option<String>, Problem> {
     let session = service.held.wallet.session().map_err(CliError::from)?;
     session
         .store
@@ -67,7 +68,11 @@ pub(super) fn read<H: Host>(service: &Service<'_, H>, key: &str) -> Result<Optio
         .map_err(|error| Problem::from(CliError::from(error)))
 }
 
-pub(super) fn write<H: Host>(service: &Service<'_, H>, key: &str, value: &str) -> Result<(), Problem> {
+pub(super) fn write<H: Host>(
+    service: &Service<'_, H>,
+    key: &str,
+    value: &str,
+) -> Result<(), Problem> {
     let session = service.held.wallet.session().map_err(CliError::from)?;
     session
         .store
@@ -152,12 +157,14 @@ pub(super) fn problem_at(error: ContactError, param: &str) -> Problem {
             "not_verified",
             "the contact is not verified; compare the words first",
         ),
-        ContactError::Waiting => {
-            Problem::conflict("contact_waiting", "the pairing waits for the contact's wallet")
-        }
-        ContactError::KeyCheckRefused => {
-            Problem::conflict("key_check_refused", "no key check is allowed for these pairings now")
-        }
+        ContactError::Waiting => Problem::conflict(
+            "contact_waiting",
+            "the pairing waits for the contact's wallet",
+        ),
+        ContactError::KeyCheckRefused => Problem::conflict(
+            "key_check_refused",
+            "no key check is allowed for these pairings now",
+        ),
         ContactError::PairingInProgress => Problem::conflict(
             "pairing_in_progress",
             "a pairing with this wallet is in progress",
@@ -169,9 +176,10 @@ pub(super) fn problem_at(error: ContactError, param: &str) -> Problem {
             "relay_changed",
             "the contact asked for no move to this relay",
         ),
-        ContactError::WrongClass => {
-            Problem::conflict("wrong_class", "this does not apply to a pairing of this class")
-        }
+        ContactError::WrongClass => Problem::conflict(
+            "wrong_class",
+            "this does not apply to a pairing of this class",
+        ),
         ContactError::InviteDismissed => {
             Problem::conflict("invite_dismissed", "this pairing request was dismissed")
         }
@@ -195,9 +203,7 @@ pub(super) fn problem_at(error: ContactError, param: &str) -> Problem {
             "no_free_slot",
             "the wallet has no free pairing slot",
         ),
-        ContactError::Name(_) => {
-            Problem::invalid(param, "not a name a contact card can carry")
-        }
+        ContactError::Name(_) => Problem::invalid(param, "not a name a contact card can carry"),
         ContactError::RelayAddress => Problem::invalid(param, "not the name of a relay"),
         ContactError::Decode(_) | ContactError::Words(_) | ContactError::WordsNotFound => {
             Problem::invalid(param, "not a pairing invite this wallet can read")
@@ -247,12 +253,19 @@ fn contact_of(view: &ContactView, class: &str, extras: &Extras) -> Contact {
     let words = (view.verified_at.is_none() && view.status == PairingStatus::Paired)
         .then_some(view.sas.as_ref())
         .flatten()
-        .map(|symbols| symbols.iter().map(|symbol| symbol.name.to_owned()).collect());
+        .map(|symbols| {
+            symbols
+                .iter()
+                .map(|symbol| symbol.name.to_owned())
+                .collect()
+        });
     let contact = Contact {
         id,
         class: class.to_owned(),
         state: state_name(view.status).to_owned(),
-        ended_reason: view.ended_reason.map(|reason| reason_name(reason).to_owned()),
+        ended_reason: view
+            .ended_reason
+            .map(|reason| reason_name(reason).to_owned()),
         label,
         claimed_name: view.claimed_name.clone(),
         verify_words: words,
@@ -397,7 +410,10 @@ pub(super) async fn object<H: Host>(
 }
 
 /// The contact of the path, or 404.
-async fn existing<H: Host>(service: &Service<'_, H>, request: &Request) -> Result<Contact, Problem> {
+async fn existing<H: Host>(
+    service: &Service<'_, H>,
+    request: &Request,
+) -> Result<Contact, Problem> {
     let id = request.param("id")?;
     object(service, id)
         .await?
@@ -676,14 +692,27 @@ pub(super) async fn create<H: Host>(
         Some(_) => return Err(Problem::invalid("/expires_in", "1h, 24h or 7d")),
     };
     match method {
-        "accept" if body.invite.as_deref().is_none_or(|text| text.trim().is_empty()) => {
+        "accept"
+            if body
+                .invite
+                .as_deref()
+                .is_none_or(|text| text.trim().is_empty()) =>
+        {
             return Err(Problem::invalid("/invite", "an accept needs the invite"));
         }
-        "request" if body.address.as_deref().is_none_or(|text| text.trim().is_empty()) => {
+        "request"
+            if body
+                .address
+                .as_deref()
+                .is_none_or(|text| text.trim().is_empty()) =>
+        {
             return Err(Problem::invalid("/address", "a request needs the address"));
         }
         "request" if class == PairingClass::Private => {
-            return Err(Problem::invalid("/class", "a request makes a standard contact"));
+            return Err(Problem::invalid(
+                "/class",
+                "a request makes a standard contact",
+            ));
         }
         _ => {}
     }
@@ -865,9 +894,8 @@ pub(super) async fn check<H: Host>(
     let relays = relays(service);
     match &body.previous_contact_id {
         Some(previous) => {
-            let old = contact_id(previous).map_err(|_| {
-                Problem::invalid("/previous_contact_id", "not a contact id")
-            })?;
+            let old = contact_id(previous)
+                .map_err(|_| Problem::invalid("/previous_contact_id", "not a contact id"))?;
             let started = book
                 .contact_key_check(&relays, id, old)
                 .await
@@ -1034,7 +1062,10 @@ fn import_problem(error: ContactError) -> Problem {
             | StoreError::BackupOfOtherNetwork,
         )) => Problem::invalid("/document", "not a contacts backup this wallet can read"),
         ContactError::Wallet(WalletError::Store(StoreError::ContactCapReached { .. })) => {
-            Problem::conflict("contact_cap_reached", "the wallet holds as many contacts as it may")
+            Problem::conflict(
+                "contact_cap_reached",
+                "the wallet holds as many contacts as it may",
+            )
         }
         other => problem_at(other, "/document"),
     }
@@ -1114,8 +1145,7 @@ pub(super) async fn accept_pair_request<H: Host>(
         check_label(label, "/label")?;
     }
     let text = request.param("id")?;
-    let key = request_key(text)
-        .ok_or_else(|| Problem::not_found("no such pair request"))?;
+    let key = request_key(text).ok_or_else(|| Problem::not_found("no such pair request"))?;
     let book = service.held.wallet.contact_book();
     let pending = book
         .pairing_requests()
@@ -1242,9 +1272,7 @@ pub(super) async fn list_quarantine<H: Host>(
         .contact_quarantine()
         .await
         .map_err(problem)?;
-    kept.sort_by(|left, right| {
-        (left.first_seen, &left.id).cmp(&(right.first_seen, &right.id))
-    });
+    kept.sort_by(|left, right| (left.first_seen, &left.id).cmp(&(right.first_seen, &right.id)));
     let items: Vec<(String, Quarantined)> = kept
         .iter()
         .map(|message| {

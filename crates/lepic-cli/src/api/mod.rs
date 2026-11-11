@@ -385,7 +385,9 @@ impl<'o, O: Owner> Api<'o, O> {
             self.caller.check(request.headers())?;
             // The CLI's private channel: not an operation of the API document.
             if request.method() == Method::POST && request.uri().path() == CLI_RUN {
-                let request = self.request(request, Vec::new(), role, listener, closing).await?;
+                let request = self
+                    .request(request, Vec::new(), role, listener, closing)
+                    .await?;
                 return self.owner.command_line(request).await;
             }
         }
@@ -397,7 +399,9 @@ impl<'o, O: Owner> Api<'o, O> {
             return Err(Problem::role_required(operation.role));
         }
         let op = operation.op;
-        let request = self.request(request, params, role, listener, closing).await?;
+        let request = self
+            .request(request, params, role, listener, closing)
+            .await?;
         self.owner.operate(op, request, &self.context).await
     }
 

@@ -92,7 +92,11 @@ fn the_service_calls_keep_the_contract() {
         assert_eq!(document["openapi"], "3.1.0");
         let events = http(socket, "GET", "/api/v1/events?limit=5", None).ok();
         assert!(events["items"].is_array(), "{events}");
-        problem(&http(socket, "GET", "/api/v1/no-such-thing", None), 404, "no_route");
+        problem(
+            &http(socket, "GET", "/api/v1/no-such-thing", None),
+            404,
+            "no_route",
+        );
         let wrong = http(socket, "DELETE", "/api/v1/status", None);
         problem(&wrong, 405, "method_not_allowed");
     });
@@ -111,7 +115,12 @@ impl Walk<'_> {
         assert!(id.is_some(), "{method} {path} is not in the document");
         let id = id.unwrap();
         let body = body.map(Value::to_string);
-        let reply = http(self.socket, method, &format!("/api/v1{path}"), body.as_deref());
+        let reply = http(
+            self.socket,
+            method,
+            &format!("/api/v1{path}"),
+            body.as_deref(),
+        );
         assert_ne!(reply.status, 501, "{id} is not implemented: {reply:?}");
         self.reached.insert(id);
         reply
@@ -138,7 +147,8 @@ fn every_operation_keeps_the_contract() {
         walk.call("GET", "/status", None).ok();
         walk.call("GET", "/openapi.json", None).ok();
         walk.call("GET", "/wallet", None).ok();
-        walk.call("PATCH", "/wallet", Some(&json!({"issues_addresses": true}))).ok();
+        walk.call("PATCH", "/wallet", Some(&json!({"issues_addresses": true})))
+            .ok();
         walk.call("POST", "/sync", Some(&json!({})));
         walk.call("GET", "/accounts", None).ok();
         let account = walk.call("POST", "/accounts", Some(&json!({"label": "walk"})));
@@ -183,8 +193,10 @@ fn every_operation_keeps_the_contract() {
         walk.call("GET", "/payments", None).ok();
         walk.call("GET", &format!("/payments/{id}"), None).ok();
         let note = json!({"metadata": {"order": "walk"}});
-        walk.call("PATCH", &format!("/payments/{id}"), Some(&note)).ok();
-        walk.call("GET", &format!("/payments/{invoice_id}/handoff"), None).ok();
+        walk.call("PATCH", &format!("/payments/{id}"), Some(&note))
+            .ok();
+        walk.call("GET", &format!("/payments/{invoice_id}/handoff"), None)
+            .ok();
         walk.call("GET", &format!("/payments/{id}/handoff"), None);
         let approve = json!({"amount": "1"});
         walk.call("POST", &format!("/payments/{id}/approve"), Some(&approve));
@@ -193,7 +205,8 @@ fn every_operation_keeps_the_contract() {
         walk.call("POST", &format!("/payments/{id}/finalize"), Some(&answer));
         walk.call("POST", &format!("/payments/{id}/deliver"), Some(&json!({})));
         walk.call("POST", &format!("/payments/{id}/post"), Some(&json!({})));
-        walk.call("POST", &format!("/payments/{id}/cancel"), None).ok();
+        walk.call("POST", &format!("/payments/{id}/cancel"), None)
+            .ok();
 
         // Things handed to the wallet.
         let nonsense = json!({"text": "not a slate"});
@@ -210,7 +223,11 @@ fn every_operation_keeps_the_contract() {
         let verify = json!({"result": "skip"});
         walk.call("POST", &format!("{nobody}/verify"), Some(&verify));
         walk.call("POST", &format!("{nobody}/check"), Some(&json!({})));
-        walk.call("POST", &format!("{nobody}/keys"), Some(&json!({"use": "new"})));
+        walk.call(
+            "POST",
+            &format!("{nobody}/keys"),
+            Some(&json!({"use": "new"})),
+        );
         let move_to = json!({"host": "relay.example"});
         walk.call("POST", &format!("{nobody}/move"), Some(&move_to));
         let payload = json!({"data_base64": "aGk="});
@@ -248,6 +265,10 @@ fn every_operation_keeps_the_contract() {
             .into_iter()
             .filter(|id| !walk.reached.contains(id))
             .collect();
-        assert_eq!(missing, Vec::<String>::new(), "operations the walk did not reach");
+        assert_eq!(
+            missing,
+            Vec::<String>::new(),
+            "operations the walk did not reach"
+        );
     });
 }

@@ -103,7 +103,13 @@ fn a_contact_pairs_is_managed_and_deleted_through_the_api() {
         problem(&early, 409, "not_verified");
 
         // Rename.
-        let renamed = http(socket, "PATCH", &path(&id), Some(r#"{"label":"Best buyer"}"#)).ok();
+        let renamed = http(
+            socket,
+            "PATCH",
+            &path(&id),
+            Some(r#"{"label":"Best buyer"}"#),
+        )
+        .ok();
         assert_eq!(renamed["label"], "Best buyer", "{renamed}");
         assert_eq!(
             http(socket, "GET", &path(&id), None).ok()["label"],
@@ -111,7 +117,12 @@ fn a_contact_pairs_is_managed_and_deleted_through_the_api() {
         );
 
         // Verify: both sides answer `match`.
-        let bad = http(socket, "POST", &format!("{}/verify", path(&id)), Some(r#"{"result":"maybe"}"#));
+        let bad = http(
+            socket,
+            "POST",
+            &format!("{}/verify", path(&id)),
+            Some(r#"{"result":"maybe"}"#),
+        );
         let bad = problem(&bad, 400, "invalid_field");
         assert_eq!(bad["param"], "/result", "{bad}");
         buyer
@@ -151,7 +162,12 @@ fn a_contact_pairs_is_managed_and_deleted_through_the_api() {
                 .is_empty()
         });
         let toolarge = format!(r#"{{"data_base64":"{}"}}"#, "A".repeat(100_000));
-        let big = http(socket, "POST", &format!("{}/payloads", path(&id)), Some(&toolarge));
+        let big = http(
+            socket,
+            "POST",
+            &format!("{}/payloads", path(&id)),
+            Some(&toolarge),
+        );
         assert_eq!(big.status, 400, "{big:?}");
         let bad = http(
             socket,
@@ -181,10 +197,20 @@ fn a_contact_pairs_is_managed_and_deleted_through_the_api() {
         assert_eq!(payload["data_base64"], "aGk=", "{payload}");
         assert_eq!(payload["size"], 2, "{payload}");
         let payload_id = text(&payload, "id").to_owned();
-        let gone = http(socket, "DELETE", &format!("/api/v1/payloads/{payload_id}"), None);
+        let gone = http(
+            socket,
+            "DELETE",
+            &format!("/api/v1/payloads/{payload_id}"),
+            None,
+        );
         assert_eq!(gone.status, 204, "{gone:?}");
         problem(
-            &http(socket, "DELETE", &format!("/api/v1/payloads/{payload_id}"), None),
+            &http(
+                socket,
+                "DELETE",
+                &format!("/api/v1/payloads/{payload_id}"),
+                None,
+            ),
             404,
             "not_found",
         );
@@ -197,32 +223,51 @@ fn a_contact_pairs_is_managed_and_deleted_through_the_api() {
 
         // Nothing is quarantined, and nothing unknown can be retried or deleted.
         let quarantine = http(socket, "GET", "/api/v1/quarantine", None).ok();
-        assert!(quarantine["items"].as_array().unwrap().is_empty(), "{quarantine}");
+        assert!(
+            quarantine["items"].as_array().unwrap().is_empty(),
+            "{quarantine}"
+        );
         let unknown = "0123456789abcdef0123456789abcdef";
         problem(
-            &http(socket, "POST", &format!("/api/v1/quarantine/{unknown}/retry"), Some("{}")),
+            &http(
+                socket,
+                "POST",
+                &format!("/api/v1/quarantine/{unknown}/retry"),
+                Some("{}"),
+            ),
             404,
             "not_found",
         );
         problem(
-            &http(socket, "DELETE", &format!("/api/v1/quarantine/{unknown}"), None),
+            &http(
+                socket,
+                "DELETE",
+                &format!("/api/v1/quarantine/{unknown}"),
+                None,
+            ),
             404,
             "not_found",
         );
 
         // Nothing is announced to move.
-        let moved = http(socket, "POST", &format!("{}/move", path(&id)), Some(r#"{"host":"relay.test"}"#));
+        let moved = http(
+            socket,
+            "POST",
+            &format!("{}/move", path(&id)),
+            Some(r#"{"host":"relay.test"}"#),
+        );
         problem(&moved, 409, "relay_changed");
 
         // Delete.
-        let removed = http(socket, "DELETE", &format!("{}?notify=false", path(&id)), None);
+        let removed = http(
+            socket,
+            "DELETE",
+            &format!("{}?notify=false", path(&id)),
+            None,
+        );
         assert_eq!(removed.status, 204, "{removed:?}");
         problem(&http(socket, "GET", &path(&id), None), 404, "not_found");
-        problem(
-            &http(socket, "DELETE", &path(&id), None),
-            404,
-            "not_found",
-        );
+        problem(&http(socket, "DELETE", &path(&id), None), 404, "not_found");
     });
 }
 
@@ -232,14 +277,16 @@ fn a_contact_is_created_once_and_refused_when_the_body_is_wrong() {
     let host = TestHost::new();
     let shop = new_wallet(&host, "shop password");
     serving(host, &shop, |socket, _| {
-        let body = r#"{"id":"11111111-1111-4111-8111-111111111111","method":"invite","label":"Once"}"#;
+        let body =
+            r#"{"id":"11111111-1111-4111-8111-111111111111","method":"invite","label":"Once"}"#;
         let first = http(socket, "POST", "/api/v1/contacts", Some(body));
         assert_eq!(first.status, 201, "{first:?}");
         let first = first.json();
         let again = http(socket, "POST", "/api/v1/contacts", Some(body));
         assert_eq!(again.status, 200, "{again:?}");
         assert_eq!(again.json()["id"], first["id"]);
-        let other = r#"{"id":"11111111-1111-4111-8111-111111111111","method":"invite","label":"Other"}"#;
+        let other =
+            r#"{"id":"11111111-1111-4111-8111-111111111111","method":"invite","label":"Other"}"#;
         problem(
             &http(socket, "POST", "/api/v1/contacts", Some(other)),
             409,
@@ -315,13 +362,23 @@ fn a_contact_is_created_once_and_refused_when_the_body_is_wrong() {
                 "not_found",
             );
             problem(
-                &http(socket, "POST", &format!("{}/move", path(id)), Some(r#"{"host":"relay.test"}"#)),
+                &http(
+                    socket,
+                    "POST",
+                    &format!("{}/move", path(id)),
+                    Some(r#"{"host":"relay.test"}"#),
+                ),
                 404,
                 "not_found",
             );
         }
         problem(
-            &http(socket, "DELETE", "/api/v1/pair-requests/0123456789abcdef0123456789abcdef", None),
+            &http(
+                socket,
+                "DELETE",
+                "/api/v1/pair-requests/0123456789abcdef0123456789abcdef",
+                None,
+            ),
             404,
             "not_found",
         );
@@ -349,7 +406,12 @@ fn the_contacts_are_exported_and_imported_on_the_socket() {
         let document = text(&backup, "document").to_owned();
         assert!(!document.is_empty());
 
-        let deleted = http(socket, "DELETE", &format!("{}?notify=false", path(&id)), None);
+        let deleted = http(
+            socket,
+            "DELETE",
+            &format!("{}?notify=false", path(&id)),
+            None,
+        );
         assert_eq!(deleted.status, 204, "{deleted:?}");
         let body = json!({ "document": document }).to_string();
         let restored = http(socket, "POST", "/api/v1/contacts/import", Some(&body)).ok();
@@ -471,7 +533,10 @@ fn a_pairing_request_is_deleted_through_the_api() {
         let listed = http(socket, "GET", "/api/v1/pair-requests", None).ok();
         assert!(listed["items"].as_array().unwrap().is_empty(), "{listed}");
         let contacts = http(socket, "GET", "/api/v1/contacts", None).ok();
-        assert!(contacts["items"].as_array().unwrap().is_empty(), "{contacts}");
+        assert!(
+            contacts["items"].as_array().unwrap().is_empty(),
+            "{contacts}"
+        );
     });
 }
 

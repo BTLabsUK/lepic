@@ -5,9 +5,9 @@ use std::cell::RefCell;
 use std::convert::Infallible;
 
 use hyper::StatusCode;
+use lepic_node::NodeApi as _;
 use lepic_store::AccountIndex;
 use lepic_wallet::event::Event;
-use lepic_node::NodeApi as _;
 use lepic_wallet_contacts::{CollectTrigger, WalletContacts as _};
 use serde::Deserialize;
 use tokio::sync::{Notify, broadcast};
@@ -230,7 +230,10 @@ pub(super) async fn change_password<H: Host>(
 ) -> Reply {
     let body: PasswordBody = request.json()?;
     if body.new.is_empty() {
-        return Err(Problem::invalid("/new", "a new wallet password cannot be empty"));
+        return Err(Problem::invalid(
+            "/new",
+            "a new wallet password cannot be empty",
+        ));
     }
     let kdf = service.host.vault_kdf();
     let data_dir = service.settings.data_dir.clone();
@@ -355,12 +358,7 @@ pub(super) async fn list_accounts<H: Host>(
 ) -> Reply {
     let list = ListQuery::parse(request.query())?;
     let mut accounts = Vec::new();
-    for account in service
-        .held
-        .wallet
-        .accounts()
-        .map_err(CliError::from)?
-    {
+    for account in service.held.wallet.accounts().map_err(CliError::from)? {
         accounts.push(account_of(service, account)?);
     }
     ok(&Page::of(accounts, &list, Order::Ascending, |account| {
@@ -387,11 +385,9 @@ pub(super) async fn create_account<H: Host>(
         .iter()
         .any(|account| account.label == body.label)
     {
-        return Err(Problem::conflict(
-            "account_exists",
-            "an account has this label",
-        )
-        .with_param("/label"));
+        return Err(
+            Problem::conflict("account_exists", "an account has this label").with_param("/label"),
+        );
     }
     let account = wallet.create_account(&body.label).map_err(|error| {
         // A bad label is the caller's: the wallet names it.
@@ -465,7 +461,9 @@ pub(super) async fn account_object<H: Host>(
         .map_err(CliError::from)?
         .into_iter()
         .find(|account| account.index == index);
-    found.map(|account| account_of(service, account)).transpose()
+    found
+        .map(|account| account_of(service, account))
+        .transpose()
 }
 
 fn account_of<H: Host>(

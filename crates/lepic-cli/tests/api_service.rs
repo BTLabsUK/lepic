@@ -60,7 +60,11 @@ fn errors_are_problem_documents() {
         let detail = problem(&extra, 400, "invalid_body")["detail"].to_string();
         assert!(detail.contains("fee"), "{detail}");
 
-        problem(&http(socket, "GET", "/api/v1/nowhere", None), 404, "no_route");
+        problem(
+            &http(socket, "GET", "/api/v1/nowhere", None),
+            404,
+            "no_route",
+        );
         // The old owner API is gone.
         problem(&http(socket, "GET", "/v1/status", None), 404, "no_route");
         let method = http(socket, "DELETE", "/api/v1/payments", None);

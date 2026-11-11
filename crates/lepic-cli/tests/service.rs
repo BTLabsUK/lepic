@@ -324,7 +324,10 @@ fn a_listener_with_native_direct_offers_its_native_endpoint() {
             ("POST", "/cli/run", "{}"),
         ] {
             let (status, _) = ask_listener(port, method, path, body);
-            assert!(status.starts_with("HTTP/1.1 404"), "{method} {path}: {status}");
+            assert!(
+                status.starts_with("HTTP/1.1 404"),
+                "{method} {path}: {status}"
+            );
         }
     });
 }
@@ -728,7 +731,10 @@ fn the_cli_channel_is_on_the_socket_only() {
         let _stop = StopOnDrop(Arc::clone(&stop));
         wait_for_socket(&socket);
         wallet
-            .run(&client, &["api", "client", "add", "laptop", pem.to_str().unwrap()])
+            .run(
+                &client,
+                &["api", "client", "add", "laptop", pem.to_str().unwrap()],
+            )
             .ok();
         let status = http(&socket, "GET", "/api/v1/status", None).ok();
         let address = status["owner_tls"]["address"].as_str().unwrap().to_owned();
@@ -776,7 +782,12 @@ fn the_cli_channel_is_on_the_socket_only() {
         support::problem(&tls("not a call"), 404, "no_route");
 
         // On the socket a body that is not a call is refused, and a call runs.
-        for body in ["not json", r#"{"nothing":1}"#, r#"{"command":"nothing"}"#, "{}"] {
+        for body in [
+            "not json",
+            r#"{"nothing":1}"#,
+            r#"{"command":"nothing"}"#,
+            "{}",
+        ] {
             let reply = http(&socket, "POST", "/cli/run", Some(body));
             support::problem(&reply, 400, "invalid_body");
         }

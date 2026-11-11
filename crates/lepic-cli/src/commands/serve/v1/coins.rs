@@ -109,7 +109,10 @@ pub(super) async fn list_addresses<H: Host>(
     if kind.is_none_or(|kind| kind == "epicbox") && index.is_none() {
         let default = resolve(service, None, "/account")?;
         if only.is_none_or(|only| only == default.index) {
-            let text = service.held.epicbox.attach_wallet(wallet)
+            let text = service
+                .held
+                .epicbox
+                .attach_wallet(wallet)
                 .map_err(CliError::from)?
                 .to_string();
             items.push((
@@ -140,7 +143,11 @@ pub(super) async fn list_addresses<H: Host>(
                 .map_err(CliError::from)?;
             for view in page.addresses {
                 items.push((
-                    format!("1{}{}", number_key(u64::from(account.index.0)), number_key(u64::from(view.index))),
+                    format!(
+                        "1{}{}",
+                        number_key(u64::from(account.index.0)),
+                        number_key(u64::from(view.index))
+                    ),
                     epic1_address(&account.label, view.index, view.address),
                 ));
             }
@@ -250,7 +257,10 @@ fn parse_link_id(id: &str) -> Option<(AccountIndex, Epic1LinkKind, u32)> {
         _ => return None,
     };
     let n = parts.next()?.parse().ok()?;
-    parts.next().is_none().then_some((AccountIndex(account), kind, n))
+    parts
+        .next()
+        .is_none()
+        .then_some((AccountIndex(account), kind, n))
 }
 
 fn kept_key(id: &str) -> String {
@@ -303,7 +313,10 @@ fn link_object<H: Host>(
         .unwrap_or_default();
     Ok(Link {
         id,
-        text: kept.as_ref().map(|kept| kept.text.clone()).unwrap_or_default(),
+        text: kept
+            .as_ref()
+            .map(|kept| kept.text.clone())
+            .unwrap_or_default(),
         kind: kind_name(view.kind).to_owned(),
         account,
         address_index: view
@@ -438,11 +451,12 @@ pub(super) async fn create_link<H: Host>(
     }
     let address_index = match body.address_index {
         Some(index) => index,
-        None => book
-            .epic1_addresses(account.index, 0, 1)
-            .await
-            .map_err(CliError::from)?
-            .highest,
+        None => {
+            book.epic1_addresses(account.index, 0, 1)
+                .await
+                .map_err(CliError::from)?
+                .highest
+        }
     };
     let relays = super::super::super::contact::relays_in_mode(
         &service.held,
@@ -483,7 +497,9 @@ pub(super) async fn create_link<H: Host>(
     let labels = labels(service)?;
     let view = views
         .iter()
-        .find(|view| view.account == account.index && view.kind == issued.kind && view.n == issued.n)
+        .find(|view| {
+            view.account == account.index && view.kind == issued.kind && view.n == issued.n
+        })
         .ok_or_else(|| Problem::not_found("the link was not stored"))?;
     created(&link_object(service, &labels, view)?)
 }

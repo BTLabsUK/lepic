@@ -9,8 +9,8 @@ use lepic_wallet_contacts::WalletContacts as _;
 use serde::Deserialize;
 
 use super::super::Service;
-use super::contacts::{OWN_NAME, own_name, problem_at, read, relays, write};
 use super::Reply;
+use super::contacts::{OWN_NAME, own_name, problem_at, read, relays, write};
 use crate::api::list::{ListQuery, Order, Page};
 use crate::api::model::{Peer, Profile, Relay};
 use crate::api::{Context, Problem, Request, no_content, ok, response};
@@ -185,14 +185,12 @@ fn profile_object<H: Host>(service: &Service<'_, H>) -> Result<Profile, Problem>
     let (names, _) = describe(u32::from(profile_bits(service)?));
     let domain = service.settings.domain.clone();
     let domain_proof = match &domain {
-        Some(_) => match crate::commands::profile::domain_document(
-            &service.held,
-            service.settings,
-            &[],
-        ) {
-            Ok(Report::ProfileDomainDocument(file)) => Some(file.document),
-            _ => None,
-        },
+        Some(_) => {
+            match crate::commands::profile::domain_document(&service.held, service.settings, &[]) {
+                Ok(Report::ProfileDomainDocument(file)) => Some(file.document),
+                _ => None,
+            }
+        }
         None => None,
     };
     Ok(Profile {
