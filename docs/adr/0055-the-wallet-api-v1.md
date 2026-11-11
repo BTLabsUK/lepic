@@ -61,9 +61,9 @@ code does.
 
 ### Errors
 
-- Errors are RFC 9457 problem documents with `code` (one closed list), `category` (the CLI's
-  error kinds plus `conflict`), and where they apply `param`, `payment_id`, `contact_id` and
-  `errors`.
+- Errors are RFC 9457 problem documents with `code` (a stable, fine-grained name; clients must
+  accept codes they do not know), `category` (the CLI's error kinds plus `conflict`), and where
+  they apply `param`, `payment_id`, `contact_id` and `errors`.
 - 502, 503 and 504 carry `Retry-After`.
 - Each operation lists its statuses. The document's description lists the few any call may answer:
   - 408 `body_too_slow` and 413 `body_too_large` while the body is read;
