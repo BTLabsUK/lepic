@@ -21,7 +21,7 @@ use hyper::header::{self, HeaderValue};
 use jiff::SignedDuration;
 use lepic_node::NodeApi;
 use lepic_store::{AccountIndex, ApiEvent, ContactId, TxId};
-use lepic_wallet::event::{Connection, Event as EngineEvent, SlateId};
+use lepic_wallet::event::{Connection, Event as EngineEvent, PairingFailure, SlateId};
 use serde_json::{Map, Value, json};
 use tokio::sync::{broadcast, watch};
 use tokio::time::MissedTickBehavior;
@@ -65,6 +65,67 @@ impl Log {
             seen: RefCell::default(),
             progress_at: Cell::new(None),
         }
+    }
+}
+
+/// Fills `seen` from logged events, oldest first: the newest `data.object` of each payment and
+/// contact. A key already in the map is replaced; a new one is added while the map is below
+/// [`MAX_SEEN`].
+fn fill_seen<'a>(
+    seen: &mut HashMap<String, Value>,
+    events: impl IntoIterator<Item = (&'a str, &'a [u8])>,
+) {
+    for (kind, data) in events {
+        let resource = match kind.split_once('.') {
+            Some(("payment", _)) => "payment",
+            Some(("contact", rest)) if rest != "removed" => "contact",
+            _ => continue,
+        };
+        let Ok(Value::Object(mut data)) = serde_json::from_slice::<Value>(data) else {
+            continue;
+        };
+        let Some(object) = data.remove("object") else {
+            continue;
+        };
+        let Some(id) = object.get("id").and_then(Value::as_str) else {
+            continue;
+        };
+        let key = key(resource, id);
+        if seen.contains_key(&key) || seen.len() < MAX_SEEN {
+            seen.insert(key, object);
+        }
+    }
+}
+
+/// Reads the snapshots clients last saw from the event log into the log's memory, so the first
+/// change after a restart is compared with them.
+fn load_seen<H: Host>(service: &Service<'_, H>) {
+    let kinds = ["payment.*".to_owned(), "contact.*".to_owned()];
+    let mut after = 0;
+    let mut seen = service.log.seen.borrow_mut();
+    loop {
+        let batch = match service.held.wallet.api_events_after(
+            after,
+            lepic_store::MAX_API_EVENTS_PER_READ,
+            &kinds,
+        ) {
+            Ok(batch) => batch,
+            Err(error) => {
+                tracing::warn!(
+                    error = %lepic_telemetry::ErrorChain(&error),
+                    "the api log was not read at start"
+                );
+                return;
+            }
+        };
+        let Some(last) = batch.last().map(|event| event.id) else {
+            return;
+        };
+        fill_seen(
+            &mut seen,
+            batch.iter().map(|event| (event.kind.as_str(), event.data.as_slice())),
+        );
+        after = last;
     }
 }
 
@@ -246,7 +307,10 @@ fn entry(
                 "state_changed"
             }
             Change::Updated(fields) => {
-                data.insert("changed".to_owned(), json!(fields));
+                // Never `changed: []`: without a snapshot and without fields, say nothing.
+                if !fields.is_empty() {
+                    data.insert("changed".to_owned(), json!(fields));
+                }
                 "updated"
             }
         },
@@ -322,6 +386,7 @@ fn append<H: Host>(service: &Service<'_, H>, kind: &str, data: &Value) {
 /// Writes the engine's events to the log for as long as serve runs, and prunes it.
 pub(in super::super) async fn writer<H: Host>(service: &Service<'_, H>) -> Infallible {
     let mut events = service.held.wallet.subscribe();
+    load_seen(service);
     let mut prune = tokio::time::interval(PRUNE_EVERY);
     prune.set_missed_tick_behavior(MissedTickBehavior::Delay);
     loop {
@@ -352,6 +417,22 @@ fn prune_log<H: Host>(service: &Service<'_, H>) {
         .and_then(|_| wallet.prune_api_requests(before));
     if let Err(error) = pruned {
         tracing::warn!(error = %lepic_telemetry::ErrorChain(&error), "pruning the api log failed");
+    }
+}
+
+/// The reason string of a `contact.state_changed` entry for a pairing that failed. One arm per
+/// variant and no catch-all: a new variant does not compile until it is named here and in
+/// `docs/api/README.md`.
+fn failure_reason(failure: PairingFailure) -> &'static str {
+    match failure {
+        PairingFailure::ChangedOnTheWay => "changed_on_the_way",
+        PairingFailure::KindDiffers => "kind_differs",
+        PairingFailure::Expired => "expired",
+        PairingFailure::NotConfirmed => "not_confirmed",
+        PairingFailure::Refused(_) => "refused",
+        PairingFailure::OtherAddress => "other_address",
+        PairingFailure::AddressProofMissing => "address_proof_missing",
+        PairingFailure::Crossed => "crossed",
     }
 }
 
@@ -474,7 +555,7 @@ async fn engine<H: Host>(service: &Service<'_, H>, event: &EngineEvent) {
             contact(s, &contact_id(pairing.contact_id), State(None)).await;
         }
         E::PairingFailed(failed) => {
-            let reason = format!("{:?}", failed.reason).to_lowercase();
+            let reason = failure_reason(failed.reason).to_owned();
             contact(s, &contact_id(failed.contact_id), State(Some(reason))).await;
         }
         E::PairingRequested(request) => {
@@ -806,5 +887,63 @@ mod tests {
         let mut same = payment("awaiting_answer", "1");
         same["updated_at"] = json!("z");
         assert!(entry("payment", Some(&before), same, Change::Created).is_none());
+    }
+
+    #[test]
+    fn an_update_without_a_snapshot_or_fields_names_no_changed() {
+        let (kind, data) = entry("contact", None, json!({ "id": "c" }), Change::Updated(&[])).unwrap();
+        assert_eq!(kind, "contact.updated");
+        assert!(data.get("changed").is_none(), "{data}");
+        let (_, data) = entry(
+            "contact",
+            None,
+            json!({ "id": "c" }),
+            Change::Updated(&["requested_relay"]),
+        )
+        .unwrap();
+        assert_eq!(data["changed"], json!(["requested_relay"]));
+    }
+
+    #[test]
+    fn a_state_change_without_a_snapshot_has_no_from_state() {
+        let (_, data) = entry("payment", None, payment("posted", "1"), Change::State(None)).unwrap();
+        assert_eq!(data["to_state"], "posted");
+        assert!(data.get("from_state").is_none());
+    }
+
+    #[test]
+    fn the_snapshots_are_filled_from_the_newest_logged_objects() {
+        let first = br#"{"object":{"id":"p","state":"awaiting_answer"}}"#;
+        let second = br#"{"object":{"id":"p","state":"finalized"},"from_state":"awaiting_answer"}"#;
+        let contact = br#"{"object":{"id":"c","state":"paired"}}"#;
+        let removed = br#"{"object":{"id":"gone","state":"paired"}}"#;
+        let other = br#"{"object":{"id":"a"}}"#;
+        let mut seen = HashMap::new();
+        fill_seen(
+            &mut seen,
+            [
+                ("payment.created", first.as_slice()),
+                ("payment.state_changed", second.as_slice()),
+                ("contact.created", contact.as_slice()),
+                ("contact.removed", removed.as_slice()),
+                ("account.balance_changed", other.as_slice()),
+                ("payment.updated", b"not json".as_slice()),
+            ],
+        );
+        assert_eq!(seen.len(), 2, "{seen:?}");
+        assert_eq!(seen["payment:p"]["state"], "finalized");
+        assert_eq!(seen["contact:c"]["state"], "paired");
+        let before = seen["payment:p"].clone();
+        assert!(entry("payment", Some(&before), before.clone(), Change::State(None)).is_none());
+    }
+
+    #[test]
+    fn a_failure_reason_is_a_fixed_snake_case_string() {
+        assert_eq!(failure_reason(PairingFailure::ChangedOnTheWay), "changed_on_the_way");
+        assert_eq!(failure_reason(PairingFailure::AddressProofMissing), "address_proof_missing");
+        assert_eq!(
+            failure_reason(PairingFailure::Refused(lepic_wallet_contacts::Refusal::Expired)),
+            "refused"
+        );
     }
 }
