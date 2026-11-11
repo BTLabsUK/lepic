@@ -1,6 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
 //! The welcome card the interactive shell prints at start, and the epic1 mark shown beside epic1
-//! addresses. The card carries the LEPIC banner only; the epic1 mark never appears in it.
+//! addresses. The card carries the lepic wordmark only; the epic1 mark never appears in it, as
+//! both branding packs keep the marks apart and never lock them up.
+//!
+//! The wordmark follows the LEPIC branding pack: the word `lepic` with its l drawn as a bar in
+//! Phosphor green and the letters `epic` in the terminal's own text colour. Never a green word.
+//! On 16-colour terminals Phosphor is the basic green (`32`), which every console draws.
 
 use super::paint::{cells, take_cells};
 
@@ -18,13 +23,25 @@ pub(crate) struct CardInfo<'a> {
     pub network: &'a str,
 }
 
-const BANNER: [&str; 5] = [
-    "██       ███████  ██████   ██   ██████",
-    "██       ██       ██   ██  ██  ██",
-    "██       █████    ██████   ██  ██",
-    "██       ██       ██       ██  ██",
-    "███████  ███████  ██       ██   ██████",
+/// The bar of the wordmark, in the rows it fills. It is wider than a letter stem, two and a half
+/// cells against a five-cell letter, as in the pack's geometry (24 of 58 units).
+const BAR: &str = "██▌";
+const BAR_ROWS: usize = 4;
+/// Cells between the bar and the e.
+const BAR_GAP: &str = "  ";
+/// `epic` in Red Hat Mono's lowercase shapes, two pixels a row: an ascender row with the dot of
+/// the i, three rows of x-height ending on the baseline, where the bar ends too, and a
+/// descender row for the p.
+const LETTERS: [&str; 5] = [
+    "              ▀",
+    "▄▀▀▀▄ █▀▀▀▄ ▀▀█   ▄▀▀▀▀",
+    "█▀▀▀▀ █   █   █   █",
+    "▀▄▄▄▀ █▄▄▄▀   █▄▄ ▀▄▄▄▄",
+    "      █",
 ];
+/// The inline mark for cards too narrow for the wordmark: U+258C, then the letters.
+const MARK_BAR: &str = "▌";
+const MARK_LETTERS: &str = "epic";
 
 const SIDE_BY_SIDE_MIN: u16 = 80;
 const BANNER_MIN: u16 = 44;
@@ -32,12 +49,12 @@ const BOX_MIN: u16 = 24;
 const BANNER_GAP: usize = 2;
 
 const ACCENT: &str = "\x1b[38;2;246;212;113m";
+// Phosphor on a 16-colour terminal.
+const GREEN: &str = "\x1b[32m";
 const BOLD: &str = "\x1b[1m";
 const DIM: &str = "\x1b[2m";
 const RESET: &str = "\x1b[0m";
 const WHITE: &str = "\x1b[1;97m";
-// The basic yellow, which every console draws; the accent needs 24-bit colour.
-const YELLOW: &str = "\x1b[33m";
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Style {
@@ -47,7 +64,7 @@ enum Style {
     // The accent waits for the shell to print the epic1 mark beside addresses.
     #[allow(dead_code)]
     Accent,
-    Yellow,
+    Green,
     White,
 }
 
@@ -58,7 +75,7 @@ impl Style {
             Style::Bold => BOLD,
             Style::Dim => DIM,
             Style::Accent => ACCENT,
-            Style::Yellow => YELLOW,
+            Style::Green => GREEN,
             Style::White => WHITE,
         }
     }
@@ -135,23 +152,57 @@ fn fit(line: Line, max: usize, glyphs: Glyphs) -> Line {
     out
 }
 
+const BANNER_ROWS: usize = LETTERS.len();
+
+/// Half blocks drawn in ASCII: a full cell, the top half and the bottom half.
+fn ascii(text: &str) -> String {
+    text.replace(['█', '▌'], "#")
+        .replace('▀', "\"")
+        .replace('▄', "_")
+}
+
+fn drawn(text: &str, glyphs: Glyphs) -> String {
+    match glyphs {
+        Glyphs::Unicode => text.to_owned(),
+        Glyphs::Ascii => ascii(text),
+    }
+}
+
 fn banner_width() -> usize {
-    BANNER.iter().map(|r| cells(r)).max().unwrap_or(0)
+    let letters = LETTERS.iter().map(|r| cells(r)).max().unwrap_or(0);
+    cells(BAR)
+        .saturating_add(cells(BAR_GAP))
+        .saturating_add(letters)
 }
 
 fn banner_line(index: usize, glyphs: Glyphs) -> Line {
-    let row = BANNER.get(index).copied().unwrap_or("");
-    let text = match glyphs {
-        Glyphs::Unicode => row.to_owned(),
-        Glyphs::Ascii => row.replace('█', "#"),
+    let bar = if index < BAR_ROWS {
+        span(drawn(BAR, glyphs), Style::Green)
+    } else {
+        span(" ".repeat(cells(BAR)), Style::Plain)
     };
-    vec![span(text, Style::Yellow)]
+    let letters = LETTERS.get(index).copied().unwrap_or("");
+    vec![
+        bar,
+        span(BAR_GAP, Style::Plain),
+        span(drawn(letters, glyphs), Style::Plain),
+    ]
+}
+
+/// The one-line mark, `▌epic`, with the pack's tagline.
+fn mark_line(glyphs: Glyphs) -> Line {
+    vec![
+        span(drawn(MARK_BAR, glyphs), Style::Green),
+        span(MARK_LETTERS, Style::Bold),
+        span("  light Epic", Style::Dim),
+    ]
 }
 
 fn title(info: &CardInfo<'_>) -> Line {
     vec![
         span("LEPIC", Style::White),
         span(format!(" {}", info.version), Style::Dim),
+        span(" · light Epic wallet core", Style::Dim),
     ]
 }
 
@@ -173,7 +224,7 @@ fn hint(label: &str, rest: &str) -> Line {
     line
 }
 
-/// The text of the card in five rows, to sit beside the five-row banner.
+/// The text of the card in five rows, to sit beside the five-row wordmark.
 fn text_wide(info: &CardInfo<'_>) -> Vec<Line> {
     vec![
         title(info),
@@ -187,7 +238,10 @@ fn text_wide(info: &CardInfo<'_>) -> Vec<Line> {
 /// The text of the card with one hint per line.
 fn text_narrow(info: &CardInfo<'_>) -> Vec<Line> {
     vec![
-        title(info),
+        vec![
+            span("LEPIC", Style::White),
+            span(format!(" {}", info.version), Style::Dim),
+        ],
         wallet_line(info),
         Line::new(),
         hint("Start with: ", "help or ?"),
@@ -207,23 +261,26 @@ pub(crate) fn welcome(
 ) -> Vec<String> {
     let max = usize::from(columns.saturating_sub(1));
     let body: Vec<Line> = if columns < BOX_MIN {
-        let mut lines = text_narrow(info);
+        let mut lines = vec![mark_line(glyphs)];
+        lines.extend(text_narrow(info));
         lines.retain(|l| !l.is_empty());
         return lines
             .into_iter()
             .map(|l| render(&fit(localize(l, glyphs), max, glyphs), color))
             .collect();
     } else if columns < BANNER_MIN {
-        text_narrow(info)
+        let mut lines = vec![mark_line(glyphs), Line::new()];
+        lines.extend(text_narrow(info));
+        lines
     } else if columns < SIDE_BY_SIDE_MIN {
-        let mut lines: Vec<Line> = (0..BANNER.len()).map(|i| banner_line(i, glyphs)).collect();
+        let mut lines: Vec<Line> = (0..BANNER_ROWS).map(|i| banner_line(i, glyphs)).collect();
         lines.push(Line::new());
         lines.extend(text_narrow(info));
         lines
     } else {
         let text = text_wide(info);
         let pad = banner_width().saturating_add(BANNER_GAP);
-        (0..BANNER.len())
+        (0..BANNER_ROWS)
             .map(|i| {
                 let mut line = banner_line(i, glyphs);
                 let used = width(&line);
@@ -446,6 +503,43 @@ mod tests {
             assert!(!text.contains("++"));
             assert!(!text.contains("\x1b[38;2;246;212;113m"));
         }
+    }
+
+    #[test]
+    fn only_the_bar_is_green() {
+        for columns in [24, 40, 60, 112] {
+            let lines = welcome(&info(), columns, Glyphs::Unicode, true);
+            let text = lines.join("\n");
+            let greens: Vec<&str> = text.split(GREEN).skip(1).collect();
+            assert!(!greens.is_empty(), "{columns}");
+            for after in greens {
+                let painted = after.split(RESET).next().unwrap_or("");
+                assert!(
+                    painted == BAR || painted == MARK_BAR,
+                    "{columns}: {painted:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn wordmark_reads_lepic_with_the_bar_down_to_the_baseline() {
+        let plain = welcome(&info(), 112, Glyphs::Unicode, false);
+        let rows: Vec<&str> = plain[1..6]
+            .iter()
+            .map(|l| &l[l.find(' ').unwrap_or(0)..])
+            .collect();
+        assert!(
+            rows[..4].iter().all(|r| r.starts_with(" ██▌  ")),
+            "{rows:?}"
+        );
+        assert!(rows[4].starts_with("       "), "{rows:?}");
+        assert!(rows[4].contains("█"), "the p has a descender: {rows:?}");
+        let ascii = welcome(&info(), 112, Glyphs::Ascii, false).join("\n");
+        assert!(ascii.contains("###  _\"\"\"_"), "{ascii}");
+        let narrow =
+            crate::shell::paint::strip(&welcome(&info(), 40, Glyphs::Unicode, true).join("\n"));
+        assert!(narrow.contains("▌epic  light Epic"), "{narrow}");
     }
 
     #[test]
