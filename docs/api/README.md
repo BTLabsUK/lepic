@@ -8,9 +8,6 @@ running serve. [ADR 0055](../adr/0055-the-wallet-api-v1.md) says why it is built
 The API is for the wallet's owner. It is not the endpoint other wallets pay to: that is
 `/v2/foreign` and `/api/v1/inbox`, see [The public listener](#the-public-listener).
 
-TODO(payments): flows, kinds, states and `actions`, and the error-code table below wait for the
-payments and contacts handlers.
-
 ## Connecting
 
 One serve holds one wallet, and no path names a wallet. To serve two wallets, run two serves with
@@ -91,15 +88,148 @@ timeout is safe:
 
 Over TLS a payment must carry an `id`, so a client that loses the answer can always ask again.
 
-TODO(payments): a curl example of a repeated create, once `POST /payments` is implemented.
+A real run. An invoice needs no funds, so it is the easy thing to try:
+
+```sh
+curl -i --unix-socket ./w.sock -H 'content-type: application/json' \
+  -d '{"id":"4263265f-afde-45bf-ac7e-3041a7de8475","kind":"invoice","amount":"1","via":"file"}' \
+  http://lepic/api/v1/payments
+```
+
+The first call answers `201 Created` with the payment. The same command again answers
+`200 OK` with the same payment (the `handoff` is only in the 201). The same `id` with
+`"amount":"2"` answers:
+
+```
+HTTP/1.1 409 Conflict
+content-type: application/problem+json
+```
+
+```json
+{"type":"about:blank","title":"Conflict","status":409,"detail":"this id was used before with another request body","code":"idempotency_mismatch","category":"conflict","param":"/id"}
+```
+
+A send keeps your `id` as the payment's `id`. An invoice gets an `id` of the wallet's own
+choosing, and your `id` stays an alias: `GET /payments/{your id}` returns the same payment.
+Read `id` from the answer, not from your request.
 
 ## Payments
 
-TODO(payments): kinds, `via`, the forms of `to`, states and `actions`, and the flows: send,
-invoice by file, handoff, finalize, cancel.
+A payment is one object, whatever its kind: a send you make, an invoice you issue or pay, or a
+payment found by a scan. `GET /payments` lists them, newest first. `state`, `kind`, `direction`
+and `via` filter the list.
 
-Two rules hold already (ADR 0055, D5). An invoice that is scanned or pasted is always held for
-approval. `POST /open` never pays one.
+### The fields that steer you
+
+| Field | Values |
+|---|---|
+| `kind` | `send`, `invoice`, `coinbase`, `unknown` (found by a scan). Only `send` and `invoice` can be created. |
+| `direction` | `in`, `out`, `self` (between your own accounts, or splitting your own coins). |
+| `state` | `needs_approval`, `awaiting_answer`, `awaiting_post`, `finalized`, `posted`, `confirmed`, `cancelled`, `declined`, `expired`. |
+| `state_reason` | Why a payment reached an end state: `by_us`, `by_them`, `superseded` and others. Accept values you do not know. |
+| `via` | `epicbox`, `http`, `tor`, `contact`, `link`, `in_person`, `file`, `peer`, `chain`: how the slate travels. |
+| `delivery.state` | `queued`, `sent`, `uncertain`, `held`, `failed`, `refused`, `by_hand`. `uncertain` means the send went out and you do not know it arrived. |
+| `actions` | The calls that work on the payment now. |
+
+`actions` is the list to read. A call not in it answers 409 `action_not_available` and changes
+nothing. Today the values are:
+
+| State | `actions` |
+|---|---|
+| `needs_approval` | `approve`, `decline` |
+| `awaiting_answer` | `cancel`, and `deliver` for a send that has not reached the other wallet |
+| `finalized` | `post`, `cancel` |
+| `posted` | `post`, and `cancel` when the chain never took the payment (`cancellable_from_height`) |
+| the other states | none |
+
+`finalize` is in the contract, but no payment lists it yet: only in-person payments collect
+several answers, and serve starts none. `POST /payments/{id}/finalize` answers
+409 `action_not_available`.
+
+### The destination, `to`
+
+`POST /payments` takes `amount` and, for most routes, `to`. `to` is one of:
+
+| Form | Route |
+|---|---|
+| `key@host` | Epicbox address |
+| `http://…` or `https://…` | HTTP listener of another wallet |
+| `….onion` | Tor |
+| `epic:…` | A payment link |
+| `contact:ID` | A contact |
+| `account:LABEL` | One of your own accounts |
+
+Without `to`, `via` must be `file` or `in_person`: the payment is made for someone you hand it to.
+`via` forces a route when `to` is not enough. `POST /payments/estimate` takes the same body and
+answers the fee, `max_amount` and the coins it would use, without changing anything.
+`"amount":"max"` is for the estimate only.
+
+### Send to an address
+
+```sh
+curl --unix-socket ./w.sock -H 'content-type: application/json' \
+  -d '{"id":"5b0e2f6a-3c1d-4e8f-9a7b-2d4c6e8f0a1b","amount":"1","to":"KEY@epicbox.example","message":"rent"}' \
+  http://lepic/api/v1/payments
+```
+
+The answer is `201` with the payment in `awaiting_answer` and `via: epicbox`. When the other
+wallet answers, serve finishes and posts the payment by itself; poll `GET /payments/{id}` or
+watch the [events](#events) for `posted`, then `confirmed`. A change in `actions` tells you when
+`cancel` is possible.
+
+### An invoice by file
+
+1. Issue it: `{"kind":"invoice","amount":"3","via":"file"}`. The answer holds a `handoff` with
+   the slate `text` and a `file_name`. Give the text to the payer: paste it, save it or show it
+   as QR. `GET /payments/{id}/handoff` returns it again; `?qr=true` adds `qr_frames`.
+2. The payer opens it in their wallet (below) and hands an answer back.
+3. You open the answer with `POST /open`. The outcome is `finished` and the payment is posted.
+
+### Take what is handed to you
+
+`POST /open` takes pasted `text`, a file as `file_base64`, or scanned `qr_frames`, and acts on
+it. `POST /inspect` takes the same and only says what it is, so use it to look first. Add
+`expect` to refuse anything else: a text of another kind answers 422 `unexpected_input` and
+nothing changes.
+
+`outcome` says what happened: `received` (a payment was handed to you and `handoff` is the answer
+to give back), `finished` (the answer to your payment arrived and it was posted),
+`answer_added`, `invoice_parked`, `pairing_advanced` or `already_done` (you opened it before).
+
+Open never pays, which is the rule of ADR 0055 (D5).
+
+### An invoice that asks you to pay
+
+An invoice that is scanned or pasted is always held for approval. Money leaves in two calls:
+
+```sh
+curl --unix-socket ./w.sock -H 'content-type: application/json' \
+  -d '{"text":"<the invoice>"}' http://lepic/api/v1/open
+```
+
+The outcome is `invoice_parked`. The payment is in `needs_approval`, `actions` is
+`["approve","decline"]` and nothing was spent. Look at `amount` and the issuer, then:
+
+```sh
+curl --unix-socket ./w.sock -H 'content-type: application/json' \
+  -d '{"amount":"3"}' http://lepic/api/v1/payments/$ID/approve
+```
+
+You retype the amount. If it differs from the invoice, the answer is 400 `invalid_field` with
+`param` `/amount` and the payment stays held. If it matches, serve pays and the answer is the
+payment with a `handoff` to give the issuer when they are not online. `decline` refuses the
+invoice and tells the issuer. After either, the other answers 409 `action_not_available`.
+
+### Handoff, deliver, post, cancel
+
+- `POST /payments/{id}/deliver` sends the slate again, `{"relay":"next"}` to the next relay, or
+  `{"to":"contact:ID"}` through a contact's mailbox. `relay_ok` allows a relay outside your list.
+- `POST /payments/{id}/post` posts a finished payment to the node again. `{"fluff":true}` skips
+  the stem phase.
+- `POST /payments/{id}/cancel` ends a payment that is not on the chain and frees its coins. It
+  answers the same payment when repeated.
+- `PATCH /payments/{id}` sets `metadata`: up to 50 local notes, never sent.
+- `deliver:false` on a create makes the payment and returns the `handoff` without sending it.
 
 ## Events
 
@@ -143,7 +273,19 @@ Events are kept for 30 days by default. A client that falls behind, or asks from
 pruned, gets an `events.skipped` event with the count and a `reason` of `lagged` or `pruned`.
 Read the object again with a `GET`, then carry on from the new id.
 
-TODO(payments): a stream example with a real payment event.
+A real run: this stream was open while an invoice was created (the `data` is cut here, and
+`data.object` holds the payment).
+
+```sh
+curl -N -H 'Accept: text/event-stream' --unix-socket ./w.sock http://lepic/api/v1/events
+```
+
+```
+id: 4
+event: payment.created
+data: {"id":4,"type":"payment.created","created_at":"2026-11-11T02:55:20.040280091Z","data":{"object":{"account":"default","actions":["cancel"],"amount":"1.00000000",...,"kind":"invoice","state":"awaiting_answer",...}}}
+
+```
 
 ## Errors
 
@@ -175,7 +317,87 @@ x-lepic-version: 0.4.0
 - Any call may also answer 408 `body_too_slow` or 413 `body_too_large` while serve reads the body,
   and 500 `internal`.
 
-TODO(errors): the table of every `code`, with status and meaning, built from the merged code.
+### Every code
+
+The status follows the code. A code that serve takes from the CLI keeps the status of its
+category unless the table says another; `Retry-After` is set on 502, 503 and 504.
+
+**Any call**
+
+| Code | Status | Meaning |
+|---|---|---|
+| `no_route` | 404 | The path is not in the document. |
+| `method_not_allowed` | 405 | The path does not take the method; `Allow` lists the ones it does. |
+| `body_too_slow` | 408 | The body did not arrive in time. |
+| `body_too_large` | 413 | The body is over the limit. |
+| `role_required` | 403 | The TLS client's role is below what the call needs. |
+| `socket_only` | 403 | The call is answered on the Unix socket only. |
+| `client_not_listed` | 403 | The TLS client was removed from `api-clients` after it connected. |
+| `invalid_request` | 400 | The request is malformed. |
+| `invalid_body` | 400 | The body is not valid JSON for the operation, or names an unknown field. |
+| `invalid_field` | 400 | One field is wrong; `param` points at it. |
+| `invalid_cursor` | 400 | The `cursor` is not one this list issued. |
+| `cursor_filters_changed` | 400 | The cursor was issued for other query parameters. |
+| `not_found` | 404 | No object has that id. |
+| `internal` | 500 | A bug in serve. |
+| `interrupted`, `cancelled` | 503 | Serve is stopping, or the scan was cancelled. |
+
+**Creating safely twice**
+
+| Code | Status | Meaning |
+|---|---|---|
+| `idempotency_mismatch` | 409 | The `id` was used before with another body. |
+| `in_progress` | 409 | A request with this `id` is still being answered. |
+| `account_exists` | 409 | An account with that label exists. |
+
+**Payments**
+
+| Code | Status | Meaning |
+|---|---|---|
+| `action_not_available` | 409 | The payment's `actions` do not list the call. |
+| `format_not_available` | 409 | The handoff is not available in that `format`. |
+| `no_handoff` | 409 | The payment has nothing to hand over. |
+| `nothing_to_open` | 409 | The text is already finished or needs nothing from this wallet. |
+| `unexpected_input` | 422 | `POST /open` found a kind not named in `expect`. |
+| `insufficient_funds` | 422 | The account cannot pay the amount and the fee. |
+| `change_too_small`, `too_heavy`, `nothing_to_consolidate` | by category | The coins cannot make this payment. |
+| `invalid_slate`, `payment_expired`, `invoice_changed`, `amount_mismatch` | by category | The slate or invoice cannot be used as it is. |
+| `invoice_already_paid`, `invoice_locked_above_tip`, `inputs_spent_elsewhere`, `inputs_spent_by_own_transaction`, `peer_inputs_spent` | 409 | The payment's state on the chain conflicts with the call. |
+| `on_chain`, `in_pool`, `not_releasable`, `changed_during_cancel` | 409 | The payment cannot be cancelled in its present state. |
+| `not_posted`, `not_delivered` | by category | A step before has not happened. |
+| `plain_http_not_allowed`, `http_url_invalid`, `onion_address_invalid` | 400 | The destination is not usable as given. |
+
+**Wallet and node**
+
+| Code | Status | Meaning |
+|---|---|---|
+| `wrong_password` | 403 | The password is wrong. |
+| `wallet_not_found` | 404 | There is no wallet in the data directory. |
+| `wallet_already_exists`, `wallet_busy`, `locked`, `foreign_wallet` | 409 | The wallet is in a state the call cannot work with. |
+| `restore_scan_required` | 503 | A restored wallet must finish its scan first. |
+| `scan_running` | 409 or 503 | A scan is running; wait for it. |
+| `node_unreachable` | 502 | The node did not answer. 504 when it timed out. |
+| `offline` | 409 | The wallet is set to offline. |
+| `tor_not_running`, `onion_unreachable` | 503, 502 | Tor is not up, or the onion service did not answer. |
+| `transport_failed` | 502 | The relay or the other wallet could not be reached. |
+| `damaged_database` | 500 | The wallet's database is damaged. |
+| `wallet_too_new` | 409 | A newer LEPIC wrote the wallet. |
+| `wrong_key` | 409 | The wallet's key does not open its files. |
+
+**Contacts and pairing**
+
+| Code | Status | Meaning |
+|---|---|---|
+| `contact_not_found`, `pairing_not_found` | 404 | No such contact, or no such pairing or request. |
+| `invite_expired`, `already_paired`, `pairing_in_progress`, `pairing_crossed`, `pairing_ended`, `contact_ended`, `contact_waiting`, `invite_dismissed`, `not_verified`, `key_check_refused`, `relay_changed`, `keys_not_changed`, `domain_fixed`, `contact_cap_reached` | 409 | The pairing or contact is not in a state the call can use. |
+| `wrong_class` | 409 | The call does not apply to a pairing of this class. |
+| `other_address`, `address_proof_missing`, `peer_not_proven`, `no_free_slot` | 422 | The pairing cannot go on. |
+| `contacts_offline`, `epicbox_off` | 409 | The switch the call needs is off. |
+
+Codes from the CLI that this table does not list reach a client with their category's status:
+`usage` 400, `wrong_password` 403, `not_found` 404, `wallet_state` and `conflict` 409, `rejected`
+and `funds` 422, `node` and `transport` 502, `interrupted` 503, `internal` and `config` 500.
+Read `category` for those, and accept codes you do not know.
 
 ## The public listener
 

@@ -541,17 +541,24 @@ it runs it listens on Epicbox, expires unpaid invoices, collects contact mailbox
 wallet and answers the wallet API: HTTP with JSON bodies on a Unix socket, `lepic.sock` in the
 data directory unless `--socket` says otherwise. Only the user that runs it can use the socket.
 
+Point the wallet at a node in `config.toml`, here a floonet node:
+
+```toml
+network = "floonet"
+node_url = "https://floo-node.btlabs.uk"
+```
+
 ```sh
 lepic serve &
-curl --unix-socket ./try/wallet/lepic.sock http://lepic/api/v1/status
+curl --unix-socket /home/user/.lepic/floonet/lepic.sock http://lepic/api/v1/status
 ```
 
 ```json
-{"version":"0.4.0","uptime_s":3,"listeners":{"epicbox":{"state":"connected"}},"refresh":{"failures":1,"last_error":"node request failed: could not connect to the node: client error (Connect): tcp connect error: Connection refused (os error 111)"},"collect":{"failures":0,"last_success_at":"2026-11-11T01:51:28.060938633Z"},"requests":{"served":0,"in_flight":1,"refused":0}}
+{"version":"0.4.0","uptime_s":5,"listeners":{"epicbox":{"state":"connected"}},"refresh":{"failures":0,"last_success_at":"2026-11-11T02:55:09.797663717Z"},"collect":{"failures":0,"last_success_at":"2026-11-11T02:55:09.816610725Z"},"requests":{"served":0,"in_flight":1,"refused":0}}
 ```
 
-This run had no node to reach, so `refresh` shows a failure. With a node it shows
-`"failures":0` and a `last_success_at`.
+`refresh` has `"failures":0` and a `last_success_at` when serve reaches the node. If it cannot,
+`failures` counts up and `last_error` says why.
 
 `GET /api/v1/openapi.json` returns the OpenAPI document; the same document is in
 [api/openapi.json](api/openapi.json). It is written by hand and is the contract. The API has its
