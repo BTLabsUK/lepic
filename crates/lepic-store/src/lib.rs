@@ -5,6 +5,7 @@
 //! implementation; [`MemoryStore`] behaves the same without a file, for tests of the layers above.
 
 mod account;
+mod api_log;
 mod at_rest;
 mod contact;
 #[cfg(feature = "sqlite")]
@@ -36,6 +37,11 @@ mod transaction;
 mod tx_record;
 
 pub use account::{AccountIndex, AccountRecord, AccountRepository};
+pub use api_log::{
+    API_DIGEST_LEN, ApiEvent, ApiLogRepository, ApiRequest, MAX_API_EVENT_DATA_LEN,
+    MAX_API_EVENTS_PER_READ, MAX_API_KIND_LEN, MAX_API_KIND_PATTERNS, MAX_API_REQUEST_ID_LEN,
+    MAX_API_SCOPE_LEN,
+};
 pub use at_rest::{
     AtRest, AtRestReport, AtRestState, MIGRATED_FROM_SETTING, MigrationObserver, MigrationProgress,
     MigrationStage, ROLLBACK_SCAN_SETTING, STORE_KEY_LEN, StoreKey,

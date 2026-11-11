@@ -936,10 +936,38 @@ const UPGRADES: &[UpgradeCase] = &[
     },
     UpgradeCase {
         from: 16,
+        seed: V16_SEED,
+        check: check_v16_seed,
+    },
+    UpgradeCase {
+        from: 17,
         seed: "",
         check: check_v13_seed,
     },
 ];
+
+const V16_SEED: &str = "INSERT INTO peer_pins (account, origin, seal_key, first_seen, last_seen)
+    VALUES (0, 'https://wallet.example:443', X'0707070707070707070707070707070707070707070707070707070707070707', 5, 6);";
+
+/// A v16 database keeps its pin and gains empty, usable event and request tables.
+fn check_v16_seed(store: &SqliteStore) {
+    let pin = store
+        .read(|repos| repos.peer_pin(AccountIndex(0), "https://wallet.example:443"))
+        .unwrap()
+        .unwrap();
+    assert_eq!(pin.seal_key, [7; 32]);
+    store
+        .read(|repos| {
+            assert_eq!(repos.api_event_bounds()?, None);
+            assert_eq!(repos.api_event_last_id()?, 0);
+            Ok::<_, StoreError>(())
+        })
+        .unwrap();
+    let id = store
+        .write(|repos| repos.append_api_event("payment.created", Timestamp::UNIX_EPOCH, b"{}"))
+        .unwrap();
+    assert_eq!(id, 1);
+}
 
 fn key() -> StoreKeys {
     StoreKeys::new(

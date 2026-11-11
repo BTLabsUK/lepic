@@ -33,6 +33,8 @@ pub enum Record {
     PairRequest,
     StatusNotice,
     PeerPin,
+    ApiEvent,
+    ApiRequest,
 }
 
 impl fmt::Display for Record {
@@ -60,6 +62,8 @@ impl fmt::Display for Record {
             Self::PairRequest => "pair request",
             Self::StatusNotice => "status notice",
             Self::PeerPin => "peer pin",
+            Self::ApiEvent => "api event",
+            Self::ApiRequest => "api request",
         })
     }
 }

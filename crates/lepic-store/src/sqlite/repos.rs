@@ -3,10 +3,12 @@ use jiff::Timestamp;
 use lepic_primitives::amount::{Amount, Fee, Height};
 use lepic_primitives::output::OutputIdentifier;
 use lepic_primitives::ser::{ProtocolVersion, deserialize};
+use rusqlite::types::Value;
 use rusqlite::{Connection, OptionalExtension, Row, params};
 use uuid::Uuid;
 
 use crate::account::{AccountIndex, AccountRecord, AccountRepository};
+use crate::api_log::{self, ApiEvent, ApiLogRepository, ApiRequest, KindPattern};
 use crate::contact::{
     self, CARD_KEY_LEN, ContactCap, ContactId, ContactKind, ContactMailbox, ContactOutboxEntry,
     ContactOutboxId, ContactOutboxState, ContactRecord, ContactRepository, ContactState,
@@ -1493,6 +1495,168 @@ impl PeerPinRepository for SqliteRepos<'_> {
             params![i64::from(account.0), origin],
         )?;
         Ok(deleted > 0)
+    }
+}
+
+fn decode_api_event(row: &Row<'_>) -> Result<ApiEvent, StoreError> {
+    Ok(ApiEvent {
+        id: u64_from_column(row.get(0)?),
+        kind: row.get(1)?,
+        created_at: timestamp_from_column(row.get(2)?, Record::ApiEvent, "created at")?,
+        data: row.get(3)?,
+    })
+}
+
+fn decode_api_request(row: &Row<'_>) -> Result<ApiRequest, StoreError> {
+    let record = Record::ApiRequest;
+    Ok(ApiRequest {
+        scope: row.get(0)?,
+        id: row.get(1)?,
+        digest: row
+            .get::<_, Vec<u8>>(2)?
+            .try_into()
+            .map_err(|_| corrupt(record, "digest"))?,
+        created_at: timestamp_from_column(row.get(3)?, record, "created at")?,
+    })
+}
+
+impl ApiLogRepository for SqliteRepos<'_> {
+    fn append_api_event(
+        &mut self,
+        kind: &str,
+        created_at: Timestamp,
+        data: &[u8],
+    ) -> Result<u64, StoreError> {
+        api_log::check_kind(kind)?;
+        api_log::check_event_data(data)?;
+        self.conn.execute(
+            "INSERT INTO api_events (kind, created_at, data) VALUES (?1, ?2, ?3)",
+            params![kind, timestamp_to_column(created_at)?, data],
+        )?;
+        Ok(u64_from_column(self.conn.last_insert_rowid()))
+    }
+
+    fn api_events_after(
+        &self,
+        after: u64,
+        limit: usize,
+        kinds: &[String],
+    ) -> Result<Vec<ApiEvent>, StoreError> {
+        api_log::check_limit(limit)?;
+        let patterns = api_log::parse_patterns(kinds)?;
+        // Ids come from a signed column: nothing lies above the largest one.
+        let Ok(after) = i64::try_from(after) else {
+            return Ok(Vec::new());
+        };
+        // Only placeholders are pasted into the statement; every value is bound.
+        let mut values: Vec<Value> = vec![Value::Integer(after)];
+        let mut filters = Vec::new();
+        for pattern in &patterns {
+            match pattern {
+                KindPattern::Exact(kind) => {
+                    values.push(Value::Text((*kind).to_owned()));
+                    filters.push(format!("kind = ?{}", values.len()));
+                }
+                KindPattern::Prefix(prefix) => {
+                    values.push(Value::Integer(i64::try_from(prefix.len()).map_err(
+                        |_| StoreError::OutOfRange {
+                            field: "api event kind filter",
+                        },
+                    )?));
+                    let length = values.len();
+                    values.push(Value::Text((*prefix).to_owned()));
+                    filters.push(format!("substr(kind, 1, ?{length}) = ?{}", values.len()));
+                }
+            }
+        }
+        let filter = if filters.is_empty() {
+            String::new()
+        } else {
+            format!(" AND ({})", filters.join(" OR "))
+        };
+        values.push(Value::Integer(i64::try_from(limit).map_err(|_| {
+            StoreError::OutOfRange {
+                field: "api event limit",
+            }
+        })?));
+        let limit_slot = values.len();
+        self.collect(
+            &format!(
+                "SELECT id, kind, created_at, data FROM api_events WHERE id > ?1{filter}
+                 ORDER BY id LIMIT ?{limit_slot}"
+            ),
+            rusqlite::params_from_iter(values),
+            decode_api_event,
+        )
+    }
+
+    fn api_event_bounds(&self) -> Result<Option<(u64, u64)>, StoreError> {
+        let bounds: (Option<i64>, Option<i64>) =
+            self.conn
+                .query_row("SELECT MIN(id), MAX(id) FROM api_events", [], |row| {
+                    Ok((row.get(0)?, row.get(1)?))
+                })?;
+        Ok(match bounds {
+            (Some(low), Some(high)) => Some((u64_from_column(low), u64_from_column(high))),
+            _ => None,
+        })
+    }
+
+    fn api_event_last_id(&self) -> Result<u64, StoreError> {
+        let last: Option<i64> = self
+            .conn
+            .query_row(
+                "SELECT seq FROM sqlite_sequence WHERE name = 'api_events'",
+                [],
+                |row| row.get(0),
+            )
+            .optional()?;
+        Ok(last.map_or(0, u64_from_column))
+    }
+
+    fn prune_api_events(&mut self, before: Timestamp) -> Result<u64, StoreError> {
+        let deleted = self.conn.execute(
+            "DELETE FROM api_events WHERE created_at < ?1",
+            [timestamp_to_column(before)?],
+        )?;
+        Ok(u64::try_from(deleted).unwrap_or(u64::MAX))
+    }
+
+    fn put_api_request(&mut self, request: &ApiRequest) -> Result<(), StoreError> {
+        api_log::check_request_key(&request.scope, &request.id)?;
+        let inserted = self.conn.execute(
+            "INSERT INTO api_requests (scope, id, digest, created_at) VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT (scope, id) DO NOTHING",
+            params![
+                request.scope,
+                request.id,
+                request.digest.as_slice(),
+                timestamp_to_column(request.created_at)?,
+            ],
+        )?;
+        if inserted == 0 {
+            return Err(StoreError::Duplicate {
+                record: Record::ApiRequest,
+            });
+        }
+        Ok(())
+    }
+
+    fn api_request(&self, scope: &str, id: &str) -> Result<Option<ApiRequest>, StoreError> {
+        self.first(
+            "SELECT scope, id, digest, created_at FROM api_requests
+             WHERE scope = ?1 AND id = ?2",
+            params![scope, id],
+            decode_api_request,
+        )
+    }
+
+    fn prune_api_requests(&mut self, before: Timestamp) -> Result<u64, StoreError> {
+        let deleted = self.conn.execute(
+            "DELETE FROM api_requests WHERE created_at < ?1",
+            [timestamp_to_column(before)?],
+        )?;
+        Ok(u64::try_from(deleted).unwrap_or(u64::MAX))
     }
 }
 

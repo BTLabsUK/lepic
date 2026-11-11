@@ -9,6 +9,7 @@ use lepic_primitives::amount::Height;
 use uuid::Uuid;
 
 use crate::account::{AccountIndex, AccountRecord, AccountRepository};
+use crate::api_log::{self, ApiEvent, ApiLogRepository, ApiRequest};
 use crate::contact::{
     self, CARD_KEY_LEN, ContactCap, ContactId, ContactMailbox, ContactOutboxEntry, ContactOutboxId,
     ContactOutboxState, ContactRecord, ContactRepository, INVITE_ID_LEN, MAX_CANCELLED_PAIRINGS,
@@ -61,6 +62,9 @@ struct State {
     /// Sealed rows by tag, as the SQLite table holds them.
     peer_compat: BTreeMap<[u8; 32], Vec<u8>>,
     peer_pins: BTreeMap<(AccountIndex, String), PeerPin>,
+    api_events: BTreeMap<u64, ApiEvent>,
+    api_event_last_id: u64,
+    api_requests: BTreeMap<(String, String), ApiRequest>,
     contacts: BTreeMap<ContactId, ContactRecord>,
     contact_slot_counters: BTreeMap<AccountIndex, u32>,
     contact_mailboxes: BTreeMap<ContactId, ContactMailbox>,
@@ -910,6 +914,107 @@ impl PeerPinRepository for MemoryRepos<'_> {
             .peer_pins
             .remove(&(account, origin.to_owned()))
             .is_some())
+    }
+}
+
+impl ApiLogRepository for MemoryRepos<'_> {
+    fn append_api_event(
+        &mut self,
+        kind: &str,
+        created_at: Timestamp,
+        data: &[u8],
+    ) -> Result<u64, StoreError> {
+        api_log::check_kind(kind)?;
+        api_log::check_event_data(data)?;
+        timestamp_to_column(created_at)?;
+        let id = self
+            .state
+            .api_event_last_id
+            .checked_add(1)
+            .ok_or(StoreError::OutOfRange {
+                field: "api event id",
+            })?;
+        self.state.api_event_last_id = id;
+        self.state.api_events.insert(
+            id,
+            ApiEvent {
+                id,
+                kind: kind.to_owned(),
+                created_at,
+                data: data.to_vec(),
+            },
+        );
+        Ok(id)
+    }
+
+    fn api_events_after(
+        &self,
+        after: u64,
+        limit: usize,
+        kinds: &[String],
+    ) -> Result<Vec<ApiEvent>, StoreError> {
+        api_log::check_limit(limit)?;
+        let patterns = api_log::parse_patterns(kinds)?;
+        Ok(self
+            .state
+            .api_events
+            .range((std::ops::Bound::Excluded(after), std::ops::Bound::Unbounded))
+            .map(|(_, event)| event)
+            .filter(|event| {
+                patterns.is_empty() || patterns.iter().any(|pattern| pattern.matches(&event.kind))
+            })
+            .take(limit)
+            .cloned()
+            .collect())
+    }
+
+    fn api_event_bounds(&self) -> Result<Option<(u64, u64)>, StoreError> {
+        let low = self.state.api_events.keys().next();
+        let high = self.state.api_events.keys().next_back();
+        Ok(low.zip(high).map(|(low, high)| (*low, *high)))
+    }
+
+    fn api_event_last_id(&self) -> Result<u64, StoreError> {
+        Ok(self.state.api_event_last_id)
+    }
+
+    fn prune_api_events(&mut self, before: Timestamp) -> Result<u64, StoreError> {
+        timestamp_to_column(before)?;
+        let count = self.state.api_events.len();
+        self.state
+            .api_events
+            .retain(|_, event| event.created_at >= before);
+        Ok(u64::try_from(count.saturating_sub(self.state.api_events.len())).unwrap_or(u64::MAX))
+    }
+
+    fn put_api_request(&mut self, request: &ApiRequest) -> Result<(), StoreError> {
+        api_log::check_request_key(&request.scope, &request.id)?;
+        timestamp_to_column(request.created_at)?;
+        let key = (request.scope.clone(), request.id.clone());
+        if self.state.api_requests.contains_key(&key) {
+            return Err(StoreError::Duplicate {
+                record: Record::ApiRequest,
+            });
+        }
+        self.state.api_requests.insert(key, request.clone());
+        Ok(())
+    }
+
+    fn api_request(&self, scope: &str, id: &str) -> Result<Option<ApiRequest>, StoreError> {
+        Ok(self
+            .state
+            .api_requests
+            .get(&(scope.to_owned(), id.to_owned()))
+            .cloned())
+    }
+
+    fn prune_api_requests(&mut self, before: Timestamp) -> Result<u64, StoreError> {
+        timestamp_to_column(before)?;
+        let count = self.state.api_requests.len();
+        self.state
+            .api_requests
+            .retain(|_, request| request.created_at >= before);
+        Ok(u64::try_from(count.saturating_sub(self.state.api_requests.len())).unwrap_or(u64::MAX))
     }
 }
 

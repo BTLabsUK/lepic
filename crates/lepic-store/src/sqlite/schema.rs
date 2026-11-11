@@ -520,12 +520,33 @@ CREATE TABLE peer_pins (
 ) WITHOUT ROWID;
 ";
 
+/// The serve API's event log and its idempotency records. AUTOINCREMENT keeps an event id from
+/// being given twice after a prune. Content is stored as given: the store relies on the
+/// whole-file encryption, as peer pins and transaction records do.
+const V17: &str = "
+CREATE TABLE api_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind TEXT NOT NULL CHECK (length(kind) BETWEEN 1 AND 64),
+    created_at INTEGER NOT NULL,
+    data BLOB NOT NULL CHECK (length(data) <= 1048576)
+);
+CREATE INDEX api_events_created_at ON api_events (created_at);
+CREATE TABLE api_requests (
+    scope TEXT NOT NULL CHECK (length(scope) BETWEEN 1 AND 32),
+    id TEXT NOT NULL CHECK (length(id) BETWEEN 1 AND 128),
+    digest BLOB NOT NULL CHECK (length(digest) = 32),
+    created_at INTEGER NOT NULL,
+    PRIMARY KEY (scope, id)
+) WITHOUT ROWID;
+CREATE INDEX api_requests_created_at ON api_requests (created_at);
+";
+
 pub(crate) const MIGRATIONS: &[&str] = &[
-    V1, V2, V3, V4, V5, V6, V7, V8, V9, V10, V11, V12, V13, V14, V15, V16,
+    V1, V2, V3, V4, V5, V6, V7, V8, V9, V10, V11, V12, V13, V14, V15, V16, V17,
 ];
 
 /// The version this build writes.
-pub const SCHEMA_VERSION: u32 = 16;
+pub const SCHEMA_VERSION: u32 = 17;
 
 /// The schema version stored in the database; 0 for a database without a schema.
 pub(crate) fn stored_version(conn: &Connection) -> Result<u32, StoreError> {

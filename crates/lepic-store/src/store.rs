@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 use crate::account::AccountRepository;
+use crate::api_log::ApiLogRepository;
 use crate::contact::ContactRepository;
 use crate::context::ContextRepository;
 use crate::error::StoreError;
@@ -26,6 +27,7 @@ pub trait Repositories:
     + InvoiceRepository
     + PeerRepository
     + PeerPinRepository
+    + ApiLogRepository
     + ImportedRepository
     + ContactRepository
     + TxRecordRepository
@@ -43,6 +45,7 @@ impl<T> Repositories for T where
         + InvoiceRepository
         + PeerRepository
         + PeerPinRepository
+        + ApiLogRepository
         + ImportedRepository
         + ContactRepository
         + TxRecordRepository

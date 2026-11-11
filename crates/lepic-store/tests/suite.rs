@@ -16,10 +16,10 @@ use lepic_primitives::amount::{Amount, Fee, Height};
 use lepic_primitives::output::OutputFeatures;
 use lepic_primitives::params::Network;
 use lepic_store::{
-    AccountIndex, AccountRecord, CONTACT_SLOT_COUNT, ChainCheck, ContactCap, ContactOutboxState,
-    ContactState, DomainClaimBytes, FoundDuring, ImportSummary, ImportedKind, ImportedMessage,
-    ImportedOutput, ImportedOutputStatus, ImportedTransaction, InboxEntry, InboxStatus,
-    InvoiceAddressIndex, InvoiceCap, KeyId, MAX_CANCELLED_PAIRINGS, MAX_CONTACTS,
+    AccountIndex, AccountRecord, ApiRequest, CONTACT_SLOT_COUNT, ChainCheck, ContactCap,
+    ContactOutboxState, ContactState, DomainClaimBytes, FoundDuring, ImportSummary, ImportedKind,
+    ImportedMessage, ImportedOutput, ImportedOutputStatus, ImportedTransaction, InboxEntry,
+    InboxStatus, InvoiceAddressIndex, InvoiceCap, KeyId, MAX_CANCELLED_PAIRINGS, MAX_CONTACTS,
     MAX_IMPORTED_MESSAGE_BYTES, MAX_PARKED_INVOICES, MAX_PARKED_INVOICES_PER_SENDER,
     MAX_PENDING_PAIRINGS, OpenReceipt, OtherWalletSpend, OutboxEntry, OutboxId, OutboxStatus,
     OutputStatus, PRIVATE_SLOT_END, PairRequest, PairingEndReason, PairingFacts, PairingId,
@@ -2668,6 +2668,242 @@ fn peer_pins_are_kept_per_account_and_origin<B: Backend>() {
     }
 }
 
+fn api_event_ids_rise_and_are_not_reused_after_a_prune<B: Backend>() {
+    let backend = B::create(context_key(1));
+    let store = backend.store();
+    assert_eq!(read(store, |repos| repos.api_event_last_id()).unwrap(), 0);
+    assert_eq!(read(store, |repos| repos.api_event_bounds()).unwrap(), None);
+    let ids = write(store, |repos| {
+        Ok((
+            repos.append_api_event("payment.created", support::time(10), b"{\"n\":1}")?,
+            repos.append_api_event("payment.completed", support::time(20), b"{}")?,
+            repos.append_api_event("link.created", support::time(30), b"")?,
+        ))
+    })
+    .unwrap();
+    assert_eq!(ids, (1, 2, 3));
+    assert_eq!(
+        read(store, |repos| repos.api_event_bounds()).unwrap(),
+        Some((1, 3))
+    );
+    let first = read(store, |repos| repos.api_events_after(0, 10, &[])).unwrap();
+    assert_eq!(first.len(), 3);
+    assert_eq!(first[0].id, 1);
+    assert_eq!(first[0].kind, "payment.created");
+    assert_eq!(first[0].created_at, support::time(10));
+    assert_eq!(first[0].data, b"{\"n\":1}");
+    assert_eq!(first[2].data, b"");
+
+    // Two events are older than time 25.
+    let pruned = write(store, |repos| repos.prune_api_events(support::time(25))).unwrap();
+    assert_eq!(pruned, 2);
+    assert_eq!(
+        read(store, |repos| repos.api_event_bounds()).unwrap(),
+        Some((3, 3))
+    );
+    let next = write(store, |repos| {
+        repos.append_api_event("link.paid", support::time(40), b"{}")
+    })
+    .unwrap();
+    assert_eq!(next, 4);
+
+    // Every event pruned: the last id stays.
+    write(store, |repos| repos.prune_api_events(support::time(1000))).unwrap();
+    assert_eq!(read(store, |repos| repos.api_event_bounds()).unwrap(), None);
+    assert_eq!(read(store, |repos| repos.api_event_last_id()).unwrap(), 4);
+    let after_all = write(store, |repos| {
+        repos.append_api_event("link.paid", support::time(1001), b"{}")
+    })
+    .unwrap();
+    assert_eq!(after_all, 5);
+}
+
+fn api_events_are_read_after_an_id_with_a_limit_and_a_kind_filter<B: Backend>() {
+    let backend = B::create(context_key(1));
+    let store = backend.store();
+    let kinds = [
+        "payment.created",
+        "payment.completed",
+        "payments",
+        "link.created",
+        "payment.created",
+    ];
+    write(store, |repos| {
+        for (index, kind) in kinds.iter().enumerate() {
+            repos.append_api_event(kind, support::time(1), &[u8::try_from(index).unwrap()])?;
+        }
+        Ok(())
+    })
+    .unwrap();
+    let ids = |after: u64, limit: usize, filter: &[&str]| -> Vec<u64> {
+        let filter: Vec<String> = filter.iter().map(|kind| (*kind).to_owned()).collect();
+        read(store, |repos| repos.api_events_after(after, limit, &filter))
+            .unwrap()
+            .iter()
+            .map(|event| event.id)
+            .collect()
+    };
+    assert_eq!(ids(0, 100, &[]), vec![1, 2, 3, 4, 5]);
+    assert_eq!(ids(2, 100, &[]), vec![3, 4, 5]);
+    assert_eq!(ids(0, 2, &[]), vec![1, 2]);
+    assert_eq!(ids(0, 0, &[]), Vec::<u64>::new());
+    assert_eq!(ids(5, 100, &[]), Vec::<u64>::new());
+    assert_eq!(ids(u64::MAX, 100, &[]), Vec::<u64>::new());
+    // Exact: only the equal kind.
+    assert_eq!(ids(0, 100, &["payment.created"]), vec![1, 5]);
+    assert_eq!(ids(0, 100, &["payment"]), Vec::<u64>::new());
+    // Wildcard: the dotted prefix, not `payments`.
+    assert_eq!(ids(0, 100, &["payment.*"]), vec![1, 2, 5]);
+    // Several entries are alternatives; the limit applies after filtering.
+    assert_eq!(ids(0, 100, &["payments", "link.*"]), vec![3, 4]);
+    assert_eq!(ids(0, 2, &["payment.*"]), vec![1, 2]);
+    assert_eq!(ids(1, 100, &["payment.*"]), vec![2, 5]);
+
+    for bad in [
+        "*",
+        ".*",
+        "payment*",
+        "payment.**",
+        "pay*ment.*",
+        "pay ment",
+        "payment.%",
+        "",
+        "x'; DROP TABLE api_events; --",
+    ] {
+        let filter = vec![bad.to_owned()];
+        let error = read(store, |repos| repos.api_events_after(0, 10, &filter)).unwrap_err();
+        assert!(
+            matches!(error, StoreError::OutOfRange { .. }),
+            "{bad}: {error:?}"
+        );
+    }
+    let many = vec!["a.b".to_owned(); 33];
+    assert!(matches!(
+        read(store, |repos| repos.api_events_after(0, 10, &many)).unwrap_err(),
+        StoreError::OutOfRange { .. }
+    ));
+    assert!(matches!(
+        read(store, |repos| repos.api_events_after(0, 1001, &[])).unwrap_err(),
+        StoreError::OutOfRange { .. }
+    ));
+}
+
+fn api_event_inputs_are_bounded<B: Backend>() {
+    let backend = B::create(context_key(1));
+    let store = backend.store();
+    for kind in [
+        String::new(),
+        "k".repeat(65),
+        "bad kind".to_owned(),
+        "a*".to_owned(),
+    ] {
+        let error = write(store, |repos| {
+            repos.append_api_event(&kind, support::time(1), b"{}")
+        })
+        .unwrap_err();
+        assert!(
+            matches!(
+                error,
+                StoreError::OutOfRange {
+                    field: "api event kind"
+                }
+            ),
+            "{error:?}"
+        );
+    }
+    let big = vec![b'x'; 1 << 20];
+    write(store, |repos| {
+        repos.append_api_event("big", support::time(1), &big)
+    })
+    .unwrap();
+    let too_big = vec![b'x'; (1 << 20) + 1];
+    let error = write(store, |repos| {
+        repos.append_api_event("big", support::time(1), &too_big)
+    })
+    .unwrap_err();
+    assert!(
+        matches!(
+            error,
+            StoreError::OutOfRange {
+                field: "api event data"
+            }
+        ),
+        "{error:?}"
+    );
+    // The refused events took no id.
+    assert_eq!(read(store, |repos| repos.api_event_last_id()).unwrap(), 1);
+}
+
+fn api_requests_are_stored_once_and_pruned_by_time<B: Backend>() {
+    let backend = B::create(context_key(1));
+    let store = backend.store();
+    let request = |scope: &str, id: &str, digest: u8, at: i64| ApiRequest {
+        scope: scope.to_owned(),
+        id: id.to_owned(),
+        digest: [digest; 32],
+        created_at: support::time(at),
+    };
+    write(store, |repos| {
+        repos.put_api_request(&request("payment", "a", 1, 10))?;
+        repos.put_api_request(&request("link", "a", 2, 20))?;
+        repos.put_api_request(&request("payment", "b", 3, 30))
+    })
+    .unwrap();
+    let error = write(store, |repos| {
+        repos.put_api_request(&request("payment", "a", 9, 99))
+    })
+    .unwrap_err();
+    assert!(
+        matches!(
+            error,
+            StoreError::Duplicate {
+                record: Record::ApiRequest
+            }
+        ),
+        "{error:?}"
+    );
+    // The first record stands.
+    assert_eq!(
+        read(store, |repos| repos.api_request("payment", "a")).unwrap(),
+        Some(request("payment", "a", 1, 10))
+    );
+    assert_eq!(
+        read(store, |repos| repos.api_request("link", "a")).unwrap(),
+        Some(request("link", "a", 2, 20))
+    );
+    assert_eq!(
+        read(store, |repos| repos.api_request("contact", "a")).unwrap(),
+        None
+    );
+    for (scope, id) in [
+        ("", "a"),
+        ("payment", ""),
+        (&"s".repeat(33), "a"),
+        ("payment", &"i".repeat(129)),
+    ] {
+        let error = write(store, |repos| {
+            repos.put_api_request(&request(scope, id, 1, 1))
+        })
+        .unwrap_err();
+        assert!(matches!(error, StoreError::OutOfRange { .. }), "{error:?}");
+    }
+    let pruned = write(store, |repos| repos.prune_api_requests(support::time(25))).unwrap();
+    assert_eq!(pruned, 2);
+    assert_eq!(
+        read(store, |repos| repos.api_request("payment", "a")).unwrap(),
+        None
+    );
+    assert_eq!(
+        read(store, |repos| repos.api_request("payment", "b")).unwrap(),
+        Some(request("payment", "b", 3, 30))
+    );
+    // A pruned id can be recorded again.
+    write(store, |repos| {
+        repos.put_api_request(&request("payment", "a", 7, 40))
+    })
+    .unwrap();
+}
+
 macro_rules! shared_suite {
     ($backend:ty: $($test:ident),+ $(,)?) => {
         $(
@@ -2978,6 +3214,10 @@ for_each_backend!(
     peer_compat_is_found_only_under_its_tag_key,
     forget_peers_deletes_rows_whose_newest_date_is_older,
     peer_pins_are_kept_per_account_and_origin,
+    api_event_ids_rise_and_are_not_reused_after_a_prune,
+    api_events_are_read_after_an_id_with_a_limit_and_a_kind_filter,
+    api_event_inputs_are_bounded,
+    api_requests_are_stored_once_and_pruned_by_time,
     imported_transactions_round_trip_and_are_replaced,
     imported_records_need_their_transaction_and_bounded_messages,
     imported_outputs_are_found_by_commitment_and_status,
