@@ -568,3 +568,96 @@ fn a_contact_is_checked_and_its_keys_resolved() {
         assert_eq!(checked.status, 200, "{checked:?}");
     });
 }
+
+/// The shop deletes a request and the payer withdraws it and asks again at once, a few times
+/// over: each new request reaches the shop, though the invites expire in the same second.
+#[test]
+fn a_request_asked_again_at_once_after_a_delete_reaches_the_shop() {
+    let host = TestHost::new();
+    let (payer, shop, address) = paid_shop(&host);
+    serving(host, &shop, |socket, host| {
+        let mut request = request_arrives(socket, host, &payer, &address);
+        let sent = payer.run(host, &["contact", "list"]).ok().json();
+        let mut contact_id = text(&sent["sent_requests"][0], "contact_id").to_owned();
+        for _ in 0..3 {
+            let old = text(&request, "id").to_owned();
+            let deleted = http(
+                socket,
+                "DELETE",
+                &format!("/api/v1/pair-requests/{old}"),
+                None,
+            );
+            assert_eq!(deleted.status, 204, "{deleted:?}");
+            payer
+                .run(host, &["contact", "request-cancel", &contact_id])
+                .ok();
+            let asked = payer
+                .run(host, &["contact", "request", &address, "--name", "Payer"])
+                .ok()
+                .json();
+            contact_id = text(&asked, "contact_id").to_owned();
+            wait_until("the new request arrives", || {
+                let listed = http(socket, "GET", "/api/v1/pair-requests", None).ok();
+                listed["items"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|item| item["id"] != old.as_str())
+            });
+            let listed = http(socket, "GET", "/api/v1/pair-requests", None).ok();
+            assert_eq!(listed["items"].as_array().unwrap().len(), 1, "{listed}");
+            request = listed["items"][0].clone();
+        }
+    });
+}
+
+/// The payer asks through the API and the shop answers; the payer deletes the contact while it
+/// waits and asks again. The shop can answer the second request. The shop's CLI calls stay few:
+/// each opens its wallet, and the whole test has `PATIENCE`.
+#[test]
+fn a_waiting_request_deleted_through_the_api_can_be_asked_again() {
+    let host = TestHost::new();
+    let (payer, shop, address) = paid_shop(&host);
+    let answer = |host: &TestHost| {
+        shop.run(host, &["epicbox", "drain"]).ok();
+        let received = shop.run(host, &["contact", "requests"]).ok().json();
+        assert_eq!(
+            received["requests"].as_array().unwrap().len(),
+            1,
+            "{received}"
+        );
+        let request_id = text(&received["requests"][0], "request_id").to_owned();
+        shop.run(host, &["contact", "request-accept", &request_id])
+            .ok();
+    };
+    serving(host, &payer, |socket, host| {
+        let body = json!({"method": "request", "address": address, "label": "Shop"}).to_string();
+        let created = http(socket, "POST", "/api/v1/contacts", Some(&body));
+        assert_eq!(created.status, 201, "{created:?}");
+        let contact = created.json();
+        assert_eq!(contact["state"], "waiting", "{contact}");
+        assert_eq!(contact["pairing"]["method"], "request", "{contact}");
+        let first = text(&contact, "id").to_owned();
+        answer(host);
+
+        // Still a sent request here, or paired and not yet heard: both are waiting.
+        assert_eq!(contact_state(socket, &first), "waiting");
+        let deleted = http(socket, "DELETE", &path(&first), None);
+        assert_eq!(deleted.status, 204, "{deleted:?}");
+        let again = http(socket, "POST", "/api/v1/contacts", Some(&body));
+        assert_eq!(again.status, 201, "{again:?}");
+        let second = text(&again.json(), "id").to_owned();
+        assert_ne!(second, first);
+        answer(host);
+        wait_until("both sides paired", || {
+            shop.run(host, &["contact", "collect"]).ok();
+            contact_state(socket, &second) == "verified"
+        });
+        let at_shop = shop.run(host, &["contact", "list"]).ok().json();
+        assert_eq!(
+            at_shop["contacts"].as_array().unwrap().len(),
+            1,
+            "{at_shop}"
+        );
+    });
+}
