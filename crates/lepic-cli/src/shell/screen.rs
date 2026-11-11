@@ -33,6 +33,8 @@ struct Inner {
     mode: Mode,
     queue: VecDeque<String>,
     footer: Option<[String; 4]>,
+    /// Rows drawn above the footer while a command runs, such as the epic1 seal.
+    art: Vec<String>,
     out: Box<dyn Write + Send>,
     repaint: Option<RepaintSignal>,
 }
@@ -47,6 +49,7 @@ impl Screen {
             mode: Mode::Direct,
             queue: VecDeque::new(),
             footer: None,
+            art: Vec::new(),
             out,
             repaint: None,
         })))
@@ -106,10 +109,19 @@ impl Screen {
     /// A command runs: `footer` goes under its output.
     pub(crate) fn running(&self, footer: [String; 4]) {
         let mut inner = self.inner();
-        let _ = inner.leave();
-        inner.mode = Mode::Running;
+        inner.run();
         inner.footer = Some(footer);
-        let _ = queue!(inner.out, Hide);
+        let _ = inner.paint(None);
+    }
+
+    /// Draws `art` above the footer while a command runs, from before the footer shows.
+    pub(crate) fn art(&self, art: Vec<String>) {
+        let mut inner = self.inner();
+        if inner.art.is_empty() && art.is_empty() {
+            return;
+        }
+        inner.run();
+        inner.art = art;
         let _ = inner.paint(None);
     }
 
@@ -124,6 +136,15 @@ impl Screen {
 }
 
 impl Inner {
+    /// Enters running, unless it runs already.
+    fn run(&mut self) {
+        if self.mode != Mode::Running {
+            let _ = self.leave();
+            self.mode = Mode::Running;
+            let _ = queue!(self.out, Hide);
+        }
+    }
+
     /// Ends the current mode: the queue is printed, the footer cleared.
     fn leave(&mut self) -> io::Result<()> {
         match self.mode {
@@ -135,6 +156,7 @@ impl Inner {
             }
             Mode::Running => {
                 self.footer = None;
+                self.art.clear();
                 queue!(
                     self.out,
                     Print("\r"),
@@ -158,8 +180,8 @@ impl Inner {
         self.out.flush()
     }
 
-    /// Clears the footer, prints `text` where it was and draws the footer under it, in one
-    /// synchronized write. The cursor rests on the footer's first row, a blank one, so a resize
+    /// Clears the footer, prints `text` where it was and draws the art and the footer under it,
+    /// in one synchronized write. The cursor rests on their first row, a blank one, so a resize
     /// that rewraps the rows below it is cleared by the next paint.
     fn paint(&mut self, text: Option<&str>) -> io::Result<()> {
         let mut buffer = Zeroizing::new(Vec::new());
@@ -175,10 +197,19 @@ impl Inner {
                 buffer.extend_from_slice(b"\r\n");
             }
         }
-        if let Some(footer) = &self.footer {
-            buffer.extend_from_slice(footer.join("\r\n").as_bytes());
-            let up = u16::try_from(footer.len().saturating_sub(1)).unwrap_or(0);
-            queue!(buffer, MoveUp(up), Print("\r"))?;
+        let rows: Vec<&str> = self
+            .art
+            .iter()
+            .chain(self.footer.iter().flatten())
+            .map(String::as_str)
+            .collect();
+        if !rows.is_empty() {
+            buffer.extend_from_slice(rows.join("\r\n").as_bytes());
+            let up = u16::try_from(rows.len().saturating_sub(1)).unwrap_or(0);
+            if up > 0 {
+                queue!(buffer, MoveUp(up))?;
+            }
+            queue!(buffer, Print("\r"))?;
         }
         queue!(buffer, EndSynchronizedUpdate)?;
         self.out.write_all(&buffer)?;
@@ -332,6 +363,26 @@ mod tests {
         assert!(cleared.starts_with("\r\u{1b}[J"), "{cleared:?}");
         screen.print("done");
         assert_eq!(out.take(), "done\r\n");
+    }
+
+    #[test]
+    fn art_goes_above_the_footer_and_leaves_with_it() {
+        let out = Captured::default();
+        let screen = Screen::new(Box::new(out.clone()));
+        screen.art(vec![String::new(), "seal".to_owned()]);
+        let alone = out.take();
+        assert!(alone.contains("\r\nseal\u{1b}[1A\r"), "{alone:?}");
+        screen.running(footer());
+        let both = out.take();
+        assert!(!both.contains("\r\u{1b}[J\u{1b}[?25h"), "{both:?}");
+        assert!(both.contains("seal\r\n\r\n>\r\n"), "{both:?}");
+        assert!(both.ends_with("\u{1b}[5A\r\u{1b}[?2026l"), "{both:?}");
+        screen.print("posted");
+        assert!(out.take().contains("posted\r\n\r\nseal\r\n"));
+        screen.direct();
+        assert!(out.take().starts_with("\r\u{1b}[J"));
+        screen.running(footer());
+        assert!(!out.take().contains("seal"));
     }
 
     #[test]

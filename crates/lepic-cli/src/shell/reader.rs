@@ -39,6 +39,8 @@ pub(crate) enum Reply {
     Interrupt,
     /// The terminal changed size while watching.
     Resize,
+    /// Any other key pressed while watching.
+    Key,
     /// The watch ended and the terminal is out of raw mode.
     Watched,
     History(Vec<String>),
@@ -158,6 +160,9 @@ fn watch(stop: &AtomicBool, reply: &UnboundedSender<Reply>) {
                 }
                 Ok(Event::Resize(_, _)) => {
                     let _ = reply.send(Reply::Resize);
+                }
+                Ok(Event::Key(key)) if key.kind == KeyEventKind::Press => {
+                    let _ = reply.send(Reply::Key);
                 }
                 Ok(_) => {}
                 Err(_) => break,

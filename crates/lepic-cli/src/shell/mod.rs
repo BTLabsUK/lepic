@@ -9,5 +9,6 @@ pub(crate) mod paint;
 pub(crate) mod reader;
 pub(crate) mod review;
 pub(crate) mod screen;
+pub(crate) mod seal;
 pub(crate) mod session;
 pub(crate) mod words;

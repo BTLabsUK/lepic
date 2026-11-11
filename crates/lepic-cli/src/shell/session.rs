@@ -41,6 +41,7 @@ use crate::shell::live::{
 use crate::shell::paint::{self, Tone, tint};
 use crate::shell::reader::{Ask, Read, Reader, Reply};
 use crate::shell::screen::{Queue, Screen, ScreenWriter, ShellLog};
+use crate::shell::seal::{self, Seal};
 use crate::shell::words::{self, Line, SHELL_WORDS};
 use crate::{Console, hint};
 
@@ -990,6 +991,9 @@ impl<'a, H: Host> Shell<'a, H> {
     ) -> Result<Report, CliError> {
         // A Ctrl+C from before the command started does not cancel it.
         live.ctrl_c.clear();
+        let mut seal = Seal::of(&command, settings.output, self.colour, self.marks.glyphs);
+        let fake = seal::fake_send(&self.env, seal.as_ref());
+        let mut frames = tokio::time::interval(seal::FRAME);
         let (cancel, interrupt) = watch::channel(false);
         let stop_watch = Arc::new(AtomicBool::new(false));
         reader.ask(Ask::Watch(Arc::clone(&stop_watch)));
@@ -1002,7 +1006,7 @@ impl<'a, H: Host> Shell<'a, H> {
         let result = {
             // Boxed: the command's future is deep, and the session's would pass the compiler's
             // layout depth with it inline.
-            let mut running = self
+            let running = self
                 .held
                 .run(
                     self.host,
@@ -1013,6 +1017,7 @@ impl<'a, H: Host> Shell<'a, H> {
                     reviewed,
                 )
                 .boxed_local();
+            let mut running = fake.unwrap_or(running);
             loop {
                 let mut redraw = false;
                 tokio::select! {
@@ -1021,13 +1026,16 @@ impl<'a, H: Host> Shell<'a, H> {
                         tick = tick.wrapping_add(1);
                         redraw = true;
                     }
+                    _ = frames.tick(), if seal.as_ref().is_some_and(Seal::moving) => {}
                     reply = reader.replies.recv() => match reply {
                         Some(Reply::Interrupt) => {
+                            seal::skip(&mut seal);
                             cancel.send_replace(true);
                             doing = format!("{what}, cancelling");
                             redraw = true;
                         }
                         Some(Reply::Resize) => redraw = true,
+                        Some(Reply::Key) => seal::skip(&mut seal),
                         _ => {}
                     },
                     background = self.next_background(live, false) => {
@@ -1047,6 +1055,9 @@ impl<'a, H: Host> Shell<'a, H> {
                         redraw = true;
                     }
                 }
+                if let Some(seal) = &mut seal {
+                    self.screen.art(seal.rows(columns()));
+                }
                 if redraw && started.elapsed() >= FOOTER_AFTER {
                     let rows = self.footer(tick, &doing, started.elapsed());
                     if shown {
@@ -1059,6 +1070,11 @@ impl<'a, H: Host> Shell<'a, H> {
             }
         };
         drop(console);
+        if let Some(seal) = &mut seal
+            && result.is_ok()
+        {
+            seal.finish(&self.screen, &mut reader.replies).await;
+        }
         stop_watch.store(true, Ordering::SeqCst);
         loop {
             match reader.replies.recv().await {
@@ -1067,6 +1083,9 @@ impl<'a, H: Host> Shell<'a, H> {
             }
         }
         self.screen.direct();
+        if let Some(line) = seal.and_then(|seal| seal.last_line(&result)) {
+            self.screen.print(&line);
+        }
         result
     }
 
