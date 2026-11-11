@@ -125,19 +125,37 @@ pub(in super::super) fn delete_held<H: Host>(
 pub(in super::super) fn live_held<H: Host>(
     service: &Service<'_, H>,
 ) -> Result<Vec<(String, Held)>, CliError> {
-    let tip = service
-        .held
-        .wallet
-        .last_confirmed_height()?
-        .map(lepic_primitives::amount::Height::value);
+    let tip = known_tip(service)?;
     let mut live = Vec::new();
     for (id, held) in all_held(service)? {
-        match (held.expires_at_height, tip) {
-            (Some(expires), Some(tip)) if expires < tip => delete_held(service, &id)?,
-            _ => live.push((id, held)),
+        if past(held.expires_at_height, tip) {
+            delete_held(service, &id)?;
+        } else {
+            live.push((id, held));
         }
     }
     Ok(live)
+}
+
+/// Whether an invoice that expires at `expires_at_height` is past it at the wallet's last
+/// known tip, as [`live_held`] judges it. The node is not asked.
+pub(in super::super) fn held_expired<H: Host>(
+    service: &Service<'_, H>,
+    expires_at_height: Option<u64>,
+) -> Result<bool, CliError> {
+    Ok(past(expires_at_height, known_tip(service)?))
+}
+
+fn known_tip<H: Host>(service: &Service<'_, H>) -> Result<Option<u64>, CliError> {
+    Ok(service
+        .held
+        .wallet
+        .last_confirmed_height()?
+        .map(lepic_primitives::amount::Height::value))
+}
+
+const fn past(expires_at_height: Option<u64>, tip: Option<u64>) -> bool {
+    matches!((expires_at_height, tip), (Some(expires), Some(tip)) if expires < tip)
 }
 
 fn all_held<H: Host>(service: &Service<'_, H>) -> Result<Vec<(String, Held)>, CliError> {

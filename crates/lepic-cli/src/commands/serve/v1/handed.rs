@@ -474,6 +474,16 @@ async fn park<H: Host>(service: &Service<'_, H>, read: Read, text: String) -> Re
             handoff: None,
         });
     }
+    let expires_at_height = slate
+        .ttl_cutoff_height()
+        .map(lepic_primitives::amount::Height::value);
+    if view::held_expired(service, expires_at_height)? {
+        return Err(Problem::of(
+            Category::Rejected,
+            "payment_expired",
+            "this invoice expired: ask the payee for a new one",
+        ));
+    }
     if view::live_held(service)?.len() >= service.host.max_held_invoices() {
         return Err(Problem::conflict(
             "too_many_held",
@@ -490,9 +500,7 @@ async fn park<H: Host>(service: &Service<'_, H>, read: Read, text: String) -> Re
         contact_id,
         amount: slate.amount().value(),
         message: message_of(&slate),
-        expires_at_height: slate
-            .ttl_cutoff_height()
-            .map(lepic_primitives::amount::Height::value),
+        expires_at_height,
         received_at: jiff::Timestamp::now().to_string(),
     };
     view::put_held(service, &id, &held)?;

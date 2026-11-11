@@ -703,3 +703,38 @@ fn an_invoice_with_a_time_ordered_id_is_answered_on_its_repeat_after_a_crash() {
         vec![format!("api.payment.{made}")]
     });
 }
+
+#[test]
+fn an_expired_invoice_opened_here_is_refused_and_not_held() {
+    let (host, wallet) = funded();
+    let issuer = new_wallet(&host, "issuer password");
+    let file = issuer.path("invoice.slate");
+    issuer
+        .run(
+            &host,
+            &["invoice", "issue", "3", "--to-file", file.to_str().unwrap()],
+        )
+        .ok();
+    // The payer's TTL is not signed: a cutoff below the tip stands for an invoice that waited
+    // too long.
+    let mut slate: Value = serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
+    assert!(slate.get("ttl_cutoff_height").is_some(), "{slate}");
+    slate["ttl_cutoff_height"] = json!(5);
+    let invoice = slate.to_string();
+
+    serving(host, &wallet, |socket, client| {
+        // The wallet learns the tip, which is above the cutoff.
+        let synced = post(socket, "/api/v1/sync", &json!({})).ok();
+        assert!(synced["height"].as_u64().unwrap() > 5, "{synced}");
+        for _ in 0..2 {
+            problem(
+                &post(socket, "/api/v1/open", &json!({ "text": invoice })),
+                422,
+                "payment_expired",
+            );
+        }
+        let held = http(socket, "GET", "/api/v1/payments?state=needs_approval", None).ok();
+        assert!(held["items"].as_array().unwrap().is_empty(), "{held}");
+        assert!(client.node.pushed_transactions().is_empty());
+    });
+}

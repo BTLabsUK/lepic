@@ -251,6 +251,9 @@ payment with a `handoff` to give the issuer when they are not online. `decline` 
 invoice and tells the issuer. After either, the other answers 409 `action_not_available`.
 `deliver:false` on `approve` is not supported yet: it answers 400 `invalid_field` at `/deliver`.
 
+An invoice past its expiry height is not held: `open` answers 422 `payment_expired` and stores
+nothing.
+
 At most 100 invoices wait for approval. One more answers 409 `too_many_held`; approve or decline
 one first. Opening an invoice that is already held again does not count. A held invoice whose
 `expires_at_height` is below the wallet's last known height drops out of the list; serve does
