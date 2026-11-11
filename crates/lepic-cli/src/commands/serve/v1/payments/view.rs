@@ -180,6 +180,14 @@ pub(in super::super) fn put_alias<H: Host>(
     put_setting(service, &format!("{ALIAS}{alias}"), id)
 }
 
+/// The slate id the caller's id `alias` stands for, if one is stored.
+pub(in super::super) fn alias<H: Host>(
+    service: &Service<'_, H>,
+    alias: &str,
+) -> Result<Option<String>, CliError> {
+    setting(service, &format!("{ALIAS}{alias}"))
+}
+
 /// The slate id a caller's id stands for: itself when a payment, a declined invoice or a
 /// waiting invoice has that id (a real slate id wins over an alias), else the alias if one is
 /// stored, else itself.

@@ -3,6 +3,7 @@
 //! (RFC 0003 §5.19); `lepic epictx open`: an `.epictx` file shown as JSON (§5.10).
 
 use lepic_primitives::amount::Amount;
+use lepic_store::WalletStore as _;
 use lepic_wallet::send::{SendError, SendRequest};
 use lepic_wallet_contacts::{
     ContactError, ContactRelays, Epic1AnswerView, Epic1LinkKind, Epic1LinkRequest, Epic1LinkView,
@@ -13,6 +14,7 @@ use super::contact::{SlateFile, purpose_name, read_sealed, relays_in_mode};
 use super::in_person::{host_report, slate_id};
 use super::{Opened, Run, Spend, amount_sent, caller_slate_id, drawn_slate_id};
 use crate::amount::{format_amount, parse_amount};
+use crate::api::links::{self, Kept, kept_key, link_id};
 use crate::cli::{Epic1Args, Epic1Command, Epic1LinkArgs, Epic1PayArgs, EpictxCommand};
 use crate::exit::CliError;
 use crate::host::Host;
@@ -176,19 +178,39 @@ async fn link<N: lepic_node::NodeApi + 'static>(
         epicbox: link_relays,
     } = args;
     let wallet = &opened.wallet;
+    let account = wallet.account(&account.account)?.index;
+    let kind = if printed {
+        Epic1LinkKind::Printed
+    } else {
+        Epic1LinkKind::OnScreen
+    };
     let request = Epic1LinkRequest {
-        account: wallet.account(&account.account)?.index,
+        account,
         index,
         amount: amount.as_deref().map(parse_amount).transpose()?,
-        message: message.message,
-        kind: if printed {
-            Epic1LinkKind::Printed
-        } else {
-            Epic1LinkKind::OnScreen
-        },
+        message: message.message.clone(),
+        kind,
         relays: link_relays,
     };
-    let issued = wallet.contact_book().epic1_link(relays, request).await?;
+    // Kept for `GET /api/v1/links` as serve keeps it, with the mailbox in one transaction.
+    let mut kept = Kept {
+        text: String::new(),
+        address_index: index,
+        amount,
+        message: message.message,
+    };
+    let record = links::record(account, kind, &kept, None).map_err(kept_error)?;
+    let issued = wallet
+        .contact_book()
+        .epic1_link_recorded(relays, request, record)
+        .await?;
+    kept.text.clone_from(&issued.link);
+    let text = serde_json::to_string(&kept).map_err(kept_error)?;
+    let key = kept_key(&link_id(account, issued.kind, issued.n));
+    wallet
+        .session()?
+        .store
+        .write(|repos| repos.put_setting(&key, &text))?;
     Ok(Report::Epic1Link(Epic1LinkReport {
         link: issued.link,
         address: issued.address,
@@ -196,6 +218,13 @@ async fn link<N: lepic_node::NodeApi + 'static>(
         kind: kind_name(issued.kind),
         n: issued.n,
     }))
+}
+
+fn kept_error(error: serde_json::Error) -> CliError {
+    CliError::Io {
+        what: "keep the link for the API",
+        source: std::io::Error::other(error),
+    }
 }
 
 /// Pays an epic1 link: the amount given, or the one the link asks. Returns the payment and

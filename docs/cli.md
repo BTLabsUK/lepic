@@ -340,6 +340,10 @@ lepic tx finalize ./invoice.slate.response   # issuer
 | `invoice list` | Lists the parked invoices |
 | `invoice decline SLATE_ID` | Declines a parked invoice so it is never paid |
 
+`invoice issue --slate-id UUID` and `contact invoice --slate-id UUID` issue the invoice under a
+version-4 UUID the caller chose. An id this wallet already used for any transaction is refused
+with exit code 7 and nothing is stored.
+
 The payer types the amount again, and an invoice for any other amount is refused. A file whose
 name looks like a slate id is given with a directory, as in `./<SLATE_ID>`.
 

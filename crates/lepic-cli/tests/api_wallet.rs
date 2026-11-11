@@ -12,7 +12,7 @@
 mod support;
 
 use serde_json::{Value, json};
-use support::{funded, http, problem, serving};
+use support::{SENDER_MNEMONIC, funded, http, problem, serving, with_settings};
 
 const API: &str = "/api/v1";
 
@@ -402,5 +402,116 @@ fn the_password_changes_over_the_socket() {
             400,
             "invalid_field",
         );
+    });
+}
+
+/// The wallet's environment with its relay under a public name, as `serving_public` has it.
+fn public_env(wallet: &support::Instance) -> Vec<(String, String)> {
+    let mut env = wallet.env();
+    for (name, value) in &mut env {
+        if name == "LEPIC_EPICBOX_RELAY" {
+            "wss://relay.example.org".clone_into(value);
+        }
+    }
+    env
+}
+
+#[test]
+fn an_address_is_recorded_with_its_id_as_it_is_issued() {
+    let (host, wallet) = funded();
+    let again = host.without_interrupt();
+    let made = serving(host, &wallet, |socket, _| {
+        issue(socket);
+        send(socket, "POST", "/addresses", &json!({"id": "addr-crash"})).ok_status(201)
+    });
+    // The id's record is written in the transaction that issues the address: no crash can leave
+    // an address without it, which a repeat would issue again.
+    let recorded = with_settings(&wallet, SENDER_MNEMONIC, |repos| {
+        repos.setting("api.created.address.addr-crash")
+    });
+    assert_eq!(
+        recorded.as_deref(),
+        Some(made["index"].to_string().as_str()),
+        "{made}"
+    );
+    serving(again, &wallet, |socket, _| {
+        let repeated = send(socket, "POST", "/addresses", &json!({"id": "addr-crash"}));
+        assert_eq!(repeated.status, 200, "{repeated:?}");
+        let repeated = repeated.json();
+        assert_eq!(repeated["index"], made["index"], "{repeated}");
+        assert_eq!(repeated["text"], made["text"], "{repeated}");
+        let next = send(socket, "POST", "/addresses", &json!({})).ok_status(201);
+        assert_eq!(next["index"], made["index"].as_u64().unwrap() + 1, "{next}");
+    });
+}
+
+#[test]
+fn a_link_cut_short_before_its_text_was_kept_is_answered_on_its_repeat() {
+    let (host, wallet) = funded();
+    let again = host.without_interrupt();
+    let body = json!({"id": "link-crash", "kind": "printed", "amount": "2", "message": "dues"});
+    let made = serving_public(host, &wallet, |socket| {
+        issue(socket);
+        send(socket, "POST", "/addresses", &json!({})).ok_status(201);
+        send(socket, "POST", "/links", &body).ok_status(201)
+    });
+    let id = made["id"].as_str().unwrap().to_owned();
+    // The state between the link's transaction and the write of its text.
+    with_settings(&wallet, SENDER_MNEMONIC, |repos| {
+        let key = format!("api.link.{id}");
+        let mut kept: Value = serde_json::from_str(&repos.setting(&key)?.unwrap()).unwrap();
+        kept["text"] = json!("");
+        repos.put_setting(&key, &kept.to_string())
+    });
+    serving_public(again, &wallet, |socket| {
+        let repeated = send(socket, "POST", "/links", &body);
+        assert_eq!(repeated.status, 200, "{repeated:?}");
+        let repeated = repeated.json();
+        assert_eq!(repeated["id"], id.as_str(), "{repeated}");
+        assert_eq!(repeated["text"], made["text"], "{repeated}");
+        let listed = get(socket, "/links").ok();
+        assert_eq!(listed["items"].as_array().unwrap().len(), 1, "{listed}");
+        assert_eq!(listed["items"][0]["text"], made["text"], "{listed}");
+        assert_eq!(listed["items"][0]["message"], "dues", "{listed}");
+    });
+}
+
+#[test]
+fn links_issued_by_the_cli_are_listed_with_their_text() {
+    let (host, wallet) = funded();
+    let cli = host.without_interrupt();
+    let after = host.without_interrupt();
+    serving(host, &wallet, |socket, _| {
+        issue(socket);
+        send(socket, "POST", "/addresses", &json!({})).ok_status(201);
+    });
+    // The CLI's link and the API id of it.
+    let link = |args: &[&str]| {
+        let printed = wallet
+            .run_with(&cli, args, public_env(&wallet), "")
+            .ok()
+            .json();
+        let id = format!("0.printed.{}", printed["n"]);
+        (printed["link"].as_str().unwrap().to_owned(), id)
+    };
+    let (kept, kept_id) = link(&["epic1", "link", "--printed", "3", "--message", "club fee"]);
+    let (older, older_id) = link(&["epic1", "link", "--printed", "1"]);
+    // A link an earlier build issued has no record beside its mailbox.
+    with_settings(&wallet, SENDER_MNEMONIC, |repos| {
+        repos.delete_setting(&format!("api.link.{older_id}"))
+    });
+    serving_public(after, &wallet, |socket| {
+        let listed = get(socket, "/links").ok();
+        let items = listed["items"].as_array().unwrap();
+        assert_eq!(items.len(), 2, "{listed}");
+        let text_of = |id: &str| {
+            items
+                .iter()
+                .find(|item| item["id"] == id)
+                .unwrap_or_else(|| panic!("{id} in {listed}"))["text"]
+                .clone()
+        };
+        assert_eq!(text_of(&kept_id), kept.as_str(), "{listed}");
+        assert_eq!(text_of(&older_id), older.as_str(), "{listed}");
     });
 }

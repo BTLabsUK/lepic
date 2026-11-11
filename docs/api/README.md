@@ -118,9 +118,13 @@ content-type: application/problem+json
 {"type":"about:blank","title":"Conflict","status":409,"detail":"this id was used before with another request body","code":"idempotency_mismatch","category":"conflict","param":"/id"}
 ```
 
-A send keeps your `id` as the payment's `id`. An invoice gets an `id` of the wallet's own
-choosing, and your `id` stays an alias: `GET /payments/{your id}` returns the same payment.
-Read `id` from the answer, not from your request.
+A send keeps your `id` as the payment's `id`, and so does an invoice whose `id` is a version-4
+UUID. An invoice under any other UUID gets an `id` of the wallet's own choosing, and your `id`
+stays an alias: `GET /payments/{your id}` returns the same payment. Read `id` from the answer,
+not from your request.
+
+A create is safe to repeat after serve stopped while answering it: a payment, an address or a
+link that was made is answered with 200 on the repeat, never made a second time.
 
 ## Payments
 
@@ -268,8 +272,7 @@ not ask the node for this.
 
 `used` on an address is always `false` for now. A link has an `address_index` when the wallet
 knows the address it pays; a link mailbox that a restore found in use has none, and the field is
-left out. A link issued with the CLI lists with an empty `text`; one issued through the
-API keeps its text.
+left out. A link lists with its `text`, whether the CLI or the API issued it.
 
 ## Contacts
 

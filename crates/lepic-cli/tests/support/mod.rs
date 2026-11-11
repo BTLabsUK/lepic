@@ -547,3 +547,24 @@ pub fn new_wallet(host: &TestHost, password: &str) -> Instance {
     wallet.run(host, &["wallet", "init"]).ok();
     wallet
 }
+
+/// Runs `change` on the settings of the stopped wallet `wallet` restored from `mnemonic`, as
+/// another program with the phrase would: a test cuts a create short by taking away what it
+/// writes after the object.
+pub fn with_settings<T>(
+    wallet: &Instance,
+    mnemonic: &str,
+    change: impl FnOnce(&mut dyn lepic_store::Repositories) -> Result<T, lepic_store::StoreError>,
+) -> T {
+    use lepic_store::WalletStore as _;
+    use lepic_wallet::StoreOpener as _;
+    let seed = lepic_keychain::Seed::from_mnemonic(mnemonic).unwrap();
+    let store = lepic_wallet::EncryptedSqliteStores
+        .open(
+            &wallet.data_dir(),
+            lepic_wallet::lifecycle::store_keys(&seed).unwrap(),
+            &lepic_wallet::store_key(&seed).unwrap(),
+        )
+        .unwrap();
+    store.write(change).unwrap()
+}

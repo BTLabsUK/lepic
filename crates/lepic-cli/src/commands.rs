@@ -1303,6 +1303,12 @@ impl<H: Host> Run<'_, H> {
         {
             return Err(CliError::InvoiceOverHttp);
         }
+        let slate_id = args
+            .slate_id
+            .slate_id
+            .as_deref()
+            .map(caller_slate_id)
+            .transpose()?;
         let (transport, delivery, destination) = self.delivery(args.destination, false)?;
         let opened = self.open().await?;
         let account = opened.wallet.account(&args.account.account)?;
@@ -1316,7 +1322,7 @@ impl<H: Host> Run<'_, H> {
         let file = matches!(delivery, Delivery::Export { .. }).then(|| destination.clone());
         let issued = opened
             .wallet
-            .issue_invoice(
+            .issue_invoice_as(
                 method,
                 InvoiceRequest {
                     account: account.index,
@@ -1325,6 +1331,7 @@ impl<H: Host> Run<'_, H> {
                     ttl_blocks: None,
                 },
                 delivery,
+                slate_id,
             )
             .await?;
         Ok(Report::InvoiceIssue(InvoiceIssueReport {

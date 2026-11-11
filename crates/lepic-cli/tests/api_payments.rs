@@ -20,7 +20,7 @@ use base64::engine::general_purpose::STANDARD;
 use serde_json::{Value, json};
 use support::{
     FUNDING, Instance, SENDER_MNEMONIC, TestHost, funded, http, new_wallet, problem, serving, text,
-    wait_until,
+    wait_until, with_settings,
 };
 
 /// The amount a Decimal string names, in EPIC.
@@ -633,5 +633,73 @@ fn a_create_is_remembered_across_a_restart() {
             409,
             "idempotency_mismatch",
         );
+    });
+}
+
+/// The payments of `kind` the wallet lists.
+fn count_of(socket: &Path, kind: &str) -> usize {
+    let listed = http(socket, "GET", "/api/v1/payments?limit=100", None).ok();
+    listed["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|item| item["kind"] == kind)
+        .count()
+}
+
+/// Makes the payment `body` asks for, takes away what an earlier build wrote after the payment
+/// (`keys`), as a crash between the two would, and repeats the call after a restart: the repeat
+/// answers 200 with the same payment and makes none.
+fn repeat_after_a_crash(body: &Value, kind: &str, keys: impl Fn(&str) -> Vec<String>) {
+    let (host, wallet) = funded();
+    let again = host.without_interrupt();
+    let made = serving(host, &wallet, |socket, _| {
+        let created = post(socket, "/api/v1/payments", body);
+        assert_eq!(created.status, 201, "{created:?}");
+        assert_eq!(count_of(socket, kind), 1);
+        created.json()
+    });
+    let made_id = text(&made, "id").to_owned();
+    with_settings(&wallet, SENDER_MNEMONIC, |repos| {
+        for key in keys(&made_id) {
+            repos.delete_setting(&key)?;
+        }
+        Ok(())
+    });
+    serving(again, &wallet, |socket, _| {
+        let repeated = post(socket, "/api/v1/payments", body);
+        assert_eq!(repeated.status, 200, "{repeated:?}");
+        assert_eq!(repeated.json()["id"], made_id.as_str(), "{repeated:?}");
+        assert_eq!(count_of(socket, kind), 1);
+    });
+}
+
+#[test]
+fn a_send_cut_short_after_it_was_made_is_answered_on_its_repeat() {
+    let id = "0b1c2d3e-4f5a-4b6c-8d7e-9f0a1b2c3d4e";
+    let body = json!({ "id": id, "amount": "1", "via": "file" });
+    repeat_after_a_crash(&body, "send", |made| vec![format!("api.payment.{made}")]);
+}
+
+#[test]
+fn an_invoice_cut_short_after_it_was_made_is_answered_on_its_repeat() {
+    let id = "1c2d3e4f-5a6b-4c7d-9e8f-0a1b2c3d4e5f";
+    let body = json!({ "id": id, "kind": "invoice", "amount": "2", "via": "file" });
+    repeat_after_a_crash(&body, "invoice", |made| {
+        // A random UUID is the invoice's slate id: nothing maps the caller's id to it.
+        assert_eq!(made, id);
+        vec![format!("api.payment.{made}"), format!("api.alias.{id}")]
+    });
+}
+
+#[test]
+fn an_invoice_with_a_time_ordered_id_is_answered_on_its_repeat_after_a_crash() {
+    // Not a random UUID: the wallet draws the slate id and stores it for the caller's id before
+    // the invoice is made, so only the note can be missing after a crash.
+    let id = "018f3a2b-4c5d-7e6f-8a9b-0c1d2e3f4a5b";
+    let body = json!({ "id": id, "kind": "invoice", "amount": "2", "via": "file" });
+    repeat_after_a_crash(&body, "invoice", |made| {
+        assert_ne!(made, id);
+        vec![format!("api.payment.{made}")]
     });
 }

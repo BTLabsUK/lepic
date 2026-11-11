@@ -443,10 +443,10 @@ pub enum HttpReach {
     OtherComputers,
 }
 
-/// The slate id a caller gives a send so that sending again cannot pay twice.
+/// The slate id a caller gives a send or an invoice so that a repeat cannot make a second one.
 #[derive(Debug, Clone, Args, Serialize, Deserialize)]
 pub struct SendSlateIdArg {
-    /// Slate id of the send: a random version-4 UUID the caller stores before sending
+    /// Slate id: a random version-4 UUID the caller stores before sending or issuing
     #[arg(long, value_name = "SLATE_ID")]
     pub slate_id: Option<String>,
 }
@@ -683,6 +683,8 @@ pub struct IssueArgs {
     pub account: AccountArg,
     #[command(flatten)]
     pub message: MessageArg,
+    #[command(flatten)]
+    pub slate_id: SendSlateIdArg,
 }
 
 #[derive(Debug, Clone, Args, Serialize, Deserialize)]
@@ -1690,6 +1692,8 @@ pub struct ContactInvoiceArgs {
     pub reference: Option<String>,
     #[command(flatten)]
     pub account: AccountArg,
+    #[command(flatten)]
+    pub slate_id: SendSlateIdArg,
 }
 
 #[derive(Debug, Clone, Args, Serialize, Deserialize)]

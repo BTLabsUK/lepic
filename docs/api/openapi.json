@@ -4659,7 +4659,7 @@
           "id": {
             "type": "string",
             "format": "uuid",
-            "description": "Optional caller-chosen id. A send uses it as its slate id; an invoice takes a slate id of the wallet's own and keeps this one as an alias that `GET /payments/{id}` also answers. Read `id` from the answer. Idempotency key: a repeat with the same id and body returns the stored payment with 200; a different body is 409 `idempotency_mismatch`. Required over owner TLS."
+            "description": "Optional caller-chosen id. A send uses it as its slate id, and so does an invoice given a version-4 UUID; an invoice given another UUID takes a slate id of the wallet's own and keeps this one as an alias that `GET /payments/{id}` also answers. Read `id` from the answer. Idempotency key: a repeat with the same id and body returns the stored payment with 200; a different body is 409 `idempotency_mismatch`. Required over owner TLS."
           },
           "kind": {
             "type": "string",

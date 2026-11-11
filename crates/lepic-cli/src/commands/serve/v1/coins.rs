@@ -2,18 +2,26 @@
 //! Coins and being paid: `/outputs`, `/addresses`, `/links`.
 //!
 //! The addresses are the epic1 addresses of each account and the wallet's Epicbox address; the
-//! links are the epic1 links. The wallet keeps neither the text of a link nor what it asks, so
-//! serve keeps them beside the link in the wallet's settings, under `api.`, and a link made with
-//! the CLI is listed without them.
+//! links are the epic1 links. The wallet keeps neither the text of a link nor its message, so
+//! serve and `lepic epic1 link` keep them beside the link in the wallet's settings, under `api.`
+//! ([`crate::api::links`]). A link issued before they were kept for the CLI lists with its text
+//! built again from the wallet's record, without a message.
+//!
+//! A create with an `id` stores what it made and the record of that id in one store transaction,
+//! so a repeat after a crash answers 200 with the same address or link.
 
 use lepic_store::{AccountIndex, WalletStore as _};
-use lepic_wallet_contacts::{Epic1LinkKind, Epic1LinkRequest, Epic1LinkView, WalletContacts as _};
-use serde::{Deserialize, Serialize};
+use lepic_wallet::epic1_index::{self, IssueError};
+use lepic_wallet_contacts::{
+    ContactError, Epic1LinkKind, Epic1LinkRequest, Epic1LinkView, Epic1Refusal, WalletContacts as _,
+};
+use serde::Deserialize;
 
 use super::super::Service;
 use super::wallet::resolve;
 use super::{Reply, begin};
 use crate::amount::{format_amount, parse_amount};
+use crate::api::links::{self, Kept, kept_key, kind_part, link_id};
 use crate::api::list::{ListQuery, Order, Page, number_key};
 use crate::api::model::{Address, Link, Output};
 use crate::api::{Context, Problem, Request, created, idempotency, ok};
@@ -209,32 +217,52 @@ pub(super) async fn create_address<H: Host>(
             return ok(&epic1_address(&account.label, view.index, view.address));
         }
     }
-    let (index, address) = book
-        .epic1_new_address(account.index)
-        .await
-        .map_err(CliError::from)?;
-    if let Some(id) = &body.id {
-        write(service, &created_key("address", id), &index.to_string())?;
-    }
+    let (index, address) = match &body.id {
+        Some(id) => {
+            // Fails on a locked wallet before anything is stored.
+            book.epic1_address_at(account.index, 0)
+                .await
+                .map_err(CliError::from)?;
+            let index = issue_address(service, account.index, &created_key("address", id))?;
+            let address = book
+                .epic1_address_at(account.index, index)
+                .await
+                .map_err(CliError::from)?;
+            (index, address)
+        }
+        None => book
+            .epic1_new_address(account.index)
+            .await
+            .map_err(CliError::from)?,
+    };
     created(&epic1_address(&account.label, index, address.encode()))
 }
 
-/// What serve keeps of a link beside the wallet's own record of its mailbox.
-#[derive(Debug, Serialize, Deserialize)]
-struct Kept {
-    text: String,
-    address_index: u32,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    amount: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    message: Option<String>,
-}
-
-const fn kind_part(kind: Epic1LinkKind) -> &'static str {
-    match kind {
-        Epic1LinkKind::OnScreen => "screen",
-        Epic1LinkKind::Printed => "printed",
-    }
+/// Issues the next epic1 address of `account` as `epic1_new_address` does, and stores its index
+/// under `key` in the same store transaction.
+fn issue_address<H: Host>(
+    service: &Service<'_, H>,
+    account: AccountIndex,
+    key: &str,
+) -> Result<u32, Problem> {
+    let session = service.held.wallet.session().map_err(CliError::from)?;
+    let issued = session.store.write(|repos| {
+        let index = epic1_index::issue_next(repos, account)?;
+        if let Some(index) = index {
+            repos.put_setting(key, &index.to_string())?;
+        }
+        Ok::<_, IssueError>(index)
+    });
+    let refusal = match issued {
+        Ok(Some(index)) => {
+            tracing::info!(account = account.0, index, "epic1 address issued");
+            return Ok(index);
+        }
+        Ok(None) => ContactError::Epic1(Epic1Refusal::NoAddressLeft),
+        Err(IssueError::NotIssuingInstall) => ContactError::Epic1(Epic1Refusal::NotIssuingInstall),
+        Err(IssueError::Store(error)) => ContactError::from(error),
+    };
+    Err(CliError::from(refusal).into())
 }
 
 const fn kind_name(kind: Epic1LinkKind) -> &'static str {
@@ -242,10 +270,6 @@ const fn kind_name(kind: Epic1LinkKind) -> &'static str {
         Epic1LinkKind::OnScreen => "on_screen",
         Epic1LinkKind::Printed => "printed",
     }
-}
-
-fn link_id(account: AccountIndex, kind: Epic1LinkKind, n: u32) -> String {
-    format!("{}.{}.{n}", account.0, kind_part(kind))
 }
 
 fn parse_link_id(id: &str) -> Option<(AccountIndex, Epic1LinkKind, u32)> {
@@ -261,10 +285,6 @@ fn parse_link_id(id: &str) -> Option<(AccountIndex, Epic1LinkKind, u32)> {
         .next()
         .is_none()
         .then_some((AccountIndex(account), kind, n))
-}
-
-fn kept_key(id: &str) -> String {
-    format!("api.link.{id}")
 }
 
 fn created_key(scope: &str, id: &str) -> String {
@@ -299,7 +319,7 @@ fn kept<H: Host>(service: &Service<'_, H>, id: &str) -> Result<Option<Kept>, Pro
     Ok(read(service, &kept_key(id))?.and_then(|text| serde_json::from_str(&text).ok()))
 }
 
-fn link_object<H: Host>(
+async fn link_object<H: Host>(
     service: &Service<'_, H>,
     labels: &[(AccountIndex, String)],
     view: &Epic1LinkView,
@@ -311,12 +331,26 @@ fn link_object<H: Host>(
         .find(|(index, _)| *index == view.account)
         .map(|(_, label)| label.clone())
         .unwrap_or_default();
+    let text = match kept.as_ref().filter(|kept| !kept.text.is_empty()) {
+        Some(kept) => kept.text.clone(),
+        // Cut short before the text was kept, or issued by a CLI that kept none.
+        None => service
+            .held
+            .wallet
+            .contact_book()
+            .epic1_link_text(
+                view.account,
+                view.kind,
+                view.n,
+                kept.as_ref().and_then(|kept| kept.message.clone()),
+            )
+            .await
+            .map_err(CliError::from)?
+            .unwrap_or_default(),
+    };
     Ok(Link {
         id,
-        text: kept
-            .as_ref()
-            .map(|kept| kept.text.clone())
-            .unwrap_or_default(),
+        text,
         kind: kind_name(view.kind).to_owned(),
         account,
         address_index: view
@@ -366,7 +400,7 @@ pub(super) async fn list_links<H: Host>(
                 kind_part(view.kind),
                 number_key(u64::from(view.n))
             ),
-            link_object(service, &labels, view)?,
+            link_object(service, &labels, view).await?,
         ));
     }
     items.sort_by(|one, other| one.0.cmp(&other.0));
@@ -446,7 +480,7 @@ pub(super) async fn create_link<H: Host>(
             .iter()
             .find(|view| view.account == index && view.kind == link_kind && view.n == n)
         {
-            return ok(&link_object(service, &labels, view)?);
+            return ok(&link_object(service, &labels, view).await?);
         }
     }
     let address_index = match body.address_index {
@@ -464,8 +498,21 @@ pub(super) async fn create_link<H: Host>(
         false,
         &service.settings.servers.meeting_relays,
     );
+    let mut kept = Kept {
+        text: String::new(),
+        address_index,
+        amount: body.amount.clone(),
+        message: body.message.clone(),
+    };
+    let record = links::record(
+        account.index,
+        kind,
+        &kept,
+        body.id.as_deref().map(|caller| created_key("link", caller)),
+    )
+    .map_err(|error| Problem::usage(error.to_string()))?;
     let issued = book
-        .epic1_link(
+        .epic1_link_recorded(
             &relays,
             Epic1LinkRequest {
                 account: account.index,
@@ -475,24 +522,17 @@ pub(super) async fn create_link<H: Host>(
                 kind,
                 relays: body.relays.clone(),
             },
+            record,
         )
         .await
         .map_err(CliError::from)?;
     let id = link_id(account.index, issued.kind, issued.n);
-    let record = Kept {
-        text: issued.link,
-        address_index: issued.index,
-        amount: body.amount.clone(),
-        message: body.message.clone(),
-    };
+    kept.text = issued.link;
     write(
         service,
         &kept_key(&id),
-        &serde_json::to_string(&record).map_err(|error| Problem::usage(error.to_string()))?,
+        &serde_json::to_string(&kept).map_err(|error| Problem::usage(error.to_string()))?,
     )?;
-    if let Some(caller) = &body.id {
-        write(service, &created_key("link", caller), &id)?;
-    }
     let views = book.epic1_links().await.map_err(CliError::from)?;
     let labels = labels(service)?;
     let view = views
@@ -501,7 +541,7 @@ pub(super) async fn create_link<H: Host>(
             view.account == account.index && view.kind == issued.kind && view.n == issued.n
         })
         .ok_or_else(|| Problem::not_found("the link was not stored"))?;
-    created(&link_object(service, &labels, view)?)
+    created(&link_object(service, &labels, view).await?)
 }
 
 pub(super) async fn retire_link<H: Host>(
@@ -522,7 +562,7 @@ pub(super) async fn retire_link<H: Host>(
     else {
         return Err(Problem::not_found("no printed link has this id"));
     };
-    let mut link = link_object(service, &labels, view)?;
+    let mut link = link_object(service, &labels, view).await?;
     book.epic1_retire(account, n)
         .await
         .map_err(CliError::from)?;

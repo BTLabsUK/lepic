@@ -25,6 +25,7 @@ use crate::cli::{
     SpendArgs, TorBinaryArgs, TxCommand,
 };
 use crate::commands::contact::SlateFile;
+use crate::commands::{caller_slate_id, drawn_slate_id};
 use crate::exit::CliError;
 use crate::host::Host;
 use crate::output::Report;
@@ -316,8 +317,23 @@ pub(in super::super) async fn create<H: Host>(
         _ => None,
     };
     let destination = destination(route, file.as_ref());
+    // The slate id is settled and noted before the payment is made, so a call cut short after
+    // the payment was stored leaves nothing for its repeat to add.
+    let slate = match (&id, invoice) {
+        (Some(id), true) => Some(invoice_slate_id(service, id)?),
+        (Some(id), false) => Some(id.clone()),
+        (None, _) => None,
+    };
+    let mut note = Note {
+        purpose: body.purpose.clone(),
+        metadata: body.metadata.clone(),
+        handoff: None,
+    };
+    if let Some(slate) = slate.as_deref() {
+        view::put_note(service, slate, &note)?;
+    }
     let command = if invoice {
-        invoice_command(&body, destination, purpose)
+        invoice_command(&body, destination, purpose, slate.clone())
     } else {
         send_command(&body, destination, purpose, spend, id.clone(), reach)
     };
@@ -350,12 +366,10 @@ pub(in super::super) async fn create<H: Host>(
         None => None,
     };
     drop(file);
-    let note = Note {
-        purpose: body.purpose.clone(),
-        metadata: body.metadata,
-        handoff: handoff.clone(),
-    };
-    view::put_note(service, &slate_id, &note)?;
+    if handoff.is_some() || slate.as_deref() != Some(slate_id.as_str()) {
+        note.handoff.clone_from(&handoff);
+        view::put_note(service, &slate_id, &note)?;
+    }
     events::payment(service, &slate_id, Change::Created).await;
     let mut payment = super::object(service, &slate_id)
         .await?
@@ -378,11 +392,27 @@ fn destination(route: Route, file: Option<&SlateFile>) -> SendDestinationArgs {
     }
 }
 
-/// The command that issues the invoice `body` asks for.
+/// The slate id of the invoice the caller's `id` asks for: `id` itself when it is a random
+/// version-4 UUID, else the slate id stored for it, else a new one, stored before the invoice is
+/// made so that a repeat issues under the same slate id.
+fn invoice_slate_id<H: Host>(service: &Service<'_, H>, id: &str) -> Result<String, Problem> {
+    if caller_slate_id(id).is_ok() {
+        return Ok(id.to_owned());
+    }
+    if let Some(slate_id) = view::alias(service, id)? {
+        return Ok(slate_id);
+    }
+    let slate_id = drawn_slate_id()?.to_string();
+    view::put_alias(service, id, &slate_id)?;
+    Ok(slate_id)
+}
+
+/// The command that issues the invoice `body` asks for, under `slate_id` when given.
 fn invoice_command(
     body: &CreateBody,
     destination: SendDestinationArgs,
     purpose: Option<PurposeArg>,
+    slate_id: Option<String>,
 ) -> Command {
     let account = AccountArg {
         account: body.account(),
@@ -395,6 +425,7 @@ fn invoice_command(
                 purpose: purpose.unwrap_or(PurposeArg::Request),
                 reference: body.message.clone(),
                 account,
+                slate_id: SendSlateIdArg { slate_id },
             }),
             offline: false,
             epicbox_off: false,
@@ -409,6 +440,7 @@ fn invoice_command(
             message: MessageArg {
                 message: body.message.clone(),
             },
+            slate_id: SendSlateIdArg { slate_id },
         })),
     }
 }
