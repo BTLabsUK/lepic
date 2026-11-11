@@ -75,7 +75,7 @@ curl --unix-socket ./w.sock http://lepic/api/v1/accounts
 
 ## Creating safely twice
 
-A create (payment, address, link, contact, account) may carry an `id` you choose. Use a UUID for
+A create (payment, address, link, contact) may carry an `id` you choose. Use a UUID for
 a payment. Serve records a digest of the body before it creates anything, so a retry after a
 timeout is safe:
 
@@ -159,8 +159,12 @@ several answers, and serve starts none. `POST /payments/{id}/finalize` answers
 | `contact:ID` | A contact |
 | `account:LABEL` | One of your own accounts |
 
-Without `to`, `via` must be `file` or `in_person`: the payment is made for someone you hand it to.
-`via` forces a route when `to` is not enough. `POST /payments/estimate` takes the same body and
+Serve does not make payments to `epic:` links or `account:` yet: open the link with `POST /open`
+instead, and move coins between accounts with the CLI. Both answer 400 `invalid_field`.
+
+Without `to`, `via` must be `file`: the payment is made for someone you hand it to. `via` forces
+a route when `to` is not enough. `in_person`, `link`, `peer` and `chain` are in the contract but
+serve does not start them yet; they answer 400 `invalid_field`. `POST /payments/estimate` takes the same body and
 answers the fee, `max_amount` and the coins it would use, without changing anything.
 `"amount":"max"` is for the estimate only.
 
@@ -222,8 +226,9 @@ invoice and tells the issuer. After either, the other answers 409 `action_not_av
 
 ### Handoff, deliver, post, cancel
 
-- `POST /payments/{id}/deliver` sends the slate again, `{"relay":"next"}` to the next relay, or
-  `{"to":"contact:ID"}` through a contact's mailbox. `relay_ok` allows a relay outside your list.
+- `POST /payments/{id}/deliver` sends the slate again to the payment's own address. `relay` and
+  `to` are in the contract but not supported yet: they answer 400 `invalid_field`. `relay_ok` is
+  taken and has no effect yet.
 - `POST /payments/{id}/post` posts a finished payment to the node again. `{"fluff":true}` skips
   the stem phase.
 - `POST /payments/{id}/cancel` ends a payment that is not on the chain and frees its coins. It
@@ -389,8 +394,8 @@ category unless the table says another; `Retry-After` is set on 502, 503 and 504
 | Code | Status | Meaning |
 |---|---|---|
 | `contact_not_found`, `pairing_not_found` | 404 | No such contact, or no such pairing or request. |
-| `invite_expired`, `already_paired`, `pairing_in_progress`, `pairing_crossed`, `pairing_ended`, `contact_ended`, `contact_waiting`, `invite_dismissed`, `not_verified`, `key_check_refused`, `relay_changed`, `keys_not_changed`, `domain_fixed`, `contact_cap_reached` | 409 | The pairing or contact is not in a state the call can use. |
-| `wrong_class` | 409 | The call does not apply to a pairing of this class. |
+| `invite_expired`, `already_paired`, `pairing_in_progress`, `pairing_crossed`, `pairing_ended`, `pairing_waiting`, `invite_dismissed`, `contact_not_verified`, `key_check_refused`, `relay_changed`, `keys_not_changed`, `domain_fixed`, `contact_cap_reached` | 409 | The pairing or contact is not in a state the call can use. |
+| `wrong_pairing_class` | 400 | The call does not apply to a pairing of this class. |
 | `other_address`, `address_proof_missing`, `peer_not_proven`, `no_free_slot` | 422 | The pairing cannot go on. |
 | `contacts_offline`, `epicbox_off` | 409 | The switch the call needs is off. |
 
