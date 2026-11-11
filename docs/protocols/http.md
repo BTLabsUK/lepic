@@ -3,7 +3,7 @@
 A LEPIC wallet sends and receives slates over HTTP in two ways. With any Epic wallet it speaks
 the wallet foreign API: JSON-RPC 2.0 at `/v2/foreign`, wire-compatible with epic-wallet v4.1.0
 `send -m http` and `listen -m http` ([ADR 0017](../adr/0017-foreign-api-over-http.md)). A LEPIC
-listener also advertises a native direct endpoint at `/v1/peer`, where two LEPIC wallets swap
+listener also advertises a native direct endpoint at `/api/v1/inbox`, where two LEPIC wallets swap
 sealed `lepic.v1` slates
 ([ADR 0052](../adr/0052-legacy-at-the-edge-native-between-lepic-wallets.md)). This guide covers
 addresses, the foreign API, sending, listening and the native endpoint. The same exchanges run
@@ -60,7 +60,7 @@ Every call is a JSON-RPC 2.0 `POST` to `/v2/foreign`. An answer wraps its result
 A LEPIC listener answers:
 
 ```json
-{"id":1,"jsonrpc":"2.0","result":{"Ok":{"foreign_api_version":2,"supported_slate_versions":["V3","V2"],"lepic":{"protocol":1,"formats":["lepic.v1"],"path":"/v1/peer","seal":"<64 hex>"}}}}
+{"id":1,"jsonrpc":"2.0","result":{"Ok":{"foreign_api_version":2,"supported_slate_versions":["V3","V2"],"lepic":{"protocol":2,"formats":["lepic.v1"],"path":"/api/v1/inbox","seal":"<64 hex>"}}}}
 ```
 
 The `lepic` key is the [advert](#the-advert); a listener without the native endpoint leaves it
@@ -219,9 +219,9 @@ fail again and as `Unavailable` otherwise.
 
 | Key | Value |
 |---|---|
-| `protocol` | 1 |
+| `protocol` | 2 |
 | `formats` | `["lepic.v1"]`; at most 16, of at most 64 characters |
-| `path` | `/v1/peer`; at most 256 characters, starting with `/` |
+| `path` | `/api/v1/inbox`; at most 256 characters, starting with `/` |
 | `seal` | The listener's seal key, 64 hex: kind `01` on the onion, `02` on the web listener |
 
 `Advert::new(seal)`, `to_json` and `from_json` build and read it. A reader ignores unknown keys.
@@ -232,8 +232,8 @@ protocol, or one without `lepic.v1`, as none.
 
 | Request | Answer |
 |---|---|
-| `GET /v1/peer` | `application/json`: `protocol`, `formats`, `network` (`mainnet` or `floonet`), `key` (64 hex) |
-| `POST /v1/peer/slates` | The reply envelope, `application/vnd.lepic.epictx` |
+| `GET /api/v1/inbox` | `application/json`: `protocol`, `formats`, `network` (`mainnet` or `floonet`), `key` (64 hex) |
+| `POST /api/v1/inbox` | The reply envelope, `application/vnd.lepic.epictx` |
 
 The POST body is a slate envelope sealed anonymously to the listener's seal key, with a reply
 key; see [EPICTX](epictx.md). Its `Content-Type` is `application/vnd.lepic.epictx`, and it is at
@@ -252,10 +252,9 @@ as the foreign API.
 
 | Constant | Value |
 |---|---|
-| `PROTOCOL` | 1 |
+| `PROTOCOL` | 2 |
 | `FORMAT_LEPIC_V1` | `lepic.v1` |
-| `PEER_PATH` | `/v1/peer` |
-| `SLATES_PATH` | `/v1/peer/slates` |
+| `PEER_PATH` | `/api/v1/inbox` |
 | `ENVELOPE_MEDIA_TYPE` | `application/vnd.lepic.epictx` |
 | `MAX_ENVELOPE_LEN` | 69,632 |
 | `SEAL_KEY_LEN` | 32 |
@@ -281,7 +280,7 @@ endpoint, a `SlateHandler`, refuses with a `PeerRefusal`: `Refused` (422), `NotR
 ### The client
 
 `PeerClient::new` or `PeerClient::to_other_computers` builds a client; `with_dialer` sends over
-another stream, such as SOCKS5. `info(target)` reads `GET /v1/peer` and
+another stream, such as SOCKS5. `info(target)` reads `GET /api/v1/inbox` and
 `post_slate(target, envelope)` posts an envelope. `PeerClientSettings::default()` is a 15 s
 connect timeout, a 60 s request timeout and answers of at most `MAX_ENVELOPE_LEN`. The client
 reads at most 4096 bytes of a problem, reads `Retry-After` in seconds only, and follows no
@@ -321,7 +320,7 @@ legacy, and the listener's `check_version` carries the advert
 
 1. The sender reads `check_version`. Without the advert it sends V2 or V3 JSON to `/v2/foreign`.
 2. With it, the sender checks the seal key against its pin, seals the S1 to it with a reply key,
-   and posts it to `/v1/peer/slates`.
+   and posts it to `/api/v1/inbox`.
 3. The listener opens it, answers, and returns the S2 sealed to the reply key.
 4. The sender opens and finalizes it.
 

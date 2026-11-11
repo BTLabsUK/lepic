@@ -162,9 +162,9 @@ impl PeerTarget {
         )
     }
 
-    /// The URL envelopes are posted to.
-    pub fn slates_uri(&self) -> String {
-        format!("{}/slates", self.info_uri())
+    /// The URL envelopes are posted to: the same as [`Self::info_uri`], by `POST`.
+    pub fn envelope_uri(&self) -> String {
+        self.info_uri()
     }
 }
 

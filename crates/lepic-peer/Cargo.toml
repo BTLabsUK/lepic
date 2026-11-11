@@ -1,6 +1,6 @@
 [package]
 name = "lepic-peer"
-description = "The native direct endpoint (ADR 0052): the /v1/peer routes a listener serves, its advert, and the client that posts an envelope to them."
+description = "The native direct endpoint (ADR 0052): the /api/v1/inbox routes a listener serves, its advert, and the client that posts an envelope to them."
 version.workspace = true
 edition.workspace = true
 license.workspace = true

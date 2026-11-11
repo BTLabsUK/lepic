@@ -21,7 +21,7 @@ use tracing::debug;
 use crate::problem::{PROBLEM_MEDIA_TYPE, Problem, ProblemCode};
 use crate::{
     Advert, ENVELOPE_MEDIA_TYPE, FORMAT_LEPIC_V1, MAX_ENVELOPE_LEN, PEER_PATH, PROTOCOL, PeerInfo,
-    SEAL_KEY_LEN, SLATES_PATH, to_hex,
+    SEAL_KEY_LEN, to_hex,
 };
 
 /// How many replies are kept to answer a repeated envelope with. The oldest goes first.
@@ -73,27 +73,28 @@ impl PeerRefusal {
 /// The endpoint's routes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PeerRoute {
-    /// `GET /v1/peer`: the endpoint's description.
+    /// `GET /api/v1/inbox`: the endpoint's description.
     Info,
-    /// `POST /v1/peer/slates`: an envelope in, its reply out.
+    /// `POST /api/v1/inbox`: an envelope in, its reply out.
     Slates,
 }
 
 impl PeerRoute {
-    /// The route at `path`, if it is one of the endpoint's.
-    pub fn from_path(path: &str) -> Option<Self> {
-        match path {
-            PEER_PATH => Some(Self::Info),
-            SLATES_PATH => Some(Self::Slates),
-            _ => None,
-        }
+    /// Whether `path` is the endpoint's one path. A method other than `GET` and `POST` on it
+    /// has no route ([`Self::from_request`] is `None`) and is answered 405.
+    pub fn is_path(path: &str) -> bool {
+        path == PEER_PATH
     }
 
-    /// The one method the route answers.
-    pub fn method(self) -> Method {
-        match self {
-            Self::Info => Method::GET,
-            Self::Slates => Method::POST,
+    /// The route for `method` at `path`: `GET` describes, `POST` takes an envelope.
+    pub fn from_request(path: &str, method: &Method) -> Option<Self> {
+        if !Self::is_path(path) {
+            return None;
+        }
+        match *method {
+            Method::GET => Some(Self::Info),
+            Method::POST => Some(Self::Slates),
+            _ => None,
         }
     }
 }
@@ -170,7 +171,7 @@ impl PeerEndpoint {
         Advert::new(self.seal)
     }
 
-    /// The answer of `GET /v1/peer`.
+    /// The answer of `GET /api/v1/inbox`.
     pub fn info(&self) -> PeerInfo {
         PeerInfo {
             protocol: PROTOCOL,
@@ -381,7 +382,7 @@ mod tests {
     }
 
     fn post(body: &[u8], media: &str) -> Request<Full<Bytes>> {
-        Request::post(SLATES_PATH)
+        Request::post(PEER_PATH)
             .header(CONTENT_TYPE, media)
             .header(CONTENT_LENGTH, body.len())
             .body(Full::new(Bytes::copy_from_slice(body)))
@@ -407,15 +408,24 @@ mod tests {
 
     #[test]
     fn routes_are_the_two_paths() {
-        assert_eq!(PeerRoute::from_path("/v1/peer"), Some(PeerRoute::Info));
-        assert_eq!(
-            PeerRoute::from_path("/v1/peer/slates"),
-            Some(PeerRoute::Slates)
-        );
-        assert_eq!(PeerRoute::from_path("/v1/peer/"), None);
-        assert_eq!(PeerRoute::from_path("/v2/foreign"), None);
-        assert_eq!(PeerRoute::Info.method(), Method::GET);
-        assert_eq!(PeerRoute::Slates.method(), Method::POST);
+        let at = |path, method| PeerRoute::from_request(path, &method);
+        assert_eq!(at("/api/v1/inbox", Method::GET), Some(PeerRoute::Info));
+        assert_eq!(at("/api/v1/inbox", Method::POST), Some(PeerRoute::Slates));
+        assert_eq!(at("/api/v1/inbox", Method::PUT), None);
+        assert_eq!(at("/api/v1/inbox", Method::DELETE), None);
+        assert!(PeerRoute::is_path("/api/v1/inbox"));
+        for path in [
+            "/api/v1/inbox/",
+            "/api/v1/inbox/slates",
+            "/v1/peer",
+            "/v1/peer/slates",
+            "/api/v1/status",
+            "/v2/foreign",
+        ] {
+            assert!(!PeerRoute::is_path(path), "{path}");
+            assert_eq!(at(path, Method::GET), None, "{path}");
+            assert_eq!(at(path, Method::POST), None, "{path}");
+        }
     }
 
     #[tokio::test]
@@ -431,7 +441,7 @@ mod tests {
         assert_eq!(
             text,
             format!(
-                r#"{{"protocol":1,"formats":["lepic.v1"],"network":"floonet","key":"{}"}}"#,
+                r#"{{"protocol":2,"formats":["lepic.v1"],"network":"floonet","key":"{}"}}"#,
                 "09".repeat(32)
             )
         );
@@ -533,7 +543,7 @@ mod tests {
             .answer(PeerRoute::Slates, post(&long, ENVELOPE_MEDIA_TYPE), TIMEOUT)
             .await;
         assert_eq!(answer.response.status(), StatusCode::PAYLOAD_TOO_LARGE);
-        let undeclared = Request::post(SLATES_PATH)
+        let undeclared = Request::post(PEER_PATH)
             .header(CONTENT_TYPE, ENVELOPE_MEDIA_TYPE)
             .body(Full::new(Bytes::from(long)))
             .unwrap();

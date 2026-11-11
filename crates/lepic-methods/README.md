@@ -103,7 +103,7 @@ convert a mining node's `build_coinbase` for the engine.
 
 Between LEPIC wallets, a listener's `check_version` answer carries an advert (ADR 0052).
 `HttpPeer::probe(to)` and `TorPeer::probe(to)` read it as a `Probe`, and `Probe::target` gives
-the `/v1/peer` endpoint to post to. Both implement `DirectPeer`, which gives the origin a pin
+the `/api/v1/inbox` endpoint to post to. Both implement `DirectPeer`, which gives the origin a pin
 is kept under and posts a sealed envelope the way the method reaches the listener.
 `Tor::peer_dialer` routes a `PeerClient` through tor.
 

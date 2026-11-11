@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-//! The native direct endpoint between LEPIC wallets (ADR 0052): the `/v1/peer` routes a
+//! The native direct endpoint between LEPIC wallets (ADR 0052): the `/api/v1/inbox` routes a
 //! listener serves next to the foreign API, the advert in its `check_version` answer, and the
 //! client that posts an envelope to them. The crate moves envelope bytes only.
 //!
@@ -26,17 +26,16 @@ pub use server::{
 };
 
 /// The shape of the endpoint this crate speaks. An additive change keeps it; a break is a new
-/// path.
-pub const PROTOCOL: u32 = 1;
-/// The slate format the endpoint carries in protocol 1.
+/// number. Protocol 2 serves one path, [`PEER_PATH`], for `GET` and `POST` (ADR 0052, D7);
+/// protocol 1 posted to a `/slates` sub-path of a `/v1/peer` path and is no longer spoken.
+pub const PROTOCOL: u32 = 2;
+/// The slate format the endpoint carries in protocol 2.
 pub const FORMAT_LEPIC_V1: &str = "lepic.v1";
-/// The path of the endpoint's description, and the prefix of its other routes.
-pub const PEER_PATH: &str = "/v1/peer";
-/// The path an envelope is posted to.
-pub const SLATES_PATH: &str = "/v1/peer/slates";
-/// The media type of an envelope posted to [`SLATES_PATH`] and of its reply (D4).
+/// The endpoint's one path: `GET` describes it, `POST` takes an envelope.
+pub const PEER_PATH: &str = "/api/v1/inbox";
+/// The media type of an envelope posted to [`PEER_PATH`] and of its reply (D4).
 pub const ENVELOPE_MEDIA_TYPE: &str = "application/vnd.lepic.epictx";
-/// The largest body [`SLATES_PATH`] takes: the largest slate envelope, rounded up to 68 KiB.
+/// The largest body [`PEER_PATH`] takes: the largest slate envelope, rounded up to 68 KiB.
 pub const MAX_ENVELOPE_LEN: usize = 69_632;
 /// The length of a listener's seal key.
 pub const SEAL_KEY_LEN: usize = 32;
@@ -112,7 +111,7 @@ struct RawAdvert {
     seal: String,
 }
 
-/// The answer of `GET /v1/peer`.
+/// The answer of `GET /api/v1/inbox`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PeerInfo {
     pub protocol: u32,
@@ -210,7 +209,7 @@ mod tests {
         assert_eq!(
             json.to_string(),
             format!(
-                r#"{{"formats":["lepic.v1"],"path":"/v1/peer","protocol":1,"seal":"{}"}}"#,
+                r#"{{"formats":["lepic.v1"],"path":"/api/v1/inbox","protocol":2,"seal":"{}"}}"#,
                 "07".repeat(32)
             )
         );
@@ -229,9 +228,12 @@ mod tests {
             Advert::from_json(&json)
         };
         assert_eq!(with("seal", "00".into()), Err(PeerFormatError::Key));
-        assert_eq!(with("path", "v1/peer".into()), Err(PeerFormatError::Path));
         assert_eq!(
-            with("path", "/v1/peer?x".into()),
+            with("path", "api/v1/inbox".into()),
+            Err(PeerFormatError::Path)
+        );
+        assert_eq!(
+            with("path", "/api/v1/inbox?x".into()),
             Err(PeerFormatError::Path)
         );
         assert_eq!(

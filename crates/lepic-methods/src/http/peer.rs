@@ -191,7 +191,12 @@ mod tests {
         let probe = |advert| Probe::new(WebScheme::Http, "Wallet.Example", 3415, advert).unwrap();
         assert_eq!(probe(Some(advert.clone())).advert(), Some(&advert));
         let other = Advert {
-            protocol: 2,
+            protocol: 1,
+            ..advert.clone()
+        };
+        assert_eq!(probe(Some(other)).advert(), None);
+        let other = Advert {
+            protocol: 3,
             ..advert.clone()
         };
         assert_eq!(probe(Some(other)).advert(), None);
@@ -203,8 +208,8 @@ mod tests {
         let probed = probe(Some(advert.clone()));
         assert_eq!(probed.origin().to_string(), "http://wallet.example:3415");
         assert_eq!(
-            probed.target(&advert).unwrap().slates_uri(),
-            "http://wallet.example:3415/v1/peer/slates"
+            probed.target(&advert).unwrap().envelope_uri(),
+            "http://wallet.example:3415/api/v1/inbox"
         );
     }
 }

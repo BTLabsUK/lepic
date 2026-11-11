@@ -272,7 +272,7 @@ pub async fn listen(
 }
 
 /// As [`listen`], and with `peer` the socket also serves the native endpoint (ADR 0052) at
-/// `/v1/peer` and advertises it in `check_version` under `peer`'s seal key. Without `peer`
+/// `/api/v1/inbox` and advertises it in `check_version` under `peer`'s seal key. Without `peer`
 /// those routes are not found and `check_version` carries no advert.
 pub async fn listen_with(
     settings: ListenSettings,
@@ -691,8 +691,11 @@ async fn answer(
         state.admit_request()
     };
     if let Some(peer) = &state.peer
-        && let Some(route) = PeerRoute::from_path(request.uri().path())
+        && PeerRoute::is_path(request.uri().path())
     {
+        let Some(route) = PeerRoute::from_request(request.uri().path(), request.method()) else {
+            return status(StatusCode::METHOD_NOT_ALLOWED);
+        };
         return answer_peer(state, peer, admission, route, request).await;
     }
     let Some(admission) = admission else {
@@ -843,9 +846,6 @@ async fn answer_peer(
     route: PeerRoute,
     request: Request<Incoming>,
 ) -> Response<Full<Bytes>> {
-    if request.method() != route.method() {
-        return status(StatusCode::METHOD_NOT_ALLOWED);
-    }
     let rate_limited = || problem_response(ProblemCode::RateLimited, Some(BUDGET_RETRY));
     // Loopback connections are set apart for a mining node; this route is not one of its.
     let admission = match admission {

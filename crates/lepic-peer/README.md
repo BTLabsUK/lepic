@@ -1,9 +1,9 @@
 # lepic-peer
 
 The native direct endpoint between LEPIC wallets (ADR 0052). A LEPIC listener serves the
-`/v1/peer` routes on the same socket as the `epic-wallet` foreign API and names them in its
+`/api/v1/inbox` routes on the same socket as the `epic-wallet` foreign API and names them in its
 `check_version` answer. A LEPIC sender reads that advert, then posts a sealed EPICTX envelope
-to `/v1/peer/slates` instead of a legacy slate. This crate holds both sides: `PeerEndpoint`
+to `/api/v1/inbox` instead of a legacy slate. This crate holds both sides: `PeerEndpoint`
 answers the routes and `PeerClient` calls them. It moves envelope bytes only; opening and
 sealing them is the wallet's work.
 
@@ -19,7 +19,7 @@ The crate has no features.
 What it does not do:
 
 - It does not listen. The listener in `lepic-legacy-rpc` owns the socket, the connection
-  budgets and the timeouts, and hands `/v1/peer` requests to `PeerEndpoint`.
+  budgets and the timeouts, and hands `/api/v1/inbox` requests to `PeerEndpoint`.
 - It does not open or seal envelopes. The `SlateHandler` the host passes in does that on the
   listener's side, and the caller does it on the sender's side.
 - It does not choose between the native and the legacy route. `lepic-methods` does, from the
@@ -33,9 +33,9 @@ A LEPIC listener adds a `lepic` key to its `check_version` answer. `Advert` is t
 
 ```json
 {
-  "protocol": 1,
+  "protocol": 2,
   "formats": ["lepic.v1"],
-  "path": "/v1/peer",
+  "path": "/api/v1/inbox",
   "seal": "<64 hex digits>"
 }
 ```
@@ -50,8 +50,8 @@ foreign API only.
 
 | Route | Request | Answer |
 |---|---|---|
-| `PeerRoute::Info` | `GET /v1/peer` | `PeerInfo` as JSON |
-| `PeerRoute::Slates` | `POST /v1/peer/slates`, an envelope of type `application/vnd.lepic.epictx` | The reply envelope, same type |
+| `PeerRoute::Info` | `GET /api/v1/inbox` | `PeerInfo` as JSON |
+| `PeerRoute::Slates` | `POST /api/v1/inbox`, an envelope of type `application/vnd.lepic.epictx` | The reply envelope, same type |
 
 `PeerInfo` describes the endpoint: `protocol`, `formats`, `network` (`"mainnet"` or
 `"floonet"`) and `key`, the seal key in hex.
@@ -90,7 +90,7 @@ request timeouts.
   `PeerClientError::ThisComputer`. `AddressClass` names which kind was refused.
 - `with_dialer` takes a `PeerDialer`, such as a tor stream; TLS and the `Host` header use
   the target's host.
-- `info(target)` reads `GET /v1/peer` and checks it.
+- `info(target)` reads `GET /api/v1/inbox` and checks it.
 - `post_slate(target, envelope)` posts one envelope and returns the reply bytes as they came.
 
 `PeerTarget` is the endpoint to call: scheme, host, port and the advert's path. `Origin` is
@@ -101,7 +101,7 @@ host and the port, or the bare name of an onion.
 
 | Item | Purpose |
 |---|---|
-| `Advert`, `PeerInfo` | The advert in `check_version` and the answer of `GET /v1/peer` |
+| `Advert`, `PeerInfo` | The advert in `check_version` and the answer of `GET /api/v1/inbox` |
 | `PeerEndpoint`, `SlateHandler`, `HandlerFuture` | The listener's side of the routes |
 | `PeerRoute`, `PeerAnswer`, `PeerRefusal` | Which route a request is for, and what came of it |
 | `Problem`, `ProblemCode`, `problem_response` | Refusals as problem details |
@@ -116,7 +116,7 @@ Constants:
 |---|---|
 | `PROTOCOL` | `1`; an additive change keeps it, a break takes another path |
 | `FORMAT_LEPIC_V1` | `"lepic.v1"` |
-| `PEER_PATH`, `SLATES_PATH` | `"/v1/peer"`, `"/v1/peer/slates"` |
+| `PEER_PATH` | `"/api/v1/inbox"`, the one path for `GET` and `POST` |
 | `ENVELOPE_MEDIA_TYPE` | `"application/vnd.lepic.epictx"` |
 | `MAX_ENVELOPE_LEN` | 69,632 bytes (68 KiB) |
 | `SEAL_KEY_LEN` | 32 |

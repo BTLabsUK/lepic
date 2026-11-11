@@ -3,7 +3,7 @@
 The wallet foreign API of `epic-wallet` over HTTP, on the wire: the JSON-RPC messages, a client
 that posts a slate to a wallet listening at an `http(s)://` address, and a listener that takes
 payments. It is wire-compatible with `epic-wallet` `v4.1.0` `send -m http` and
-`listen -m http` (ADR 0017). The same listener serves the native `/v1/peer` routes of
+`listen -m http` (ADR 0017). The same listener serves the native `/api/v1/inbox` routes of
 `lepic-peer` to other LEPIC wallets (ADR 0052). The HTTP method that uses this crate is
 `lepic_methods::http`.
 
@@ -78,7 +78,7 @@ no redirects and reads at most `ClientSettings::max_response_bytes` of an answer
 ### The listener
 
 `listen(settings, handler)` binds a TCP port and serves on the current Tokio runtime;
-`listen_with` also serves the native `/v1/peer` routes and adds their advert to
+`listen_with` also serves the native `/api/v1/inbox` routes and adds their advert to
 `check_version`. On Unix, `listen_unix` and `listen_unix_with` bind a socket file instead, for a
 listener only a local tor reaches. A port another program holds fails with
 `ListenError::PortInUse`.
