@@ -278,7 +278,8 @@ withdrawn, an invite of yours is cancelled. A late answer is then refused, and y
 same wallet again at once. On a paired contact it ends the pairing and tells the contact. With
 `notify=false` the contact is not told and keeps its record until this wallet sends it a new pair
 request; that request ends the old record there, if that wallet had heard from this one and the
-request is newer than the pairing.
+request is newer than the pairing. When the pairing came from a request of this wallet, newer is
+judged by this wallet's clock alone, so a clock behind the contact's does not stop it.
 
 A new request from a wallet whose earlier request you answered, and which never confirmed it,
 replaces that pairing, so `acceptPairRequest` takes it.

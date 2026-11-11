@@ -40,7 +40,7 @@ use super::keys::contact_network;
 use super::manage::PendingPairingView;
 use super::pairing::{InviteExpiry, InviteOffer, InviteRequest};
 use super::{CLOCK_SKEW, ContactError, ContactRelays, LockedRng};
-use crate::ContactBook;
+use crate::{ContactBook, hex};
 
 /// Live requests kept at once; the oldest goes first.
 pub const MAX_LIVE_REQUESTS: usize = 20;
@@ -199,7 +199,7 @@ enum Dropped {
     /// The request kept from that sender is newer.
     Older,
     /// A pairing with the sender is live and the request cannot say it ended: the contact was
-    /// not heard from yet, or the pairing is not older than the request.
+    /// not heard from yet, or the request does not postdate the pairing.
     LivePairing,
 }
 
@@ -232,25 +232,39 @@ fn kept_stays(
     }
 }
 
-/// The live pairings with `key` that a request from that key, issued at `issued_at`, ends;
+/// The live pairings with `key` that a request from that key, expiring at `expires_at`, ends;
 /// `Err` when one of them it cannot end: a pairing whose contact was not heard from yet, or one
-/// made after the request was issued (an old request a relay delivers again).
+/// the request does not postdate (an old request a relay delivers again).
+///
+/// A pairing made by answering a request from `key` is postdated by a request that expires
+/// later than that one, or in the same second with another invite: both times come from the
+/// sender's clock, so how far it is from ours does not matter. Any other pairing is postdated by a request issued no earlier than the
+/// pairing was made by our clock.
 ///
 /// The relay delivers a request only under a signature by `key` and sealed to us with a key
 /// agreement only `key` can make, so a request from `key` says its holder dropped the pairing.
 fn pairings_ended_by(
     repos: &dyn Repositories,
     key: &[u8; PAYMENTS_KEY_LEN],
-    issued_at: Timestamp,
+    invite_id: &[u8; INVITE_ID_LEN],
+    expires_at: Timestamp,
 ) -> Result<Result<Vec<ContactId>, Dropped>, StoreError> {
+    let issued_at = expires_at
+        .checked_sub(REQUEST_EXPIRY)
+        .unwrap_or(Timestamp::MIN);
     let mut ended = Vec::new();
     for record in repos.contacts_by_payments_key(key)? {
         if record.facts.ended_reason.is_some() {
             continue;
         }
-        if record.facts.peer_heard_at.is_none()
-            || record.created_at.as_second() > issued_at.as_second()
-        {
+        let postdates = match answered(repos, record.contact_id)? {
+            Some((seconds, answered_invite)) => {
+                expires_at.as_second() > seconds
+                    || (expires_at.as_second() == seconds && *invite_id != answered_invite)
+            }
+            None => record.created_at.as_second() <= issued_at.as_second(),
+        };
+        if record.facts.peer_heard_at.is_none() || !postdates {
             return Ok(Err(Dropped::LivePairing));
         }
         ended.push(record.contact_id);
@@ -269,8 +283,8 @@ where
     /// dismissed or answered here, when it is the live request kept from that key again, or
     /// when it is older than the request kept from that key. A request from the key of a live
     /// pairing says the contact dropped it: the pairing ends as unpaired, raising
-    /// [`Event::ContactUnpaired`], unless the contact was not heard from yet or the pairing is
-    /// newer than the request, which is then dropped. A kept one raises
+    /// [`Event::ContactUnpaired`], unless the contact was not heard from yet or the request
+    /// does not postdate the pairing (see [`pairings_ended_by`]), and is then dropped. A kept one raises
     /// [`Event::PairingRequested`].
     pub(crate) async fn take_pair_request(
         &self,
@@ -313,10 +327,8 @@ where
                     {
                         return Ok(Arrived::Dropped(why));
                     }
-                    let issued_at = expires_at
-                        .checked_sub(REQUEST_EXPIRY)
-                        .unwrap_or(Timestamp::MIN);
-                    let ended = match pairings_ended_by(repos, &sender_key, issued_at)? {
+                    let ended = match pairings_ended_by(repos, &sender_key, &invite_id, expires_at)?
+                    {
                         Ok(ended) => ended,
                         Err(why) => return Ok(Arrived::Dropped(why)),
                     };
@@ -725,15 +737,16 @@ pub(crate) fn own_request_to(
         .map(|pending| pending.contact_id))
 }
 
-/// Marks the request whose invite is `invite_id` answered; `InviteDismissed` when it was
-/// dismissed here.
+/// Marks the request whose invite is `invite_id` answered, and returns when its invite expires
+/// by its sender's clock; `None` when no request has that invite, and `InviteDismissed` when it
+/// was dismissed here.
 pub(crate) fn answer_request(
     repos: &mut dyn Repositories,
     invite_id: &[u8; INVITE_ID_LEN],
     now: Timestamp,
-) -> Result<(), ContactError> {
+) -> Result<Option<Timestamp>, ContactError> {
     let Some(mut request) = repos.pair_request_by_invite(invite_id)? else {
-        return Ok(());
+        return Ok(None);
     };
     if request.dismissed_at.is_some() {
         return Err(ContactError::InviteDismissed);
@@ -742,5 +755,131 @@ pub(crate) fn answer_request(
         request.answered_at = Some(now);
         repos.put_pair_request(&request)?;
     }
-    Ok(())
+    Ok(Some(request.expires_at))
+}
+
+/// The setting beside the pairing record `contact_id` that holds the request it answered: when
+/// that expires, in unix seconds by the clock of its sender, a dot, and its invite id in hex.
+fn answered_key(contact_id: ContactId) -> String {
+    lepic_store::contact_extra_key(contact_id, ANSWERED_NAME)
+}
+
+const ANSWERED_NAME: &str = "answered_request_expires";
+
+/// Records that the pairing record `contact_id` answered the request with `invite_id`, expiring
+/// at `expires_at` by its sender's clock. The store drops it with the record.
+pub(crate) fn remember_answered(
+    repos: &mut dyn Repositories,
+    contact_id: ContactId,
+    invite_id: &[u8; INVITE_ID_LEN],
+    expires_at: Timestamp,
+) -> Result<(), StoreError> {
+    let value = format!("{}.{}", expires_at.as_second(), hex::encode(invite_id));
+    repos.put_setting(&answered_key(contact_id), &value)
+}
+
+/// The request the pairing record `contact_id` answered: when it expires by its sender's
+/// clock, and its invite id.
+fn answered(
+    repos: &dyn Repositories,
+    contact_id: ContactId,
+) -> Result<Option<(i64, [u8; INVITE_ID_LEN])>, StoreError> {
+    Ok(repos.setting(&answered_key(contact_id))?.and_then(|value| {
+        let (seconds, invite_id) = value.split_once('.')?;
+        Some((
+            seconds.parse::<i64>().ok()?,
+            hex::decode_array::<INVITE_ID_LEN>(invite_id).ok()?,
+        ))
+    }))
+}
+
+#[cfg(test)]
+mod tests {
+    use lepic_store::{AccountIndex, ContactState, MemoryStore, PairingFacts, SealMode, StoreKeys};
+
+    use super::*;
+
+    const KEY: [u8; PAYMENTS_KEY_LEN] = [7; PAYMENTS_KEY_LEN];
+
+    fn at(seconds: i64) -> Timestamp {
+        Timestamp::from_second(seconds).unwrap()
+    }
+
+    /// A live pairing with `KEY`, heard from, made at `created_at` by our clock.
+    fn paired(created_at: Timestamp) -> ContactRecord {
+        ContactRecord {
+            contact_id: ContactId([1; 16]),
+            account: AccountIndex(0),
+            slot: 0,
+            box_salt: [0; 16],
+            own_card: Vec::new(),
+            peer: None,
+            alternate: None,
+            label: String::new(),
+            state: ContactState::Verified,
+            sas: None,
+            verified_at: None,
+            allow_invoices: false,
+            seal: SealMode::On,
+            last_sealed_in: None,
+            app_contact: None,
+            imported_from_backup: false,
+            created_at,
+            updated_at: created_at,
+            facts: PairingFacts {
+                payments_address: Some("key@relay.example".to_owned()),
+                payments_key: Some(KEY),
+                peer_heard_at: Some(created_at),
+                ..PairingFacts::default()
+            },
+        }
+    }
+
+    fn ends(store: &MemoryStore, invite_id: u8, expires_at: Timestamp) -> bool {
+        store
+            .read(|repos| pairings_ended_by(repos, &KEY, &[invite_id; INVITE_ID_LEN], expires_at))
+            .unwrap()
+            .is_ok()
+    }
+
+    /// A pairing made by answering a request is ended by a later request from the same
+    /// sender, however far the sender's clock is behind ours, and never by the answered
+    /// request again or one before it.
+    #[test]
+    fn an_answered_pairing_compares_the_senders_own_times() {
+        let store = MemoryStore::new(StoreKeys::from_bytes([1; 32], [1; 32]));
+        let day = i64::try_from(REQUEST_EXPIRY.as_secs()).unwrap() / 7;
+        // Our clock says day 100; the sender's says day 10.
+        let record = paired(at(100 * day));
+        let answered = at(10 * day) + REQUEST_EXPIRY;
+        store
+            .write(|repos| {
+                repos.put_contact(&record)?;
+                remember_answered(repos, record.contact_id, &[2; INVITE_ID_LEN], answered)
+            })
+            .unwrap();
+
+        assert!(ends(&store, 3, answered + Duration::from_secs(1)));
+        assert!(
+            ends(&store, 3, answered),
+            "another request in the same second"
+        );
+        assert!(!ends(&store, 2, answered), "the answered request again");
+        assert!(!ends(&store, 3, answered - Duration::from_secs(1)));
+    }
+
+    /// Without an answered request the pairing's own time decides, as before.
+    #[test]
+    fn another_pairing_compares_its_creation_with_the_request() {
+        let store = MemoryStore::new(StoreKeys::from_bytes([1; 32], [1; 32]));
+        let record = paired(at(1_000_000));
+        store.write(|repos| repos.put_contact(&record)).unwrap();
+
+        assert!(ends(&store, 3, record.created_at + REQUEST_EXPIRY));
+        assert!(!ends(
+            &store,
+            3,
+            record.created_at + REQUEST_EXPIRY - Duration::from_secs(1)
+        ));
+    }
 }

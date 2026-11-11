@@ -1541,9 +1541,17 @@ fn store_answer(
         return Err(ContactError::AlreadyPaired);
     }
     let network = at.network;
-    super::requests::answer_request(repos, invite.id().as_bytes(), at.now)?;
+    let answered = super::requests::answer_request(repos, invite.id().as_bytes(), at.now)?;
     let mut rng = LockedRng(&mut **rng.lock());
     let (new, mut private) = new_record(repos, &mut rng, request.account, request.class)?;
+    if let Some(expires_at) = answered {
+        super::requests::remember_answered(
+            repos,
+            new.contact_id,
+            invite.id().as_bytes(),
+            expires_at,
+        )?;
+    }
     if let (Some(secrets), Some(link)) = (&mut private, &invite.fields().link) {
         secrets.link = link.clone();
     }
