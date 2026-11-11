@@ -64,20 +64,24 @@ fn an_account_is_created_once_per_label() {
 
 #[test]
 fn outputs_page_and_filter() {
-    let (host, wallet) = funded();
+    let host = support::TestHost::new();
+    host.fund(support::SENDER_MNEMONIC, 0, support::FUNDING, 1);
+    host.fund(support::SENDER_MNEMONIC, 1, support::FUNDING, 2);
+    let wallet = support::Instance::new("serving password");
+    wallet.restore(&host, support::SENDER_MNEMONIC);
     serving(host, &wallet, |socket, _| {
         let all = get(socket, "/outputs").ok();
         let items = all["items"].as_array().unwrap();
-        assert!(!items.is_empty(), "{all}");
+        assert_eq!(items.len(), 2, "{all}");
         assert_eq!(items[0]["account"], "default");
         assert_eq!(items[0]["state"], "unspent");
-        let paged = get(socket, "/outputs?limit=1").ok();
-        assert_eq!(paged["items"].as_array().unwrap().len(), 1);
-        if items.len() > 1 {
-            let cursor = paged["next_cursor"].as_str().unwrap();
-            let next = get(socket, &format!("/outputs?limit=1&cursor={cursor}")).ok();
-            assert_ne!(next["items"][0]["commitment"], paged["items"][0]["commitment"]);
-        }
+        let first = get(socket, "/outputs?limit=1").ok();
+        assert_eq!(first["items"].as_array().unwrap().len(), 1);
+        let cursor = first["next_cursor"].as_str().unwrap();
+        let second = get(socket, &format!("/outputs?limit=1&cursor={cursor}")).ok();
+        assert_eq!(second["items"].as_array().unwrap().len(), 1);
+        assert_ne!(second["items"][0]["commitment"], first["items"][0]["commitment"]);
+        assert!(second.get("next_cursor").is_none_or(Value::is_null), "{second}");
         let none = get(socket, "/outputs?state=spent").ok();
         assert!(none["items"].as_array().unwrap().is_empty());
         problem(&get(socket, "/outputs?state=nonsense"), 400, "invalid_field");
