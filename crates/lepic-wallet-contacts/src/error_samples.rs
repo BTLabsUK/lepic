@@ -197,6 +197,10 @@ pub fn send_errors() -> Vec<SendError> {
             slate_id: SLATE,
             sent: None,
         },
+        SendError::FeeAboveMaximum {
+            fee: Fee::new(800_000),
+            max_fee: Fee::new(700_000),
+        },
         SendError::Undelivered {
             tx_id: TX,
             slate_id: SLATE,

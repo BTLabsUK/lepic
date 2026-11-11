@@ -636,6 +636,7 @@ impl WalletError {
             | SendError::CannotDeliver { .. }
             | SendError::CannotExport { .. }
             | SendError::SlateIdTaken { .. }
+            | SendError::FeeAboveMaximum { .. }
             | SendError::ProofAddress(_) => WalletErrorKind::InvalidArgument,
             SendError::Undelivered { .. } => WalletErrorKind::TransportFailed,
             SendError::Unrepresentable(_) => WalletErrorKind::InvalidSlate,

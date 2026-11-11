@@ -17,7 +17,7 @@ mod support;
 use std::sync::{Arc, Mutex};
 
 use lepic_legacy_slate::v3_json::LEGACY_V3_JSON;
-use lepic_primitives::amount::{Amount, Height};
+use lepic_primitives::amount::{Amount, Fee, Height};
 use lepic_primitives::output::OutputFeatures;
 use lepic_slate::codec::WireSlate;
 use lepic_slate::error::{EncodeError, Unrepresentable};
@@ -339,6 +339,55 @@ fn a_send_with_a_given_slate_id_is_made_once() {
     assert_eq!(sender.transactions().len(), 1);
     assert_eq!(sender.next_child(), NEXT_CHILD + 1);
     assert_eq!(sender.outbox(OutboxStatus::Delivered).len(), 1);
+}
+
+both_stores!(a_send_never_pays_more_than_its_maximum_fee);
+fn a_send_never_pays_more_than_its_maximum_fee() {
+    let sender = Sender::new();
+    let estimate = sender
+        .harness
+        .block_on(
+            sender
+                .wallet
+                .estimate_fee(Amount::new(AMOUNT), request(AMOUNT).selection_options()),
+        )
+        .unwrap();
+    let below = Fee::new(estimate.fee.value() - 1);
+    let error = sender
+        .harness
+        .block_on(sender.wallet.send(
+            &sender.harness.method(),
+            SendRequest {
+                max_fee: Some(below),
+                ..request(AMOUNT)
+            },
+            to(PEER),
+        ))
+        .unwrap_err();
+    assert!(
+        matches!(
+            error,
+            SendError::FeeAboveMaximum { fee, max_fee }
+                if fee == estimate.fee && max_fee == below
+        ),
+        "{error:?}"
+    );
+    assert!(sender.transactions().is_empty());
+    assert_eq!(sender.next_child(), NEXT_CHILD);
+    assert!(sender.received().is_none());
+
+    let sent = sender
+        .harness
+        .block_on(sender.wallet.send(
+            &sender.harness.method(),
+            SendRequest {
+                max_fee: Some(estimate.fee),
+                ..request(AMOUNT)
+            },
+            to(PEER),
+        ))
+        .unwrap();
+    assert_eq!(sent.fee, estimate.fee);
 }
 
 both_stores!(refuses_a_send_the_outputs_cannot_cover_before_storing_anything);

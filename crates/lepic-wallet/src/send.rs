@@ -148,6 +148,9 @@ pub enum SendError {
         #[source]
         source: TransportError,
     },
+    /// The send needs a fee above [`SendRequest::max_fee`]; nothing was stored.
+    #[error("the send needs a fee of {fee}, above the maximum of {max_fee}")]
+    FeeAboveMaximum { fee: Fee, max_fee: Fee },
 }
 
 impl From<StoreError> for SendError {
@@ -206,6 +209,10 @@ pub struct SendRequest {
     /// [`SendError::SlateIdTaken`], which names the first send. It must be a random version-4
     /// id made for this send, since it travels in the slate.
     pub slate_id: Option<SlateId>,
+    /// The highest fee the send may pay. A selection that needs more fails with
+    /// [`SendError::FeeAboveMaximum`] before anything is stored, so a send shown to the user
+    /// with a fee never pays more than that fee.
+    pub max_fee: Option<Fee>,
 }
 
 impl SendRequest {
@@ -225,6 +232,7 @@ impl SendRequest {
             payment_proof_recipient: None,
             exclude_outputs: Vec::new(),
             slate_id: None,
+            max_fee: None,
         }
     }
 
@@ -704,6 +712,14 @@ fn create_s1(
                 .request(request.amount, tip, base_fee),
         )?,
     )?;
+    if let Some(max_fee) = request.max_fee
+        && selection.fee > max_fee
+    {
+        return Err(SendError::FeeAboveMaximum {
+            fee: selection.fee,
+            max_fee,
+        });
+    }
     let built = store_s1(
         repos,
         keychain,
