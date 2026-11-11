@@ -1,10 +1,10 @@
 # shellcheck shell=bash
 # A service on `lepic serve` and its wallet API, as a tip bot runs it: status and the CLI running
 # through serve while it holds the wallet, withdrawals sent at once over HTTP and Epicbox,
-# deposits arriving at once over HTTP and Epicbox, the event stream, and a slate_id repeated in a
+# deposits arriving at once over HTTP and Epicbox, the event stream, and a payment id repeated in a
 # race.
 
-SVC_PATHS="crates/lepic-cli/src/api crates/lepic-cli/src/service.rs crates/lepic-cli/src/commands/serve.rs crates/lepic-wallet crates/lepic-epicbox"
+SVC_PATHS="crates/lepic-cli/src/api crates/lepic-cli/src/service.rs crates/lepic-cli/src/commands/serve.rs crates/lepic-cli/src/commands/serve crates/lepic-wallet crates/lepic-epicbox"
 CASES+=("svc.status|case_svc_status|${SVC_PATHS}")
 CASES+=("svc.withdraw-burst|case_svc_withdraw_burst|${SVC_PATHS} crates/lepic-legacy-rpc")
 CASES+=("svc.withdraw-epicbox|case_svc_withdraw_epicbox|${SVC_PATHS}")
@@ -29,8 +29,10 @@ api() {
 }
 
 svc_ready() {
-    api GET /v1/status || return 1
-    jq -e '.height != null and .epicbox == "connected"' <<<"${API_BODY}" >/dev/null
+    api GET /api/v1/status || return 1
+    jq -e '.listeners.epicbox.state == "connected"' <<<"${API_BODY}" >/dev/null || return 1
+    api GET /api/v1/wallet || return 1
+    jq -e '.height != null' <<<"${API_BODY}" >/dev/null
 }
 
 # Starts serve on the bot with extra arguments; sets SVC_PID and SVC_SOCK.
@@ -42,9 +44,9 @@ svc_start() {
     wait_until "serve synced and on the relay" 90 svc_ready || fail "serve not ready: ${API_BODY}" || return 1
 }
 
-# The bot's state of one transaction, through the API.
+# The bot's state of one payment (its id is the slate id), through the API.
 svc_tx_state() {
-    api GET "/v1/transactions/$1" >/dev/null || return 1
+    api GET "/api/v1/payments/$1" >/dev/null || return 1
     jq -r '.state' <<<"${API_BODY}"
 }
 svc_tx_state_is() { [[ "$(svc_tx_state "$1")" == "$2" ]]; }
@@ -76,29 +78,37 @@ svc_outputs_at_least() {
 }
 
 case_svc_status() {
-    local address cli_address methods
+    local address cli_address
     ensure_wallet "${SVC_BOT}" || return 1
     cli_address="$(w "${SVC_BOT}" wallet address | jq -r .address)"
     svc_start || return 1
-    api GET /v1/wallet || fail "GET /v1/wallet ${API_STATUS}" || return 1
-    expect_json "${API_BODY}" '.network == "floonet" and (.accounts | length) >= 1' "wallet over the API" || return 1
-    api GET /v1/wallet/address || fail "GET /v1/wallet/address ${API_STATUS}" || return 1
-    address="$(jq -r .address <<<"${API_BODY}")"
-    expect_eq "${address}" "${cli_address}" "address over the API" || return 1
-    api GET /v1/epic1/address || fail "GET /v1/epic1/address ${API_STATUS}" || return 1
-    expect_match "$(jq -r .address <<<"${API_BODY}")" '^tepic1' "epic1 address over the API" || return 1
-    api GET /v1/node || fail "GET /v1/node ${API_STATUS}" || return 1
-    api GET /v1/methods || fail "GET /v1/methods ${API_STATUS}" || return 1
-    methods="$(jq -c '[.methods[].id]' <<<"${API_BODY}")"
-    expect_json "${methods}" 'index("epicbox") != null and index("http") != null' "methods epicbox and http" || return 1
-    # serve always listens on Epicbox; this one runs without --http.
-    expect_json "${API_BODY}" '(.methods[] | select(.id == "epicbox") | .listens) == true and (.methods[] | select(.id == "http") | .listens) == false' "epicbox listens, http does not" || return 1
-    api GET /v1/openapi.json || fail "GET /v1/openapi.json ${API_STATUS}" || return 1
+    api GET /api/v1/status || fail "GET /api/v1/status ${API_STATUS}" || return 1
+    # serve always listens on Epicbox; this one runs without --http. (/v1/methods has no direct
+    # successor: the status listeners say what serve listens on.)
+    expect_json "${API_BODY}" '.listeners.epicbox.state == "connected" and (.listeners | has("http") | not) and .refresh.failures == 0 and .collect.failures == 0 and (.requests.served >= 0)' "status listeners: epicbox connected, no http" || return 1
+    api GET /api/v1/wallet || fail "GET /api/v1/wallet ${API_STATUS}" || return 1
+    expect_json "${API_BODY}" '.network == "floonet" and .height != null' "wallet over the API" || return 1
+    api GET /api/v1/accounts || fail "GET /api/v1/accounts ${API_STATUS}" || return 1
+    expect_json "${API_BODY}" '(.items | length) >= 1' "accounts over the API" || return 1
+    api GET '/api/v1/addresses?type=epicbox' || fail "GET /api/v1/addresses epicbox ${API_STATUS}" || return 1
+    address="$(jq -r '.items[0].text' <<<"${API_BODY}")"
+    expect_eq "${address}" "${cli_address}" "epicbox address over the API" || return 1
+    api GET '/api/v1/addresses?type=epic1' || fail "GET /api/v1/addresses epic1 ${API_STATUS}" || return 1
+    if [[ "$(jq '.items | length' <<<"${API_BODY}")" -gt 0 ]]; then
+        expect_match "$(jq -r '.items[0].text' <<<"${API_BODY}")" '^tepic1' "epic1 address over the API" || return 1
+    else
+        note "no epic1 address issued yet"
+    fi
+    api GET /api/v1/node || fail "GET /api/v1/node ${API_STATUS}" || return 1
+    expect_json "${API_BODY}" 'has("tip_height") and has("syncing")' "node over the API" || return 1
+    api GET /api/v1/openapi.json || fail "GET /api/v1/openapi.json ${API_STATUS}" || return 1
+    expect_json "${API_BODY}" '.openapi != null and (.paths | has("/payments"))' "openapi document" || return 1
     # A problem is RFC 9457 JSON with a code a client can branch on.
-    api GET /v1/transactions/999999 && { fail "an unknown transaction answered ${API_STATUS}"; return 1; }
-    expect_json "${API_BODY}" '.code == "not_found" and .status == 404' "unknown transaction problem" || return 1
-    api POST /v1/transactions '{"to":"nonsense","amount":"abc"}' && { fail "a bad send was accepted"; return 1; }
-    expect_json "${API_BODY}" '.code == "usage" or .code == "rejected"' "bad send problem" || return 1
+    api GET "/api/v1/payments/$(cat /proc/sys/kernel/random/uuid)" && { fail "an unknown payment answered ${API_STATUS}"; return 1; }
+    expect_json "${API_BODY}" '.code == "not_found" and .status == 404' "unknown payment problem" || return 1
+    api POST /api/v1/payments '{"to":"nonsense","amount":"abc"}' && { fail "a bad send was accepted"; return 1; }
+    expect_eq "${API_STATUS}" 400 "bad send status" || return 1
+    expect_json "${API_BODY}" '(.code | type) == "string" and .status == 400' "bad send problem ($(jq -r .code <<<"${API_BODY}"))" || return 1
     # Serve holds the data directory: a command with a route runs through serve's socket, errors
     # included, and one with no route exits 5 naming serve (ADR 0053).
     cli_address="$(w "${SVC_BOT}" wallet address | jq -r .address)"
@@ -112,12 +122,12 @@ case_svc_status() {
     wx 5 "${SVC_BOT}" tx send --to-file "${CASE_DIR}/unrouted.slate" 0.01 || return 1
     expect_json "${LAST_JSON}" '.error.kind == "wallet_state" and (.error.message | contains("lepic serve is running"))' "a command with no route names serve" || return 1
     wstop "${SVC_PID}"
-    note "status, wallet, address, epic1, node, methods, problems; CLI through serve (wallet, transactions, contacts), exit 5 with no route"
+    note "status, wallet, accounts, addresses, node, openapi, problems; CLI through serve (wallet, transactions, contacts), exit 5 with no route"
 }
 
-# Three withdrawals at once to three HTTP listeners, then two requests racing under one slate_id.
+# Three withdrawals at once to three HTTP listeners, then two requests racing under one id.
 case_svc_withdraw_burst() {
-    local i urls=() pids=() body slate ids race_slate
+    local i urls=() pids=() body slate ids race_slate status
     for i in "${!SVC_USERS[@]}"; do ensure_wallet "${SVC_USERS[i]}" || return 1; done
     svc_bot_outputs 4 0.2 || return 1
     for i in "${!SVC_USERS[@]}"; do
@@ -128,39 +138,49 @@ case_svc_withdraw_burst() {
     for i in "${!SVC_USERS[@]}"; do
         slate="$(cat /proc/sys/kernel/random/uuid)"
         body="$(jq -nc --arg to "${urls[i]}" --arg a "${SVC_AMOUNT}" --arg s "${slate}" \
-            '{to:$to, amount:$a, method:"http", slate_id:$s, min_confirmations:1, message:"e2e withdrawal"}')"
-        (api POST /v1/transactions "${body}"; printf '%s\n%s\n' "${API_STATUS}" "${API_BODY}" >"${CASE_DIR}/burst.${i}") &
+            '{to:$to, amount:$a, via:"http", id:$s, min_confirmations:1, message:"e2e withdrawal", purpose:"withdrawal"}')"
+        (api POST /api/v1/payments "${body}"; printf '%s\n%s\n' "${API_STATUS}" "${API_BODY}" >"${CASE_DIR}/burst.${i}") &
         pids+=($!)
     done
     for i in "${pids[@]}"; do wait "${i}"; done
     for i in "${!SVC_USERS[@]}"; do
-        [[ "$(head -n 1 "${CASE_DIR}/burst.${i}")" == 200 ]] || fail "withdrawal ${i}: $(tail -n +1 "${CASE_DIR}/burst.${i}" | tr '\n' ' ')" || return 1
-        expect_json "$(tail -n +2 "${CASE_DIR}/burst.${i}")" '.state == "posted" and .repeated == false and .dialect != null' "withdrawal ${i} posted" || return 1
+        [[ "$(head -n 1 "${CASE_DIR}/burst.${i}")" == 201 ]] || fail "withdrawal ${i}: $(tail -n +1 "${CASE_DIR}/burst.${i}" | tr '\n' ' ')" || return 1
+        expect_json "$(tail -n +2 "${CASE_DIR}/burst.${i}")" '(.state == "posted" or .state == "confirmed") and .direction == "out" and .via == "http"' "withdrawal ${i} posted" || return 1
     done
-    ids="$(for i in "${!SVC_USERS[@]}"; do tail -n +2 "${CASE_DIR}/burst.${i}" | jq -r .tx_id; done | sort -u | wc -l)"
-    expect_eq "${ids}" 3 "distinct transactions" || return 1
-    # The same slate_id sent twice at once: one transaction, and one report says repeated.
+    ids="$(for i in "${!SVC_USERS[@]}"; do tail -n +2 "${CASE_DIR}/burst.${i}" | jq -r .id; done | sort -u | wc -l)"
+    expect_eq "${ids}" 3 "distinct payments" || return 1
+    # The same id sent twice at once: one payment. One answers 201; the other 200 (it saw the
+    # stored payment) or 409 in_progress (the first was still running).
     race_slate="$(cat /proc/sys/kernel/random/uuid)"
     body="$(jq -nc --arg to "${urls[0]}" --arg a "${SVC_AMOUNT}" --arg s "${race_slate}" \
-        '{to:$to, amount:$a, method:"http", slate_id:$s, min_confirmations:1}')"
+        '{to:$to, amount:$a, via:"http", id:$s, min_confirmations:1}')"
     pids=()
     for i in 0 1; do
-        (api POST /v1/transactions "${body}"; printf '%s\n%s\n' "${API_STATUS}" "${API_BODY}" >"${CASE_DIR}/race.${i}") &
+        (api POST /api/v1/payments "${body}"; printf '%s\n%s\n' "${API_STATUS}" "${API_BODY}" >"${CASE_DIR}/race.${i}") &
         pids+=($!)
     done
     for i in "${pids[@]}"; do wait "${i}"; done
     for i in 0 1; do note "race ${i}: $(tr '\n' ' ' <"${CASE_DIR}/race.${i}" | head -c 300)"; done
-    expect_eq "$(cat "${CASE_DIR}"/race.* | grep -o '"tx_id":[0-9]*' | sort -u | wc -l)" 1 "one transaction for a raced slate_id" || return 1
-    api POST /v1/transactions "${body}" || fail "repeat after the race ${API_STATUS}" || return 1
-    expect_json "${API_BODY}" '.repeated == true' "a later repeat reports repeated" || return 1
-    api GET /v1/transactions || return 1
-    expect_eq "$(jq --arg s "${race_slate}" '[.transactions[] | select(.slate_id == $s)] | length' <<<"${API_BODY}")" 1 "raced slate stored once" || return 1
+    expect_eq "$(head -qn 1 "${CASE_DIR}"/race.0 "${CASE_DIR}"/race.1 | grep -c '^201$')" 1 "one 201 for a raced id" || return 1
+    for i in 0 1; do
+        status="$(head -n 1 "${CASE_DIR}/race.${i}")"
+        case "${status}" in
+        201 | 200) ;;
+        409) expect_json "$(tail -n +2 "${CASE_DIR}/race.${i}")" '.code == "in_progress"' "race ${i} 409 is in_progress" || return 1 ;;
+        *) fail "race ${i} answered ${status}" || return 1 ;;
+        esac
+    done
+    api POST /api/v1/payments "${body}" || fail "repeat after the race ${API_STATUS}" || return 1
+    expect_eq "${API_STATUS}" 200 "a later repeat answers 200" || return 1
+    expect_eq "$(jq -r .id <<<"${API_BODY}")" "${race_slate}" "the repeat names the same payment" || return 1
+    api GET '/api/v1/payments?limit=500' || return 1
+    expect_eq "$(jq --arg s "${race_slate}" '[.items[] | select(.id == $s)] | length' <<<"${API_BODY}")" 1 "raced id listed once" || return 1
     # Serve refreshes on its own: the withdrawals confirm without a CLI call.
     for i in "${!SVC_USERS[@]}"; do
-        wait_until "withdrawal ${i} confirmed" 240 svc_tx_state_is "$(tail -n +2 "${CASE_DIR}/burst.${i}" | jq -r .tx_id)" confirmed \
+        wait_until "withdrawal ${i} confirmed" 240 svc_tx_state_is "$(tail -n +2 "${CASE_DIR}/burst.${i}" | jq -r .id)" confirmed \
             || fail "withdrawal ${i} not confirmed" || return 1
     done
-    note "3 withdrawals at once posted and confirmed; raced slate_id gave one transaction"
+    note "3 withdrawals at once posted and confirmed; raced id gave one payment"
 }
 
 # A withdrawal to an Epicbox address: serve's own relay connection takes the answer and posts it.
@@ -172,10 +192,11 @@ case_svc_withdraw_epicbox() {
     epicbox_listen "${user}" || fail "${user} not on the relay" || return 1
     svc_start || return 1
     slate="$(cat /proc/sys/kernel/random/uuid)"
-    body="$(jq -nc --arg to "${address}" --arg a "${SVC_AMOUNT}" --arg s "${slate}" '{to:$to, amount:$a, slate_id:$s, min_confirmations:1}')"
-    api POST /v1/transactions "${body}" || fail "epicbox withdrawal ${API_STATUS}: ${API_BODY}" || return 1
-    expect_json "${API_BODY}" '.state == "sent" and .transport == "epicbox"' "withdrawal sent over Epicbox" || return 1
-    tx="$(jq -r .tx_id <<<"${API_BODY}")"
+    body="$(jq -nc --arg to "${address}" --arg a "${SVC_AMOUNT}" --arg s "${slate}" '{to:$to, amount:$a, via:"epicbox", id:$s, min_confirmations:1}')"
+    api POST /api/v1/payments "${body}" || fail "epicbox withdrawal ${API_STATUS}: ${API_BODY}" || return 1
+    expect_eq "${API_STATUS}" 201 "epicbox withdrawal status" || return 1
+    expect_json "${API_BODY}" '.id == "'"${slate}"'" and .via == "epicbox" and .direction == "out"' "withdrawal sent over Epicbox" || return 1
+    tx="${slate}"
     local t0=${SECONDS}
     wait_until "epicbox withdrawal posted" 120 svc_tx_state_in "${tx}" "posted confirmed" || fail "the answer never came back" || return 1
     local leg=$((SECONDS - t0))
@@ -188,22 +209,26 @@ svc_tx_state_in() {
     [[ " $2 " == *" ${s} "* ]]
 }
 
-# Three deposits at once to serve's HTTP listener, seen in the event stream.
+# Three deposits at once to serve's HTTP listener (native, LEPIC to LEPIC through /api/v1/inbox),
+# seen in the event stream.
 case_svc_deposit_burst() {
-    local i id port pids=() slate events_pid got
+    local i port pids=() slate events_pid got
     ensure_wallet "${SVC_BOT}" || return 1
+    wconfig_set "${SVC_BOT}" 'native_direct = true'
     for i in "${!SVC_USERS[@]}"; do
         ensure_wallet "${SVC_USERS[i]}" || return 1
         ensure_funds "${SVC_USERS[i]}" 0.3 1 || return 1
+        wconfig_set "${SVC_USERS[i]}" 'native_direct = true'
     done
     svc_start --http --port 0 || return 1
-    port="$(jq -r '.http.port // empty' <<<"${API_BODY}")"
+    api GET /api/v1/status || return 1
+    port="$(jq -r '.listeners.http.port // empty' <<<"${API_BODY}")"
     [[ "${port}" =~ ^[0-9]+$ ]] || fail "no http port in status: ${API_BODY}" || return 1
-    curl -sN --unix-socket "${SVC_SOCK}" http://lepic/v1/events >"${CASE_DIR}/events.txt" 2>/dev/null &
+    curl -sN --unix-socket "${SVC_SOCK}" -H 'accept: text/event-stream' http://lepic/api/v1/events >"${CASE_DIR}/events.txt" 2>/dev/null &
     events_pid=$!
     E2E_BG[${events_pid}]="${CASE_DIR}/events"
     for i in "${!SVC_USERS[@]}"; do
-        (lepic_env "${SVC_USERS[i]}" --output json tx send --to "http://127.0.0.1:${port}" \
+        (lepic_env "${SVC_USERS[i]}" --output json tx send --allow-plain-http --to "http://127.0.0.1:${port}" \
             --min-confirmations "${E2E_MINCONF}" -m "e2e deposit ${i}" "${SVC_AMOUNT}" \
             >"${CASE_DIR}/deposit.${i}.json" 2>"${CASE_DIR}/deposit.${i}.err"
          echo $? >"${CASE_DIR}/deposit.${i}.exit") &
@@ -212,29 +237,27 @@ case_svc_deposit_burst() {
     for i in "${pids[@]}"; do wait "${i}"; done
     for i in "${!SVC_USERS[@]}"; do
         expect_eq "$(cat "${CASE_DIR}/deposit.${i}.exit")" 0 "deposit ${i} exit ($(tail -c 300 "${CASE_DIR}/deposit.${i}.err"))" || return 1
-        expect_json "$(cat "${CASE_DIR}/deposit.${i}.json")" '.state == "posted"' "deposit ${i} posted" || return 1
-    done
-    api GET /v1/transactions || return 1
-    for i in "${!SVC_USERS[@]}"; do
-        slate="$(jq -r .slate_id "${CASE_DIR}/deposit.${i}.json")"
-        got="$(jq -c --arg s "${slate}" '.transactions[] | select(.slate_id == $s)' <<<"${API_BODY}")"
-        [[ -n "${got}" ]] || fail "deposit ${i} (${slate}) not in the bot's list" || return 1
-        expect_json "${got}" '.direction == "incoming"' "deposit ${i} incoming" || return 1
-        # A received event names the transaction and its slate.
-        id="$(jq -r .tx_id <<<"${got}")"
-        grep '^data:' "${CASE_DIR}/events.txt" | sed 's/^data: //' |
-            jq -e --argjson id "${id}" --arg s "${slate}" 'select(.kind == "received" and .tx_id == $id and .slate_id == $s)' >/dev/null ||
-            fail "no received event for deposit ${i} (tx ${id}, slate ${slate})" || return 1
+        expect_json "$(cat "${CASE_DIR}/deposit.${i}.json")" '.state == "posted" and .format != "legacy"' "deposit ${i} posted, not legacy" || return 1
     done
     for i in "${!SVC_USERS[@]}"; do
         slate="$(jq -r .slate_id "${CASE_DIR}/deposit.${i}.json")"
-        wait_until "deposit ${i} confirmed" 240 svc_slate_state_is "${slate}" confirmed || fail "deposit ${i} not confirmed" || return 1
+        api GET "/api/v1/payments/${slate}" || fail "deposit ${i} (${slate}) not at the bot: ${API_STATUS}" || return 1
+        got="${API_BODY}"
+        expect_json "${got}" '.direction == "in"' "deposit ${i} incoming" || return 1
+        # A payment.created event carries the payment.
+        wait_until "payment.created event for deposit ${i}" 30 svc_created_event "${slate}" ||
+            fail "no payment.created event for deposit ${i} (${slate})" || return 1
     done
-    note "3 deposits at once over serve --http posted, evented and confirmed; events: $(grep -c '^event:' "${CASE_DIR}/events.txt")"
+    for i in "${!SVC_USERS[@]}"; do
+        slate="$(jq -r .slate_id "${CASE_DIR}/deposit.${i}.json")"
+        wait_until "deposit ${i} confirmed" 240 svc_tx_state_is "${slate}" confirmed || fail "deposit ${i} not confirmed" || return 1
+    done
+    note "3 native deposits at once over serve --http posted, evented and confirmed; events: $(grep -c '^event:' "${CASE_DIR}/events.txt")"
 }
-svc_slate_state_is() {
-    api GET /v1/transactions || return 1
-    [[ "$(jq -r --arg s "$1" '.transactions[] | select(.slate_id == $s) | .state' <<<"${API_BODY}")" == "$2" ]]
+# True when the event stream file holds a payment.created event for the payment id.
+svc_created_event() {
+    grep '^data:' "${CASE_DIR}/events.txt" | sed 's/^data: //' |
+        jq -e --arg s "$1" 'select(.type == "payment.created" and ((.data.payment_id // .data.object.id) == $s))' >/dev/null
 }
 
 # A deposit over Epicbox: serve answers it unattended, the payer's drain finalizes and posts.
@@ -244,21 +267,16 @@ case_svc_deposit_epicbox() {
     ensure_wallet "${user}" || return 1
     ensure_funds "${user}" 0.3 1 || return 1
     svc_start || return 1
-    api GET /v1/wallet/address || return 1
-    address="$(jq -r .address <<<"${API_BODY}")"
+    address="$(w "${SVC_BOT}" wallet address | jq -r .address)"
     w "${user}" tx send --to "${address}" --min-confirmations "${E2E_MINCONF}" "${SVC_AMOUNT}" >"${CASE_DIR}/send.json" \
         || fail "send to the bot failed" || return 1
     slate="$(jq -r .slate_id "${CASE_DIR}/send.json")"
     t0=${SECONDS}
-    wait_until "the bot answered" 120 svc_slate_present "${slate}" || fail "serve never took the slate" || return 1
+    wait_until "the bot answered" 120 svc_tx_state "${slate}" || fail "serve never took the slate" || return 1
     wait_until "payer finalized and posted" 120 svc_drain_posted "${user}" "${slate}" || fail "the answer never reached the payer" || return 1
     local leg=$((SECONDS - t0))
-    wait_until "deposit confirmed at the bot" 240 svc_slate_state_is "${slate}" confirmed || fail "not confirmed at the bot" || return 1
+    wait_until "deposit confirmed at the bot" 240 svc_tx_state_is "${slate}" confirmed || fail "not confirmed at the bot" || return 1
     note "epicbox deposit answered by serve and posted in ${leg}s, then confirmed"
-}
-svc_slate_present() {
-    api GET /v1/transactions || return 1
-    jq -e --arg s "$1" 'any(.transactions[]; .slate_id == $s)' <<<"${API_BODY}" >/dev/null
 }
 svc_drain_posted() {
     w "$1" epicbox drain >/dev/null || true

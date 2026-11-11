@@ -834,18 +834,18 @@ lepic_heard_payer() {
 
 # The payer's serve status, from its API on the socket.
 payer_serve_status() {
-    curl -sf --unix-socket "$1" http://lepic/v1/status
+    curl -sf --unix-socket "$1" http://lepic/api/v1/status
 }
 
 # The payer's serve status shows a collect and a refresh that succeeded, none failing since.
 payer_serve_healthy() {
     payer_serve_status "$1" | jq -e '
-        [.collect, .refresh] | all(.consecutive_failures == 0 and .last_success != null)' >/dev/null
+        [.collect, .refresh] | all(.failures == 0 and .last_success_at != null)' >/dev/null
 }
 
 # The service checks its paired payer while the payer runs `lepic serve`: the serve's first
 # collect takes the check and answers with the payer's card, and the service hears the payer
-# again. `GET /v1/status` shows the collect and the refresh succeeding, and serve stops cleanly on
+# again. `GET /api/v1/status` shows the collect and the refresh succeeding, and serve stops cleanly on
 # Ctrl-C.
 step_contact_check_answered_by_serve() {
     [[ -n "${SERVICE_SIDE}" ]] || fail "no pairing from the earlier step" || return 1
