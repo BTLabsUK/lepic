@@ -162,6 +162,25 @@ fn the_profile_is_read_and_updated() {
 }
 
 #[test]
+fn a_profile_update_with_a_bad_name_changes_nothing() {
+    let host = TestHost::new();
+    let wallet = new_wallet(&host, "wallet password");
+    serving(host, &wallet, |socket, _| {
+        let before = http(socket, "GET", "/api/v1/profile", None).ok();
+        assert_eq!(before["flags"], json!([]), "{before}");
+
+        for name in ["", "bad\\u0007name"] {
+            let body = format!(r#"{{"name":"{name}","flags":["automated","no-payments"]}}"#);
+            let refused = http(socket, "PATCH", "/api/v1/profile", Some(&body));
+            let refused = problem(&refused, 400, "invalid_field");
+            assert_eq!(refused["param"], "/name", "{refused}");
+            // The flags given beside the bad name were not applied.
+            assert_eq!(http(socket, "GET", "/api/v1/profile", None).ok(), before);
+        }
+    });
+}
+
+#[test]
 fn the_domain_file_exists_when_a_domain_is_set() {
     let host = TestHost::new();
     let wallet = new_wallet(&host, "wallet password");

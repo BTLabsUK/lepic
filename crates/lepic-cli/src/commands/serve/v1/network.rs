@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 
 use hyper::StatusCode;
 use lepic_store::{AccountIndex, OutboxStatus, WalletStore as _};
-use lepic_wallet_contacts::WalletContacts as _;
+use lepic_wallet_contacts::{ContactError, WalletContacts as _};
 use serde::Deserialize;
 
 use super::super::Service;
@@ -223,6 +223,11 @@ pub(super) async fn update_profile<H: Host>(
     _context: &Context,
 ) -> Reply {
     let body: ProfileBody = request.json()?;
+    // Every field is checked before any is applied, so a refused call changes nothing.
+    if let Some(name) = &body.name {
+        lepic_wallet_contacts::ContactName::new(name)
+            .map_err(|error| problem_at(ContactError::Name(error), "/name"))?;
+    }
     let bits = match &body.flags {
         Some(flags) => Some(
             parse_names(&flags.join(","))

@@ -83,8 +83,8 @@ pub use lepic_contact::EncodeError as ContactEncodeError;
 pub use lepic_contact::PaymentFile;
 /// The contact formats a host names in these calls.
 pub use lepic_contact::{
-    ContactKind, DomainName, Network as ContactNetwork, PairingClass, Purpose, Refusal, SasSymbol,
-    VerifyingKey,
+    ContactKind, ContactName, DomainName, Network as ContactNetwork, PairingClass, Purpose,
+    Refusal, SasSymbol, VerifyingKey,
 };
 /// The `BEGINEPICTX.` text of an in-person answer, to show instead of its bytes.
 pub use lepic_seal::armor_tx;
