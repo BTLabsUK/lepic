@@ -45,8 +45,6 @@ const MAX_COLLECT_ONLY: usize = 64;
 /// A relay host, `domain[:port]`, is at most this long.
 const MAX_RELAY_HOST: usize = 260;
 
-/// Pairing words a user types; more is never a pairing.
-
 /// Refuses an address that is not an Epicbox address of `network`.
 fn check_address(
     address: Option<&str>,

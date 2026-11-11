@@ -65,7 +65,7 @@ impl Route {
                 Segment::Literal(_) => return None,
                 Segment::Param(_) if part.is_empty() => return None,
                 Segment::Param(name) => {
-                    params.push((name.clone(), super::decode(part, false).ok()?))
+                    params.push((name.clone(), super::decode(part, false).ok()?));
                 }
             }
         }
