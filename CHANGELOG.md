@@ -42,6 +42,15 @@ Conventional Commit messages at release time.
   parameter of the binding's `epic1Pay`. Payment proofs a stock wallet puts in a slate are still
   kept.
 
+### Fixed
+
+- Pair requests: a second request from the same wallet in the same second was dropped; the newer
+  one now replaces the one kept. A request from a contact this wallet is still paired with was
+  dropped too; it now ends that pairing as unpaired (`ContactUnpaired`) and is kept, when the
+  contact was heard from and the pairing is older than the request. An answer its sender never
+  confirmed no longer blocks a new request from that sender until it expires. A dropped request
+  is logged at info with a `reason`.
+
 ## [0.4.0] - 2026-11-10
 
 ### Fixed

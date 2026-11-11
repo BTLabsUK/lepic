@@ -271,6 +271,18 @@ knows the address it pays; a link mailbox that a restore found in use has none, 
 left out. A link issued with the CLI lists with an empty `text`; one issued through the
 API keeps its text.
 
+## Contacts
+
+`DELETE /contacts/{id}` on a contact whose pairing still waits cancels it: a request you sent is
+withdrawn, an invite of yours is cancelled. A late answer is then refused, and you can ask the
+same wallet again at once. On a paired contact it ends the pairing and tells the contact. With
+`notify=false` the contact is not told and keeps its record until this wallet sends it a new pair
+request; that request ends the old record there, if that wallet had heard from this one and the
+request is newer than the pairing.
+
+A new request from a wallet whose earlier request you answered, and which never confirmed it,
+replaces that pairing, so `acceptPairRequest` takes it.
+
 ## Events
 
 Serve keeps an event log. Each event has a rising integer `id`, a `type` like
