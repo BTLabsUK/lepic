@@ -30,7 +30,9 @@ files, which decides whether it is a slate they accept.
 
 The UR type is `epic-slate`.
 
-- A payload that fits in one fragment is one single-part UR, `ur:epic-slate/<bytewords>`.
+- A payload that fits in one fragment is one single-part UR, `ur:epic-slate/<bytewords>`. The
+  writer may choose another single-code limit, from 0 to 1024 bytes (`encode_ur_slate_split`):
+  a payload of at most that many bytes is one single-part UR, and a longer one is split.
 - A longer payload is a multipart UR: parts `ur:epic-slate/<seq>-<count>/<bytewords>`, where
   `<count>` is the number of fragments and `<seq>` starts at 1. Parts 1 to `<count>` carry the
   fragments in order. Parts after them are fountain parts, each the XOR of fragments chosen from
@@ -145,6 +147,13 @@ version 1. A payload of at most 360 bytes (the CBOR map, not the byte string ins
 single-part code. A longer payload is split into fragments of at most 200 bytes, which is the
 recommended length, and written as `<count>` pure parts followed by the fountain parts, as
 version 1 writes them. The encoder accepts fragment lengths from 16 to 1024 bytes.
+
+The 360-byte limit is the default. Whether a payload is one code or an animated sequence is the
+writer's display choice, so `encode_ur_binary_split` takes the single-code limit, 0 to 1024
+bytes (0 always splits), next to the fragment length. A writer that draws every code at level H
+with a logo in the centre picks small values, for example 80 and 64, to keep each frame near a
+version 11 symbol. Readers take a single-part code or parts either way; nothing on the wire
+says which limit the writer used.
 
 ### Limits
 

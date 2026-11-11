@@ -11,6 +11,10 @@
 //! Payload version 2 (RFC 0003 §5.18) carries a native `lepic.v1` slate or an envelope as bytes,
 //! nothing compressed: [`encode_ur_binary`] writes it and [`decode_ur_parts`] reads either
 //! version. [`encode_ur_slate`] and [`decode_ur_slate`] handle version 1 only.
+//!
+//! Whether a payload is one code or an animated sequence is the caller's display policy: the
+//! `_split` encoders take the longest payload that stays one code, and the others apply the
+//! defaults below. The reader takes one part or many either way.
 
 use minicbor::data::Type;
 use thiserror::Error;
@@ -32,7 +36,8 @@ pub const ENVELOPE_MAGIC: [u8; 4] = [0x89, 0x45, 0x53, 0x45];
 /// A code of this size needs fragments longer than 200 bytes, because a code holds at most
 /// [`MAX_SEQUENCE_LEN`] fragments (51,200 bytes at 200).
 pub const MAX_BINARY_LEN: usize = 67_648;
-/// A version 2 payload of at most this many bytes is one single-part code.
+/// A version 2 payload of at most this many bytes is one single-part code, unless the caller
+/// passes its own limit to [`encode_ur_binary_split`].
 pub const SINGLE_CODE_MAX_LEN: usize = 360;
 /// Recommended fragment length of a version 2 multipart code.
 pub const BINARY_FRAGMENT_LEN: usize = 200;
@@ -77,6 +82,8 @@ pub enum UrEncodeError {
     NotJson,
     #[error("fragment length {len} is outside {min} to {max}")]
     FragmentLength { len: usize, min: usize, max: usize },
+    #[error("single-code limit {len} exceeds {max}")]
+    SingleCodeLength { len: usize, max: usize },
     #[error("the slate needs {count} fragments, more than {max}")]
     TooManyFragments { count: usize, max: usize },
     #[error("multipart framing failed")]
@@ -176,11 +183,28 @@ pub fn encode_ur_slate(
     slate_json: impl AsRef<str>,
     max_fragment_len: usize,
 ) -> Result<Vec<String>, UrEncodeError> {
+    encode_ur_slate_split(slate_json, max_fragment_len, max_fragment_len)
+}
+
+/// [`encode_ur_slate`] with the caller's single-code limit: a payload of at most
+/// `single_code_max_len` bytes, 0 to [`MAX_FRAGMENT_LEN`], is one single-part code; a longer one
+/// is split into fragments of at most `max_fragment_len` bytes. 0 always splits.
+pub fn encode_ur_slate_split(
+    slate_json: impl AsRef<str>,
+    single_code_max_len: usize,
+    max_fragment_len: usize,
+) -> Result<Vec<String>, UrEncodeError> {
     let slate_json = slate_json.as_ref();
     if !(MIN_FRAGMENT_LEN..=MAX_FRAGMENT_LEN).contains(&max_fragment_len) {
         return Err(UrEncodeError::FragmentLength {
             len: max_fragment_len,
             min: MIN_FRAGMENT_LEN,
+            max: MAX_FRAGMENT_LEN,
+        });
+    }
+    if single_code_max_len > MAX_FRAGMENT_LEN {
+        return Err(UrEncodeError::SingleCodeLength {
+            len: single_code_max_len,
             max: MAX_FRAGMENT_LEN,
         });
     }
@@ -193,7 +217,7 @@ pub fn encode_ur_slate(
         },
     })?;
     let payload = encode_payload(slate_json.as_bytes());
-    encode_parts(&payload, max_fragment_len, max_fragment_len).map_err(|error| match error {
+    encode_parts(&payload, single_code_max_len, max_fragment_len).map_err(|error| match error {
         FramingError::TooManyFragments(count) => UrEncodeError::TooManyFragments {
             count,
             max: MAX_SEQUENCE_LEN,
@@ -210,10 +234,28 @@ pub fn encode_ur_binary(
     bytes: &[u8],
     max_fragment_len: usize,
 ) -> Result<Vec<String>, UrBinaryEncodeError> {
+    encode_ur_binary_split(bytes, SINGLE_CODE_MAX_LEN, max_fragment_len)
+}
+
+/// [`encode_ur_binary`] with the caller's single-code limit in place of
+/// [`SINGLE_CODE_MAX_LEN`]: a payload of at most `single_code_max_len` bytes, 0 to
+/// [`MAX_FRAGMENT_LEN`], is one single-part code; a longer one is split into fragments of at
+/// most `max_fragment_len` bytes. 0 always splits.
+pub fn encode_ur_binary_split(
+    bytes: &[u8],
+    single_code_max_len: usize,
+    max_fragment_len: usize,
+) -> Result<Vec<String>, UrBinaryEncodeError> {
     if !(MIN_FRAGMENT_LEN..=MAX_FRAGMENT_LEN).contains(&max_fragment_len) {
         return Err(UrBinaryEncodeError::FragmentLength {
             len: max_fragment_len,
             min: MIN_FRAGMENT_LEN,
+            max: MAX_FRAGMENT_LEN,
+        });
+    }
+    if single_code_max_len > MAX_FRAGMENT_LEN {
+        return Err(UrBinaryEncodeError::SingleCodeLength {
+            len: single_code_max_len,
             max: MAX_FRAGMENT_LEN,
         });
     }
@@ -225,7 +267,7 @@ pub fn encode_ur_binary(
     }
     classify_binary(bytes).ok_or(UrBinaryEncodeError::UnknownMagic)?;
     let payload = frame_payload(BINARY_PAYLOAD_VERSION_BYTE, bytes);
-    encode_parts(&payload, SINGLE_CODE_MAX_LEN, max_fragment_len).map_err(|error| match error {
+    encode_parts(&payload, single_code_max_len, max_fragment_len).map_err(|error| match error {
         FramingError::TooManyFragments(count) => UrBinaryEncodeError::TooManyFragments {
             count,
             max: MAX_SEQUENCE_LEN,
@@ -331,6 +373,8 @@ pub enum UrBinaryEncodeError {
     TooLong { len: usize, max: usize },
     #[error("fragment length {len} is outside {min} to {max}")]
     FragmentLength { len: usize, min: usize, max: usize },
+    #[error("single-code limit {len} exceeds {max}")]
+    SingleCodeLength { len: usize, max: usize },
     #[error("the payload needs {count} fragments, more than {max}")]
     TooManyFragments { count: usize, max: usize },
     #[error("multipart framing failed")]

@@ -10,10 +10,12 @@
 )]
 
 use lepic_slate::ur_slate::{
-    BINARY_FRAGMENT_LEN, ENVELOPE_MAGIC, MAX_BINARY_LEN, MAX_SEQUENCE_LEN, NATIVE_SLATE_MAGIC,
-    PayloadFault, SINGLE_CODE_MAX_LEN, UrBinary, UrBinaryEncodeError, UrContent, UrContentError,
-    UrDecodeError, decode_ur_parts, decode_ur_slate, encode_ur_binary, encode_ur_slate,
+    BINARY_FRAGMENT_LEN, ENVELOPE_MAGIC, MAX_BINARY_LEN, MAX_FRAGMENT_LEN, MAX_SEQUENCE_LEN,
+    NATIVE_SLATE_MAGIC, PayloadFault, SINGLE_CODE_MAX_LEN, UrBinary, UrBinaryEncodeError,
+    UrContent, UrContentError, UrDecodeError, UrEncodeError, decode_ur_parts, decode_ur_slate,
+    encode_ur_binary, encode_ur_binary_split, encode_ur_slate, encode_ur_slate_split,
 };
+use proptest::prelude::*;
 use ur::bytewords::{self, Style};
 
 fn bytes(magic: [u8; 4], len: usize) -> Vec<u8> {
@@ -66,6 +68,106 @@ fn the_single_code_threshold_is_the_payload_size() {
     let multi = encode_ur_binary(&bytes(NATIVE_SLATE_MAGIC, at + 1), BINARY_FRAGMENT_LEN).unwrap();
     assert!(multi.len() > 1);
     assert!(multi[0].starts_with("UR:EPIC-SLATE/1-2/"));
+}
+
+#[test]
+fn without_a_limit_the_single_code_threshold_stays_at_360() {
+    assert_eq!(SINGLE_CODE_MAX_LEN, 360);
+    for len in [50, SINGLE_CODE_MAX_LEN - 7, SINGLE_CODE_MAX_LEN - 6, 3000] {
+        let slate = bytes(NATIVE_SLATE_MAGIC, len);
+        assert_eq!(
+            encode_ur_binary(&slate, BINARY_FRAGMENT_LEN).unwrap(),
+            encode_ur_binary_split(&slate, SINGLE_CODE_MAX_LEN, BINARY_FRAGMENT_LEN).unwrap(),
+        );
+    }
+}
+
+#[test]
+fn the_callers_single_code_limit_decides_one_code_or_many() {
+    // A body of 100 bytes takes 6 bytes of framing: a payload of 106.
+    let slate = bytes(NATIVE_SLATE_MAGIC, 100);
+    let single = encode_ur_binary_split(&slate, 106, 64).unwrap();
+    assert_eq!(single.len(), 1);
+    assert!(single[0].starts_with("UR:EPIC-SLATE/"));
+    assert!(!single[0].starts_with("UR:EPIC-SLATE/1-"));
+    let multi = encode_ur_binary_split(&slate, 105, 64).unwrap();
+    assert!(multi[0].starts_with("UR:EPIC-SLATE/1-2/"));
+    assert_eq!(multi.len(), 2 + 10);
+    for parts in [&single, &multi] {
+        assert_eq!(
+            content(parts),
+            UrContent::Binary(UrBinary::NativeSlate(slate.clone()))
+        );
+    }
+}
+
+#[test]
+fn a_zero_limit_always_splits_and_the_limit_is_bounded() {
+    let slate = bytes(NATIVE_SLATE_MAGIC, 20);
+    let parts = encode_ur_binary_split(&slate, 0, 200).unwrap();
+    assert!(parts[0].starts_with("UR:EPIC-SLATE/1-1/"));
+    assert_eq!(
+        content(&parts),
+        UrContent::Binary(UrBinary::NativeSlate(slate.clone()))
+    );
+    assert_eq!(
+        encode_ur_binary_split(&slate, MAX_FRAGMENT_LEN + 1, 200),
+        Err(UrBinaryEncodeError::SingleCodeLength {
+            len: MAX_FRAGMENT_LEN + 1,
+            max: MAX_FRAGMENT_LEN
+        })
+    );
+    assert_eq!(
+        encode_ur_binary_split(&bytes(ENVELOPE_MAGIC, 900), MAX_FRAGMENT_LEN, 200)
+            .unwrap()
+            .len(),
+        1
+    );
+}
+
+#[test]
+fn a_slate_text_code_takes_the_callers_single_code_limit() {
+    let json = r#"{"id":"slate-1"}"#;
+    assert_eq!(
+        encode_ur_slate(json, 200).unwrap(),
+        encode_ur_slate_split(json, 200, 200).unwrap()
+    );
+    assert_eq!(encode_ur_slate_split(json, 200, 16).unwrap().len(), 1);
+    let parts = encode_ur_slate_split(json, 0, 16).unwrap();
+    assert!(parts.len() > 1);
+    assert_eq!(decode_ur_slate(&parts).unwrap().json.as_deref(), Some(json));
+    assert_eq!(
+        encode_ur_slate_split(json, MAX_FRAGMENT_LEN + 1, 200),
+        Err(UrEncodeError::SingleCodeLength {
+            len: MAX_FRAGMENT_LEN + 1,
+            max: MAX_FRAGMENT_LEN
+        })
+    );
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(64))]
+
+    #[test]
+    fn every_part_of_a_split_code_decodes_to_the_bytes(
+        len in 4..4000usize,
+        single_code_max_len in 0..=MAX_FRAGMENT_LEN,
+        fragment_len in 16..=200usize,
+        envelope in any::<bool>(),
+    ) {
+        let magic = if envelope { ENVELOPE_MAGIC } else { NATIVE_SLATE_MAGIC };
+        let body = bytes(magic, len);
+        let parts = encode_ur_binary_split(&body, single_code_max_len, fragment_len).unwrap();
+        let expected = if envelope {
+            UrBinary::Envelope(body.clone())
+        } else {
+            UrBinary::NativeSlate(body.clone())
+        };
+        prop_assert_eq!(content(&parts), UrContent::Binary(expected));
+        if parts.len() > 1 {
+            prop_assert!(body.len() + 5 > single_code_max_len);
+        }
+    }
 }
 
 #[test]
