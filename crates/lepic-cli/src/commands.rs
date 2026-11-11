@@ -280,6 +280,30 @@ struct Run<'a, H: Host> {
     graceful: Arc<AtomicBool>,
     /// The wallet `lepic serve` holds open, which every command then uses.
     held: Option<Arc<Opened<HostNode<H>>>>,
+    /// What the shell's review showed of the send this run makes.
+    reviewed: Option<Reviewed>,
+}
+
+/// The amount and fee the shell's review of a send showed. The send checks them again before it
+/// stores anything, and refuses one that would take more.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Reviewed {
+    pub(crate) amount: u64,
+    pub(crate) fee: u64,
+}
+
+impl Reviewed {
+    /// Whether a send of `amount` with `fee` is the one reviewed: the same amount, a fee no
+    /// higher.
+    pub(crate) fn check(self, amount: u64, fee: u64) -> Result<(), CliError> {
+        if amount == self.amount && fee <= self.fee {
+            return Ok(());
+        }
+        Err(CliError::ReviewChanged {
+            reviewed: self.amount.saturating_add(self.fee),
+            total: amount.saturating_add(fee),
+        })
+    }
 }
 
 /// Runs `command` until it ends or the user interrupts it. An interrupt ends any command at
@@ -306,6 +330,7 @@ pub(crate) async fn execute<H: Host>(
         interrupt: interrupt.clone(),
         graceful: Arc::clone(&graceful),
         held: None,
+        reviewed: None,
     };
     let result = tokio::select! {
         result = run.dispatch(command) => result,
@@ -840,13 +865,17 @@ impl<H: Host> Run<'_, H> {
             slate_id: Some(drawn),
             ..spend.send_request(account.index, amount, args.message.message)
         };
-        if transport == lepic_methods::tor::TRANSPORT_ID {
+        if self.reviewed.is_some() || transport == lepic_methods::tor::TRANSPORT_ID {
             // The checks the send makes before it stores anything, before tor takes its time
-            // to connect for a send that cannot be made.
-            opened
+            // to connect for a send that cannot be made. A reviewed send is checked against its
+            // review here.
+            let selection = opened
                 .wallet
                 .estimate_fee(request.amount, request.selection_options())
                 .await?;
+            if let Some(reviewed) = self.reviewed {
+                reviewed.check(selection.amount.value(), selection.fee.value())?;
+            }
         }
         let tor = self.tor_for(transport, &args.tor, &opened).await?;
         // From here the send may store its transaction, so an interrupt ends it here and reports

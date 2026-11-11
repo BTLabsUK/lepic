@@ -113,6 +113,7 @@ impl<H: Host> Service<'_, H> {
             interrupt: self.interrupt.clone(),
             graceful: Arc::clone(&graceful),
             held: Some(Arc::clone(&self.held)),
+            reviewed: None,
         };
         // Boxed: a command's future is too large for the stack of the handler that awaits it.
         tokio::select! {
@@ -481,6 +482,7 @@ mod tests {
                         interrupt,
                         graceful: Arc::new(AtomicBool::new(false)),
                         held: None,
+                        reviewed: None,
                     };
                     let opened = run.open().await.unwrap();
                     run.held = Some(Arc::clone(&opened));

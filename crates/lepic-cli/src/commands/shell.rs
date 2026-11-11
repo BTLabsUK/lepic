@@ -16,7 +16,9 @@ use lepic_wallet::{DEFAULT_ACCOUNT_LABEL, Event, WalletError};
 use tokio::sync::{broadcast, watch};
 use zeroize::Zeroizing;
 
-use super::{Opened, Payee, Run, Spend, abort_on, password_from, start_from_confirmed_tip};
+use super::{
+    Opened, Payee, Reviewed, Run, Spend, abort_on, password_from, start_from_confirmed_tip,
+};
 use crate::Console;
 use crate::amount::parse_amount;
 use crate::cli::{Command, SendArgs};
@@ -66,6 +68,7 @@ impl<H: Host> Held<H> {
             interrupt,
             graceful: Arc::new(AtomicBool::new(false)),
             held: None,
+            reviewed: None,
         };
         let opened = run.prepare(false).await?;
         Ok(Self {
@@ -105,7 +108,8 @@ impl<H: Host> Held<H> {
     }
 
     /// Runs `command` on the held wallet with `settings`, until it ends or `interrupt` turns
-    /// true, as [`super::execute`] runs one.
+    /// true, as [`super::execute`] runs one. A send that was `reviewed` takes no more than the
+    /// review showed.
     pub(crate) async fn run(
         &self,
         host: &H,
@@ -113,6 +117,7 @@ impl<H: Host> Held<H> {
         command: Command,
         console: &mut Console,
         interrupt: watch::Receiver<bool>,
+        reviewed: Option<Reviewed>,
     ) -> Result<Report, CliError> {
         let graceful = Arc::new(AtomicBool::new(false));
         let mut run = Run {
@@ -122,6 +127,7 @@ impl<H: Host> Held<H> {
             interrupt: interrupt.clone(),
             graceful: Arc::clone(&graceful),
             held: Some(Arc::clone(&self.opened)),
+            reviewed,
         };
         tokio::select! {
             result = run.dispatch(command) => result,
@@ -149,6 +155,7 @@ impl<H: Host> Held<H> {
             interrupt,
             graceful: Arc::new(AtomicBool::new(false)),
             held: None,
+            reviewed: None,
         };
         let (payee, _) = run.payee(args.destination.clone(), args.plain_http.allow_plain_http)?;
         let wallet = &self.opened.wallet;
@@ -176,6 +183,7 @@ impl<H: Host> Held<H> {
             fee: selection.fee.value(),
             spendable,
             delivery: delivery_name(&payee),
+            network: settings.network.to_string(),
         })
     }
 
@@ -227,6 +235,7 @@ impl<H: Host> Held<H> {
                 interrupt,
                 graceful: Arc::new(AtomicBool::new(false)),
                 held: Some(Arc::clone(&opened)),
+                reviewed: None,
             };
             let stopped = async {
                 let _ = stop.await;

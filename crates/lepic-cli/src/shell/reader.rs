@@ -10,10 +10,10 @@ use std::thread::JoinHandle;
 use std::time::Duration;
 
 use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
-use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
 use reedline::{Reedline, Signal};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 
+use crate::secret::RawMode;
 use crate::shell::editor::LivePrompt;
 use crate::shell::history;
 
@@ -143,9 +143,9 @@ fn serve(
 
 /// Reads the keys in raw mode, so Ctrl+C arrives as a key rather than a signal, until `stop`.
 fn watch(stop: &AtomicBool, reply: &UnboundedSender<Reply>) {
-    if enable_raw_mode().is_err() {
+    let Ok(_raw) = RawMode::enable() else {
         return;
-    }
+    };
     while !stop.load(Ordering::SeqCst) {
         match event::poll(WATCH_POLL) {
             Ok(true) => match event::read() {
@@ -166,5 +166,4 @@ fn watch(stop: &AtomicBool, reply: &UnboundedSender<Reply>) {
             Err(_) => break,
         }
     }
-    let _ = disable_raw_mode();
 }

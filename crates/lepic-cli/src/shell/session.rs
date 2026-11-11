@@ -3,6 +3,7 @@
 //! runs each as a `lepic` command on the held wallet with its output above the live area, and
 //! locks the wallet when it ends or sits idle.
 
+use std::future::Future;
 use std::io::{self, BufReader, Write as _};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -11,7 +12,6 @@ use std::time::Duration;
 use clap::error::ErrorKind as ClapErrorKind;
 use clap::{CommandFactory as _, Parser as _};
 use crossterm::event::{self, Event as TermEvent, KeyCode, KeyEventKind, KeyModifiers};
-use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
 use futures_util::FutureExt as _;
 use futures_util::future::LocalBoxFuture;
 use lepic_telemetry::{LogFilter, host_dispatch};
@@ -24,11 +24,12 @@ use zeroize::Zeroizing;
 
 use crate::amount::format_units;
 use crate::cli::{Cli, Command, GlobalArgs, TxCommand};
+use crate::commands::Reviewed;
 use crate::commands::shell::Held;
 use crate::exit::{CliError, ErrorKind};
 use crate::host::{Host, Interrupt};
 use crate::output::{Report, render, render_error};
-use crate::secret::{PASSWORD_ENV, SecretError, SecretInput, read_hidden_line};
+use crate::secret::{PASSWORD_ENV, RawMode, SecretError, SecretInput, read_hidden_line};
 use crate::settings::{Env, OutputFormat, RelayTor, Settings};
 use crate::shell::card::{CardInfo, Glyphs, welcome};
 use crate::shell::editor::{LivePrompt, Shared, columns, line_editor};
@@ -45,6 +46,8 @@ use crate::{Console, hint};
 const WALLET: &str = "default";
 /// How often the editor looks for queued lines and the footer redraws.
 const TICK: Duration = Duration::from_millis(100);
+/// How often a prompt on its own thread looks whether it is still waited for.
+const PROMPT_POLL: Duration = Duration::from_millis(100);
 /// A command that ends sooner shows no footer.
 const FOOTER_AFTER: Duration = Duration::from_millis(200);
 /// How often an unlocked wallet is brought up to the node's tip for the status line.
@@ -135,7 +138,18 @@ async fn session<H: Host>(
         status,
         marks,
     };
-    shell.unlock(given).await;
+    let mut live = Live {
+        events: shell.held.subscribe(),
+        events_open: true,
+        serving: None,
+        refreshing: None,
+        next_refresh: Instant::now(),
+        ctrl_c: CtrlC::new(),
+        terminate: host.terminated(),
+        leaving: false,
+        last_command: Instant::now(),
+    };
+    shell.unlock(given, &mut live).await;
 
     let history: Box<dyn reedline::History> = match FilteredHistory::open(&settings.data_dir) {
         Ok(history) => Box::new(history),
@@ -152,16 +166,6 @@ async fn session<H: Host>(
     screen.set_repaint(editor.repaint_signal());
     let mut reader = Reader::start(editor, LivePrompt, stop_read)
         .map_err(CliError::io("start the line editor"))?;
-    let mut live = Live {
-        events: shell.held.subscribe(),
-        events_open: true,
-        serving: None,
-        refreshing: None,
-        next_refresh: Instant::now(),
-        signal: host.interrupted(),
-        leaving: false,
-        last_command: Instant::now(),
-    };
     let result = shell.read_loop(&mut reader, &mut live).await;
     shell.leave(&mut live).await;
     drop(reader);
@@ -196,8 +200,11 @@ struct Live<'a> {
     serving: Option<Serving<'a>>,
     refreshing: Option<LocalBoxFuture<'a, bool>>,
     next_refresh: Instant,
-    /// The process's interrupt or terminate signal; once it fired the session ends.
-    signal: Interrupt,
+    /// Ctrl+C as a signal, which comes while no raw-mode read holds the terminal: it cancels
+    /// the step or command that runs.
+    ctrl_c: CtrlC,
+    /// The process told to end; once it fired the session ends.
+    terminate: Interrupt,
     leaving: bool,
     /// When the last command was entered, for the idle lock.
     last_command: Instant,
@@ -212,7 +219,40 @@ enum Background {
     Refreshed(bool),
     RefreshDue,
     IdleLock,
-    Signal,
+    /// Ctrl+C as a signal.
+    Interrupt,
+    /// The process told to end.
+    Terminate,
+}
+
+/// The process's Ctrl+C, listened for afresh: one that came before [`CtrlC::clear`] is not seen.
+struct CtrlC(LocalBoxFuture<'static, ()>);
+
+impl CtrlC {
+    fn new() -> Self {
+        let mut listener = async {
+            if tokio::signal::ctrl_c().await.is_err() {
+                std::future::pending::<()>().await;
+            }
+        }
+        .boxed_local();
+        // The first poll installs the listener, so a Ctrl+C from here on is kept for `next`.
+        if listener.as_mut().now_or_never().is_some() {
+            return Self::new();
+        }
+        Self(listener)
+    }
+
+    /// Forgets a Ctrl+C that came before now.
+    fn clear(&mut self) {
+        *self = Self::new();
+    }
+
+    /// The next Ctrl+C; the listener is renewed before this returns.
+    async fn next(&mut self) {
+        (&mut self.0).await;
+        self.clear();
+    }
 }
 
 /// What follows a line.
@@ -276,7 +316,12 @@ impl<'a, H: Host> Shell<'a, H> {
     /// the prompt.
     async fn next_background(&self, live: &mut Live<'_>, at_prompt: bool) -> Background {
         let idle_at = if at_prompt {
-            self.idle_lock_at(live)
+            idle_lock_at(
+                self.settings.shell_idle_lock_minutes,
+                live.serving.is_some(),
+                self.held.is_unlocked(),
+                live.last_command,
+            )
         } else {
             None
         };
@@ -287,7 +332,8 @@ impl<'a, H: Host> Shell<'a, H> {
             serving,
             refreshing,
             next_refresh,
-            signal,
+            ctrl_c,
+            terminate,
             leaving,
             ..
         } = live;
@@ -316,7 +362,8 @@ impl<'a, H: Host> Shell<'a, H> {
             () = tokio::time::sleep_until(idle_at.unwrap_or(far)), if idle_at.is_some() => {
                 Background::IdleLock
             }
-            () = signal, if !*leaving => Background::Signal,
+            () = ctrl_c.next() => Background::Interrupt,
+            () = terminate, if !*leaving => Background::Terminate,
         }
     }
 
@@ -352,19 +399,41 @@ impl<'a, H: Host> Shell<'a, H> {
                     minutes(self.settings.shell_idle_lock_minutes)
                 ));
             }
-            Background::Signal => live.leaving = true,
+            // At the prompt the editor reads Ctrl+C as a key; a signal there ends nothing.
+            Background::Interrupt => {}
+            Background::Terminate => live.leaving = true,
         }
     }
 
-    /// When the idle lock fires: never while serve runs, the wallet is locked or the setting is
-    /// 0.
-    fn idle_lock_at(&self, live: &Live<'_>) -> Option<Instant> {
-        let minutes = self.settings.shell_idle_lock_minutes;
-        if minutes == 0 || live.serving.is_some() || !self.held.is_unlocked() {
-            return None;
+    /// Runs one step of a line, a prompt or the wallet's work, with the background going on
+    /// beside it. Ctrl+C as a signal, or the session ending, drops the step: `None`, and a
+    /// note of what was cancelled unless the session ends.
+    async fn step<'s, T>(
+        &'s self,
+        live: &mut Live<'s>,
+        cancelled: &str,
+        work: impl Future<Output = T>,
+    ) -> Option<T> {
+        live.ctrl_c.clear();
+        let mut work = std::pin::pin!(work);
+        let done = loop {
+            tokio::select! {
+                done = &mut work => break Some(done),
+                background = self.next_background(live, false) => {
+                    if matches!(background, Background::Interrupt) {
+                        break None;
+                    }
+                    self.on_background(live, background);
+                    if live.leaving {
+                        break None;
+                    }
+                }
+            }
+        };
+        if done.is_none() && !live.leaving {
+            self.screen.print(cancelled);
         }
-        live.last_command
-            .checked_add(Duration::from_secs(minutes.saturating_mul(60)))
+        done
     }
 
     fn on_event(&self, event: &Event) {
@@ -402,11 +471,20 @@ impl<'a, H: Host> Shell<'a, H> {
         }
     }
 
-    /// Unlocks the wallet with the password `given`, or asks for it.
-    async fn unlock(&self, given: Option<Result<Zeroizing<String>, SecretError>>) -> bool {
+    /// Unlocks the wallet with the password `given`, or asks for it. Ctrl+C cancels the
+    /// prompt, or the unlock while it runs.
+    async fn unlock<'s>(
+        &'s self,
+        given: Option<Result<Zeroizing<String>, SecretError>>,
+        live: &mut Live<'s>,
+    ) -> bool {
+        const CANCELLED: &str = "Unlock cancelled.";
         let password = match given {
             Some(password) => password,
-            None => ask_password().await,
+            None => match self.step(live, CANCELLED, ask_password()).await {
+                Some(password) => password,
+                None => return false,
+            },
         };
         let password = match password {
             Ok(password) => password,
@@ -420,9 +498,13 @@ impl<'a, H: Host> Shell<'a, H> {
             Glyphs::Ascii => "...",
         };
         self.screen.print(&format!("Unlocking{dots}"));
-        if let Err(error) = self.held.unlock(password).await {
-            self.print_error(&error, self.settings);
-            return false;
+        match self.step(live, CANCELLED, self.held.unlock(password)).await {
+            None => return false,
+            Some(Err(error)) => {
+                self.print_error(&error, self.settings);
+                return false;
+            }
+            Some(Ok(())) => {}
         }
         self.status.update(|status| status.locked = false);
         self.read_balance();
@@ -455,7 +537,7 @@ impl<'a, H: Host> Shell<'a, H> {
                 if self.held.is_unlocked() {
                     self.screen
                         .print(&format!("Wallet {WALLET} is unlocked already."));
-                } else if self.unlock(None).await {
+                } else if self.unlock(None, live).await {
                     live.next_refresh = Instant::now();
                 }
             }
@@ -609,9 +691,20 @@ impl<'a, H: Host> Shell<'a, H> {
             .collect::<Vec<_>>();
         let serve_args = match Cli::try_parse_from(&argv) {
             Ok(Cli {
+                global,
                 command: Command::Serve(serve_args),
-                ..
-            }) => serve_args,
+            }) => {
+                if let Some(flag) = given_flag(&global) {
+                    self.print_error(
+                        &CliError::Arguments(format!(
+                            "{flag} does not apply to serve start: serve takes the session's settings"
+                        )),
+                        self.settings,
+                    );
+                    return;
+                }
+                serve_args
+            }
             Ok(_) => return,
             Err(error) => {
                 self.screen
@@ -696,56 +789,65 @@ impl<'a, H: Host> Shell<'a, H> {
                 return;
             }
         };
+        let mut reviewed = None;
         if let Command::Tx(TxCommand::Send(send)) = &cli.command
             && !yes
         {
-            if !self.held.is_unlocked() && !self.unlock_for_command().await {
+            const NOT_SENT: &str = "Not sent.";
+            if !self.held.is_unlocked() && !self.unlock_for_command(live).await {
                 return;
             }
-            let review = match self
+            let reviewing = self
                 .held
                 .review(self.host, &settings, self.env.clone(), send)
-                .boxed_local()
-                .await
-            {
-                Ok(review) => review,
-                Err(error) => {
+                .boxed_local();
+            let review = match self.step(live, NOT_SENT, reviewing).await {
+                None => return,
+                Some(Ok(review)) => review,
+                Some(Err(error)) => {
                     self.print_error(&error, &settings);
                     return;
                 }
             };
             self.screen.print(&review.lines().join("\n"));
-            let question = review.question();
-            let answer = tokio::task::spawn_blocking(move || confirm(&question))
-                .await
-                .unwrap_or(false);
-            if !answer {
-                self.screen.print("Not sent.");
-                return;
+            match self.step(live, NOT_SENT, ask_yes(review.question())).await {
+                None => return,
+                Some(false) => {
+                    self.screen.print(NOT_SENT);
+                    return;
+                }
+                Some(true) => reviewed = Some(review.reviewed()),
             }
         }
         let what = command_name(&args);
         let mut result = self
-            .run_command(cli.command.clone(), &what, &settings, reader, live)
+            .run_command(
+                cli.command.clone(),
+                &what,
+                &settings,
+                reviewed,
+                reader,
+                live,
+            )
             .await;
         let locked_out = matches!(&result, Err(error) if error.kind() == ErrorKind::WalletState)
             && !self.held.is_unlocked();
         if locked_out && !live.leaving {
-            if !self.unlock_for_command().await {
+            if !self.unlock_for_command(live).await {
                 return;
             }
             result = self
-                .run_command(cli.command, &what, &settings, reader, live)
+                .run_command(cli.command, &what, &settings, reviewed, reader, live)
                 .await;
         }
         self.print_result(result, &settings);
     }
 
-    async fn unlock_for_command(&self) -> bool {
+    async fn unlock_for_command<'s>(&'s self, live: &mut Live<'s>) -> bool {
         self.screen.print(&format!(
             "Wallet {WALLET} is locked; its password opens it."
         ));
-        self.unlock(None).await
+        self.unlock(None, live).await
     }
 
     /// The settings for one line: the session's, with the line's own global flags on top. Flags
@@ -785,15 +887,18 @@ impl<'a, H: Host> Shell<'a, H> {
     }
 
     /// Runs `command` with the footer under its output once it takes longer than a glance,
-    /// until it ends or Ctrl+C cancels it.
+    /// until it ends or Ctrl+C cancels it. A send that was `reviewed` takes no more than that.
     async fn run_command<'s>(
         &'s self,
         command: Command,
         what: &str,
         settings: &Settings,
+        reviewed: Option<Reviewed>,
         reader: &mut Reader,
         live: &mut Live<'s>,
     ) -> Result<Report, CliError> {
+        // A Ctrl+C from before the command started does not cancel it.
+        live.ctrl_c.clear();
         let (cancel, interrupt) = watch::channel(false);
         let stop_watch = Arc::new(AtomicBool::new(false));
         reader.ask(Ask::Watch(Arc::clone(&stop_watch)));
@@ -808,7 +913,14 @@ impl<'a, H: Host> Shell<'a, H> {
             // layout depth with it inline.
             let mut running = self
                 .held
-                .run(self.host, settings, command, &mut console, interrupt)
+                .run(
+                    self.host,
+                    settings,
+                    command,
+                    &mut console,
+                    interrupt,
+                    reviewed,
+                )
                 .boxed_local();
             loop {
                 let mut redraw = false;
@@ -835,9 +947,11 @@ impl<'a, H: Host> Shell<'a, H> {
                                 grouped(progress.target.value())
                             );
                         }
+                        let interrupted = matches!(background, Background::Interrupt);
                         self.on_background(live, background);
-                        if live.leaving {
+                        if interrupted || live.leaving {
                             cancel.send_replace(true);
+                            doing = format!("{what}, cancelling");
                         }
                         redraw = true;
                     }
@@ -921,43 +1035,126 @@ impl<'a, H: Host> Shell<'a, H> {
     }
 }
 
+/// Turns true when dropped: a prompt's thread watches it, so a prompt nobody waits for any
+/// more ends and leaves raw mode.
+struct StopOnDrop(Arc<AtomicBool>);
+
+impl StopOnDrop {
+    fn new() -> Self {
+        Self(Arc::new(AtomicBool::new(false)))
+    }
+
+    fn flag(&self) -> Arc<AtomicBool> {
+        Arc::clone(&self.0)
+    }
+}
+
+impl Drop for StopOnDrop {
+    fn drop(&mut self) {
+        self.0.store(true, Ordering::SeqCst);
+    }
+}
+
 /// Asks for the wallet password at the terminal, on a thread of its own.
 async fn ask_password() -> Result<Zeroizing<String>, SecretError> {
     let prompt = format!("Password for wallet {WALLET}: ");
-    tokio::task::spawn_blocking(move || read_hidden_line(&prompt))
-        .await
-        .unwrap_or(Err(SecretError::Cancelled {
-            what: "wallet password",
-        }))
+    let stop = StopOnDrop::new();
+    let flag = stop.flag();
+    let read = tokio::task::spawn_blocking(move || {
+        read_hidden_line(&prompt, &|| flag.load(Ordering::SeqCst))
+    });
+    let password = read.await.unwrap_or(Err(SecretError::Cancelled {
+        what: "wallet password",
+    }));
+    drop(stop);
+    password
 }
 
-/// Asks `question` and reads one key: only `y` answers yes.
-fn confirm(question: &str) -> bool {
+/// Asks `question` on a thread of its own and reads one key: only `y` answers yes.
+async fn ask_yes(question: String) -> bool {
+    let stop = StopOnDrop::new();
+    let flag = stop.flag();
+    let answer = tokio::task::spawn_blocking(move || confirm(&question, &flag))
+        .await
+        .unwrap_or(false);
+    drop(stop);
+    answer
+}
+
+/// Asks `question` and reads one key: only `y` answers yes. Keys typed before the question do
+/// not answer it. Once `stop` turns true it ends with no answer.
+fn confirm(question: &str, stop: &AtomicBool) -> bool {
     let mut out = io::stdout();
+    let Ok(raw) = RawMode::enable() else {
+        let _ = out.write_all(question.as_bytes());
+        let _ = out.write_all(b"\n");
+        let _ = out.flush();
+        return false;
+    };
+    while matches!(event::poll(Duration::ZERO), Ok(true)) {
+        if event::read().is_err() {
+            break;
+        }
+    }
     let _ = out.write_all(question.as_bytes());
     let _ = out.flush();
-    if enable_raw_mode().is_err() {
-        let _ = out.write_all(b"\r\n");
-        return false;
-    }
     let yes = loop {
+        if stop.load(Ordering::SeqCst) {
+            break None;
+        }
+        match event::poll(PROMPT_POLL) {
+            Ok(true) => {}
+            Ok(false) => continue,
+            Err(_) => break Some(false),
+        }
         match event::read() {
             Ok(TermEvent::Key(key)) if key.kind == KeyEventKind::Press => {
                 let control = key.modifiers.contains(KeyModifiers::CONTROL);
                 match key.code {
-                    KeyCode::Char('y' | 'Y') if !control => break true,
-                    KeyCode::Char(_) | KeyCode::Enter | KeyCode::Esc => break false,
+                    KeyCode::Char('y' | 'Y') if !control => break Some(true),
+                    KeyCode::Char(_) | KeyCode::Enter | KeyCode::Esc => break Some(false),
                     _ => {}
                 }
             }
             Ok(_) => {}
-            Err(_) => break false,
+            Err(_) => break Some(false),
         }
     };
-    let _ = disable_raw_mode();
-    let _ = out.write_all(if yes { b"y\r\n" } else { b"N\r\n" });
+    drop(raw);
+    let _ = out.write_all(match yes {
+        Some(true) => b"y\n",
+        Some(false) => b"N\n",
+        None => b"\n",
+    });
     let _ = out.flush();
-    yes
+    yes == Some(true)
+}
+
+/// When the idle lock fires, `minutes` after the `last` line: never while serve runs or the
+/// wallet is locked, nor when the setting is 0.
+fn idle_lock_at(minutes: u64, serving: bool, unlocked: bool, last: Instant) -> Option<Instant> {
+    if minutes == 0 || serving || !unlocked {
+        return None;
+    }
+    last.checked_add(Duration::from_secs(minutes.saturating_mul(60)))
+}
+
+/// The first global flag `global` gives, as typed.
+fn given_flag(global: &GlobalArgs) -> Option<&'static str> {
+    [
+        (global.data_dir.is_some(), "--data-dir"),
+        (global.network.is_some(), "--network"),
+        (global.config.is_some(), "--config"),
+        (global.settings.is_some(), "--settings"),
+        (global.log_level.is_some(), "--log-level"),
+        (global.log_format.is_some(), "--log-format"),
+        (global.output.is_some(), "--output"),
+        (global.profile.is_some(), "--profile"),
+        (global.profile_bits.is_some(), "--profile-bits"),
+        (global.domain.is_some(), "--domain"),
+    ]
+    .into_iter()
+    .find_map(|(given, flag)| given.then_some(flag))
 }
 
 /// The command words of a line, as the footer names what runs: `tx send`.
@@ -988,6 +1185,8 @@ fn without_lepic(text: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+
     use super::*;
 
     #[test]
@@ -996,6 +1195,66 @@ mod tests {
         assert_eq!(command_name(&words("tx send 1.5 --to x")), "tx send");
         assert_eq!(command_name(&words("epicbox listen")), "epicbox listen");
         assert_eq!(command_name(&words("wallet info --verbose")), "wallet info");
+    }
+
+    #[test]
+    fn the_idle_lock_waits_for_an_unlocked_wallet_with_no_serve() {
+        let last = Instant::now();
+        let at = |minutes, serving, unlocked| idle_lock_at(minutes, serving, unlocked, last);
+        assert_eq!(at(15, true, true), None);
+        assert_eq!(at(15, false, false), None);
+        assert_eq!(at(0, false, true), None);
+        assert_eq!(
+            at(15, false, true),
+            last.checked_add(Duration::from_secs(900))
+        );
+        // Too far to name: no lock.
+        assert_eq!(at(u64::MAX, false, true), None);
+    }
+
+    #[test]
+    fn serve_start_names_the_first_global_flag_given() {
+        assert_eq!(given_flag(&GlobalArgs::default()), None);
+        let global = GlobalArgs {
+            output: Some(crate::cli::OutputArg::Json),
+            domain: Some("example.com".to_owned()),
+            ..GlobalArgs::default()
+        };
+        assert_eq!(given_flag(&global), Some("--output"));
+    }
+
+    /// A Ctrl+C from before `clear` is forgotten; one after it is seen.
+    #[cfg(unix)]
+    #[test]
+    fn a_cleared_ctrl_c_cancels_nothing() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let interrupt = || {
+            let sent = std::process::Command::new("kill")
+                .args(["-INT", &std::process::id().to_string()])
+                .status()
+                .unwrap();
+            assert!(sent.success());
+        };
+        runtime.block_on(async {
+            let mut ctrl_c = CtrlC::new();
+            interrupt();
+            tokio::time::timeout(Duration::from_secs(10), ctrl_c.next())
+                .await
+                .expect("the Ctrl+C is seen");
+            interrupt();
+            // Long enough for the runtime to take the signal in.
+            tokio::time::sleep(Duration::from_millis(300)).await;
+            ctrl_c.clear();
+            assert!(
+                tokio::time::timeout(Duration::from_millis(300), ctrl_c.next())
+                    .await
+                    .is_err(),
+                "the cleared Ctrl+C is not seen"
+            );
+        });
     }
 
     #[test]

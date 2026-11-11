@@ -48,6 +48,12 @@ pub trait Host {
     /// runtime, before anything is read, so that an interrupt at a prompt reaches the CLI.
     fn interrupted(&self) -> Interrupt;
 
+    /// Resolves when the process is told to end, as a service manager does with SIGTERM. The
+    /// interactive shell leaves on it; Ctrl+C there only cancels what runs. Never by default.
+    fn terminated(&self) -> Interrupt {
+        Box::pin(std::future::pending())
+    }
+
     /// How often `lepic serve` collects the contact mailboxes and refreshes the wallet, as the
     /// app's foreground tick does. Tests shorten it.
     fn maintenance_interval(&self) -> Duration {
@@ -137,6 +143,18 @@ impl Host for ProcessHost {
                 Some(()) = next_signal(interrupt.as_mut()) => {}
                 Some(()) = next_signal(terminate.as_mut()) => {}
                 else => std::future::pending::<()>().await,
+            }
+        })
+    }
+
+    /// SIGTERM, with its handler installed here as [`Self::interrupted`] does.
+    #[cfg(unix)]
+    fn terminated(&self) -> Interrupt {
+        use tokio::signal::unix::{SignalKind, signal};
+        let mut terminate = signal(SignalKind::terminate()).ok();
+        Box::pin(async move {
+            if next_signal(terminate.as_mut()).await.is_none() {
+                std::future::pending::<()>().await;
             }
         })
     }

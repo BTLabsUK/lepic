@@ -184,7 +184,9 @@ impl SecretInput {
         std::thread::Builder::new()
             .name("lepic-secret-input".to_owned())
             .spawn(move || {
-                let _ = sender.send(read_keys(what));
+                // A dropped read closes the channel; the thread then leaves raw mode and ends.
+                let line = read_keys(what, &|| sender.is_closed());
+                let _ = sender.send(line);
             })
             .map_err(io_error)?;
         let line = receiver.await.map_err(|_| SecretError::Missing { what })?;
@@ -286,23 +288,27 @@ fn line_buffer() -> Zeroizing<Vec<u8>> {
 }
 
 /// Reads one secret from the terminal key by key with nothing echoed, whatever the platform:
-/// `prompt` goes to standard error and a newline follows the Enter. For the shell's `unlock`.
-pub(crate) fn read_hidden_line(prompt: &str) -> Result<Zeroizing<String>, SecretError> {
+/// `prompt` goes to standard error and a newline follows the Enter. For the shell's `unlock`;
+/// once `stop` returns true the read ends as cancelled.
+pub(crate) fn read_hidden_line(
+    prompt: &str,
+    stop: &dyn Fn() -> bool,
+) -> Result<Zeroizing<String>, SecretError> {
     const WHAT: &str = "password";
     let io_error = |source| SecretError::Io { what: WHAT, source };
     let mut stderr = io::stderr();
     stderr.write_all(prompt.as_bytes()).map_err(io_error)?;
     stderr.flush().map_err(io_error)?;
-    let line = read_keys(WHAT);
+    let line = read_keys(WHAT, stop);
     let _ = stderr.write_all(b"\n");
     line
 }
 
 /// Raw mode until dropped, on error and panic too.
-struct RawMode;
+pub(crate) struct RawMode;
 
 impl RawMode {
-    fn enable() -> io::Result<Self> {
+    pub(crate) fn enable() -> io::Result<Self> {
         terminal::enable_raw_mode()?;
         Ok(Self)
     }
@@ -314,11 +320,25 @@ impl Drop for RawMode {
     }
 }
 
-fn read_keys(what: &'static str) -> Result<Zeroizing<String>, SecretError> {
-    let _raw = RawMode::enable().map_err(|source| SecretError::Io { what, source })?;
+/// How often a key read looks whether its reader still waits.
+const STOP_POLL: std::time::Duration = std::time::Duration::from_millis(100);
+
+/// Reads keys in raw mode until the line ends, or until `stop` returns true.
+fn read_keys(
+    what: &'static str,
+    stop: &dyn Fn() -> bool,
+) -> Result<Zeroizing<String>, SecretError> {
+    let io_error = |source| SecretError::Io { what, source };
+    let _raw = RawMode::enable().map_err(io_error)?;
     let mut line = TypedLine::new();
     loop {
-        let event = event::read().map_err(|source| SecretError::Io { what, source })?;
+        if stop() {
+            return Err(SecretError::Cancelled { what });
+        }
+        if !event::poll(STOP_POLL).map_err(io_error)? {
+            continue;
+        }
+        let event = event::read().map_err(io_error)?;
         match line.apply(event) {
             Typed::More => {}
             Typed::Done => return Ok(line.text),

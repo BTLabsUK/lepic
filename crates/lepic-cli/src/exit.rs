@@ -173,6 +173,14 @@ pub enum CliError {
          destination or transport"
     )]
     SlateIdReused { tx_id: u32 },
+    /// The shell's send costs other than its review showed: the wallet's outputs or the fee
+    /// changed between the two. Nothing is stored.
+    #[error(
+        "the send would now take {} EPIC in total, not the {} EPIC reviewed: nothing was sent",
+        crate::amount::format_units(*total),
+        crate::amount::format_units(*reviewed)
+    )]
+    ReviewChanged { reviewed: u64, total: u64 },
     #[error("no send of this wallet has that slate id")]
     NoSendWithSlate,
     #[error("--reply-file applies to an invoice slate file, not to a parked invoice")]
@@ -412,7 +420,7 @@ impl CliError {
             Self::ServeUnanswered { .. } => ErrorKind::Transport,
             Self::ServeVersion { .. } => ErrorKind::Config,
             Self::PaymentUnanswered { .. } => ErrorKind::Incomplete,
-            Self::SlateIdReused { .. } => ErrorKind::Rejected,
+            Self::SlateIdReused { .. } | Self::ReviewChanged { .. } => ErrorKind::Rejected,
             Self::NoSendWithSlate => ErrorKind::NotFound,
             Self::Send(error) => send_kind(error),
             Self::Receive(error) => receive_kind(error),

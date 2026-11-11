@@ -2,6 +2,7 @@
 //! The review the shell shows before `tx send`, and the question that follows it.
 
 use crate::amount::format_units;
+use crate::commands::Reviewed;
 use crate::shell::live::printable;
 
 /// What a send will do, from the fee estimate on the open wallet. Amounts in base units.
@@ -15,11 +16,21 @@ pub(crate) struct Review {
     pub spendable: u64,
     /// How the slate travels: `epicbox`, `tor`, `http`, `file` or `contact`.
     pub delivery: &'static str,
+    /// The network the wallet sends on.
+    pub network: String,
 }
 
 impl Review {
     pub(crate) const fn total(&self) -> u64 {
         self.amount.saturating_add(self.fee)
+    }
+
+    /// What the send is held to once the user answers yes.
+    pub(crate) const fn reviewed(&self) -> Reviewed {
+        Reviewed {
+            amount: self.amount,
+            fee: self.fee,
+        }
     }
 
     /// The review, one field a line.
@@ -35,6 +46,7 @@ impl Review {
                 epic(self.spendable.saturating_sub(self.total())),
             ),
             ("Delivery", self.delivery.to_owned()),
+            ("Network", self.network.clone()),
         ];
         let mut lines: Vec<String> = rows
             .iter()
@@ -52,6 +64,8 @@ impl Review {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+
     use super::*;
 
     fn review() -> Review {
@@ -61,6 +75,7 @@ mod tests {
             fee: 800_000,
             spendable: 849_200_000,
             delivery: "epicbox",
+            network: "floonet".to_owned(),
         }
     }
 
@@ -75,10 +90,26 @@ mod tests {
                 "  Total            1.50800000 EPIC",
                 "  Spendable after  6.98400000 EPIC",
                 "  Delivery         epicbox",
+                "  Network          floonet",
                 "A sent payment cannot be reversed.",
             ]
         );
         assert_eq!(review().question(), "Send 1.50800000 EPIC in total? [y/N] ");
+    }
+
+    #[test]
+    fn the_send_takes_no_more_than_the_review_showed() {
+        let reviewed = review().reviewed();
+        assert!(reviewed.check(150_000_000, 800_000).is_ok());
+        assert!(reviewed.check(150_000_000, 700_000).is_ok());
+        let error = reviewed.check(150_000_000, 900_000).unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "the send would now take 1.50900000 EPIC in total, not the 1.50800000 EPIC \
+             reviewed: nothing was sent"
+        );
+        assert_eq!(error.kind(), crate::exit::ErrorKind::Rejected);
+        assert!(reviewed.check(140_000_000, 800_000).is_err());
     }
 
     #[test]

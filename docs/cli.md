@@ -564,8 +564,9 @@ hint: did you mean tx list?
 ```
 
 A command's output prints above the input line. While it runs, Ctrl+C cancels it; at the prompt,
-Ctrl+C clears the line. Listeners (`epicbox listen`, `http listen`, `tor listen`) run until
-Ctrl+C.
+Ctrl+C clears the line. Ctrl+C while the wallet unlocks, or while a send is reviewed or asked
+about, cancels that step and returns to the prompt. Listeners (`epicbox listen`, `http listen`,
+`tor listen`) run until Ctrl+C. SIGTERM locks the wallet and leaves the shell.
 
 Besides the commands, the shell knows these words:
 
@@ -582,8 +583,10 @@ Besides the commands, the shell knows these words:
 | `exit`, `quit`, Ctrl+D | Lock the wallet and leave |
 
 `tx send` shows what it will do first: the address, the amount, the fee, the total, the
-spendable balance after it and how it is delivered, then asks `Send 1.50800000 EPIC in total?
-[y/N]`. Only `y` sends. `--yes` on the line skips the question; it exists in the shell only.
+spendable balance after it, how it is delivered and the network, then asks `Send 1.50800000 EPIC
+in total? [y/N]`. Only `y` sends. `--yes` on the line skips the question; it exists in the shell
+only. A reviewed send that would now take a different amount or a higher fee, because the
+wallet's outputs changed in between, is refused with nothing sent (exit code 7).
 
 The wallet locks after `shell_idle_lock_minutes` minutes with no line entered (15 by default, 0
 turns it off), never while serve runs; a command that needs it asks for the password again.
@@ -591,7 +594,8 @@ turns it off), never while serve runs; a command that needs it asks for the pass
 `wallet init`, `wallet restore`, `wallet import-seed` and `wallet password` run outside the shell.
 Standard input belongs to the shell, so `-` in place of a file is refused. `--data-dir`,
 `--network`, `--config` and `--settings` on a line are refused: they hold for the session. The
-other global options apply to that line.
+other global options apply to that line. `serve start` refuses global options: serve takes the
+session's settings.
 
 The lines go to `shell-history` in the data directory, readable by its owner only. Lines that may
 hold secrets are left out: anything naming a password or secret, seed imports, `epiccash:` links
