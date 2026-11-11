@@ -66,7 +66,6 @@ pub enum Report {
     ContactAccept(ContactAcceptReport),
     ContactLink(ContactLinkReport),
     ContactCollect(ContactCollectReport),
-    ContactCard(ContactCardReport),
     Contact(ContactReport),
     ContactList(ContactListReport),
     ContactRemove(ContactRemoveReport),
@@ -516,9 +515,6 @@ pub struct ContactInviteReport {
     pub contact_id: String,
     pub link: String,
     pub expires_at: String,
-    /// The five pairing words as `emoji name`, when they were offered.
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub words: Vec<String>,
 }
 
 /// A code to show as a QR code, from `in-person invoice`.
@@ -678,12 +674,6 @@ pub struct ContactFailureReport {
     /// `expired`, `changed-on-the-way`, `refused-already-used`, `refused-expired` or
     /// `refused-cancelled`.
     pub reason: &'static str,
-}
-
-#[derive(Debug, Serialize, ToSchema)]
-pub struct ContactCardReport {
-    pub contact_id: String,
-    pub link: String,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -1525,8 +1515,7 @@ fn write_human(out: &mut Vec<u8>, report: &Report) -> std::io::Result<()> {
         | Report::ContactPreview(_)
         | Report::ContactAccept(_)
         | Report::ContactLink(_)
-        | Report::ContactCollect(_)
-        | Report::ContactCard(_) => write_pairing_human(out, report),
+        | Report::ContactCollect(_) => write_pairing_human(out, report),
         Report::ContactBackup(r) => writeln!(out, "{}", r.backup),
         Report::Contact(_)
         | Report::ContactList(_)
@@ -2084,9 +2073,6 @@ fn write_pairing_human(out: &mut Vec<u8>, report: &Report) -> std::io::Result<()
     match report {
         Report::ContactInvite(r) => {
             writeln!(out, "Share this invite: {}", r.link)?;
-            if !r.words.is_empty() {
-                writeln!(out, "Or read out these words: {}", r.words.join(", "))?;
-            }
             writeln!(
                 out,
                 "It expires at {}. Contact {}.",
@@ -2169,11 +2155,6 @@ fn write_pairing_human(out: &mut Vec<u8>, report: &Report) -> std::io::Result<()
             }
             Ok(())
         }
-        Report::ContactCard(r) => writeln!(
-            out,
-            "Show this card: {}\nThen scan the other one with `lepic contact scan-card {} <LINK>`.",
-            r.link, r.contact_id
-        ),
         _ => Ok(()),
     }
 }
@@ -3045,9 +3026,8 @@ mod tests {
                     contact_id: text("c"),
                     link: text("l"),
                     expires_at: text("t"),
-                    words: vec![text("w")],
                 }),
-                vec!["contact_id", "expires_at", "link", "words"],
+                vec!["contact_id", "expires_at", "link"],
             ),
             (
                 Report::ContactPreview(ContactPreviewReport {
@@ -3116,13 +3096,6 @@ mod tests {
                     "timed_out",
                     "unreachable",
                 ],
-            ),
-            (
-                Report::ContactCard(ContactCardReport {
-                    contact_id: text("c"),
-                    link: text("l"),
-                }),
-                vec!["contact_id", "link"],
             ),
             (
                 Report::Contact(ContactReport {

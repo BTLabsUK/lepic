@@ -119,7 +119,7 @@ A stream that cannot start ends with a `WalletError` as its error and no event.
 | `policy` | `HostPolicy` and `PinSettings` |
 | `wallet` | Open and create, balance, transactions, refresh and scan, send and receive by slate, file and Epicbox, QR slate codes, fees, cancel and repost, address signatures |
 | `invoice` | Issue and pay invoices by slate or file, `sweep_invoices` |
-| `contact` | Pairing with invite links, cards and the five pairing words ([RFC 0002](rfcs/0002-contact-pairing.md)), contacts, sealed slates and invoices, outbox, export and import |
+| `contact` | Pairing with invite links ([RFC 0002](rfcs/0002-contact-pairing.md)), contacts, sealed slates and invoices, outbox, export and import |
 | `http` | Sends to an `http(s)` listener and the wallet's own listener, with pinned peer keys ([ADR 0017](adr/0017-foreign-api-over-http.md)) |
 | `tor` | The wallet's own tor, its onion address, and Epicbox, node and HTTP traffic over it ([ADR 0018](adr/0018-tor-on-desktop.md)) |
 | `in_person` | EPICTX between two phones by QR code ([RFC 0003](rfcs/0003-epictx-native-slates.md)) |
@@ -143,7 +143,7 @@ and Rust.
 | Dart to Rust | The wallet password, the PIN, the recovery phrase (create, restore, `validate_mnemonic`, `wallet_fingerprint`, `reset_password`), `WalletConfig.node_api_secret` |
 | Rust to Dart | The recovery phrase, only from `mnemonic` and `mnemonic_with_pin`, for the backup screen |
 | Rust to the app's store only | The sealed vault and the PIN key; Dart code never reads them |
-| Both ways | Pairing invite links (`epiccash://pair/1/…`) and the five pairing words |
+| Both ways | Pairing invite links (`epiccash://pair/1/…`) |
 
 Never out of Rust: seed bytes, private keys, blinding factors, nonces, vault keys, and the
 generated password of a PIN wallet, which Dart holds only as sealed text. LEPIC never stores or

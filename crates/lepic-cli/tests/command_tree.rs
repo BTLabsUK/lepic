@@ -86,8 +86,6 @@ fn the_tree_has_every_planned_command() {
         "contact enter",
         "contact collect",
         "contact sas",
-        "contact show-card",
-        "contact scan-card",
         "contact list",
         "contact remove",
         "contact label",

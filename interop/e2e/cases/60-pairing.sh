@@ -1,5 +1,5 @@
 # shellcheck shell=bash
-# Pairing and contacts: invite, pairing words, cards, by hand, requests, labels, backup, key
+# Pairing and contacts: invite, by hand, requests, labels, backup, key
 # check, check, relay moves, payments, invoices, payloads, profiles and offline contacts.
 # Wallets e1s-ct-*: pairings persist in them, so every case clears the contacts of its own wallets
 # first (they are the suite's own) and pairs again.
@@ -7,8 +7,6 @@
 CT_PATHS="crates/lepic-cli crates/lepic-contact crates/lepic-seal crates/lepic-wallet-contacts"
 
 CASES+=("pair.invite|case_pair_invite|${CT_PATHS}")
-CASES+=("pair.words|case_pair_words|${CT_PATHS}")
-CASES+=("pair.card|case_pair_card|${CT_PATHS}")
 CASES+=("pair.by-hand|case_pair_by_hand|${CT_PATHS}")
 CASES+=("pair.request|case_pair_request|${CT_PATHS} crates/lepic-wallet")
 CASES+=("ct.manage|case_ct_manage|${CT_PATHS}")
@@ -112,50 +110,6 @@ case_pair_invite() {
     expect_eq "$(ct_field "${CT_BOB}" "${CT_B}" claimed_name)" Alice "Bob's name for Alice" || return 1
     expect_eq "$(ct_field "${CT_ALICE}" "${CT_A}" home_relay | sed 's/:443$//')" "${E2E_RELAY}" "home relay" || return 1
     note "verified on both sides; SAS $(w "${CT_ALICE}" contact list | jq -c '.contacts[0].sas')"
-}
-
-case_pair_words() {
-    local out words link acc
-    ct_wallets "${CT_ALICE}" "${CT_BOB}" || return 1
-    ct_reset "${CT_ALICE}" || return 1
-    ct_reset "${CT_BOB}" || return 1
-    out="$(w "${CT_ALICE}" contact invite --name Alice --pairing-words)" || fail "invite --pairing-words failed" || return 1
-    CT_A="$(jq -r .contact_id <<<"${out}")"
-    expect_json "${out}" '.words | length == 5' "five pairing words" || return 1
-    # The words as the user types them: the names without the emoji.
-    words="$(jq -r '.words[] | sub("^[^ ]+ "; "")' <<<"${out}" | tr '\n' ' ')"
-    out="$(w "${CT_BOB}" contact enter ${words})" || fail "contact enter of the words failed" || return 1
-    expect_json "${out}" '.outcome == "invite"' "words found an invite" || return 1
-    link="$(jq -r .link <<<"${out}")"
-    expect_match "${link}" '^epiccash://pair/1/' "invite link found by the words" || return 1
-    acc="$(w "${CT_BOB}" contact accept "${link}" --name Bob)" || fail "accept of the found invite failed" || return 1
-    CT_B="$(jq -r .contact_id <<<"${acc}")"
-    ct_wait "paired through the words" 90 "${CT_ALICE},${CT_BOB}" ct_both_state_in "${CT_ALICE}" "${CT_A}" "${CT_BOB}" "${CT_B}" "paired" || return 1
-    # Wrong words are refused with a usage error.
-    wx 2 "${CT_BOB}" contact enter one two three four five || return 1
-    note "invite found by five words, paired"
-}
-
-case_pair_card() {
-    local ca cb
-    ct_wallets "${CT_ALICE}" "${CT_BOB}" || return 1
-    ct_reset "${CT_ALICE}" || return 1
-    ct_reset "${CT_BOB}" || return 1
-    ca="$(w "${CT_ALICE}" contact show-card --name Alice)" || fail "show-card on alice failed" || return 1
-    cb="$(w "${CT_BOB}" contact show-card --name Bob)" || fail "show-card on bob failed" || return 1
-    expect_match "$(jq -r .link <<<"${ca}")" '^epiccash://contact/1/' "card link" || return 1
-    CT_A="$(jq -r .contact_id <<<"${ca}")"
-    CT_B="$(jq -r .contact_id <<<"${cb}")"
-    # In person nothing goes through a relay: each scans the other's card.
-    w "${CT_ALICE}" contact scan-card "${CT_A}" "$(jq -r .link <<<"${cb}")" >/dev/null || fail "alice scan-card failed" || return 1
-    w "${CT_BOB}" contact scan-card "${CT_B}" "$(jq -r .link <<<"${ca}")" >/dev/null || fail "bob scan-card failed" || return 1
-    expect_eq "$(ct_field "${CT_ALICE}" "${CT_A}" claimed_name)" Bob "name on alice's card of bob" || return 1
-    expect_eq "$(ct_field "${CT_BOB}" "${CT_B}" claimed_name)" Alice "name on bob's card of alice" || return 1
-    expect_eq "$(ct_field "${CT_ALICE}" "${CT_A}" sas)" "$(ct_field "${CT_BOB}" "${CT_B}" sas)" "in-person SAS words" || return 1
-    w "${CT_ALICE}" contact sas "${CT_A}" match >/dev/null || fail "sas on alice failed" || return 1
-    w "${CT_BOB}" contact sas "${CT_B}" match >/dev/null || fail "sas on bob failed" || return 1
-    ct_wait "cards trade and both verified" 90 "${CT_ALICE},${CT_BOB}" ct_both_state_in "${CT_ALICE}" "${CT_A}" "${CT_BOB}" "${CT_B}" "verified" || return 1
-    note "in-person pairing verified"
 }
 
 case_pair_by_hand() {

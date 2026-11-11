@@ -480,7 +480,6 @@ pub fn epic1_refusals() -> Vec<Epic1Refusal> {
         R::LinkRelay,
         R::TooManyRelays,
         R::Message,
-        R::ProofKey,
         R::Finalized,
         R::AmountMismatch,
         R::AddressNotIssued,

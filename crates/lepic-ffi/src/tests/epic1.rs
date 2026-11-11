@@ -152,14 +152,14 @@ async fn a_link_paid_is_answered_by_the_payee_and_finalized_by_the_payers_collec
         .unwrap();
     assert_eq!(
         kind(
-            ben.epic1_pay(elsewhere.link, None, 1, None, None, false, false, Online)
+            ben.epic1_pay(elsewhere.link, None, 1, None, None, false, Online)
                 .await
         ),
         WalletErrorKind::RelayNotConfirmed
     );
     // The wallet's own relay needs no confirmation.
     let paid = ben
-        .epic1_pay(link.link.clone(), None, 1, None, None, false, false, Online)
+        .epic1_pay(link.link.clone(), None, 1, None, None, false, Online)
         .await
         .unwrap();
     assert_eq!(paid.address, address);
@@ -231,23 +231,14 @@ async fn a_printed_link_is_retired_once_and_bad_requests_are_refused() {
     );
     assert_eq!(
         kind(
-            ben.epic1_pay(
-                printed.link.clone(),
-                None,
-                1,
-                None,
-                None,
-                false,
-                true,
-                Online
-            )
-            .await
+            ben.epic1_pay(printed.link.clone(), None, 1, None, None, true, Online)
+                .await
         ),
         WalletErrorKind::InvalidArgument
     );
     assert_eq!(
         kind(
-            ben.epic1_pay(printed.link, Some(0), 1, None, None, false, true, Online)
+            ben.epic1_pay(printed.link, Some(0), 1, None, None, true, Online)
                 .await
         ),
         WalletErrorKind::InvalidArgument

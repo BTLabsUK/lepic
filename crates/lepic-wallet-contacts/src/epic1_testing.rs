@@ -26,16 +26,12 @@ pub fn link_mailboxes(link: &str) -> Option<Vec<EpicboxAddress>> {
         .collect()
 }
 
-/// `link` with the address's proof key replaced by `proof_of`'s, and the address's network by
-/// `network` when given.
-fn rebuilt(link: &str, proof_of: Option<&str>, network: Option<RelayNetwork>) -> Option<String> {
+/// `link` with the address's network replaced by `network`.
+fn rebuilt(link: &str, network: RelayNetwork) -> Option<String> {
     let mut link = Epic1Link::parse(link).ok()?;
-    let proof = match proof_of {
-        Some(other) => Epic1Address::decode_any(other).ok()?.proof_key().to_bytes(),
-        None => link.address.proof_key().to_bytes(),
-    };
+    let proof = link.address.proof_key().to_bytes();
     link.address = Epic1Address::from_key_bytes(
-        network.unwrap_or(link.address.network()),
+        network,
         &proof,
         *link.address.seal_key().as_bytes(),
     )
@@ -50,13 +46,7 @@ pub fn for_other_network(link: &str) -> Option<String> {
         RelayNetwork::Mainnet => RelayNetwork::Floonet,
         RelayNetwork::Floonet => RelayNetwork::Mainnet,
     };
-    rebuilt(link, None, Some(network))
-}
-
-/// `link` asking for a payment proof to the proof key of the epic1 `other`, its seal key kept.
-#[must_use]
-pub fn with_proof_key_of(link: &str, other: &str) -> Option<String> {
-    rebuilt(link, Some(other), None)
+    rebuilt(link, network)
 }
 
 /// `link` asking no amount, everything else kept.

@@ -13,12 +13,12 @@ use zeroize::Zeroizing;
 use super::events::{self, EventReport};
 use super::{Api, Body, Call, InFlight, Listener, Problem, Request, report, response};
 use crate::cli::{
-    AccountArg, Command, ContactAcceptArgs, ContactArgs, ContactCardArgs, ContactCommand,
+    AccountArg, Command, ContactAcceptArgs, ContactArgs, ContactCommand,
     ContactEnterArgs, ContactIdArg, ContactInviteArgs, ContactKeyCheckArgs, ContactKeysArgs,
     ContactLabelArgs, ContactLinkArg, ContactMoveArgs, ContactMoveHomeArgs, ContactNameArg,
     ContactPayloadAckArgs, ContactPayloadArgs, ContactPayloadCommand, ContactPayloadPostArgs,
     ContactRequestAcceptArgs, ContactRequestArgs, ContactRequestIdArg, ContactSasArgs,
-    ContactScanArgs, ContactSwitchArgs, DEFAULT_CHANGE_OUTPUTS, DEFAULT_CONTACT_NAME, DomainArgs,
+    ContactSwitchArgs, DEFAULT_CHANGE_OUTPUTS, DEFAULT_CONTACT_NAME, DomainArgs,
     DomainCommand, Epic1AddressArgs, Epic1AddressesArgs, Epic1Args, Epic1Command, Epic1LinkArg,
     Epic1LinkArgs, Epic1PayArgs, Epic1PostAnswerArgs, Epic1PostNextArgs, Epic1RetireArgs,
     EpicboxCommand, EpictxCommand, EpictxOpenArgs, FluffArg, HttpReach, InPersonArgs,
@@ -32,7 +32,7 @@ use crate::cli::{
 };
 use crate::commands::is_onion;
 use crate::output::{
-    AddressReport, ContactAcceptReport, ContactBackupReport, ContactCardReport, ContactCheckReport,
+    AddressReport, ContactAcceptReport, ContactBackupReport, ContactCheckReport,
     ContactCollectReport, ContactImportReport, ContactInviteReport, ContactInvoiceListReport,
     ContactKeyCheckReport, ContactLinkReport, ContactListReport, ContactMoveHomeReport,
     ContactPayloadAckReport, ContactPayloadListReport, ContactPayloadPostReport,
@@ -226,9 +226,6 @@ pub(crate) struct InviteBody {
     name: Option<String>,
     /// How long the invite may be answered; one day when absent.
     expiry: Option<InviteExpiryArg>,
-    /// Also offer five pairing words that find the invite.
-    #[serde(default)]
-    pairing_words: bool,
 }
 
 /// A pairing request to a wallet's payments address.
@@ -266,26 +263,8 @@ pub(crate) struct AcceptBody {
 #[derive(Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct EnterBody {
-    /// One link, or the five pairing words.
-    input: Vec<String>,
-}
-
-/// The name a card carries.
-#[derive(Deserialize, ToSchema)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct CardBody {
-    /// The name this wallet gives itself; `LEPIC` when absent.
-    name: Option<String>,
-}
-
-/// The other phone's card.
-#[derive(Deserialize, ToSchema)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct ScanCardBody {
-    /// The id the card route answered on this wallet.
-    contact: String,
-    /// The other phone's `epiccash://contact/` link.
-    link: String,
+    /// The pairing link.
+    input: String,
 }
 
 /// The verdict on the four SAS words.
@@ -489,9 +468,6 @@ pub(crate) struct Epic1PayBody {
     min_confirmations: Option<u64>,
     /// Outputs the change is split into.
     change_outputs: Option<usize>,
-    /// Ask the payee for a payment proof signed with its epic1 proof key.
-    #[serde(default)]
-    proof: bool,
     /// The relays `POST /v1/epic1/read` showed for the link were checked and may be used.
     #[serde(default)]
     hosts_ok: bool,
@@ -1245,7 +1221,6 @@ pub(crate) async fn contact_invite(api: &Api<'_>, request: Request) -> Answer {
         name: contact_name(body.name),
         expiry: body.expiry.unwrap_or_default(),
         kind: None,
-        pairing_words: body.pairing_words,
     };
     api.run(contact(ContactCommand::Invite(args))).await
 }
@@ -1524,44 +1499,6 @@ pub(crate) async fn contact_move_home(api: &Api<'_>, request: Request) -> Answer
         drain_days,
     };
     api.run(contact(ContactCommand::MoveHome(args))).await
-}
-
-/// Show a card to pair in person
-///
-/// Makes a pairing; the other phone scans the card.
-#[utoipa::path(
-    post,
-    path = "/v1/contacts/card",
-    tag = "contacts",
-    request_body = CardBody,
-    responses((status = 200, body = ContactCardReport)),
-)]
-pub(crate) async fn contact_card(api: &Api<'_>, request: Request) -> Answer {
-    let body: CardBody = request.json()?;
-    let args = ContactCardArgs {
-        name: contact_name(body.name),
-        kind: None,
-    };
-    api.run(contact(ContactCommand::ShowCard(args))).await
-}
-
-/// Pair in person with the card the other phone shows
-#[utoipa::path(
-    post,
-    path = "/v1/contacts/cards/scan",
-    tag = "contacts",
-    request_body = ScanCardBody,
-    responses((status = 200, body = ContactReport)),
-)]
-pub(crate) async fn contact_scan_card(api: &Api<'_>, request: Request) -> Answer {
-    let body: ScanCardBody = request.json()?;
-    let args = ContactScanArgs {
-        contact: ContactIdArg {
-            contact: body.contact,
-        },
-        link: body.link,
-    };
-    api.run(contact(ContactCommand::ScanCard(args))).await
 }
 
 /// The contact messages kept in quarantine
@@ -2019,7 +1956,6 @@ pub(crate) async fn epic1_pay(api: &Api<'_>, request: Request) -> Answer {
             message: body.message,
         },
         spend: spend(body.min_confirmations, body.change_outputs),
-        proof: body.proof,
         hosts_ok: body.hosts_ok,
         slate_id: SendSlateIdArg {
             slate_id: body.slate_id,

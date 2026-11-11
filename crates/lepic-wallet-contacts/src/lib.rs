@@ -42,7 +42,6 @@ mod relay;
 mod requests;
 mod sealed;
 mod status;
-mod words;
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -95,7 +94,7 @@ pub use lepic_wallet::event::PairingFailure;
 pub use manage::{MAX_APP_CONTACT_LEN, MAX_BACKUP_LEN, MAX_HOME_DRAIN, PendingPairingView};
 pub use outbox::{NOT_POSTED_AFTER, OUTBOX_STUCK_AFTER, OutboxReport, OutboxView};
 pub use pairing::{
-    AcceptOutcome, AcceptRequest, CardOffer, CardRequest, InviteExpiry, InviteOffer, InvitePreview,
+    AcceptOutcome, AcceptRequest, InviteExpiry, InviteOffer, InvitePreview,
     InviteRequest, LinkOutcome, SasDecision,
 };
 pub use payload::{
@@ -112,7 +111,6 @@ pub use sealed::{
 pub use status::{
     NEVER_FINISHED_AFTER, PairingStatus, STATUS_NOTICES, STATUS_RETRY_FOR, status_of,
 };
-pub use words::WORDS_INVITE_EXPIRY;
 
 /// The contact engine of one wallet: pairing, contact mailboxes, sealed slates, contact
 /// invoices, key checks and app payloads.

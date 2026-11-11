@@ -11,12 +11,12 @@ use hyper::Method;
 use serde_json::json;
 
 use crate::cli::{
-    AccountArg, ContactAcceptArgs, ContactArgs, ContactCardArgs, ContactCommand, ContactEnterArgs,
+    AccountArg, ContactAcceptArgs, ContactArgs, ContactCommand, ContactEnterArgs,
     ContactExportArgs, ContactIdArg, ContactImportArgs, ContactInviteArgs, ContactKeyCheckArgs,
     ContactKeysArgs, ContactLabelArgs, ContactLinkArg, ContactMoveArgs, ContactMoveHomeArgs,
     ContactNameArg, ContactPayloadAckArgs, ContactPayloadArgs, ContactPayloadCommand,
     ContactPayloadPostArgs, ContactRequestAcceptArgs, ContactRequestArgs, ContactRequestIdArg,
-    ContactSasArgs, ContactScanArgs, ContactSwitchArgs, DomainCommand, DomainFileArgs,
+    ContactSasArgs, ContactSwitchArgs, DomainCommand, DomainFileArgs,
     Epic1AddressArgs, Epic1AddressesArgs, Epic1Args, Epic1Command, Epic1LinkArg, Epic1LinkArgs,
     Epic1PayArgs, Epic1PostAnswerArgs, Epic1PostNextArgs, Epic1RetireArgs, EpictxCommand,
     EpictxOpenArgs, InPersonArgs, InPersonCodeArg, InPersonCommand, InPersonFinalizeArgs,
@@ -82,10 +82,9 @@ pub(super) fn contact(args: &ContactArgs) -> Option<Call> {
             name: ContactNameArg { name },
             expiry,
             kind: None,
-            pairing_words,
         }) => post_json(
             "/v1/contacts/invites",
-            json!({ "name": name, "expiry": expiry, "pairing_words": pairing_words }),
+            json!({ "name": name, "expiry": expiry }),
         ),
         ContactCommand::Request(ContactRequestArgs {
             address,
@@ -129,17 +128,6 @@ pub(super) fn contact(args: &ContactArgs) -> Option<Call> {
         }) => post_json(
             format!("/v1/contacts/{}/sas", encode(contact)),
             json!({ "result": result }),
-        ),
-        ContactCommand::ShowCard(ContactCardArgs {
-            name: ContactNameArg { name },
-            kind: None,
-        }) => post_json("/v1/contacts/card", json!({ "name": name })),
-        ContactCommand::ScanCard(ContactScanArgs {
-            contact: ContactIdArg { contact },
-            link,
-        }) => post_json(
-            "/v1/contacts/cards/scan",
-            json!({ "contact": contact, "link": link }),
         ),
         ContactCommand::List => get("/v1/contacts"),
         ContactCommand::Remove(ContactIdArg { contact }) => {
@@ -196,7 +184,6 @@ pub(super) fn contact(args: &ContactArgs) -> Option<Call> {
         }
         ContactCommand::Payload(ContactPayloadArgs { command }) => payload(command),
         ContactCommand::Invite(_)
-        | ContactCommand::ShowCard(_)
         | ContactCommand::Invoice(_)
         | ContactCommand::PayInvoice(_)
         | ContactCommand::Decline(_)
@@ -442,7 +429,6 @@ pub(super) fn epic1(args: &Epic1Args) -> Option<Call> {
             account: AccountArg { account },
             message: MessageArg { message },
             spend,
-            proof,
             hosts_ok,
             slate_id: SendSlateIdArg { slate_id },
         }) => {
@@ -457,7 +443,6 @@ pub(super) fn epic1(args: &Epic1Args) -> Option<Call> {
                     "message": message,
                     "min_confirmations": min_confirmations,
                     "change_outputs": change_outputs,
-                    "proof": proof,
                     "hosts_ok": hosts_ok,
                     "slate_id": slate_id,
                 }),

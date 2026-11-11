@@ -114,9 +114,7 @@ impl EpicWallet {
         .await
     }
 
-    /// Pays an epic1 link `amount` atomic units, or with `None` the amount the link asks. With
-    /// `proof` the payee is asked for a payment proof signed with the address's epic1 proof
-    /// key. The payment names a reply mailbox on the wallet's own relay, is stored, then posted
+    /// Pays an epic1 link `amount` atomic units, or with `None` the amount the link asks. The payment names a reply mailbox on the wallet's own relay, is stored, then posted
     /// to the link's first relay, and to the next when a post fails, at most three.
     /// `hosts_ok` says the user confirmed every relay [`EpicWallet::epic1_link_read`] showed.
     /// Collecting takes the answer and finalizes it.
@@ -133,7 +131,6 @@ impl EpicWallet {
         minimum_confirmations: u64,
         message: Option<String>,
         options: Option<SendOptions>,
-        proof: bool,
         hosts_ok: bool,
         relay_mode: ContactRelayMode,
     ) -> Result<Epic1Paid, WalletError> {
@@ -145,7 +142,6 @@ impl EpicWallet {
                     minimum_confirmations,
                     message,
                     options,
-                    proof,
                     hosts_ok,
                     relay_mode,
                 )

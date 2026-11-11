@@ -33,7 +33,7 @@ use lepic_wallet::selection::SelectionStrategy;
 use lepic_wallet::send::{Delivery, SendRequest};
 use lepic_wallet::{Event, ReceiveRequest};
 use lepic_wallet_contacts::epic1_testing::{
-    for_other_network, link_mailboxes, native_body_of, sealed_to_epic1, with_proof_key_of,
+    for_other_network, link_mailboxes, native_body_of, sealed_to_epic1,
     without_amount, without_transports,
 };
 use lepic_wallet_contacts::in_person_testing::{armored, without_tail};
@@ -97,14 +97,13 @@ impl World {
         )
     }
 
-    fn pay_link(&self, link: &str, proof: bool) -> Result<Epic1Paid, ContactError> {
-        self.pay(link, proof, send(), true)
+    fn pay_link(&self, link: &str) -> Result<Epic1Paid, ContactError> {
+        self.pay(link, send(), true)
     }
 
     fn pay(
         &self,
         link: &str,
-        proof: bool,
         send: SendRequest,
         hosts_ok: bool,
     ) -> Result<Epic1Paid, ContactError> {
@@ -114,7 +113,6 @@ impl World {
             Epic1PayRequest {
                 link: link.to_owned(),
                 send,
-                proof,
                 slate_file: file,
             },
             hosts_ok,
@@ -228,7 +226,7 @@ fn a_link_paid_is_answered_through_the_reply_mailbox_and_finalized() {
     // A relay outside the relay list needs the user's word.
     let elsewhere = world.issue_link(&world.issuer, Epic1LinkKind::Printed, &["shop.test"]);
     assert_eq!(
-        refusal(world.pay(&elsewhere.link, true, send(), false)),
+        refusal(world.pay(&elsewhere.link, send(), false)),
         Epic1Refusal::RelayNotConfirmed
     );
     assert_eq!(
@@ -237,7 +235,7 @@ fn a_link_paid_is_answered_through_the_reply_mailbox_and_finalized() {
     );
 
     // The wallet's own relay needs none.
-    let paid = world.pay(&issued.link, true, send(), false).unwrap();
+    let paid = world.pay(&issued.link, send(), false).unwrap();
     assert_eq!(paid.address, address);
     assert_eq!(paid.posted, Some(0));
     assert_eq!(paid.attempts.len(), 1);
@@ -283,7 +281,7 @@ fn a_payment_is_posted_to_the_next_entry_when_the_first_refuses() {
     );
     assert_eq!(link_mailboxes(&issued.link).unwrap().len(), 3);
 
-    let paid = world.pay_link(&issued.link, false).unwrap();
+    let paid = world.pay_link(&issued.link).unwrap();
 
     assert_eq!(paid.posted, Some(1));
     assert_eq!(paid.attempts.len(), 2);
@@ -303,7 +301,7 @@ fn post_next_posts_the_same_payment_to_the_second_mailbox_answered_once() {
         Epic1LinkKind::Printed,
         &["relay.test", "shop.test"],
     );
-    let paid = world.pay_link(&issued.link, false).unwrap();
+    let paid = world.pay_link(&issued.link).unwrap();
     assert_eq!(paid.posted, Some(0));
 
     let next = world
@@ -334,43 +332,6 @@ fn post_next_posts_the_same_payment_to_the_second_mailbox_answered_once() {
     assert_eq!(world.answers_posted(), 1);
     world.collect(&world.payer);
     assert_eq!(world.node.pushed_transactions().len(), 1);
-}
-
-#[test]
-fn a_proof_names_the_epic1_proof_key_and_another_key_is_refused() {
-    let world = World::new();
-    let issued = world.issue_link(&world.issuer, Epic1LinkKind::OnScreen, &[]);
-    let stranger = world.stranger();
-    let other = stranger
-        .wallet
-        .contact_book()
-        .epic1_address(ACCOUNT)
-        .unwrap()
-        .encode();
-    let foreign = with_proof_key_of(&issued.link, &other).unwrap();
-
-    let paid = world.pay_link(&foreign, true).unwrap();
-    assert_eq!(paid.posted, Some(0));
-    assert_eq!(world.taken(&world.issuer), 0);
-    assert!(
-        world
-            .block_on(
-                world
-                    .issuer
-                    .wallet
-                    .contact_book()
-                    .epic1_answers(&relays(&world.issuer))
-            )
-            .unwrap()
-            .is_empty()
-    );
-    let mailbox = &link_mailboxes(&issued.link).unwrap()[0];
-    assert_eq!(world.relay.pending(mailbox), 0);
-
-    // The link as issued, with the proof, is taken.
-    world.payer.fund(20, FUNDING);
-    world.pay_link(&issued.link, true).unwrap();
-    assert_eq!(world.taken(&world.issuer), 1);
 }
 
 #[test]
@@ -469,7 +430,7 @@ fn a_link_for_another_network_or_without_transports_cannot_be_paid() {
         Epic1Refusal::WrongNetwork
     );
     assert_eq!(
-        refusal(world.pay_link(&other, false)),
+        refusal(world.pay_link(&other)),
         Epic1Refusal::WrongNetwork
     );
 
@@ -552,8 +513,8 @@ fn a_restore_finds_payments_at_the_last_printed_and_on_screen_links() {
     assert_eq!((printed.n, on_screen.n), (31, 49));
 
     world.payer.fund(20, FUNDING);
-    world.pay_link(&printed.link, false).unwrap();
-    world.pay_link(&on_screen.link, false).unwrap();
+    world.pay_link(&printed.link).unwrap();
+    world.pay_link(&on_screen.link).unwrap();
 
     let twin = world.issuer_twin();
     let book = twin.wallet.contact_book();
@@ -635,7 +596,7 @@ fn a_payment_of_another_amount_than_the_link_asks_is_refused_before_it_is_sent()
     let issued = world.issue_link(&world.issuer, Epic1LinkKind::OnScreen, &[]);
 
     assert_eq!(
-        refusal(world.pay(&issued.link, false, half(), false)),
+        refusal(world.pay(&issued.link, half(), false)),
         Epic1Refusal::AmountMismatch
     );
     assert_eq!(
@@ -647,7 +608,7 @@ fn a_payment_of_another_amount_than_the_link_asks_is_refused_before_it_is_sent()
 
     // A link that asks no amount takes the one the payer names.
     let open = without_amount(&issued.link).unwrap();
-    world.pay(&open, false, half(), false).unwrap();
+    world.pay(&open, half(), false).unwrap();
 }
 
 #[test]
@@ -656,7 +617,7 @@ fn the_payee_refuses_a_payment_that_is_not_the_amount_it_issued() {
     let issued = world.issue_link(&world.issuer, Epic1LinkKind::OnScreen, &[]);
     // A payer that does not read the amount from the link.
     let open = without_amount(&issued.link).unwrap();
-    world.pay(&open, false, half(), false).unwrap();
+    world.pay(&open, half(), false).unwrap();
 
     assert_eq!(world.taken(&world.issuer), 0);
     assert!(
@@ -703,7 +664,7 @@ fn a_payer_whose_payment_the_payee_refuses_gets_its_inputs_back() {
     let world = World::new();
     let issued = world.issue_link(&world.issuer, Epic1LinkKind::OnScreen, &[]);
     let open = without_amount(&issued.link).unwrap();
-    let paid = world.pay(&open, false, half(), false).unwrap();
+    let paid = world.pay(&open, half(), false).unwrap();
     assert_ne!(world.payer_locked(), Amount::ZERO);
     let mut events = world.payer.wallet.subscribe();
 
@@ -740,7 +701,7 @@ fn a_payer_whose_payment_the_payee_refuses_gets_its_inputs_back() {
 fn a_refusal_that_is_not_for_the_payment_leaves_it_waiting() {
     let world = World::new();
     let issued = world.issue_link(&world.issuer, Epic1LinkKind::OnScreen, &[]);
-    let paid = world.pay(&issued.link, false, send(), false).unwrap();
+    let paid = world.pay(&issued.link, send(), false).unwrap();
     let mailbox = world.reply_mailbox(paid.slate_id);
     let other = SlateId::from_bytes([9; 16]);
     let not_refusals = [
@@ -780,7 +741,7 @@ fn a_refusal_that_is_not_for_the_payment_leaves_it_waiting() {
 fn a_refusal_that_comes_after_the_answer_does_not_cancel_the_payment() {
     let world = World::new();
     let issued = world.issue_link(&world.issuer, Epic1LinkKind::OnScreen, &[]);
-    let paid = world.pay(&issued.link, false, send(), false).unwrap();
+    let paid = world.pay(&issued.link, send(), false).unwrap();
     assert_eq!(world.taken(&world.issuer), 1);
     world.post(
         7,
@@ -933,8 +894,8 @@ fn a_link_to_a_new_address_is_paid_and_proved_at_its_index() {
         .unwrap();
     assert_eq!(issued.address, address);
 
-    // The payment proof names the proof key of address n, which the payee signs with.
-    let paid = world.pay_link(&issued.link, true).unwrap();
+    // A payment to the link of address n is taken at that index.
+    let paid = world.pay_link(&issued.link).unwrap();
     assert_eq!(paid.address, address);
     assert_eq!(world.taken(&world.issuer), 1);
     assert_eq!(world.received_index(), Some(n));
@@ -1076,10 +1037,10 @@ fn a_link_payment_past_the_open_receipt_cap_is_refused_and_leaves_its_link_unuse
     });
     let first = world.issue_link(&world.issuer, Epic1LinkKind::OnScreen, &[]);
     let second = world.issue_link(&world.issuer, Epic1LinkKind::Printed, &[]);
-    world.pay_link(&first.link, false).unwrap();
+    world.pay_link(&first.link).unwrap();
     assert_eq!(world.taken(&world.issuer), 1);
     world.payer.fund(20, FUNDING);
-    let refused = world.pay_link(&second.link, false).unwrap();
+    let refused = world.pay_link(&second.link).unwrap();
     assert_eq!(refused.posted, Some(0));
 
     // The second payment finds the cap full and is dropped.
@@ -1112,18 +1073,18 @@ fn a_second_payment_to_a_link_is_refused_while_the_first_waits_for_its_answer() 
         &["down.test", "relay.test"],
     );
     let other = world.issue_link(&world.issuer, Epic1LinkKind::OnScreen, &[]);
-    let paid = world.pay_link(&issued.link, false).unwrap();
+    let paid = world.pay_link(&issued.link).unwrap();
     assert_eq!(paid.posted, Some(1));
     assert_eq!(paid.uncertain, None);
     assert!(paid.attempts.iter().all(|attempt| !attempt.uncertain));
 
     world.payer.fund(20, FUNDING);
     assert_eq!(
-        refusal(world.pay_link(&issued.link, false)),
+        refusal(world.pay_link(&issued.link)),
         Epic1Refusal::PaymentPending
     );
     // Another link of the same payee is paid as usual.
-    let paid_other = world.pay_link(&other.link, false).unwrap();
+    let paid_other = world.pay_link(&other.link).unwrap();
     assert_eq!(paid_other.posted, Some(0));
 
     // Once the first payment is cancelled the link is paid again.
@@ -1131,7 +1092,7 @@ fn a_second_payment_to_a_link_is_refused_while_the_first_waits_for_its_answer() 
         .block_on(world.payer.wallet.cancel(paid.tx_id))
         .unwrap();
     assert_eq!(world.payer_state(paid.tx_id), TxState::Cancelled);
-    let again = world.pay_link(&issued.link, false).unwrap();
+    let again = world.pay_link(&issued.link).unwrap();
     assert_eq!(again.posted, Some(1));
 }
 
@@ -1140,7 +1101,7 @@ fn a_payment_is_finalized_from_the_relay_it_named_after_the_relay_setting_change
     let world = World::new();
     world.relay.set_relays_apart(true);
     let issued = world.issue_link(&world.issuer, Epic1LinkKind::OnScreen, &[]);
-    let paid = world.pay_link(&issued.link, false).unwrap();
+    let paid = world.pay_link(&issued.link).unwrap();
     assert_eq!(world.taken(&world.issuer), 1);
     assert_eq!(world.answers_posted(), 1);
     assert_eq!(world.relay.pending(&world.reply_mailbox(paid.slate_id)), 1);

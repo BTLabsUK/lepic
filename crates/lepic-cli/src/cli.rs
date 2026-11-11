@@ -1241,9 +1241,6 @@ pub struct Epic1PayArgs {
     pub message: MessageArg,
     #[command(flatten)]
     pub spend: SpendArgs,
-    /// Ask the payee for a payment proof signed with its epic1 proof key
-    #[arg(long)]
-    pub proof: bool,
     /// The relays of the link that are not in the relay list were checked and may be used
     #[arg(long)]
     pub hosts_ok: bool,
@@ -1320,20 +1317,12 @@ comes later is refused.")]
     Open(ContactLinkArg),
     /// Answer an invite; the reply goes to the inviter's relay unless --by-hand
     Accept(ContactAcceptArgs),
-    /// Take a pair-reply or pair-confirm link that was sent by hand, or find an invite by its
-    /// five pairing words
-    #[command(after_help = "\
-Words are typed by name, or pasted as emoji. The invite they find is printed as a link to answer \
-with `lepic contact accept`.")]
+    /// Take a pair-reply or pair-confirm link that was sent by hand
     Enter(ContactEnterArgs),
     /// Fetch pairing and contact messages from the home relays once, and send what waits
     Collect,
     /// Record the check of the four SAS words against the other screen
     Sas(ContactSasArgs),
-    /// Show a card to pair in person; the other phone scans it
-    ShowCard(ContactCardArgs),
-    /// Pair in person with the card the other phone shows
-    ScanCard(ContactScanArgs),
     /// List the paired contacts
     List,
     /// Remove a pairing; the contact is not told
@@ -1500,9 +1489,6 @@ pub struct ContactInviteArgs {
     /// Deprecated and ignored: new pairings write person
     #[arg(long, value_enum, hide = true)]
     pub kind: Option<ContactKindArg>,
-    /// Also offer five pairing words that find the invite
-    #[arg(long)]
-    pub pairing_words: bool,
 }
 
 #[derive(Debug, Args)]
@@ -1539,9 +1525,9 @@ pub struct ContactLinkArg {
 
 #[derive(Debug, Args)]
 pub struct ContactEnterArgs {
-    /// The epiccash:// link, or the five pairing words
-    #[arg(value_name = "LINK|WORDS", required = true, num_args = 1..=5)]
-    pub input: Vec<String>,
+    /// The epiccash:// link
+    #[arg(value_name = "LINK")]
+    pub input: String,
 }
 
 #[derive(Debug, Args)]
@@ -1676,25 +1662,6 @@ pub struct ContactSasArgs {
     pub contact: ContactIdArg,
     #[arg(value_enum, value_name = "RESULT")]
     pub result: SasArg,
-}
-
-#[derive(Debug, Args)]
-pub struct ContactCardArgs {
-    #[command(flatten)]
-    pub name: ContactNameArg,
-    /// Deprecated and ignored: new pairings write person
-    #[arg(long, value_enum, hide = true)]
-    pub kind: Option<ContactKindArg>,
-}
-
-#[derive(Debug, Args)]
-pub struct ContactScanArgs {
-    /// The id `contact show-card` printed on this wallet
-    #[command(flatten)]
-    pub contact: ContactIdArg,
-    /// The other phone's epiccash://contact/ link
-    #[arg(value_name = "LINK")]
-    pub link: String,
 }
 
 #[derive(Debug, Args)]

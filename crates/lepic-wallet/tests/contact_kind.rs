@@ -21,10 +21,9 @@ mod world;
 use helpers::{accept, invite_request, relays};
 use lepic_contact::{ContactCard, ContactKind, Invite, Network as ContactNetwork, SigningKey};
 use lepic_primitives::params::Network;
-use lepic_store::AccountIndex;
 use lepic_store::ContactId;
 use lepic_wallet::account::parent_key_id;
-use lepic_wallet_contacts::{CardRequest, InviteRequest, WalletContacts, contact_root};
+use lepic_wallet_contacts::{InviteRequest, WalletContacts, contact_root};
 use world::{Party, World};
 
 fn store_kind(kind: ContactKind) -> lepic_store::ContactKind {
@@ -120,28 +119,6 @@ fn a_new_invite_and_its_answer_write_person_whatever_the_request_says() {
         view_kind(&world, &world.payer, payer_side),
         Some(ContactKind::Person)
     );
-}
-
-#[test]
-fn a_card_shown_in_person_writes_person_whatever_the_request_says() {
-    let world = World::new();
-    let offer = world
-        .block_on(world.issuer.wallet.contact_book().pairing_show_card(
-            &relays(&world.issuer),
-            CardRequest {
-                account: AccountIndex(0),
-                name: "Anna".to_owned(),
-                kind: ContactKind::Shop,
-                home_relay: None,
-            },
-        ))
-        .unwrap();
-    let record = world
-        .issuer
-        .read(|repos| repos.contact(offer.contact_id))
-        .unwrap();
-    let card = ContactCard::decode(&record.own_card, ContactNetwork::Floonet).unwrap();
-    assert_eq!(card.fields().kind, ContactKind::Person);
 }
 
 #[test]

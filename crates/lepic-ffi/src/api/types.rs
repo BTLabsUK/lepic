@@ -1210,15 +1210,13 @@ pub struct EndedPairing {
 
 /// A new invite, from `EpicWallet::pairing_invite`. `link` lets anyone who sees it pair as
 /// this contact until it is used or expires: share it, show it as a QR code, never store it.
-/// The words are as secret as the link. `Debug` shows neither.
+/// `Debug` does not show the link.
 #[derive(Clone, PartialEq, Eq)]
 pub struct PairingInvite {
     pub contact_id: String,
     /// `epiccash://pair/1/...`.
     pub link: String,
     pub expires_at_ms: i64,
-    /// The five pairing words when they were asked for; empty otherwise.
-    pub words: Vec<SasEntry>,
 }
 
 /// What an invite claims, for the "Pair with Anna?" sheet, from `EpicWallet::pairing_preview`.
@@ -1255,30 +1253,12 @@ pub enum PairingClass {
     Private,
 }
 
-/// An invite found by its pairing words, from `EpicWallet::pairing_find_words`. Answer it
-/// with `link`; do not store it. `Debug` does not show the link.
-#[derive(Clone, PartialEq, Eq)]
-pub struct FoundInvite {
-    pub link: String,
-    pub preview: InvitePreview,
-}
-
 impl std::fmt::Debug for PairingInvite {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("PairingInvite")
             .field("contact_id", &self.contact_id)
             .field("link", &"<redacted>")
             .field("expires_at_ms", &self.expires_at_ms)
-            .field("words", &format_args!("<{} redacted>", self.words.len()))
-            .finish()
-    }
-}
-
-impl std::fmt::Debug for FoundInvite {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("FoundInvite")
-            .field("link", &"<redacted>")
-            .field("preview", &self.preview)
             .finish()
     }
 }
@@ -1291,14 +1271,6 @@ pub struct PairingAnswer {
     pub reply_link: String,
     /// The reply reached the relay; the confirmation is collected later.
     pub posted: bool,
-}
-
-/// A card shown to pair in person, from `EpicWallet::pairing_show_card`.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PairingCard {
-    pub contact_id: String,
-    /// `epiccash://contact/1/...`, shown as a QR code for the other phone.
-    pub link: String,
 }
 
 /// What a pasted reply or confirm link did.

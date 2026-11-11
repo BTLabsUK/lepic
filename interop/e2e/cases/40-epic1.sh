@@ -10,7 +10,6 @@ CASES+=("epic1.index|case_e1_index|crates/lepic-cli crates/lepic-epic1 crates/le
 CASES+=("epic1.no-amount|case_e1_no_amount|crates/lepic-cli crates/lepic-epic1")
 CASES+=("epic1.printed|case_e1_printed|crates/lepic-cli crates/lepic-epic1 crates/lepic-wallet-contacts")
 CASES+=("epic1.epicbox-param|case_e1_epicbox_param|crates/lepic-cli crates/lepic-epic1 crates/lepic-wallet-contacts")
-CASES+=("epic1.proof|case_e1_proof|crates/lepic-cli crates/lepic-epic1 crates/lepic-wallet-contacts")
 CASES+=("epic1.restore|case_e1_restore|crates/lepic-cli crates/lepic-epic1 crates/lepic-wallet crates/lepic-keychain")
 CASES+=("epic1.concurrent|case_e1_concurrent|crates/lepic-cli crates/lepic-epic1 crates/lepic-wallet-contacts")
 CASES+=("epic1.refusals|case_e1_refusals|crates/lepic-cli crates/lepic-epic1")
@@ -265,23 +264,6 @@ case_e1_epicbox_param() {
     expect_eq "${n}" 1 "one transaction for the slate posted twice" || return 1
     e1_collect_until "${E1_PAYER}" "${slate}" "posted confirmed" "${E1_PAYEE}" || return 1
     note "relay2 ok, dead first relay falls through (posted 1), post-next to the second relay, payee takes the duplicate once"
-}
-
-# pay --proof: the payee signs a payment proof with its epic1 proof key.
-case_e1_proof() {
-    local link pay slate
-    e1_setup || return 1
-    link="$(w "${E1_PAYEE}" epic1 link 0.01 | jq -r .link)" || fail "epic1 link failed" || return 1
-    pay="$(w "${E1_PAYER}" epic1 pay "${link}" --proof --min-confirmations "${E2E_MINCONF}" --ttl-blocks 100)" || fail "epic1 pay --proof failed" || return 1
-    printf '%s\n' "${pay}" >"${CASE_DIR}/pay.json"
-    expect_json "${pay}" '(has("proof_address") | not)' "pay --proof sends no proof address back" || return 1
-    slate="$(jq -r .slate_id <<<"${pay}")"
-    e1_collect_until "${E1_PAYEE}" "${slate}" "pending_confirmation received finalized confirmed" || return 1
-    e1_collect_until "${E1_PAYER}" "${slate}" "posted confirmed" "${E1_PAYEE}" || return 1
-    e1_confirmed "${E1_PAYER}" "${slate}" || return 1
-    w "${E1_PAYER}" tx show "$(tx_by_slate "${E1_PAYER}" "${slate}" | jq -r .tx_id)" >"${CASE_DIR}/payer-tx.json" || fail "tx show failed" || return 1
-    w "${E1_PAYEE}" tx show "$(tx_by_slate "${E1_PAYEE}" "${slate}" | jq -r .tx_id)" >"${CASE_DIR}/payee-tx.json" || fail "tx show failed" || return 1
-    note "pay --proof finalized and confirmed; the report has no proof address"
 }
 
 # A payee restored from its phrase reads the link mailboxes once and takes a payment made while

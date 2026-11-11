@@ -1,7 +1,7 @@
 # Pairing
 
-Two LEPIC wallets pair once. They can scan each other's card in person, or exchange an invite
-link or five pairing words online. Each side then holds keys made for that one contact and a
+Two LEPIC wallets pair once, by exchanging an invite link, a reply and a confirm. (Pairing by
+card and by spoken pairing words is no longer implemented.) Each side then holds keys made for that one contact and a
 mailbox on the pairing's home relay. Slates, invoices and notices between them travel sealed and
 signed. This guide shows the messages, the calls that make them and the limits in the code. The
 normative rules are in [RFC 0002](../rfcs/0002-contact-pairing.md), and its edge cases in
@@ -155,29 +155,12 @@ The outcome travels to the contact as a sealed status notice (`pair-finished`, `
 `pair-mismatch`, `unpaired`), only when its feature word claims them. The notices carry a hash of
 the SAS, never the SAS itself ([§7.6](../rfcs/0002-contact-pairing.md#76-pairing-record)).
 
-## In person
+## In person and pairing words
 
-Each phone shows its card QR (`pairing_show_card`, a fresh slot per showing) and scans the
-other's (`pairing_scan_card`). Both nonces are zero, and the card with the lower sig key is
-card A (`Sas::in_person`). No network is used. Each side delivers to the mailbox on the other's
-card. On its first collect each wallet sends the contact a new card with a fresh mailbox, since
-anyone nearby saw the QR ([§7.4](../rfcs/0002-contact-pairing.md#74-in-person)).
-
-## Pairing words
-
-Five SAS entries (`WORD_COUNT`) replace a link when there is nothing to scan or paste
-([§7.7](../rfcs/0002-contact-pairing.md#77-pairing-words)):
-
-1. A makes an invite with a 10-minute expiry (`WORDS_INVITE_EXPIRY`) and 5 random bytes.
-2. `PairingWords::stretch` runs Argon2id over the words and the 10-minute `WordsWindow`. The
-   result gives a rendezvous mailbox and an invite key.
-3. A posts the encrypted invite, at most `MAX_POSTED_LEN` (4,096 characters), to the rendezvous
-   mailbox on every built-in relay of the network.
-4. B types the words, and tries the current window and the one before (`WordsWindow::to_try`).
-   It opens the first message that decrypts and acknowledges it.
-
-Words are not offered on a network with no built-in relay, or with Epicbox off. The meeting list
-holds at most `MAX_MEETING_RELAYS`, 16.
+LEPIC no longer implements pairing by card QR or by the five pairing words
+([§7.4](../rfcs/0002-contact-pairing.md#74-in-person),
+[§7.7](../rfcs/0002-contact-pairing.md#77-pairing-words)). The RFC sections remain as the record
+of the design.
 
 ## Private pairings
 

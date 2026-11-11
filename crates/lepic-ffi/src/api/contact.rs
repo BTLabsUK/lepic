@@ -31,12 +31,11 @@ use flutter_rust_bridge::frb;
 use crate::api::error::WalletError;
 use crate::api::types::{
     CollectTrigger, ContactCollectReport, ContactImportSummary, ContactInvoiceView, ContactKind,
-    ContactPayloadView, ContactRelayMode, ContactView, DomainVerdict, FinalizedTx, FoundInvite,
-    InviteExpiry, InvitePreview, IssuedInvoice, KeyCheckStart, KeysDecision, OutboxEntryView,
-    OutboxReport, PaidInvoice, PairRequestView, PairingAnswer, PairingCard, PairingClass,
-    PairingInvite, PairingLinkResult, PendingPairingView, QuarantineRetryReport,
-    QuarantinedMessageView, SasDecision, SealedAnswer, SealedSlateView, SendOptions, SentTx,
-    SlatePurpose, SlateWire,
+    ContactPayloadView, ContactRelayMode, ContactView, DomainVerdict, FinalizedTx, InviteExpiry,
+    InvitePreview, IssuedInvoice, KeyCheckStart, KeysDecision, OutboxEntryView, OutboxReport,
+    PaidInvoice, PairRequestView, PairingAnswer, PairingClass, PairingInvite, PairingLinkResult,
+    PendingPairingView, QuarantineRetryReport, QuarantinedMessageView, SasDecision, SealedAnswer,
+    SealedSlateView, SendOptions, SentTx, SlatePurpose, SlateWire,
 };
 use crate::api::wallet::EpicWallet;
 use crate::boundary::guard;
@@ -69,33 +68,22 @@ pub fn sealed_file_extension(text: String) -> Result<String, WalletError> {
 impl EpicWallet {
     /// Makes an invite to pair, valid for `expiry`, whose messages go through this wallet's
     /// relay. The pending pairing is stored and listed by [`EpicWallet::pairings_pending`];
-    /// [`EpicWallet::contacts_collect`] takes the reply and raises `PairingReplied`. Without
-    /// words nothing is sent, so this works offline.
-    ///
-    /// With `offer_words` the invite lasts 10 minutes and is also posted under five pairing
-    /// words, returned in `words`, for the other side to type, on every meeting relay whatever
-    /// relay the wallet uses: the `meeting_relays`, each `domain[:port]` over TLS, which the
-    /// app takes from its settings; LEPIC has none of its own. The other side must look on at
-    /// least one of them. That needs `Online` and fails with `ContactsOffline` or `EpicboxOff`
-    /// before anything is stored, with `PairingWordsUnavailable` when `meeting_relays` is
-    /// empty, and with `TransportFailed` when no meeting relay takes the post, the invite then
-    /// withdrawn. Without `offer_words`, `meeting_relays` is ignored and may be empty.
-    ///
+    /// [`EpicWallet::contacts_collect`] takes the reply and raises `PairingReplied`. Nothing
+    /// is sent, so this works offline.
     /// The pairing's mailboxes live on `home_relay`, `domain[:port]` reached over TLS, or with
     /// `None` on the wallet's own Epicbox relay; the other side reaches them there whatever
     /// relay it uses.
     ///
     /// `pairing_class` `Private` makes a private pairing with another wallet of the user's
-    /// ([`PairingClass`]): its invite must travel by QR or paste, so `offer_words` is refused
-    /// with `WrongPairingClass`.
+    /// ([`PairingClass`]): its invite must travel by QR or paste.
     ///
     /// With `expect_address` set, the reply must prove that Epicbox address, compared by key:
     /// a reply without the proof fails `AddressProofMissing`, one proving another key
     /// `OtherAddress`, with nothing stored, as `PairingFailed` in the collect or as the error
     /// of `pairing_enter_link`. A reply that proves it completes the pairing Verified.
     ///
-    /// Fails with `InvalidArgument` for a meeting or home relay that is not `domain[:port]`,
-    /// for more than 16 meeting relays or an `expect_address` that is not an Epicbox address of
+    /// Fails with `InvalidArgument` for a home relay that is not `domain[:port]`
+    /// or an `expect_address` that is not an Epicbox address of
     /// this network, with `InvalidContactName` for a `name` a card cannot carry, and with `Io`
     /// when 64 pairings are pending.
     ///
@@ -106,9 +94,7 @@ impl EpicWallet {
         name: String,
         kind: ContactKind,
         expiry: InviteExpiry,
-        offer_words: bool,
         relay_mode: ContactRelayMode,
-        meeting_relays: Vec<String>,
         home_relay: Option<String>,
         pairing_class: PairingClass,
         expect_address: Option<String>,
@@ -119,9 +105,7 @@ impl EpicWallet {
                     name,
                     kind,
                     expiry,
-                    offer_words,
                     relay_mode,
-                    meeting_relays,
                     home_relay,
                     pairing_class,
                     expect_address,
@@ -275,33 +259,6 @@ impl EpicWallet {
         .await
     }
 
-    /// Finds the invite that five pairing words name, typed as names or emoji, on the
-    /// meeting relays, and returns its link with its preview, for
-    /// [`EpicWallet::pairing_accept`]. The meeting relays are `meeting_relays`, each
-    /// `domain[:port]` over TLS, which the app takes from its settings; all are asked at once,
-    /// each for at most 20 seconds, and
-    /// the first invite that opens wins. That copy is taken off its relay, so nobody else finds
-    /// it; copies on other relays expire.
-    ///
-    /// Fails with `InvalidPairingWords` for words not in the table, `PairingWordsNotFound`
-    /// when no relay holds the invite, `TransportFailed` when no meeting relay could be
-    /// reached, `PairingWordsUnavailable` when `meeting_relays` is empty, `InvalidArgument`
-    /// for a meeting relay that is not `domain[:port]` or more than 16 of them, and
-    /// `ContactsOffline` or `EpicboxOff`.
-    pub async fn pairing_find_words(
-        &self,
-        words: Vec<String>,
-        relay_mode: ContactRelayMode,
-        meeting_relays: Vec<String>,
-    ) -> Result<FoundInvite, WalletError> {
-        self.run("pairing_find_words", |session| async move {
-            session
-                .pairing_find_words(words, relay_mode, meeting_relays)
-                .await
-        })
-        .await
-    }
-
     /// Answers an invite as `name`. The pending pairing is stored first, then the reply is
     /// posted unless `by_hand` is set or the mode is not `Online`; `reply_link` is returned
     /// either way, for "Send by hand" and for a post that failed (`posted` false).
@@ -368,50 +325,6 @@ impl EpicWallet {
     ) -> Result<PairingLinkResult, WalletError> {
         self.run("pairing_enter_link", |session| async move {
             session.pairing_enter_link(&text, relay_mode).await
-        })
-        .await
-    }
-
-    /// Shows a card to pair in person: "Show my code". Its `link` goes in a QR code for the
-    /// other phone; [`EpicWallet::pairing_scan_card`] with the same `contact_id` finishes the
-    /// pairing with theirs. Nothing is sent, so this works offline. The pairing's mailboxes
-    /// live on `home_relay` as [`EpicWallet::pairing_invite`] describes.
-    ///
-    /// Fails as [`EpicWallet::pairing_invite`] does.
-    ///
-    /// `kind` is deprecated and ignored: a new pairing writes a person (docs/adr/0041).
-    pub async fn pairing_show_card(
-        &self,
-        name: String,
-        kind: ContactKind,
-        relay_mode: ContactRelayMode,
-        home_relay: Option<String>,
-    ) -> Result<PairingCard, WalletError> {
-        self.run("pairing_show_card", |session| async move {
-            session
-                .pairing_show_card(name, kind, relay_mode, home_relay)
-                .await
-        })
-        .await
-    }
-
-    /// Finishes an in-person pairing with the card `link` scanned from the other phone:
-    /// "Scan theirs". The contact is paired, not verified; show the words check from the
-    /// returned view. Works offline.
-    ///
-    /// Fails with `ContactNotFound` when `contact_id` is not a card this wallet shows,
-    /// `InvalidPairingText` for a link that is not a card on the wallet's network, and
-    /// `AlreadyPaired` for a contact this wallet holds or its own card.
-    pub async fn pairing_scan_card(
-        &self,
-        contact_id: String,
-        link: String,
-        relay_mode: ContactRelayMode,
-    ) -> Result<ContactView, WalletError> {
-        self.run("pairing_scan_card", |session| async move {
-            session
-                .pairing_scan_card(&contact_id, &link, relay_mode)
-                .await
         })
         .await
     }

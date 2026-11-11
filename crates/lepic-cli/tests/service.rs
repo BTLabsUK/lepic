@@ -621,7 +621,7 @@ fn the_route_covered_command_families_run_through_a_running_serve() {
         wait_for_socket(&socket);
         let through = run_all(&client);
         let made = [
-            wallet.run(&client, &["contact", "invite", "--pairing-words"]),
+            wallet.run(&client, &["contact", "invite"]),
             wallet.run(&client, &["in-person", "invoice", "1"]),
         ];
         stop.store(true, Ordering::SeqCst);
