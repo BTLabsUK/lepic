@@ -49,7 +49,6 @@ tokio-rustls.workspace = true
 toml = { workspace = true, features = ["std", "parse", "serde"] }
 tracing = { workspace = true, features = ["std"] }
 # Moves to [workspace.dependencies] at merge.
-utoipa = { version = "6.0.0", default-features = false, features = ["macros"] }
 zeroize = { workspace = true, features = ["std"] }
 
 [target.'cfg(unix)'.dependencies]

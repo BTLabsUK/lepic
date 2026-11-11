@@ -7,7 +7,6 @@ use std::fmt::Write as _;
 use std::io::Write as _;
 
 use serde::{Serialize, Serializer};
-use utoipa::ToSchema;
 use zeroize::Zeroizing;
 
 use crate::amount::{AmountError, format_units, parse_amount};
@@ -152,7 +151,7 @@ pub struct ScanReport {
 }
 
 /// What `wallet scan` did: every field of the engine's scan summary.
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Serialize)]
 pub struct WalletScanReport {
     pub start_height: u64,
     pub end_height: u64,
@@ -173,7 +172,7 @@ pub struct WalletScanReport {
     pub delete_unconfirmed: bool,
 }
 
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Serialize)]
 pub struct InfoReport {
     pub network: String,
     /// The chain tip the balances were computed at.
@@ -189,7 +188,7 @@ pub struct InfoReport {
     pub accounts: Vec<AccountReport>,
 }
 
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Serialize)]
 pub struct AccountReport {
     pub index: u32,
     pub label: String,
@@ -201,18 +200,18 @@ pub struct AccountReport {
     pub locked: Option<String>,
 }
 
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Serialize)]
 pub struct AddressReport {
     pub address: String,
 }
 
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Serialize)]
 pub struct OutputsReport {
     pub account: String,
     pub outputs: Vec<OutputReport>,
 }
 
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Serialize)]
 pub struct OutputReport {
     /// Hex commitment.
     pub commitment: String,
@@ -228,12 +227,12 @@ pub struct OutputReport {
     pub tx_id: Option<u32>,
 }
 
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Serialize)]
 pub struct PasswordReport {
     pub changed: bool,
 }
 
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Serialize)]
 pub struct SendReport {
     pub tx_id: u32,
     pub slate_id: String,
@@ -283,7 +282,7 @@ pub struct ReceiveReport {
 }
 
 /// A slate received through the API: the reply travels in the answer, not in a file.
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Serialize)]
 pub struct SlateReceiveReport {
     pub tx_id: u32,
     pub slate_id: String,
@@ -294,14 +293,14 @@ pub struct SlateReceiveReport {
     pub repeated: bool,
 }
 
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Serialize)]
 pub struct FinalizeReport {
     pub tx_id: u32,
     pub slate_id: String,
     pub state: String,
 }
 
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Serialize)]
 pub struct PostReport {
     pub tx_id: u32,
     pub state: String,
@@ -312,19 +311,19 @@ pub struct PostReport {
     pub height: Option<u64>,
 }
 
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Serialize)]
 pub struct TxStateReport {
     pub tx_id: u32,
     pub state: String,
 }
 
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Serialize)]
 pub struct TxListReport {
     pub account: String,
     pub transactions: Vec<TxReport>,
 }
 
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Serialize)]
 pub struct TxReport {
     pub tx_id: u32,
     pub direction: String,
@@ -391,7 +390,7 @@ pub struct TxReport {
 }
 
 /// A listing: the service key in hex and the generation.
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Serialize)]
 pub struct ListingReport {
     pub service_key: String,
     pub generation: u32,
@@ -411,7 +410,7 @@ pub struct ImportHistoryReport {
 }
 
 /// What the old wallet recorded of an imported transaction.
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Serialize)]
 pub struct ImportedReport {
     pub source_id: u32,
     pub kind: &'static str,
@@ -420,7 +419,7 @@ pub struct ImportedReport {
     pub check: &'static str,
 }
 
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Serialize)]
 pub struct MessageReport {
     /// `sender` or `receiver` of the money.
     pub role: String,
@@ -499,7 +498,7 @@ pub struct InboxReport {
     pub expired: Option<ExpiredReport>,
 }
 
-#[derive(Debug, Default, Serialize, ToSchema)]
+#[derive(Debug, Default, Serialize)]
 pub struct ExpiredReport {
     /// Slate ids of parked invoices deleted unpaid.
     pub deleted: Vec<String>,
@@ -510,7 +509,7 @@ pub struct ExpiredReport {
     pub cancellable: Vec<u32>,
 }
 
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Serialize)]
 pub struct ContactInviteReport {
     pub contact_id: String,
     pub link: String,
@@ -518,7 +517,7 @@ pub struct ContactInviteReport {
 }
 
 /// A code to show as a QR code, from `in-person invoice`.
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Serialize)]
 pub struct InPersonCodeReport {
     pub tx_id: u32,
     pub slate_id: String,
@@ -535,7 +534,7 @@ pub struct InPersonCodeReport {
 }
 
 /// The relay a code names for its answer, as it is shown before posting.
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Serialize)]
 pub struct InPersonHostReport {
     pub host: String,
     pub port: u16,
@@ -546,7 +545,7 @@ pub struct InPersonHostReport {
 }
 
 /// What a scanned code asks, from `in-person read`.
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Serialize)]
 pub struct InPersonReadReport {
     pub slate_id: String,
     /// `invoice` for an I1, `send` for an S1.
@@ -560,7 +559,7 @@ pub struct InPersonReadReport {
 }
 
 /// An answer to a scanned code, from `in-person pay`.
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Serialize)]
 pub struct InPersonPaidReport {
     pub tx_id: u32,
     pub slate_id: String,
@@ -573,7 +572,7 @@ pub struct InPersonPaidReport {
 }
 
 /// An answer posted to the relay its code names, from `in-person post`.
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Serialize)]
 pub struct InPersonPostReport {
     pub slate_id: String,
     pub posted: bool,
@@ -582,7 +581,7 @@ pub struct InPersonPostReport {
 }
 
 /// An answer taken for a code this wallet showed, from `in-person take`.
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Serialize)]
 pub struct InPersonTakenReport {
     pub tx_id: u32,
     pub slate_id: String,
@@ -595,7 +594,7 @@ pub struct InPersonTakenReport {
 }
 
 /// One answer to a code this wallet showed.
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Serialize)]
 pub struct InPersonAnswerReport {
     pub number: u32,
     pub check_code: String,
@@ -604,7 +603,7 @@ pub struct InPersonAnswerReport {
 }
 
 /// A code this wallet showed and its answers, from `in-person answers`.
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Serialize)]
 pub struct InPersonAnswersReport {
     pub tx_id: u32,
     pub slate_id: String,
@@ -618,7 +617,7 @@ pub struct InPersonAnswersReport {
     pub answers: Vec<InPersonAnswerReport>,
 }
 
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Serialize)]
 pub struct ContactPreviewReport {
     /// What the inviter calls itself, unverified.
     pub claimed_name: String,
@@ -628,7 +627,7 @@ pub struct ContactPreviewReport {
     pub service: bool,
 }
 
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Serialize)]
 pub struct ContactAcceptReport {
     pub contact_id: String,
     /// The reply as a link, to send by hand when `posted` is false.
@@ -636,7 +635,7 @@ pub struct ContactAcceptReport {
     pub posted: bool,
 }
 
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Serialize)]
 pub struct ContactLinkReport {
     /// `confirm` (send `link` back by hand), `paired`, `ignored`, or `invite` (pairing words
     /// found the invite `link`, to answer).
@@ -647,7 +646,7 @@ pub struct ContactLinkReport {
     pub link: Option<String>,
 }
 
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Serialize)]
 pub struct ContactCollectReport {
     pub mailboxes: usize,
     pub capped: usize,
@@ -668,7 +667,7 @@ pub struct ContactCollectReport {
     pub unreachable: Vec<String>,
 }
 
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Serialize)]
 pub struct ContactFailureReport {
     pub contact_id: String,
     /// `expired`, `changed-on-the-way`, `refused-already-used`, `refused-expired` or
@@ -676,7 +675,7 @@ pub struct ContactFailureReport {
     pub reason: &'static str,
 }
 
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Serialize)]
 pub struct ContactReport {
     pub contact_id: String,
     pub label: String,
@@ -712,7 +711,7 @@ pub struct ContactReport {
     pub last_heard: Option<String>,
 }
 
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Serialize)]
 pub struct ContactListReport {
     pub contacts: Vec<ContactReport>,
     /// The pair requests this wallet sent that wait for an answer, oldest first.
@@ -720,7 +719,7 @@ pub struct ContactListReport {
 }
 
 /// A pair request this wallet sent that nobody answered yet.
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Serialize)]
 pub struct SentRequestReport {
     /// The id `contact request-cancel` takes.
     pub contact_id: String,
@@ -732,7 +731,7 @@ pub struct SentRequestReport {
 }
 
 /// A pair request another wallet sent to this one.
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Serialize)]
 pub struct PairRequestReport {
     /// The id `contact request-accept` and `contact request-dismiss` take.
     pub request_id: String,
@@ -747,26 +746,26 @@ pub struct PairRequestReport {
 }
 
 /// `lepic contact requests`.
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Serialize)]
 pub struct ContactRequestsReport {
     pub requests: Vec<PairRequestReport>,
 }
 
 /// `lepic contact request-dismiss`.
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Serialize)]
 pub struct ContactRequestDismissReport {
     pub request_id: String,
     pub dismissed: bool,
 }
 
 /// `lepic contact request-cancel`.
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Serialize)]
 pub struct ContactRequestCancelReport {
     pub contact_id: String,
     pub cancelled: bool,
 }
 
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Serialize)]
 pub struct ContactRemoveReport {
     pub contact_id: String,
     pub removed: bool,
@@ -795,13 +794,13 @@ pub struct ContactSlateReport {
     pub text: Option<String>,
 }
 
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Serialize)]
 pub struct ContactCheckReport {
     pub contact_id: String,
 }
 
 /// `lepic profile show`.
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Serialize)]
 pub struct ProfileShowReport {
     /// The profile this wallet tells paired contacts: the flag, `LEPIC_PROFILE`, the config file.
     pub profile: u16,
@@ -812,7 +811,7 @@ pub struct ProfileShowReport {
 }
 
 /// `lepic profile set`.
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Serialize)]
 pub struct ProfileSetReport {
     pub profile: u16,
     pub names: Vec<&'static str>,
@@ -824,7 +823,7 @@ pub struct ProfileSetReport {
 }
 
 /// `lepic profile domain show`.
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Serialize)]
 pub struct ProfileDomainShowReport {
     /// The domain the settings give; none when unset.
     pub domain: Option<String>,
@@ -834,7 +833,7 @@ pub struct ProfileDomainShowReport {
 }
 
 /// `lepic profile domain file`.
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Serialize)]
 pub struct ProfileDomainFileReport {
     pub path: String,
     pub bytes: usize,
@@ -843,7 +842,7 @@ pub struct ProfileDomainFileReport {
 }
 
 /// The text of the domain file, for the wallet API; the command writes it to a file.
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Serialize)]
 pub struct ProfileDomainDocumentReport {
     pub document: String,
     /// Where the file must be served; none when no domain is configured.
@@ -851,14 +850,14 @@ pub struct ProfileDomainDocumentReport {
 }
 
 /// `lepic profile domain attach`.
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Serialize)]
 pub struct ProfileDomainAttachReport {
     pub domain: String,
     /// How many contact updates were queued.
     pub queued: u32,
 }
 
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Serialize)]
 pub struct ContactMoveHomeReport {
     /// The home relay moved to, `domain:port`.
     pub home_relay: String,
@@ -869,7 +868,7 @@ pub struct ContactMoveHomeReport {
     pub drain_until: Option<String>,
 }
 
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Serialize)]
 pub struct ContactKeyCheckReport {
     /// The new pairing the check went over.
     pub contact_id: String,
@@ -886,7 +885,7 @@ pub struct ContactInvoiceIssueReport {
     pub amount: String,
 }
 
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Serialize)]
 pub struct ContactInvoiceReport {
     pub slate_id: String,
     pub contact_id: String,
@@ -902,30 +901,30 @@ pub struct ContactInvoiceReport {
     pub same_amount: Vec<String>,
 }
 
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Serialize)]
 pub struct ContactInvoiceListReport {
     pub invoices: Vec<ContactInvoiceReport>,
 }
 
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Serialize)]
 pub struct ContactExportReport {
     pub file: String,
 }
 
 /// The contact backup document, for the wallet API; the command writes it to a file.
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Serialize)]
 pub struct ContactBackupReport {
     pub backup: String,
 }
 
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Serialize)]
 pub struct ContactImportReport {
     pub imported: usize,
     pub skipped_existing: usize,
     pub skipped_conflict: usize,
 }
 
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Serialize)]
 pub struct ContactPayloadPostReport {
     pub contact_id: String,
     /// The id the other wallet keeps the payload under, 32 lowercase hex digits.
@@ -935,12 +934,12 @@ pub struct ContactPayloadPostReport {
     pub peer_lacks_app_payloads: bool,
 }
 
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Serialize)]
 pub struct ContactQuarantineReport {
     pub messages: Vec<QuarantinedMessageReport>,
 }
 
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Serialize)]
 pub struct QuarantinedMessageReport {
     pub id: String,
     pub contact_id: String,
@@ -950,12 +949,12 @@ pub struct QuarantinedMessageReport {
     pub size: u64,
 }
 
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Serialize)]
 pub struct ContactPayloadListReport {
     pub payloads: Vec<ContactPayloadReport>,
 }
 
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Serialize)]
 pub struct ContactPayloadReport {
     pub id: String,
     pub contact_id: String,
@@ -964,21 +963,21 @@ pub struct ContactPayloadReport {
     pub payload: String,
 }
 
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Serialize)]
 pub struct ContactPayloadAckReport {
     /// How many kept payloads were forgotten.
     pub acknowledged: usize,
 }
 
 /// The seal keys pinned for an account's direct payees, in origin order.
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Serialize)]
 pub struct PeerPinListReport {
     pub account: String,
     pub pins: Vec<PeerPinReport>,
 }
 
 /// The seal key a LEPIC wallet showed at an origin.
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Serialize)]
 pub struct PeerPinReport {
     /// `http://host:port`, `https://host:port`, or the onion name alone.
     pub origin: String,
@@ -990,7 +989,7 @@ pub struct PeerPinReport {
     pub last_seen: String,
 }
 
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Serialize)]
 pub struct PeerForgetReport {
     pub origin: String,
     /// False when no key was pinned for the origin.
@@ -1027,7 +1026,7 @@ pub struct ServeReport {
 }
 
 /// A running `serve`: facts only, which a monitor compares with its own thresholds.
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Serialize)]
 pub struct ServeStatusReport {
     /// The socket the API answers on.
     pub socket: String,
@@ -1052,7 +1051,7 @@ pub struct ServeStatusReport {
 }
 
 /// The owner TLS listener of a running `serve --owner-tls`.
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Serialize)]
 pub struct OwnerTlsStatus {
     /// The address it listens on, `ip:port`.
     pub address: String,
@@ -1061,14 +1060,14 @@ pub struct OwnerTlsStatus {
 }
 
 /// The methods serve offers.
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Serialize)]
 pub struct MethodsReport {
     /// The registered methods, in registry order.
     pub methods: Vec<MethodReport>,
 }
 
 /// One method and what it can do.
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Serialize)]
 pub struct MethodReport {
     /// The method's id, as a send names it and as transactions store it.
     pub id: String,
@@ -1086,14 +1085,14 @@ pub struct MethodReport {
 }
 
 /// What a slate over a method may carry.
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Serialize)]
 pub struct CarriesReport {
     /// A LEPIC receiver may be given a key to seal its answer to.
     pub reply_key: bool,
 }
 
 /// The API's requests since serve started.
-#[derive(Debug, Clone, Copy, Default, Serialize, ToSchema)]
+#[derive(Debug, Clone, Copy, Default, Serialize)]
 pub struct RequestsReport {
     /// Requests answered, problems included.
     pub served: u64,
@@ -1105,7 +1104,7 @@ pub struct RequestsReport {
 }
 
 /// The HTTP listener of a running `serve --http`, with its counts so far.
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Serialize)]
 pub struct ServeHttpStatus {
     #[serde(flatten)]
     pub listener: HttpListenReport,
@@ -1114,7 +1113,7 @@ pub struct ServeHttpStatus {
 }
 
 /// One maintenance task of `serve`, since it started.
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Serialize)]
 pub struct MaintenanceReport {
     /// Failures since the last success.
     pub consecutive_failures: u32,
@@ -1125,7 +1124,7 @@ pub struct MaintenanceReport {
 }
 
 /// What `http listen`, or the HTTP listener of `serve`, did before it was stopped.
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Serialize)]
 pub struct HttpListenReport {
     pub port: u16,
     /// `local` or `internet`.
@@ -1155,7 +1154,7 @@ pub struct TorListenReport {
     pub refused: u32,
 }
 
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Serialize)]
 pub struct PeerReport {
     pub address: String,
     /// `unknown`, `lepic` or `no_invoices`.
@@ -1171,14 +1170,14 @@ pub struct PeerReport {
     pub native_slates: bool,
 }
 
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Serialize)]
 pub struct EpicboxStatusReport {
     pub relay: String,
     pub address: String,
     pub pending_deliveries: usize,
 }
 
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Serialize)]
 pub struct NodeStatusReport {
     pub node: String,
     pub node_version: String,

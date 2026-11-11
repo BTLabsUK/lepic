@@ -4,12 +4,11 @@
 use std::io::Write as _;
 
 use serde::Serialize;
-use utoipa::ToSchema;
 
 use super::{InPersonHostReport, Report, printable, short_time};
 
 /// The epic1 address of an account, from `epic1 address`.
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Serialize)]
 pub struct Epic1AddressReport {
     pub account: String,
     /// The address's number in the account; 0 is its first address.
@@ -18,7 +17,7 @@ pub struct Epic1AddressReport {
 }
 
 /// The epic1 addresses an account issued, from `epic1 addresses`.
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Serialize)]
 pub struct Epic1AddressesReport {
     pub account: String,
     /// The highest number issued or paid; every number up to it is issued.
@@ -28,14 +27,14 @@ pub struct Epic1AddressesReport {
 }
 
 /// One address of `epic1 addresses`.
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Serialize)]
 pub struct Epic1AddressEntryReport {
     pub index: u32,
     pub address: String,
 }
 
 /// A link issued, from `epic1 link`.
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Serialize)]
 pub struct Epic1LinkReport {
     /// The link text, `epic:epic1…?epicbox=…`.
     pub link: String,
@@ -48,7 +47,7 @@ pub struct Epic1LinkReport {
 }
 
 /// A printed link freed, from `epic1 retire`.
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Serialize)]
 pub struct Epic1RetireReport {
     pub account: String,
     pub n: u32,
@@ -56,7 +55,7 @@ pub struct Epic1RetireReport {
 }
 
 /// A link mailbox in use.
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Serialize)]
 pub struct Epic1LinkEntryReport {
     /// The account's index.
     pub account: u32,
@@ -71,13 +70,13 @@ pub struct Epic1LinkEntryReport {
 }
 
 /// The link mailboxes in use, from `epic1 links`.
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Serialize)]
 pub struct Epic1LinksReport {
     pub links: Vec<Epic1LinkEntryReport>,
 }
 
 /// What an epic1 link asks, from `epic1 read`.
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Serialize)]
 pub struct Epic1ReadReport {
     /// The payee: the epic1 address, never a mailbox.
     pub address: String,
@@ -89,7 +88,7 @@ pub struct Epic1ReadReport {
 }
 
 /// One post of a payment to a relay of its link.
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Serialize)]
 pub struct Epic1AttemptReport {
     pub host: String,
     /// Why the post failed; absent when it went through.
@@ -99,7 +98,7 @@ pub struct Epic1AttemptReport {
 }
 
 /// A payment to an epic1 link, from `epic1 pay` and `epic1 post-next`.
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Serialize)]
 pub struct Epic1PaidReport {
     pub tx_id: u32,
     pub slate_id: String,
@@ -118,7 +117,7 @@ pub struct Epic1PaidReport {
 }
 
 /// An answer this wallet made for a payment taken at a link mailbox.
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Serialize)]
 pub struct Epic1AnswerReport {
     pub tx_id: u32,
     pub slate_id: String,
@@ -130,33 +129,33 @@ pub struct Epic1AnswerReport {
 }
 
 /// The answers to payments taken at link mailboxes, from `epic1 answers`.
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Serialize)]
 pub struct Epic1AnswersReport {
     pub answers: Vec<Epic1AnswerReport>,
 }
 
 /// An answer posted, from `epic1 post-answer`.
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Serialize)]
 pub struct Epic1PostReport {
     pub slate_id: String,
     pub posted: bool,
 }
 
 /// This install made the one that issues new epic1 addresses, from `epic1 issue-here`.
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Serialize)]
 pub struct Epic1IssuerReport {
     pub issuing: bool,
 }
 
 /// The link mailboxes read after a restore, from `epic1 restore`.
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Serialize)]
 pub struct Epic1RestoreReport {
     /// Payments taken and answers finalized.
     pub taken: usize,
 }
 
 /// A slate in an .epictx file as it arrived, from `epictx open`.
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Serialize)]
 pub struct EpictxOpenReport {
     /// The contact whose key signed the envelope; absent for an anonymous one.
     pub contact_id: Option<String>,
@@ -170,7 +169,6 @@ pub struct EpictxOpenReport {
     pub expires: Option<u64>,
     /// Every field of a `lepic.v1` slate, with its network, kernel features, header version
     /// and tail; for another slate its V3 JSON.
-    #[schema(value_type = Object)]
     pub slate: serde_json::Value,
 }
 
