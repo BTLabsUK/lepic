@@ -7,7 +7,7 @@ use std::process::ExitCode;
 
 use lepic_cli::secret::SecretInput;
 use lepic_cli::settings::Env;
-use lepic_cli::{Console, ProcessHost, run};
+use lepic_cli::{Console, ProcessHost, run_with};
 
 fn main() -> ExitCode {
     let stdin = io::stdin();
@@ -23,9 +23,12 @@ fn main() -> ExitCode {
         stderr: Box::new(io::stderr()),
         ansi: io::stderr().is_terminal(),
     };
-    ExitCode::from(run(
+    // Without a command, `lepic` opens the shell when it talks to a person.
+    let interactive = terminal && io::stdout().is_terminal();
+    ExitCode::from(run_with(
         &ProcessHost::default(),
         std::env::args_os(),
         &mut console,
+        interactive,
     ))
 }

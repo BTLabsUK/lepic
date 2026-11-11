@@ -159,7 +159,16 @@ pub enum Command {
     /// Choose who may use the wallet API from another machine
     #[command(subcommand)]
     Api(ApiCommand),
+    /// Open the interactive shell, which `lepic` without a command opens at a terminal
+    #[command(after_help = SHELL_HELP)]
+    Shell,
 }
+
+const SHELL_HELP: &str = "\
+Opens the wallet once and keeps it open between commands, which are typed without `lepic`. Tab
+completes commands and flags; `help` lists the shell's own words. The wallet locks after
+shell_idle_lock_minutes without a command (15 by default, 0 never) and when the shell closes.
+Needs a terminal on standard input and output.";
 
 const SERVE_HELP: &str = "\
 Opens the wallet once, as other commands do, and holds the data directory until it stops. It

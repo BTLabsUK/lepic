@@ -53,7 +53,7 @@ use zeroize::Zeroizing;
 
 pub use crate::host::{Host, ProcessHost};
 
-use crate::cli::Cli;
+use crate::cli::{Cli, Command};
 use crate::exit::{CliError, ErrorKind};
 use crate::output::{render, render_error};
 use crate::secret::SecretInput;
@@ -75,10 +75,29 @@ pub fn run<H: Host>(
     args: impl IntoIterator<Item = impl Into<OsString> + Clone>,
     console: &mut Console,
 ) -> u8 {
+    run_with(host, args, console, false)
+}
+
+/// Runs one command as [`run`] does. With `interactive`, when standard input and output are a
+/// terminal, a line without a command opens the shell.
+pub fn run_with<H: Host>(
+    host: &H,
+    args: impl IntoIterator<Item = impl Into<OsString> + Clone>,
+    console: &mut Console,
+    interactive: bool,
+) -> u8 {
     randomize_crypto_context();
     let args: Vec<OsString> = args.into_iter().map(Into::into).collect();
     let cli = match Cli::try_parse_from(&args) {
         Ok(cli) => cli,
+        Err(error) if interactive && needs_command(&error) => match shell_line(&args) {
+            Some(cli) => cli,
+            None => {
+                let (text, code) = usage_text(&error);
+                let _ = console.stderr.write_all(text.as_bytes());
+                return code;
+            }
+        },
         Err(error) if json_requested(&args, &console.env) && !is_informational(&error) => {
             let message = usage_message(&error);
             return report_error(
@@ -104,6 +123,19 @@ pub fn run<H: Host>(
         Ok(settings) => settings,
         Err(error) => return report_error(console, format, &error.into(), None),
     };
+    if matches!(cli.command, Command::Shell) {
+        if !interactive {
+            return report_error(
+                console,
+                settings.output,
+                &CliError::Arguments(
+                    "the shell needs a terminal on standard input and output".to_owned(),
+                ),
+                Some(&settings),
+            );
+        }
+        return shell::session::run(host, &cli.global, &settings, console);
+    }
     let text = match execute(host, cli, &settings, console) {
         Ok(text) => text,
         Err(error) => return report_error(console, settings.output, &error, Some(&settings)),
@@ -202,6 +234,24 @@ fn missing_subcommand_message(error: &clap::Error) -> String {
         path.join(" "),
         names.join(", ")
     )
+}
+
+/// Whether clap refused the line only because it names no command.
+fn needs_command(error: &clap::Error) -> bool {
+    matches!(
+        error.kind(),
+        ClapErrorKind::DisplayHelpOnMissingArgumentOrSubcommand | ClapErrorKind::MissingSubcommand
+    )
+}
+
+/// The line with `shell` after its flags, when that parses: `lepic --network floonet` opens the
+/// shell on floonet.
+fn shell_line(args: &[OsString]) -> Option<Cli> {
+    let mut with_shell = args.to_vec();
+    with_shell.push("shell".into());
+    Cli::try_parse_from(&with_shell)
+        .ok()
+        .filter(|cli| matches!(cli.command, Command::Shell))
 }
 
 /// What a command line that does not parse prints, and the exit code: help and version on

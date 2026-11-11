@@ -471,6 +471,24 @@ fn usage_errors_exit_with_code_two_and_help_with_zero() {
 }
 
 #[test]
+fn without_a_terminal_no_command_prints_the_usage_and_the_shell_is_refused() {
+    let host = TestHost::new();
+    let wallet = Instance::new("test password");
+    let mut env = wallet.env();
+    env.retain(|(key, _)| key != "LEPIC_OUTPUT");
+    let bare = run_in(&host, &[], env.clone(), "");
+    assert_eq!(bare.code, 2, "{bare:?}");
+    assert!(bare.stderr.contains("Usage: lepic"), "{bare:?}");
+    assert!(bare.stdout.is_empty(), "{bare:?}");
+    let shell = run_in(&host, &["shell"], env, "");
+    assert_eq!(shell.code, 2, "{shell:?}");
+    assert!(
+        shell.stderr.contains("the shell needs a terminal"),
+        "{shell:?}"
+    );
+}
+
+#[test]
 fn node_status_reports_the_tip() {
     let host = TestHost::new();
     let outcome = Instance::new("test password")

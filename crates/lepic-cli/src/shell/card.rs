@@ -2,8 +2,6 @@
 //! The welcome card the interactive shell prints at start, and the epic1 mark shown beside epic1
 //! addresses. The card carries the LEPIC banner only; the epic1 mark never appears in it.
 
-#![allow(dead_code)]
-
 /// Which character set the terminal can draw.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Glyphs {
@@ -41,6 +39,8 @@ enum Style {
     Plain,
     Bold,
     Dim,
+    // The accent waits for the shell to print the epic1 mark beside addresses.
+    #[allow(dead_code)]
     Accent,
 }
 
@@ -249,11 +249,15 @@ fn boxed(body: Vec<Line>, max: usize, glyphs: Glyphs, color: bool) -> Vec<String
     out
 }
 
+// The mark waits for the shell to print epic1 addresses beside it.
+#[cfg_attr(not(test), allow(dead_code))]
 const MARK: [&str; 5] = [".#..#..", "##....#", ".#.#...", ".#...#.", "###.#.."];
+#[cfg_attr(not(test), allow(dead_code))]
 const MARK_DIGIT_COLUMNS: usize = 3;
 
 /// The epic1 mark: a "1" in the accent colour among dim noise cells, with clear space of two
 /// cells on every side. Without colour the noise is drawn lighter so the "1" still reads.
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn epic1_mark(glyphs: Glyphs, color: bool) -> Vec<String> {
     let (solid, noise) = match glyphs {
         Glyphs::Unicode => ("██", "▒▒"),

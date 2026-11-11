@@ -96,6 +96,7 @@ pub(crate) mod peer;
 mod profile;
 #[cfg(unix)]
 mod serve;
+pub(crate) mod shell;
 
 /// The directory inside the data directory that holds the wallet's tor files.
 const TOR_DIR: &str = "tor";
@@ -340,6 +341,7 @@ impl<H: Host> Run<'_, H> {
             Command::Profile(command) => self.profile(command).await,
             Command::Serve(args) => self.serve(args).await,
             Command::Api(ApiCommand::Client(command)) => self.api_client(command),
+            Command::Shell => Err(CliError::Arguments("the shell is open already".to_owned())),
         }
     }
 

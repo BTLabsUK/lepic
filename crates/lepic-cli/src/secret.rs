@@ -285,7 +285,6 @@ fn line_buffer() -> Zeroizing<Vec<u8>> {
 
 /// Reads one secret from the terminal key by key with nothing echoed, whatever the platform:
 /// `prompt` goes to standard error and a newline follows the Enter. For the shell's `unlock`.
-#[cfg_attr(unix, allow(dead_code))]
 pub(crate) fn read_hidden_line(prompt: &str) -> Result<Zeroizing<String>, SecretError> {
     const WHAT: &str = "password";
     let io_error = |source| SecretError::Io { what: WHAT, source };
