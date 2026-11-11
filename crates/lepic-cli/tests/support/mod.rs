@@ -34,6 +34,8 @@ use lepic_primitives::params::Network;
 use serde_json::Value;
 use tempfile::TempDir;
 
+pub mod contract;
+
 /// The chain tip of the scripted node: far enough past the funding output for it to be
 /// spendable with the default three confirmations.
 pub const TIP: u64 = 30;
@@ -413,7 +415,11 @@ pub fn http(socket: &Path, method: &str, path: &str, body: Option<&str>) -> Repl
     .unwrap();
     let mut answer = String::new();
     stream.read_to_string(&mut answer).unwrap();
-    parse_reply(&answer)
+    let reply = parse_reply(&answer);
+    if let Some(below) = path.strip_prefix("/api/v1") {
+        contract::check(method, below, &reply);
+    }
+    reply
 }
 
 /// A response read whole, with a `Content-Length` body.
