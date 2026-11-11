@@ -36,7 +36,6 @@ mod native;
 mod outbox;
 mod pairing;
 mod payload;
-mod payment_qr;
 mod private;
 mod quarantine;
 mod relay;
@@ -102,7 +101,6 @@ pub use payload::{
     ContactPayload, MAX_APP_PAYLOAD_LEN, MAX_KEPT_PAYLOADS, MAX_KEPT_PAYLOADS_PER_CONTACT,
     PayloadId, PostedPayload,
 };
-pub use payment_qr::{PaymentQrRefusal, is_payment_qr_native, payment_qr_native, payment_qr_text};
 pub use quarantine::{QuarantineReason, QuarantineRetry, QuarantinedMessage};
 pub use relay::{MAX_MEETING_RELAYS, meeting_host, meeting_relays};
 pub use requests::{MAX_LIVE_REQUESTS, MAX_SETTLED_REQUESTS, PairRequestView, REQUEST_EXPIRY};

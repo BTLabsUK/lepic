@@ -690,8 +690,7 @@ A slate in a QR code uses the UR type `epic-slate`:
   bytes.
 
 An in-person proposal is a raw `lepic.v1` slate with its tail (9); an answer is a slate envelope.
-A payment file is deflated JSON, or on the caller's request a native slate with an empty tail
-where `lepic.v1` can carry the slate (ADR 0056).
+A payment file is deflated JSON, version 1, never version 2 (ADR 0057).
 
 ### 5.19 epic1 payments
 

@@ -3,9 +3,9 @@
 Two phones side by side exchange a slate without a relay, a server or a file: the sender's phone
 shows its S1 (or an issuer its I1) as a looping sequence of QR codes, the other phone scans it,
 then shows its S2 (or I2) the same way for the first phone to scan. The codes carry the slate
-unencrypted, as the slate JSON text the file method would write (version 1, ADR 0025) or as its
-native `lepic.v1` bytes (version 2, ADR 0056). LEPIC implements the format in
-`lepic_slate::ur_slate`, and the binding exposes it as `encode_ur_slate` and `decode_ur_slate`.
+JSON text that the file method would write, deflated and unencrypted (version 1, ADR 0025,
+ADR 0057). LEPIC implements the format in `lepic_slate::ur_slate`, and the binding exposes it as
+`encode_ur_slate` and `decode_ur_slate`.
 
 The format builds on the Uniform Resources scheme of Blockchain Commons (BCR-2020-005, URs;
 BCR-2020-012, bytewords; and its multipart fountain encoding). This page states only what Epic
@@ -116,29 +116,15 @@ Version 2 carries a native `lepic.v1` slate or an envelope as bytes, nothing com
 (RFC 0003 §5.18). It has the same UR type, framing and case as version 1. `lepic_slate::ur_slate`
 reads and writes both versions: version 1 through `encode_ur_slate` and `decode_ur_slate`,
 version 2 through `encode_ur_binary` and `decode_ur_parts`. The binding uses version 2 for the
-codes and answers of the in-person flow, and for payment files when the caller asks for it.
+codes and answers of the in-person flow only.
 
 ### Payment files
 
-The binding's `encode_ur_slate` writes a payment file, V2 or V3 slate JSON, as version 1
-unless the caller passes `native`. With `native` it writes the slate's `lepic.v1` bytes with an
-empty tail, about half the parts. Readers of LEPIC releases before 0.5.0 read version 1 only and
-refuse version 2 as an unsupported version, so a wallet writes version 1 while the wallets that
-scan its codes may be older. `lepic.v1` leaves out the body of a proposal and the initiator's
-message in an answer; the initiator puts them back from the proposal it stored when it
-finalizes. With `native` the encoder still writes version 1 where `lepic.v1` cannot carry the
-slate:
-
-- text the legacy codecs do not read;
-- a range proof that is not a single bulletproof;
-- a block header version other than the one the fork table gives the slate's height;
-- bytes that would not read back, such as a message over the `lepic.v1` limit.
-
-`decode_ur_slate` reads both versions. A version 2 native slate comes back as V3 JSON text on
-the network its header names. A native slate with a reply key or reply mailbox is an in-person
-code and an envelope is an in-person answer: `decode_ur_slate` refuses both as
-`ForeignUrCode`, and the in-person reader `in_person_qr_read` refuses a payment file's native
-slate, like version 1 text, as `InvalidSlate`. The CLI and `lepic serve` write version 1.
+Payment files are version 1 only: the binding's `encode_ur_slate` writes the deflated slate
+text, and every reader of `ur:epic-slate` takes it. The binding's `decode_ur_slate` reads
+version 1 and refuses a version 2 code, an in-person code or answer, as `ForeignUrCode`. The
+in-person reader `in_person_qr_read` refuses version 1 text as `InvalidSlate`. The CLI and
+`lepic serve` write version 1 as well.
 
 ### Payload
 
@@ -174,8 +160,8 @@ The 360-byte limit is the default. Whether a payload is one code or an animated 
 writer's display choice, so `encode_ur_binary_split` takes the single-code limit, 0 to 1024
 bytes (0 always splits), next to the fragment length. A writer that draws every code at level H
 with a logo in the centre picks smaller values to keep each frame within a fixed symbol, for
-example 64-byte fragments for version 11 or 125-byte fragments for version 15. Readers take a single-part code or parts either way; nothing on the wire
-says which limit the writer used.
+example 64-byte fragments for version 11. Readers take a single-part code or parts either way;
+nothing on the wire says which limit the writer used.
 
 ### Limits
 

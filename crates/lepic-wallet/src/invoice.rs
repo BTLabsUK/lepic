@@ -74,7 +74,7 @@ use crate::send::{
 use crate::state::{StateChange, apply_transition, state_name};
 use crate::wallet::Wallet;
 use build::{IssuerContext, final_transaction, verify_message};
-pub(crate) use build::{check_signed_payment, complete_answer, leaves_out_body};
+pub(crate) use build::{check_signed_payment, complete_answer};
 
 /// The issuer's private context is stored under the participant id legacy slates give the
 /// receiver, which the issuer is.
@@ -881,8 +881,13 @@ fn finalize_stored(
         .slate(slate_uuid, SlateStage::Invoice1)?
         .filter(|stored| stored.codec == LEGACY_V3_JSON.as_str())
         .ok_or(InvoiceError::UnknownSlate { slate_id })?;
-    let completed = completed_answer(env, &issued, i2, compact)?;
-    let i2 = completed.as_ref().unwrap_or(i2);
+    let completed;
+    let i2 = if compact {
+        completed = completed_answer(env, &issued, i2)?;
+        &completed
+    } else {
+        i2
+    };
     match entry.entry.state {
         TxState::Received => {}
         state @ (TxState::Finalized | TxState::Posted) => {
@@ -995,26 +1000,18 @@ fn check_stored(
             });
         }
     }
-    let completed = completed_answer(env, &issued, i2, true)?;
-    build_from_stored(repos, env, issued, completed.as_ref().unwrap_or(i2)).map(|_| ())
+    let i2 = completed_answer(env, &issued, i2)?;
+    build_from_stored(repos, env, issued, &i2).map(|_| ())
 }
 
-/// `i2` with what a compact answer leaves out put back from the stored I1 `issued`: when
-/// `compact`, or when `i2` carries none of the I1's inputs and outputs, as I2 text read from a
-/// `lepic.v1` code does. `None` leaves `i2` as it is.
+/// `i2` with what a compact answer leaves out put back from the stored I1 `issued`.
 fn completed_answer(
     env: &InvoiceEnvironment<'_>,
     issued: &StoredSlate,
     i2: &Slate,
-    compact: bool,
-) -> Result<Option<Slate>, InvoiceError> {
+) -> Result<Slate, InvoiceError> {
     let issued = env.decode_stored(issued.clone())?;
-    if !compact && !leaves_out_body(i2, &issued) {
-        return Ok(None);
-    }
-    complete_answer(i2.clone(), &issued)
-        .map(Some)
-        .map_err(InvoiceError::Slate)
+    complete_answer(i2.clone(), &issued).map_err(InvoiceError::Slate)
 }
 
 impl<N, S, V> Wallet<N, S, V>

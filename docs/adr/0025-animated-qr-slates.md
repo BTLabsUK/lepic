@@ -1,6 +1,6 @@
 # ADR 0025: Slates as animated QR codes in `ur:epic-slate`
 
-Status: accepted. The payload of `encode_ur_slate` and `decode_ur_slate`: see ADR 0056.
+Status: accepted
 
 ## Context
 
@@ -17,8 +17,9 @@ codes, and the receiver misses frames.
   of the slate JSON>}`. Fountain parts follow the plain fragments, so a looping sequence
   recovers from missed frames without the receiver asking for anything. The same module also
   writes and reads version 2, which carries native `lepic.v1` slates and envelopes as bytes
-  (ADR 0012, ADR 0024). `encode_ur_slate` and `decode_ur_slate` were version 1 only; ADR 0056
-  lets them read version 2 for payment files and write it on the caller's request.
+  (ADR 0012, ADR 0024) for the in-person flow. Payment files are version 1 only (ADR 0057):
+  `encode_ur_slate` and `decode_ur_slate` write and read the deflated text, and the binding's
+  `decode_ur_slate` refuses a version 2 code as `ForeignUrCode`.
 - The codec is `lepic_slate::ur_slate`, a pure module with no I/O. `lepic-wallet` re-exports it.
   It does not parse the slate: the text goes on to the codecs exactly as slate text from a file
   does, and the app inspects it with `inspect_slate` and hands it to `receive_slate` or

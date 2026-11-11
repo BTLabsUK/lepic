@@ -55,7 +55,7 @@ use uuid::Uuid;
 use crate::account;
 use crate::codecs;
 use crate::error::WalletError;
-use crate::invoice::{complete_answer, earliest_cutoff, leaves_out_body};
+use crate::invoice::{complete_answer, earliest_cutoff};
 use crate::lifecycle::Session;
 use crate::ports::{SecretVault, StoreOpener};
 use crate::refresh::{KernelAt, RefreshError, final_kernel, stored_slate};
@@ -633,8 +633,13 @@ fn finalize_stored(
         .ok_or(FinalizeError::UnknownSlate { slate_id })?;
     let tx_id = entry.id;
     check_answerer(repos, env.method, env.network, tx_id, answerer)?;
-    let completed = answer_to_finalize(repos, base_fee, s2, compact)?;
-    let s2 = completed.as_ref().unwrap_or(s2);
+    let completed;
+    let s2 = if compact {
+        completed = completed_answer(repos, base_fee, s2)?;
+        &completed
+    } else {
+        s2
+    };
     match entry.entry.state {
         TxState::Sent => {}
         state @ (TxState::Finalized | TxState::Posted | TxState::Confirmed) => {
@@ -717,26 +722,6 @@ fn completed_answer(
 ) -> Result<Slate, FinalizeError> {
     let s1 = stored_s1(repos, base_fee, s2.id())?;
     complete_answer(s2.clone(), &s1).map_err(FinalizeError::Slate)
-}
-
-/// `s2` completed from the stored S1 when `compact`, or when it carries none of the S1's inputs
-/// and outputs, as S2 text read from a `lepic.v1` code does. `None` leaves `s2` as it is; a
-/// missing or unreadable S1 then fails later, where it did before.
-fn answer_to_finalize(
-    repos: &dyn Repositories,
-    base_fee: Fee,
-    s2: &Slate,
-    compact: bool,
-) -> Result<Option<Slate>, FinalizeError> {
-    if compact {
-        return completed_answer(repos, base_fee, s2).map(Some);
-    }
-    match stored_s1(repos, base_fee, s2.id()) {
-        Ok(s1) if leaves_out_body(s2, &s1) => complete_answer(s2.clone(), &s1)
-            .map(Some)
-            .map_err(FinalizeError::Slate),
-        _ => Ok(None),
-    }
 }
 
 /// Builds the S3 of `s2` for `tx_id` against the stored S1 and sender context, without storing

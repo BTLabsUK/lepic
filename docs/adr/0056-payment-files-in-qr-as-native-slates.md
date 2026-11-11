@@ -1,6 +1,6 @@
 # ADR 0056: Payment files in QR codes as native slates
 
-Status: accepted
+Status: superseded by 0057
 Date: 2026-11-11
 
 ## Context
