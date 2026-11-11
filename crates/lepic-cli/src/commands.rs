@@ -899,6 +899,7 @@ impl<H: Host> Run<'_, H> {
             (sending, _) => sending,
         };
         let (sent, dialect, state) = sending?;
+        let destination = reported_destination(destination, dialect);
         Ok(sent_report(&sent, transport, destination, state, dialect))
     }
 
@@ -938,6 +939,7 @@ impl<H: Host> Run<'_, H> {
         .await;
         stop_tor(&opened, tor).await;
         let (state, dialect) = resending?;
+        let destination = reported_destination(destination, dialect);
         Ok(Report::Resend(ResendReport {
             tx_id: tx_id.0,
             transport: transport.to_string(),
@@ -1773,6 +1775,26 @@ fn repeated_send(
         dialect: None,
         format: None,
     }))
+}
+
+/// The endpoint a delivery to `destination` went to: for a native exchange with a listener its
+/// inbox on the same origin, which every listener of protocol 2 serves at one path (ADR 0052,
+/// D7); otherwise `destination` as named.
+fn reported_destination(destination: String, dialect: Option<Dialect>) -> String {
+    if dialect != Some(Dialect::Native) {
+        return destination;
+    }
+    match ListenerUrl::parse(&destination, PlainHttp::Allowed) {
+        Ok(url) => {
+            let scheme = match url.scheme() {
+                lepic_methods::http::Scheme::Http => "http",
+                lepic_methods::http::Scheme::Https => "https",
+            };
+            let inbox = lepic_methods::http::Advert::new([0; 32]).path;
+            format!("{scheme}://{}:{}{inbox}", url.host(), url.port())
+        }
+        Err(_) => destination,
+    }
 }
 
 /// The report of a send this run made and delivered.
@@ -2896,6 +2918,33 @@ mod tests {
         }
         check_private_dir(with_mode(0o700).path()).unwrap();
         check_private_dir(&with_mode(0o700).path().join("missing")).unwrap();
+    }
+
+    #[test]
+    fn a_native_send_reports_the_inbox_it_went_to() {
+        for (named, native) in [
+            (
+                "http://wallet.example:3415/v2/foreign",
+                "http://wallet.example:3415/api/v1/inbox",
+            ),
+            (
+                "https://wallet.example:443/wallet/v2/foreign",
+                "https://wallet.example:443/api/v1/inbox",
+            ),
+        ] {
+            assert_eq!(
+                reported_destination(named.to_owned(), Some(Dialect::Native)),
+                native
+            );
+            for dialect in [Some(Dialect::Legacy), None] {
+                assert_eq!(reported_destination(named.to_owned(), dialect), named);
+            }
+        }
+        let onion = "exampleexampleexampleexampleexampleexampleexampleexampl.onion";
+        assert_eq!(
+            reported_destination(onion.to_owned(), Some(Dialect::Native)),
+            onion
+        );
     }
 
     #[test]
