@@ -82,9 +82,11 @@ pub fn inspect_slate(json: String, chain: Chain) -> Result<SlateInfo, WalletErro
 
 /// The slate text `json` of `chain` as the QR texts of an animated `ur:epic-slate` code
 /// (`docs/compat/ur-epic-slate.md`), uppercase for the QR alphanumeric mode. Show them in a
-/// loop, in order. The code carries the slate's `lepic.v1` bytes (payload version 2), which
-/// leave out what the other wallet already has; a slate `lepic.v1` cannot carry, such as one
-/// whose range proofs are not single bulletproofs, goes as deflated text (version 1).
+/// loop, in order. Without `native` the code carries the deflated text (payload version 1),
+/// which every reader takes. With it the code carries the slate's `lepic.v1` bytes (version 2),
+/// about half the parts, which leave out what the other wallet already has; only a reader of
+/// LEPIC 0.5.0 or later takes them. A slate `lepic.v1` cannot carry, such as one whose range
+/// proofs are not single bulletproofs, goes as deflated text either way.
 /// `max_fragment_len` bounds each part's payload in bytes, 16 to 1024. A payload of at most
 /// `single_code_max_len` bytes, 0 to 1024, is a single code; without it, one that fits one
 /// fragment is. Which to pass is the caller's display choice: smaller values give smaller codes
@@ -94,11 +96,18 @@ pub fn inspect_slate(json: String, chain: Chain) -> Result<SlateInfo, WalletErro
 pub fn encode_ur_slate(
     json: String,
     chain: Chain,
+    native: bool,
     max_fragment_len: u32,
     single_code_max_len: Option<u32>,
 ) -> Result<Vec<String>, WalletError> {
     guard("encode_ur_slate", || {
-        ur_slate::encode(json, chain.network(), max_fragment_len, single_code_max_len)
+        ur_slate::encode(
+            json,
+            chain.network(),
+            native,
+            max_fragment_len,
+            single_code_max_len,
+        )
     })
 }
 

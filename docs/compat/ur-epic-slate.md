@@ -116,14 +116,18 @@ Version 2 carries a native `lepic.v1` slate or an envelope as bytes, nothing com
 (RFC 0003 §5.18). It has the same UR type, framing and case as version 1. `lepic_slate::ur_slate`
 reads and writes both versions: version 1 through `encode_ur_slate` and `decode_ur_slate`,
 version 2 through `encode_ur_binary` and `decode_ur_parts`. The binding uses version 2 for the
-codes and answers of the in-person flow, and for payment files.
+codes and answers of the in-person flow, and for payment files when the caller asks for it.
 
 ### Payment files
 
-The binding's `encode_ur_slate` writes a payment file, V2 or V3 slate JSON, as the slate's
-`lepic.v1` bytes with an empty tail. `lepic.v1` leaves out the body of a proposal and the
-initiator's message in an answer; the initiator puts them back from the proposal it stored when
-it finalizes. The encoder writes version 1 instead where `lepic.v1` cannot carry the slate:
+The binding's `encode_ur_slate` writes a payment file, V2 or V3 slate JSON, as version 1
+unless the caller passes `native`. With `native` it writes the slate's `lepic.v1` bytes with an
+empty tail, about half the parts. Readers of LEPIC releases before 0.5.0 read version 1 only and
+refuse version 2 as an unsupported version, so a wallet writes version 1 while the wallets that
+scan its codes may be older. `lepic.v1` leaves out the body of a proposal and the initiator's
+message in an answer; the initiator puts them back from the proposal it stored when it
+finalizes. With `native` the encoder still writes version 1 where `lepic.v1` cannot carry the
+slate:
 
 - text the legacy codecs do not read;
 - a range proof that is not a single bulletproof;

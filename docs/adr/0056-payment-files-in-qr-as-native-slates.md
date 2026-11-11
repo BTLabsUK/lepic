@@ -14,10 +14,13 @@ deflated text.
 
 ## Decision
 
-- The binding's `encode_ur_slate` takes the chain. It writes the slate of a payment file, V2 or V3
-  JSON, as a version 2 payload: the slate's `lepic.v1` bytes with an empty tail
-  (`lepic_wallet_contacts::payment_qr_native`).
-- It writes version 1, the deflated text, where `lepic.v1` cannot carry the slate:
+- The binding's `encode_ur_slate` takes the chain and `native`. Without `native` it writes the
+  slate of a payment file as version 1, the deflated text, which every reader takes. With it,
+  it writes a version 2 payload: the slate's `lepic.v1` bytes with an empty tail
+  (`lepic_wallet_contacts::payment_qr_native`). Released apps run LEPIC builds that read version
+  1 only, and a QR code cannot tell the scanning wallet's version, so a wallet writes version 1
+  until the wallets that scan its codes read version 2, then turns `native` on.
+- With `native` it still writes version 1 where `lepic.v1` cannot carry the slate:
   - text the legacy codecs do not read;
   - a range proof that is not a single bulletproof;
   - a block header version other than the one the fork table gives the slate's height;
@@ -39,7 +42,8 @@ deflated text.
 
 ## Consequences
 
-- Payment codes need about half as many parts as before, and an S1 or I1 far fewer.
+- With `native`, payment codes need about half as many parts as version 1, and an S1 or I1 far
+  fewer. Without it the codes are as before and every reader takes them.
 - The text read from a version 2 code is V3 JSON without the proposal's body, smaller than the
   file that was shown. Only the initiator that stored the proposal can finalize the answer.
 - An app or wallet that reads only version 1 refuses a version 2 payment code as an unknown

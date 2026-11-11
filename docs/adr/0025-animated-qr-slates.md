@@ -18,7 +18,7 @@ codes, and the receiver misses frames.
   recovers from missed frames without the receiver asking for anything. The same module also
   writes and reads version 2, which carries native `lepic.v1` slates and envelopes as bytes
   (ADR 0012, ADR 0024). `encode_ur_slate` and `decode_ur_slate` were version 1 only; ADR 0056
-  gives them version 2 for payment files.
+  lets them read version 2 for payment files and write it on the caller's request.
 - The codec is `lepic_slate::ur_slate`, a pure module with no I/O. `lepic-wallet` re-exports it.
   It does not parse the slate: the text goes on to the codecs exactly as slate text from a file
   does, and the app inspects it with `inspect_slate` and hands it to `receive_slate` or

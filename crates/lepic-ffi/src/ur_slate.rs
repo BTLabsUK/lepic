@@ -13,18 +13,19 @@ use lepic_wallet_contacts::{
 use crate::api::error::{WalletError, WalletErrorKind};
 use crate::api::types::{InPersonQrProgress, UrSlateProgress};
 
-/// The parts of an animated QR code for slate text on `network`: its `lepic.v1` bytes, or the
-/// deflated text where `lepic.v1` cannot carry the slate. Without `single_code_max_len` a
-/// payload that fits one fragment is one code.
+/// The parts of an animated QR code for slate text on `network`: the deflated text, or with
+/// `native` its `lepic.v1` bytes where `lepic.v1` can carry the slate. Without
+/// `single_code_max_len` a payload that fits one fragment is one code.
 pub(crate) fn encode(
     json: String,
     network: Network,
+    native: bool,
     max_fragment_len: u32,
     single_code_max_len: Option<u32>,
 ) -> Result<Vec<String>, WalletError> {
     let single_code_max_len = len_of(single_code_max_len.unwrap_or(max_fragment_len));
     let max_fragment_len = len_of(max_fragment_len);
-    if let Some(bytes) = payment_qr_native(network, &json) {
+    if let Some(bytes) = native.then(|| payment_qr_native(network, &json)).flatten() {
         return encode_ur_binary_split(&bytes, single_code_max_len, max_fragment_len)
             .map_err(|error| WalletError::chained(encode_binary_kind(&error), &error));
     }

@@ -147,7 +147,7 @@ async fn an_offline_wallet_pays_by_slate_text_without_reaching_the_node_or_relay
     assert_eq!(info.stage, SlateStage::S3);
     assert_eq!(info.version, 3);
     assert_eq!(info.amount, EPIC);
-    let parts = encode_ur_slate(finished.clone(), Chain::Floonet, 200, None).unwrap();
+    let parts = encode_ur_slate(finished.clone(), Chain::Floonet, false, 200, None).unwrap();
     let decoded = decode_ur_slate(parts).unwrap().json.unwrap();
     let read = inspect_slate(decoded, Chain::Floonet).unwrap();
     assert_eq!(
