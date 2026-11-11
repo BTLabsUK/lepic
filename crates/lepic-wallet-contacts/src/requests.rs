@@ -236,10 +236,11 @@ fn kept_stays(
 /// `Err` when one of them it cannot end: a pairing whose contact was not heard from yet, or one
 /// the request does not postdate (an old request a relay delivers again).
 ///
-/// A pairing made by answering a request from `key` is postdated by a request that expires
-/// later than that one, or in the same second with another invite: both times come from the
-/// sender's clock, so how far it is from ours does not matter. Any other pairing is postdated by a request issued no earlier than the
-/// pairing was made by our clock.
+/// A pairing with a request from `key` known to be older (see [`remember_request`]) is
+/// postdated by a request that expires later than that one, or in the same second with another
+/// invite: both times come from the sender's clock, so how far it is from ours does not matter.
+/// Any other pairing is postdated by a request issued no earlier than the pairing was made by
+/// our clock.
 ///
 /// The relay delivers a request only under a signature by `key` and sealed to us with a key
 /// agreement only `key` can make, so a request from `key` says its holder dropped the pairing.
@@ -257,10 +258,10 @@ fn pairings_ended_by(
         if record.facts.ended_reason.is_some() {
             continue;
         }
-        let postdates = match answered(repos, record.contact_id)? {
-            Some((seconds, answered_invite)) => {
+        let postdates = match request_before(repos, record.contact_id)? {
+            Some((seconds, older_invite)) => {
                 expires_at.as_second() > seconds
-                    || (expires_at.as_second() == seconds && *invite_id != answered_invite)
+                    || (expires_at.as_second() == seconds && *invite_id != older_invite)
             }
             None => record.created_at.as_second() <= issued_at.as_second(),
         };
@@ -284,8 +285,8 @@ where
     /// when it is older than the request kept from that key. A request from the key of a live
     /// pairing says the contact dropped it: the pairing ends as unpaired, raising
     /// [`Event::ContactUnpaired`], unless the contact was not heard from yet or the request
-    /// does not postdate the pairing (see [`pairings_ended_by`]), and is then dropped. A kept one raises
-    /// [`Event::PairingRequested`].
+    /// does not postdate the pairing (see [`pairings_ended_by`]), and is then dropped. A kept
+    /// one raises [`Event::PairingRequested`].
     pub(crate) async fn take_pair_request(
         &self,
         sender: &str,
@@ -758,33 +759,55 @@ pub(crate) fn answer_request(
     Ok(Some(request.expires_at))
 }
 
-/// The setting beside the pairing record `contact_id` that holds the request it answered: when
-/// that expires, in unix seconds by the clock of its sender, a dot, and its invite id in hex.
-fn answered_key(contact_id: ContactId) -> String {
-    lepic_store::contact_extra_key(contact_id, ANSWERED_NAME)
+/// The setting beside the pairing record `contact_id` that holds a request from the contact
+/// known to be older than the pairing: when that expires, in unix seconds by the clock of its
+/// sender, a dot, and its invite id in hex.
+fn request_key(contact_id: ContactId) -> String {
+    lepic_store::contact_extra_key(contact_id, REQUEST_NAME)
 }
 
-const ANSWERED_NAME: &str = "answered_request_expires";
+const REQUEST_NAME: &str = "request_before_pairing";
 
-/// Records that the pairing record `contact_id` answered the request with `invite_id`, expiring
-/// at `expires_at` by its sender's clock. The store drops it with the record.
-pub(crate) fn remember_answered(
+/// Records that the request with `invite_id`, expiring at `expires_at` by its sender's clock,
+/// is older than the pairing record `contact_id`: the record answered it, or it was here when
+/// the pairing finished. The store drops it with the record.
+pub(crate) fn remember_request(
     repos: &mut dyn Repositories,
     contact_id: ContactId,
     invite_id: &[u8; INVITE_ID_LEN],
     expires_at: Timestamp,
 ) -> Result<(), StoreError> {
     let value = format!("{}.{}", expires_at.as_second(), hex::encode(invite_id));
-    repos.put_setting(&answered_key(contact_id), &value)
+    repos.put_setting(&request_key(contact_id), &value)
 }
 
-/// The request the pairing record `contact_id` answered: when it expires by its sender's
-/// clock, and its invite id.
-fn answered(
+/// When a pairing with a proven payments key finishes without a request it answered, records
+/// the request kept from that key, if any, as older than the pairing: it arrived before the
+/// pairing finished, so its sender signed it before. A pairing made from an invite link or in
+/// person then compares a later request with it by the sender's clock alone.
+pub(crate) fn remember_held_request(
+    repos: &mut dyn Repositories,
+    record: &ContactRecord,
+) -> Result<(), StoreError> {
+    let Some(key) = record.facts.payments_key else {
+        return Ok(());
+    };
+    if repos.setting(&request_key(record.contact_id))?.is_some() {
+        return Ok(());
+    }
+    match repos.pair_request(&key)? {
+        Some(held) => remember_request(repos, record.contact_id, &held.invite_id, held.expires_at),
+        None => Ok(()),
+    }
+}
+
+/// The request from the contact known to be older than the pairing record `contact_id`: when
+/// it expires by its sender's clock, and its invite id.
+fn request_before(
     repos: &dyn Repositories,
     contact_id: ContactId,
 ) -> Result<Option<(i64, [u8; INVITE_ID_LEN])>, StoreError> {
-    Ok(repos.setting(&answered_key(contact_id))?.and_then(|value| {
+    Ok(repos.setting(&request_key(contact_id))?.and_then(|value| {
         let (seconds, invite_id) = value.split_once('.')?;
         Some((
             seconds.parse::<i64>().ok()?,
@@ -855,7 +878,7 @@ mod tests {
         store
             .write(|repos| {
                 repos.put_contact(&record)?;
-                remember_answered(repos, record.contact_id, &[2; INVITE_ID_LEN], answered)
+                remember_request(repos, record.contact_id, &[2; INVITE_ID_LEN], answered)
             })
             .unwrap();
 
@@ -868,7 +891,67 @@ mod tests {
         assert!(!ends(&store, 3, answered - Duration::from_secs(1)));
     }
 
-    /// Without an answered request the pairing's own time decides, as before.
+    /// A pairing that finished while a request from its contact was here (an invite-link
+    /// pairing) takes that request as older: a later one ends it whatever the clocks, the held
+    /// one again does not.
+    #[test]
+    fn a_held_request_is_older_than_the_pairing_it_was_here_for() {
+        let store = MemoryStore::new(StoreKeys::from_bytes([1; 32], [1; 32]));
+        // Our clock says day 100; the sender's, day 10.
+        let day = i64::try_from(REQUEST_EXPIRY.as_secs()).unwrap() / 7;
+        let record = paired(at(100 * day));
+        let held = at(10 * day) + REQUEST_EXPIRY;
+        store
+            .write(|repos| {
+                repos.put_pair_request(&PairRequest {
+                    sender_key: KEY,
+                    sender_address: "key@relay.example".to_owned(),
+                    invite_id: [2; INVITE_ID_LEN],
+                    invite: Vec::new(),
+                    expires_at: held,
+                    received_at: at(100 * day),
+                    dismissed_at: None,
+                    answered_at: None,
+                })?;
+                repos.put_contact(&record)?;
+                remember_held_request(repos, &record)
+            })
+            .unwrap();
+
+        assert!(ends(&store, 3, held + Duration::from_secs(1)));
+        assert!(!ends(&store, 2, held), "the held request again");
+        assert!(!ends(&store, 3, held - Duration::from_secs(1)));
+    }
+
+    /// A request the pairing answered stays the one compared with.
+    #[test]
+    fn an_answered_request_is_not_replaced_by_a_held_one() {
+        let store = MemoryStore::new(StoreKeys::from_bytes([1; 32], [1; 32]));
+        let record = paired(at(1_000_000));
+        let answered = at(2_000_000);
+        store
+            .write(|repos| {
+                repos.put_contact(&record)?;
+                remember_request(repos, record.contact_id, &[2; INVITE_ID_LEN], answered)?;
+                repos.put_pair_request(&PairRequest {
+                    sender_key: KEY,
+                    sender_address: "key@relay.example".to_owned(),
+                    invite_id: [4; INVITE_ID_LEN],
+                    invite: Vec::new(),
+                    expires_at: at(1_500_000),
+                    received_at: at(1_000_000),
+                    dismissed_at: None,
+                    answered_at: None,
+                })?;
+                remember_held_request(repos, &record)
+            })
+            .unwrap();
+
+        assert!(!ends(&store, 3, at(1_600_000)));
+        assert!(ends(&store, 3, answered + Duration::from_secs(1)));
+    }
+
+    /// Without a request known to be older the pairing's own time decides, as before.
     #[test]
     fn another_pairing_compares_its_creation_with_the_request() {
         let store = MemoryStore::new(StoreKeys::from_bytes([1; 32], [1; 32]));

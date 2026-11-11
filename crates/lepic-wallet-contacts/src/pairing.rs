@@ -1223,6 +1223,7 @@ where
                         record.verified_at = Some(now);
                     }
                     repos.put_contact(&record)?;
+                    super::requests::remember_held_request(repos, &record)?;
                     repos.put_contact_mailbox(&paired_mailbox(
                         contact_id, &peer, &own, home_text, onion,
                     ))?;
@@ -1545,7 +1546,7 @@ fn store_answer(
     let mut rng = LockedRng(&mut **rng.lock());
     let (new, mut private) = new_record(repos, &mut rng, request.account, request.class)?;
     if let Some(expires_at) = answered {
-        super::requests::remember_answered(
+        super::requests::remember_request(
             repos,
             new.contact_id,
             invite.id().as_bytes(),
@@ -1777,6 +1778,7 @@ fn decide_reply(
         learn_requests_work(repos, &record, network)?;
     }
     repos.put_contact(&record)?;
+    super::requests::remember_held_request(repos, &record)?;
     repos.put_contact_mailbox(&paired_mailbox(contact_id, &peer, &own, home_text, onion))?;
     // The code still finds the reply mailbox until the invite ends, to refuse
     // later replies; without nA no second reply can pair. The confirm code lets

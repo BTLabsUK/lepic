@@ -848,6 +848,59 @@ fn a_new_request_ends_the_pairing_when_its_senders_clock_is_behind() {
     accept_request(&world, ben, &again[0].invite_link, anna).unwrap();
 }
 
+/// Anna's clock is an hour behind Ben's. Anna sends Ben a request, then they pair by Ben's
+/// invite link instead. Anna removes Ben and asks again: the request Ben held from her is older
+/// than the pairing, the new one is later by her own clock, so it ends Ben's record and shows.
+#[test]
+fn a_new_request_ends_an_invite_pairing_when_its_senders_clock_is_behind() {
+    let world = World::new();
+    let (anna, ben) = (&world.issuer, &world.payer);
+    proven(anna, ben);
+    ben.clock.advance(HOUR);
+    let first = send_request(&world, anna, ben).unwrap();
+    drain(&world, ben);
+    let held = requests_at(&world, ben);
+    assert_eq!(held.len(), 1);
+
+    let link = world.invite(ben, "Ben");
+    let anna_side = world
+        .block_on(
+            anna.wallet
+                .contact_book()
+                .pairing_accept(&relays(anna), accept(&link, "Anna", false)),
+        )
+        .unwrap()
+        .contact_id;
+    world.collect(ben);
+    world.collect(anna);
+    world.collect(ben);
+    let ben_side = world.only_contact(ben);
+    assert_eq!(status(&world, ben, ben_side), PairingStatus::Paired);
+    let mut ben_events = ben.wallet.subscribe();
+
+    world
+        .block_on(anna.wallet.contact_book().contact_remove(anna_side))
+        .unwrap();
+    world
+        .block_on(anna.wallet.contact_book().pairing_request_cancel(first))
+        .unwrap();
+    anna.clock.advance(Duration::from_secs(1));
+    send_request(&world, anna, ben).unwrap();
+    drain(&world, ben);
+
+    let again = requests_at(&world, ben);
+    assert_eq!(again.len(), 1);
+    assert_ne!(again[0].request_id, held[0].request_id);
+    let ended = world
+        .block_on(ben.wallet.contact_book().contact(ben_side))
+        .unwrap();
+    assert_eq!(ended.ended_reason, Some(PairingEndReason::Unpaired));
+    assert!(events(&mut ben_events).iter().any(|event| matches!(
+        event,
+        Event::ContactUnpaired(news) if news.contact_id == ben_side
+    )));
+}
+
 /// Ben answers Anna's request; Anna withdraws it before the answer reaches her and asks again.
 /// Ben's answered pairing was never confirmed: answering the new request replaces it, and the
 /// two pair once.
