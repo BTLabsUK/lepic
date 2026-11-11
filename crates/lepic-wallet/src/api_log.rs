@@ -4,7 +4,7 @@
 
 use jiff::Timestamp;
 use lepic_node::NodeApi;
-use lepic_store::{API_DIGEST_LEN, ApiEvent, ApiRequest, Repositories, StoreError, WalletStore};
+use lepic_store::{API_DIGEST_LEN, ApiEvent, ApiRequest, WalletStore};
 use tracing::instrument;
 
 use crate::error::WalletError;
@@ -121,7 +121,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use lepic_store::{MemoryStore, StoreKeys};
+    use lepic_store::{MemoryStore, StoreError, StoreKeys};
 
     use super::*;
 
