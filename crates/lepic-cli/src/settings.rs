@@ -124,7 +124,7 @@ pub const SETTINGS: &[(&str, &str, &str)] = &[
     (
         "shell_idle_lock_minutes",
         "LEPIC_SHELL_IDLE_LOCK_MINUTES",
-        "minutes without input before the interactive shell locks the wallet; 0 never",
+        "minutes with no line entered before the interactive shell locks the wallet; 0 never",
     ),
     (
         "settings_file",
@@ -457,7 +457,7 @@ impl Settings {
     }
 }
 
-/// The minutes without input before the shell locks the wallet; 0 never.
+/// The minutes with no line entered before the shell locks the wallet; 0 never.
 fn shell_idle_lock_minutes(lookup: &Lookup<'_>) -> Result<u64, SettingsError> {
     Ok(lookup
         .parse("shell_idle_lock_minutes", |text| text.parse::<u64>().ok())?
