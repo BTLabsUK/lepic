@@ -9,6 +9,10 @@
 //!
 //! The crate's `README.md` describes its parts; `docs/cli.md` is the user guide.
 
+// The unit tests of serve reuse the integration tests' support, which names this crate.
+#[cfg(test)]
+extern crate self as lepic_cli;
+
 pub mod amount;
 #[cfg(unix)]
 mod api;
