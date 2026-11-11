@@ -46,6 +46,12 @@ Conventional Commit messages at release time.
 
 ### Changed
 
+- **Breaking:** payment files in QR codes are native `lepic.v1` slates (`ur:epic-slate`
+  version 2), about half the parts of the deflated text; a reader of version 1 only refuses them.
+  The FFI's `encode_ur_slate` takes the chain and falls back to the text where a slate has no
+  `lepic.v1` form; `decode_ur_slate` reads both versions and refuses in-person codes and answers
+  as `ForeignUrCode`. An answer file or text that leaves out the initiator's inputs, change and
+  message finalizes from the stored proposal.
 - A send with a TTL to a peer that takes the V2 slate (stock Epicbox, HTTP) goes out instead of
   being refused with `Unrepresentable` (409 `invalid_slate` over serve). The slate carries no TTL;
   the wallet keeps the height as the send's local cutoff, refuses to finalize or post the send

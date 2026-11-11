@@ -12614,6 +12614,7 @@ fn wire__crate__api__wallet__encode_ur_slate_impl(
             let mut deserializer =
                 flutter_rust_bridge::for_generated::SseDeserializer::new(message);
             let api_json = <String>::sse_decode(&mut deserializer);
+            let api_chain = <crate::api::types::Chain>::sse_decode(&mut deserializer);
             let api_max_fragment_len = <u32>::sse_decode(&mut deserializer);
             let api_single_code_max_len = <Option<u32>>::sse_decode(&mut deserializer);
             deserializer.end();
@@ -12621,6 +12622,7 @@ fn wire__crate__api__wallet__encode_ur_slate_impl(
                 transform_result_sse::<_, crate::api::error::WalletError>((move || {
                     let output_ok = crate::api::wallet::encode_ur_slate(
                         api_json,
+                        api_chain,
                         api_max_fragment_len,
                         api_single_code_max_len,
                     )?;

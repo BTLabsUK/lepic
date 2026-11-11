@@ -3,9 +3,9 @@
 Two phones side by side exchange a slate without a relay, a server or a file: the sender's phone
 shows its S1 (or an issuer its I1) as a looping sequence of QR codes, the other phone scans it,
 then shows its S2 (or I2) the same way for the first phone to scan. The codes carry the slate
-JSON text that the file method would write, unencrypted (ADR 0025). LEPIC implements the format
-in `lepic_slate::ur_slate`, and the binding exposes it as `encode_ur_slate` and
-`decode_ur_slate`.
+unencrypted, as the slate JSON text the file method would write (version 1, ADR 0025) or as its
+native `lepic.v1` bytes (version 2, ADR 0056). LEPIC implements the format in
+`lepic_slate::ur_slate`, and the binding exposes it as `encode_ur_slate` and `decode_ur_slate`.
 
 The format builds on the Uniform Resources scheme of Blockchain Commons (BCR-2020-005, URs;
 BCR-2020-012, bytewords; and its multipart fountain encoding). This page states only what Epic
@@ -116,7 +116,25 @@ Version 2 carries a native `lepic.v1` slate or an envelope as bytes, nothing com
 (RFC 0003 §5.18). It has the same UR type, framing and case as version 1. `lepic_slate::ur_slate`
 reads and writes both versions: version 1 through `encode_ur_slate` and `decode_ur_slate`,
 version 2 through `encode_ur_binary` and `decode_ur_parts`. The binding uses version 2 for the
-codes and answers of the in-person flow.
+codes and answers of the in-person flow, and for payment files.
+
+### Payment files
+
+The binding's `encode_ur_slate` writes a payment file, V2 or V3 slate JSON, as the slate's
+`lepic.v1` bytes with an empty tail. `lepic.v1` leaves out the body of a proposal and the
+initiator's message in an answer; the initiator puts them back from the proposal it stored when
+it finalizes. The encoder writes version 1 instead where `lepic.v1` cannot carry the slate:
+
+- text the legacy codecs do not read;
+- a range proof that is not a single bulletproof;
+- a block header version other than the one the fork table gives the slate's height;
+- bytes that would not read back, such as a message over the `lepic.v1` limit.
+
+`decode_ur_slate` reads both versions. A version 2 native slate comes back as V3 JSON text on
+the network its header names. A native slate with a reply key or reply mailbox is an in-person
+code and an envelope is an in-person answer: `decode_ur_slate` refuses both as
+`ForeignUrCode`, and the in-person reader `in_person_qr_read` refuses a payment file's native
+slate, like version 1 text, as `InvalidSlate`. The CLI and `lepic serve` write version 1.
 
 ### Payload
 
@@ -151,8 +169,8 @@ version 1 writes them. The encoder accepts fragment lengths from 16 to 1024 byte
 The 360-byte limit is the default. Whether a payload is one code or an animated sequence is the
 writer's display choice, so `encode_ur_binary_split` takes the single-code limit, 0 to 1024
 bytes (0 always splits), next to the fragment length. A writer that draws every code at level H
-with a logo in the centre picks small values, for example 80 and 64, to keep each frame near a
-version 11 symbol. Readers take a single-part code or parts either way; nothing on the wire
+with a logo in the centre picks smaller values to keep each frame within a fixed symbol, for
+example 64-byte fragments for version 11 or 125-byte fragments for version 15. Readers take a single-part code or parts either way; nothing on the wire
 says which limit the writer used.
 
 ### Limits

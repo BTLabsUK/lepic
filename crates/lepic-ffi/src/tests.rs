@@ -29,6 +29,7 @@ mod node;
 mod offline;
 mod outputs;
 mod password;
+mod payment_qr;
 mod peer;
 mod resend;
 mod scan;
@@ -744,18 +745,32 @@ fn a_slate_read_from_its_qr_codes_inspects_as_the_text() {
     let json = vector_slate(include_str!(
         "../../../testdata/vectors/slates/send_file_plain_s1_file.json"
     ));
-    let parts = encode_ur_slate(json.clone(), 200, None).unwrap();
-    let partial = decode_ur_slate(parts[..3].to_vec()).unwrap();
+    let parts = encode_ur_slate(json.clone(), Chain::Floonet, 40, Some(40)).unwrap();
+    let count = parts[0]
+        .split('/')
+        .nth(1)
+        .and_then(|seq| seq.split_once('-'))
+        .map(|(_, count)| count.parse::<u32>().unwrap())
+        .unwrap();
+    assert!(count > 1);
+    let partial = decode_ur_slate(parts[..1].to_vec()).unwrap();
     assert!(!partial.complete);
-    assert_eq!((partial.received_fragments, partial.fragment_count), (3, 7));
+    assert_eq!(
+        (partial.received_fragments, partial.fragment_count),
+        (1, count)
+    );
     let progress = decode_ur_slate(parts).unwrap();
     assert!(progress.complete);
-    assert_eq!(progress.received_fragments, 7);
+    assert_eq!(progress.received_fragments, count);
     let decoded = progress.json.unwrap();
-    assert_eq!(decoded, json);
+    let (read, file) = (
+        inspect_slate(decoded, Chain::Floonet).unwrap(),
+        inspect_slate(json, Chain::Floonet).unwrap(),
+    );
+    assert_eq!(read.stage, SlateStage::S1);
     assert_eq!(
-        inspect_slate(decoded, Chain::Floonet).unwrap().stage,
-        SlateStage::S1
+        (read.slate_id, read.amount, read.fee, read.version),
+        (file.slate_id, file.amount, file.fee, 3)
     );
 }
 
@@ -763,17 +778,17 @@ fn a_slate_read_from_its_qr_codes_inspects_as_the_text() {
 fn a_slate_code_takes_the_callers_single_code_limit() {
     use crate::api::wallet::{decode_ur_slate, encode_ur_slate};
     let json = r#"{"id":"slate-1","pad":"abcdefghijklmnopqrstuvwxyz"}"#.to_owned();
-    let default = encode_ur_slate(json.clone(), 200, None).unwrap();
+    let default = encode_ur_slate(json.clone(), Chain::Floonet, 200, None).unwrap();
     assert_eq!(default.len(), 1);
     assert_eq!(
-        encode_ur_slate(json.clone(), 16, Some(200)).unwrap(),
+        encode_ur_slate(json.clone(), Chain::Floonet, 16, Some(200)).unwrap(),
         default
     );
-    let split = encode_ur_slate(json.clone(), 16, Some(0)).unwrap();
+    let split = encode_ur_slate(json.clone(), Chain::Floonet, 16, Some(0)).unwrap();
     assert!(split.len() > 1);
     assert_eq!(decode_ur_slate(split).unwrap().json, Some(json.clone()));
     assert_eq!(
-        kind(encode_ur_slate(json, 200, Some(1025))),
+        kind(encode_ur_slate(json, Chain::Floonet, 200, Some(1025))),
         WalletErrorKind::InvalidArgument
     );
 }
@@ -781,8 +796,14 @@ fn a_slate_code_takes_the_callers_single_code_limit() {
 #[test]
 fn qr_code_refusals_have_their_own_kinds() {
     use crate::api::wallet::{decode_ur_slate, encode_ur_slate};
-    let s1 = encode_ur_slate(r#"{"a":"1"}"#.to_owned(), 200, None).unwrap();
-    let long = encode_ur_slate(format!("\"{}\"", "ab".repeat(300)), 16, None).unwrap();
+    let s1 = encode_ur_slate(r#"{"a":"1"}"#.to_owned(), Chain::Floonet, 200, None).unwrap();
+    let long = encode_ur_slate(
+        format!("\"{}\"", "ab".repeat(300)),
+        Chain::Floonet,
+        16,
+        None,
+    )
+    .unwrap();
     let cases = [
         (
             vec!["https://example.org".to_owned()],
@@ -806,16 +827,22 @@ fn qr_code_refusals_have_their_own_kinds() {
         assert_eq!(kind(decode_ur_slate(parts)), expected);
     }
     assert_eq!(
-        kind(encode_ur_slate("slate".to_owned(), 200, None)),
+        kind(encode_ur_slate(
+            "slate".to_owned(),
+            Chain::Floonet,
+            200,
+            None
+        )),
         WalletErrorKind::InvalidSlate
     );
     assert_eq!(
-        kind(encode_ur_slate("{}".to_owned(), 8, None)),
+        kind(encode_ur_slate("{}".to_owned(), Chain::Floonet, 8, None)),
         WalletErrorKind::InvalidArgument
     );
     assert_eq!(
         kind(encode_ur_slate(
             format!("\"{}\"", "a".repeat(70_000)),
+            Chain::Floonet,
             200,
             None
         )),

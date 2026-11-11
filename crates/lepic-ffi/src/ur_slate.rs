@@ -1,24 +1,34 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Slate text as animated QR codes (`ur:epic-slate`), without a wallet.
 
+use lepic_primitives::params::Network;
 use lepic_wallet::slate::ur_slate::{
     SINGLE_CODE_MAX_LEN, UrBinary, UrBinaryEncodeError, UrContent, UrContentError, UrDecodeError,
-    UrEncodeError, UrProgress, decode_ur_parts, decode_ur_slate, encode_ur_binary_split,
-    encode_ur_slate_split,
+    UrEncodeError, decode_ur_parts, encode_ur_binary_split, encode_ur_slate_split,
+};
+use lepic_wallet_contacts::{
+    PaymentQrRefusal, is_payment_qr_native, payment_qr_native, payment_qr_text,
 };
 
 use crate::api::error::{WalletError, WalletErrorKind};
 use crate::api::types::{InPersonQrProgress, UrSlateProgress};
 
-/// The parts of an animated QR code for slate text. Without `single_code_max_len` a payload
-/// that fits one fragment is one code.
+/// The parts of an animated QR code for slate text on `network`: its `lepic.v1` bytes, or the
+/// deflated text where `lepic.v1` cannot carry the slate. Without `single_code_max_len` a
+/// payload that fits one fragment is one code.
 pub(crate) fn encode(
     json: String,
+    network: Network,
     max_fragment_len: u32,
     single_code_max_len: Option<u32>,
 ) -> Result<Vec<String>, WalletError> {
-    let single_code_max_len = single_code_max_len.unwrap_or(max_fragment_len);
-    encode_ur_slate_split(json, len_of(single_code_max_len), len_of(max_fragment_len))
+    let single_code_max_len = len_of(single_code_max_len.unwrap_or(max_fragment_len));
+    let max_fragment_len = len_of(max_fragment_len);
+    if let Some(bytes) = payment_qr_native(network, &json) {
+        return encode_ur_binary_split(&bytes, single_code_max_len, max_fragment_len)
+            .map_err(|error| WalletError::chained(encode_binary_kind(&error), &error));
+    }
+    encode_ur_slate_split(json, single_code_max_len, max_fragment_len)
         .map_err(|error| WalletError::chained(encode_kind(&error), &error))
 }
 
@@ -27,10 +37,47 @@ fn len_of(value: u32) -> usize {
     usize::try_from(value).unwrap_or(usize::MAX)
 }
 
+/// How far the scanned parts of a payment-file code got: either payload version, the slate
+/// text of a `lepic.v1` slate as V3 JSON. An in-person code or answer is a foreign code here.
 pub(crate) fn decode(parts: &[String]) -> Result<UrSlateProgress, WalletError> {
-    let progress = decode_ur_slate(parts)
-        .map_err(|error| WalletError::chained(decode_kind(&error), &error))?;
-    Ok(progress_of(progress))
+    let progress = decode_ur_parts(parts).map_err(|error| content_error(&error))?;
+    let json = match progress.content {
+        None => None,
+        Some(UrContent::Json(json)) => Some(json),
+        Some(UrContent::Binary(UrBinary::NativeSlate(bytes))) => {
+            Some(payment_qr_text(&bytes).map_err(|refusal| {
+                let kind = match refusal {
+                    PaymentQrRefusal::InPerson => WalletErrorKind::ForeignUrCode,
+                    PaymentQrRefusal::Malformed => WalletErrorKind::InvalidUrCode,
+                };
+                WalletError::chained(kind, &refusal)
+            })?)
+        }
+        Some(UrContent::Binary(UrBinary::Envelope(_))) => {
+            return Err(WalletError::new(
+                WalletErrorKind::ForeignUrCode,
+                "the code is an in-person answer, not a payment file",
+            ));
+        }
+    };
+    // The decoder bounds both counts by the sequence limit, far below u32::MAX.
+    let count = |value: usize| u32::try_from(value).unwrap_or(u32::MAX);
+    Ok(UrSlateProgress {
+        complete: json.is_some(),
+        received_fragments: count(progress.resolved_fragments),
+        fragment_count: count(progress.fragment_count),
+        json,
+    })
+}
+
+/// A payment-file code's content error as the decoder's kind.
+fn content_error(error: &UrContentError) -> WalletError {
+    let kind = match error {
+        UrContentError::Decode(decode) => decode_kind(decode),
+        UrContentError::UnknownMagic => WalletErrorKind::InvalidUrCode,
+        UrContentError::TooLong { .. } => WalletErrorKind::UrCodeTooLarge,
+    };
+    WalletError::chained(kind, error)
 }
 
 /// The parts of an animated QR code for the bytes of an in-person code or answer. Without
@@ -45,8 +92,8 @@ pub(crate) fn encode_binary(
         .map_err(|error| WalletError::chained(encode_binary_kind(&error), &error))
 }
 
-/// How far the scanned parts of an in-person code or answer got. Parts of a JSON slate code
-/// are not an in-person code.
+/// How far the scanned parts of an in-person code or answer got. Parts of a payment-file code,
+/// JSON or a `lepic.v1` slate without a reply key or mailbox, are not an in-person code.
 pub(crate) fn decode_binary(parts: &[String]) -> Result<InPersonQrProgress, WalletError> {
     let progress = decode_ur_parts(parts).map_err(|error| {
         let kind = match &error {
@@ -59,6 +106,12 @@ pub(crate) fn decode_binary(parts: &[String]) -> Result<InPersonQrProgress, Wall
     let count = |value: usize| u32::try_from(value).unwrap_or(u32::MAX);
     let bytes = match progress.content {
         None => None,
+        Some(UrContent::Binary(UrBinary::NativeSlate(bytes))) if is_payment_qr_native(&bytes) => {
+            return Err(WalletError::new(
+                WalletErrorKind::InvalidSlate,
+                "the code holds a payment file, not an in-person code",
+            ));
+        }
         Some(UrContent::Binary(UrBinary::NativeSlate(bytes) | UrBinary::Envelope(bytes))) => {
             Some(bytes)
         }
@@ -118,16 +171,5 @@ fn decode_kind(error: &UrDecodeError) -> WalletErrorKind {
         | UrDecodeError::InvalidDeflate
         | UrDecodeError::NotUtf8
         | UrDecodeError::NotJson => WalletErrorKind::InvalidUrCode,
-    }
-}
-
-fn progress_of(progress: UrProgress) -> UrSlateProgress {
-    // The decoder bounds both counts by the sequence limit, far below u32::MAX.
-    let count = |value: usize| u32::try_from(value).unwrap_or(u32::MAX);
-    UrSlateProgress {
-        complete: progress.is_complete(),
-        received_fragments: count(progress.resolved_fragments),
-        fragment_count: count(progress.fragment_count),
-        json: progress.json,
     }
 }

@@ -39,7 +39,7 @@ they were written, and the file names do not change.
 | [0022](0022-node-over-tor.md) | Node over Tor | accepted |
 | [0023](0023-binding-in-its-own-repository.md) | The Flutter binding lives in its own repository | accepted |
 | [0024](0024-contact-pairing-and-invoice-trust.md) | Contact pairing, sealed slates and invoice trust on paired contacts | proposed |
-| [0025](0025-animated-qr-slates.md) | Slates as animated QR codes in `ur:epic-slate` | accepted |
+| [0025](0025-animated-qr-slates.md) | Slates as animated QR codes in `ur:epic-slate` | accepted; payload of `encode_ur_slate` and `decode_ur_slate` superseded by 0056 |
 | [0026](0026-tor-as-a-build-feature.md) | Tor is a build feature of the binding | accepted |
 | [0027](0027-minimum-confirmations.md) | Minimum confirmations is a per-wallet setting, default 6 | accepted; upper bound superseded by 0036 |
 | [0028](0028-transaction-records-in-tables.md) | Per-transaction state lives in tables that cascade with the transaction | accepted |
@@ -70,3 +70,4 @@ they were written, and the file names do not change.
 | [0053](0053-cli-commands-through-a-running-serve.md) | CLI commands reach a running `lepic serve` through its socket | accepted; route mapping superseded by 0055 |
 | [0054](0054-epic1-over-carriers-derived-mailboxes-short-links.md) | epic1 over carriers: derived mailboxes and a short link | proposed |
 | [0055](0055-the-wallet-api-v1.md) | The wallet API v1, served from one hand-written document | accepted |
+| [0056](0056-payment-files-in-qr-as-native-slates.md) | Payment files in QR codes as native slates | accepted |
