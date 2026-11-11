@@ -559,7 +559,8 @@ fn send_kind(error: &SendError) -> ErrorKind {
         | SendError::ProofAddress(_)
         | SendError::NotResendable { .. }
         | SendError::PayeeMismatch { .. }
-        | SendError::SlateIdTaken { .. } => ErrorKind::Rejected,
+        | SendError::SlateIdTaken { .. }
+        | SendError::FeeAboveMaximum { .. } => ErrorKind::Rejected,
         SendError::UnknownTransport { .. }
         | SendError::CannotDeliver { .. }
         | SendError::CannotExport { .. } => ErrorKind::Transport,

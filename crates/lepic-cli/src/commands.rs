@@ -21,7 +21,7 @@ use lepic_methods::http::{
 use lepic_methods::registry::Methods;
 use lepic_methods::tor::{SocksProxy, Tor, TorPeer, TorProcess, TorSettings, TorState};
 use lepic_node::{NodeApi, NodeClient, Propagation, RpcTransport};
-use lepic_primitives::amount::Height;
+use lepic_primitives::amount::{Fee, Height};
 use lepic_primitives::params::Network;
 use lepic_store::{
     ChainCheck, ContactId, ImportedKind, OutboxStatus, OutputStatus, Repositories, SlateStage,
@@ -863,6 +863,9 @@ impl<H: Host> Run<'_, H> {
         let drawn = slate_id.map_or_else(drawn_slate_id, Ok)?;
         let request = SendRequest {
             slate_id: Some(drawn),
+            // The fee the review showed binds the send itself, which selects again in its own
+            // store transaction: a fee that rose since the check below refuses the send there.
+            max_fee: self.reviewed.map(|reviewed| Fee::new(reviewed.fee)),
             ..spend.send_request(account.index, amount, args.message.message)
         };
         if self.reviewed.is_some() || transport == lepic_methods::tor::TRANSPORT_ID {
@@ -927,6 +930,14 @@ impl<H: Host> Run<'_, H> {
                 Err(error @ CliError::Send(SendError::SlateIdTaken { sent: Some(_), .. })),
                 Some(_),
             ) => return repeat(destination).await?.ok_or(error),
+            // Only a reviewed send has a maximum fee, which is the reviewed fee, on the
+            // reviewed amount.
+            (Err(CliError::Send(SendError::FeeAboveMaximum { fee, max_fee })), _) => {
+                return Err(CliError::ReviewChanged {
+                    reviewed: amount.value().saturating_add(max_fee.value()),
+                    total: amount.value().saturating_add(fee.value()),
+                });
+            }
             (sending, _) => sending,
         };
         let (sent, dialect, state) = sending?;

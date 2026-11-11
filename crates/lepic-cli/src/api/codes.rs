@@ -248,6 +248,7 @@ fn send(error: &SendError) -> Option<&'static str> {
         | SendError::CannotDeliver { .. }
         | SendError::CannotExport { .. }
         | SendError::SlateIdTaken { .. }
+        | SendError::FeeAboveMaximum { .. }
         | SendError::ProofAddress(_) => "invalid_argument",
         SendError::Undelivered { .. } => "transport_failed",
         SendError::Unrepresentable(_) => "invalid_slate",
