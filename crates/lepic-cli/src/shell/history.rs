@@ -57,13 +57,80 @@ fn create_private(path: &Path) -> io::Result<()> {
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
 }
 
+/// Windows has no mode bits: the file gets a protected DACL with one entry, full control for
+/// the user running the shell, as 0600 gives on Unix. `icacls` sets it because the workspace
+/// denies the unsafe code a direct `SetNamedSecurityInfoW` call needs.
 #[cfg(not(unix))]
 fn create_private(path: &Path) -> io::Result<()> {
     std::fs::OpenOptions::new()
         .create(true)
         .append(true)
-        .open(path)
-        .map(drop)
+        .open(path)?;
+    let user = acl::user_sid()?;
+    // `/reset` drops the explicit entries a file made by hand may carry; `/inheritance:r` then
+    // drops the inherited ones and protects the DACL, and `/grant:r` leaves the user's entry
+    // as the only one. Between the two calls the file has only what its directory passes on.
+    acl::icacls(path, &["/reset"])?;
+    acl::icacls(
+        path,
+        &["/inheritance:r", "/grant:r", &format!("*{user}:(F)")],
+    )
+}
+
+#[cfg(not(unix))]
+mod acl {
+    use std::io;
+    use std::path::{Path, PathBuf};
+    use std::process::{Command, Stdio};
+
+    /// The longest SID text: `S-1-` and up to 15 numbers of at most 20 digits.
+    const MAX_SID_LEN: usize = 4 + 15 * 21;
+
+    /// A tool of `System32`, named by its full path so no directory on `PATH` stands in for it.
+    fn system_tool(name: &str) -> io::Result<PathBuf> {
+        let root = std::env::var_os("SystemRoot")
+            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "SystemRoot is not set"))?;
+        Ok(PathBuf::from(root).join("System32").join(name))
+    }
+
+    fn run(tool: &str, args: &[&std::ffi::OsStr]) -> io::Result<Vec<u8>> {
+        let output = Command::new(system_tool(tool)?)
+            .args(args)
+            .stdin(Stdio::null())
+            .stderr(Stdio::null())
+            .output()?;
+        if !output.status.success() {
+            return Err(io::Error::other(format!(
+                "{tool} failed: {}",
+                output.status
+            )));
+        }
+        Ok(output.stdout)
+    }
+
+    pub(super) fn icacls(path: &Path, args: &[&str]) -> io::Result<()> {
+        let mut all = vec![path.as_os_str()];
+        all.extend(args.iter().map(std::ffi::OsStr::new));
+        run("icacls.exe", &all).map(drop)
+    }
+
+    /// The SID of the user the process runs as, from `whoami /user`: `"name","S-1-…"`.
+    pub(super) fn user_sid() -> io::Result<String> {
+        let args = ["/user", "/fo", "csv", "/nh"].map(std::ffi::OsStr::new);
+        let output = run("whoami.exe", &args)?;
+        parse_whoami_sid(&String::from_utf8_lossy(&output))
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "whoami gave no user SID"))
+    }
+
+    pub(super) fn parse_whoami_sid(output: &str) -> Option<String> {
+        let sid = output.trim().rsplit(',').next()?.trim_matches('"');
+        let numbers = sid.strip_prefix("S-1-")?;
+        let well_formed = sid.len() <= MAX_SID_LEN
+            && numbers
+                .split('-')
+                .all(|number| !number.is_empty() && number.bytes().all(|b| b.is_ascii_digit()));
+        well_formed.then(|| sid.to_owned())
+    }
 }
 
 impl History for FilteredHistory {
@@ -153,5 +220,56 @@ mod tests {
         let _history = FilteredHistory::open(dir.path()).unwrap();
         let mode = std::fs::metadata(&path).unwrap().permissions().mode();
         assert_eq!(mode & 0o777, 0o600);
+    }
+
+    /// An older file that others could read is narrowed to one entry: the user, full control,
+    /// not inherited, with inheritance off.
+    #[cfg(not(unix))]
+    #[test]
+    fn the_file_is_the_owners_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(HISTORY_FILE);
+        std::fs::write(&path, "").unwrap();
+        // Everyone may read it.
+        acl::icacls(&path, &["/grant", "*S-1-1-0:(R)"]).unwrap();
+        let _history = FilteredHistory::open(dir.path()).unwrap();
+        let user = acl::user_sid().unwrap();
+        let script = "$acl = Get-Acl -LiteralPath $env:LEPIC_ACL_PATH; \
+            'protected=' + $acl.AreAccessRulesProtected; \
+            foreach ($rule in $acl.Access) { \
+              $sid = $rule.IdentityReference.Translate([Security.Principal.SecurityIdentifier]); \
+              'rule=' + $sid.Value + '|' + $rule.FileSystemRights + '|' + \
+                $rule.AccessControlType + '|' + $rule.IsInherited }";
+        let output = std::process::Command::new("powershell.exe")
+            .args(["-NoProfile", "-NonInteractive", "-Command", script])
+            .env("LEPIC_ACL_PATH", &path)
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        let text = String::from_utf8(output.stdout).unwrap();
+        let lines: Vec<&str> = text
+            .lines()
+            .map(str::trim)
+            .filter(|l| !l.is_empty())
+            .collect();
+        assert_eq!(
+            lines,
+            [
+                "protected=True".to_owned(),
+                format!("rule={user}|FullControl|Allow|False")
+            ]
+        );
+    }
+
+    #[cfg(not(unix))]
+    #[test]
+    fn the_user_sid_is_the_last_whoami_field() {
+        assert_eq!(
+            acl::parse_whoami_sid("\"host\\a,b\",\"S-1-5-21-1-2-3-1001\"\r\n").as_deref(),
+            Some("S-1-5-21-1-2-3-1001")
+        );
+        assert_eq!(acl::parse_whoami_sid("\"host\\a\",\"S-1-5--1\""), None);
+        assert_eq!(acl::parse_whoami_sid("\"host\\a\",\"1-5-21\""), None);
+        assert_eq!(acl::parse_whoami_sid(""), None);
     }
 }
