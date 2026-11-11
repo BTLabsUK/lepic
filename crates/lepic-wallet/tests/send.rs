@@ -228,16 +228,13 @@ both_stores!(refuses_a_payment_proof_the_transport_cannot_carry_before_storing_a
 fn refuses_a_payment_proof_the_transport_cannot_carry_before_storing_anything() {
     let sender = Sender::with_policy(Arc::new(V2Only));
     let outputs_before = sender.outputs();
-    for request in [
-        SendRequest {
+    // With a TTL as well: the TTL alone would become a local cutoff, the proof cannot.
+    for ttl_blocks in [None, Some(30)] {
+        let request = SendRequest {
             payment_proof_recipient: Some(receiver_address()),
+            ttl_blocks,
             ..request(AMOUNT)
-        },
-        SendRequest {
-            ttl_blocks: Some(30),
-            ..request(AMOUNT)
-        },
-    ] {
+        };
         let error = sender
             .harness
             .block_on(
@@ -250,7 +247,7 @@ fn refuses_a_payment_proof_the_transport_cannot_carry_before_storing_anything() 
             matches!(
                 error,
                 SendError::Unrepresentable(EncodeError::Unrepresentable {
-                    what: Unrepresentable::PaymentProof | Unrepresentable::TimeToLive,
+                    what: Unrepresentable::PaymentProof,
                     ..
                 })
             ),

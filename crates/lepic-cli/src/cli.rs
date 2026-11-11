@@ -470,6 +470,9 @@ pub struct SpendArgs {
     #[arg(long, value_name = "STRATEGY", default_value = "smallest")]
     pub selection: SelectionArg,
     /// Blocks after which the other party must refuse the slate
+    ///
+    /// A V2 slate (Epicbox, HTTP) cannot carry it: this wallet keeps the height and cancels the
+    /// send if it is unanswered by then.
     #[arg(long, value_name = "BLOCKS")]
     pub ttl_blocks: Option<u64>,
 }

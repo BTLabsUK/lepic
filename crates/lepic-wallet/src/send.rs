@@ -39,7 +39,9 @@ use lepic_primitives::output::{OutputFeatures, OutputIdentifier};
 use lepic_primitives::params::Network;
 use lepic_primitives::tx::TransactionBody;
 use lepic_slate::codec::{Codec, CodecId, EncodeContext, MediaType, WireSlate};
-use lepic_slate::error::{DecodeError, EncodeError, ProofAddressError, SlateError};
+use lepic_slate::error::{
+    DecodeError, EncodeError, ProofAddressError, SlateError, Unrepresentable,
+};
 use lepic_slate::model::{
     KernelLock, Participant, ParticipantMessage, PaymentProof, ProofAddress, Proposal, Slate,
     SlateId,
@@ -181,7 +183,9 @@ pub struct SendRequest {
     pub strategy: SelectionStrategy,
     /// [`KernelLock::NONE`] gives a `Plain` kernel, any other height a `HeightLocked` one.
     pub lock: KernelLock,
-    /// Blocks past the chain tip after which the receiver must refuse the slate.
+    /// Blocks past the chain tip after which the receiver must refuse the slate. A send whose
+    /// format has no TTL field, the legacy V2 shape, keeps it as [`Self::local_ttl_blocks`]
+    /// instead.
     pub ttl_blocks: Option<u64>,
     /// Blocks past the chain tip after which this wallet refuses to finalize or post the send,
     /// and expires it at a refresh if it is unanswered. Kept by this wallet only, not in the
@@ -283,7 +287,7 @@ pub struct S1Plan {
 
 /// The random values of one S1. [`S1Randomness::draw`] takes them from the wallet's RNG; tests
 /// pass the values upstream chose.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct S1Randomness {
     pub slate_id: SlateId,
     /// The kernel offset, split off the sender's excess.
@@ -737,6 +741,58 @@ fn create_s1(
     })
 }
 
+/// Creates the S1 of `request` in one store transaction, as [`create_s1`] does. When the
+/// format the S1 goes out in cannot carry a TTL, the legacy V2 shape a stock Epicbox or HTTP
+/// receiver gets, the transaction is rolled back and the S1 is built again without the slate
+/// TTL: its cutoff becomes the send's local cutoff, the earlier one when the request has both,
+/// which this wallet enforces as it enforces [`SendRequest::local_ttl_blocks`]. A format that
+/// carries a TTL gets it in the slate as before.
+fn write_s1<D: WalletStore>(
+    store: &D,
+    env: &SendEnvironment<'_>,
+    keychain: &Keychain,
+    tip: Height,
+    request: &SendRequest,
+    delivery: &Delivery,
+    randomness: S1Randomness,
+) -> Result<StoredS1, SendError> {
+    let Some(ttl_blocks) = request.ttl_blocks else {
+        return store.write(|repos| {
+            create_s1(repos, env, keychain, tip, request, delivery, randomness)
+        });
+    };
+    let first = store.write(|repos| {
+        create_s1(
+            repos,
+            env,
+            keychain,
+            tip,
+            request,
+            delivery,
+            randomness.clone(),
+        )
+    });
+    match first {
+        Err(SendError::Unrepresentable(EncodeError::Unrepresentable {
+            codec,
+            what: Unrepresentable::TimeToLive,
+        })) => {
+            let local = SendRequest {
+                ttl_blocks: None,
+                local_ttl_blocks: Some(
+                    request
+                        .local_ttl_blocks
+                        .map_or(ttl_blocks, |local| local.min(ttl_blocks)),
+                ),
+                ..request.clone()
+            };
+            debug!(%codec, "ttl kept as a local cutoff");
+            store.write(|repos| create_s1(repos, env, keychain, tip, &local, delivery, randomness))
+        }
+        other => other,
+    }
+}
+
 /// What an S1 is stored with, apart from the request and its selection.
 pub(crate) struct S1Storage {
     pub(crate) network: Network,
@@ -1169,17 +1225,15 @@ where
                 };
                 let randomness = S1Randomness::draw(&mut **ports.rng.lock());
                 Ok(randomness.map_err(SendError::from).and_then(|randomness| {
-                    session.store.write(|repos| {
-                        create_s1(
-                            repos,
-                            &env,
-                            &session.keychain,
-                            tip,
-                            &request,
-                            &target,
-                            randomness,
-                        )
-                    })
+                    write_s1(
+                        &session.store,
+                        &env,
+                        &session.keychain,
+                        tip,
+                        &request,
+                        &target,
+                        randomness,
+                    )
                 }))
             })
             .await??;
@@ -1228,17 +1282,15 @@ where
                 };
                 let randomness = S1Randomness::draw(&mut **ports.rng.lock());
                 Ok(randomness.map_err(SendError::from).and_then(|randomness| {
-                    session.store.write(|repos| {
-                        create_s1(
-                            repos,
-                            &env,
-                            &session.keychain,
-                            tip,
-                            &request,
-                            &delivery,
-                            randomness,
-                        )
-                    })
+                    write_s1(
+                        &session.store,
+                        &env,
+                        &session.keychain,
+                        tip,
+                        &request,
+                        &delivery,
+                        randomness,
+                    )
                 }))
             })
             .await??;

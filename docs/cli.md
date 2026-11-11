@@ -287,7 +287,7 @@ sealed.
 | `--min-confirmations N` | Confirmations an output needs to be spent; default 6 |
 | `--change-outputs N` | Outputs the change is split into; default 1 |
 | `--selection smallest\|all` | Fewest small outputs that cover the amount, or every eligible output; default `smallest` |
-| `--ttl-blocks N` | Blocks after which the payee must refuse the slate |
+| `--ttl-blocks N` | Blocks after which the payee must refuse the slate. A V2 slate (Epicbox, HTTP) has no TTL field: the wallet keeps the height and cancels the send at refresh if it is still unanswered |
 | `--purpose P` | `payment`, `deposit`, `withdrawal`, `refund` or `request`; only with `--to-contact` |
 | `--fluff` | Broadcast to all peers at once instead of through the stem phase |
 | `--slate-id UUID` | A version-4 UUID the caller stores before sending |

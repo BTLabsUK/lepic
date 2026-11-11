@@ -84,8 +84,11 @@ What LEPIC writes (ADR 0015 for files, ADR 0003 for Epicbox):
 | Epicbox | V2 shape, header `2/3/<b>` | the shape and codec of the inbound slate, `version` following the shape, the rest carried through |
 | HTTP | V2 shape, header `2/3/<b>` | the shape and codec of the inbound slate |
 
-A slate with a TTL or a payment proof cannot go out in the V2 shape, so such a send over Epicbox
-or HTTP fails with `Unrepresentable` and stores nothing.
+A slate with a payment proof cannot go out in the V2 shape, so such a send over Epicbox or HTTP
+fails with `Unrepresentable` and stores nothing. A send with a TTL goes out in the V2 shape without
+it: the wallet keeps the height as the send's wallet-local cutoff
+([states.md](states.md#wallet-local-cutoff)) and expires the send at refresh if it is still
+unanswered. The receiver does not see the TTL.
 
 LEPIC's file output differs in bytes from `epic-wallet`'s for slates without a TTL or payment
 proof. `epic-wallet` reads it through path 1, which accepts header version 3 with the V3 shape. A

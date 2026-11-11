@@ -85,7 +85,9 @@ LEPIC differs as follows:
 A send may carry a wallet-local cutoff (`SendRequest::local_ttl_blocks`): a height this wallet
 stores next to the transaction and never puts in the slate. It works on every method, including
 those whose V2 slate cannot carry a TTL. A file send can carry the same height as its slate TTL,
-which the receiver enforces too.
+which the receiver enforces too. A `SendRequest::ttl_blocks` on a send whose slate goes out in the
+V2 shape becomes the local cutoff (the earlier of the two when both are given) and is left out of
+the slate.
 
 Once the tip reaches the earlier of the slate TTL and the local cutoff, this wallet neither
 finalizes the send nor posts it, also not again after a failed post. A refresh expires the send if
