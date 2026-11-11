@@ -36,8 +36,10 @@ the hosts (CLI and FFI) wire everything together. [Architecture](architecture.md
 - [FFI](ffi.md): the API an app calls through flutter_rust_bridge, its streams and error codes.
 - [Configuration](configuration.md): `config.toml`, `settings.toml` and the settings a host app
   passes through the FFI.
-- [`api/openapi.json`](api/openapi.json): the OpenAPI document of the REST API that `lepic serve`
-  answers on its socket. It is generated from the code.
+- [Wallet API guide](api/README.md): connecting, conventions, payments, events and errors, for
+  integrators.
+- [`api/openapi.json`](api/openapi.json): the OpenAPI document of the wallet API (`/api/v1`) that
+  `lepic serve` answers. It is written by hand and is the contract.
 
 ## Protocols
 

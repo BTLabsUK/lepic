@@ -543,38 +543,34 @@ data directory unless `--socket` says otherwise. Only the user that runs it can 
 
 ```sh
 lepic serve &
-curl --unix-socket ./try/wallet/lepic.sock http://lepic/v1/status
+curl --unix-socket ./try/wallet/lepic.sock http://lepic/api/v1/status
 ```
 
 ```json
-{"socket":"/home/user/try/wallet/lepic.sock","uptime_s":1,"requests":{"served":0,"in_flight":1,"refused":0},"epicbox":"connecting","height":null,"node_tip":null,"refresh":{"consecutive_failures":0,"last_error":null,"last_success":null},"collect":{"consecutive_failures":0,"last_error":null,"last_success":null}}
+{"version":"0.4.0","uptime_s":3,"listeners":{"epicbox":{"state":"connected"}},"refresh":{"failures":1,"last_error":"node request failed: could not connect to the node: client error (Connect): tcp connect error: Connection refused (os error 111)"},"collect":{"failures":0,"last_success_at":"2026-11-11T01:51:28.060938633Z"},"requests":{"served":0,"in_flight":1,"refused":0}}
 ```
 
-`GET /v1/openapi.json` returns the OpenAPI document of every route; the same document is in
-[api/openapi.json](api/openapi.json). Response bodies are the JSON `lepic --output json` prints,
-and amounts are decimal strings in EPIC. The routes follow the commands:
+This run had no node to reach, so `refresh` shows a failure. With a node it shows
+`"failures":0` and a `last_success_at`.
 
-| Routes | Commands |
-|---|---|
-| `/v1/wallet`, `/v1/wallet/address`, `/v1/wallet/password`, `/v1/wallet/scan`, `/v1/outputs` | `wallet` |
-| `/v1/transactions`, `/v1/transactions/{tx_id}/…`, `/v1/slates/receive`, `/v1/slates/finalize` | `tx` |
-| `/v1/contacts/…`, `/v1/contact-invoices`, `/v1/payloads` | `contact` |
-| `/v1/in-person/…`, `/v1/epic1/…`, `/v1/epictx/open` | `in-person`, `epic1`, `epictx` |
-| `/v1/epicbox`, `/v1/node`, `/v1/profile/…`, `/v1/peer-pins` | `epicbox`, `node`, `profile`, `peer` |
-| `/v1/status`, `/v1/methods`, `/v1/events` | The running service and its events |
-
-`GET /v1/methods` says per method whether this serve `listens` on it: `epicbox` always, `http`
-with `--http`. `GET /v1/transactions` and `GET /v1/transactions/{tx_id}` take `refresh=true`, as
-`--refresh`. `POST /v1/epic1/pay` takes a `slate_id`, and a repeat under it posts nothing and
-reports `repeated: true`; the owner TLS listener requires it.
+`GET /api/v1/openapi.json` returns the OpenAPI document; the same document is in
+[api/openapi.json](api/openapi.json). It is written by hand and is the contract. The API has its
+own objects (payments, accounts, outputs, addresses, links, contacts, the relay, peers, the
+profile, the node, the wallet and the service), its own errors and an event log. They are not the
+JSON that `lepic --output json` prints, and the CLI does not map onto routes. Amounts are decimal
+strings in EPIC. [api/README.md](api/README.md) is the guide for people who write against it.
 
 `serve --http` also answers payments at `/v2/foreign` as `http listen` does, and takes the same
-`--port`, `--internet`, `--coinbase` and `--coinbase-remote` options.
+`--port`, `--internet`, `--coinbase` and `--coinbase-remote` options. The public listeners answer
+only `/v2/foreign` and `/api/v1/inbox`, the endpoint between LEPIC wallets; the wallet API is
+never on them.
 
 ### Commands while serve runs
 
-While `serve` holds a wallet, a `lepic` command on that wallet with a route in the API runs on
-serve's wallet through its socket ([ADR 0053](adr/0053-cli-commands-through-a-running-serve.md)).
+While `serve` holds a wallet, a `lepic` command on that wallet that serve can run goes through
+serve's socket and runs on serve's wallet ([ADR 0053](adr/0053-cli-commands-through-a-running-serve.md)).
+`lepic` sends the parsed command to a private route, `POST /cli/run`, that only the socket
+answers; it is not part of the wallet API and not in the OpenAPI document.
 `lepic` tries the socket the data directory's `serve-socket` file names (`serve --socket` writes
 it and removes it on exit), then `lepic.sock`. The command prints what it would print on its own,
 with the same error, kind and exit code. It asks for no password, runs with serve's settings and
@@ -593,7 +589,7 @@ them with HTTP 409 (kind `config`, exit code 3) and names it; a client that send
 `curl`, is not checked. Serve answers every request with its version in `x-lepic-version`. A
 `--socket` another serve answers on is refused.
 
-A command given an option its route has no field for runs on its own and meets the lock. These
+A command given an option serve cannot take runs on its own and meets the lock. These
 keep a command off serve: `--to-file`, `--to-contact`, `--purpose`, `--allow-plain-http`,
 `--tor-binary`, `--lib-dir`, `--fluff` and `--ttl-blocks` on `tx send` (`--ttl-blocks` also on
 `in-person read`, `in-person pay` and `epic1 pay`), a non-default `--selection`, `--offline` and
@@ -610,9 +606,9 @@ These commands exit with code 5 while serve runs:
 | `wallet password` | It asks for both passwords on the terminal; run it with serve stopped |
 | `serve`, `epicbox listen`, `epicbox drain`, `http listen`, `tor listen`, `tor address` | They are listeners or take the wallet for their own run |
 | `api client add`, `list`, `remove` | They edit the file serve reads at start |
-| `invoice issue`, `pay`, `list`, `decline` | No route covers them |
-| `tx receive`, `tx finalize`, `tx resend` | They read or write slate files, or have options no route takes |
-| `contact seal`, `open-sealed`, `send-slate`, `plain`, `invoice`, `pay-invoice`, `decline` | No route covers them |
+| `invoice issue`, `pay`, `list`, `decline` | Serve does not run them |
+| `tx receive`, `tx finalize`, `tx resend` | They read or write slate files, or have options serve does not take |
+| `contact seal`, `open-sealed`, `send-slate`, `plain`, `invoice`, `pay-invoice`, `decline` | Serve does not run them |
 
 The error reads `lepic serve is running on this wallet (socket PATH) and this command does not go
 through its API`. A serve whose socket cannot be reached is not found, and the command meets the
@@ -620,12 +616,17 @@ lock.
 
 ### Owner API over TLS
 
-`serve --owner-tls` also answers the owner routes over mutual TLS, on the `ip:port` that
+`serve --owner-tls` also answers the wallet API over mutual TLS, on the `ip:port` that
 `[api] owner_tls` sets in settings.toml. It writes its certificate to `api-tls.pem` in the data
 directory, issued to `lepic-wallet`; clients trust that file and present their own certificate.
-Routes marked `x-socket-only` in the OpenAPI document stay on the socket: changing the password,
-`POST /v1/contacts/export` and `POST /v1/contacts/import`. Over TLS each is a 403 problem with
-code `usage`.
+Operations marked `x-socket-only` in the OpenAPI document stay on the socket: `PUT /wallet/password`,
+`POST /contacts/export` and `POST /contacts/import`. Over TLS each is a 403 problem with code
+`socket_only`. `POST /cli/run` is not there at all: over TLS it answers 404 `no_route`.
+
+Each client has a role. `read` calls change nothing, `receive` also creates invoices, addresses
+and links and takes payments but never spends, and `full` may call everything the TLS listener
+answers. A call above the client's role is a 403 problem with code `role_required`. The socket
+is always `full`. Over TLS `POST /payments` must carry an `id`.
 
 The TLS listener has its own `max_connections`, so TLS clients cannot take the socket's
 connections. A TLS connection takes one once its handshake ends; up to `max_connections`
@@ -635,13 +636,16 @@ within 5 seconds or the header time when that is shorter, counts as refused.
 `lepic api client` chooses the clients:
 
 ```sh
-lepic api client add laptop ./laptop-cert.pem
+lepic api client add laptop ./laptop-cert.pem --role receive
 lepic api client list
 lepic api client remove laptop
 ```
 
 A client is accepted by its Ed25519 key: `add` stores the SHA-256 of the certificate's public
-key in `api-clients`. Names use letters, digits, `.`, `-` and `_`.
+key in `api-clients`, one line per client: `<name> <fingerprint> <role>`, where `#` starts a
+comment. `--role` is `read`, `receive` or `full` and defaults to `read`; a line without a role
+is `read`. Names use letters, digits, `.`, `-` and `_`. A running serve reads the file at each
+request.
 
 ## Output formats
 

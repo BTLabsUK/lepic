@@ -9,6 +9,20 @@ Conventional Commit messages at release time.
 
 ### Changed
 
+- **Breaking:** the owner API moved from `/v1` to `/api/v1`, with a new document, new objects
+  and new errors. `docs/api/openapi.json` is written by hand and is the contract; `serve` builds
+  its router from it and serves it at `GET /api/v1/openapi.json`. A payment is one object whatever
+  its kind, with a UUID `id`; creates take a caller-chosen `id` and are safe to repeat; lists
+  page with `limit` and `cursor`; errors are problem documents with `code` and `category`; an
+  event log can be read as a list or streamed and resumed. The CLI's reports are no longer the
+  API's schema. See ADR 0055 and [docs/api/README.md](docs/api/README.md).
+- **Breaking:** clients of `serve --owner-tls` have a role, `read`, `receive` or `full`.
+  `lepic api client add --role` sets it; a line in `api-clients` without a role is `read`. A call
+  above the role answers 403 `role_required`, and a socket-only call over TLS answers 403
+  `socket_only`. A payment created over TLS must carry an `id`.
+- **Breaking:** the console and the other callers of the old owner routes use `/api/v1`.
+- CLI commands run through a running serve over a private socket-only channel, `POST /cli/run`,
+  as the parsed command. They print what they print on their own (ADR 0053).
 - The native direct endpoint is served at `/api/v1/inbox` (`GET` describes it, `POST` takes the
   sealed envelope) instead of `/v1/peer` and `/v1/peer/slates`. The advert `protocol` is 2; a
   listener or wallet on protocol 1 is treated as having no native endpoint and the send falls
@@ -16,6 +30,8 @@ Conventional Commit messages at release time.
 
 ### Removed
 
+- The `/v1` owner routes (`/v1/status`, `/v1/wallet`, `/v1/transactions`, and the rest) and
+  `GET /v1/openapi.json`, without a compatibility layer. The generated `utoipa` document is gone.
 - Pairing by card and by spoken pairing words: `contact show-card`, `contact scan-card`,
   `contact invite --pairing-words`, the words form of `contact enter`, the owner API routes
   `/v1/contacts/card` and `/v1/contacts/cards/scan`, and the matching library and binding

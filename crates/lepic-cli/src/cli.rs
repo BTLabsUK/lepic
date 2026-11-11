@@ -165,13 +165,15 @@ const SERVE_HELP: &str = "\
 Opens the wallet once, as other commands do, and holds the data directory until it stops. It
 listens on Epicbox, expires unpaid invoices, collects contact mailboxes and refreshes the wallet
 while it runs, and answers the wallet API, HTTP with JSON bodies, on a local socket: for example
-`curl --unix-socket SOCKET http://lepic/v1/status`. GET /v1/openapi.json describes every route.
+`curl --unix-socket SOCKET http://lepic/api/v1/status`. GET /api/v1/openapi.json describes every
+operation.
 Only the user that runs it can use the socket. Ctrl-C or SIGTERM stops it.
 
-With --owner-tls it also answers the owner routes over TLS on the address `[api] owner_tls` sets
-in settings.toml, to the clients `lepic api client add` lists. It writes its certificate to
-api-tls.pem in the data directory; clients trust that file, issued to `lepic-wallet`, and present
-their own certificate. Changing the password stays on the socket.";
+With --owner-tls it also answers the wallet API over TLS on the address `[api] owner_tls` sets
+in settings.toml, to the clients `lepic api client add` lists, each with its role. It writes its
+certificate to api-tls.pem in the data directory; clients trust that file, issued to
+`lepic-wallet`, and present their own certificate. Changing the password and contact export and
+import stay on the socket.";
 
 #[derive(Debug, Clone, Args, Serialize, Deserialize)]
 #[command(
@@ -186,7 +188,7 @@ pub struct ServeArgs {
     /// Also answer payments sent over HTTP, as `lepic http listen` does
     #[arg(long)]
     pub http: bool,
-    /// Also answer the owner routes over TLS to the listed clients
+    /// Also answer the wallet API over TLS to the listed clients
     #[arg(long)]
     pub owner_tls: bool,
     #[command(flatten)]
