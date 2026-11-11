@@ -234,18 +234,22 @@ mod tests {
         acl::icacls(&path, &["/grant", "*S-1-1-0:(R)"]).unwrap();
         let _history = FilteredHistory::open(dir.path()).unwrap();
         let user = acl::user_sid().unwrap();
-        let script = "$acl = Get-Acl -LiteralPath $env:LEPIC_ACL_PATH; \
+        // .NET rather than Get-Acl: under cargo the PowerShell module path is not Windows
+        // PowerShell's, so its modules fail to load.
+        let script = "$ErrorActionPreference = 'Stop'; \
+            $acl = [IO.File]::GetAccessControl($env:LEPIC_ACL_PATH); \
             'protected=' + $acl.AreAccessRulesProtected; \
-            foreach ($rule in $acl.Access) { \
-              $sid = $rule.IdentityReference.Translate([Security.Principal.SecurityIdentifier]); \
-              'rule=' + $sid.Value + '|' + $rule.FileSystemRights + '|' + \
+            $rules = $acl.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier]); \
+            foreach ($rule in $rules) { \
+              'rule=' + $rule.IdentityReference.Value + '|' + $rule.FileSystemRights + '|' + \
                 $rule.AccessControlType + '|' + $rule.IsInherited }";
         let output = std::process::Command::new("powershell.exe")
             .args(["-NoProfile", "-NonInteractive", "-Command", script])
             .env("LEPIC_ACL_PATH", &path)
             .output()
             .unwrap();
-        assert!(output.status.success());
+        let errors = String::from_utf8_lossy(&output.stderr).into_owned();
+        assert!(output.status.success(), "{errors}");
         let text = String::from_utf8(output.stdout).unwrap();
         let lines: Vec<&str> = text
             .lines()
@@ -257,7 +261,8 @@ mod tests {
             [
                 "protected=True".to_owned(),
                 format!("rule={user}|FullControl|Allow|False")
-            ]
+            ],
+            "{errors}"
         );
     }
 
