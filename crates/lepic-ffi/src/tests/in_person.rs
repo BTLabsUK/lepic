@@ -310,7 +310,7 @@ async fn a_send_received_in_person_takes_the_answer_shown_back() {
     assert_eq!(world.chain.pushed_count(), 0);
 
     // The same answer scanned again, as QR parts, is the one already taken.
-    let parts = in_person_qr_parts(reply.envelope.clone(), 100).unwrap();
+    let parts = in_person_qr_parts(reply.envelope.clone(), 100, None).unwrap();
     assert!(parts.len() > 1);
     let first = in_person_qr_read(parts[..1].to_vec()).unwrap();
     assert!(!first.complete);
@@ -341,13 +341,38 @@ async fn a_send_received_in_person_takes_the_answer_shown_back() {
 }
 
 #[test]
+fn qr_parts_take_the_callers_single_code_limit() {
+    use lepic_wallet::slate::ur_slate::NATIVE_SLATE_MAGIC;
+    let mut code = NATIVE_SLATE_MAGIC.to_vec();
+    code.resize(300, 7);
+    let default = in_person_qr_parts(code.clone(), 200, None).unwrap();
+    assert_eq!(default.len(), 1);
+    assert_eq!(
+        in_person_qr_parts(code.clone(), 200, Some(360)).unwrap(),
+        default
+    );
+    let split = in_person_qr_parts(code.clone(), 64, Some(64)).unwrap();
+    assert_eq!(split.len(), 5 + 10);
+    for part in &split {
+        assert!(part.len() < default[0].len() / 3);
+    }
+    let read = in_person_qr_read(split).unwrap();
+    assert!(read.complete);
+    assert_eq!(read.bytes, Some(code.clone()));
+    assert_eq!(
+        kind(in_person_qr_parts(code, 200, Some(1025))),
+        WalletErrorKind::InvalidArgument
+    );
+}
+
+#[test]
 fn qr_parts_refuse_what_is_neither_a_code_nor_an_answer() {
     assert_eq!(
-        kind(in_person_qr_parts(b"plain text".to_vec(), 200)),
+        kind(in_person_qr_parts(b"plain text".to_vec(), 200, None)),
         WalletErrorKind::InvalidSlate
     );
     assert_eq!(
-        kind(in_person_qr_parts(Vec::new(), 200)),
+        kind(in_person_qr_parts(Vec::new(), 200, None)),
         WalletErrorKind::InvalidSlate
     );
 }

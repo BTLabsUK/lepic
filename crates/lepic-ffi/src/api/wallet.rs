@@ -83,13 +83,19 @@ pub fn inspect_slate(json: String, chain: Chain) -> Result<SlateInfo, WalletErro
 /// The slate text `json` as the QR texts of an animated `ur:epic-slate` code
 /// (`docs/compat/ur-epic-slate.md`), uppercase for the QR alphanumeric mode. Show them in a
 /// loop, in order. `max_fragment_len` bounds each part's payload in bytes, 16 to 1024; 200 fits
-/// a typical part into a version 11 QR code at level L. A slate that fits one fragment is a single
-/// code. Nothing is encrypted: whoever sees the screen can read the slate. Fails with
-/// `InvalidSlate` for empty or non-JSON text, `InvalidArgument` for a fragment length outside
-/// the limits, and `UrCodeTooLarge` for text over 64 KiB or more than 256 fragments.
-pub fn encode_ur_slate(json: String, max_fragment_len: u32) -> Result<Vec<String>, WalletError> {
+/// a typical part into a version 11 QR code at level L. A compressed slate of at most
+/// `single_code_max_len` bytes, 0 to 1024, is a single code; without it, one that fits one
+/// fragment is. Which to pass is the caller's display choice: smaller values give smaller codes
+/// and more of them. Nothing is encrypted: whoever sees the screen can read the slate. Fails
+/// with `InvalidSlate` for empty or non-JSON text, `InvalidArgument` for a length outside its
+/// limits, and `UrCodeTooLarge` for text over 64 KiB or more than 256 fragments.
+pub fn encode_ur_slate(
+    json: String,
+    max_fragment_len: u32,
+    single_code_max_len: Option<u32>,
+) -> Result<Vec<String>, WalletError> {
     guard("encode_ur_slate", || {
-        ur_slate::encode(json, max_fragment_len)
+        ur_slate::encode(json, max_fragment_len, single_code_max_len)
     })
 }
 

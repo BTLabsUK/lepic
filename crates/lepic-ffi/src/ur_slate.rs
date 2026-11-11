@@ -2,17 +2,29 @@
 //! Slate text as animated QR codes (`ur:epic-slate`), without a wallet.
 
 use lepic_wallet::slate::ur_slate::{
-    UrBinary, UrBinaryEncodeError, UrContent, UrContentError, UrDecodeError, UrEncodeError,
-    UrProgress, decode_ur_parts, decode_ur_slate, encode_ur_binary, encode_ur_slate,
+    SINGLE_CODE_MAX_LEN, UrBinary, UrBinaryEncodeError, UrContent, UrContentError, UrDecodeError,
+    UrEncodeError, UrProgress, decode_ur_parts, decode_ur_slate, encode_ur_binary_split,
+    encode_ur_slate_split,
 };
 
 use crate::api::error::{WalletError, WalletErrorKind};
 use crate::api::types::{InPersonQrProgress, UrSlateProgress};
 
-pub(crate) fn encode(json: String, max_fragment_len: u32) -> Result<Vec<String>, WalletError> {
-    let max_fragment_len = usize::try_from(max_fragment_len).unwrap_or(usize::MAX);
-    encode_ur_slate(json, max_fragment_len)
+/// The parts of an animated QR code for slate text. Without `single_code_max_len` a payload
+/// that fits one fragment is one code.
+pub(crate) fn encode(
+    json: String,
+    max_fragment_len: u32,
+    single_code_max_len: Option<u32>,
+) -> Result<Vec<String>, WalletError> {
+    let single_code_max_len = single_code_max_len.unwrap_or(max_fragment_len);
+    encode_ur_slate_split(json, len_of(single_code_max_len), len_of(max_fragment_len))
         .map_err(|error| WalletError::chained(encode_kind(&error), &error))
+}
+
+/// A length from Dart; one past `usize` stays out of every range the encoders accept.
+fn len_of(value: u32) -> usize {
+    usize::try_from(value).unwrap_or(usize::MAX)
 }
 
 pub(crate) fn decode(parts: &[String]) -> Result<UrSlateProgress, WalletError> {
@@ -21,13 +33,15 @@ pub(crate) fn decode(parts: &[String]) -> Result<UrSlateProgress, WalletError> {
     Ok(progress_of(progress))
 }
 
-/// The parts of an animated QR code for the bytes of an in-person code or answer.
+/// The parts of an animated QR code for the bytes of an in-person code or answer. Without
+/// `single_code_max_len` the payload default, [`SINGLE_CODE_MAX_LEN`], applies.
 pub(crate) fn encode_binary(
     bytes: &[u8],
     max_fragment_len: u32,
+    single_code_max_len: Option<u32>,
 ) -> Result<Vec<String>, WalletError> {
-    let max_fragment_len = usize::try_from(max_fragment_len).unwrap_or(usize::MAX);
-    encode_ur_binary(bytes, max_fragment_len)
+    let single_code_max_len = single_code_max_len.map_or(SINGLE_CODE_MAX_LEN, len_of);
+    encode_ur_binary_split(bytes, single_code_max_len, len_of(max_fragment_len))
         .map_err(|error| WalletError::chained(encode_binary_kind(&error), &error))
 }
 
@@ -66,7 +80,8 @@ pub(crate) fn decode_binary(parts: &[String]) -> Result<InPersonQrProgress, Wall
 fn encode_binary_kind(error: &UrBinaryEncodeError) -> WalletErrorKind {
     match error {
         UrBinaryEncodeError::UnknownMagic => WalletErrorKind::InvalidSlate,
-        UrBinaryEncodeError::FragmentLength { .. } => WalletErrorKind::InvalidArgument,
+        UrBinaryEncodeError::FragmentLength { .. }
+        | UrBinaryEncodeError::SingleCodeLength { .. } => WalletErrorKind::InvalidArgument,
         UrBinaryEncodeError::TooLong { .. } | UrBinaryEncodeError::TooManyFragments { .. } => {
             WalletErrorKind::UrCodeTooLarge
         }
@@ -77,7 +92,9 @@ fn encode_binary_kind(error: &UrBinaryEncodeError) -> WalletErrorKind {
 fn encode_kind(error: &UrEncodeError) -> WalletErrorKind {
     match error {
         UrEncodeError::Empty | UrEncodeError::NotJson => WalletErrorKind::InvalidSlate,
-        UrEncodeError::FragmentLength { .. } => WalletErrorKind::InvalidArgument,
+        UrEncodeError::FragmentLength { .. } | UrEncodeError::SingleCodeLength { .. } => {
+            WalletErrorKind::InvalidArgument
+        }
         UrEncodeError::TextTooLong { .. } | UrEncodeError::TooManyFragments { .. } => {
             WalletErrorKind::UrCodeTooLarge
         }

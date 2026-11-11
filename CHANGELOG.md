@@ -36,6 +36,13 @@ Conventional Commit messages at release time.
   passes the fee it showed, so the check and the send are one step.
 - On Windows the shell ends cleanly on console close, logoff, shutdown and Ctrl+Break, and its
   history file is owner-only (ACL). On Unix it ends cleanly on SIGTERM.
+- The caller picks the single-code limit of a `ur:epic-slate` code: `encode_ur_slate_split` and
+  `encode_ur_binary_split` in `lepic-slate`, and an optional `single_code_max_len` on the FFI's
+  `encode_ur_slate` and `in_person_qr_parts`. A payload of at most that many bytes (0 to 1024) is
+  one code, and a longer one is split into parts. Without it nothing changes: 360 bytes for
+  in-person codes and answers, one fragment for slate text. A wallet that draws its codes at level
+  H with a logo passes small values to get smaller frames, and more of them. Reading is
+  unchanged.
 
 ### Changed
 

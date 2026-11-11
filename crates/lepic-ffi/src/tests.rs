@@ -744,7 +744,7 @@ fn a_slate_read_from_its_qr_codes_inspects_as_the_text() {
     let json = vector_slate(include_str!(
         "../../../testdata/vectors/slates/send_file_plain_s1_file.json"
     ));
-    let parts = encode_ur_slate(json.clone(), 200).unwrap();
+    let parts = encode_ur_slate(json.clone(), 200, None).unwrap();
     let partial = decode_ur_slate(parts[..3].to_vec()).unwrap();
     assert!(!partial.complete);
     assert_eq!((partial.received_fragments, partial.fragment_count), (3, 7));
@@ -760,10 +760,29 @@ fn a_slate_read_from_its_qr_codes_inspects_as_the_text() {
 }
 
 #[test]
+fn a_slate_code_takes_the_callers_single_code_limit() {
+    use crate::api::wallet::{decode_ur_slate, encode_ur_slate};
+    let json = r#"{"id":"slate-1","pad":"abcdefghijklmnopqrstuvwxyz"}"#.to_owned();
+    let default = encode_ur_slate(json.clone(), 200, None).unwrap();
+    assert_eq!(default.len(), 1);
+    assert_eq!(
+        encode_ur_slate(json.clone(), 16, Some(200)).unwrap(),
+        default
+    );
+    let split = encode_ur_slate(json.clone(), 16, Some(0)).unwrap();
+    assert!(split.len() > 1);
+    assert_eq!(decode_ur_slate(split).unwrap().json, Some(json.clone()));
+    assert_eq!(
+        kind(encode_ur_slate(json, 200, Some(1025))),
+        WalletErrorKind::InvalidArgument
+    );
+}
+
+#[test]
 fn qr_code_refusals_have_their_own_kinds() {
     use crate::api::wallet::{decode_ur_slate, encode_ur_slate};
-    let s1 = encode_ur_slate(r#"{"a":"1"}"#.to_owned(), 200).unwrap();
-    let long = encode_ur_slate(format!("\"{}\"", "ab".repeat(300)), 16).unwrap();
+    let s1 = encode_ur_slate(r#"{"a":"1"}"#.to_owned(), 200, None).unwrap();
+    let long = encode_ur_slate(format!("\"{}\"", "ab".repeat(300)), 16, None).unwrap();
     let cases = [
         (
             vec!["https://example.org".to_owned()],
@@ -787,15 +806,19 @@ fn qr_code_refusals_have_their_own_kinds() {
         assert_eq!(kind(decode_ur_slate(parts)), expected);
     }
     assert_eq!(
-        kind(encode_ur_slate("slate".to_owned(), 200)),
+        kind(encode_ur_slate("slate".to_owned(), 200, None)),
         WalletErrorKind::InvalidSlate
     );
     assert_eq!(
-        kind(encode_ur_slate("{}".to_owned(), 8)),
+        kind(encode_ur_slate("{}".to_owned(), 8, None)),
         WalletErrorKind::InvalidArgument
     );
     assert_eq!(
-        kind(encode_ur_slate(format!("\"{}\"", "a".repeat(70_000)), 200)),
+        kind(encode_ur_slate(
+            format!("\"{}\"", "a".repeat(70_000)),
+            200,
+            None
+        )),
         WalletErrorKind::UrCodeTooLarge
     );
 }
