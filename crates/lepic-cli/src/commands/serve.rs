@@ -306,6 +306,7 @@ impl<H: Host> Run<'_, H> {
     pub(super) async fn serve(&mut self, args: ServeArgs) -> Result<Report, CliError> {
         let path = args
             .socket
+            .clone()
             .unwrap_or_else(|| service::default_socket(&self.settings.data_dir));
         service::check_socket_path(&path)?;
         let owner_tls_address = args
@@ -317,19 +318,49 @@ impl<H: Host> Run<'_, H> {
                     .ok_or(CliError::OwnerTlsNotConfigured)
             })
             .transpose()?;
+        let borrowed = self.held.is_some();
         let opened = self.open().await?;
+        let report = self
+            .serve_opened(
+                &opened,
+                &path,
+                owner_tls_address,
+                &args,
+                std::future::pending(),
+            )
+            .await;
+        // Serve locks only a wallet it opened itself.
+        if !borrowed {
+            opened.wallet.lock();
+        }
+        report
+    }
+
+    /// Serves the API, owner TLS, Epicbox and maintenance on the open wallet `opened`, at the
+    /// socket `path`, until `stop` completes or the run's interrupt fires, then drains the
+    /// connections, shuts the listeners down and returns the report. Called by `lepic serve`
+    /// and by the interactive shell's `serve start`. It never locks the wallet: the caller
+    /// decides. Its future is not `Send` and needs a tokio runtime with time and net enabled.
+    pub(crate) async fn serve_opened(
+        &mut self,
+        opened: &Arc<Opened<HostNode<H>>>,
+        path: &std::path::Path,
+        owner_tls_address: Option<std::net::SocketAddr>,
+        args: &ServeArgs,
+        stop_when: impl Future<Output = ()>,
+    ) -> Result<Report, CliError> {
         let http = if args.http {
-            Some(HttpListener::start(&opened, self.settings, &args.listen).await?)
+            Some(HttpListener::start(opened, self.settings, &args.listen).await?)
         } else {
             None
         };
         let owner_tls = match owner_tls_address {
             Some(address) => Some(
-                OwnerTls::bind(address, &owner_tls_key(&opened)?, &self.settings.data_dir).await?,
+                OwnerTls::bind(address, &owner_tls_key(opened)?, &self.settings.data_dir).await?,
             ),
             None => None,
         };
-        let listening = service::bind(&path, &self.settings.data_dir)?;
+        let listening = service::bind(path, &self.settings.data_dir)?;
         opened.epicbox.attach_wallet(&opened.wallet)?;
         let handle = ListenHandle::new();
         let swept = Mutex::new(Some(InvoiceSweep::default()));
@@ -337,7 +368,7 @@ impl<H: Host> Run<'_, H> {
         let service = Service {
             host: self.host,
             settings: self.settings,
-            held: Arc::clone(&opened),
+            held: Arc::clone(opened),
             interrupt: stop.subscribe(),
             maintenance: RefCell::default(),
             http: http.as_ref(),
@@ -354,15 +385,24 @@ impl<H: Host> Run<'_, H> {
             self.settings.data_dir.clone(),
             crate::api::Caller::of(self.settings),
         );
+        // The external stop ends serve as the interrupt does, then waits for the drain.
+        let external = async {
+            stop_when.await;
+            finish_listen(&handle);
+            stop.send_replace(true);
+            std::future::pending::<Infallible>().await
+        };
+        let work = async {
+            tokio::select! {
+                result = serving(&service, &api, &listening, &handle, &swept, &stop) => result,
+                never = external => match never {},
+            }
+        };
         let result = self
-            .until_interrupted(
-                opened.wallet.subscribe(),
-                serving(&service, &api, &listening, &handle, &swept, &stop),
-                || {
-                    finish_listen(&handle);
-                    stop.send_replace(true);
-                },
-            )
+            .until_interrupted(opened.wallet.subscribe(), work, || {
+                finish_listen(&handle);
+                stop.send_replace(true);
+            })
             .await;
         let requests = api.context().requests().served;
         drop(api);
@@ -373,7 +413,6 @@ impl<H: Host> Run<'_, H> {
         };
         drop(owner_tls);
         drop(listening);
-        opened.wallet.lock();
         let summary = result?;
         let expired = swept.into_inner().unwrap_or_else(PoisonError::into_inner);
         Ok(Report::Serve(ServeReport {
@@ -382,5 +421,92 @@ impl<H: Host> Run<'_, H> {
             inbox: inbox_report(summary, expired),
             http,
         }))
+    }
+}
+
+/// The integration tests' support, which the unit test of serve reuses.
+#[cfg(test)]
+#[path = "../../tests/support/mod.rs"]
+mod support;
+
+#[cfg(test)]
+mod tests {
+    // Tests may unwrap (docs/rules.md).
+    #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+
+    use clap::Parser as _;
+
+    use super::*;
+    use crate::cli::Cli;
+    use crate::commands::serve::support;
+
+    /// Serve on a wallet the caller holds open ends on the external stop, reports, and leaves
+    /// the wallet unlocked and the socket removed.
+    #[test]
+    fn serve_on_a_held_wallet_stops_on_the_signal_and_keeps_the_wallet_unlocked() {
+        let (host, wallet) = support::funded();
+        let dir = tempfile::tempdir().unwrap();
+        let socket = dir.path().join("s.sock");
+        let socket_arg = socket.to_str().unwrap().to_owned();
+        let cli = Cli::try_parse_from(["lepic", "serve", "--socket", &socket_arg]).unwrap();
+        let Command::Serve(args) = cli.command else {
+            panic!("not serve");
+        };
+        let env = Env::new(wallet.env());
+        let settings = Settings::resolve(&cli.global, &env).unwrap();
+        let mut console = Console {
+            env,
+            secrets: SecretInput::new(
+                Box::new(BufReader::new(std::io::empty())),
+                false,
+                Box::new(std::io::sink()),
+            ),
+            stdout: Box::new(std::io::sink()),
+            stderr: Box::new(std::io::sink()),
+            ansi: false,
+        };
+        let (_keep, interrupt) = watch::channel(false);
+        let report = std::thread::Builder::new()
+            .stack_size(8 << 20)
+            .spawn(move || {
+                let runtime = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .unwrap();
+                runtime.block_on(async {
+                    let mut run = Run {
+                        host: &host,
+                        settings: &settings,
+                        console: &mut console,
+                        interrupt,
+                        graceful: Arc::new(AtomicBool::new(false)),
+                        held: None,
+                    };
+                    let opened = run.open().await.unwrap();
+                    run.held = Some(Arc::clone(&opened));
+                    let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+                    let serve = run.serve_opened(&opened, &socket, None, &args, async {
+                        let _ = stopped.await;
+                    });
+                    let driver = async {
+                        while !socket.exists() {
+                            tokio::time::sleep(Duration::from_millis(5)).await;
+                        }
+                        stop.send(()).unwrap();
+                    };
+                    let (report, ()) = tokio::join!(serve, driver);
+                    assert!(opened.wallet.is_unlocked());
+                    assert!(!socket.exists());
+                    report.unwrap()
+                })
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+        let Report::Serve(report) = report else {
+            panic!("not a serve report");
+        };
+        assert_eq!(report.requests, 0);
+        assert_eq!(report.socket, socket_arg);
     }
 }
