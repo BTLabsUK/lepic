@@ -123,7 +123,9 @@ fn load_seen<H: Host>(service: &Service<'_, H>) {
         };
         fill_seen(
             &mut seen,
-            batch.iter().map(|event| (event.kind.as_str(), event.data.as_slice())),
+            batch
+                .iter()
+                .map(|event| (event.kind.as_str(), event.data.as_slice())),
         );
         after = last;
     }
@@ -891,7 +893,8 @@ mod tests {
 
     #[test]
     fn an_update_without_a_snapshot_or_fields_names_no_changed() {
-        let (kind, data) = entry("contact", None, json!({ "id": "c" }), Change::Updated(&[])).unwrap();
+        let (kind, data) =
+            entry("contact", None, json!({ "id": "c" }), Change::Updated(&[])).unwrap();
         assert_eq!(kind, "contact.updated");
         assert!(data.get("changed").is_none(), "{data}");
         let (_, data) = entry(
@@ -906,7 +909,8 @@ mod tests {
 
     #[test]
     fn a_state_change_without_a_snapshot_has_no_from_state() {
-        let (_, data) = entry("payment", None, payment("posted", "1"), Change::State(None)).unwrap();
+        let (_, data) =
+            entry("payment", None, payment("posted", "1"), Change::State(None)).unwrap();
         assert_eq!(data["to_state"], "posted");
         assert!(data.get("from_state").is_none());
     }
@@ -934,15 +938,31 @@ mod tests {
         assert_eq!(seen["payment:p"]["state"], "finalized");
         assert_eq!(seen["contact:c"]["state"], "paired");
         let before = seen["payment:p"].clone();
-        assert!(entry("payment", Some(&before), before.clone(), Change::State(None)).is_none());
+        assert!(
+            entry(
+                "payment",
+                Some(&before),
+                before.clone(),
+                Change::State(None)
+            )
+            .is_none()
+        );
     }
 
     #[test]
     fn a_failure_reason_is_a_fixed_snake_case_string() {
-        assert_eq!(failure_reason(PairingFailure::ChangedOnTheWay), "changed_on_the_way");
-        assert_eq!(failure_reason(PairingFailure::AddressProofMissing), "address_proof_missing");
         assert_eq!(
-            failure_reason(PairingFailure::Refused(lepic_wallet_contacts::Refusal::Expired)),
+            failure_reason(PairingFailure::ChangedOnTheWay),
+            "changed_on_the_way"
+        );
+        assert_eq!(
+            failure_reason(PairingFailure::AddressProofMissing),
+            "address_proof_missing"
+        );
+        assert_eq!(
+            failure_reason(PairingFailure::Refused(
+                lepic_wallet_contacts::Refusal::Expired
+            )),
             "refused"
         );
     }

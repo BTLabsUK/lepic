@@ -191,7 +191,11 @@ fn a_link_on_a_local_relay_is_refused() {
     let (host, wallet) = funded();
     serving(host, &wallet, |socket, _| {
         issue(socket);
-        problem(&send(socket, "POST", "/links", &json!({})), 422, "own_relay_local");
+        problem(
+            &send(socket, "POST", "/links", &json!({})),
+            422,
+            "own_relay_local",
+        );
     });
 }
 

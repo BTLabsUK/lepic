@@ -94,8 +94,8 @@ pub use lepic_wallet::event::PairingFailure;
 pub use manage::{MAX_APP_CONTACT_LEN, MAX_BACKUP_LEN, MAX_HOME_DRAIN, PendingPairingView};
 pub use outbox::{NOT_POSTED_AFTER, OUTBOX_STUCK_AFTER, OutboxReport, OutboxView};
 pub use pairing::{
-    AcceptOutcome, AcceptRequest, InviteExpiry, InviteOffer, InvitePreview,
-    InviteRequest, LinkOutcome, SasDecision,
+    AcceptOutcome, AcceptRequest, InviteExpiry, InviteOffer, InvitePreview, InviteRequest,
+    LinkOutcome, SasDecision,
 };
 pub use payload::{
     ContactPayload, MAX_APP_PAYLOAD_LEN, MAX_KEPT_PAYLOADS, MAX_KEPT_PAYLOADS_PER_CONTACT,

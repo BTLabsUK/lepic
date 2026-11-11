@@ -30,12 +30,8 @@ pub fn link_mailboxes(link: &str) -> Option<Vec<EpicboxAddress>> {
 fn rebuilt(link: &str, network: RelayNetwork) -> Option<String> {
     let mut link = Epic1Link::parse(link).ok()?;
     let proof = link.address.proof_key().to_bytes();
-    link.address = Epic1Address::from_key_bytes(
-        network,
-        &proof,
-        *link.address.seal_key().as_bytes(),
-    )
-    .ok()?;
+    link.address =
+        Epic1Address::from_key_bytes(network, &proof, *link.address.seal_key().as_bytes()).ok()?;
     Some(link.to_uri())
 }
 

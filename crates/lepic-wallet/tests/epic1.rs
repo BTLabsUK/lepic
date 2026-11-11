@@ -33,8 +33,8 @@ use lepic_wallet::selection::SelectionStrategy;
 use lepic_wallet::send::{Delivery, SendRequest};
 use lepic_wallet::{Event, ReceiveRequest};
 use lepic_wallet_contacts::epic1_testing::{
-    for_other_network, link_mailboxes, native_body_of, sealed_to_epic1,
-    without_amount, without_transports,
+    for_other_network, link_mailboxes, native_body_of, sealed_to_epic1, without_amount,
+    without_transports,
 };
 use lepic_wallet_contacts::in_person_testing::{armored, without_tail};
 use lepic_wallet_contacts::{
@@ -429,10 +429,7 @@ fn a_link_for_another_network_or_without_transports_cannot_be_paid() {
         refusal(book.epic1_read(&relays(&world.payer), &other)),
         Epic1Refusal::WrongNetwork
     );
-    assert_eq!(
-        refusal(world.pay_link(&other)),
-        Epic1Refusal::WrongNetwork
-    );
+    assert_eq!(refusal(world.pay_link(&other)), Epic1Refusal::WrongNetwork);
 
     let bare = without_transports(&issued.link).unwrap();
     let refused = refusal(book.epic1_read(&relays(&world.payer), &bare));

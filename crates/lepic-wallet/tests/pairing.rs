@@ -19,7 +19,6 @@ mod support;
 #[path = "epicbox_invoices/world.rs"]
 mod world;
 
-
 use helpers::{HOUR, MINUTE, accept, events, invite_request, relays};
 use lepic_contact::{
     ContactCard, ContactKind, EncSecretKey, Invite, InviteFields, Network as ContactNetwork,
@@ -31,9 +30,9 @@ use lepic_store::{AccountIndex, ContactId, ContactState, WalletStore};
 use lepic_wallet::Event;
 use lepic_wallet::event::{ContactChange, ContactEvent, ContactUpdate, FailedPairing};
 use lepic_wallet_contacts::{
-    AcceptRequest, CollectTrigger, ContactError, ContactRelays, InviteExpiry,
-    InviteRequest, KeyCheckStart, KeysDecision, LinkOutcome, PairingClass, PairingEndReason,
-    PairingFailure, PairingStatus, PayloadId, RelayMode, SasDecision, WalletContacts,
+    AcceptRequest, CollectTrigger, ContactError, ContactRelays, InviteExpiry, InviteRequest,
+    KeyCheckStart, KeysDecision, LinkOutcome, PairingClass, PairingEndReason, PairingFailure,
+    PairingStatus, PayloadId, RelayMode, SasDecision, WalletContacts,
 };
 use rand::SeedableRng;
 use world::{Party, World};
