@@ -675,3 +675,207 @@ fn a_mismatch_while_a_sealed_answer_waits_finalizes_nothing_and_the_send_cancels
     world.block_on(payer.wallet.cancel(sent.tx_id)).unwrap();
     assert_eq!(state(payer), lepic_store::TxState::Cancelled);
 }
+
+fn requests_at(world: &World, party: &Party) -> Vec<lepic_wallet_contacts::PairRequestView> {
+    world
+        .block_on(party.wallet.contact_book().pairing_requests())
+        .unwrap()
+}
+
+/// Anna asks Ben, Ben dismisses it, Anna withdraws and asks again, all in one second: the clocks
+/// never move, so both invites expire in the same second. The second request shows.
+#[test]
+fn a_request_after_a_dismiss_in_the_same_second_shows() {
+    let world = World::new();
+    let (anna, ben) = (&world.issuer, &world.payer);
+    proven(anna, ben);
+    let first = send_request(&world, anna, ben).unwrap();
+    drain(&world, ben);
+    let dismissed = requests_at(&world, ben);
+    world
+        .block_on(
+            ben.wallet
+                .contact_book()
+                .pairing_request_dismiss(dismissed[0].request_id),
+        )
+        .unwrap();
+    world
+        .block_on(anna.wallet.contact_book().pairing_request_cancel(first))
+        .unwrap();
+
+    send_request(&world, anna, ben).unwrap();
+    drain(&world, ben);
+    let again = requests_at(&world, ben);
+    assert_eq!(again.len(), 1);
+    assert_ne!(again[0].request_id, dismissed[0].request_id);
+    assert_eq!(
+        again[0].expires_at, dismissed[0].expires_at,
+        "the same second"
+    );
+    accept_request(&world, ben, &again[0].invite_link, anna).unwrap();
+}
+
+/// Ben answers Anna's request and then deletes the contact it made, Anna withdraws and asks
+/// again, all in one second: the second request shows and Ben can answer it.
+#[test]
+fn a_request_after_a_delete_in_the_same_second_shows() {
+    let world = World::new();
+    let (anna, ben) = (&world.issuer, &world.payer);
+    proven(anna, ben);
+    let first = send_request(&world, anna, ben).unwrap();
+    drain(&world, ben);
+    let answered = requests_at(&world, ben);
+    let ben_side = accept_request(&world, ben, &answered[0].invite_link, anna).unwrap();
+    assert!(
+        world
+            .block_on(ben.wallet.contact_book().contact_remove(ben_side))
+            .unwrap()
+    );
+    world
+        .block_on(anna.wallet.contact_book().pairing_request_cancel(first))
+        .unwrap();
+
+    send_request(&world, anna, ben).unwrap();
+    drain(&world, ben);
+    let again = requests_at(&world, ben);
+    assert_eq!(again.len(), 1);
+    assert_ne!(again[0].request_id, answered[0].request_id);
+    accept_request(&world, ben, &again[0].invite_link, anna).unwrap();
+}
+
+/// A live request is replaced by a newer one from the same key in the same second; the same
+/// request delivered again changes nothing.
+#[test]
+fn a_live_request_gives_way_to_a_newer_one_in_the_same_second() {
+    let world = World::new();
+    let (anna, ben) = (&world.issuer, &world.payer);
+    proven(anna, ben);
+    let first = send_request(&world, anna, ben).unwrap();
+    drain(&world, ben);
+    let kept = requests_at(&world, ben);
+    world
+        .block_on(anna.wallet.contact_book().pairing_request_cancel(first))
+        .unwrap();
+    send_request(&world, anna, ben).unwrap();
+    drain(&world, ben);
+    let newer = requests_at(&world, ben);
+    assert_eq!(newer.len(), 1);
+    assert_ne!(newer[0].request_id, kept[0].request_id);
+    assert_eq!(newer[0].expires_at, kept[0].expires_at, "the same second");
+}
+
+/// Anna and Ben pair; Anna removes Ben without telling him and asks again. The request proves
+/// Anna's key, so Ben's record ends as unpaired, the request is listed, and Ben can answer it.
+#[test]
+fn a_request_from_a_paired_contact_ends_its_pairing_and_shows() {
+    let world = World::new();
+    let (anna, ben) = (&world.issuer, &world.payer);
+    proven(anna, ben);
+    let anna_side = send_request(&world, anna, ben).unwrap();
+    drain(&world, ben);
+    let first = requests_at(&world, ben);
+    let ben_side = accept_request(&world, ben, &first[0].invite_link, anna).unwrap();
+    world.collect(anna);
+    world.collect(ben);
+    world.collect(anna);
+    assert_eq!(status(&world, ben, ben_side), PairingStatus::Verified);
+    let mut ben_events = ben.wallet.subscribe();
+
+    assert!(
+        world
+            .block_on(anna.wallet.contact_book().contact_remove(anna_side))
+            .unwrap()
+    );
+    send_request(&world, anna, ben).unwrap();
+    drain(&world, ben);
+
+    let again = requests_at(&world, ben);
+    assert_eq!(again.len(), 1);
+    let ended = world
+        .block_on(ben.wallet.contact_book().contact(ben_side))
+        .unwrap();
+    assert_eq!(ended.status, PairingStatus::Ended);
+    assert_eq!(ended.ended_reason, Some(PairingEndReason::Unpaired));
+    let seen = events(&mut ben_events);
+    assert!(seen.iter().any(|event| matches!(
+        event,
+        Event::ContactUnpaired(news) if news.contact_id == ben_side
+    )));
+    assert!(seen.iter().any(|event| matches!(
+        event,
+        Event::PairingRequested(news) if news.request_id == again[0].request_id
+    )));
+    accept_request(&world, ben, &again[0].invite_link, anna).unwrap();
+}
+
+/// A request that was issued before the pairing it would end (an old one a relay delivers
+/// again) ends nothing and is dropped.
+#[test]
+fn a_request_older_than_the_pairing_ends_nothing() {
+    let world = World::new();
+    let (anna, ben) = (&world.issuer, &world.payer);
+    proven(anna, ben);
+    let anna_side = send_request(&world, anna, ben).unwrap();
+    drain(&world, ben);
+    let first = requests_at(&world, ben);
+    // Ben answers an hour later; Anna's clock stays behind, so her next request looks older
+    // than the pairing.
+    ben.clock.advance(HOUR);
+    let ben_side = accept_request(&world, ben, &first[0].invite_link, anna).unwrap();
+    world.collect(anna);
+    world.collect(ben);
+    world.collect(anna);
+    assert_eq!(status(&world, ben, ben_side), PairingStatus::Verified);
+
+    world
+        .block_on(anna.wallet.contact_book().contact_remove(anna_side))
+        .unwrap();
+    send_request(&world, anna, ben).unwrap();
+    drain(&world, ben);
+    assert!(requests_at(&world, ben).is_empty());
+    assert_eq!(status(&world, ben, ben_side), PairingStatus::Verified);
+}
+
+/// Ben answers Anna's request; Anna withdraws it before the answer reaches her and asks again.
+/// Ben's answered pairing was never confirmed: answering the new request replaces it, and the
+/// two pair once.
+#[test]
+fn a_new_request_replaces_a_pairing_its_sender_never_confirmed() {
+    let world = World::new();
+    let (anna, ben) = (&world.issuer, &world.payer);
+    proven(anna, ben);
+    let first = send_request(&world, anna, ben).unwrap();
+    drain(&world, ben);
+    let answered = requests_at(&world, ben);
+    let old_side = accept_request(&world, ben, &answered[0].invite_link, anna).unwrap();
+    world
+        .block_on(anna.wallet.contact_book().pairing_request_cancel(first))
+        .unwrap();
+    let anna_side = send_request(&world, anna, ben).unwrap();
+    drain(&world, ben);
+    let again = requests_at(&world, ben);
+    assert_eq!(again.len(), 1);
+
+    let ben_side = accept_request(&world, ben, &again[0].invite_link, anna).unwrap();
+    let pending = world
+        .block_on(ben.wallet.contact_book().pairings_pending())
+        .unwrap();
+    assert_eq!(pending.len(), 1);
+    assert!(pending.iter().all(|view| view.contact_id == ben_side));
+    assert!(
+        world
+            .block_on(ben.wallet.contact_book().contact(old_side))
+            .is_err(),
+        "the old pairing is gone"
+    );
+
+    world.collect(anna);
+    world.collect(ben);
+    world.collect(anna);
+    assert_eq!(status(&world, anna, anna_side), PairingStatus::Verified);
+    assert_eq!(status(&world, ben, ben_side), PairingStatus::Verified);
+    let paired = world
+        .block_on(ben.wallet.contact_book().contacts())
+        .unwrap();
+    assert_eq!(paired.len(), 1);
+}
