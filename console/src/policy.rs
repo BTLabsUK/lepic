@@ -102,31 +102,41 @@ pub(crate) fn admit_api(
     }
 }
 
+/// The reads of the wallet API v1 the page makes, by full path.
 const READS: &[&str] = &[
-    "/v1/status",
-    "/v1/wallet",
-    "/v1/wallet/address",
-    "/v1/outputs",
-    "/v1/transactions",
-    "/v1/node",
-    "/v1/events",
-    "/v1/openapi.json",
+    "/api/v1/status",
+    "/api/v1/wallet",
+    "/api/v1/accounts",
+    "/api/v1/addresses",
+    "/api/v1/node",
+    "/api/v1/outputs",
+    "/api/v1/payments",
+    "/api/v1/events",
+    "/api/v1/openapi.json",
 ];
 
-/// Whether the page may call the route `method` and `path` (without its query) name.
+const PAYMENTS: &str = "/api/v1/payments/";
+
+/// Whether the page may call the route `method` and `path` (without its query) name. `path` is
+/// the full path as serve knows it, from `/api/v1`.
 pub(crate) fn allowed(method: &Method, path: &str) -> bool {
-    let under_transaction = path
-        .strip_prefix("/v1/transactions/")
+    let under_payments = path
+        .strip_prefix(PAYMENTS)
         .map(|rest| rest.split('/').collect::<Vec<_>>());
-    match (method.as_str(), under_transaction.as_deref()) {
+    match (method.as_str(), under_payments.as_deref()) {
         ("GET", None) => READS.contains(&path),
-        ("GET", Some([id])) | ("POST", Some([id, "cancel"])) => is_tx_id(id),
+        ("GET", Some([id])) | ("POST", Some([id, "cancel"])) => is_payment_id(id),
         _ => false,
     }
 }
 
-fn is_tx_id(text: &str) -> bool {
-    !text.is_empty() && text.bytes().all(|byte| byte.is_ascii_digit())
+/// A payment id is a UUID in its canonical form: 8-4-4-4-12 hexadecimal digits.
+fn is_payment_id(text: &str) -> bool {
+    let groups: Vec<&str> = text.split('-').collect();
+    groups.len() == 5
+        && groups.iter().zip([8, 4, 4, 4, 12]).all(|(group, size)| {
+            group.len() == size && group.bytes().all(|b| b.is_ascii_hexdigit())
+        })
 }
 
 #[cfg(test)]
@@ -306,23 +316,45 @@ mod tests {
         assert!(!same_token("ab", "abc"));
     }
 
+    const ID: &str = "3f2b8c1e-5d7a-4e0b-9a61-2c4d8e7f1a90";
+
     #[test]
     fn only_the_listed_reads_pass() {
         for path in READS {
             assert!(allowed(&Method::GET, path), "{path}");
         }
-        assert!(allowed(&Method::GET, "/v1/transactions/12"));
+        assert!(allowed(&Method::GET, &format!("/api/v1/payments/{ID}")));
+        assert!(allowed(
+            &Method::GET,
+            &format!("/api/v1/payments/{}", ID.to_uppercase())
+        ));
         for path in [
-            "/v1/methods",
-            "/v1/wallet/password",
-            "/v1/slates/receive",
-            "/v2/foreign",
-            "/v1/transactions/",
-            "/v1/transactions/abc",
-            "/v1/transactions/12/",
-            "/v1/transactions/12/messages",
-            "/v1/status/",
-            "/V1/status",
+            "/v1/status",
+            "/v1/transactions",
+            "/api/v1/methods",
+            "/api/v1/wallet/password",
+            "/api/v1/wallet/address",
+            "/api/v1/contacts",
+            "/api/v1/links",
+            "/api/v1/relay",
+            "/api/v1/peers",
+            "/api/v1/profile",
+            "/api/v1/inspect",
+            "/api/v1/open",
+            "/api/v1/payments/",
+            "/api/v1/payments/12",
+            "/api/v1/payments/abc",
+            "/api/v1/payments/estimate",
+            "/api/v1/payments/3f2b8c1e5d7a4e0b9a612c4d8e7f1a90",
+            "/api/v1/payments/3f2b8c1e-5d7a-4e0b-9a61-2c4d8e7f1a9",
+            "/api/v1/payments/3f2b8c1e-5d7a-4e0b-9a61-2c4d8e7f1a9g",
+            "/api/v1/payments/3f2b8c1e-5d7a-4e0b-9a61-2c4d8e7f1a90/",
+            "/api/v1/payments/3f2b8c1e-5d7a-4e0b-9a61-2c4d8e7f1a90/handoff",
+            "/api/v1/payments/3f2b8c1e-5d7a-4e0b-9a61-2c4d8e7f1a90/approve",
+            "/api/v1/status/",
+            "/API/v1/status",
+            "/api/v2/status",
+            "/api/v1",
             "/",
         ] {
             assert!(!allowed(&Method::GET, path), "{path}");
@@ -331,18 +363,28 @@ mod tests {
 
     #[test]
     fn the_only_write_is_cancel() {
-        assert!(allowed(&Method::POST, "/v1/transactions/7/cancel"));
+        assert!(allowed(
+            &Method::POST,
+            &format!("/api/v1/payments/{ID}/cancel")
+        ));
         for (method, path) in [
-            (Method::POST, "/v1/transactions"),
-            (Method::POST, "/v1/transactions/7"),
-            (Method::POST, "/v1/transactions//cancel"),
-            (Method::POST, "/v1/transactions/7/cancel/"),
-            (Method::PUT, "/v1/transactions/7/cancel"),
-            (Method::DELETE, "/v1/transactions/7"),
-            (Method::PUT, "/v1/wallet/password"),
-            (Method::POST, "/v1/status"),
+            (Method::POST, "/api/v1/payments".to_owned()),
+            (Method::POST, format!("/api/v1/payments/{ID}")),
+            (Method::POST, format!("/api/v1/payments/{ID}/approve")),
+            (Method::POST, format!("/api/v1/payments/{ID}/decline")),
+            (Method::POST, format!("/api/v1/payments/{ID}/finalize")),
+            (Method::POST, format!("/api/v1/payments/{ID}/post")),
+            (Method::POST, "/api/v1/payments//cancel".to_owned()),
+            (Method::POST, "/api/v1/payments/7/cancel".to_owned()),
+            (Method::POST, format!("/api/v1/payments/{ID}/cancel/")),
+            (Method::PUT, format!("/api/v1/payments/{ID}/cancel")),
+            (Method::DELETE, format!("/api/v1/payments/{ID}")),
+            (Method::PUT, "/api/v1/wallet/password".to_owned()),
+            (Method::POST, "/api/v1/wallet/scan".to_owned()),
+            (Method::POST, "/api/v1/status".to_owned()),
+            (Method::POST, "/v1/transactions/7/cancel".to_owned()),
         ] {
-            assert!(!allowed(&method, path), "{method} {path}");
+            assert!(!allowed(&method, &path), "{method} {path}");
         }
     }
 }

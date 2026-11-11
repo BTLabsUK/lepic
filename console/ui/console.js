@@ -9,6 +9,9 @@ const RECENT = 5;
 const THEME_KEY = "lepic-console-theme";
 const SESSION_KEY = "lepic-console-session";
 const NO_SESSION = "Open the console with the link lepic-console printed in its terminal. A new link is printed each time one is used.";
+const V1 = "/api/v1";
+const PAGE = 50;
+const PAGE_MAX = 500;
 const VIEWS = { overview: "Overview", transactions: "Payments", outputs: "Outputs", events: "Events", api: "API" };
 const SVG_NS = "http://www.w3.org/2000/svg";
 
@@ -314,7 +317,7 @@ async function api(path, init) {
   const auth = await authorization();
   let response;
   try {
-    response = await fetch(`/api${path}`, {
+    response = await fetch(path, {
       cache: "no-store",
       ...init,
       headers: { ...((init && init.headers) || {}), ...auth },
@@ -407,7 +410,7 @@ $("retry").addEventListener("click", () => refreshAll());
 // Overview
 
 // The last answer of each read, and the error of a read that failed.
-const seen = { status: null, wallet: null, node: null, address: null, transactions: null, nodeError: null };
+const seen = { status: null, wallet: null, accounts: null, node: null, address: null, walletError: null, nodeError: null };
 
 function health() {
   if (signedOut) {
@@ -420,27 +423,44 @@ function health() {
   if (!status) return { tone: "unknown", icon: "wait", line: "Checking the wallet…", sub: [] };
 
   const refresh = status.refresh || {};
-  const refreshed = refresh.last_success ? ["Last refreshed from the node ", timeNode(refresh.last_success), "."] : [];
-  if (refresh.consecutive_failures > 0) {
+  const refreshed = refresh.last_success_at ? ["Last refreshed from the node ", timeNode(refresh.last_success_at), "."] : [];
+  if (refresh.failures > 0) {
     return {
       tone: "warn",
       icon: "warn",
       line: "The wallet cannot refresh from its node.",
-      sub: [`It failed ${times(refresh.consecutive_failures)} in a row. `, refresh.last_error ? `The last error: ${refresh.last_error}. ` : "", ...refreshed],
+      sub: [`It failed ${times(refresh.failures)} in a row. `, refresh.last_error ? `The last error: ${refresh.last_error}. ` : "", ...refreshed],
     };
   }
-  if (typeof status.height !== "number") {
-    return { tone: "info", icon: "wait", line: "Waiting for the first sync.", sub: ["The wallet has not read the chain yet."] };
+  const wallet = seen.wallet;
+  if (!wallet) {
+    if (seen.walletError) return { tone: "warn", icon: "warn", line: "The wallet cannot be read.", sub: [`${capital(seen.walletError.message)}.`] };
+    return { tone: "unknown", icon: "wait", line: "Checking the wallet…", sub: [] };
   }
-  if (typeof status.node_tip === "number" && status.node_tip > status.height) {
+  const scan = wallet.scan;
+  if (scan && scan.state === "running") {
     return {
       tone: "info",
       icon: "wait",
-      line: `Catching up with the network, ${plural(status.node_tip - status.height, "block")} to go.`,
+      line: typeof scan.target_height === "number" && scan.target_height > scan.height
+        ? `Reading the chain, block ${count(scan.height)} of ${count(scan.target_height)}.`
+        : "Reading the chain.",
       sub: refreshed,
     };
   }
-  if (status.epicbox === "disconnected") {
+  if (!(wallet.height > 0)) {
+    return { tone: "info", icon: "wait", line: "Waiting for the first sync.", sub: ["The wallet has not read the chain yet."] };
+  }
+  const tip = seen.node && seen.node.tip_height;
+  if (typeof tip === "number" && tip > wallet.height) {
+    return {
+      tone: "info",
+      icon: "wait",
+      line: `Catching up with the network, ${plural(tip - wallet.height, "block")} to go.`,
+      sub: refreshed,
+    };
+  }
+  if (epicboxState(status) === "disconnected") {
     return {
       tone: "warn",
       icon: "warn",
@@ -448,10 +468,15 @@ function health() {
       sub: ["Payments sent to the address below do not arrive until it reconnects."],
     };
   }
-  if (seen.wallet && seen.wallet.node_behind) {
+  if (wallet.node_behind) {
     return { tone: "warn", icon: "warn", line: "The node is behind the wallet.", sub: ["The balance was not updated at the last refresh."] };
   }
   return { tone: "ok", icon: "check", line: "Your wallet is up to date.", sub: refreshed };
+}
+
+function epicboxState(status) {
+  const listener = status && status.listeners && status.listeners.epicbox;
+  return listener ? listener.state : undefined;
 }
 
 function renderHealth() {
@@ -475,26 +500,29 @@ function services() {
   rows.push({ tone: "ok", icon: "check", name: "Wallet service", state: "Running", hint: lasting(status.uptime_s) ? `Up for ${lasting(status.uptime_s)}` : "" });
 
   const node = seen.node;
+  const nodeHint = node ? `Version ${node.version}, block ${count(node.tip_height)}` : "";
   if (seen.nodeError) {
     rows.push({ tone: "warn", icon: "warn", name: "Node", state: "Not answering", hint: capital(seen.nodeError.message) });
   } else if (seen.wallet && seen.wallet.node_behind) {
-    rows.push({ tone: "warn", icon: "warn", name: "Node", state: "Behind the wallet", hint: node && node.node ? hostOf(node.node) : "" });
+    rows.push({ tone: "warn", icon: "warn", name: "Node", state: "Behind the wallet", hint: nodeHint });
+  } else if (node && node.syncing) {
+    rows.push({ tone: "info", icon: "wait", name: "Node", state: "Syncing", hint: nodeHint });
   } else if (node) {
-    rows.push({ tone: "ok", icon: "check", name: "Node", state: "Connected", hint: node.node ? hostOf(node.node) : "" });
+    rows.push({ tone: "ok", icon: "check", name: "Node", state: "Connected", hint: nodeHint });
   } else {
     rows.push({ tone: "unknown", icon: "wait", name: "Node", state: "Checking", hint: "" });
   }
 
-  const relay = seen.address && seen.address.address ? String(seen.address.address).split("@")[1] || "" : "";
+  const relay = seen.address && seen.address.text ? String(seen.address.text).split("@")[1] || "" : "";
   const epicbox = {
     connected: { tone: "ok", icon: "check", state: "Connected", hint: relay ? `Through ${relay}` : "" },
     connecting: { tone: "info", icon: "wait", state: "Connecting", hint: relay ? `To ${relay}` : "" },
     disconnected: { tone: "risk", icon: "stop", state: "Disconnected", hint: "Payments to the address wait until it reconnects." },
     stopped: { tone: "unknown", icon: "off", state: "Off", hint: "This wallet does not listen on Epicbox." },
-  }[status.epicbox] || { tone: "unknown", icon: "wait", state: "No report yet", hint: "" };
+  }[epicboxState(status)] || { tone: "unknown", icon: "wait", state: "No report yet", hint: "" };
   rows.push({ name: "Epicbox", ...epicbox });
 
-  const http = status.http;
+  const http = status.listeners && status.listeners.http;
   if (http) {
     const reach = { local: "Listening on this computer only", internet: "Open to the internet" }[http.exposure] || capital(words(http.exposure || "listening"));
     rows.push({ tone: "ok", icon: "check", name: "Payments over HTTP", state: "On", hint: reach });
@@ -503,17 +531,17 @@ function services() {
   }
 
   const refresh = status.refresh || {};
-  if (refresh.consecutive_failures > 0) {
-    rows.push({ tone: "warn", icon: "warn", name: "Keeping in sync", state: "Failing", hint: `Failed ${times(refresh.consecutive_failures)} in a row.${refresh.last_error ? ` ${capital(refresh.last_error)}` : ""}` });
-  } else if (refresh.last_success) {
-    rows.push({ tone: "ok", icon: "check", name: "Keeping in sync", state: "Working", hint: "Last refreshed ", since: refresh.last_success });
+  if (refresh.failures > 0) {
+    rows.push({ tone: "warn", icon: "warn", name: "Keeping in sync", state: "Failing", hint: `Failed ${times(refresh.failures)} in a row.${refresh.last_error ? ` ${capital(refresh.last_error)}` : ""}` });
+  } else if (refresh.last_success_at) {
+    rows.push({ tone: "ok", icon: "check", name: "Keeping in sync", state: "Working", hint: "Last refreshed ", since: refresh.last_success_at });
   } else {
     rows.push({ tone: "info", icon: "wait", name: "Keeping in sync", state: "Not yet", hint: "No refresh has finished yet." });
   }
 
   const collect = status.collect || {};
-  if (collect.consecutive_failures > 0) {
-    rows.push({ tone: "warn", icon: "warn", name: "Collecting payments", state: "Failing", hint: `Failed ${times(collect.consecutive_failures)} in a row.${collect.last_error ? ` ${capital(collect.last_error)}` : ""}` });
+  if (collect.failures > 0) {
+    rows.push({ tone: "warn", icon: "warn", name: "Collecting payments", state: "Failing", hint: `Failed ${times(collect.failures)} in a row.${collect.last_error ? ` ${capital(collect.last_error)}` : ""}` });
   }
   return rows;
 }
@@ -544,33 +572,33 @@ function renderTech() {
   const node = seen.node || {};
   const wallet = seen.wallet || {};
   const requests = status.requests || {};
-  const http = status.http;
+  const http = status.listeners && status.listeners.http;
   const refresh = status.refresh || {};
   const collect = status.collect || {};
+  const scan = wallet.scan;
   const pairs = [
-    ["Socket", status.socket, true],
+    ["Version", status.version],
     ["Running for", lasting(status.uptime_s)],
     ["Requests served", typeof requests.served === "number" ? count(requests.served) : null],
     ["Requests in progress", typeof requests.in_flight === "number" ? count(requests.in_flight) : null],
     ["Requests refused", typeof requests.refused === "number" ? count(requests.refused) : null],
-    ["Wallet height", typeof status.height === "number" ? count(status.height) : null],
-    ["Node height", typeof status.node_tip === "number" ? count(status.node_tip) : null],
+    ["Wallet height", typeof wallet.height === "number" ? count(wallet.height) : null],
+    ["Node height", typeof node.tip_height === "number" ? count(node.tip_height) : null],
     ["Network", wallet.network],
-    ["Node", node.node, true],
-    ["Node version", node.node_version],
-    ["Block header version", typeof node.block_header_version === "number" ? String(node.block_header_version) : null],
-    ["Last block", node.last_block, true],
-    ["Epicbox", status.epicbox],
+    ["Node version", node.version],
+    ["Node syncing", typeof node.syncing === "boolean" ? (node.syncing ? "yes" : "no") : null],
+    ["Chain scan", scan ? `${scan.state}, block ${count(scan.height)}${typeof scan.target_height === "number" ? ` of ${count(scan.target_height)}` : ""}` : null],
+    ["Epicbox", epicboxState(status)],
   ];
   if (http) {
     pairs.push(["HTTP port", String(http.port)]);
     pairs.push(["HTTP exposure", http.exposure]);
     pairs.push(["HTTP payments", `${count(http.received)} received, ${count(http.repeated)} repeated, ${count(http.refused)} refused`]);
-    pairs.push(["Coinbase over HTTP", typeof http.coinbase === "boolean" ? (http.coinbase ? "yes" : "no") : http.coinbase]);
+    pairs.push(["Coinbase over HTTP", http.coinbase]);
   }
   for (const [label, report] of [["refresh", refresh], ["collect", collect]]) {
-    pairs.push([`Last ${label}`, report.last_success ? when(report.last_success) : "none yet"]);
-    pairs.push([`${capital(label)} failures in a row`, typeof report.consecutive_failures === "number" ? count(report.consecutive_failures) : null]);
+    pairs.push([`Last ${label}`, report.last_success_at ? when(report.last_success_at) : "none yet"]);
+    pairs.push([`${capital(label)} failures in a row`, typeof report.failures === "number" ? count(report.failures) : null]);
     pairs.push([`Last ${label} error`, report.last_error]);
   }
   list.replaceChildren(...facts(pairs));
@@ -578,22 +606,27 @@ function renderTech() {
 
 const BALANCE_PARTS = [
   ["spendable", "Ready to spend"],
-  ["awaiting_confirmation", "Waiting for confirmations"],
-  ["awaiting_finalization", "Waiting for a payment to finish"],
-  ["immature", "Maturing"],
+  ["confirming", "Waiting for confirmations"],
+  ["pending", "Waiting for a payment to finish"],
+  ["maturing", "Maturing"],
   ["locked", "Reserved for payments in progress"],
 ];
 
-function renderWallet() {
+function renderNetwork() {
   const info = seen.wallet;
   if (!info) return;
   const tag = $("network");
   tag.textContent = info.network ? capital(String(info.network)) : "";
   tag.hidden = !info.network;
-  if (!changed("wallet", info.accounts || [])) return;
+}
 
-  const accounts = info.accounts || [];
-  const sum = (key) => accounts.reduce((total, account) => total + (atoms(account[key]) || 0n), 0n);
+// The balance of each account and their total, from the accounts list.
+function renderBalances() {
+  const accounts = seen.accounts;
+  if (!accounts) return;
+  if (!changed("accounts", accounts)) return;
+
+  const sum = (key) => accounts.reduce((total, account) => total + (atoms(account.balance && account.balance[key]) || 0n), 0n);
   const total = sum("total");
   $("balance-total").textContent = accounts.length ? plain(total) : "–";
 
@@ -612,14 +645,14 @@ function renderWallet() {
   perAccount.hidden = accounts.length < 2;
   perAccount.replaceChildren(el("dl", { class: "lc-parts" }, accounts.flatMap((account) => [
     el("dt", { text: account.label || `Account ${account.index}` }),
-    el("dd", { text: `${plain(atoms(account.total))} EPIC` }),
+    el("dd", { text: `${plain(atoms(account.balance && account.balance.total))} EPIC` }),
   ])));
 }
 
 function renderAddress() {
   const report = seen.address || {};
-  setText($("address"), report.address || "–");
-  $("copy-address").hidden = !report.address;
+  setText($("address"), report.text || "–");
+  $("copy-address").hidden = !report.text;
 }
 
 let copyTimer = null;
@@ -636,80 +669,163 @@ $("copy-address").addEventListener("click", async () => {
   copyTimer = setTimeout(() => { note.textContent = ""; }, 4000);
 });
 
+// Lists with a "more" link: the first page, and the pages after it that were asked for
+
+const lists = {
+  payments: { path: `${V1}/payments`, items: [], cursor: null, loaded: false, busy: false, version: 0, more: "transactions-more", what: "payments", key: (item) => item.id },
+  outputs: { path: `${V1}/outputs`, items: [], cursor: null, loaded: false, busy: false, version: 0, more: "outputs-more", what: "outputs", key: (item) => item.commitment },
+};
+
+// Reads the pages again from the start, as many items as are shown, so a refresh keeps them.
+async function refreshList(name) {
+  const list = lists[name];
+  const version = ++list.version;
+  const limit = Math.min(PAGE_MAX, Math.max(PAGE, list.items.length));
+  const report = await api(`${list.path}?limit=${limit}`);
+  if (version !== list.version) return list;
+  list.items = report.items || [];
+  list.cursor = report.next_cursor || null;
+  list.loaded = true;
+  return list;
+}
+
+async function loadMore(name) {
+  const list = lists[name];
+  if (!list.cursor || list.busy) return;
+  const button = $(list.more);
+  const version = list.version;
+  list.busy = true;
+  button.disabled = true;
+  setText(button, "Loading…");
+  try {
+    const report = await api(`${list.path}?limit=${PAGE}&cursor=${encodeURIComponent(list.cursor)}`);
+    if (version === list.version) {
+      const have = new Set(list.items.map(list.key));
+      list.items = list.items.concat((report.items || []).filter((item) => !have.has(list.key(item))));
+      list.cursor = report.next_cursor || null;
+    }
+    drawList(name);
+  } catch (error) {
+    if (error.code === "no_session") return;
+    setText(button, `Could not load more: ${error.message}. Try again.`);
+  } finally {
+    list.busy = false;
+    button.disabled = false;
+  }
+}
+
+function updateMore(name) {
+  const list = lists[name];
+  const button = $(list.more);
+  button.parentElement.hidden = !list.cursor;
+  setText(button, `Show more ${list.what}`);
+}
+
+function drawList(name) {
+  if (name === "payments") drawPayments();
+  else drawOutputs();
+  updateMore(name);
+}
+
+for (const name of Object.keys(lists)) $(lists[name].more).addEventListener("click", () => loadMore(name));
+
 // Payments
 
-const TX_STATE = {
-  sent: "Waiting for the other side",
-  received: "Waiting for the sender",
-  finalized: "Signed, not yet published",
+const PAYMENT_STATE = {
+  needs_approval: "Waiting for your approval",
+  awaiting_answer: "Waiting for the other side",
+  awaiting_post: "Waiting for the sender",
+  finalized: "Signed, not yet on the network",
   posted: "Published, waiting for the first confirmation",
   confirmed: "Confirmed",
   cancelled: "Cancelled",
+  declined: "Declined",
   expired: "Expired",
 };
-const TX_LEAD = {
-  sent: "The payment was created and handed over. It goes on when the other side answers.",
-  received: "This wallet answered. The sender has to finish the payment and publish it.",
-  finalized: "Both sides signed. The payment still has to be published to the network.",
+const PAYMENT_LEAD = {
+  needs_approval: "A payment was asked of this wallet. Nothing was paid, and it waits for an approval.",
+  awaiting_answer: "The payment was created and handed over. It goes on when the other side answers.",
+  awaiting_post: "This wallet answered. The sender has to finish the payment and publish it.",
+  finalized: "Both sides signed. The node has not taken the payment yet.",
   posted: "The network has the payment. It counts once a block includes it.",
 };
-const TX_TONE = { confirmed: ["ok", "check"], cancelled: ["unknown", "stop"], expired: ["unknown", "stop"] };
-const CANCELLABLE = new Set(["sent", "received", "finalized"]);
-const TRANSPORT = { epicbox: "over Epicbox", http: "over HTTP", tor: "over Tor", file: "by file", self: "to this wallet itself" };
+const PAYMENT_TONE = { confirmed: ["ok", "check"], cancelled: ["unknown", "stop"], declined: ["unknown", "stop"], expired: ["unknown", "stop"] };
+const ENDED = new Set(["confirmed", "cancelled", "declined", "expired"]);
+const VIA = {
+  epicbox: "over Epicbox",
+  http: "over HTTP",
+  tor: "over Tor",
+  file: "by file",
+  contact: "through a contact",
+  link: "through a link",
+  in_person: "in person",
+  peer: "straight to the other wallet",
+  chain: "found on the chain",
+};
 
-function over(transport) {
-  if (!transport) return "";
-  return TRANSPORT[transport] || `over ${words(transport)}`;
+function over(via) {
+  if (!via) return "";
+  return VIA[via] || `over ${words(via)}`;
 }
 
 function relayName(transport) {
   return { epicbox: "Epicbox", http: "HTTP", tor: "Tor" }[transport] || capital(words(transport || "the transport"));
 }
 
-function txTitle(tx) {
-  const incoming = tx.direction === "incoming";
-  if (tx.state === "confirmed") return incoming ? "Received" : "Sent";
-  if (tx.state === "cancelled" || tx.state === "expired") return incoming ? "Incoming payment" : "Outgoing payment";
-  return incoming ? "Receiving" : "Sending";
+// The first group of the payment's id, enough to tell payments apart on a row.
+function shortId(id) {
+  return String(id).split("-")[0];
 }
 
-function txState(tx) {
-  if (tx.state === "sent" && tx.direction === "outgoing") return "Waiting for the recipient";
-  return TX_STATE[tx.state] || capital(words(tx.state || "unknown"));
+function paymentTitle(payment) {
+  const direction = payment.direction;
+  if (payment.state === "confirmed") return direction === "in" ? "Received" : direction === "out" ? "Sent" : "Moved within this wallet";
+  if (ENDED.has(payment.state)) return direction === "in" ? "Incoming payment" : direction === "out" ? "Outgoing payment" : "Payment within this wallet";
+  return direction === "in" ? "Receiving" : direction === "out" ? "Sending" : "Moving within this wallet";
+}
+
+function paymentState(payment) {
+  if (payment.state === "awaiting_answer") {
+    if (payment.direction === "out") return "Waiting for the recipient";
+    if (payment.direction === "in") return "Waiting for the payer";
+  }
+  return PAYMENT_STATE[payment.state] || capital(words(payment.state || "unknown"));
 }
 
 // What the payment adds to or takes from the wallet, the fee apart. Null when it cannot be told.
-function txAmount(tx) {
-  const credited = atoms(tx.amount_credited);
-  const debited = atoms(tx.amount_debited);
-  if (credited === null && debited === null) return null;
-  const net = (credited || 0n) - (debited || 0n);
-  if (net >= 0n) return net;
-  const fee = atoms(tx.fee) || 0n;
-  return -net > fee ? net + fee : net;
+function paymentAmount(payment) {
+  const value = atoms(payment.amount);
+  if (value === null) return null;
+  if (payment.direction === "out") return -value;
+  return value;
 }
 
-function paymentRow(tx) {
-  const incoming = tx.direction === "incoming";
-  const ended = tx.state === "cancelled" || tx.state === "expired";
-  const value = txAmount(tx);
-  const meta = [`Number ${tx.tx_id}`, over(tx.transport)].filter(Boolean).join(", ");
+function offers(payment, action) {
+  return Array.isArray(payment.actions) && payment.actions.includes(action);
+}
+
+function paymentRow(payment) {
+  const incoming = payment.direction === "in";
+  const ended = payment.state !== "confirmed" && ENDED.has(payment.state);
+  const value = paymentAmount(payment);
+  const meta = [`Payment ${shortId(payment.id)}`, over(payment.via)].filter(Boolean).join(", ");
   return el("li", null, el("button", {
     type: "button",
     class: "lc-row-btn",
-    "data-key": `tx-${tx.tx_id}`,
-    "data-tx": String(tx.tx_id),
-    onclick: () => openTransaction(tx.tx_id),
+    "data-key": `pay-${payment.id}`,
+    "data-tx": payment.id,
+    title: payment.id,
+    onclick: () => openPayment(payment.id),
   }, [
     el("span", { class: "lc-row-icon", "data-tone": ended ? null : incoming ? "in" : "out" }, icon(incoming ? "in" : "out")),
     el("span", { class: "lc-row-main" }, [
-      el("span", { class: "lc-row-title", text: txTitle(tx) }),
-      el("span", { class: "lc-row-sub", text: txState(tx) }),
+      el("span", { class: "lc-row-title", text: paymentTitle(payment) }),
+      el("span", { class: "lc-row-sub", text: paymentState(payment) }),
     ]),
     el("span", { class: "lc-row-meta", text: meta }),
     el("span", { class: "lc-row-end" }, [
       el("span", { class: "lc-row-amount", "data-tone": ended ? "void" : value !== null && value > 0n ? "in" : null, text: `${signed(value)} EPIC` }),
-      timeNode(tx.updated_at || tx.created_at, "lc-row-time"),
+      timeNode(payment.updated_at || payment.created_at, "lc-row-time"),
     ]),
   ]));
 }
@@ -718,56 +834,59 @@ function placeholder(text) {
   return el("li", { class: "lc-placeholder", text });
 }
 
-function renderTransactions(report) {
-  if (!changed("transactions", report)) return;
-  const list = [...(report.transactions || [])].sort((a, b) => String(b.updated_at).localeCompare(String(a.updated_at)));
-  seen.transactions = list;
-  const waiting = list.filter((tx) => !["confirmed", "cancelled", "expired"].includes(tx.state)).length;
-  $("tx-summary").textContent = list.length
-    ? `${capital(plural(list.length, "payment"))}, newest first${waiting ? `. ${capital(plural(waiting, "payment"))} still in progress.` : "."}`
+function renderPayments() {
+  const list = lists.payments;
+  if (!changed("payments", [list.items, list.cursor])) return;
+  drawList("payments");
+}
+
+function drawPayments() {
+  const { items, cursor } = lists.payments;
+  const waiting = items.filter((payment) => !ENDED.has(payment.state)).length;
+  $("tx-summary").textContent = items.length
+    ? `${cursor ? `The newest ${plural(items.length, "payment")}` : capital(plural(items.length, "payment"))}, newest first${waiting ? `. ${capital(plural(waiting, "payment"))} still in progress.` : "."}`
     : "Every payment this wallet sends or receives is listed here.";
-  if (!list.length) {
+  if (!items.length) {
     const none = "No payments yet. Give someone this wallet's address to receive the first one.";
     swap($("transactions"), [placeholder(none)]);
     swap($("recent"), [placeholder(none)]);
     return;
   }
-  swap($("transactions"), list.map(paymentRow));
-  swap($("recent"), list.slice(0, RECENT).map(paymentRow));
+  swap($("transactions"), items.map(paymentRow));
+  swap($("recent"), items.slice(0, RECENT).map(paymentRow));
 }
 
 // Outputs
 
 const OUTPUT_STATE = {
-  spendable: ["Ready to spend", "ok", "check"],
-  awaiting_confirmation: ["Waiting for confirmations", "info", "wait"],
-  awaiting_finalization: ["Waiting for a payment to finish", "info", "wait"],
-  immature: ["Maturing", "info", "wait"],
+  unspent: ["Ready to spend", "ok", "check"],
+  unconfirmed: ["Waiting for confirmations", "info", "wait"],
   locked: ["Reserved for a payment in progress", "unknown", "lock"],
-  unpaid_invoice: ["Part of an unpaid invoice", "unknown", "wait"],
+  spent: ["Spent", "unknown", "off"],
 };
 
 function outputRow(output) {
-  const spent = output.status === "spent";
-  const [label, tone, mark] = spent ? ["Spent", "unknown", "off"] : OUTPUT_STATE[output.category] || [capital(words(output.category || output.status || "unknown")), "unknown", "info"];
-  let state = label;
-  if (output.category === "immature" && typeof output.lock_height === "number") state = `Maturing, ready at block ${count(output.lock_height)}`;
+  const spent = output.state === "spent";
+  const [label, tone, mark] = OUTPUT_STATE[output.state] || [capital(words(output.state || "unknown")), "unknown", "info"];
+  const height = seen.wallet && seen.wallet.height;
+  const maturing = !spent && typeof output.lock_height === "number" && typeof height === "number" && output.lock_height > height;
+  const state = maturing ? `Maturing, ready at block ${count(output.lock_height)}` : label;
   const commitment = String(output.commitment || "");
-  const source = typeof output.tx_id === "number"
+  const source = output.payment_id
     ? el("button", {
       type: "button",
       class: "lc-inline-btn lc-link",
       "data-key": `out-${commitment}`,
-      "data-tx": String(output.tx_id),
-      text: `From payment number ${output.tx_id}`,
-      onclick: () => openTransaction(output.tx_id),
+      "data-tx": output.payment_id,
+      text: `From payment ${shortId(output.payment_id)}`,
+      onclick: () => openPayment(output.payment_id),
     })
     : null;
   return el("li", null, el("div", { class: spent ? "lc-row lc-is-spent" : "lc-row" }, [
-    el("span", { class: "lc-row-icon", "data-tone": tone }, icon(mark)),
+    el("span", { class: "lc-row-icon", "data-tone": maturing ? "info" : tone }, icon(maturing ? "wait" : mark)),
     el("span", { class: "lc-row-main" }, [
-      el("span", { class: "lc-row-title", text: `${plain(atoms(output.value))} EPIC` }),
-      el("span", { class: "lc-row-sub", text: output.is_coinbase ? `${state}. Mining reward.` : state }),
+      el("span", { class: "lc-row-title", text: `${plain(atoms(output.amount))} EPIC` }),
+      el("span", { class: "lc-row-sub", text: output.coinbase ? `${state}. Mining reward.` : state }),
     ]),
     el("span", { class: "lc-row-meta" }, source),
     el("span", { class: "lc-row-end" }, [
@@ -777,13 +896,19 @@ function outputRow(output) {
   ]));
 }
 
-function renderOutputs(report) {
-  if (!changed("outputs", report)) return;
-  const list = [...(report.outputs || [])].sort((a, b) =>
-    Number(a.status === "spent") - Number(b.status === "spent") || (b.height || 0) - (a.height || 0));
-  const ready = list.filter((output) => output.status !== "spent" && output.category === "spendable").length;
-  $("outputs-summary").textContent = list.length ? `${capital(plural(list.length, "output"))}, ${ready} ready to spend.` : "";
-  swap($("outputs"), list.length ? list.map(outputRow) : [placeholder("No outputs yet. The first payment this wallet receives adds one.")]);
+function renderOutputs() {
+  const list = lists.outputs;
+  if (!changed("outputs", [list.items, list.cursor, seen.wallet && seen.wallet.height])) return;
+  drawList("outputs");
+}
+
+function drawOutputs() {
+  const { items, cursor } = lists.outputs;
+  const ready = items.filter((output) => output.state === "unspent").length;
+  $("outputs-summary").textContent = items.length
+    ? `${cursor ? `The first ${plural(items.length, "output")}` : capital(plural(items.length, "output"))}, ${ready} ready to spend.`
+    : "";
+  swap($("outputs"), items.length ? items.map(outputRow) : [placeholder("No outputs yet. The first payment this wallet receives adds one.")]);
 }
 
 function renderProblemInto(list, what, error) {
@@ -793,7 +918,7 @@ function renderProblemInto(list, what, error) {
 // One payment, in a dialog
 
 const dialog = $("tx-dialog");
-let openTxId = null;
+let openPaymentId = null;
 let opener = null;
 
 function techValue(key, value) {
@@ -802,32 +927,33 @@ function techValue(key, value) {
   if (Array.isArray(value) && value.every((item) => typeof item !== "object")) return [value.join(", ") || "none", false];
   if (typeof value === "object") return [JSON.stringify(value), true];
   if (/_at$/.test(key)) return [when(value), false];
-  if (key === "slate_id" || /^[0-9a-f]{16,}$/i.test(String(value))) return [String(value), true];
+  if (/^[0-9a-f-]{16,}$/i.test(String(value))) return [String(value), true];
   return [String(value), false];
 }
 
-function renderTransaction(tx) {
-  const incoming = tx.direction === "incoming";
-  const value = txAmount(tx);
-  const fee = atoms(tx.fee);
-  const [tone, mark] = TX_TONE[tx.state] || ["info", "wait"];
-  const plainKeys = new Set(["tx_id", "direction", "state", "transport", "created_at", "updated_at"]);
-  const rest = Object.entries(tx)
+function renderPayment(payment) {
+  const incoming = payment.direction === "in";
+  const value = paymentAmount(payment);
+  const fee = atoms(payment.fee);
+  const [tone, mark] = PAYMENT_TONE[payment.state] || ["info", "wait"];
+  const plainKeys = new Set(["id", "direction", "state", "via", "created_at", "updated_at", "actions", "amount", "fee"]);
+  const rest = Object.entries(payment)
     .filter(([key, v]) => !plainKeys.has(key) && v !== null && v !== undefined && v !== "" && !(Array.isArray(v) && !v.length))
     .map(([key, v]) => [capital(words(key)), ...techValue(key, v)]);
   const wasOpen = Boolean(dialog.querySelector(".lc-tech[open]"));
 
-  $("tx-dialog-title").textContent = `${txTitle(tx)}, payment number ${tx.tx_id}`;
+  $("tx-dialog-title").textContent = `${paymentTitle(payment)}, payment ${shortId(payment.id)}`;
   $("tx-dialog-body").replaceChildren(
-    el("p", { class: "lc-state", "data-tone": tone }, [icon(mark), `${txState(tx)}.`]),
-    el("p", { class: "lc-state-lead", text: TX_LEAD[tx.state] || "" }),
+    el("p", { class: "lc-state", "data-tone": tone }, [icon(mark), `${paymentState(payment)}.`]),
+    el("p", { class: "lc-state-lead", text: PAYMENT_LEAD[payment.state] || "" }),
     el("dl", { class: "lc-facts" }, facts([
       ["Amount", `${signed(value)} EPIC`],
-      ["Network fee", !incoming && fee !== null && fee > 0n ? `${plain(fee)} EPIC` : null],
-      ["Direction", incoming ? "Into this wallet" : "Out of this wallet"],
-      ["Delivery", tx.transport ? capital(over(tx.transport)) : null],
-      ["Started", tx.created_at ? when(tx.created_at) : null],
-      ["Last change", tx.updated_at ? timeNode(tx.updated_at) : null],
+      ["Network fee", payment.direction !== "in" && fee !== null && fee > 0n ? `${plain(fee)} EPIC` : null],
+      ["Direction", incoming ? "Into this wallet" : payment.direction === "out" ? "Out of this wallet" : "Between this wallet's own coins"],
+      ["Delivery", payment.via ? capital(over(payment.via)) : null],
+      ["Payment id", payment.id, true],
+      ["Started", payment.created_at ? when(payment.created_at) : null],
+      ["Last change", payment.updated_at ? timeNode(payment.updated_at) : null],
     ])),
     rest.length
       ? el("details", { class: "lc-tech", open: wasOpen }, [
@@ -836,31 +962,32 @@ function renderTransaction(tx) {
       ])
       : "",
   );
-  $("tx-dialog-actions").hidden = !CANCELLABLE.has(tx.state);
+  // Cancel is offered when the payment's own list of actions has it.
+  $("tx-dialog-actions").hidden = !offers(payment, "cancel");
 }
 
-async function loadTransaction(id) {
+async function loadPayment(id) {
   try {
-    const tx = await api(`/v1/transactions/${id}`);
-    if (openTxId !== id) return false;
-    renderTransaction(tx);
+    const payment = await api(`${V1}/payments/${id}`);
+    if (openPaymentId !== id) return false;
+    renderPayment(payment);
     return true;
   } catch (error) {
-    if (openTxId !== id) return false;
+    if (openPaymentId !== id) return false;
     $("tx-dialog-body").replaceChildren(el("p", { class: "lc-state-lead", text: `Could not load this payment: ${error.message}` }));
     return false;
   }
 }
 
-async function openTransaction(id) {
+async function openPayment(id) {
   if (!dialog.open) opener = document.activeElement;
-  openTxId = id;
-  $("tx-dialog-title").textContent = `Payment number ${id}`;
+  openPaymentId = id;
+  $("tx-dialog-title").textContent = `Payment ${shortId(id)}`;
   $("tx-dialog-body").replaceChildren(el("p", { class: "lc-state-lead", text: "Loading…" }));
   $("tx-dialog-actions").hidden = true;
   resetCancel();
   if (!dialog.open) dialog.showModal();
-  await loadTransaction(id);
+  await loadPayment(id);
 }
 
 function resetCancel() {
@@ -886,23 +1013,23 @@ $("tx-cancel-keep").addEventListener("click", () => {
 });
 
 $("tx-cancel-confirm").addEventListener("click", async () => {
-  const id = openTxId;
+  const id = openPaymentId;
   $("tx-cancel-confirm").disabled = true;
   $("tx-cancel-keep").disabled = true;
   $("tx-cancel-note").textContent = "Cancelling…";
   try {
-    const result = await api(`/v1/transactions/${id}/cancel`, { method: "POST" });
+    const result = await api(`${V1}/payments/${id}/cancel`, { method: "POST" });
     scheduleDetails();
-    if (openTxId !== id) return;
-    await loadTransaction(id);
-    if (openTxId !== id) return;
+    if (openPaymentId !== id) return;
+    await loadPayment(id);
+    if (openPaymentId !== id) return;
     $("tx-dialog-actions").hidden = false;
     $("tx-cancel").hidden = true;
     $("tx-cancel-keep").hidden = true;
     $("tx-cancel-confirm").hidden = true;
-    $("tx-cancel-note").textContent = `Payment number ${result.tx_id ?? id} is ${result.state || "cancelled"}.`;
+    $("tx-cancel-note").textContent = `Payment ${shortId(result.id || id)} is ${paymentState({ state: result.state || "cancelled" }).toLowerCase()}.`;
   } catch (error) {
-    if (openTxId !== id) return;
+    if (openPaymentId !== id) return;
     $("tx-cancel-note").textContent = `Not cancelled: ${error.message}`;
     $("tx-cancel-confirm").disabled = false;
     $("tx-cancel-keep").disabled = false;
@@ -910,8 +1037,8 @@ $("tx-cancel-confirm").addEventListener("click", async () => {
 });
 
 dialog.addEventListener("close", () => {
-  const id = openTxId;
-  openTxId = null;
+  const id = openPaymentId;
+  openPaymentId = null;
   const back = opener && opener.isConnected
     ? opener
     : document.querySelector(`.lc-view:not([hidden]) [data-tx="${CSS.escape(String(id))}"]`);
@@ -926,102 +1053,95 @@ dialog.addEventListener("click", (event) => {
 
 const feed = $("events");
 
-function numbered(data) {
-  return typeof data.tx_id === "number" ? `Payment number ${data.tx_id}` : "A payment";
+// The id of the payment an event is about, if it is about one.
+function paymentOf(event) {
+  const data = event.data || {};
+  const object = data.object || {};
+  if (event.type.startsWith("payment.")) return object.id || data.payment_id || null;
+  return null;
+}
+
+function paymentName(event) {
+  const id = paymentOf(event);
+  return id ? `Payment ${shortId(id)}` : "A payment";
 }
 
 function reason(data, lead) {
-  const text = data.reason ? `${capital(String(data.reason))}.` : "";
+  const text = data.reason ? `${capital(words(String(data.reason)))}.` : "";
   return [lead, text].filter(Boolean).join(" ");
 }
 
-// kind: (data) => [icon, tone, title, detail]. `group` joins repeats that differ in detail only.
-const EVENTS = {
-  session: (d) => ["lock", "unknown", { unlocked: "Wallet unlocked", locked: "Wallet locked", closed: "Wallet closed" }[d.state] || "The wallet session changed", ""],
-  balance: () => ["check", "unknown", "Balance checked", "A routine check, every few seconds."],
-  transaction: (d) => [
-    d.to === "confirmed" ? "check" : d.to === "cancelled" || d.to === "expired" ? "stop" : "wait",
-    d.to === "confirmed" ? "ok" : d.to === "cancelled" || d.to === "expired" ? "unknown" : "info",
-    `${numbered(d)}: ${(TX_STATE[d.to] || words(d.to || "changed")).toLowerCase()}`,
-    d.from ? `Before: ${(TX_STATE[d.from] || words(d.from)).toLowerCase()}.` : "",
-  ],
-  received: (d) => ["in", "in", "Payment received", [epic(d.amount), over(d.transport)].filter(Boolean).join(", ")],
-  self_sent: (d) => ["in", "info", "Sent a payment to this wallet itself", epic(d.amount)],
-  answered_again: () => ["info", "unknown", "A payment arrived a second time and got the same answer", "Nothing changed."],
-  reply_undelivered: (d) => ["warn", "warn", "The answer to a received payment could not be delivered", reason(d, "The payment stays received. The sender gets the answer when it sends again.")],
-  sync: (d) => typeof d.target === "number" && typeof d.height === "number" && d.target > d.height
-    ? ["wait", "info", `Catching up: block ${count(d.height)} of ${count(d.target)}`, ""]
-    : ["check", "unknown", typeof d.height === "number" ? `Read the chain up to block ${count(d.height)}` : "Read the chain", ""],
-  transport: (d) => ({
-    connected: ["link", "ok", `${relayName(d.transport)} connected`, ""],
-    connecting: ["wait", "info", `Connecting to ${relayName(d.transport)}`, ""],
-    disconnected: ["warn", "warn", `${relayName(d.transport)} disconnected`, ""],
-    stopped: ["off", "unknown", `${relayName(d.transport)} stopped`, ""],
-  }[d.state] || ["link", "unknown", `${relayName(d.transport)}: ${words(d.state || "changed")}`, ""]),
-  transport_drain: (d) => ["link", d.state === "disconnected" ? "warn" : "unknown", `Collecting waiting payments from ${relayName(d.transport)}: ${words(d.state || "changed")}`, ""],
-  transport_disconnected: (d) => ["warn", "warn", `Lost the connection to ${relayName(d.transport)}`, reason(d, "")],
-  invoice_parked: (d) => ["wait", "info", "An invoice arrived and waits for an answer", [epic(d.amount), "Nothing was paid."].filter(Boolean).join(". ")],
-  invoice_finalized: (d) => ["check", "ok", "An invoice from this wallet was paid", epic(d.amount)],
-  invoice_expired: () => ["stop", "unknown", "An invoice expired unpaid", ""],
-  invoice_posted: () => ["wait", "info", "The issuer of an invoice reports the payment published", "It counts once the wallet finds it on the chain."],
-  invoice_declined: () => ["warn", "warn", "The payer declined an invoice from this wallet", "Nothing changed."],
-  invoice_withdrawn: () => ["stop", "unknown", "The issuer withdrew an invoice", "Nothing was cancelled."],
-  invoice_bounced: () => ["warn", "warn", "An invoice came back unpaid", "The other wallet does not pay invoices."],
-  unknown_slate: () => ["warn", "warn", "An answer arrived for a payment this wallet does not know", "Another install of this wallet may have started it. Open that one to finish the payment."],
-  notice_unmatched: () => ["info", "unknown", "A notice arrived for a payment this wallet does not hold", "Nothing changed."],
-  receive_superseded: (d) => ["warn", "warn", `${numbered(d)} was taken by another install of this wallet`, "A rescan shows the funds."],
-  payment_posted: () => ["wait", "info", "The sender reports a payment published", "It counts once the wallet finds it on the chain."],
-  payment_cancelled: () => ["warn", "warn", "The sender reports it cancelled a payment", "Nothing changed here."],
-  payment_declined: () => ["warn", "warn", "The recipient declined a payment", "It was cancelled and its funds are free again."],
-  not_posted: (d) => ["warn", "warn", "A payment could not be published", reason(d, "It stays signed until it is published again or cancelled.")],
-  pairing_replied: () => ["people", "info", "A contact answered a pairing invite", "The words still have to be checked."],
-  pairing_confirmed: () => ["people", "info", "A pairing completed", "The words still have to be checked."],
-  pairing_failed: (d) => ["warn", "warn", "A pairing ended without a contact", reason(d, "")],
-  pairing_requested: () => ["people", "info", "Another wallet asked to pair", "The request waits for an answer."],
-  contact_updated: () => ["people", "unknown", "A contact's pairing changed", ""],
-  contact_relay_move_requested: () => ["people", "info", "A contact asks to move to another relay", "The mailbox in use stays until the move is accepted."],
-  home_relay_unreachable: () => ["warn", "warn", "A contact relay is not answering", "Collecting from it is slowed down."],
-  contact_keys_restored: () => ["check", "ok", "A contact's keys are back", ""],
-  contact_keys_changed: () => ["warn", "warn", "A contact's keys changed", "The old pairing is untouched until someone decides."],
-  contact_unpaired: () => ["people", "unknown", "A contact removed its pairing with this wallet", ""],
-  invoice_from_contact: (d) => ["wait", "info", "A contact sent an invoice", [epic(d.amount), "Nothing was paid."].filter(Boolean).join(". ")],
-  withdrawal_from_contact: () => ["in", "info", "A contact sent a withdrawal", "It was received and answered."],
-  sealed_received: () => ["in", "in", "A contact sent a payment", "It was received and answered."],
-  sealed_unopenable: () => ["warn", "warn", "Messages from a contact could not be opened", "They may be written for another install of this wallet."],
-  outbox_delivered: () => ["check", "unknown", "A message reached a contact's relay", ""],
-  outbox_stuck: () => ["warn", "warn", "A message to a contact was not delivered for a day", "It stopped retrying."],
-  contact_payment_finalized: () => ["check", "ok", "A contact answered a payment and it was signed", ""],
-  contact_payload: () => ["people", "unknown", "A contact sent data", ""],
-  contact_payloads_parked: () => ["people", "unknown", "Data from a contact waits on the relay", ""],
-  in_person_answer: () => ["people", "info", "An answer to an in-person code arrived", "Nothing was finished yet."],
-  lagged: (d) => ["warn", "warn", `This page fell behind and missed ${typeof d.missed === "number" ? plural(d.missed, "event") : "some events"}.`, "The lists above were refreshed."],
-};
-const ROUTINE = new Set(["balance"]);
-const GROUPED = new Set(["balance", "sync"]);
-
-function describeEvent(kind, data) {
-  const make = EVENTS[kind];
-  if (make) {
-    const [mark, tone, title, detail] = make(data);
-    return { mark, tone, title, detail };
-  }
-  const fields = Object.entries(data).filter(([key, v]) => key !== "kind" && v !== null && v !== undefined);
-  return {
-    mark: "info",
-    tone: "unknown",
-    title: kind === "other" ? "Something else happened" : capital(words(kind)),
-    detail: fields.map(([key, v]) => `${words(key)} ${v}`).join(", "),
-  };
+function stateWords(state) {
+  return (PAYMENT_STATE[state] || words(state || "changed")).toLowerCase();
 }
 
-function drawEvent(item, kind, data, text, repeats) {
-  const payment = typeof data.tx_id === "number"
+const PAYMENT_ENDED_MARK = { confirmed: ["check", "ok"], cancelled: ["stop", "unknown"], declined: ["stop", "unknown"], expired: ["stop", "unknown"] };
+
+// type: (event) => [icon, tone, title, detail]. `GROUPED` joins repeats that differ in detail only.
+const EVENTS = {
+  "payment.created": (e) => {
+    const object = e.data.object || {};
+    const amount = epic(object.amount);
+    if (object.state === "needs_approval") return ["wait", "info", "A payment waits for an approval", [amount, over(object.via)].filter(Boolean).join(", ")];
+    const title = object.direction === "in" ? "A payment to this wallet started" : object.direction === "out" ? "A payment from this wallet started" : "A payment within this wallet started";
+    return [object.direction === "in" ? "in" : "out", "info", title, [amount, over(object.via)].filter(Boolean).join(", ")];
+  },
+  "payment.state_changed": (e) => {
+    const to = e.data.to_state;
+    const [mark, tone] = PAYMENT_ENDED_MARK[to] || ["wait", "info"];
+    return [mark, tone, `${paymentName(e)}: ${stateWords(to)}`, e.data.from_state ? reason(e.data, `Before: ${stateWords(e.data.from_state)}.`) : reason(e.data, "")];
+  },
+  "payment.updated": (e) => ["info", "unknown", `${paymentName(e)} changed`, changedFields(e.data)],
+  "contact.created": () => ["people", "info", "A contact was added", ""],
+  "contact.state_changed": (e) => ["people", "info", "A contact's pairing changed", e.data.to_state ? `Now: ${words(e.data.to_state)}.` : ""],
+  "contact.updated": (e) => ["people", "unknown", "A contact changed", changedFields(e.data)],
+  "contact.removed": () => ["people", "unknown", "A contact was removed", ""],
+  "pair_request.received": () => ["people", "info", "Another wallet asked to pair", "The request waits for an answer."],
+  "payload.received": () => ["people", "unknown", "A contact sent data", ""],
+  "quarantine.added": () => ["warn", "warn", "Messages from a contact could not be opened", "They may be written for another install of this wallet."],
+  "account.balance_changed": (e) => {
+    const object = e.data.object || {};
+    const total = object.balance ? epic(object.balance.total) : "";
+    return ["check", "unknown", "Balance changed", [object.label ? `Account ${object.label}` : "", total ? `${total} in total` : ""].filter(Boolean).join(": ")];
+  },
+  "wallet.progress": (e) => typeof e.data.target_height === "number" && typeof e.data.height === "number" && e.data.target_height > e.data.height
+    ? ["wait", "info", `Catching up: block ${count(e.data.height)} of ${count(e.data.target_height)}`, ""]
+    : ["check", "unknown", typeof e.data.height === "number" ? `Read the chain up to block ${count(e.data.height)}` : "Read the chain", ""],
+  "relay.updated": (e) => e.data.reason === "home_unreachable"
+    ? ["warn", "warn", "A contact relay is not answering", e.data.host ? `${e.data.host}. Collecting from it is slowed down.` : "Collecting from it is slowed down."]
+    : ["link", "unknown", "A relay changed", reason(e.data, "")],
+  "slate.unmatched": (e) => e.data.reason === "notice"
+    ? ["info", "unknown", "A notice arrived for a payment this wallet does not hold", "Nothing changed."]
+    : ["warn", "warn", "An answer arrived for a payment this wallet does not know", "Another install of this wallet may have started it. Open that one to finish the payment."],
+  "events.skipped": (e) => ["warn", "warn",
+    `This page missed ${typeof e.data.count === "number" ? plural(e.data.count, "event") : "some events"}.`,
+    "The lists above were refreshed."],
+};
+const ROUTINE = new Set(["wallet.progress"]);
+const GROUPED = new Set(["wallet.progress"]);
+
+function changedFields(data) {
+  return Array.isArray(data.changed) && data.changed.length ? `Changed: ${data.changed.map(words).join(", ")}.` : "";
+}
+
+function describeEvent(event) {
+  const make = EVENTS[event.type];
+  if (make) {
+    const [mark, tone, title, detail] = make(event);
+    return { mark, tone, title, detail };
+  }
+  return { mark: "info", tone: "unknown", title: capital(String(event.type).replace(/[._]/g, " ")), detail: "" };
+}
+
+function drawEvent(item, event, text, repeats) {
+  const id = paymentOf(event);
+  const payment = id
     ? el("button", {
       type: "button",
       class: "lc-inline-btn lc-link",
-      "data-tx": String(data.tx_id),
-      text: `Open payment number ${data.tx_id}`,
-      onclick: () => openTransaction(data.tx_id),
+      "data-tx": id,
+      text: `Open payment ${shortId(id)}`,
+      onclick: () => openPayment(id),
     })
     : null;
   item.replaceChildren(el("div", { class: "lc-row" }, [
@@ -1031,7 +1151,7 @@ function drawEvent(item, kind, data, text, repeats) {
       text.detail ? el("span", { class: "lc-row-sub", text: text.detail }) : null,
     ]),
     el("span", { class: "lc-row-meta" }, payment),
-    el("span", { class: "lc-row-end" }, timeNode(new Date(), "lc-row-time")),
+    el("span", { class: "lc-row-end" }, timeNode(event.created_at || new Date(), "lc-row-time")),
   ]));
 }
 
@@ -1039,21 +1159,21 @@ function showFeedState() {
   $("events-empty").hidden = Boolean(feed.querySelector("li:not([hidden])"));
 }
 
-function addEvent(kind, data) {
-  const text = describeEvent(kind, data);
-  const routine = ROUTINE.has(kind);
-  const key = GROUPED.has(kind) ? kind : `${kind}|${text.title}|${text.detail}`;
+function addEvent(event) {
+  const text = describeEvent(event);
+  const routine = ROUTINE.has(event.type);
+  const key = GROUPED.has(event.type) ? event.type : `${event.type}|${text.title}|${text.detail}`;
   // A repeat joins the newest row of its sort, across the routine rows hidden in between.
   const newest = feed.querySelector(routine ? "li[data-routine]" : "li:not([data-routine])");
   if (newest && newest.dataset.key === key) {
     const repeats = Number(newest.dataset.repeats || "1") + 1;
     newest.dataset.repeats = String(repeats);
-    drawEvent(newest, kind, data, text, repeats);
+    drawEvent(newest, event, text, repeats);
     if (newest !== feed.firstElementChild) feed.prepend(newest);
   } else {
     const item = el("li", { "data-key": key, "data-routine": routine });
     item.hidden = routine && !$("events-routine").checked;
-    drawEvent(item, kind, data, text, 1);
+    drawEvent(item, event, text, 1);
     feed.prepend(item);
     while (feed.children.length > FEED_CAP) feed.lastElementChild.remove();
   }
@@ -1076,6 +1196,8 @@ function setEventsState(state, text) {
 }
 
 let eventsOpen = false;
+// The id of the last event seen, sent on a reconnect so the stream goes on after it.
+let lastEventId = null;
 
 async function readEvents() {
   if (eventsOpen) return;
@@ -1091,7 +1213,9 @@ async function keepReadingEvents() {
   let delay = 1000;
   for (;;) {
     try {
-      const response = await fetch("/api/v1/events", { cache: "no-store", headers: await authorization() });
+      const headers = { ...(await authorization()), Accept: "text/event-stream" };
+      if (lastEventId !== null) headers["Last-Event-ID"] = String(lastEventId);
+      const response = await fetch(`${V1}/events`, { cache: "no-store", headers });
       if (response.status === 401) throw noSession();
       if (!response.ok) {
         const body = await response.json().catch(() => ({}));
@@ -1111,11 +1235,12 @@ async function keepReadingEvents() {
   }
 }
 
+// Reads the frames of the stream: `id:`, `event:` and `data:` lines, a blank line after each.
 async function consume(body) {
   const reader = body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
-  let event = { kind: "message", data: [] };
+  let frame = { type: "message", id: null, data: [] };
   for (;;) {
     const { value, done } = await reader.read();
     if (done) return;
@@ -1125,65 +1250,103 @@ async function consume(body) {
       const line = buffer.slice(0, end).replace(/\r$/, "");
       buffer = buffer.slice(end + 1);
       if (line === "") {
-        if (event.data.length) dispatch(event.kind, event.data.join("\n"));
-        event = { kind: "message", data: [] };
+        if (frame.data.length) dispatch(frame);
+        frame = { type: "message", id: null, data: [] };
+      } else if (line.startsWith("id:")) {
+        frame.id = line.slice(3).trim();
       } else if (line.startsWith("event:")) {
-        event.kind = line.slice(6).trim();
+        frame.type = line.slice(6).trim();
       } else if (line.startsWith("data:")) {
-        event.data.push(line.slice(5).replace(/^ /, ""));
+        frame.data.push(line.slice(5).replace(/^ /, ""));
       }
+      // A line that starts with ":" is a comment, the keepalive.
     }
   }
 }
 
-function dispatch(kind, text) {
-  let data = {};
-  try { data = JSON.parse(text); } catch { data = { data: text }; }
-  if (data === null || typeof data !== "object") data = { data };
-  const name = data.kind || kind;
-  addEvent(name, data);
-  // The routine balance check arrives every few seconds and changes nothing on its own.
-  if (!ROUTINE.has(name)) scheduleDetails();
+function dispatch(frame) {
+  let event;
+  try { event = JSON.parse(frame.data.join("\n")); } catch { event = null; }
+  if (event === null || typeof event !== "object" || Array.isArray(event)) event = {};
+  event.type = typeof event.type === "string" && event.type ? event.type : frame.type;
+  event.data = event.data && typeof event.data === "object" ? event.data : {};
+  const id = /^\d+$/.test(String(frame.id)) ? frame.id : typeof event.id === "number" ? String(event.id) : null;
+  if (id !== null) lastEventId = id;
+  addEvent(event);
+  touch(event.type);
+}
+
+// What each kind of event changes on the page. Types this page does not know change nothing.
+function touch(type) {
+  if (type === "events.skipped") {
+    refreshAll();
+  } else if (type === "wallet.progress" || type === "relay.updated") {
+    scheduleStatus();
+  } else if (type.startsWith("payment.") || type === "account.balance_changed") {
+    scheduleDetails();
+  }
 }
 
 // Refresh cycle
 
 let detailsTimer = null;
+let statusTimer = null;
 
 async function refreshStatus() {
-  try {
-    seen.status = await api("/v1/status");
-    markReachable();
-  } catch (error) {
+  const [status, wallet, node] = await Promise.allSettled([api(`${V1}/status`), api(`${V1}/wallet`), api(`${V1}/node`)]);
+  if (status.status === "rejected") {
+    const error = status.reason;
     if (isUnreachable(error)) markUnreachable(error);
     else if (error.code !== "no_session") setLink("busy", "Status not available");
     return;
   }
+  if ([wallet, node].some((read) => read.status === "rejected" && read.reason.code === "no_session")) return;
+  seen.status = status.value;
+  markReachable();
+  if (wallet.status === "fulfilled") {
+    seen.wallet = wallet.value;
+    seen.walletError = null;
+  } else {
+    seen.wallet = null;
+    seen.walletError = wallet.reason;
+  }
+  if (node.status === "fulfilled") {
+    seen.node = node.value;
+    seen.nodeError = null;
+  } else {
+    seen.node = null;
+    seen.nodeError = node.reason;
+  }
+  renderNetwork();
   renderHealth();
   renderServices();
   renderTech();
+  if (lists.outputs.loaded) renderOutputs();
 }
 
 async function refreshDetails() {
   const jobs = [
-    ["/v1/wallet", (v) => { seen.wallet = v; renderWallet(); }, () => { shown.wallet = null; $("balance-total").textContent = "–"; }, "the balance"],
-    ["/v1/wallet/address", (v) => { seen.address = v; renderAddress(); }, null, "the address"],
-    ["/v1/node", (v) => { seen.node = v; seen.nodeError = null; }, (error) => { seen.node = null; seen.nodeError = error; }, "the node"],
-    ["/v1/transactions", renderTransactions, (error) => { shown.transactions = null; renderProblemInto($("transactions"), "the payments", error); renderProblemInto($("recent"), "the payments", error); }, "the payments"],
-    ["/v1/outputs", renderOutputs, (error) => { shown.outputs = null; renderProblemInto($("outputs"), "the outputs", error); }, "the outputs"],
+    [async () => { seen.accounts = (await api(`${V1}/accounts?limit=${PAGE_MAX}`)).items || []; renderBalances(); },
+      () => { shown.accounts = null; $("balance-total").textContent = "–"; }, "the balance"],
+    [async () => { seen.address = ((await api(`${V1}/addresses?type=epicbox&limit=1`)).items || [])[0] || null; renderAddress(); },
+      null, "the address"],
+    [async () => { await refreshList("payments"); renderPayments(); },
+      (error) => { shown.payments = null; renderProblemInto($("transactions"), "the payments", error); renderProblemInto($("recent"), "the payments", error); $(lists.payments.more).parentElement.hidden = true; }, "the payments"],
+    [async () => { await refreshList("outputs"); renderOutputs(); },
+      (error) => { shown.outputs = null; renderProblemInto($("outputs"), "the outputs", error); $(lists.outputs.more).parentElement.hidden = true; }, "the outputs"],
   ];
-  await Promise.all(jobs.map(async ([path, render, failed, what]) => {
+  await Promise.all(jobs.map(async ([run, failed, what]) => {
     try {
-      render(await api(path));
+      await run();
     } catch (error) {
       if (error.code === "no_session") return;
       if (isUnreachable(error)) markUnreachable(error);
       if (failed) failed(error);
-      if (path === "/v1/wallet") {
+      if (what === "the balance") {
         $("balance-note").hidden = false;
         $("balance-note").textContent = `Could not load ${what}: ${error.message}`;
         $("balance-parts").hidden = true;
-      } else if (path === "/v1/wallet/address") {
+      } else if (what === "the address") {
         setText($("address"), `Not available: ${error.message}`);
         $("copy-address").hidden = true;
       }
@@ -1197,6 +1360,11 @@ async function refreshDetails() {
 function scheduleDetails() {
   clearTimeout(detailsTimer);
   detailsTimer = setTimeout(refreshDetails, AFTER_EVENT_MS);
+}
+
+function scheduleStatus() {
+  if (statusTimer !== null) return;
+  statusTimer = setTimeout(() => { statusTimer = null; refreshStatus(); }, AFTER_EVENT_MS);
 }
 
 async function refreshAll() {
@@ -1284,7 +1452,7 @@ function referenceOptions() {
     customCss: REFERENCE_CSS,
     // Where the API is really served. The console's own proxy passes read routes only, so it is
     // not offered as a server here.
-    servers: [{ url: "http://lepic", description: "lepic serve's Unix socket, for example with curl --unix-socket" }],
+    servers: [{ url: "http://lepic/api/v1", description: "lepic serve's Unix socket, for example with curl --unix-socket" }],
   };
 }
 
@@ -1299,7 +1467,7 @@ async function loadReference() {
   referenceLoading = true;
   referenceState("Loading the reference…");
   try {
-    referenceDocument = await api("/v1/openapi.json");
+    referenceDocument = await api(`${V1}/openapi.json`);
   } catch (error) {
     referenceLoading = false;
     referenceState(error.code === "no_session"

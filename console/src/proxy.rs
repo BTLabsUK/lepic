@@ -27,8 +27,15 @@ const CONTENT_SECURITY_POLICY: &str = "default-src 'none'; script-src 'self'; \
     style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; \
     connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
 
-/// The prefix under which the page reaches the proxied routes.
-const API_PREFIX: &str = "/api";
+/// The prefix of every proxied route. The page calls these paths and serve answers them, so the
+/// proxy forwards the path unchanged.
+const API_PREFIX: &str = "/api/v1/";
+
+/// What serve answers with JSON, for every call but the event stream.
+const ACCEPT_JSON: &str = "application/json";
+
+/// What the page's event stream asks for; serve streams only when `Accept` names it.
+const ACCEPT_STREAM: &str = "text/event-stream";
 
 /// The route where the page trades the link token for a session.
 const SESSION_PATH: &str = "/session";
@@ -118,7 +125,7 @@ impl Console {
 
     async fn route<B>(&self, request: &Request<B>) -> Response<Body> {
         let path = request.uri().path();
-        if let Some(api_path) = path.strip_prefix(API_PREFIX) {
+        if path.starts_with(API_PREFIX) {
             let admitted = policy::admit_api(
                 &self.listen,
                 request.method(),
@@ -127,8 +134,13 @@ impl Console {
             );
             return match admitted {
                 Ok(()) => {
-                    self.api(request.method(), api_path, request.uri().query())
-                        .await
+                    self.api(
+                        request.method(),
+                        path,
+                        request.uri().query(),
+                        request.headers(),
+                    )
+                    .await
                 }
                 Err(refusal) => refused(&refusal),
             };
@@ -199,7 +211,13 @@ impl Console {
         with_body(StatusCode::OK, "application/json", body.to_string())
     }
 
-    async fn api(&self, method: &Method, path: &str, query: Option<&str>) -> Response<Body> {
+    async fn api(
+        &self,
+        method: &Method,
+        path: &str,
+        query: Option<&str>,
+        headers: &HeaderMap,
+    ) -> Response<Body> {
         if !policy::allowed(method, path) {
             return problem(
                 StatusCode::NOT_FOUND,
@@ -207,7 +225,7 @@ impl Console {
                 "the console does not proxy this route",
             );
         }
-        self.forward(method, path, query)
+        self.forward(method, path, query, headers)
             .await
             .unwrap_or_else(|error| self.unreachable(&error))
     }
@@ -219,6 +237,7 @@ impl Console {
         method: &Method,
         path: &str,
         query: Option<&str>,
+        headers: &HeaderMap,
     ) -> Result<Response<Body>, Unreachable> {
         let stream = UnixStream::connect(&self.socket)
             .await
@@ -231,11 +250,15 @@ impl Console {
             Some(query) => format!("{path}?{query}"),
             None => path.to_owned(),
         };
-        let request = Request::builder()
+        let mut request = Request::builder()
             .method(method)
             .uri(uri)
             .header(header::HOST, "lepic")
-            .header(header::ACCEPT, "application/json, text/event-stream")
+            .header(header::ACCEPT, accept_for(path, headers));
+        if let Some(last) = last_event_id(path, headers) {
+            request = request.header(LAST_EVENT_ID, last);
+        }
+        let request = request
             .body(Empty::<Bytes>::new())
             .map_err(Unreachable::Request)?;
         let upstream = sender
@@ -263,6 +286,39 @@ impl Console {
             ),
         )
     }
+}
+
+/// The header that resumes an event stream after the event with this id.
+const LAST_EVENT_ID: &str = "last-event-id";
+
+/// Whether the call is the page's event stream: a GET of the events route that asks for
+/// `text/event-stream`.
+fn wants_stream(path: &str, headers: &HeaderMap) -> bool {
+    path == "/api/v1/events"
+        && headers
+            .get(header::ACCEPT)
+            .and_then(|value| value.to_str().ok())
+            .is_some_and(|accept| accept.contains(ACCEPT_STREAM))
+}
+
+/// The `Accept` serve gets: the stream only for the page's event stream, JSON for the rest.
+fn accept_for(path: &str, headers: &HeaderMap) -> &'static str {
+    if wants_stream(path, headers) {
+        ACCEPT_STREAM
+    } else {
+        ACCEPT_JSON
+    }
+}
+
+/// The event id the page resumes after, passed on for the event stream only, and only when it is
+/// a number.
+fn last_event_id(path: &str, headers: &HeaderMap) -> Option<HeaderValue> {
+    if !wants_stream(path, headers) {
+        return None;
+    }
+    let value = headers.get(LAST_EVENT_ID)?;
+    let text = value.to_str().ok()?;
+    (!text.is_empty() && text.bytes().all(|byte| byte.is_ascii_digit())).then(|| value.clone())
 }
 
 const LINK_REFUSED: &str = "open the console with the link lepic-console printed";
@@ -334,6 +390,7 @@ mod tests {
     const LISTEN: &str = "127.0.0.1:7421";
     const LINK: &str = "0123456789abcdef";
     const ORIGIN: &str = "http://127.0.0.1:7421";
+    const PAYMENT: &str = "3f2b8c1e-5d7a-4e0b-9a61-2c4d8e7f1a90";
     const SERVE_BODY: &str = r#"{"state":"running"}"#;
 
     /// A directory under the temp dir that is removed when the test ends.
@@ -346,22 +403,45 @@ mod tests {
         }
     }
 
-    /// Serves a fixed JSON body on a Unix socket and records the path of every request.
+    /// Serves a fixed JSON body on a Unix socket and records the path of every request, and the
+    /// `Accept` and `Last-Event-ID` it came with in `heads`.
     async fn stand_in(name: &str) -> (Console, Arc<Mutex<Vec<String>>>, Scratch) {
+        let (console, seen, _heads, scratch) = stand_in_heads(name).await;
+        (console, seen, scratch)
+    }
+
+    type Heads = Arc<Mutex<Vec<(String, Option<String>)>>>;
+
+    async fn stand_in_heads(name: &str) -> (Console, Arc<Mutex<Vec<String>>>, Heads, Scratch) {
         let dir = std::env::temp_dir().join(format!("lepic-console-{name}-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let scratch = Scratch(dir.clone());
         let socket = dir.join("serve.sock");
         let listener = UnixListener::bind(&socket).unwrap();
         let seen = Arc::new(Mutex::new(Vec::new()));
+        let heads: Heads = Arc::new(Mutex::new(Vec::new()));
         let recorded = Arc::clone(&seen);
+        let recorded_heads = Arc::clone(&heads);
         tokio::spawn(async move {
             while let Ok((stream, _)) = listener.accept().await {
                 let recorded = Arc::clone(&recorded);
+                let recorded_heads = Arc::clone(&recorded_heads);
                 tokio::spawn(async move {
                     let service = service_fn(move |request: Request<hyper::body::Incoming>| {
                         let recorded = Arc::clone(&recorded);
+                        let recorded_heads = Arc::clone(&recorded_heads);
                         async move {
+                            let header_text = |name: &str| {
+                                request
+                                    .headers()
+                                    .get(name)
+                                    .and_then(|value| value.to_str().ok())
+                                    .map(str::to_owned)
+                            };
+                            recorded_heads.lock().unwrap().push((
+                                header_text("accept").unwrap_or_default(),
+                                header_text("last-event-id"),
+                            ));
                             let path = request
                                 .uri()
                                 .path_and_query()
@@ -383,7 +463,7 @@ mod tests {
             }
         });
         let console = Console::new(LISTEN.to_owned(), socket, LINK.to_owned());
-        (console, seen, scratch)
+        (console, seen, heads, scratch)
     }
 
     fn get(uri: &str, bearer: Option<&str>) -> Request<Empty<Bytes>> {
@@ -435,16 +515,76 @@ mod tests {
             .await;
         assert_eq!(response.status(), StatusCode::OK);
         assert_eq!(body_of(response).await, SERVE_BODY);
-        assert_eq!(*seen.lock().unwrap(), ["/v1/status?verbose=1"]);
+        assert_eq!(*seen.lock().unwrap(), ["/api/v1/status?verbose=1"]);
     }
 
     #[tokio::test]
     async fn a_route_off_the_list_is_not_forwarded() {
         let (console, seen, _scratch) = stand_in("unlisted").await;
         let session = open_session(&console, LINK).await;
-        let response = console.answer(get("/api/v1/nothing", Some(&session))).await;
-        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        for uri in [
+            "/api/v1/nothing".to_owned(),
+            "/api/v1/transactions".to_owned(),
+            "/api/v1/payments/7".to_owned(),
+            format!("/api/v1/payments/{PAYMENT}/approve"),
+            "/v1/status".to_owned(),
+            "/api/status".to_owned(),
+        ] {
+            let response = console.answer(get(&uri, Some(&session))).await;
+            assert_eq!(response.status(), StatusCode::NOT_FOUND, "{uri}");
+        }
         assert!(seen.lock().unwrap().is_empty());
+    }
+
+    /// Sends `uri` with the given `Accept` and `Last-Event-ID` and returns what serve saw of them.
+    async fn heads_for(
+        name: &str,
+        uri: &str,
+        accept: Option<&str>,
+        last: Option<&str>,
+    ) -> (String, Option<String>) {
+        let (console, _seen, heads, _scratch) = stand_in_heads(name).await;
+        let session = open_session(&console, LINK).await;
+        let mut request = get(uri, Some(&session));
+        if let Some(accept) = accept {
+            request
+                .headers_mut()
+                .insert(header::ACCEPT, accept.parse().unwrap());
+        }
+        if let Some(last) = last {
+            request
+                .headers_mut()
+                .insert("last-event-id", last.parse().unwrap());
+        }
+        let response = console.answer(request).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let seen = heads.lock().unwrap();
+        assert_eq!(seen.len(), 1);
+        seen[0].clone()
+    }
+
+    #[tokio::test]
+    async fn only_the_event_stream_asks_serve_for_a_stream() {
+        let stream = "text/event-stream";
+        let (accept, last) = heads_for("sse", "/api/v1/events", Some(stream), Some("41")).await;
+        assert_eq!(accept, stream);
+        assert_eq!(last.as_deref(), Some("41"));
+
+        // Without the stream Accept, and on every other route, serve is asked for JSON.
+        let (accept, last) = heads_for("json-events", "/api/v1/events", None, Some("41")).await;
+        assert_eq!(accept, "application/json");
+        assert_eq!(last, None);
+        let (accept, last) =
+            heads_for("json-status", "/api/v1/status", Some(stream), Some("41")).await;
+        assert_eq!(accept, "application/json");
+        assert_eq!(last, None);
+    }
+
+    #[tokio::test]
+    async fn a_last_event_id_that_is_not_a_number_is_not_passed_on() {
+        let stream = "text/event-stream";
+        let (_, last) = heads_for("bad-last", "/api/v1/events", Some(stream), Some("4 1")).await;
+        assert_eq!(last, None);
     }
 
     #[tokio::test]
@@ -515,7 +655,7 @@ mod tests {
         let post = |origin: Option<&str>, bearer: &str| {
             let mut builder = Request::builder()
                 .method(Method::POST)
-                .uri("/api/v1/transactions/7/cancel")
+                .uri(format!("/api/v1/payments/{PAYMENT}/cancel"))
                 .header(header::HOST, LISTEN)
                 .header(header::AUTHORIZATION, format!("Bearer {bearer}"));
             if let Some(origin) = origin {
@@ -534,7 +674,10 @@ mod tests {
         assert!(seen.lock().unwrap().is_empty());
         let allowed = console.answer(post(Some(ORIGIN), &session)).await;
         assert_eq!(allowed.status(), StatusCode::OK);
-        assert_eq!(*seen.lock().unwrap(), ["/v1/transactions/7/cancel"]);
+        assert_eq!(
+            *seen.lock().unwrap(),
+            [format!("/api/v1/payments/{PAYMENT}/cancel")]
+        );
     }
 
     #[tokio::test]

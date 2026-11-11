@@ -146,6 +146,7 @@
       <ul id="transactions" class="lc-rows lc-rows-wide">
         <li class="lc-placeholder">Waiting for the first answer…</li>
       </ul>
+      <p class="lc-block-more" hidden><button id="transactions-more" type="button" class="lc-btn">Show more payments</button></p>
     </section>
 
     <section id="view-outputs" class="lc-view" aria-labelledby="h-outputs" hidden>
@@ -157,6 +158,7 @@
       <ul id="outputs" class="lc-rows lc-rows-wide">
         <li class="lc-placeholder">Waiting for the first answer…</li>
       </ul>
+      <p class="lc-block-more" hidden><button id="outputs-more" type="button" class="lc-btn">Show more outputs</button></p>
     </section>
 
     <section id="view-events" class="lc-view" aria-labelledby="h-events" hidden>
@@ -165,7 +167,7 @@
         <p class="lc-view-lead">What the wallet does, as it happens. The list starts when this page is opened.</p>
         <div class="lc-toolbar">
           <p class="lc-live" id="events-state" role="status" data-state="busy"><span class="lc-conn-dot" aria-hidden="true"></span><span id="events-state-text">Connecting…</span></p>
-          <label class="lc-check"><input type="checkbox" id="events-routine" name="show-routine-checks" autocomplete="off" class="lc-check-box"><span>Show routine checks</span></label>
+          <label class="lc-check"><input type="checkbox" id="events-routine" name="show-scan-progress" autocomplete="off" class="lc-check-box"><span>Show scan progress</span></label>
           <button id="events-clear" type="button" class="lc-btn">Clear the list</button>
         </div>
       </div>
