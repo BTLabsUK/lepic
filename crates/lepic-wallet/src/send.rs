@@ -757,9 +757,8 @@ fn write_s1<D: WalletStore>(
     randomness: S1Randomness,
 ) -> Result<StoredS1, SendError> {
     let Some(ttl_blocks) = request.ttl_blocks else {
-        return store.write(|repos| {
-            create_s1(repos, env, keychain, tip, request, delivery, randomness)
-        });
+        return store
+            .write(|repos| create_s1(repos, env, keychain, tip, request, delivery, randomness));
     };
     let first = store.write(|repos| {
         create_s1(

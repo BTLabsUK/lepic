@@ -168,7 +168,11 @@ fn a_v2_send_keeps_its_ttl_out_of_the_slate_as_a_local_cutoff() {
         let sent = send(&sender, request(Some(ttl_blocks), local_ttl_blocks));
 
         let (wire, slate) = sender.received().unwrap();
-        assert!(wire.as_text().unwrap().starts_with(r#"{"version_info":{"version":2,"#));
+        assert!(
+            wire.as_text()
+                .unwrap()
+                .starts_with(r#"{"version_info":{"version":2,"#)
+        );
         assert!(!wire.as_text().unwrap().contains("ttl_cutoff_height"));
         assert_eq!(slate.ttl_cutoff_height(), None);
         assert_eq!(
