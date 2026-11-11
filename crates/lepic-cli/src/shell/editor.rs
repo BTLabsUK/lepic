@@ -332,7 +332,7 @@ pub(crate) fn line_editor(
     let selected = Color::Default.reverse();
     let menu = IdeMenu::default()
         .with_name(MENU)
-        .with_marker("")
+        .with_marker("> ")
         .with_text_style(plain)
         .with_selected_text_style(selected)
         .with_description_text_style(dim)
