@@ -33,7 +33,7 @@ impl Query {
                 continue;
             }
             let (key, value) = pair.split_once('=').unwrap_or((pair, ""));
-            let (key, value) = (super::decode(key)?, super::decode(value)?);
+            let (key, value) = (super::decode(key, true)?, super::decode(value, true)?);
             if fields.contains_key(&key) {
                 return Err(Problem::usage(format!("query parameter {key} given twice")));
             }

@@ -64,7 +64,7 @@ impl Route {
                 Segment::Literal(literal) if literal == part => {}
                 Segment::Literal(_) => return None,
                 Segment::Param(_) if part.is_empty() => return None,
-                Segment::Param(name) => params.push((name.clone(), super::decode(part).ok()?)),
+                Segment::Param(name) => params.push((name.clone(), super::decode(part, false).ok()?)),
             }
         }
         parts.next().is_none().then_some(params)
@@ -291,5 +291,12 @@ mod tests {
             params,
             [("origin".to_owned(), "https://wallet.example:443".to_owned())]
         );
+    }
+
+    #[test]
+    fn a_plus_in_a_path_segment_stays_a_plus() {
+        let router = Router::new();
+        let (_, params) = router.find(&Method::DELETE, "/api/v1/peers/a+b%20c").unwrap();
+        assert_eq!(params, [("origin".to_owned(), "a+b c".to_owned())]);
     }
 }
