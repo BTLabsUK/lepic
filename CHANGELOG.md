@@ -15,6 +15,11 @@ Conventional Commit messages at release time.
   than it showed, Ctrl+C cancels the current step, and the wallet locks after
   `shell_idle_lock_minutes` idle (default 15). The shell draws in colour; `NO_COLOR` turns it
   off. Without a terminal, `lepic` prints the usage as before.
+- QR codes in the terminal: the shell draws one under each address or link to hand on (`wallet
+  address`, `epic1 address`, `epic1 new-address`, `epic1 link`, `tor address`, `contact invite`,
+  a by-hand `contact accept` and a confirm link from `contact enter`), and `--qr` on those
+  commands draws it outside the shell. Never with `--output json` or when standard output is not
+  a terminal.
 
 ## [0.5.0] - 2026-11-11
 

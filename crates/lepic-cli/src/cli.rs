@@ -256,7 +256,7 @@ pub enum WalletCommand {
     /// Refresh against the node and show accounts and balances
     Info,
     /// Show the wallet's Epicbox address
-    Address,
+    Address(QrArg),
     /// List the wallet's outputs, spent ones included
     Outputs(AccountArg),
     /// Change the wallet password
@@ -544,6 +544,16 @@ pub enum SelectionArg {
     /// Spend the fewest small outputs that cover the amount, as `epic-wallet send` does by
     /// default
     Smallest,
+}
+
+/// `--qr` on a command that prints an address or a link to hand on. The shell draws the code
+/// without it. Serve never sees it: the CLI draws the code from the report serve answers.
+#[derive(Debug, Clone, Copy, Default, Args, Serialize, Deserialize)]
+pub struct QrArg {
+    /// Also draw it as a QR code, at a terminal wide enough (not with --output json)
+    #[arg(long)]
+    #[serde(skip)]
+    pub qr: bool,
 }
 
 #[derive(Debug, Clone, Args, Serialize, Deserialize)]
@@ -863,6 +873,9 @@ pub struct TorAddressArgs {
     /// Show the previous onion address, the payment-proof address in onion form
     #[arg(long)]
     pub previous: bool,
+    #[command(flatten)]
+    #[serde(skip)]
+    pub qr: QrArg,
 }
 
 #[derive(Debug, Clone, Args, Serialize, Deserialize)]
@@ -1152,7 +1165,7 @@ pub enum Epic1Command {
 Each address of an account is a number. The account's first address, number 0, always exists. \
 Payments to every issued address come to the same account; the payment shows the number. A \
 wallet restored from its recovery phrase issues none until `lepic epic1 issue-here`.")]
-    NewAddress(AccountArg),
+    NewAddress(Epic1NewAddressArgs),
     /// Make this restored install the one that issues new epic1 addresses
     #[command(after_help = "\
 Run it once no other install on the same recovery phrase issues addresses: two that both issue \
@@ -1196,6 +1209,18 @@ pub struct Epic1AddressArgs {
     /// the first address]
     #[arg(long, value_name = "N", default_value_t = 0)]
     pub index: u32,
+    #[command(flatten)]
+    #[serde(skip)]
+    pub qr: QrArg,
+}
+
+#[derive(Debug, Clone, Args, Serialize, Deserialize)]
+pub struct Epic1NewAddressArgs {
+    #[command(flatten)]
+    pub account: AccountArg,
+    #[command(flatten)]
+    #[serde(skip)]
+    pub qr: QrArg,
 }
 
 #[derive(Debug, Clone, Args, Serialize, Deserialize)]
@@ -1229,6 +1254,9 @@ pub struct Epic1LinkArgs {
     /// An Epicbox relay the link names, `domain[:port]`, up to three [default: the wallet's relay]
     #[arg(long, value_name = "RELAY")]
     pub epicbox: Vec<String>,
+    #[command(flatten)]
+    #[serde(skip)]
+    pub qr: QrArg,
 }
 
 #[derive(Debug, Clone, Args, Serialize, Deserialize)]
@@ -1506,6 +1534,9 @@ pub struct ContactInviteArgs {
     /// Deprecated and ignored: new pairings write person
     #[arg(long, value_enum, hide = true)]
     pub kind: Option<ContactKindArg>,
+    #[command(flatten)]
+    #[serde(skip)]
+    pub qr: QrArg,
 }
 
 #[derive(Debug, Clone, Args, Serialize, Deserialize)]
@@ -1545,6 +1576,9 @@ pub struct ContactEnterArgs {
     /// The epiccash:// link
     #[arg(value_name = "LINK")]
     pub input: String,
+    #[command(flatten)]
+    #[serde(skip)]
+    pub qr: QrArg,
 }
 
 #[derive(Debug, Clone, Args, Serialize, Deserialize)]
@@ -1630,6 +1664,9 @@ pub struct ContactAcceptArgs {
     /// Print the reply link to send by hand instead of posting it
     #[arg(long)]
     pub by_hand: bool,
+    #[command(flatten)]
+    #[serde(skip)]
+    pub qr: QrArg,
 }
 
 #[derive(Debug, Clone, Args, Serialize, Deserialize)]

@@ -22,6 +22,7 @@ fn main() -> ExitCode {
         stdout: Box::new(io::stdout()),
         stderr: Box::new(io::stderr()),
         ansi: io::stderr().is_terminal(),
+        stdout_terminal: io::stdout().is_terminal(),
     };
     // Without a command, `lepic` opens the shell when it talks to a person.
     let interactive = terminal && io::stdout().is_terminal();

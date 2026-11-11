@@ -6,7 +6,7 @@
 use std::fmt::Write as _;
 use std::io::Write as _;
 
-use serde::{Serialize, Serializer};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use zeroize::Zeroizing;
 
 use crate::amount::{AmountError, format_units, parse_amount};
@@ -200,7 +200,7 @@ pub struct AccountReport {
     pub locked: Option<String>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct AddressReport {
     pub address: String,
 }
@@ -509,7 +509,7 @@ pub struct ExpiredReport {
     pub cancellable: Vec<u32>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct ContactInviteReport {
     pub contact_id: String,
     pub link: String,
@@ -627,7 +627,7 @@ pub struct ContactPreviewReport {
     pub service: bool,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct ContactAcceptReport {
     pub contact_id: String,
     /// The reply as a link, to send by hand when `posted` is false.
@@ -635,15 +635,34 @@ pub struct ContactAcceptReport {
     pub posted: bool,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct ContactLinkReport {
     /// `confirm` (send `link` back by hand), `paired`, `ignored`, or `invite` (pairing words
     /// found the invite `link`, to answer).
+    #[serde(deserialize_with = "pairing_outcome")]
     pub outcome: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub contact_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub link: Option<String>,
+}
+
+/// The `outcome` of a [`ContactLinkReport`] serve answered, as one of the words it can be.
+fn pairing_outcome<'de, D: Deserializer<'de>>(deserializer: D) -> Result<&'static str, D::Error> {
+    known_word(deserializer, &["confirm", "paired", "ignored", "invite"])
+}
+
+/// A word a report field holds from a fixed set, read back from serve's JSON.
+pub(crate) fn known_word<'de, D: Deserializer<'de>>(
+    deserializer: D,
+    words: &[&'static str],
+) -> Result<&'static str, D::Error> {
+    let word = String::deserialize(deserializer)?;
+    words
+        .iter()
+        .find(|known| **known == word)
+        .copied()
+        .ok_or_else(|| serde::de::Error::unknown_variant(&word, &[]))
 }
 
 #[derive(Debug, Serialize)]
@@ -1135,7 +1154,7 @@ pub struct HttpListenReport {
     pub refused: u32,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct TorAddressReport {
     /// `<56 characters>.onion`.
     pub onion: String,

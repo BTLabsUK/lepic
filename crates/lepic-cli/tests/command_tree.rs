@@ -453,3 +453,40 @@ fn an_api_client_is_added_by_name_and_certificate_file() {
     };
     assert!(args.owner_tls && !args.http);
 }
+
+#[test]
+fn qr_is_on_the_commands_that_print_an_address_or_a_link_to_hand_on() {
+    let with_qr: Vec<String> = all_commands()
+        .into_iter()
+        .filter(|(_, command)| command.get_arguments().any(|arg| arg.get_id() == "qr"))
+        .map(|(path, _)| path.join(" "))
+        .collect();
+    assert_eq!(
+        with_qr,
+        [
+            "wallet address",
+            "tor address",
+            "contact invite",
+            "contact accept",
+            "contact enter",
+            "epic1 address",
+            "epic1 new-address",
+            "epic1 link",
+        ]
+    );
+}
+
+#[test]
+fn serve_is_sent_a_command_without_its_qr_flag() {
+    for line in [
+        &["lepic", "wallet", "address", "--qr"][..],
+        &["lepic", "epic1", "link", "--qr", "--printed"],
+        &["lepic", "contact", "invite", "--qr"],
+    ] {
+        let cli = Cli::try_parse_from(line).unwrap();
+        let sent = serde_json::to_string(&cli.command).unwrap();
+        assert!(!sent.contains("qr"), "{sent}");
+        let back: lepic_cli::cli::Command = serde_json::from_str(&sent).unwrap();
+        assert_eq!(serde_json::to_string(&back).unwrap(), sent);
+    }
+}

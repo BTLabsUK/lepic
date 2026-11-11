@@ -327,6 +327,7 @@ pub fn run_reading(
         stdout: Box::new(stdout.clone()),
         stderr: Box::new(stderr.clone()),
         ansi: false,
+        stdout_terminal: false,
     };
     let code = run(
         host,

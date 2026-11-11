@@ -1124,6 +1124,7 @@ impl<'a, H: Host> Shell<'a, H> {
             stdout: Box::new(ScreenWriter::new(self.screen.clone())),
             stderr: Box::new(ScreenWriter::new(self.screen.clone())),
             ansi: colour(&self.env, true),
+            stdout_terminal: false,
         }
     }
 
@@ -1137,6 +1138,13 @@ impl<'a, H: Host> Shell<'a, H> {
                 if settings.output == OutputFormat::Human {
                     let done = did_something(&report);
                     self.screen.print(&paint::output(&text, done, self.colour));
+                    let columns = super::editor::columns();
+                    let glyphs = self.marks.glyphs;
+                    if let Some(qr) =
+                        crate::qr::for_shell(&report, settings.output, columns, glyphs, self.colour)
+                    {
+                        self.screen.print(&qr);
+                    }
                 } else {
                     self.screen.print(&text);
                 }

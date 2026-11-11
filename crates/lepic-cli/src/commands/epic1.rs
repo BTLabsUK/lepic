@@ -63,10 +63,10 @@ impl<H: Host> Run<'_, H> {
                 })
             }
             Epic1Command::NewAddress(args) => {
-                let account = wallet.account(&args.account)?.index;
+                let account = wallet.account(&args.account.account)?.index;
                 let (index, address) = book.epic1_new_address(account).await?;
                 Report::Epic1Address(Epic1AddressReport {
-                    account: args.account,
+                    account: args.account.account,
                     index,
                     address: address.encode(),
                 })
@@ -176,6 +176,7 @@ async fn link<N: lepic_node::NodeApi + 'static>(
         message,
         printed,
         epicbox: link_relays,
+        qr: _,
     } = args;
     let wallet = &opened.wallet;
     let account = wallet.account(&account.account)?.index;

@@ -464,7 +464,7 @@ impl<H: Host> Run<'_, H> {
                 }))
             }
             WalletCommand::Password => self.change_password().await,
-            WalletCommand::Address => {
+            WalletCommand::Address(_) => {
                 let opened = self.open().await?;
                 let address = opened.epicbox.attach_wallet(&opened.wallet)?;
                 Ok(Report::Address(AddressReport {

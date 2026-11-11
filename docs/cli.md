@@ -121,7 +121,7 @@ The examples below leave out `--network` and `--data-dir`.
 | `wallet import-seed FILE [--no-scan]` | Recreates a wallet from an `epic-wallet` `wallet.seed` file |
 | `wallet import-history DIR` | Imports the transaction history of the `epic-wallet` wallet it was made from |
 | `wallet info` | Refreshes against the node and shows accounts and balances |
-| `wallet address` | Shows the Epicbox address |
+| `wallet address [--qr]` | Shows the Epicbox address |
 | `wallet outputs [-a LABEL]` | Lists the outputs, spent ones included |
 | `wallet password` | Changes the password |
 | `wallet scan` | Scans the chain and brings the wallet in line with it |
@@ -461,11 +461,11 @@ two addresses of one account do not show that they belong together.
 
 | Command | What it does |
 |---|---|
-| `epic1 address [--index N]` | Shows address 0, or an issued or paid one; a higher number is refused |
-| `epic1 new-address` | Issues the account's next address |
+| `epic1 address [--index N] [--qr]` | Shows address 0, or an issued or paid one; a higher number is refused |
+| `epic1 new-address [--qr]` | Issues the account's next address |
 | `epic1 addresses [--from N] [--limit N]` | Lists the issued addresses, with `highest`, the highest number issued or paid |
 | `epic1 issue-here` | Makes a restored install the one that issues addresses |
-| `epic1 link [AMOUNT] [--index N] [--printed] [--epicbox HOST]` | Makes a link; `--epicbox` names up to three relays |
+| `epic1 link [AMOUNT] [--index N] [--printed] [--epicbox HOST] [--qr]` | Makes a link; `--epicbox` names up to three relays |
 | `epic1 links`, `retire N` | Lists link mailboxes in use; frees a printed link's mailbox |
 | `epic1 answers`, `post-answer SLATE_ID` | Lists answers to payments taken; posts one to a relay outside the relay list |
 | `epic1 read LINK` | Shows what a link asks and the relays a payment would go to |
@@ -606,6 +606,36 @@ uses ASCII. It draws in the sixteen basic terminal colours: commands in the inpu
 status rule and hints, errors, hints, help and the send review. `NO_COLOR`, `TERM=dumb` or output
 that is not a terminal turn the shell's colour off. Commands run outside the shell print as
 before.
+
+## QR codes
+
+A command that prints an address or a link to hand on can draw it as a QR code under its text,
+for a phone to scan off the screen:
+
+| Command | The code holds |
+|---|---|
+| `wallet address` | The Epicbox address |
+| `epic1 address`, `epic1 new-address` | The epic1 address |
+| `epic1 link` | The `epic:` link |
+| `tor address` | The onion address |
+| `contact invite` | The invite link |
+| `contact accept --by-hand` | The reply link to send back |
+| `contact enter` | The confirm link to send back, when it prints one |
+
+The shell draws the code by default. Elsewhere `--qr` on the command asks for it. There is no
+code with `--output json`, and none when standard output is not a terminal: `--qr` then prints
+`No QR code: standard output is not a terminal.` on standard error.
+
+The code is drawn with half blocks, two rows of the code to a line, at error correction level M
+with a quiet zone of four modules. A link too long for the window at M is drawn at level L, then
+with a quiet zone of two modules. A window too narrow for even that gets a line saying how many
+columns the code needs; widen it and run the command again. Where the shell draws ASCII (see
+above) each module is two characters wide on a line of its own, so the code needs twice the
+columns.
+
+With colour the code is black on a white field, which scans on dark and light themes. With
+`NO_COLOR` or `TERM=dumb` the terminal's own text colour draws the light modules, which is right
+on a dark theme; on a light theme that code comes out inverted, and not every scanner reads it.
 
 ## lepic serve and the wallet API
 

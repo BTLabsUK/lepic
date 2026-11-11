@@ -31,6 +31,7 @@ pub mod host;
 pub mod output;
 pub mod profile;
 pub mod progress;
+mod qr;
 pub mod secret;
 #[cfg(unix)]
 mod service;
@@ -68,6 +69,8 @@ pub struct Console {
     pub stderr: Box<dyn Write + Send>,
     /// Colour in log lines on stderr.
     pub ansi: bool,
+    /// Whether stdout is a terminal, where `--qr` draws its code.
+    pub stdout_terminal: bool,
 }
 
 /// Runs one command and returns its exit code (see [`exit::ErrorKind`]).
@@ -137,8 +140,8 @@ pub fn run_with<H: Host>(
         }
         return shell::session::run(host, &cli.global, &settings, console);
     }
-    let text = match execute(host, cli, &settings, console) {
-        Ok(text) => text,
+    let (text, qr) = match execute(host, cli, &settings, console) {
+        Ok(done) => done,
         Err(error) => return report_error(console, settings.output, &error, Some(&settings)),
     };
     let written = console
@@ -146,7 +149,12 @@ pub fn run_with<H: Host>(
         .write_all(text.as_bytes())
         .and_then(|()| console.stdout.flush());
     match written {
-        Ok(()) => 0,
+        Ok(()) => {
+            if let Some(payload) = qr {
+                qr::print_after(console, settings.output, &payload);
+            }
+            0
+        }
         Err(source) => report_error(
             console,
             settings.output,
@@ -305,7 +313,13 @@ fn execute<H: Host>(
     cli: Cli,
     settings: &Settings,
     console: &mut Console,
-) -> Result<Zeroizing<String>, CliError> {
+) -> Result<(Zeroizing<String>, Option<Zeroizing<String>>), CliError> {
+    // `--qr` keeps the report to draw from; in JSON there is no code to draw.
+    let qr = qr::requested(&cli.command) && settings.output == OutputFormat::Human;
+    let payload = |report: &output::Report| {
+        qr.then(|| qr::payload(report).map(|text| Zeroizing::new(text.to_owned())))
+            .flatten()
+    };
     let telemetry = CliTelemetry::new(CliConfig {
         filter: LogFilter::parse(&settings.log_filter)?,
         console: settings.log_format,
@@ -320,11 +334,15 @@ fn execute<H: Host>(
         runtime.block_on(async {
             // While `lepic serve` holds the wallet, a command with a route runs there.
             #[cfg(unix)]
-            if let Some(text) = through_serve::run(&cli.command, settings).await? {
-                return Ok(text);
+            if qr {
+                if let Some(report) = through_serve::run_report(&cli.command, settings).await? {
+                    return Ok((render(&report, settings.output), payload(&report)));
+                }
+            } else if let Some(text) = through_serve::run(&cli.command, settings).await? {
+                return Ok((text, None));
             }
             let report = commands::execute(host, cli.command, settings, console).await?;
-            Ok(render(&report, settings.output))
+            Ok((render(&report, settings.output), payload(&report)))
         })
     })
 }

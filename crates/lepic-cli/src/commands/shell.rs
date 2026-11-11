@@ -43,6 +43,7 @@ pub(crate) fn quiet_console(env: Env) -> Console {
         stdout: Box::new(std::io::sink()),
         stderr: Box::new(std::io::sink()),
         ansi: false,
+        stdout_terminal: false,
     }
 }
 

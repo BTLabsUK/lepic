@@ -104,6 +104,7 @@ impl<H: Host> Service<'_, H> {
             stdout: Box::new(std::io::sink()),
             stderr: Box::new(std::io::sink()),
             ansi: false,
+            stdout_terminal: false,
         };
         let graceful = Arc::new(AtomicBool::new(false));
         let mut run = Run {
@@ -465,6 +466,7 @@ mod tests {
             stdout: Box::new(std::io::sink()),
             stderr: Box::new(std::io::sink()),
             ansi: false,
+            stdout_terminal: false,
         };
         let (_keep, interrupt) = watch::channel(false);
         let report = std::thread::Builder::new()

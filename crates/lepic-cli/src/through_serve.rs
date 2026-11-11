@@ -127,6 +127,8 @@ enum Body {
 enum Finish {
     /// Print it as the command prints it.
     Print,
+    /// Hand back the JSON report, which the CLI prints and draws a QR code from (`--qr`).
+    Report,
     /// The answer holds the contact backup; write it to the file and report the file.
     ContactBackup(PathBuf),
     /// The answer holds the domain file; write it and report the file.
@@ -181,6 +183,37 @@ pub(crate) async fn run(
     )
     .await
     .map(Some)
+}
+
+/// Runs `command` on the wallet serve holds, as [`run`] does, and returns its report rather than
+/// its text: for `--qr`, which draws the code from the report.
+pub(crate) async fn run_report(
+    command: &Command,
+    settings: &Settings,
+) -> Result<Option<output::Report>, CliError> {
+    let Some(call) = call(command) else {
+        return Ok(None);
+    };
+    if !matches!(call.finish, Finish::Print) {
+        return Ok(None);
+    }
+    let Some((stream, socket)) = service::connect(&settings.data_dir).await else {
+        return Ok(None);
+    };
+    let json = exchange(
+        stream,
+        &socket,
+        call.finish(Finish::Report),
+        settings.output,
+        &Caller::of(settings),
+    )
+    .await?;
+    crate::qr::report_from_json(command, &json)
+        .map(Some)
+        .map_err(|e| CliError::ServeUnanswered {
+            socket,
+            source: e.into(),
+        })
 }
 
 /// The socket serve answers on in `data_dir`, when it runs there: the one its pointer file
@@ -286,7 +319,7 @@ fn finish(
     unanswered: &dyn Fn(Box<dyn std::error::Error + Send + Sync>) -> CliError,
 ) -> Result<Zeroizing<String>, CliError> {
     let report = match finish {
-        Finish::Print => return Ok(text),
+        Finish::Print | Finish::Report => return Ok(text),
         Finish::ContactBackup(file) => {
             let answer: Backup = serde_json::from_str(&text).map_err(|e| unanswered(e.into()))?;
             files::save_backup(&file, &answer.backup)?
@@ -365,7 +398,7 @@ fn call(command: &Command) -> Option<Call> {
     match command {
         Command::Wallet(
             WalletCommand::Info
-            | WalletCommand::Address
+            | WalletCommand::Address(_)
             | WalletCommand::Outputs(_)
             | WalletCommand::Scan(_),
         )

@@ -3,12 +3,12 @@
 
 use std::io::Write as _;
 
-use serde::Serialize;
+use serde::{Deserialize, Deserializer, Serialize};
 
 use super::{InPersonHostReport, Report, printable, short_time};
 
 /// The epic1 address of an account, from `epic1 address`.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct Epic1AddressReport {
     pub account: String,
     /// The address's number in the account; 0 is its first address.
@@ -34,7 +34,7 @@ pub struct Epic1AddressEntryReport {
 }
 
 /// A link issued, from `epic1 link`.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct Epic1LinkReport {
     /// The link text, `epic:epic1…?epicbox=…`.
     pub link: String,
@@ -42,8 +42,14 @@ pub struct Epic1LinkReport {
     /// The number of the address in its account.
     pub index: u32,
     /// `on_screen` or `printed`.
+    #[serde(deserialize_with = "link_kind")]
     pub kind: &'static str,
     pub n: u32,
+}
+
+/// The `kind` of an [`Epic1LinkReport`] serve answered.
+fn link_kind<'de, D: Deserializer<'de>>(deserializer: D) -> Result<&'static str, D::Error> {
+    super::known_word(deserializer, &["on_screen", "printed"])
 }
 
 /// A printed link freed, from `epic1 retire`.
