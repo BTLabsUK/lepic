@@ -86,7 +86,13 @@ timeout is safe:
 | The same `id` and another body | 409 `idempotency_mismatch` |
 | The same `id` while the first call is still being answered | 409 `in_progress`; wait and ask again |
 
-A create that answers an error made nothing; its `id` can be used again.
+A create refused with a 4xx, or a 502 from the node, made nothing and keeps no record: the
+same `id` with a corrected body is a new create. `idempotency_mismatch` and `in_progress` are
+the exceptions; they leave the earlier call with that `id` as it was. After a 500 or 503 the
+object may exist: repeat the same body to find out.
+
+An `id` that already names a payment is refused with 409 `idempotency_mismatch`, `param`
+`/id`, for sends and invoices alike.
 
 Over TLS a payment must carry an `id`, so a client that loses the answer can always ask again.
 
