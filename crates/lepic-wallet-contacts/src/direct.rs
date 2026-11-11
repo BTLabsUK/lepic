@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Native slates to a listener's endpoint (ADR 0052, EPICTX 5.15 and 6.2): the send that picks
-//! the dialect of an HTTP or Tor address, and the handler a listener's `/v1/peer/slates` route
+//! the dialect of an HTTP or Tor address, and the handler a listener's `/api/v1/inbox` route
 //! answers with.
 //!
 //! A send goes native only when the host sets
@@ -58,7 +58,7 @@ use crate::ContactBook;
 /// How a slate went to a listener.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Dialect {
-    /// `lepic.v1` in an envelope through the listener's `/v1/peer/slates`.
+    /// `lepic.v1` in an envelope through the listener's `/api/v1/inbox`.
     Native,
     /// A V2 or V3 JSON slate through the foreign API, as every wallet speaks it.
     Legacy,
@@ -560,7 +560,7 @@ pub trait Epic1Keys: Send + Sync {
     fn epic1_keys(&self) -> BoxFuture<'_, Vec<Epic1AccountKeys>>;
 }
 
-/// The handler of a listener socket's `/v1/peer/slates`: opens an envelope with the socket's
+/// The handler of a listener socket's `/api/v1/inbox`: opens an envelope with the socket's
 /// seal key, receives the S1 in it through `host` as the foreign API does, and seals the S2 to
 /// the reply key the envelope carries.
 ///

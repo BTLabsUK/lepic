@@ -292,7 +292,7 @@ With `ExtendedErrors`, tor names why an onion could not be reached:
 Between LEPIC wallets the `check_version` answer can advertise the native direct endpoint
 ([RFC 0003 §5.15](../rfcs/0003-epictx-native-slates.md#515-advert-and-native-direct-endpoint)).
 `TorPeer` reads that advert through the Tor method and posts the envelope to
-`/v1/peer/slates` at `http://<onion>:80` through a `PeerClient` that dials with
+`/api/v1/inbox` at `http://<onion>:80` through a `PeerClient` that dials with
 `Tor::peer_dialer(connect_timeout)`, a circuit per connection. The rules are in
 [RFC 0003 §6.2](../rfcs/0003-epictx-native-slates.md#62-direct-http-or-tor-peer) and the
 endpoint in [HTTP](http.md).

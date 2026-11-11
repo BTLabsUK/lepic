@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 use std::time::Duration;
 
-/// A field of an advert or of a `GET /v1/peer` answer that cannot be read.
+/// A field of an advert or of a `GET /api/v1/inbox` answer that cannot be read.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 #[non_exhaustive]
 pub enum PeerFormatError {

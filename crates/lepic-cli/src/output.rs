@@ -251,7 +251,7 @@ pub struct SendReport {
     /// Whether a delivery attempt got the slate to the other party. Only a repeat can report
     /// `false`; `tx resend` delivers it.
     pub delivered: bool,
-    /// How the slate went to an HTTP or Tor listener: `native` through its `/v1/peer/slates`,
+    /// How the slate went to an HTTP or Tor listener: `native` through its `/api/v1/inbox`,
     /// or `legacy` through its foreign API. Absent for other transports and for a repeat.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub dialect: Option<&'static str>,

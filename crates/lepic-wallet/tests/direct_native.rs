@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Sends to HTTP listeners in the native dialect (ADR 0052): the payer's S1 sealed to the
-//! listener's key and posted to its `/v1/peer/slates`, the S2 sealed back to the slate's reply
+//! listener's key and posted to its `/api/v1/inbox`, the S2 sealed back to the slate's reply
 //! key, and the key pinned once the exchange is in. The legacy dialect is taken without
 //! `native_direct`, for a listener that advertises no endpoint and when asked for; a pinned
 //! listener that fails is a stop, never a legacy send.

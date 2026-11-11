@@ -566,7 +566,7 @@ mod tests {
         assert_eq!(
             std::str::from_utf8(&answer).unwrap(),
             format!(
-                r#"{{"id":3,"jsonrpc":"2.0","result":{{"Ok":{{"foreign_api_version":2,"supported_slate_versions":["V3","V2"],"lepic":{{"formats":["lepic.v1"],"path":"/v1/peer","protocol":1,"seal":"{}"}}}}}}}}"#,
+                r#"{{"id":3,"jsonrpc":"2.0","result":{{"Ok":{{"foreign_api_version":2,"supported_slate_versions":["V3","V2"],"lepic":{{"formats":["lepic.v1"],"path":"/api/v1/inbox","protocol":2,"seal":"{}"}}}}}}}}"#,
                 "05".repeat(32)
             )
         );
@@ -589,7 +589,7 @@ mod tests {
         };
         let read = |lepic: &str| decode_version_response(body(lepic).as_bytes()).unwrap();
         let info = read(&format!(
-            r#""lepic":{{"protocol":1,"formats":["lepic.v1","later"],"path":"/v1/peer","seal":"{seal}","x":true}}"#
+            r#""lepic":{{"protocol":2,"formats":["lepic.v1","later"],"path":"/api/v1/inbox","seal":"{seal}","x":true}}"#
         ));
         let advert = info.lepic.unwrap();
         assert_eq!(advert.seal, [10; 32]);
@@ -597,9 +597,9 @@ mod tests {
         for malformed in [
             r#""lepic":null"#.to_owned(),
             r#""lepic":"yes""#.to_owned(),
-            r#""lepic":{"protocol":1,"formats":["lepic.v1"],"path":"/v1/peer","seal":"00"}"#
+            r#""lepic":{"protocol":2,"formats":["lepic.v1"],"path":"/api/v1/inbox","seal":"00"}"#
                 .to_owned(),
-            format!(r#""lepic":{{"protocol":1,"formats":[],"path":"v1","seal":"{seal}"}}"#),
+            format!(r#""lepic":{{"protocol":2,"formats":[],"path":"v1","seal":"{seal}"}}"#),
             r#""unrelated":1"#.to_owned(),
         ] {
             assert_eq!(read(&malformed).lepic, None, "{malformed}");

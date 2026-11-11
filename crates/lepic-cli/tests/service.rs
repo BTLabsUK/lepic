@@ -289,7 +289,7 @@ fn a_listener_without_native_direct_answers_as_before() {
         );
         let unknown = ask_listener(port, "POST", "/v1/unknown", "{}");
         assert!(unknown.0.starts_with("HTTP/1.1 404"), "{unknown:?}");
-        for (method, path) in [("POST", "/v1/peer/slates"), ("GET", "/v1/peer")] {
+        for (method, path) in [("POST", "/api/v1/inbox"), ("GET", "/api/v1/inbox")] {
             assert_eq!(ask_listener(port, method, path, "{}"), unknown, "{path}");
         }
     });
@@ -304,7 +304,7 @@ fn a_listener_with_native_direct_offers_its_native_endpoint() {
         let version: serde_json::Value = serde_json::from_slice(&body).unwrap();
         let advert = &version["result"]["Ok"]["lepic"];
         assert!(advert.is_object(), "{version}");
-        let (status, _) = ask_listener(port, "GET", "/v1/peer", "");
+        let (status, _) = ask_listener(port, "GET", "/api/v1/inbox", "");
         assert!(status.starts_with("HTTP/1.1 200"), "{status}");
     });
 }

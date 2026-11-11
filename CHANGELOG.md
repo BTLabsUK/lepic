@@ -7,6 +7,13 @@ Conventional Commit messages at release time.
 
 ## [Unreleased]
 
+### Changed
+
+- The native direct endpoint is served at `/api/v1/inbox` (`GET` describes it, `POST` takes the
+  sealed envelope) instead of `/v1/peer` and `/v1/peer/slates`. The advert `protocol` is 2; a
+  listener or wallet on protocol 1 is treated as having no native endpoint and the send falls
+  back to `/v2/foreign`.
+
 ## [0.4.0] - 2026-11-10
 
 ### Fixed

@@ -14,7 +14,7 @@ The normative byte layouts are in the [RFCs](../rfcs/).
 | Epicbox | V3 then V2 by shape; `BEGINEPICTX.` at the payments address | V2 for a new slate, a reply in the shape it answers; native when the peer claimed it |
 | HTTP foreign API `/v2/foreign` | V3 then V2 by shape | V2 for a new slate, a reply in the shape it answers |
 | Tor | As HTTP, at `<onion>:80` | As HTTP |
-| Native direct `/v1/peer/slates` | `lepic.v1` in a type `0A` envelope | The same |
+| Native direct `/api/v1/inbox` | `lepic.v1` in a type `0A` envelope | The same |
 | In person (QR) | A raw `lepic.v1` proposal; UR `epic-slate` | A slate envelope, posted or shown back |
 
 The V2 and V3 JSON a LEPIC wallet writes ends with the `lepic` marker. Another LEPIC wallet reads

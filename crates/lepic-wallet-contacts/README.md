@@ -126,7 +126,7 @@ Contact invoices (RFC 0002 11 and 12) park only when the contact is verified and
 
 | Call | Route | Spec |
 |---|---|---|
-| `direct_send`, `direct_resend`; `DirectHandler` | An HTTP or Tor listener's `/v1/peer/slates`, when it advertises the endpoint | ADR 0052, RFC 0003 5.15 |
+| `direct_send`, `direct_resend`; `DirectHandler` | An HTTP or Tor listener's `/api/v1/inbox`, when it advertises the endpoint | ADR 0052, RFC 0003 5.15 |
 | `epic1_link`, `epic1_pay`, `epic1_post_answer` and others | Link mailboxes of an epic1 address | RFC 0003 5.14 |
 | `in_person_send`, `in_person_invoice`, `in_person_take`, `in_person_finalize` and others | A code shown on one screen and scanned by the other | RFC 0003 9 |
 

@@ -53,15 +53,15 @@ fn refuses_origins_without_scheme_port_or_host() {
 
 #[test]
 fn targets_join_the_advert_path() {
-    let target = PeerTarget::new(WebScheme::Http, "Wallet.Example", 3415, "/v1/peer").unwrap();
-    assert_eq!(target.info_uri(), "http://wallet.example:3415/v1/peer");
+    let target = PeerTarget::new(WebScheme::Http, "Wallet.Example", 3415, "/api/v1/inbox").unwrap();
+    assert_eq!(target.info_uri(), "http://wallet.example:3415/api/v1/inbox");
     assert_eq!(
-        target.slates_uri(),
-        "http://wallet.example:3415/v1/peer/slates"
+        target.envelope_uri(),
+        "http://wallet.example:3415/api/v1/inbox"
     );
     assert_eq!(target.origin().to_string(), "http://wallet.example:3415");
     assert_eq!(
-        PeerTarget::new(WebScheme::Http, "wallet.example", 3415, "v1/peer"),
+        PeerTarget::new(WebScheme::Http, "wallet.example", 3415, "api/v1/inbox"),
         Err(OriginError::Path)
     );
 }

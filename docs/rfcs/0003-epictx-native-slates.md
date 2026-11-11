@@ -574,9 +574,9 @@ A LEPIC listener advertises native slates in the result of its `check_version` a
   "foreign_api_version": 2,
   "supported_slate_versions": ["V3", "V2"],
   "lepic": {
-    "protocol": 1,
+    "protocol": 2,
     "formats": ["lepic.v1"],
-    "path": "/v1/peer",
+    "path": "/api/v1/inbox",
     "seal": "0000000000000000000000000000000000000000000000000000000000000000"
   }
 }
@@ -591,8 +591,8 @@ incompatible.
 
 | Request | Answer |
 |---|---|
-| `GET /v1/peer` | `application/json`: `protocol`, `formats`, `network` (`mainnet` or `floonet`), `key` (64 hex) |
-| `POST /v1/peer/slates` | The reply envelope, `application/vnd.lepic.epictx` |
+| `GET /api/v1/inbox` | `application/json`: `protocol`, `formats`, `network` (`mainnet` or `floonet`), `key` (64 hex) |
+| `POST /api/v1/inbox` | The reply envelope, `application/vnd.lepic.epictx` |
 
 The POST body is a slate envelope sealed to the listener key, anonymous, with a reply key (tag
 `03`). Its `Content-Type` MUST be `application/vnd.lepic.epictx` (parameters ignored). The body is
@@ -733,7 +733,7 @@ stored S1, and finalizes it.
 1. A reads B's `check_version`. Without the `lepic` advert, A sends V2 or V3 JSON to
    `/v2/foreign`.
 2. With it, A checks the seal key against its pin (5.15), seals the S1 anonymously to it with a
-   reply key, and POSTs it to `/v1/peer/slates`.
+   reply key, and POSTs it to `/api/v1/inbox`.
 3. B opens it with the listener's seal key, answers, and returns the S2 sealed to the reply key.
    When the epic1 keys are switched on for that socket (5.5), an envelope the listener key does
    not open is tried with B's issued epic1 seal keys; one that opens is a payment to that address
@@ -1022,7 +1022,7 @@ release; the rest is on `main` and unreleased.
 | epic1 address and link | `crates/lepic-epic1/src/{address,bech32m,link,relay}.rs` |
 | Numbered addresses, restore gap | `crates/lepic-wallet/src/epic1_index.rs` (`RESTORE_GAP`, 50) |
 | epic1 payments, sealed files, direct listener | `crates/lepic-wallet-contacts/src/{epic1,sealed,direct}.rs` (`EPIC1_TTL_BLOCKS`, 1,440) |
-| Advert, `/v1/peer`, pinning | `crates/lepic-peer/src/`, `crates/lepic-methods/src/http/peer.rs`, `crates/lepic-wallet/src/{peer_compat,peer_pin}.rs` |
+| Advert, `/api/v1/inbox`, pinning | `crates/lepic-peer/src/`, `crates/lepic-methods/src/http/peer.rs`, `crates/lepic-wallet/src/{peer_compat,peer_pin}.rs` |
 | Fuzz targets | `fuzz/fuzz_targets/{slate_native,envelope_inner,armor_sealed,seal_open,epic1_link}.rs` |
 
 A slate too large to seal (`FieldTooLong`, `BodyTooLarge`) is a typed error: a usage error in the

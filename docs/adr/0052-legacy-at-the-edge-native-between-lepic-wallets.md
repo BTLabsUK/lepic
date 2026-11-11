@@ -143,11 +143,11 @@ the host may post the same sealed S1 to the link's next transport (§5.14).
 
 ### The native direct endpoint
 
-A LEPIC listener serves the `/v1/peer` routes of `lepic-peer` beside `/v2/foreign`, on the same
+A LEPIC listener serves the `/api/v1/inbox` routes of `lepic-peer` beside `/v2/foreign`, on the same
 port and onion. The crate moves envelope bytes only and implements no wallet trait.
 
-- `GET /v1/peer` describes the endpoint: protocol, formats, network and the seal key.
-- `POST /v1/peer/slates` takes a type `0A` envelope as `application/vnd.lepic.epictx`, at most
+- `GET /api/v1/inbox` describes the endpoint: protocol, formats, network and the seal key.
+- `POST /api/v1/inbox` takes a type `0A` envelope as `application/vnd.lepic.epictx`, at most
   `MAX_ENVELOPE_LEN` (69,632 bytes, 68 KiB). `200` answers with the reply envelope, sealed to the
   sender's one-time reply key. A repeated slate gets the same reply (`MAX_CACHED_REPLIES`, 64).
 - Errors are RFC 9457 problems with a closed list of codes: `not_ready` (503, `Retry-After`),
@@ -184,8 +184,8 @@ the risk afterwards, as HSTS does for HTTPS.
 
 ### Versions
 
-Two axes, as in grin: `protocol`, the shape of the endpoint (`/v1`; an additive change keeps it,
-a break takes `/v2`), and `formats`, the slate encodings. Protocol 1 has no feature bits. The
+Two axes, as in grin: `protocol`, the shape of the endpoint (an additive change keeps it, a
+break takes the next number), and `formats`, the slate encodings. Protocol 2 has no feature bits. The
 bits of the LEPIC marker (`lepic-transport` `marker::features`) are claims without parity, and
 `NATIVE_SLATES` is bit 7.
 
@@ -287,3 +287,11 @@ when the host says so.
 - RFC 0001: slate format.
 - RFC 0002: contact pairing.
 - RFC 0003: EPICTX.
+
+## Amendment 2026-11-11 (D7)
+
+The native endpoint is one path, `/api/v1/inbox`: `GET` describes it, `POST` takes the envelope.
+The earlier `/v1/peer` and `/v1/peer/slates` are gone, and no released app used them. The advert
+`protocol` is 2 because the POST target moved: a wallet that reads any other protocol treats the
+listener as having no native endpoint and sends over `/v2/foreign`. The public listeners serve
+this path and `/v2/foreign` only; no other `/api/v1/` path is served there.

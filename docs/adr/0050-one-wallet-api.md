@@ -18,7 +18,7 @@ owner functions need to exist as calls: a list of outputs, a password change, me
 
 - The API is HTTP/1.1 with JSON bodies, resource-oriented, described by one OpenAPI 3.1 document.
   Owner calls live under `/v1`. The payment endpoint other Epic wallets post to, `POST /v2/foreign`
-  (JSON-RPC 2.0), and the native endpoints `/v1/peer` and `/v1/peer/slates` (ADR 0052) are in the
+  (JSON-RPC 2.0), and the native endpoint `/api/v1/inbox` (ADR 0052) are in the
   same document with no security requirement. Their wire formats do not change with the API
   (ADR 0017).
 - The document is generated from the Rust types and the route table with `utoipa`. Doc comments

@@ -30,7 +30,7 @@ use crate::origin::PeerTarget;
 use crate::problem::{MAX_PROBLEM_LEN, PROBLEM_MEDIA_TYPE};
 use crate::{ENVELOPE_MEDIA_TYPE, MAX_ENVELOPE_LEN, PeerFormatError, PeerInfo};
 
-/// The longest `GET /v1/peer` answer read.
+/// The longest `GET /api/v1/inbox` answer read.
 const MAX_INFO_LEN: usize = 4096;
 
 /// Limits of [`PeerClient`].
@@ -351,7 +351,7 @@ impl PeerClient {
         }
         let request = Request::builder()
             .method(Method::POST)
-            .uri(parse_uri(&target.slates_uri())?)
+            .uri(parse_uri(&target.envelope_uri())?)
             .header(CONTENT_TYPE, ENVELOPE_MEDIA_TYPE)
             .header(ACCEPT, ENVELOPE_MEDIA_TYPE)
             .body(Full::new(Bytes::copy_from_slice(envelope)))

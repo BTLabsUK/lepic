@@ -79,7 +79,7 @@ async fn serving(settings: ListenSettings, seal: [u8; 32]) -> (ListenerHandle, A
 }
 
 fn target(port: u16) -> PeerTarget {
-    PeerTarget::new(WebScheme::Http, "127.0.0.1", port, "/v1/peer").unwrap()
+    PeerTarget::new(WebScheme::Http, "127.0.0.1", port, "/api/v1/inbox").unwrap()
 }
 
 fn peer_client() -> PeerClient {
@@ -165,7 +165,7 @@ async fn advertises_the_endpoint_and_describes_it() {
     assert!(version.v2 && version.v3);
     assert_eq!(version.lepic, Some(Advert::new(KEY_A)));
     let info = peer_client().info(&target(port)).await.unwrap();
-    assert_eq!(info.protocol, 1);
+    assert_eq!(info.protocol, 2);
     assert_eq!(info.formats, ["lepic.v1"]);
     assert_eq!(info.network, "floonet");
     assert_eq!(info.seal_key().unwrap(), KEY_A);
@@ -182,7 +182,8 @@ async fn the_key_is_the_sockets_whatever_host_is_named() {
     let raw = exchange(port_a, &check_version_request(&other_host).into_bytes()).await;
     assert!(raw.contains(&"a1".repeat(32)), "{raw}");
     assert!(!raw.contains(&"b2".repeat(32)), "{raw}");
-    let get = format!("GET /v1/peer HTTP/1.1\r\nhost: {other_host}\r\nconnection: close\r\n\r\n");
+    let get =
+        format!("GET /api/v1/inbox HTTP/1.1\r\nhost: {other_host}\r\nconnection: close\r\n\r\n");
     let raw = exchange(port_a, get.as_bytes()).await;
     assert!(raw.starts_with("HTTP/1.1 200"), "{raw}");
     assert!(raw.contains(&"a1".repeat(32)), "{raw}");
@@ -220,7 +221,7 @@ async fn a_refused_slate_is_422_refused() {
     assert!(matches!(error, PeerClientError::Refused), "{error:?}");
     let body = "I1 envelope";
     let post = format!(
-        "POST /v1/peer/slates HTTP/1.1\r\nhost: x\r\ncontent-type: application/vnd.lepic.epictx\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+        "POST /api/v1/inbox HTTP/1.1\r\nhost: x\r\ncontent-type: application/vnd.lepic.epictx\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
         body.len()
     );
     let raw = exchange(port, post.as_bytes()).await;
@@ -235,7 +236,7 @@ async fn a_long_body_is_refused_before_it_is_read() {
     let (listener, wallet) = serving(settings(), KEY_A).await;
     let port = listener.local_addr().port();
     // Only the head is written: the answer comes without the body.
-    let post = "POST /v1/peer/slates HTTP/1.1\r\nhost: x\r\ncontent-type: application/vnd.lepic.epictx\r\ncontent-length: 69633\r\n\r\n";
+    let post = "POST /api/v1/inbox HTTP/1.1\r\nhost: x\r\ncontent-type: application/vnd.lepic.epictx\r\ncontent-length: 69633\r\n\r\n";
     let raw = exchange(port, post.as_bytes()).await;
     assert!(raw.starts_with("HTTP/1.1 413"), "{raw}");
     assert!(raw.contains(r#""code":"too_large""#), "{raw}");
@@ -249,15 +250,18 @@ async fn another_media_type_is_415_and_another_method_405() {
     let port = listener.local_addr().port();
     let body = "{}";
     let post = format!(
-        "POST /v1/peer/slates HTTP/1.1\r\nhost: x\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+        "POST /api/v1/inbox HTTP/1.1\r\nhost: x\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
         body.len()
     );
     let raw = exchange(port, post.as_bytes()).await;
     assert!(raw.starts_with("HTTP/1.1 415"), "{raw}");
     assert!(raw.contains(r#""code":"unsupported_format""#), "{raw}");
-    let get = "GET /v1/peer/slates HTTP/1.1\r\nhost: x\r\nconnection: close\r\n\r\n";
-    let raw = exchange(port, get.as_bytes()).await;
+    let put = "PUT /api/v1/inbox HTTP/1.1\r\nhost: x\r\nconnection: close\r\n\r\n";
+    let raw = exchange(port, put.as_bytes()).await;
     assert!(raw.starts_with("HTTP/1.1 405"), "{raw}");
+    let old = "GET /api/v1/inbox/slates HTTP/1.1\r\nhost: x\r\nconnection: close\r\n\r\n";
+    let raw = exchange(port, old.as_bytes()).await;
+    assert!(raw.starts_with("HTTP/1.1 404"), "{raw}");
     assert_eq!(wallet.calls.load(Ordering::SeqCst), 0);
     listener.shutdown().await;
 }
@@ -305,13 +309,13 @@ async fn a_body_that_is_not_an_envelope_is_refused_before_the_payment_budget() {
         .await
         .unwrap();
     // The budget is spent; each of these is answered for what it is, not as over the budget.
-    let json = "POST /v1/peer/slates HTTP/1.1\r\nhost: x\r\ncontent-type: application/json\r\ncontent-length: 2\r\nconnection: close\r\n\r\n{}";
+    let json = "POST /api/v1/inbox HTTP/1.1\r\nhost: x\r\ncontent-type: application/json\r\ncontent-length: 2\r\nconnection: close\r\n\r\n{}";
     let raw = exchange(port, json.as_bytes()).await;
     assert!(raw.starts_with("HTTP/1.1 415"), "{raw}");
-    let long = "POST /v1/peer/slates HTTP/1.1\r\nhost: x\r\ncontent-type: application/vnd.lepic.epictx\r\ncontent-length: 2000000\r\n\r\n";
+    let long = "POST /api/v1/inbox HTTP/1.1\r\nhost: x\r\ncontent-type: application/vnd.lepic.epictx\r\ncontent-length: 2000000\r\n\r\n";
     let raw = exchange(port, long.as_bytes()).await;
     assert!(raw.starts_with("HTTP/1.1 413"), "{raw}");
-    let junk = "POST /v1/peer/slates HTTP/1.1\r\nhost: x\r\ncontent-type: application/vnd.lepic.epictx\r\ncontent-length: 4\r\nconnection: close\r\n\r\nXjnk";
+    let junk = "POST /api/v1/inbox HTTP/1.1\r\nhost: x\r\ncontent-type: application/vnd.lepic.epictx\r\ncontent-length: 4\r\nconnection: close\r\n\r\nXjnk";
     let raw = exchange(port, junk.as_bytes()).await;
     assert!(raw.starts_with("HTTP/1.1 415"), "{raw}");
     assert!(raw.contains(r#""code":"unsupported_format""#), "{raw}");
@@ -327,7 +331,7 @@ async fn a_body_still_arriving_holds_no_payment_place() {
     let port = listener.local_addr().port();
     // A post whose body has not all come in yet.
     let mut slow = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
-    let head = "POST /v1/peer/slates HTTP/1.1\r\nhost: x\r\ncontent-type: application/vnd.lepic.epictx\r\ncontent-length: 10\r\n\r\nslow";
+    let head = "POST /api/v1/inbox HTTP/1.1\r\nhost: x\r\ncontent-type: application/vnd.lepic.epictx\r\ncontent-length: 10\r\n\r\nslow";
     slow.write_all(head.as_bytes()).await.unwrap();
     tokio::time::sleep(Duration::from_millis(200)).await;
     let reply = peer_client()
@@ -346,7 +350,7 @@ async fn a_body_still_arriving_holds_no_payment_place() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_unix_socket_serves_its_endpoint_as_behind_an_onion() {
     let path = std::env::temp_dir().join(format!("lepic-peer-routes-{}.sock", std::process::id()));
-    let get = b"GET /v1/peer HTTP/1.1\r\nhost: x.onion\r\nconnection: close\r\n\r\n";
+    let get = b"GET /api/v1/inbox HTTP/1.1\r\nhost: x.onion\r\nconnection: close\r\n\r\n";
     let unix_exchange = |request: &'static [u8]| {
         let path = path.clone();
         async move {
@@ -380,4 +384,23 @@ async fn a_unix_socket_serves_its_endpoint_as_behind_an_onion() {
     assert!(raw.contains(r#""network":"mainnet""#), "{raw}");
     assert!(raw.contains(&"b2".repeat(32)), "{raw}");
     with.shutdown().await;
+}
+
+/// A public listener serves the inbox and `/v2/foreign` only: the owner API's paths under
+/// `/api/v1/` are never served on it, with or without an endpoint.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn other_api_v1_paths_are_not_found_on_a_public_listener() {
+    let (listener, wallet) = serving(settings(), KEY_A).await;
+    let port = listener.local_addr().port();
+    for request in [
+        "GET /api/v1/status HTTP/1.1\r\nhost: x\r\nconnection: close\r\n\r\n",
+        "POST /api/v1/payments HTTP/1.1\r\nhost: x\r\ncontent-type: application/json\r\ncontent-length: 2\r\nconnection: close\r\n\r\n{}",
+        "GET /api/v1/ HTTP/1.1\r\nhost: x\r\nconnection: close\r\n\r\n",
+        "GET /api/v1/inbox/ HTTP/1.1\r\nhost: x\r\nconnection: close\r\n\r\n",
+    ] {
+        let raw = exchange(port, request.as_bytes()).await;
+        assert!(raw.starts_with("HTTP/1.1 404"), "{request}: {raw}");
+    }
+    assert_eq!(wallet.calls.load(Ordering::SeqCst), 0);
+    listener.shutdown().await;
 }

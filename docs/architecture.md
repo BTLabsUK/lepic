@@ -57,7 +57,7 @@ for the network type, but it does no I/O itself.
 | [`lepic-transport`](../crates/lepic-transport/README.md) | I/O | Transport traits, the method port, format policies, the file method |
 | [`lepic-epicbox`](../crates/lepic-epicbox/README.md) | I/O | Epicbox addresses, message crypto, frames and the relay client |
 | [`lepic-epic1`](../crates/lepic-epic1/README.md) | I/O (no I/O itself) | The epic1 address and payment link |
-| [`lepic-peer`](../crates/lepic-peer/README.md) | I/O | The native direct endpoint `/v1/peer` and its client |
+| [`lepic-peer`](../crates/lepic-peer/README.md) | I/O | The native direct endpoint `/api/v1/inbox` and its client |
 | [`lepic-legacy-rpc`](../crates/lepic-legacy-rpc/README.md) | I/O | The foreign API of `epic-wallet` over HTTP: client and listener |
 | [`lepic-tor`](../crates/lepic-tor/README.md) | I/O | Onion service and onion client over a bundled `tor` binary |
 | [`lepic-telemetry`](../crates/lepic-telemetry/README.md) | I/O | Tracing subscribers for the hosts, redaction, log capture for tests |
