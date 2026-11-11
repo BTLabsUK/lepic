@@ -14,19 +14,13 @@ mod payment;
 mod service;
 mod wallet;
 
-// Until every handler builds its objects.
-#[allow(unused_imports)]
 pub(crate) use contact::{
     Contact, ContactKeys, ContactsBackup, ImportResult, PairRequest, Payload, Quarantined,
 };
-#[allow(unused_imports)]
 pub(crate) use handed::{Inspection, OpenResult};
-#[allow(unused_imports)]
 pub(crate) use network::{Peer, Profile, Relay};
-#[allow(unused_imports)]
 pub(crate) use payment::{Delivery, Estimate, Handoff, Payment};
 pub(crate) use service::{
     EpicboxListener, Event, HttpListener, Listeners, OwnerTls, Requests, Status, Task,
 };
-#[allow(unused_imports)]
 pub(crate) use wallet::{Account, Address, Balance, Link, Node, Output, Wallet};

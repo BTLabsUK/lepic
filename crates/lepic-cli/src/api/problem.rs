@@ -283,16 +283,6 @@ impl Problem {
         )
     }
 
-    /// 501 `not_implemented`, for an operation serve does not answer yet.
-    pub(crate) fn not_implemented() -> Self {
-        Self::new(
-            StatusCode::NOT_IMPLEMENTED,
-            Category::Internal,
-            "not_implemented",
-            "this operation is not answered yet",
-        )
-    }
-
     /// This problem, about the field at JSON pointer `param`.
     pub(crate) fn with_param(mut self, param: &str) -> Self {
         self.0.param = Some(param.to_owned());

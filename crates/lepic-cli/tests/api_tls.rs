@@ -593,7 +593,7 @@ fn a_payment_over_tls_needs_an_id() {
             "/api/v1/payments",
             &json!({"amount": "1", "to": address}),
         );
-        let refused = problem(&without, 400, "invalid_argument");
+        let refused = problem(&without, 400, "invalid_field");
         assert_eq!(refused["param"], "/id", "{refused}");
         assert_eq!(sends(serve), Vec::<Value>::new());
 

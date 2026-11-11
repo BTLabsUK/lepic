@@ -115,8 +115,9 @@ impl<H: Host> Service<'_, H> {
             graceful: Arc::clone(&graceful),
             held: Some(Arc::clone(&self.held)),
         };
+        // Boxed: a command's future is too large for the stack of the handler that awaits it.
         tokio::select! {
-            result = run.dispatch(command) => result,
+            result = Box::pin(run.dispatch(command)) => result,
             () = abort_on(self.interrupt.clone(), &graceful) => Err(CliError::Interrupted),
         }
     }
