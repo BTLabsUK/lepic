@@ -293,6 +293,7 @@ struct Exchange {
     sender: Sender,
     tx_id: TxId,
     slate_id: lepic_slate::model::SlateId,
+    s1: WireSlate,
     s2: WireSlate,
 }
 
@@ -322,6 +323,7 @@ fn exchange() -> Exchange {
         sender,
         tx_id: sent.tx_id,
         slate_id: sent.slate_id,
+        s1,
         s2,
     }
 }
@@ -392,6 +394,40 @@ fn the_unchanged_s2_still_finalizes_after_every_refusal() {
         ))
         .unwrap();
     assert_eq!(finalized.tx_id, exchange.tx_id);
+}
+
+#[test]
+fn an_s2_text_without_the_senders_inputs_change_and_message_finalizes_from_the_stored_s1() {
+    // The S2 text a `lepic.v1` code reads back as: what the S1 carried left out.
+    let exchange = exchange();
+    let s1: Value = serde_json::from_str(exchange.s1.as_text().unwrap()).unwrap();
+    let compact = tampered(&exchange.s2, &|slate| {
+        let body = &mut slate["tx"]["body"];
+        body["inputs"] = Value::Array(Vec::new());
+        let senders = s1["tx"]["body"]["outputs"].as_array().unwrap();
+        body["outputs"]
+            .as_array_mut()
+            .unwrap()
+            .retain(|output| !senders.contains(output));
+        let sender = participant(slate, "0");
+        sender["message"] = Value::Null;
+        sender["message_sig"] = Value::Null;
+    });
+    assert_ne!(compact.as_text(), exchange.s2.as_text());
+
+    let finalized = exchange
+        .sender
+        .harness
+        .block_on(exchange.sender.wallet.finalize(
+            &exchange.sender.harness.method(),
+            &compact,
+            Propagation::Stem,
+        ))
+        .unwrap();
+
+    assert_eq!(finalized.tx_id, exchange.tx_id);
+    finalized.transaction.validate().unwrap();
+    assert!(exchange.snapshot().has_s3);
 }
 
 #[test]
@@ -543,7 +579,8 @@ fn invoice_mutations() -> Vec<Mutation> {
             // Fields the payer owns or that the signatures do not cover: the payer sets the
             // slate height and the expiry (an invoice payment carries the payer's TTL), the
             // input flags are not part of any signature, and in this harness both parties draw
-            // the same nonce, so copying one over the other changes nothing.
+            // the same nonce, so copying one over the other changes nothing. An I2 without the
+            // issuer's output is the compact answer, which the issuer completes from its I1.
             !name.starts_with("receiver partial signature")
                 && !matches!(
                     *name,
@@ -551,6 +588,7 @@ fn invoice_mutations() -> Vec<Mutation> {
                         | "ttl_cutoff_height"
                         | "input features"
                         | "receiver nonce replaced by the sender's"
+                        | "output removed"
                 )
         })
         .collect::<Vec<_>>()

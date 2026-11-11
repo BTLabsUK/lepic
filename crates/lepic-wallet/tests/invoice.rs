@@ -978,9 +978,8 @@ fn finalizing_refuses_a_payment_that_changed_the_invoice() {
             .unwrap()
             .clone()
     };
-    let dropped = is_issuers.clone();
     let replaced = is_issuers;
-    let cases: [(InvoiceField, Change); 6] = [
+    let cases: [(InvoiceField, Change); 4] = [
         (
             InvoiceField::Lock,
             Box::new(|slate| {
@@ -988,21 +987,6 @@ fn finalizing_refuses_a_payment_that_changed_the_invoice() {
                 let kernel = &mut slate["tx"]["body"]["kernels"][0];
                 kernel["features"] = Value::from("HeightLocked");
                 kernel["lock_height"] = Value::from("5");
-            }),
-        ),
-        (
-            InvoiceField::Outputs,
-            Box::new(move |slate| {
-                let outputs = slate["tx"]["body"]["outputs"].as_array_mut().unwrap();
-                outputs.retain(|output| !dropped(output));
-            }),
-        ),
-        (
-            InvoiceField::Outputs,
-            Box::new(move |slate| {
-                let outputs = slate["tx"]["body"]["outputs"].as_array_mut().unwrap();
-                let issuers = outputs.iter().position(replaced).unwrap();
-                outputs[issuers] = other_change;
             }),
         ),
         (
@@ -1031,6 +1015,41 @@ fn finalizing_refuses_a_payment_that_changed_the_invoice() {
         );
         flow.assert_untouched();
     }
+    // An answer without the issuer's output is completed from the stored I1, so the output
+    // put in its place is one too many for the fee the payer signed.
+    let swapped = tampered(&flow.i2, move |slate| {
+        let outputs = slate["tx"]["body"]["outputs"].as_array_mut().unwrap();
+        let issuers = outputs.iter().position(replaced).unwrap();
+        outputs[issuers] = other_change;
+    });
+    let error = flow.issuer.finalize(&swapped).unwrap_err();
+    assert!(
+        matches!(error, InvoiceError::FeeBelowMinimum { .. }),
+        "{error:?}"
+    );
+    flow.assert_untouched();
+}
+
+#[test]
+fn an_i2_text_without_the_issuers_output_and_message_finalizes_from_the_stored_i1() {
+    // The I2 text a `lepic.v1` code reads back as: the issuer's output and message left out.
+    let flow = flow(Some("for the bike"), request());
+    let issuer_commit = slate_value(&flow.i1)["tx"]["body"]["outputs"][0]["commit"].clone();
+    let compact = tampered(&flow.i2, |slate| {
+        let outputs = slate["tx"]["body"]["outputs"].as_array_mut().unwrap();
+        outputs.retain(|output| output["commit"] != issuer_commit);
+        let issuer = participant(slate, "1");
+        issuer["message"] = Value::Null;
+        issuer["message_sig"] = Value::Null;
+    });
+
+    let finalized = flow.issuer.finalize(&compact).unwrap();
+
+    assert_eq!(finalized.tx_id, flow.tx_id);
+    let issuer = finalized.slate.participant(Role::Receiver).unwrap();
+    assert_eq!(issuer.message.as_ref().unwrap().text(), "for the bike");
+    finalized.transaction.validate().unwrap();
+    assert_eq!(flow.state(), TxState::Posted);
 }
 
 #[test]

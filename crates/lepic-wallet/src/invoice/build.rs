@@ -487,6 +487,19 @@ fn check_payment(i1: &Slate, i2: &Slate) -> Result<(), InvoiceError> {
     Ok(())
 }
 
+/// Whether `answer` carries none of the inputs and outputs of the initiator's stored slate
+/// `initiator`, which has some. Such an answer was made from a proposal without its body, as
+/// `lepic.v1` sends one, and [`complete_answer`] puts the body back. An answer that keeps any
+/// of them is taken as it is, for the checks to refuse what it changed.
+pub(crate) fn leaves_out_body(answer: &Slate, initiator: &Slate) -> bool {
+    let (inputs, outputs) = (initiator.inputs(), initiator.outputs());
+    (!inputs.is_empty() || !outputs.is_empty())
+        && inputs.iter().all(|input| !answer.inputs().contains(input))
+        && outputs
+            .iter()
+            .all(|output| !answer.outputs().contains(output))
+}
+
 /// Puts back into `answer` what a compact format such as `lepic.v1` leaves out of an answer:
 /// the initiator's own inputs and outputs, and its message, taken from the initiator's stored
 /// slate `initiator`. What the answer carries stays. An initiator whose keys differ from the
