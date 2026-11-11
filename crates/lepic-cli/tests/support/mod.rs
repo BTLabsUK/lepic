@@ -61,6 +61,8 @@ pub struct TestHost {
     pub interrupt_when: Option<Arc<dyn Fn() -> bool + Send + Sync>>,
     /// The bounds of serve's API; the configured ones when `None`.
     pub api_limits: Option<ApiLimits>,
+    /// How many invoices serve holds for approval; the host's default when `None`.
+    pub max_held: Option<usize>,
 }
 
 impl TestHost {
@@ -79,6 +81,7 @@ impl TestHost {
             relay: MockRelay::new(RelayNetwork::Floonet),
             interrupt_when: None,
             api_limits: None,
+            max_held: None,
         }
     }
 
@@ -90,6 +93,7 @@ impl TestHost {
             relay: self.relay.clone(),
             interrupt_when: None,
             api_limits: self.api_limits,
+            max_held: self.max_held,
         }
     }
 
@@ -156,6 +160,10 @@ impl Host for TestHost {
 
     fn api_limits(&self, configured: ApiLimits) -> ApiLimits {
         self.api_limits.unwrap_or(configured)
+    }
+
+    fn max_held_invoices(&self) -> usize {
+        self.max_held.unwrap_or(100)
     }
 }
 

@@ -842,3 +842,97 @@ fn a_payment_made_on_the_socket_to_this_computer_is_not_delivered_over_tls() {
         "deliver connected to this computer"
     );
 }
+
+/// The answer to a send of `wallet`, answered by a new wallet, and an invoice of that wallet
+/// to `wallet` with its slate id.
+fn answer_and_invoice(host: &TestHost, wallet: &Instance) -> (String, String, String) {
+    let other = Instance::new("other password");
+    other.run(host, &["wallet", "init"]).ok();
+    let slate = wallet.path("payment.slate");
+    wallet
+        .run(
+            host,
+            &["tx", "send", "1", "--to-file", slate.to_str().unwrap()],
+        )
+        .ok();
+    other
+        .run(host, &["tx", "receive", slate.to_str().unwrap()])
+        .ok();
+    let answer = std::fs::read_to_string(wallet.path("payment.slate.response")).unwrap();
+    let file = other.path("invoice.slate");
+    let issued = other
+        .run(
+            host,
+            &["invoice", "issue", "2", "--to-file", file.to_str().unwrap()],
+        )
+        .ok()
+        .json();
+    let invoice = std::fs::read_to_string(&file).unwrap();
+    (
+        answer,
+        invoice,
+        support::text(&issued, "slate_id").to_owned(),
+    )
+}
+
+#[test]
+fn a_receive_client_holds_an_invoice_but_never_finishes_or_pays() {
+    let host = TestHost::new();
+    let wallet = funded_wallet(&host);
+    let till = client_key(&wallet, "till");
+    let (answer, invoice, slate_id) = answer_and_invoice(&host, &wallet);
+
+    serving(host, &wallet, |serve| {
+        serve.add("till", &till, "receive");
+
+        let finish = serve.post(&till, "/api/v1/open", &json!({ "text": answer }));
+        let refused = problem(&finish, 403, "role_required");
+        assert_eq!(
+            refused["detail"], "this call needs the full role",
+            "{refused}"
+        );
+
+        let held = serve.post(&till, "/api/v1/open", &json!({ "text": invoice }));
+        assert_eq!(held.status, 200, "{held:?}");
+        assert_eq!(held.json()["outcome"], "invoice_parked", "{held:?}");
+        let waiting = serve
+            .get(Some(&till), "/api/v1/payments?state=needs_approval")
+            .unwrap()
+            .ok();
+        assert_eq!(waiting["items"][0]["id"], slate_id.as_str(), "{waiting}");
+        assert_eq!(waiting["items"][0]["state"], "needs_approval", "{waiting}");
+
+        for action in ["approve", "decline", "cancel", "deliver", "post"] {
+            let path = format!("/api/v1/payments/{slate_id}/{action}");
+            let reply = serve.post(&till, &path, &json!({ "amount": "2" }));
+            problem(&reply, 403, "role_required");
+        }
+        let still = serve
+            .get(Some(&till), &format!("/api/v1/payments/{slate_id}"))
+            .unwrap()
+            .ok();
+        assert_eq!(still["state"], "needs_approval", "{still}");
+        assert!(serve.host.node.pushed_transactions().is_empty());
+    });
+}
+
+#[test]
+fn a_read_client_opens_nothing() {
+    let host = TestHost::new();
+    let wallet = funded_wallet(&host);
+    let viewer = client_key(&wallet, "viewer");
+    let (_, invoice, _) = answer_and_invoice(&host, &wallet);
+
+    serving(host, &wallet, |serve| {
+        serve.add("viewer", &viewer, "read");
+        let open = serve.post(&viewer, "/api/v1/open", &json!({ "text": invoice }));
+        problem(&open, 403, "role_required");
+        let inspected = serve.post(&viewer, "/api/v1/inspect", &json!({ "text": invoice }));
+        assert_eq!(inspected.status, 200, "{inspected:?}");
+        let waiting = serve
+            .get(Some(&viewer), "/api/v1/payments?state=needs_approval")
+            .unwrap()
+            .ok();
+        assert_eq!(waiting["items"], json!([]), "{waiting}");
+    });
+}
