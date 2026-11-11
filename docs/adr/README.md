@@ -64,8 +64,9 @@ they were written, and the file names do not change.
 | [0047](0047-the-mailbox-is-the-default-between-paired-contacts.md) | The mailbox is the default route between paired contacts | accepted |
 | [0048](0048-block-rewards-for-this-computer.md) | Block rewards are served to this computer unless the host opens them | accepted |
 | [0049](0049-keeping-messages-that-cannot-be-taken-yet.md) | Keeping messages that cannot be taken yet | accepted |
-| [0050](0050-one-wallet-api.md) | One wallet API, served by `lepic serve` | proposed |
+| [0050](0050-one-wallet-api.md) | One wallet API, served by `lepic serve` | proposed; paths, generated document, bodies and TLS clients superseded by 0055 |
 | [0051](0051-transaction-methods-in-one-crate.md) | Transaction methods live in one crate, outside the engine | accepted |
 | [0052](0052-legacy-at-the-edge-native-between-lepic-wallets.md) | Epic compatibility at the edge, a native protocol between LEPIC wallets | accepted |
-| [0053](0053-cli-commands-through-a-running-serve.md) | CLI commands reach a running `lepic serve` through its socket | accepted |
+| [0053](0053-cli-commands-through-a-running-serve.md) | CLI commands reach a running `lepic serve` through its socket | accepted; route mapping superseded by 0055 |
 | [0054](0054-epic1-over-carriers-derived-mailboxes-short-links.md) | epic1 over carriers: derived mailboxes and a short link | proposed |
+| [0055](0055-the-wallet-api-v1.md) | The wallet API v1, served from one hand-written document | accepted |

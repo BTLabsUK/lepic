@@ -1,6 +1,7 @@
 # 0053 CLI commands reach a running `lepic serve` through its socket
 
-Status: accepted
+Status: accepted. How a command travels to serve (a route request per command) is superseded by
+[ADR 0055](0055-the-wallet-api-v1.md): the CLI sends the parsed command on a private socket route.
 Date: 2026-11-10
 
 ## Context

@@ -1,6 +1,7 @@
 # ADR 0050: One wallet API, served by `lepic serve`
 
-Status: proposed
+Status: proposed. The paths, the generated document, the bodies shared with the CLI and the
+all-or-nothing TLS clients are superseded by [ADR 0055](0055-the-wallet-api-v1.md).
 
 ## Context
 
