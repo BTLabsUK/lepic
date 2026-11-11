@@ -1651,6 +1651,14 @@ impl ApiLogRepository for SqliteRepos<'_> {
         )
     }
 
+    fn delete_api_request(&mut self, scope: &str, id: &str) -> Result<bool, StoreError> {
+        let deleted = self.conn.execute(
+            "DELETE FROM api_requests WHERE scope = ?1 AND id = ?2",
+            params![scope, id],
+        )?;
+        Ok(deleted > 0)
+    }
+
     fn prune_api_requests(&mut self, before: Timestamp) -> Result<u64, StoreError> {
         let deleted = self.conn.execute(
             "DELETE FROM api_requests WHERE created_at < ?1",

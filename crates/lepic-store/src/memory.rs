@@ -1008,6 +1008,14 @@ impl ApiLogRepository for MemoryRepos<'_> {
             .cloned())
     }
 
+    fn delete_api_request(&mut self, scope: &str, id: &str) -> Result<bool, StoreError> {
+        Ok(self
+            .state
+            .api_requests
+            .remove(&(scope.to_owned(), id.to_owned()))
+            .is_some())
+    }
+
     fn prune_api_requests(&mut self, before: Timestamp) -> Result<u64, StoreError> {
         timestamp_to_column(before)?;
         let count = self.state.api_requests.len();

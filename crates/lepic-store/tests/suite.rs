@@ -2834,6 +2834,25 @@ fn api_event_inputs_are_bounded<B: Backend>() {
     assert_eq!(read(store, |repos| repos.api_event_last_id()).unwrap(), 1);
 }
 
+fn a_deleted_api_request_can_be_recorded_again<B: Backend>() {
+    let backend = B::create(context_key(1));
+    let store = backend.store();
+    let request = ApiRequest {
+        scope: "payment".to_owned(),
+        id: "a".to_owned(),
+        digest: [1; 32],
+        created_at: support::time(10),
+    };
+    write(store, |repos| repos.put_api_request(&request)).unwrap();
+    assert!(write(store, |repos| repos.delete_api_request("payment", "a")).unwrap());
+    assert!(!write(store, |repos| repos.delete_api_request("payment", "a")).unwrap());
+    assert_eq!(
+        read(store, |repos| repos.api_request("payment", "a")).unwrap(),
+        None
+    );
+    write(store, |repos| repos.put_api_request(&request)).unwrap();
+}
+
 fn api_requests_are_stored_once_and_pruned_by_time<B: Backend>() {
     let backend = B::create(context_key(1));
     let store = backend.store();
@@ -3217,6 +3236,7 @@ for_each_backend!(
     api_event_ids_rise_and_are_not_reused_after_a_prune,
     api_events_are_read_after_an_id_with_a_limit_and_a_kind_filter,
     api_event_inputs_are_bounded,
+    a_deleted_api_request_can_be_recorded_again,
     api_requests_are_stored_once_and_pruned_by_time,
     imported_transactions_round_trip_and_are_replaced,
     imported_records_need_their_transaction_and_bounded_messages,

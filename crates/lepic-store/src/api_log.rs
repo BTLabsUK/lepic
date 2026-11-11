@@ -83,6 +83,9 @@ pub trait ApiLogRepository {
 
     fn api_request(&self, scope: &str, id: &str) -> Result<Option<ApiRequest>, StoreError>;
 
+    /// Deletes the request record `(scope, id)`; true if there was one.
+    fn delete_api_request(&mut self, scope: &str, id: &str) -> Result<bool, StoreError>;
+
     /// Deletes the request records created before `before` and returns how many.
     fn prune_api_requests(&mut self, before: Timestamp) -> Result<u64, StoreError>;
 }

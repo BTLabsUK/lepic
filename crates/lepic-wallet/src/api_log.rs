@@ -106,6 +106,16 @@ where
         Ok(session.store.read(|repos| repos.api_request(scope, id))?)
     }
 
+    /// Deletes the record of the create `(scope, id)`, so the id can be used again; true if
+    /// there was one. Fails with [`WalletError::Locked`].
+    #[instrument(skip_all, fields(wallet = %self.config().name, scope))]
+    pub fn delete_api_request(&self, scope: &str, id: &str) -> Result<bool, WalletError> {
+        let session = self.session()?;
+        Ok(session
+            .store
+            .write(|repos| repos.delete_api_request(scope, id))?)
+    }
+
     /// Deletes the request records created before `before` and returns how many. Fails with
     /// [`WalletError::Locked`].
     #[instrument(skip_all, fields(wallet = %self.config().name))]
