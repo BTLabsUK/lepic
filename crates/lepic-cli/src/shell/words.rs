@@ -169,13 +169,60 @@ pub(crate) fn strip_yes(words: Vec<String>) -> (Vec<String>, bool) {
     (kept, yes)
 }
 
-/// The leading words of a line that are not options: `tx send` of `tx send 1 --to x`.
+/// The leading words of a line that are not options: `tx send` of `tx send 1 --to x`. The
+/// global options, `--network floonet` and the rest, are passed over wherever they stand, with
+/// their values, so `--network floonet tx send 1` is `tx send` too.
 fn command_path(words: &[String]) -> Vec<String> {
-    words
+    let mut path = Vec::new();
+    let mut words = words.iter();
+    while let Some(word) = words.next() {
+        if !word.starts_with('-') {
+            path.push(word.clone());
+            continue;
+        }
+        let Some(name) = word.strip_prefix("--").filter(|name| !name.contains('=')) else {
+            if word.starts_with("--") {
+                continue;
+            }
+            break;
+        };
+        match global_option(name) {
+            Some(true) => {
+                words.next();
+            }
+            Some(false) => {}
+            None => break,
+        }
+    }
+    path
+}
+
+/// Whether `name` is a global option and, if it is, whether it takes a value.
+fn global_option(name: &str) -> Option<bool> {
+    use clap::Args as _;
+    static GLOBAL: std::sync::LazyLock<Vec<(String, bool)>> = std::sync::LazyLock::new(|| {
+        crate::cli::GlobalArgs::augment_args(clap::Command::new("lepic"))
+            .get_arguments()
+            .filter_map(|arg| {
+                let long = arg.get_long()?;
+                Some((long.to_owned(), arg.get_action().takes_values()))
+            })
+            .collect()
+    });
+    GLOBAL
         .iter()
-        .take_while(|word| !word.starts_with('-'))
-        .cloned()
-        .collect()
+        .find(|(long, _)| long == name)
+        .map(|(_, takes_value)| *takes_value)
+}
+
+/// Whether `words` holds each of `names`, in order, as words of their own. The history filter
+/// asks this rather than [`command_path`], so no option it does not know, typed before the
+/// command, can hide a secret line from it.
+fn names_in_order(words: &[String], names: &[&str]) -> bool {
+    let mut words = words.iter();
+    names
+        .iter()
+        .all(|name| words.any(|word| word.eq_ignore_ascii_case(name)))
 }
 
 /// Whether the history file may keep `line`. Lines that may hold secret material are left out:
@@ -187,11 +234,10 @@ pub(crate) fn keep_in_history(line: &str) -> bool {
         return false;
     }
     let Words { words, .. } = tokenize(line);
-    let path = command_path(&words);
-    if path.starts_with(&["wallet".to_owned(), "import-seed".to_owned()]) {
+    if names_in_order(&words, &["wallet", "import-seed"]) {
         return false;
     }
-    if path.starts_with(&["in-person".to_owned(), "take".to_owned()])
+    if names_in_order(&words, &["in-person", "take"])
         && !words
             .iter()
             .any(|word| word == "--file" || word.starts_with("--file="))
@@ -490,6 +536,32 @@ mod tests {
             "in-person take ur:epic/1-2/abc ur:epic/2-2/def"
         ));
         assert!(keep_in_history("in-person take --file answer.bin"));
+        // Options before the command words hide nothing.
+        assert!(!keep_in_history(
+            "--network floonet wallet import-seed w.seed"
+        ));
+        assert!(!keep_in_history("--data-dir=d wallet import-seed w.seed"));
+        assert!(!keep_in_history("--unknown x in-person take 0a1b"));
+        assert!(!keep_in_history("--network floonet in-person take 0a1b"));
+        assert!(keep_in_history("--network floonet tx list"));
+    }
+
+    #[test]
+    fn the_command_words_pass_over_global_options() {
+        assert_eq!(command_path(&words("tx send 1 --to x")), words("tx send 1"));
+        assert_eq!(
+            command_path(&words("--network floonet tx send 1 --to x")),
+            words("tx send 1")
+        );
+        assert_eq!(
+            command_path(&words("--output=json tx --data-dir d send")),
+            words("tx send")
+        );
+        assert_eq!(command_path(&words("tx send -h")), words("tx send"));
+        assert_eq!(
+            strip_yes(words("--network floonet tx send 1 --to x --yes")),
+            (words("--network floonet tx send 1 --to x"), true)
+        );
     }
 
     #[test]
