@@ -155,8 +155,7 @@ async fn read<H: Host>(service: &Service<'_, H>, text: &str) -> Result<Read, Pro
 }
 
 /// What a sealed file holds, opened with this wallet's keys as `contact open-sealed` opens it.
-/// Opening a signed file refreshes the contact's card when it carries a newer one, and marks
-/// when the contact last sealed to this wallet; nothing else is stored.
+/// Nothing is stored: receiving, paying or finishing it later refreshes the contact.
 async fn sealed_read<H: Host>(
     service: &Service<'_, H>,
     text: &str,
@@ -168,7 +167,7 @@ async fn sealed_read<H: Host>(
         wire: wire.clone(),
         sealed: Some(Sealed::Closed(reason)),
     };
-    let opened = match Box::pin(service.held.wallet.contact_book().sealed_open(text)).await {
+    let opened = match Box::pin(service.held.wallet.contact_book().sealed_peek(text)).await {
         Ok(opened) => opened,
         Err(error) if does_not_open(&error) => return Ok(closed(error.to_string())),
         Err(error) => return Err(CliError::from(error).into()),
