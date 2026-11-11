@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //! A TTL on a send whose format has no TTL field, the legacy V2 shape a stock Epicbox receiver
 //! gets: the slate goes out without it, the wallet keeps the cutoff as the send's local cutoff,
-//! and a refresh at that height cancels the unanswered send and frees its inputs, also after a
+//! and a refresh at that height expires the unanswered send and frees its inputs, also after a
 //! restart. An answer that arrives after that is refused.
 
 // Tests may unwrap, index, panic and use plain arithmetic (docs/rules.md), including in helpers
@@ -180,8 +180,8 @@ fn a_v2_send_keeps_its_ttl_out_of_the_slate_as_a_local_cutoff() {
     }
 }
 
-both_stores!(an_unanswered_v2_send_waits_before_its_cutoff_and_is_cancelled_at_it);
-fn an_unanswered_v2_send_waits_before_its_cutoff_and_is_cancelled_at_it() {
+both_stores!(an_unanswered_v2_send_waits_before_its_cutoff_and_expires_at_it);
+fn an_unanswered_v2_send_waits_before_its_cutoff_and_expires_at_it() {
     let (sender, funding) = funded();
     let sent = send(&sender, request(Some(TTL_BLOCKS), None));
     let change = change(&sender, &funding);
@@ -199,8 +199,8 @@ fn an_unanswered_v2_send_waits_before_its_cutoff_and_is_cancelled_at_it() {
     assert!(!sender.has_sender_context(uuid(sent.slate_id)));
 }
 
-both_stores!(an_answer_that_arrives_after_the_cancel_is_refused);
-fn an_answer_that_arrives_after_the_cancel_is_refused() {
+both_stores!(an_answer_that_arrives_after_the_expiry_is_refused);
+fn an_answer_that_arrives_after_the_expiry_is_refused() {
     let (sender, funding) = funded();
     let sent = send(&sender, request(Some(TTL_BLOCKS), None));
     let (s1, _) = sender.received().unwrap();
@@ -218,11 +218,43 @@ fn an_answer_that_arrives_after_the_cancel_is_refused() {
         )
         .unwrap_err();
     assert!(
-        !matches!(error, FinalizeError::Wallet(_)),
-        "a refusal of the answer, not a wallet failure: {error:?}"
+        matches!(
+            error,
+            FinalizeError::NotFinalizable { tx_id, state: TxState::Expired } if tx_id == sent.tx_id
+        ),
+        "{error:?}"
     );
     assert_eq!(state(&sender, sent.tx_id), TxState::Expired);
     assert_eq!(status(&sender, &funding), Some(OutputStatus::Unspent));
+    assert!(sender.harness.node.pushed_transactions().is_empty());
+}
+
+both_stores!(an_answer_at_the_cutoff_before_a_refresh_is_refused);
+fn an_answer_at_the_cutoff_before_a_refresh_is_refused() {
+    let (sender, funding) = funded();
+    let sent = send(&sender, request(Some(TTL_BLOCKS), None));
+    let (s1, _) = sender.received().unwrap();
+    let s2 = v2_reply(&s1);
+
+    set_tip(&sender, TIP + TTL_BLOCKS);
+    let error = sender
+        .harness
+        .block_on(
+            sender
+                .wallet
+                .finalize(&sender.harness.method(), &s2, Propagation::Stem),
+        )
+        .unwrap_err();
+    assert!(
+        matches!(
+            error,
+            FinalizeError::Expired { cutoff, tip }
+                if cutoff == Height::new(TIP + TTL_BLOCKS) && tip == Height::new(TIP + TTL_BLOCKS)
+        ),
+        "{error:?}"
+    );
+    assert_eq!(state(&sender, sent.tx_id), TxState::Sent);
+    assert_eq!(status(&sender, &funding), Some(OutputStatus::Locked));
     assert!(sender.harness.node.pushed_transactions().is_empty());
 }
 

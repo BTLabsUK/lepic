@@ -14,9 +14,10 @@ Conventional Commit messages at release time.
 - A send with a TTL to a peer that takes the V2 slate (stock Epicbox, HTTP) goes out instead of
   being refused with `Unrepresentable` (409 `invalid_slate` over serve). The slate carries no TTL;
   the wallet keeps the height as the send's local cutoff, refuses to finalize or post the send
-  past it, and a refresh at the cutoff cancels it if unanswered and frees its inputs. This holds
-  for `tx send --ttl-blocks`, `POST /api/v1/payments` `ttl_blocks` and the FFI. Formats that
-  carry a TTL keep it in the slate.
+  past it, and a refresh at the cutoff expires it if unanswered and frees its inputs. This holds
+  for `tx send --ttl-blocks`, `POST /api/v1/payments` `ttl_blocks` and `SendRequest::ttl_blocks`;
+  the app's sends already keep their TTL as a local cutoff. Formats that carry a TTL keep it in
+  the slate. A send stored with a slate TTL and resent over a V2-only transport is still refused.
 - **Breaking:** the owner API moved from `/v1` to `/api/v1`, with a new document, new objects
   and new errors. `docs/api/openapi.json` is written by hand and is the contract; `serve` builds
   its router from it and serves it at `GET /api/v1/openapi.json`. A payment is one object whatever

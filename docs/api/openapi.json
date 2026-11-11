@@ -4727,7 +4727,7 @@
           },
           "ttl_blocks": {
             "type": "integer",
-            "description": "Blocks after which the payee must refuse the slate. A V2 slate (Epicbox, HTTP) has no TTL field: the wallet keeps the height and cancels the send at refresh if it is still unanswered."
+            "description": "Blocks after which the payee must refuse the slate. A V2 slate (Epicbox, HTTP) has no TTL field: the wallet keeps the height and expires the send at refresh if it is still unanswered."
           },
           "fluff": {
             "type": "boolean"
