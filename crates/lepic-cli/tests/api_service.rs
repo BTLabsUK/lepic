@@ -229,7 +229,7 @@ fn the_event_stream_yields_the_wallets_events() {
             }
         };
         // The payment's id is the slate id the sender's wallet shows.
-        let id = created["data"]["payment_id"].as_str().unwrap();
+        let id = created["data"]["object"]["id"].as_str().unwrap();
         assert_eq!(id, sent["slate_id"], "{created}");
         let payment = http(socket, "GET", &format!("/api/v1/payments/{id}"), None).ok();
         assert_eq!(payment["direction"], "in", "{payment}");

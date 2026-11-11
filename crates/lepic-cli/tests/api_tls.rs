@@ -64,7 +64,7 @@ fn serving<T: Send>(
     let settings = settings_with_owner_tls(wallet);
     env.push(("LEPIC_SETTINGS".to_owned(), settings.display().to_string()));
     std::thread::scope(|scope| {
-        let server = scope.spawn(|| {
+        let server = support::serve_thread(scope, || {
             wallet.run_with(
                 &host,
                 &["serve", "--socket", socket_arg, "--owner-tls"],

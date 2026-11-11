@@ -175,8 +175,9 @@ fn serving_public<T: Send>(
         }
     }
     std::thread::scope(|scope| {
-        let server =
-            scope.spawn(|| wallet.run_with(&host, &["serve", "--socket", socket_arg], env, ""));
+        let server = support::serve_thread(scope, || {
+            wallet.run_with(&host, &["serve", "--socket", socket_arg], env, "")
+        });
         support::wait_for_socket(&socket);
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| test(&socket)));
         stop.store(true, Ordering::SeqCst);
@@ -190,7 +191,7 @@ fn a_link_on_a_local_relay_is_refused() {
     let (host, wallet) = funded();
     serving(host, &wallet, |socket, _| {
         issue(socket);
-        problem(&send(socket, "POST", "/links", &json!({})), 422, "rejected");
+        problem(&send(socket, "POST", "/links", &json!({})), 422, "own_relay_local");
     });
 }
 

@@ -37,7 +37,9 @@ fn serve_answers_the_api_and_stops_on_interrupt() {
     let socket_arg = socket.to_str().unwrap();
 
     let served: Outcome = std::thread::scope(|scope| {
-        let server = scope.spawn(|| wallet.run(&host, &["serve", "--socket", socket_arg]));
+        let server = support::serve_thread(scope, || {
+            wallet.run(&host, &["serve", "--socket", socket_arg])
+        });
         let _stop = StopOnDrop(Arc::clone(&stop));
         wait_for_socket(&socket);
 
@@ -107,7 +109,9 @@ fn serve_answers_a_request_in_flight_before_it_stops() {
     let send = format!(r#"{{"amount":"1","to":"{address}"}}"#);
 
     let (sent, served) = std::thread::scope(|scope| {
-        let server = scope.spawn(|| wallet.run(&host, &["serve", "--socket", socket_arg]));
+        let server = support::serve_thread(scope, || {
+            wallet.run(&host, &["serve", "--socket", socket_arg])
+        });
         let _stop = StopOnDrop(Arc::clone(&stop));
         wait_for_socket(&socket);
         let sending = scope.spawn(|| http(&socket, "POST", "/api/v1/payments", Some(&send)));
@@ -150,7 +154,9 @@ fn serve_status_reports_refreshes_failing_in_a_row() {
     let status = || http(&socket, "GET", "/api/v1/status", None).ok();
 
     let served = std::thread::scope(|scope| {
-        let server = scope.spawn(|| wallet.run(&host, &["serve", "--socket", socket_arg]));
+        let server = support::serve_thread(scope, || {
+            wallet.run(&host, &["serve", "--socket", socket_arg])
+        });
         wait_for_socket(&socket);
         support::wait_until("a first refresh", || {
             status()["refresh"]["last_success_at"].is_string()
@@ -192,7 +198,7 @@ fn serve_with_http_answers_the_foreign_api() {
     let socket_arg = socket.to_str().unwrap();
 
     let served = std::thread::scope(|scope| {
-        let server = scope.spawn(|| {
+        let server = support::serve_thread(scope, || {
             wallet.run(
                 &host,
                 &["serve", "--socket", socket_arg, "--http", "--port", "0"],
@@ -253,7 +259,7 @@ fn with_listener(native_direct: bool, ask: impl FnOnce(u16)) {
     let socket_arg = socket.to_str().unwrap();
     let args = ["serve", "--socket", socket_arg, "--http", "--port", "0"];
     let served = std::thread::scope(|scope| {
-        let server = scope.spawn(|| wallet.run_with(&host, &args, env, ""));
+        let server = support::serve_thread(scope, || wallet.run_with(&host, &args, env, ""));
         wait_for_socket(&socket);
         let status = http(&socket, "GET", "/api/v1/status", None).ok();
         ask(u16::try_from(status["listeners"]["http"]["port"].as_u64().unwrap()).unwrap());
@@ -366,7 +372,7 @@ fn commands_run_through_a_running_serve() {
     let socket = wallet.data_dir().join("lepic.sock");
 
     let (through, unrouted, served) = std::thread::scope(|scope| {
-        let server = scope.spawn(|| wallet.run(&host, &["serve"]));
+        let server = support::serve_thread(scope, || wallet.run(&host, &["serve"]));
         wait_for_socket(&socket);
         let through = [
             wallet.run(&client, &["wallet", "info"]),
@@ -427,7 +433,9 @@ fn commands_find_a_serve_on_another_socket() {
 
     let (through, unrouted, served) = std::thread::scope(|scope| {
         let _stop = StopOnDrop(Arc::clone(&stop));
-        let server = scope.spawn(|| wallet.run(&host, &["serve", "--socket", socket_arg]));
+        let server = support::serve_thread(scope, || {
+            wallet.run(&host, &["serve", "--socket", socket_arg])
+        });
         wait_for_socket(&socket);
         wait_for_socket(&pointer);
         assert_eq!(std::fs::read(&pointer).unwrap(), socket_arg.as_bytes());
@@ -481,7 +489,7 @@ fn a_stale_pointer_is_ignored() {
     let socket = wallet.data_dir().join("lepic.sock");
     let (through, served) = std::thread::scope(|scope| {
         let _stop = StopOnDrop(Arc::clone(&stop));
-        let server = scope.spawn(|| wallet.run(&host, &["serve"]));
+        let server = support::serve_thread(scope, || wallet.run(&host, &["serve"]));
         wait_for_socket(&socket);
         wait_for_socket(&pointer);
         std::fs::write(&pointer, dead.to_str().unwrap()).unwrap();
@@ -521,7 +529,7 @@ fn a_command_through_serve_prints_the_hint_of_a_direct_run() {
 
     let (through, as_json, document) = std::thread::scope(|scope| {
         let _stop = StopOnDrop(Arc::clone(&stop));
-        let server = scope.spawn(|| wallet.run(&host, &["serve"]));
+        let server = support::serve_thread(scope, || wallet.run(&host, &["serve"]));
         wait_for_socket(&socket);
         let through = wallet.run_with(&client, &too_much, human.clone(), "");
         let as_json = wallet.run(&client, &too_much);
@@ -640,7 +648,7 @@ fn the_route_covered_command_families_run_through_a_running_serve() {
     let socket = wallet.data_dir().join("lepic.sock");
     let (through, made, served) = std::thread::scope(|scope| {
         let _stop = StopOnDrop(Arc::clone(&stop));
-        let server = scope.spawn(|| wallet.run(&host, &["serve"]));
+        let server = support::serve_thread(scope, || wallet.run(&host, &["serve"]));
         wait_for_socket(&socket);
         let through = run_all(&client);
         let made = [
@@ -720,7 +728,7 @@ fn the_cli_channel_is_on_the_socket_only() {
     env.push(("LEPIC_SETTINGS".to_owned(), settings.display().to_string()));
 
     let served = std::thread::scope(|scope| {
-        let server = scope.spawn(|| {
+        let server = support::serve_thread(scope, || {
             wallet.run_with(
                 &host,
                 &["serve", "--socket", socket_arg, "--owner-tls"],

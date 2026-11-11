@@ -450,6 +450,18 @@ pub fn parse_reply(answer: &str) -> Reply {
     }
 }
 
+/// Spawns `serve` in `scope` on a thread with the 8 MiB stack of the main thread `lepic serve`
+/// runs on; a test thread has 2 MiB, which a debug build of serve outgrows.
+pub fn serve_thread<'scope, T: Send + 'scope>(
+    scope: &'scope std::thread::Scope<'scope, '_>,
+    serve: impl FnOnce() -> T + Send + 'scope,
+) -> std::thread::ScopedJoinHandle<'scope, T> {
+    std::thread::Builder::new()
+        .stack_size(8 << 20)
+        .spawn_scoped(scope, serve)
+        .unwrap()
+}
+
 /// Runs `test` against a `lepic serve` of `wallet` on a socket, with `extra` arguments after
 /// `serve --socket <path>`, then stops serve.
 pub fn serving_with<T: Send>(
@@ -475,7 +487,7 @@ pub fn serving_with<T: Send>(
     let mut args = vec!["serve", "--socket", socket_arg];
     args.extend_from_slice(extra);
     std::thread::scope(|scope| {
-        let server = scope.spawn(|| wallet.run(&host, &args));
+        let server = serve_thread(scope, || wallet.run(&host, &args));
         // Stops serve when the test panics too, or the scope would wait for it forever.
         let stopping = Stop(&stop);
         wait_for_socket(&socket);

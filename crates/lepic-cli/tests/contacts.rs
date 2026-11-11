@@ -266,7 +266,9 @@ fn a_contact_check_is_answered_by_a_serving_wallet() {
     let socket_arg = socket.to_str().unwrap();
 
     let served = std::thread::scope(|scope| {
-        let server = scope.spawn(|| shop.run(&host, &["serve", "--socket", socket_arg]));
+        let server = support::serve_thread(scope, || {
+            shop.run(&host, &["serve", "--socket", socket_arg])
+        });
         wait_for_socket(&socket);
         // The check leaves after the pairing's last message, so its answer is heard later.
         std::thread::sleep(std::time::Duration::from_millis(10));
