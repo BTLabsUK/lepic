@@ -602,8 +602,10 @@ hold secrets are left out: anything naming a password or secret, seed imports, `
 and `--hex` payloads.
 
 The shell draws with Unicode; on Windows outside Windows Terminal, or with `LEPIC_ASCII=1`, it
-uses ASCII. `NO_COLOR` turns colour off in command output. The input line and the rows around it
-never use colour.
+uses ASCII. It draws in the sixteen basic terminal colours: commands in the input line, the
+status rule and hints, errors, hints, help and the send review. `NO_COLOR`, `TERM=dumb` or output
+that is not a terminal turn the shell's colour off. Commands run outside the shell print as
+before.
 
 ## lepic serve and the wallet API
 

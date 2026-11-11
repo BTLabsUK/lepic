@@ -33,6 +33,9 @@ const ACCENT: &str = "\x1b[38;2;246;212;113m";
 const BOLD: &str = "\x1b[1m";
 const DIM: &str = "\x1b[2m";
 const RESET: &str = "\x1b[0m";
+const WHITE: &str = "\x1b[1;97m";
+// The basic yellow, which every console draws; the accent needs 24-bit colour.
+const YELLOW: &str = "\x1b[33m";
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Style {
@@ -42,6 +45,8 @@ enum Style {
     // The accent waits for the shell to print the epic1 mark beside addresses.
     #[allow(dead_code)]
     Accent,
+    Yellow,
+    White,
 }
 
 impl Style {
@@ -51,6 +56,8 @@ impl Style {
             Style::Bold => BOLD,
             Style::Dim => DIM,
             Style::Accent => ACCENT,
+            Style::Yellow => YELLOW,
+            Style::White => WHITE,
         }
     }
 }
@@ -136,17 +143,20 @@ fn banner_line(index: usize, glyphs: Glyphs) -> Line {
         Glyphs::Unicode => row.to_owned(),
         Glyphs::Ascii => row.replace('█', "#"),
     };
-    vec![span(text, Style::Bold)]
+    vec![span(text, Style::Yellow)]
 }
 
 fn title(info: &CardInfo<'_>) -> Line {
-    vec![span(format!("LEPIC {}", info.version), Style::Bold)]
+    vec![
+        span("LEPIC", Style::White),
+        span(format!(" {}", info.version), Style::Dim),
+    ]
 }
 
 fn wallet_line(info: &CardInfo<'_>) -> Line {
     vec![
         span("wallet ", Style::Dim),
-        span(info.wallet, Style::Plain),
+        span(info.wallet, Style::Bold),
         span(" · ", Style::Dim),
         span(info.network, Style::Plain),
     ]
@@ -381,7 +391,7 @@ mod tests {
     fn version_and_wallet_appear_when_there_is_room() {
         for (columns, _, _, lines) in all_cases() {
             if columns >= 40 {
-                let text = lines.join("\n");
+                let text = crate::shell::paint::strip(&lines.join("\n"));
                 assert!(text.contains("LEPIC 0.5.0"), "{columns}");
                 assert!(text.contains("main"), "{columns}");
             }

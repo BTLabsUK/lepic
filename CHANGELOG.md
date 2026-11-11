@@ -13,8 +13,8 @@ Conventional Commit messages at release time.
   wallet opens once, each line runs a command on it, a status rule shows the balance and height,
   Tab completes commands, `tx send` asks before it sends and refuses a send that would cost more
   than it showed, Ctrl+C cancels the current step, and the wallet locks after
-  `shell_idle_lock_minutes` idle (default 15). Without a terminal, `lepic` prints the usage as
-  before.
+  `shell_idle_lock_minutes` idle (default 15). The shell draws in colour; `NO_COLOR` turns it
+  off. Without a terminal, `lepic` prints the usage as before.
 
 ## [0.5.0] - 2026-11-11
 

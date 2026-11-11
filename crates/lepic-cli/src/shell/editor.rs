@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //! The line editor's parts: the prompt, a blank row above the input, the status rule and hint
-//! row under it, completion from the command tree, and the keys. Nothing here
-//! draws colour: dim and reverse only.
+//! row under it, completion from the command tree, the keys, and the colours of the input. With
+//! colour off nothing here writes more than the dim and reverse the menu and hint have always had.
 
 use std::borrow::Cow;
 use std::ffi::OsString;
@@ -16,7 +16,8 @@ use reedline::{
 };
 
 use crate::cli::Cli;
-use crate::shell::live::{Marks, Status, hint_row};
+use crate::shell::live::{Marks, Status, hint_spans, prompt_mark};
+use crate::shell::paint::{Tone, tint};
 use crate::shell::words::{SHELL_WORDS, parse, tokenize, usage};
 
 /// The menu Tab opens.
@@ -49,9 +50,13 @@ pub(crate) fn columns() -> u16 {
     crossterm::terminal::size().map_or(80, |(columns, _)| columns)
 }
 
-/// The prompt while editing: a blank line, then `> `. The status goes under the input, where a
-/// terminal that rewraps rows as it narrows cannot leave a copy of it behind.
-pub(crate) struct LivePrompt;
+/// The prompt while editing: a blank line, then `> `, yellow while the wallet is open and dim
+/// while it is locked. The status goes under the input, where a terminal that rewraps rows as it
+/// narrows cannot leave a copy of it behind.
+pub(crate) struct LivePrompt {
+    pub status: Shared,
+    pub colour: bool,
+}
 
 impl Prompt for LivePrompt {
     fn render_prompt_left(&self) -> Cow<'_, str> {
@@ -63,7 +68,8 @@ impl Prompt for LivePrompt {
     }
 
     fn render_prompt_indicator(&self, _mode: PromptEditMode) -> Cow<'_, str> {
-        Cow::Borrowed("> ")
+        let locked = self.status.get().locked;
+        Cow::Owned(format!("{} ", prompt_mark(locked).render(self.colour)))
     }
 
     fn render_prompt_multiline_indicator(&self) -> Cow<'_, str> {
@@ -91,8 +97,10 @@ impl Prompt for LivePrompt {
     }
 }
 
-/// What stays in the console once a line is submitted: a blank line and `> ` with the line.
-pub(crate) struct TransientPrompt;
+/// What stays in the console once a line is submitted: a blank line and a dim `> ` with the line.
+pub(crate) struct TransientPrompt {
+    pub colour: bool,
+}
 
 impl Prompt for TransientPrompt {
     fn render_prompt_left(&self) -> Cow<'_, str> {
@@ -104,7 +112,7 @@ impl Prompt for TransientPrompt {
     }
 
     fn render_prompt_indicator(&self, _mode: PromptEditMode) -> Cow<'_, str> {
-        Cow::Borrowed("> ")
+        Cow::Owned(format!("{} ", tint(">", Tone::Dim, self.colour)))
     }
 
     fn render_prompt_multiline_indicator(&self) -> Cow<'_, str> {
@@ -112,7 +120,7 @@ impl Prompt for TransientPrompt {
     }
 
     fn render_prompt_history_search_indicator(&self, _search: PromptHistorySearch) -> Cow<'_, str> {
-        Cow::Borrowed("> ")
+        self.render_prompt_indicator(PromptEditMode::Default)
     }
 
     fn get_prompt_color(&self) -> Color {
@@ -137,16 +145,18 @@ impl Prompt for TransientPrompt {
 pub(crate) struct LiveStatusLine {
     status: Shared,
     marks: Marks,
+    colour: bool,
     root: clap::Command,
     /// The last line asked about and its usage, since usage is asked for on every repaint.
     cached: Option<(String, Option<String>)>,
 }
 
 impl LiveStatusLine {
-    pub(crate) fn new(status: Shared, marks: Marks) -> Self {
+    pub(crate) fn new(status: Shared, marks: Marks, colour: bool) -> Self {
         Self {
             status,
             marks,
+            colour,
             root: Cli::command(),
             cached: None,
         }
@@ -178,26 +188,112 @@ pub(crate) fn command_usage(root: &mut clap::Command, line: &str) -> Option<Stri
 }
 
 impl StatusLine for LiveStatusLine {
-    fn status(&mut self, line: &str, _pos: usize, columns: u16, _colour: bool) -> String {
+    fn status(&mut self, line: &str, _pos: usize, columns: u16, ansi: bool) -> String {
         let usage = self.usage(line);
         let status = self.status.get();
+        let on = self.colour && ansi;
         format!(
             "{}\n{}",
-            status.rule(columns, &self.marks),
-            hint_row(line, status.locked, usage.as_deref(), columns, &self.marks)
+            status.rule_spans(columns, &self.marks).render(on),
+            hint_spans(line, status.locked, usage.as_deref(), columns, &self.marks).render(on)
         )
     }
 }
 
-/// The line as typed, with no styling.
-struct Plain;
+/// The input in colour: a command word cyan, a flag cyan, a word that names no command red. A
+/// word still being typed toward a command stays plain. With colour off, the line as typed.
+struct Words {
+    root: clap::Command,
+    colour: bool,
+}
 
-impl Highlighter for Plain {
+impl Words {
+    /// The words the first word may be.
+    fn first_words(&self) -> Vec<String> {
+        let shell = SHELL_WORDS
+            .iter()
+            .map(|(word, _)| word.split(' ').next().unwrap_or(word).to_owned());
+        let commands = self
+            .root
+            .get_subcommands()
+            .filter(|sub| !sub.is_hide_set())
+            .map(|sub| sub.get_name().to_owned());
+        shell.chain(commands).chain(["quit".to_owned()]).collect()
+    }
+
+    /// How the word at `index` is drawn, after the words before it.
+    fn tone(&self, before: &[&str], word: &str, last: bool) -> Tone {
+        if word.starts_with('-') {
+            return Tone::Cyan;
+        }
+        let known = |names: Vec<String>| {
+            if names.iter().any(|name| name == word) {
+                Tone::CyanBold
+            } else if last && names.iter().any(|name| name.starts_with(word)) {
+                Tone::Plain
+            } else {
+                Tone::Red
+            }
+        };
+        match before {
+            [] => known(self.first_words()),
+            [first] if *first == "serve" => known(vec!["start".to_owned(), "stop".to_owned()]),
+            [first] => match self.root.find_subcommand(first) {
+                Some(group) if group.has_subcommands() => known(
+                    group
+                        .get_subcommands()
+                        .filter(|sub| !sub.is_hide_set())
+                        .map(|sub| sub.get_name().to_owned())
+                        .collect(),
+                ),
+                _ => Tone::Plain,
+            },
+            _ => Tone::Plain,
+        }
+    }
+}
+
+impl Highlighter for Words {
     fn highlight(&self, line: &str, _cursor: usize) -> StyledText {
-        let mut style = Color::Default.normal();
-        style.foreground = None;
+        let mut plain = Color::Default.normal();
+        plain.foreground = None;
         let mut text = StyledText::new();
-        text.push((style, line.to_owned()));
+        if !self.colour {
+            text.push((plain, line.to_owned()));
+            return text;
+        }
+        let mut before: Vec<&str> = Vec::new();
+        let mut rest = line;
+        while !rest.is_empty() {
+            let start = rest
+                .find(|c: char| !c.is_whitespace())
+                .unwrap_or(rest.len());
+            let (space, from) = rest.split_at(start);
+            if !space.is_empty() {
+                text.push((plain, space.to_owned()));
+            }
+            if from.is_empty() {
+                break;
+            }
+            let end = from.find(char::is_whitespace).unwrap_or(from.len());
+            let (word, after) = from.split_at(end);
+            // Only the command words are judged; a quoted value or what follows a flag is not.
+            let judged = before.len() < 2 && !word.starts_with(['"', '\'']);
+            let tone = if judged || word.starts_with('-') {
+                self.tone(&before, word, after.is_empty())
+            } else {
+                Tone::Plain
+            };
+            let style = match tone {
+                Tone::CyanBold => Color::Cyan.bold(),
+                Tone::Cyan => Color::Cyan.normal(),
+                Tone::Red => Color::Red.normal(),
+                _ => plain,
+            };
+            text.push((style, word.to_owned()));
+            before.push(word);
+            rest = after;
+        }
         text
     }
 }
@@ -324,19 +420,21 @@ impl Completer for ClapCompleter {
 pub(crate) fn line_editor(
     status: &Shared,
     marks: Marks,
+    colour: bool,
     history: Box<dyn reedline::History>,
 ) -> Reedline {
     let mut plain = Color::Default.normal();
     plain.foreground = None;
     let dim = Color::Default.dimmed();
     let selected = Color::Default.reverse();
+    let name = if colour { Color::Cyan.normal() } else { plain };
     let menu = IdeMenu::default()
         .with_name(MENU)
         .with_marker("> ")
-        .with_text_style(plain)
+        .with_text_style(name)
         .with_selected_text_style(selected)
         .with_description_text_style(dim)
-        .with_match_text_style(plain.underline())
+        .with_match_text_style(name.underline())
         .with_selected_match_text_style(selected.underline())
         .with_default_border()
         .with_description_mode(DescriptionMode::PreferRight)
@@ -364,9 +462,12 @@ pub(crate) fn line_editor(
         .with_menu(ReedlineMenu::EngineCompleter(Box::new(menu)))
         .with_edit_mode(Box::new(Emacs::new(keys)))
         .with_hinter(Box::new(DefaultHinter::default().with_style(dim)))
-        .with_highlighter(Box::new(Plain))
-        .with_status_line(Box::new(LiveStatusLine::new(status.clone(), marks)))
-        .with_transient_prompt(Box::new(TransientPrompt))
+        .with_highlighter(Box::new(Words {
+            root: Cli::command(),
+            colour,
+        }))
+        .with_status_line(Box::new(LiveStatusLine::new(status.clone(), marks, colour)))
+        .with_transient_prompt(Box::new(TransientPrompt { colour }))
 }
 
 #[cfg(test)]
@@ -387,29 +488,53 @@ mod tests {
     }
 
     #[test]
-    fn the_editor_rows_hold_no_colour() {
+    fn the_editor_rows_are_coloured_only_with_colour_on() {
         let marks = Marks::new(Glyphs::Unicode);
-        let shared = Shared::new(status());
-        let mut line = LiveStatusLine::new(shared, marks);
-        let prompt = LivePrompt;
-        for columns in [40, 80, 112, 200] {
-            let mut rows = vec![line.status("tx send 1 --to x", 16, columns, true)];
-            rows.push(line.status("", 0, columns, true));
-            rows.push(prompt.render_prompt_left().into_owned());
-            for row in rows {
-                assert!(colour_codes(&row).is_empty(), "{row:?}");
+        for colour in [false, true] {
+            let shared = Shared::new(status());
+            let mut line = LiveStatusLine::new(shared.clone(), marks, colour);
+            let prompt = LivePrompt {
+                status: shared,
+                colour,
+            };
+            for columns in [40, 80, 112, 200] {
+                let rows = [
+                    line.status("tx send 1 --to x", 16, columns, true),
+                    line.status("", 0, columns, true),
+                    prompt
+                        .render_prompt_indicator(PromptEditMode::Default)
+                        .into_owned(),
+                ];
+                for row in rows {
+                    assert_eq!(row.contains('\x1b'), colour, "{row:?}");
+                    for shown in crate::shell::paint::strip(&row).lines() {
+                        assert!(shown.chars().count() < usize::from(columns), "{row:?}");
+                    }
+                }
             }
         }
-        assert_eq!(prompt.get_prompt_color(), Color::Default);
-        assert_eq!(prompt.get_indicator_color(), Color::Default);
-        let highlighted = Plain.highlight("tx list", 7).render_simple();
-        assert!(colour_codes(&highlighted).is_empty(), "{highlighted:?}");
+        let words = |colour| Words {
+            root: Cli::command(),
+            colour,
+        };
+        let plain = words(false)
+            .highlight("tx list --limit 5", 0)
+            .render_simple();
+        assert!(!plain.contains('\u{1b}'), "{plain:?}");
+        let painted = words(true)
+            .highlight("tx list --limit 5", 0)
+            .render_simple();
+        assert_eq!(colour_codes(&painted), ["36", "36", "36"], "{painted:?}");
+        let typo = words(true).highlight("tx lsit", 0).render_simple();
+        assert!(colour_codes(&typo).contains(&"31".to_owned()), "{typo:?}");
+        let typing = words(true).highlight("tx li", 0).render_simple();
+        assert_eq!(colour_codes(&typing), ["36"], "{typing:?}");
     }
 
     #[test]
     fn the_status_line_shows_the_usage_of_a_command_only() {
         let marks = Marks::new(Glyphs::Ascii);
-        let mut line = LiveStatusLine::new(Shared::new(status()), marks);
+        let mut line = LiveStatusLine::new(Shared::new(status()), marks, false);
         let send = line.status("tx send ", 8, 200, false);
         let rows: Vec<&str> = send.lines().collect();
         assert_eq!(rows.len(), 2);

@@ -35,8 +35,10 @@ use crate::shell::card::{CardInfo, Glyphs, welcome};
 use crate::shell::editor::{LivePrompt, Shared, columns, line_editor};
 use crate::shell::history::FilteredHistory;
 use crate::shell::live::{
-    Marks, Status, SyncMark, colour, footer, glyphs, grouped, printable, progress_row, short_amount,
+    Marks, Status, SyncMark, colour, footer, glyphs, grouped, printable, progress_spans,
+    short_amount,
 };
+use crate::shell::paint::{self, Tone, tint};
 use crate::shell::reader::{Ask, Read, Reader, Reply};
 use crate::shell::screen::{Queue, Screen, ScreenWriter, ShellLog};
 use crate::shell::words::{self, Line, SHELL_WORDS};
@@ -100,6 +102,7 @@ async fn session<H: Host>(
     screen: &Screen,
 ) -> Result<(), CliError> {
     let marks = Marks::new(glyphs(&console.env));
+    let painted = colour(&console.env, true);
     let network = settings.network.to_string();
     let card = welcome(
         &CardInfo {
@@ -109,7 +112,7 @@ async fn session<H: Host>(
         },
         columns(),
         marks.glyphs,
-        colour(&console.env, true),
+        painted,
     );
     screen.print(&card.join("\n"));
     // A password given ahead is read first, and taken out of the environment the wallet and
@@ -141,6 +144,7 @@ async fn session<H: Host>(
         screen: screen.clone(),
         status,
         marks,
+        colour: painted,
     };
     let mut live = Live {
         events: shell.held.subscribe(),
@@ -158,18 +162,26 @@ async fn session<H: Host>(
     let history: Box<dyn reedline::History> = match FilteredHistory::open(&settings.data_dir) {
         Ok(history) => Box::new(history),
         Err(error) => {
-            screen.print(&format!("The history is kept in memory only: {error}"));
+            screen.print(&tint(
+                &format!("The history is kept in memory only: {error}"),
+                Tone::Yellow,
+                painted,
+            ));
             Box::new(FilteredHistory::in_memory())
         }
     };
     let stop_read = Arc::new(AtomicBool::new(false));
-    let mut editor = line_editor(&shell.status, marks, history)
+    let mut editor = line_editor(&shell.status, marks, painted, history)
         .with_external_printer(Queue(screen.clone()))
         .with_poll_interval(TICK)
         .with_break_signal(Arc::clone(&stop_read));
     screen.set_repaint(editor.repaint_signal());
-    let mut reader = Reader::start(editor, LivePrompt, stop_read)
-        .map_err(CliError::io("start the line editor"))?;
+    let prompt = LivePrompt {
+        status: shell.status.clone(),
+        colour: painted,
+    };
+    let mut reader =
+        Reader::start(editor, prompt, stop_read).map_err(CliError::io("start the line editor"))?;
     let result = shell.read_loop(&mut reader, &mut live).await;
     shell.leave(&mut live).await;
     drop(reader);
@@ -188,6 +200,8 @@ struct Shell<'a, H: Host> {
     screen: Screen,
     status: Shared,
     marks: Marks,
+    /// Whether the shell draws in colour.
+    colour: bool,
 }
 
 /// `serve start` running beside the commands.
@@ -441,7 +455,7 @@ impl<'a, H: Host> Shell<'a, H> {
         if done.is_none() {
             prompts_ended().await;
             if !live.leaving {
-                self.screen.print(cancelled);
+                self.say(cancelled, Tone::Yellow);
             }
         }
         done
@@ -508,7 +522,7 @@ impl<'a, H: Host> Shell<'a, H> {
             Glyphs::Unicode => "…",
             Glyphs::Ascii => "...",
         };
-        self.screen.print(&format!("Unlocking{dots}"));
+        self.say(&format!("Unlocking{dots}"), Tone::Dim);
         match self.step(live, CANCELLED, self.held.unlock(password)).await {
             None => return false,
             Some(Err(error)) => {
@@ -522,14 +536,15 @@ impl<'a, H: Host> Shell<'a, H> {
         // The idle clock starts at the unlock, not at the prompt before it.
         live.last_command = Instant::now();
         let minutes_idle = self.settings.shell_idle_lock_minutes;
-        self.screen.print(&if minutes_idle == 0 {
+        let unlocked = if minutes_idle == 0 {
             format!("Wallet {WALLET} unlocked.")
         } else {
             format!(
                 "Wallet {WALLET} unlocked. It locks after {} idle.",
                 minutes(minutes_idle)
             )
-        });
+        };
+        self.say(&unlocked, Tone::Green);
         true
     }
 
@@ -571,7 +586,10 @@ impl<'a, H: Host> Shell<'a, H> {
                     .collect();
                 self.screen.print(&numbered.join("\n"));
             }
-            Line::Status => self.screen.print(&self.status_text(live).join("\n")),
+            Line::Status => {
+                let lines = paint::labels(&self.status_text(live), self.colour);
+                self.screen.print(&lines.join("\n"));
+            }
             Line::Exit => return Flow::Exit,
             Line::ServeStart(args) => self.serve_start(args, live),
             Line::ServeStop => {
@@ -591,8 +609,9 @@ impl<'a, H: Host> Shell<'a, H> {
 
     fn help(&self, words: &[String]) {
         if words.is_empty() {
+            let lines = words::help_lines(&Cli::command());
             self.screen
-                .print(&words::help_lines(&Cli::command()).join("\n"));
+                .print(&paint::help(&lines, self.colour).join("\n"));
             return;
         }
         let asked = words.join(" ");
@@ -600,7 +619,10 @@ impl<'a, H: Host> Shell<'a, H> {
             .iter()
             .find(|(word, _)| *word == asked || (*word == "exit" && asked == "quit"))
         {
-            self.screen.print(&format!("{word}: {about}"));
+            self.screen.print(&format!(
+                "{}: {about}",
+                tint(word, Tone::CyanBold, self.colour)
+            ));
             return;
         }
         let mut root = Cli::command();
@@ -615,8 +637,8 @@ impl<'a, H: Host> Shell<'a, H> {
                 }
             }
         }
-        self.screen
-            .print(&without_lepic(&command.render_long_help().to_string()));
+        let help = self.styled(&command.render_long_help());
+        self.screen.print(&without_lepic(&help));
     }
 
     /// Prints that `words` name no command, with the nearest one.
@@ -627,13 +649,15 @@ impl<'a, H: Host> Shell<'a, H> {
         if let Some(nearest) = nearest {
             text.push_str(&format!("\nhint: did you mean {nearest}?"));
         }
-        self.screen.print(&text);
+        self.screen.print(&paint::output(&text, false, self.colour));
     }
 
     async fn lock<'s>(&'s self, live: &mut Live<'s>) {
         if live.serving.is_some() {
-            self.screen
-                .print("Serve stops first: it answers with the unlocked wallet.");
+            self.say(
+                "Serve stops first: it answers with the unlocked wallet.",
+                Tone::Yellow,
+            );
             self.stop_serving(live).await;
         }
         let was_unlocked = self.held.is_unlocked();
@@ -721,7 +745,7 @@ impl<'a, H: Host> Shell<'a, H> {
             Ok(_) => return,
             Err(error) => {
                 self.screen
-                    .print(&without_lepic(&error.render().to_string()));
+                    .print(&without_lepic(&self.styled(&error.render())));
                 return;
             }
         };
@@ -733,8 +757,10 @@ impl<'a, H: Host> Shell<'a, H> {
         {
             Ok((socket, future)) => {
                 let socket = socket.display().to_string();
-                self.screen
-                    .print(&format!("Serving the wallet API on {}", printable(&socket)));
+                self.say(
+                    &format!("Serving the wallet API on {}", printable(&socket)),
+                    Tone::Green,
+                );
                 self.status.update(|status| status.api = true);
                 live.serving = Some(Serving {
                     stop,
@@ -786,7 +812,7 @@ impl<'a, H: Host> Shell<'a, H> {
                     self.unknown(&args);
                 } else {
                     self.screen
-                        .print(&without_lepic(&error.render().to_string()));
+                        .print(&without_lepic(&self.styled(&error.render())));
                 }
                 return;
             }
@@ -822,11 +848,13 @@ impl<'a, H: Host> Shell<'a, H> {
                     return;
                 }
             };
-            self.screen.print(&review.lines().join("\n"));
-            match self.step(live, NOT_SENT, ask_yes(review.question())).await {
+            self.screen
+                .print(&paint::review(&review.lines(), self.colour).join("\n"));
+            let question = tint(&review.question(), Tone::Bold, self.colour);
+            match self.step(live, NOT_SENT, ask_yes(question)).await {
                 None => return,
                 Some(false) => {
-                    self.screen.print(NOT_SENT);
+                    self.say(NOT_SENT, Tone::Yellow);
                     return;
                 }
                 Some(true) => reviewed = Some(review.reviewed()),
@@ -857,9 +885,10 @@ impl<'a, H: Host> Shell<'a, H> {
     }
 
     async fn unlock_for_command<'s>(&'s self, live: &mut Live<'s>) -> bool {
-        self.screen.print(&format!(
-            "Wallet {WALLET} is locked; its password opens it."
-        ));
+        self.say(
+            &format!("Wallet {WALLET} is locked; its password opens it."),
+            Tone::Yellow,
+        );
         self.unlock(None, live).await
     }
 
@@ -994,8 +1023,25 @@ impl<'a, H: Host> Shell<'a, H> {
 
     fn footer(&self, tick: usize, doing: &str, elapsed: Duration) -> [String; 4] {
         let columns = columns();
-        let progress = progress_row(tick, doing, elapsed.as_secs(), columns, &self.marks);
-        footer(&self.status.get(), &progress, columns, &self.marks)
+        let progress = progress_spans(tick, doing, elapsed.as_secs(), columns, &self.marks);
+        footer(
+            &self.status.get(),
+            &progress,
+            columns,
+            &self.marks,
+            self.colour,
+        )
+    }
+
+    /// Clap's text, coloured as the shell draws it. Clap is built without its own colour, so
+    /// the rest of the CLI prints as before.
+    fn styled(&self, text: &clap::builder::StyledStr) -> String {
+        paint::clap_text(&text.to_string(), self.colour)
+    }
+
+    /// Prints `text` in `tone`.
+    fn say(&self, text: &str, tone: Tone) {
+        self.screen.print(&tint(text, tone, self.colour));
     }
 
     /// A console whose output goes to the screen and which reads no secrets.
@@ -1017,7 +1063,13 @@ impl<'a, H: Host> Shell<'a, H> {
         match result {
             Ok(report) => {
                 let text = render(&report, settings.output);
-                if !text.is_empty() {
+                if text.is_empty() {
+                    return;
+                }
+                if settings.output == OutputFormat::Human {
+                    let done = did_something(&report);
+                    self.screen.print(&paint::output(&text, done, self.colour));
+                } else {
                     self.screen.print(&text);
                 }
             }
@@ -1031,7 +1083,12 @@ impl<'a, H: Host> Shell<'a, H> {
             OutputFormat::Json => None,
         };
         let text = Zeroizing::new(render_error(error, settings.output, hint.as_deref()));
-        self.screen.print(&text);
+        if settings.output == OutputFormat::Human {
+            self.screen
+                .print(&Zeroizing::new(paint::output(&text, false, self.colour)));
+        } else {
+            self.screen.print(&text);
+        }
     }
 
     /// Ends the session: serve stops, the wallet locks.
@@ -1230,6 +1287,32 @@ fn minutes(count: u64) -> String {
 
 /// Clap's text with `lepic ` taken out of its usage lines: in the shell commands are typed
 /// without it.
+/// Whether `report` tells of something done, whose first line the shell shows in green.
+const fn did_something(report: &Report) -> bool {
+    matches!(
+        report,
+        Report::Init(_)
+            | Report::Restore(_)
+            | Report::Scan(_)
+            | Report::Password(_)
+            | Report::Send(_)
+            | Report::Resend(_)
+            | Report::Receive(_)
+            | Report::SlateReceive(_)
+            | Report::Finalize(_)
+            | Report::Post(_)
+            | Report::Cancel(_)
+            | Report::Release(_)
+            | Report::InvoiceIssue(_)
+            | Report::InvoicePay(_)
+            | Report::InvoiceDecline(_)
+            | Report::ImportHistory(_)
+            | Report::ContactAccept(_)
+            | Report::ContactRemove(_)
+            | Report::ProfileSet(_)
+    )
+}
+
 fn without_lepic(text: &str) -> String {
     text.replace("Usage: lepic ", "Usage: ")
         .replace("try 'lepic ", "try '")

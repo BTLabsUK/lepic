@@ -1,12 +1,13 @@
 // SPDX-License-Identifier: Apache-2.0
 //! The live area under the console: a blank row, the input line, the status rule and the hint
-//! or progress row. Every row here is plain text: no colour, cut to the terminal width minus one
-//! column so the terminal never wraps it. Nothing but the blank row sits above the input: a
+//! or progress row. Each row is built as styled pieces and cut to the terminal width minus one
+//! column before it is styled, so the terminal never wraps it and colour never changes a width. Nothing but the blank row sits above the input: a
 //! terminal that rewraps rows above the cursor when it narrows leaves them behind, while the
 //! rows under the cursor are cleared on every paint.
 
 use crate::settings::Env;
 use crate::shell::card::Glyphs;
+use crate::shell::paint::{Spans, Tone};
 
 /// The characters the live area draws with.
 #[derive(Clone, Copy, Debug)]
@@ -74,9 +75,11 @@ pub(crate) fn glyphs(env: &Env) -> Glyphs {
     Glyphs::Unicode
 }
 
-/// Colour in command output and the card: on at a terminal unless `NO_COLOR` is set.
+/// Colour in the shell: on at a terminal unless `NO_COLOR` is set or `TERM` is `dumb`.
 pub(crate) fn colour(env: &Env, terminal: bool) -> bool {
-    terminal && env.get("NO_COLOR").is_none_or(str::is_empty)
+    terminal
+        && env.get("NO_COLOR").is_none_or(str::is_empty)
+        && env.get("TERM").is_none_or(|term| term != "dumb")
 }
 
 /// Whether the wallet has caught up with the chain, as the session last heard.
@@ -125,15 +128,9 @@ const DROP_ORDER: [Segment; 6] = [
 ];
 
 /// Visible width of `text`, one cell per character. The live area holds no wide characters.
+#[cfg(test)]
 pub(crate) fn width(text: &str) -> usize {
     text.chars().count()
-}
-
-/// `text` cut to `columns - 1` cells.
-pub(crate) fn cut(text: &str, columns: u16) -> String {
-    text.chars()
-        .take(usize::from(columns.saturating_sub(1)))
-        .collect()
 }
 
 /// `text` with control characters replaced, so a name cannot move the cursor or set a colour.
@@ -168,80 +165,97 @@ pub(crate) fn grouped(value: u64) -> String {
 }
 
 impl Status {
-    fn left(&self, keep: &[Segment], marks: &Marks) -> Vec<String> {
-        let mut out = vec![printable(&self.wallet)];
+    fn left(&self, keep: &[Segment]) -> Vec<Spans> {
+        let mut out = vec![Spans::of(printable(&self.wallet), Tone::Bold)];
         if self.locked {
-            out.push("locked".to_owned());
+            out.push(Spans::of("locked", Tone::Dim));
             return out;
         }
         if keep.contains(&Segment::Balance)
             && let Some(balance) = &self.balance
         {
-            out.push(balance.clone());
+            out.push(Spans::of(balance.clone(), Tone::Bold));
         }
         if keep.contains(&Segment::Spendable)
             && let Some(spendable) = &self.spendable
             && self.balance.as_ref() != Some(spendable)
         {
-            out.push(format!("{spendable} spendable"));
+            let mut spans = Spans::of(spendable.clone(), Tone::Plain);
+            spans.push(" spendable", Tone::Dim);
+            out.push(spans);
         }
-        let _ = marks;
         out
     }
 
-    fn right(&self, keep: &[Segment], marks: &Marks) -> Vec<String> {
+    fn right(&self, keep: &[Segment], marks: &Marks) -> Vec<Spans> {
         let mut out = Vec::new();
+        let flag = |name: &str, on: bool| {
+            let mut spans = Spans::of(format!("{name} "), Tone::Dim);
+            if on {
+                spans.push(marks.on, Tone::Green);
+            } else {
+                spans.push(marks.off, Tone::Dim);
+            }
+            spans
+        };
         if keep.contains(&Segment::Height)
             && let Some(height) = self.height
         {
-            let mark = match self.sync {
-                SyncMark::Unknown => String::new(),
-                SyncMark::Syncing => format!(" {}", marks.syncing),
-                SyncMark::Synced => format!(" {}", marks.synced),
-            };
-            out.push(format!("h {}{mark}", grouped(height)));
+            let mut spans = Spans::of("h ", Tone::Dim);
+            spans.push(grouped(height), Tone::Plain);
+            match self.sync {
+                SyncMark::Unknown => {}
+                SyncMark::Syncing => spans.push(format!(" {}", marks.syncing), Tone::Yellow),
+                SyncMark::Synced => spans.push(format!(" {}", marks.synced), Tone::Green),
+            }
+            out.push(spans);
         }
         if keep.contains(&Segment::Network) {
-            out.push(self.network.clone());
+            out.push(Spans::of(self.network.clone(), Tone::Plain));
         }
         if keep.contains(&Segment::Tor) {
-            out.push(format!(
-                "tor {}",
-                if self.tor { marks.on } else { marks.off }
-            ));
+            out.push(flag("tor", self.tor));
         }
         if keep.contains(&Segment::Api) {
-            out.push(format!(
-                "api {}",
-                if self.api { marks.on } else { marks.off }
-            ));
+            out.push(flag("api", self.api));
         }
         out
     }
 
     /// The status rule: `── main · 10.992 EPIC ───── h 2,411,005 ✓ · mainnet · tor ● · api ○ ──`,
     /// never wider than `columns - 1`. Segments drop in [`DROP_ORDER`] until it fits.
+    #[cfg(test)]
     pub(crate) fn rule(&self, columns: u16, marks: &Marks) -> String {
+        self.rule_spans(columns, marks).plain()
+    }
+
+    /// The status rule in its colours.
+    pub(crate) fn rule_spans(&self, columns: u16, marks: &Marks) -> Spans {
         let max = usize::from(columns.saturating_sub(1));
         let rule = marks.rule.to_string();
+        let sep = Spans::of(format!(" {} ", marks.sep), Tone::Dim);
         let mut keep: Vec<Segment> = DROP_ORDER.to_vec();
         keep.push(Segment::Wallet);
         loop {
-            let sep = format!(" {} ", marks.sep);
-            let left = self.left(&keep, marks).join(&sep);
-            let right = self.right(&keep, marks).join(&sep);
-            let head = format!("{rule}{rule} {left} ");
-            let tail = if right.is_empty() {
-                format!("{rule}{rule}")
-            } else {
-                format!(" {right} {rule}{rule}")
-            };
-            let used = width(&head).saturating_add(width(&tail));
+            let left = Spans::join(self.left(&keep), &sep);
+            let right = Spans::join(self.right(&keep, marks), &sep);
+            let mut head = Spans::of(format!("{rule}{rule} "), Tone::Dim);
+            head.extend(left);
+            head.push(" ", Tone::Plain);
+            let mut tail = Spans::new();
+            if right.width() > 0 {
+                tail.push(" ", Tone::Plain);
+                tail.extend(right);
+                tail.push(" ", Tone::Plain);
+            }
+            tail.push(format!("{rule}{rule}"), Tone::Dim);
+            let used = head.width().saturating_add(tail.width());
             // At least three rule characters between the two halves.
             if used.saturating_add(3) <= max || keep.len() == 1 {
                 let fill = max.saturating_sub(used);
-                let line = format!("{head}{}{tail}", rule.repeat(fill));
-                return cut(&line, columns);
+                head.push(rule.repeat(fill), Tone::Dim);
+                head.extend(tail);
+                return head.cut(columns);
             }
             if let Some(next) = DROP_ORDER.iter().find(|segment| keep.contains(segment)) {
                 keep.retain(|segment| segment != next);
@@ -252,6 +266,7 @@ impl Status {
 
 /// The row under the status rule while the user edits `line`: the usage of the command being
 /// typed when `usage` knows it, else what the keys do.
+#[cfg(test)]
 pub(crate) fn hint_row(
     line: &str,
     locked: bool,
@@ -259,6 +274,17 @@ pub(crate) fn hint_row(
     columns: u16,
     marks: &Marks,
 ) -> String {
+    hint_spans(line, locked, usage, columns, marks).plain()
+}
+
+/// The hint row in its colours: dim.
+pub(crate) fn hint_spans(
+    line: &str,
+    locked: bool,
+    usage: Option<&str>,
+    columns: u16,
+    marks: &Marks,
+) -> Spans {
     let sep = format!(" {} ", marks.sep);
     let text = if let Some(usage) = usage {
         usage.to_owned()
@@ -281,11 +307,12 @@ pub(crate) fn hint_row(
         ]
         .join(&sep)
     };
-    cut(&printable(&text), columns)
+    Spans::of(printable(&text), Tone::Dim).cut(columns)
 }
 
 /// The row under the status rule while a command runs: `⠋ scan 2,410,800/2,411,006 · 5s ·
 /// Ctrl+C cancel`.
+#[cfg(test)]
 pub(crate) fn progress_row(
     tick: usize,
     what: &str,
@@ -293,23 +320,47 @@ pub(crate) fn progress_row(
     columns: u16,
     marks: &Marks,
 ) -> String {
+    progress_spans(tick, what, seconds, columns, marks).plain()
+}
+
+/// The progress row in its colours: the spinner yellow, the keys dim.
+pub(crate) fn progress_spans(
+    tick: usize,
+    what: &str,
+    seconds: u64,
+    columns: u16,
+    marks: &Marks,
+) -> Spans {
     let sep = format!(" {} ", marks.sep);
-    let text = format!(
-        "{} {what}{sep}{seconds}s{sep}Ctrl+C cancel",
-        marks.spinner(tick)
-    );
-    cut(&printable(&text), columns)
+    let mut spans = Spans::of(marks.spinner(tick), Tone::Yellow);
+    spans.push(format!(" {}", printable(what)), Tone::Plain);
+    spans.push(sep.clone(), Tone::Dim);
+    spans.push(format!("{seconds}s"), Tone::Plain);
+    spans.push(sep, Tone::Dim);
+    spans.push("Ctrl+C cancel", Tone::Dim);
+    spans.cut(columns)
 }
 
 /// The rows of the footer drawn while a command runs, the same rows the editor draws: blank,
-/// `>`, the status rule, progress.
-pub(crate) fn footer(status: &Status, progress: &str, columns: u16, marks: &Marks) -> [String; 4] {
+/// `>`, the status rule, progress. In colour when `on`.
+pub(crate) fn footer(
+    status: &Status,
+    progress: &Spans,
+    columns: u16,
+    marks: &Marks,
+    on: bool,
+) -> [String; 4] {
     [
         String::new(),
-        cut(">", columns),
-        status.rule(columns, marks),
-        progress.to_owned(),
+        prompt_mark(status.locked).cut(columns).render(on),
+        status.rule_spans(columns, marks).render(on),
+        progress.clone().cut(columns).render(on),
     ]
+}
+
+/// The prompt mark: yellow while the wallet is open, dim while it is locked.
+pub(crate) fn prompt_mark(locked: bool) -> Spans {
+    Spans::of(">", if locked { Tone::Dim } else { Tone::YellowBold })
 }
 
 /// The colour codes in the SGR sequences of `text`: any foreground or background other than the
@@ -500,9 +551,12 @@ mod tests {
             "⠋ scan 2,410,800/2,411,006 · 5s · Ctrl+C cancel"
         );
         for columns in WIDTHS {
-            let progress = progress_row(1, "scan", 5, columns, &marks);
-            for row in footer(&status(), &progress, columns, &marks) {
-                assert!(width(&row) < usize::from(columns), "{row}");
+            let progress = progress_spans(1, "scan", 5, columns, &marks);
+            for on in [false, true] {
+                for row in footer(&status(), &progress, columns, &marks, on) {
+                    let shown = crate::shell::paint::strip(&row);
+                    assert!(width(&shown) < usize::from(columns), "{row}");
+                }
             }
         }
     }
@@ -537,7 +591,7 @@ mod tests {
     }
 
     #[test]
-    fn live_rows_hold_no_colour() {
+    fn live_rows_are_coloured_only_with_colour_on() {
         assert_eq!(
             colour_codes("\u{1b}[1;2m\u{1b}[39mx\u{1b}[0m"),
             Vec::<String>::new()
@@ -548,14 +602,34 @@ mod tests {
         for glyphs in [Glyphs::Unicode, Glyphs::Ascii] {
             let marks = Marks::new(glyphs);
             for columns in WIDTHS {
-                let mut rows: Vec<String> = footer(&status(), "x", columns, &marks).into();
-                rows.push(hint_row("", false, None, columns, &marks));
-                rows.push(hint_row("tx", true, Some("tx <COMMAND>"), columns, &marks));
-                rows.push(progress_row(3, "scan", 5, columns, &marks));
-                for row in rows {
+                let progress = progress_spans(3, "scan", 5, columns, &marks);
+                let rows = |on: bool| -> Vec<String> {
+                    let mut rows: Vec<String> =
+                        footer(&status(), &progress, columns, &marks, on).into();
+                    rows.push(hint_spans("", false, None, columns, &marks).render(on));
+                    rows.push(
+                        hint_spans("tx", true, Some("tx <COMMAND>"), columns, &marks).render(on),
+                    );
+                    rows
+                };
+                for row in rows(false) {
                     assert!(!row.contains('\u{1b}'), "{row:?}");
+                }
+                let plain = rows(false);
+                for (row, bare) in rows(true).iter().zip(&plain) {
+                    assert_eq!(&crate::shell::paint::strip(row), bare);
                 }
             }
         }
+        let marks = Marks::new(Glyphs::Unicode);
+        let rule = status().rule_spans(112, &marks).render(true);
+        assert!(rule.contains("\u{1b}[1mmain\u{1b}[0m"), "{rule:?}");
+        assert!(rule.contains("\u{1b}[32m ✓\u{1b}[0m"), "{rule:?}");
+        assert!(
+            rule.contains("\u{1b}[2mtor \u{1b}[0m\u{1b}[32m●"),
+            "{rule:?}"
+        );
+        let mark = footer(&status(), &Spans::new(), 80, &marks, true)[1].clone();
+        assert_eq!(mark, "\u{1b}[1;33m>\u{1b}[0m");
     }
 }
