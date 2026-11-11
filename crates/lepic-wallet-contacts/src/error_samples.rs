@@ -399,6 +399,10 @@ pub fn invoice_errors() -> Vec<InvoiceError> {
         InvoiceError::Unrepresentable(unrepresentable()),
         InvoiceError::StoredSlate(DecodeError::UnknownFormat),
         InvoiceError::UnknownSlate { slate_id: SLATE },
+        InvoiceError::SlateIdTaken {
+            slate_id: SLATE,
+            issued: Some(TX),
+        },
         InvoiceError::AlreadyFinalized {
             slate_id: SLATE,
             tx_id: TX,

@@ -769,6 +769,7 @@ impl From<InvoiceError> for WalletError {
             | E::UnknownTransport { .. }
             | E::CannotDeliver { .. }
             | E::CannotExport { .. }
+            | E::SlateIdTaken { .. }
             | E::NotFinalizable { .. } => WalletErrorKind::InvalidArgument,
             E::Decode(_)
             | E::WrongStage { .. }

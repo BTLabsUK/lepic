@@ -222,6 +222,14 @@ pub enum InvoiceError {
     StoredSlate(#[source] DecodeError),
     #[error("slate {slate_id} answers no invoice this wallet issued")]
     UnknownSlate { slate_id: SlateId },
+    /// The slate id the caller gave an invoice names a slate this wallet already stores, in
+    /// either direction. Nothing was stored. `issued` is this wallet's invoice under that id,
+    /// when the id is one.
+    #[error("slate id {slate_id} is already taken")]
+    SlateIdTaken {
+        slate_id: SlateId,
+        issued: Option<TxId>,
+    },
     /// The invoice was finalized with another I2 under the same slate id.
     #[error("invoice {slate_id} was already finalized as transaction {tx_id}")]
     AlreadyFinalized { slate_id: SlateId, tx_id: TxId },
@@ -554,11 +562,33 @@ fn issue_stored(
     method: &dyn Method,
     delivery: &Delivery,
     request: &InvoiceRequest,
+    slate_id: Option<SlateId>,
     randomness: I1Randomness,
 ) -> Result<(TxId, Slate, WireSlate), InvoiceError> {
     if repos.account(request.account)?.is_none() {
         return Err(WalletError::from(AccountError::UnknownAccount(request.account)).into());
     }
+    // The stage caches key by slate id alone, so an id taken in either direction is refused.
+    let randomness = match slate_id {
+        Some(slate_id) => {
+            let issued = repos.transaction_by_slate(uuid(slate_id), TxDirection::Incoming)?;
+            if issued.is_some()
+                || repos
+                    .transaction_by_slate(uuid(slate_id), TxDirection::Outgoing)?
+                    .is_some()
+            {
+                return Err(InvoiceError::SlateIdTaken {
+                    slate_id,
+                    issued: issued.map(|tx| tx.id),
+                });
+            }
+            I1Randomness {
+                slate_id,
+                ..randomness
+            }
+        }
+        None => randomness,
+    };
     let key_id = next_output_key(repos, request.account)?;
     let ttl_cutoff_height = request
         .ttl_blocks
@@ -1002,6 +1032,20 @@ where
     /// [`InvoiceError::CannotDeliver`] or [`InvoiceError::CannotExport`]. Fails with
     /// [`InvoiceError::Undelivered`] when the invoice was stored but the method failed;
     /// [`Wallet::cancel`] withdraws it.
+    pub async fn issue_invoice(
+        &self,
+        method: &Arc<dyn Method>,
+        request: InvoiceRequest,
+        delivery: Delivery,
+    ) -> Result<IssuedInvoice, InvoiceError> {
+        self.issue_invoice_as(method, request, delivery, None).await
+    }
+
+    /// Issues an invoice as [`Wallet::issue_invoice`] does, under the caller's `slate_id` when
+    /// it names one: a random version-4 UUID the caller stores before issuing, so a retry finds
+    /// the invoice the first call made. Fails as [`Wallet::issue_invoice`] does, and with
+    /// [`InvoiceError::SlateIdTaken`], with nothing stored, when this wallet stores a slate
+    /// under that id already.
     #[instrument(skip_all, fields(
         wallet = %self.config().name,
         transport = %method.id(),
@@ -1009,14 +1053,17 @@ where
         tx_id = Empty,
         slate_id = Empty,
     ))]
-    pub async fn issue_invoice(
+    pub async fn issue_invoice_as(
         &self,
         method: &Arc<dyn Method>,
         request: InvoiceRequest,
         delivery: Delivery,
+        slate_id: Option<SlateId>,
     ) -> Result<IssuedInvoice, InvoiceError> {
         check_delivery(&**method, &delivery)?;
-        let (tx_id, slate, wire) = self.issue_unsent(method, request, delivery.clone()).await?;
+        let (tx_id, slate, wire) = self
+            .issue_unsent_as(method, request, delivery.clone(), slate_id)
+            .await?;
         let span = Span::current();
         span.record("tx_id", tx_id.0);
         span.record("slate_id", tracing::field::display(slate.id()));
@@ -1054,6 +1101,18 @@ where
         request: InvoiceRequest,
         delivery: Delivery,
     ) -> Result<(TxId, Slate, WireSlate), InvoiceError> {
+        self.issue_unsent_as(method, request, delivery, None).await
+    }
+
+    /// Issues and stores an invoice as [`Wallet::issue_unsent`] does, under the caller's
+    /// `slate_id` when it names one; see [`Wallet::issue_invoice_as`].
+    pub async fn issue_unsent_as(
+        &self,
+        method: &Arc<dyn Method>,
+        request: InvoiceRequest,
+        delivery: Delivery,
+        slate_id: Option<SlateId>,
+    ) -> Result<(TxId, Slate, WireSlate), InvoiceError> {
         let session = self.session()?;
         let (tip, _) = self.stage_tip(&session, InvoiceError::Node).await?;
         let reply_keys = self.reply_keys();
@@ -1072,7 +1131,9 @@ where
                 .map_err(InvoiceError::Signing)
                 .and_then(|randomness| {
                     session.store.write(|repos| {
-                        issue_stored(repos, &env, &*method, &delivery, &request, randomness)
+                        issue_stored(
+                            repos, &env, &*method, &delivery, &request, slate_id, randomness,
+                        )
                     })
                 });
             Ok(issued)

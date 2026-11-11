@@ -718,6 +718,7 @@ fn invoice_kind(error: &InvoiceError) -> ErrorKind {
         | InvoiceError::PaymentUndelivered { .. }
         | InvoiceError::NotPosted { .. } => ErrorKind::Incomplete,
         InvoiceError::UnknownSlate { .. } | InvoiceError::NotParked { .. } => ErrorKind::NotFound,
+        InvoiceError::SlateIdTaken { .. } => ErrorKind::Rejected,
         InvoiceError::Decode(_)
         | InvoiceError::WrongStage { .. }
         | InvoiceError::Selection(_)

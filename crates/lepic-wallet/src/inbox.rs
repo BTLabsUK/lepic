@@ -473,6 +473,7 @@ pub fn invoice_finalize_is_permanent(error: &InvoiceError) -> bool {
         | InvoiceError::Unrepresentable(_)
         | InvoiceError::StoredSlate(_)
         | InvoiceError::UnknownSlate { .. }
+        | InvoiceError::SlateIdTaken { .. }
         | InvoiceError::AlreadyFinalized { .. }
         | InvoiceError::NotFinalizable { .. }
         | InvoiceError::MissingContext { .. }

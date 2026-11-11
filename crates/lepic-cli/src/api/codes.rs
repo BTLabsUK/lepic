@@ -332,6 +332,7 @@ fn invoice(error: &InvoiceError) -> Option<&'static str> {
         | E::UnknownTransport { .. }
         | E::CannotDeliver { .. }
         | E::CannotExport { .. }
+        | E::SlateIdTaken { .. }
         | E::NotFinalizable { .. } => "invalid_argument",
         E::Decode(_)
         | E::WrongStage { .. }
