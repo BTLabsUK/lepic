@@ -12,6 +12,11 @@
 pub mod amount;
 #[cfg(unix)]
 mod api;
+/// Serve's API needs Unix sockets; the links it keeps are shared with `epic1` everywhere.
+#[cfg(not(unix))]
+mod api {
+    pub(crate) mod links;
+}
 mod api_clients;
 pub mod app_config;
 pub mod cli;
