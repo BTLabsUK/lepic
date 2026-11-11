@@ -326,7 +326,7 @@ pub(crate) fn print_after(console: &mut Console, format: OutputFormat, payload: 
     let canvas = Canvas {
         columns: terminal_columns(),
         glyphs: crate::shell::live::glyphs(&console.env),
-        colour: crate::shell::live::colour(&console.env, true) && ansi_works(),
+        colour: crate::shell::live::colour(&console.env, true) && crate::shell::live::ansi_works(),
     };
     match draw(payload, canvas) {
         Ok(drawn) => {
@@ -374,19 +374,6 @@ pub(crate) fn for_shell(
 
 fn terminal_columns() -> usize {
     crossterm::terminal::size().map_or(80, |(columns, _)| usize::from(columns))
-}
-
-/// Whether escape sequences reach the console as colour. A Windows console needs virtual
-/// terminal processing on, which crossterm switches on when it can.
-fn ansi_works() -> bool {
-    #[cfg(windows)]
-    {
-        crossterm::ansi_support::supports_ansi()
-    }
-    #[cfg(not(windows))]
-    {
-        true
-    }
 }
 
 #[cfg(test)]

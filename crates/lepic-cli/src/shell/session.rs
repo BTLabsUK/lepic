@@ -35,8 +35,8 @@ use crate::shell::card::{CardInfo, Glyphs, welcome};
 use crate::shell::editor::{LivePrompt, Shared, columns, line_editor};
 use crate::shell::history::FilteredHistory;
 use crate::shell::live::{
-    Marks, Status, SyncMark, colour, footer, glyphs, grouped, printable, progress_spans,
-    short_amount,
+    Marks, Status, SyncMark, ansi_works, colour, footer, glyphs, grouped, printable,
+    progress_spans, short_amount,
 };
 use crate::shell::paint::{self, Tone, tint};
 use crate::shell::reader::{Ask, Read, Reader, Reply};
@@ -104,7 +104,7 @@ async fn session<H: Host>(
     screen: &Screen,
 ) -> Result<(), CliError> {
     let marks = Marks::new(glyphs(&console.env));
-    let painted = colour(&console.env, true);
+    let painted = colour(&console.env, true) && ansi_works();
     let network = settings.network.to_string();
     let card = welcome(
         &CardInfo {
@@ -1123,7 +1123,7 @@ impl<'a, H: Host> Shell<'a, H> {
             ),
             stdout: Box::new(ScreenWriter::new(self.screen.clone())),
             stderr: Box::new(ScreenWriter::new(self.screen.clone())),
-            ansi: colour(&self.env, true),
+            ansi: colour(&self.env, true) && ansi_works(),
             stdout_terminal: false,
         }
     }

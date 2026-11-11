@@ -82,6 +82,20 @@ pub(crate) fn colour(env: &Env, terminal: bool) -> bool {
         && env.get("TERM").is_none_or(|term| term != "dumb")
 }
 
+/// Whether escape sequences reach the console as colour. A Windows console needs virtual
+/// terminal processing on, which crossterm switches on when it can; classic conhost starts
+/// with it off, so this runs before anything coloured is printed.
+pub(crate) fn ansi_works() -> bool {
+    #[cfg(windows)]
+    {
+        crossterm::ansi_support::supports_ansi()
+    }
+    #[cfg(not(windows))]
+    {
+        true
+    }
+}
+
 /// Whether the wallet has caught up with the chain, as the session last heard.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) enum SyncMark {
