@@ -549,7 +549,7 @@ The shell opens the wallet once, asks for its password (or reads it from the pas
 `LEPIC_PASSWORD`), and keeps it open. Each line is a `lepic` command without `lepic`:
 
 ```text
-> tx list --limit 5
+> tx list
 ── main · 10.992 EPIC · 8.492 spendable ──── h 2,411,005 ✓ · mainnet · tor ● · api ○ ──
 Enter run · Tab complete · → accept suggestion · Ctrl+C clear
 ```
