@@ -216,7 +216,9 @@ mod tests {
         };
         assert_eq!(
             [count(Role::Read), count(Role::Receive), count(Role::Full)],
-            [23, 6, 29]
+            // Post and cancel route at `receive`; their handlers ask `full` of all but an
+            // invoice this wallet issued.
+            [23, 8, 27]
         );
         let socket_only: HashSet<Op> = router
             .operations()

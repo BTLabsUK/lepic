@@ -896,7 +896,8 @@
     "/payments/{id}/post": {
       "post": {
         "operationId": "postPayment",
-        "x-role": "full",
+        "x-role": "receive",
+        "x-role-note": "Posting an invoice this wallet issued needs `receive`; posting a send needs `full`.",
         "summary": "Post a finished payment to the node again.",
         "tags": [
           "Payments"
@@ -954,7 +955,8 @@
     "/payments/{id}/cancel": {
       "post": {
         "operationId": "cancelPayment",
-        "x-role": "full",
+        "x-role": "receive",
+        "x-role-note": "Cancelling an invoice this wallet issued while it awaits its answer needs `receive`; every other cancel or release needs `full`.",
         "summary": "End a payment that is not on the chain and free its coins.",
         "tags": [
           "Payments"
@@ -1112,7 +1114,7 @@
       "post": {
         "operationId": "open",
         "x-role": "receive",
-        "x-role-note": "Receiving a payment or parking an invoice needs `receive`; finishing your own payment or advancing a pairing needs `full`.",
+        "x-role-note": "Receiving a payment, parking an invoice or finishing an invoice this wallet issued needs `receive`; finishing your own send or advancing a pairing needs `full`.",
         "summary": "Act on it: receive, finish, park an invoice, or advance a pairing. Never spends.",
         "tags": [
           "Inspect and open"

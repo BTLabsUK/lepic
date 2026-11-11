@@ -561,8 +561,11 @@ pub(super) async fn post<H: Host>(
     request: Request,
     _context: &Context,
 ) -> Reply {
-    let body: PostBody = request.json()?;
     let (payment, _) = found(service, request.param("id")?).await?;
+    if !own_invoice(&payment) {
+        request.require(Role::Full)?;
+    }
+    let body: PostBody = request.json()?;
     allowed(&payment, "post")?;
     let tx = tx_of(service, &payment.id).await?;
     run(
@@ -578,6 +581,12 @@ pub(super) async fn post<H: Host>(
     ok(&payment)
 }
 
+/// Whether `payment` is an invoice this wallet issued: finishing it moves no coin of ours, so
+/// `receive` may post it, and cancel it while it awaits its answer.
+fn own_invoice(payment: &Payment) -> bool {
+    payment.kind == "invoice" && payment.direction == "in"
+}
+
 /// Cancels a payment, or releases the coins of a posted one the chain never took. A payment
 /// already cancelled is answered as it is.
 pub(super) async fn cancel<H: Host>(
@@ -586,6 +595,10 @@ pub(super) async fn cancel<H: Host>(
     _context: &Context,
 ) -> Reply {
     let (payment, _) = found(service, request.param("id")?).await?;
+    if !(own_invoice(&payment) && matches!(payment.state.as_str(), "awaiting_answer" | "cancelled"))
+    {
+        request.require(Role::Full)?;
+    }
     if payment.state == "cancelled" {
         return ok(&payment);
     }

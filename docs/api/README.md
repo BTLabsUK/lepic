@@ -39,7 +39,7 @@ The role limits what the client may call:
 | Role | May |
 |---|---|
 | `read` | Every call that changes nothing. The default. |
-| `receive` | Also create invoices, addresses and links, and take payments. Never spends. |
+| `receive` | Also create invoices, addresses and links, take payments, and finish the invoices this wallet issued: open the answer, post it, cancel one still waiting for its answer. Never spends. |
 | `full` | Everything the TLS listener answers. |
 
 A call above the role answers 403 `role_required`. Three operations are socket-only and answer 403
@@ -220,8 +220,9 @@ Open never pays, which is the rule of ADR 0055 (D5).
 A sealed file from a contact (`BEGINEPICSEALED.` text) is opened with this wallet's keys.
 `inspect` answers `type: "sealed"` with the amount, the `contact_id` when the contact signed it,
 the message and the next step, and stores nothing. `open` goes by what is inside: a send is
-received and answered sealed (`receive`), an invoice is held for approval (`receive`), and the
-answer to your own payment is finished (`full`). A sealed file that does not open with this
+received and answered sealed (`receive`), an invoice is held for approval (`receive`), the
+answer to an invoice this wallet issued is finished (`receive`), and the answer to your own send
+is finished (`full`). A sealed file that does not open with this
 wallet's keys answers 409 `nothing_to_open`.
 
 A plain slate that carries a LEPIC wallet's reply key is answered sealed to that key, so its

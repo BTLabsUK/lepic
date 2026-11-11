@@ -940,3 +940,65 @@ fn a_read_client_opens_nothing() {
         assert_eq!(waiting["items"], json!([]), "{waiting}");
     });
 }
+
+#[test]
+fn a_receive_client_finishes_an_invoice_this_wallet_issued() {
+    let host = TestHost::new();
+    let payer = funded_wallet(&host);
+    let shop = Instance::new("shop password");
+    shop.run(&host, &["wallet", "init"]).ok();
+    let till = client_key(&shop, "till");
+    let address = receiver_address(&host);
+
+    serving(host, &shop, |serve| {
+        serve.add("till", &till, "receive");
+        let invoice = |id: &str| {
+            let made = serve.post(
+                &till,
+                "/api/v1/payments",
+                &json!({"kind": "invoice", "amount": "2", "via": "file", "id": id}),
+            );
+            assert_eq!(made.status, 201, "{made:?}");
+            made.json()
+        };
+
+        // Issued, paid by the payer from its file, and finished and posted by the till.
+        let id = "5a6b7c8d-9e0f-4a1b-8c2d-3e4f5a6b7c8d";
+        let issued = invoice(id);
+        let file = payer.path("shop-invoice.slate");
+        std::fs::write(&file, support::text(&issued["handoff"], "text")).unwrap();
+        let paid = payer
+            .run(serve.host, &["invoice", "pay", file.to_str().unwrap(), "2"])
+            .ok()
+            .json();
+        let answer = std::fs::read_to_string(support::text(&paid, "reply_file")).unwrap();
+        let opened = serve.post(&till, "/api/v1/open", &json!({ "text": answer }));
+        assert_eq!(opened.status, 200, "{opened:?}");
+        let opened = opened.json();
+        assert_eq!(opened["outcome"], "finished", "{opened}");
+        assert_eq!(opened["payment"]["id"], id, "{opened}");
+        assert_eq!(opened["payment"]["state"], "posted", "{opened}");
+        assert_eq!(serve.host.node.pushed_transactions().len(), 1);
+        // Posting it again, as after a node that lost it.
+        let path = format!("/api/v1/payments/{id}/post");
+        let posted = serve.post(&till, &path, &json!({}));
+        assert_eq!(posted.status, 200, "{posted:?}");
+        assert_eq!(posted.json()["state"], "posted", "{posted:?}");
+
+        // An invoice still waiting for its answer is called off.
+        let unanswered = "6b7c8d9e-0f1a-4b2c-9d3e-4f5a6b7c8d9e";
+        invoice(unanswered);
+        let cancel = format!("/api/v1/payments/{unanswered}/cancel");
+        let cancelled = serve.post(&till, &cancel, &json!({}));
+        assert_eq!(cancelled.status, 200, "{cancelled:?}");
+        assert_eq!(cancelled.json()["state"], "cancelled", "{cancelled:?}");
+
+        // A send still needs the full role.
+        let send = serve.post(
+            &till,
+            "/api/v1/payments",
+            &json!({"amount": "1", "to": address, "id": "7c8d9e0f-1a2b-4c3d-8e4f-5a6b7c8d9e0f"}),
+        );
+        problem(&send, 403, "role_required");
+    });
+}

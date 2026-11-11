@@ -373,7 +373,9 @@ pub(super) async fn open<H: Host>(
         }
         Some(Stage::S1) => receive(service, read, form, body.message).await,
         Some(Stage::I1) => park(service, read, text).await,
-        Some(Stage::S2 | Stage::I2) => {
+        // The answer to our own invoice moves no coin of ours; finishing a send does.
+        Some(Stage::I2) => finish(service, read).await,
+        Some(Stage::S2) => {
             request.require(Role::Full)?;
             finish(service, read).await
         }
