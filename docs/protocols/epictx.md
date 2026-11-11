@@ -253,8 +253,8 @@ why a code or an answer was refused. Examples: `Proof`, `NoReplyKey`, `NoTtl`, `
 
 | Constant | Value |
 |---|---|
-| `SINGLE_CODE_MAX_LEN` | 360 bytes fit one code |
-| `BINARY_FRAGMENT_LEN` | 200-byte fragments in an animation |
+| `SINGLE_CODE_MAX_LEN` | 360 bytes fit one code, the default; the writer may pick 0 to 1024 |
+| `BINARY_FRAGMENT_LEN` | 200-byte fragments in an animation, the default |
 | `MIN_FOUNTAIN_PARTS` | 10 fountain parts after the pure ones |
 | `MAX_BINARY_LEN` | 67,648 bytes |
 | `MIN_FRAGMENT_LEN`, `MAX_FRAGMENT_LEN` | 16 and 1024 bytes read |

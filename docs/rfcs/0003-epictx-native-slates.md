@@ -663,7 +663,7 @@ in the marker. A wallet that is not LEPIC ignores the key.
 | Direct endpoint cached answers | 64 |
 | Advert | 16 formats, 64 characters each, path 256 characters |
 | Binary QR payload | 67,648 bytes |
-| Single QR code | 360 bytes of framed payload |
+| Single QR code | 360 bytes of framed payload by default |
 | In-person answers per code | 16 |
 
 A slate's size depends on its inputs and outputs: each input adds 34 bytes and each output 709.
@@ -682,6 +682,9 @@ A slate in a QR code uses the UR type `epic-slate`:
 - A payload of at most 360 bytes is one code, in upper case.
 - A longer one is a fountain-coded animation of 200-byte fragments, with at least 10 fountain
   parts after the pure ones.
+- Both numbers are the writer's defaults: a writer may pick another single-code limit (0 to
+  1024 bytes) and fragment length (16 to 1024), for example smaller ones to keep codes drawn at
+  level H with a logo small. Readers take either.
 - A reader takes fragments of 16 to 1024 bytes, at most 256 fragments, parts of at most 2400
   characters, at most 1024 parts and 1 MiB per decode, and binary payloads of at most 67,648
   bytes.
