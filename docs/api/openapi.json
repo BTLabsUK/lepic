@@ -3413,7 +3413,6 @@
           "text",
           "kind",
           "account",
-          "address_index",
           "relays",
           "issued_at"
         ]

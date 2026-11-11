@@ -321,8 +321,7 @@ fn link_object<H: Host>(
         account,
         address_index: view
             .index
-            .or_else(|| kept.as_ref().map(|kept| kept.address_index))
-            .unwrap_or(0),
+            .or_else(|| kept.as_ref().map(|kept| kept.address_index)),
         amount: kept.as_ref().and_then(|kept| kept.amount.clone()),
         message: kept.as_ref().and_then(|kept| kept.message.clone()),
         relays: view.relays.clone(),

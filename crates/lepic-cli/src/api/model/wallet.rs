@@ -106,7 +106,9 @@ pub(crate) struct Link {
     pub(crate) kind: String,
     /// The account's label.
     pub(crate) account: String,
-    pub(crate) address_index: u32,
+    /// Absent when the wallet does not know the address of the link.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) address_index: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) amount: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

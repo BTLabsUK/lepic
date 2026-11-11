@@ -66,7 +66,7 @@ pub(super) async fn relay_object<H: Host>(service: &Service<'_, H>) -> Result<Re
             Ok((waiting, previous))
         })
         .map_err(|error: lepic_store::StoreError| Problem::from(CliError::from(error)))?;
-    let now = jiff::Timestamp::now();
+    let now = service.held.wallet.ports().clock.now();
     let draining = previous
         .into_iter()
         .filter(|(_, until)| *until > now)
@@ -241,17 +241,17 @@ pub(super) async fn update_profile<H: Host>(
     }
     let book = service.held.wallet.contact_book();
     let relays = relays(service);
-    if let Some(name) = &body.name {
-        book.contacts_set_own_name(&relays, name)
-            .await
-            .map_err(|error| problem_at(error, "/name"))?;
-        write(service, OWN_NAME, name)?;
-    }
     if let Some(bits) = bits {
         book.contacts_set_own_profile(&relays, bits)
             .await
             .map_err(|error| problem_at(error, "/flags"))?;
         write(service, PROFILE, &bits.to_string())?;
+    }
+    if let Some(name) = &body.name {
+        book.contacts_set_own_name(&relays, name)
+            .await
+            .map_err(|error| problem_at(error, "/name"))?;
+        write(service, OWN_NAME, name)?;
     }
     ok(&profile_object(service)?)
 }
