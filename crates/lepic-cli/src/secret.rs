@@ -151,6 +151,8 @@ impl SecretInput {
         if self.terminal {
             return self.read_typed(what, prompt).await;
         }
+        // Elsewhere a terminal read has returned above, so only Unix turns echo off.
+        #[cfg(unix)]
         let _echo = if self.terminal {
             let io_error = |source| SecretError::Io { what, source };
             let guard = EchoGuard::off().ok_or(SecretError::NoHiddenPrompt { what })?;
@@ -412,10 +414,11 @@ impl TypedLine {
 
 /// Turns terminal echo off until dropped. `unsafe` is denied, so this asks `stty`, which every
 /// Unix has, instead of calling `tcsetattr`. Elsewhere the prompt reads keys itself.
+#[cfg(unix)]
 struct EchoGuard;
 
+#[cfg(unix)]
 impl EchoGuard {
-    #[cfg(unix)]
     fn off() -> Option<Self> {
         stty("-echo").then_some(Self)
     }
