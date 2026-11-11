@@ -26,6 +26,7 @@ pub mod secret;
 mod service;
 pub mod settings;
 pub mod settings_file;
+mod shell;
 pub mod stores;
 #[cfg(unix)]
 mod through_serve;
