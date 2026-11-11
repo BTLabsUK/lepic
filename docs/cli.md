@@ -655,7 +655,7 @@ lepic api client remove laptop
 A client is accepted by its Ed25519 key: `add` stores the SHA-256 of the certificate's public
 key in `api-clients`, one line per client: `<name> <fingerprint> <role>`, where `#` starts a
 comment. `--role` is `read`, `receive` or `full` and defaults to `read`; a line without a role
-is `read`. Names use letters, digits, `.`, `-` and `_`. A running serve reads the file at each
+is `read`. `list` prints each client as `<name>  <fingerprint>  <role>`. Names use letters, digits, `.`, `-` and `_`. A running serve reads the file at each
 request.
 
 ## Output formats

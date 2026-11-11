@@ -1560,13 +1560,20 @@ fn write_human(out: &mut Vec<u8>, report: &Report) -> std::io::Result<()> {
         | Report::Epic1Restore(_)
         | Report::Epic1Issuer(_)
         | Report::EpictxOpen(_) => epic1::write_epic1_human(out, report),
-        Report::ApiClientAdd(r) => writeln!(out, "Client {} added: {}", r.name, r.fingerprint),
+        Report::ApiClientAdd(r) => writeln!(
+            out,
+            "Client {} added with role {}: {}",
+            r.name, r.role, r.fingerprint
+        ),
         Report::ApiClientRemove(r) => writeln!(out, "Client {} removed.", r.name),
         Report::ApiClientList(r) if r.clients.is_empty() => writeln!(out, "No clients."),
-        Report::ApiClientList(r) => r
-            .clients
-            .iter()
-            .try_for_each(|client| writeln!(out, "{}  {}", client.name, client.fingerprint)),
+        Report::ApiClientList(r) => r.clients.iter().try_for_each(|client| {
+            writeln!(
+                out,
+                "{}  {}  {}",
+                client.name, client.fingerprint, client.role
+            )
+        }),
         Report::PeerPins(r) if r.pins.is_empty() => {
             writeln!(out, "No pinned keys for account {}.", r.account)
         }
@@ -3733,6 +3740,30 @@ mod tests {
             line("no_invoices"),
             "esPeer@relay.example.org answered without LEPIC last, or sent an invoice back: it \
              does not pay invoices and is sent no notices. Send it a slate file instead.\n"
+        );
+    }
+
+    #[test]
+    fn the_client_list_shows_each_role() {
+        let client = |name: &str, role| ApiClientReport {
+            name: text(name),
+            fingerprint: text("ab12"),
+            role,
+        };
+        let report = Report::ApiClientList(ApiClientListReport {
+            clients: vec![client("gate", "receive"), client("watcher", "read")],
+        });
+        assert_eq!(
+            render(&report, OutputFormat::Human).to_string(),
+            "gate  ab12  receive\nwatcher  ab12  read\n"
+        );
+        assert_eq!(
+            render(
+                &Report::ApiClientAdd(client("gate", "receive")),
+                OutputFormat::Human
+            )
+            .to_string(),
+            "Client gate added with role receive: ab12\n"
         );
     }
 
