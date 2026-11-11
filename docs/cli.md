@@ -538,6 +538,69 @@ Two config.toml keys route Epicbox through Tor:
 Only one of the two can be set. `node_over_tor = true` sends node calls through the same tor.
 [protocols/tor.md](protocols/tor.md) covers the onion routes and the timeouts.
 
+## The interactive shell
+
+`lepic` with no command, at a terminal, opens the shell; `lepic shell` opens it too. Without a
+terminal on standard input and output, `lepic` with no command prints the usage and `lepic
+shell` is refused. Global options given with it, such as `--network floonet`, hold for the whole
+session.
+
+The shell opens the wallet once, asks for its password (or reads it from the password file or
+`LEPIC_PASSWORD`), and keeps it open. Each line is a `lepic` command without `lepic`:
+
+```text
+> tx list --limit 5
+── main · 10.992 EPIC · 8.492 spendable ──── h 2,411,005 ✓ · mainnet · tor ● · api ○ ──
+Enter run · Tab complete · → accept suggestion · Ctrl+C clear
+```
+
+The rule under the input line shows the wallet, its balance, the height, the network, Tor and
+whether serve runs. Tab completes commands and options, with what each does; a dim hint from
+the history is taken with the right arrow. A mistyped command names the nearest one:
+
+```text
+error: unknown command: tx lsit
+hint: did you mean tx list?
+```
+
+A command's output prints above the input line. While it runs, Ctrl+C cancels it; at the prompt,
+Ctrl+C clears the line. Listeners (`epicbox listen`, `http listen`, `tor listen`) run until
+Ctrl+C.
+
+Besides the commands, the shell knows these words:
+
+| Word | Does |
+|---|---|
+| `help`, `?` | Lists the commands; `help <command>` shows its usage |
+| `status` | Shows the wallet, the node and what runs in this session |
+| `lock` | Locks the wallet; serve stops first |
+| `unlock` | Asks for the password and opens the wallet again |
+| `serve start [options]` | Answers the wallet API on its socket while the shell runs, with the options of `lepic serve`; not available on Windows yet |
+| `serve stop` | Stops serving; requests in flight finish first |
+| `history` | Lists the lines typed in this data directory |
+| `clear` | Clears the screen |
+| `exit`, `quit`, Ctrl+D | Lock the wallet and leave |
+
+`tx send` shows what it will do first: the address, the amount, the fee, the total, the
+spendable balance after it and how it is delivered, then asks `Send 1.50800000 EPIC in total?
+[y/N]`. Only `y` sends. `--yes` on the line skips the question; it exists in the shell only.
+
+The wallet locks after `shell_idle_lock_minutes` minutes with no line entered (15 by default, 0
+turns it off), never while serve runs; a command that needs it asks for the password again.
+
+`wallet init`, `wallet restore`, `wallet import-seed` and `wallet password` run outside the shell.
+Standard input belongs to the shell, so `-` in place of a file is refused. `--data-dir`,
+`--network`, `--config` and `--settings` on a line are refused: they hold for the session. The
+other global options apply to that line.
+
+The lines go to `shell-history` in the data directory, readable by its owner only. Lines that may
+hold secrets are left out: anything naming a password or secret, seed imports, `epiccash:` links
+and `--hex` payloads.
+
+The shell draws with Unicode; on Windows outside Windows Terminal, or with `LEPIC_ASCII=1`, it
+uses ASCII. `NO_COLOR` turns colour off in command output. The input line and the rows around it
+never use colour.
+
 ## lepic serve and the wallet API
 
 `lepic serve` opens the wallet once and holds the data directory until Ctrl-C or SIGTERM. While

@@ -7,6 +7,14 @@ Conventional Commit messages at release time.
 
 ## [Unreleased]
 
+### Added
+
+- `lepic` with no command, at a terminal, opens an interactive shell (also `lepic shell`): the
+  wallet opens once, each line runs a command on it, a status rule shows the balance and height,
+  Tab completes commands, `tx send` asks before it sends, and the wallet locks after
+  `shell_idle_lock_minutes` idle (default 15). Without a terminal, `lepic` prints the usage as
+  before.
+
 ## [0.5.0] - 2026-11-11
 
 ### Changed
