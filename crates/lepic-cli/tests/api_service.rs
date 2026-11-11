@@ -19,6 +19,7 @@ use std::os::unix::net::UnixStream;
 use std::time::{Duration, Instant};
 
 use lepic_cli::app_config::ApiLimits;
+use lepic_node::mock::MockFailure;
 use serde_json::{Value, json};
 use support::{
     FUNDING, Instance, PATIENCE, SENDER_MNEMONIC, TestHost, http, parse_reply, problem, serving,
@@ -216,14 +217,11 @@ fn the_event_stream_yields_the_wallets_events() {
             assert!(started.elapsed() < PATIENCE, "no payment.created event");
             let (name, event) = next_event(&mut events);
             assert_eq!(event["type"], name.as_str(), "{event}");
-            let mut errors = Vec::new();
-            support::contract::validate(
-                &json!({"$ref": "#/components/schemas/Event"}),
-                &event,
-                "",
-                &mut errors,
+            assert_eq!(
+                support::contract::event_errors(&event),
+                Vec::<String>::new(),
+                "{event}"
             );
-            assert_eq!(errors, Vec::<String>::new(), "{event}");
             if name == "payment.created" {
                 break event;
             }
@@ -244,5 +242,36 @@ fn the_event_stream_yields_the_wallets_events() {
             .map(|event| &event["id"])
             .collect();
         assert!(ids.contains(&&created["id"]), "{listed}");
+
+        // Every event of a page keeps the contract, also its object.
+        let page = http(socket, "GET", "/api/v1/events", None).ok();
+        let items = page["items"].as_array().unwrap();
+        assert!(!items.is_empty(), "{page}");
+        for event in items {
+            assert_eq!(
+                support::contract::event_errors(event),
+                Vec::<String>::new(),
+                "{event}"
+            );
+        }
+    });
+}
+
+#[test]
+fn a_served_503_carries_retry_after() {
+    let host = TestHost::new();
+    let wallet = Instance::new("serving password");
+    wallet.run(&host, &["wallet", "init"]).ok();
+    let node = host.node.clone();
+    serving(host, &wallet, |socket, _| {
+        // The node cannot be reached: a scan from a height asks it for the tip first.
+        for _ in 0..50 {
+            node.fail_next("get_tip", MockFailure::Unreachable);
+        }
+        let body = json!({"from_height": 1}).to_string();
+        let scan = http(socket, "POST", "/api/v1/wallet/scan", Some(&body));
+        problem(&scan, 503, "node_unreachable");
+        let wait = scan.header("retry-after").unwrap();
+        assert!(wait.parse::<u64>().is_ok(), "{scan:?}");
     });
 }

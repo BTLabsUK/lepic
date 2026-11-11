@@ -82,6 +82,34 @@ pub fn errors(method: &str, path: &str, reply: &Reply) -> Vec<String> {
     }
 }
 
+/// Every way an `Event` breaks the contract, also in its `data.object`: the schema leaves `data`
+/// open, so the object is checked against `Payment` or `Contact` by the type's prefix. Empty
+/// when it keeps it.
+pub fn event_errors(event: &Value) -> Vec<String> {
+    let mut errors = Vec::new();
+    validate(
+        &serde_json::json!({"$ref": "#/components/schemas/Event"}),
+        event,
+        "",
+        &mut errors,
+    );
+    let schema = match event["type"].as_str().and_then(|kind| kind.split_once('.')) {
+        Some(("payment", _)) => "Payment",
+        Some(("contact", _)) => "Contact",
+        _ => return errors,
+    };
+    if let Some(object) = event["data"].get("object") {
+        let at = format!("/data/object ({})", event["type"]);
+        validate(
+            &serde_json::json!({"$ref": format!("#/components/schemas/{schema}")}),
+            object,
+            &at,
+            &mut errors,
+        );
+    }
+    errors
+}
+
 /// The `operationId` of `method` on `path` (below `/api/v1`, query included), if the document has
 /// it.
 pub fn operation_id(method: &str, path: &str) -> Option<String> {
