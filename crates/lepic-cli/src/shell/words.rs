@@ -179,7 +179,8 @@ fn command_path(words: &[String]) -> Vec<String> {
 }
 
 /// Whether the history file may keep `line`. Lines that may hold secret material are left out:
-/// contact invite links, payload hex, anything naming a password, and seed imports.
+/// contact invite links, payload hex, anything naming a password, seed imports, and answers
+/// given to `in-person take` other than by `--file`.
 pub(crate) fn keep_in_history(line: &str) -> bool {
     let lower = line.to_ascii_lowercase();
     if lower.contains("password") || lower.contains("secret") {
@@ -188,6 +189,13 @@ pub(crate) fn keep_in_history(line: &str) -> bool {
     let Words { words, .. } = tokenize(line);
     let path = command_path(&words);
     if path.starts_with(&["wallet".to_owned(), "import-seed".to_owned()]) {
+        return false;
+    }
+    if path.starts_with(&["in-person".to_owned(), "take".to_owned()])
+        && !words
+            .iter()
+            .any(|word| word == "--file" || word.starts_with("--file="))
+    {
         return false;
     }
     !words.iter().any(|word| {
@@ -477,6 +485,44 @@ mod tests {
         assert!(!keep_in_history("wallet import-seed wallet.seed"));
         assert!(!keep_in_history("--password-file p tx list"));
         assert!(!keep_in_history("node status --node-api-secret-file s"));
+        assert!(!keep_in_history("in-person take 0a1b2c3d"));
+        assert!(!keep_in_history(
+            "in-person take ur:epic/1-2/abc ur:epic/2-2/def"
+        ));
+        assert!(keep_in_history("in-person take --file answer.bin"));
+    }
+
+    #[test]
+    fn the_shell_refuses_what_runs_outside_it() {
+        let refused = |line: &str, serving: bool| {
+            let args = words(line);
+            let cli = Cli::try_parse_from(std::iter::once("lepic".to_owned()).chain(args.clone()))
+                .expect("the line parses");
+            refusal(&cli.command, &args, serving)
+        };
+        for line in [
+            "wallet init",
+            "wallet restore",
+            "wallet import-seed seed.txt",
+            "wallet password",
+            "shell",
+            "serve",
+        ] {
+            assert!(refused(line, false).is_some(), "{line} is refused");
+        }
+        for line in ["epicbox listen", "http listen", "tor listen"] {
+            assert!(
+                refused(line, true).is_some(),
+                "{line} is refused while serving"
+            );
+            assert!(
+                refused(line, false).is_none(),
+                "{line} runs while not serving"
+            );
+        }
+        assert!(refused("tx send 1 --to-file -", false).is_some());
+        assert!(refused("tx list", false).is_none());
+        assert!(refused("tx list", true).is_none());
     }
 
     #[test]
