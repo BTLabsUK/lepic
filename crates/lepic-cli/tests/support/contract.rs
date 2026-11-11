@@ -124,7 +124,9 @@ fn body(content: &Value, reply: &Reply) -> Vec<String> {
     };
     let Some(documented) = content.get(&media) else {
         let types: Vec<&String> = content.as_object().unwrap().keys().collect();
-        return vec![format!("content-type {media} is not documented ({types:?})")];
+        return vec![format!(
+            "content-type {media} is not documented ({types:?})"
+        )];
     };
     if !media.ends_with("json") {
         return Vec::new();
@@ -186,10 +188,10 @@ pub fn validate(schema: &Value, value: &Value, at: &str, errors: &mut Vec<String
             ));
         }
     }
-    if let Some(allowed) = schema.get("enum").and_then(Value::as_array) {
-        if !allowed.contains(value) {
-            errors.push(format!("{at_or_root}: {value} is not one of {allowed:?}"));
-        }
+    if let Some(allowed) = schema.get("enum").and_then(Value::as_array)
+        && !allowed.contains(value)
+    {
+        errors.push(format!("{at_or_root}: {value} is not one of {allowed:?}"));
     }
     let Some(kind) = schema.get("type").and_then(Value::as_str) else {
         return;
@@ -233,13 +235,15 @@ fn object(schema: &Value, fields: &Map<String, Value>, at: &str, errors: &mut Ve
     {
         let name = required.as_str().unwrap();
         if !fields.contains_key(name) {
-            errors.push(format!("{at_or_root}: the required field {name} is missing"));
+            errors.push(format!(
+                "{at_or_root}: the required field {name} is missing"
+            ));
         }
     }
-    if let Some(most) = schema.get("maxProperties").and_then(Value::as_u64) {
-        if fields.len() as u64 > most {
-            errors.push(format!("{at_or_root}: more than {most} fields"));
-        }
+    if let Some(most) = schema.get("maxProperties").and_then(Value::as_u64)
+        && fields.len() as u64 > most
+    {
+        errors.push(format!("{at_or_root}: more than {most} fields"));
     }
     let extra = schema.get("additionalProperties");
     for (name, field) in fields {
@@ -260,10 +264,10 @@ fn object(schema: &Value, fields: &Map<String, Value>, at: &str, errors: &mut Ve
 }
 
 fn string(schema: &Value, text: &str, at: &str, errors: &mut Vec<String>) {
-    if let Some(most) = schema.get("maxLength").and_then(Value::as_u64) {
-        if text.chars().count() as u64 > most {
-            errors.push(format!("{at}: longer than {most} characters"));
-        }
+    if let Some(most) = schema.get("maxLength").and_then(Value::as_u64)
+        && text.chars().count() as u64 > most
+    {
+        errors.push(format!("{at}: longer than {most} characters"));
     }
     if let Some(format) = schema.get("format").and_then(Value::as_str) {
         let fits = match format {
@@ -281,7 +285,12 @@ fn string(schema: &Value, text: &str, at: &str, errors: &mut Vec<String>) {
     if let Some(pattern) = schema.get("pattern").and_then(Value::as_str) {
         let fits = match pattern {
             r"^-?[0-9]+(\.[0-9]{1,8})?$" => is_decimal(text),
-            "^[0-9a-f]+$" => !text.is_empty() && text.bytes().all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase()),
+            "^[0-9a-f]+$" => {
+                !text.is_empty()
+                    && text
+                        .bytes()
+                        .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
+            }
             other => panic!("the contract check does not know the pattern {other} (at {at})"),
         };
         if !fits {
@@ -292,7 +301,9 @@ fn string(schema: &Value, text: &str, at: &str, errors: &mut Vec<String>) {
 
 pub fn is_decimal(text: &str) -> bool {
     let text = text.strip_prefix('-').unwrap_or(text);
-    let (whole, fraction) = text.split_once('.').map_or((text, None), |(w, f)| (w, Some(f)));
+    let (whole, fraction) = text
+        .split_once('.')
+        .map_or((text, None), |(w, f)| (w, Some(f)));
     let digits = |part: &str| !part.is_empty() && part.bytes().all(|b| b.is_ascii_digit());
     digits(whole) && fraction.is_none_or(|fraction| digits(fraction) && fraction.len() <= 8)
 }
