@@ -43,6 +43,8 @@ struct Job {
 #[derive(Debug, Default)]
 struct Slot {
     phase: Phase,
+    /// The phase before `claim`, until the job is queued.
+    claimed: Option<Phase>,
     pending: Option<Job>,
     height: u64,
     target: u64,
@@ -59,6 +61,25 @@ pub(in crate::commands::serve) struct Scans {
 impl Scans {
     fn running(&self) -> bool {
         self.slot.borrow().phase == Phase::Running
+    }
+
+    /// Takes the running phase when no scan has it; false when one does. The caller gives it back
+    /// with [`Scans::release`] if it then fails before it queues the job.
+    fn claim(&self) -> bool {
+        let mut slot = self.slot.borrow_mut();
+        if slot.phase == Phase::Running {
+            return false;
+        }
+        slot.claimed = Some(slot.phase);
+        slot.phase = Phase::Running;
+        true
+    }
+
+    fn release(&self) {
+        let mut slot = self.slot.borrow_mut();
+        if let Some(phase) = slot.claimed.take() {
+            slot.phase = phase;
+        }
     }
 
     fn state(&self) -> Option<(&'static str, u64, u64)> {
@@ -272,31 +293,35 @@ pub(super) async fn scan<H: Host>(
             "reset_chain scans from genesis and excludes from_height",
         ));
     }
-    if service.scans.running() {
+    if !service.scans.claim() {
         return Err(Problem::conflict(
             "scan_running",
             "a scan is already running",
         ));
     }
     if let Some(start) = body.from_height {
-        let tip = tip(service).await.map_err(|error| {
-            Problem::new(
+        let checked = match tip(service).await {
+            Ok(tip) if start > tip => Err(Problem::invalid(
+                "/from_height",
+                CliError::StartAboveTip { start, tip }.to_string(),
+            )),
+            Ok(_) => Ok(()),
+            Err(error) => Err(Problem::new(
                 StatusCode::SERVICE_UNAVAILABLE,
                 Category::Node,
                 "node_unreachable",
                 error.chain().join(": "),
-            )
-        })?;
-        if start > tip {
-            return Err(Problem::invalid(
-                "/from_height",
-                CliError::StartAboveTip { start, tip }.to_string(),
-            ));
+            )),
+        };
+        if let Err(problem) = checked {
+            service.scans.release();
+            return Err(problem);
         }
     }
     let target = {
         let mut slot = service.scans.slot.borrow_mut();
         slot.phase = Phase::Running;
+        slot.claimed = None;
         slot.height = body.from_height.unwrap_or(0);
         slot.target = slot.height;
         slot.pending = Some(Job {
@@ -506,5 +531,35 @@ pub(super) fn resolve<H: Host>(
             .into_iter()
             .find(|account| account.index.0 == 0)
             .ok_or_else(|| Problem::invalid(param, "the wallet has no default account")),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_one_call_takes_the_scan_and_a_failed_one_gives_it_back() {
+        let scans = Scans::default();
+        assert!(scans.claim());
+        assert!(scans.running());
+        // A second call, also one that would still await the node tip, is refused.
+        assert!(!scans.claim());
+        scans.release();
+        assert!(!scans.running());
+        assert!(scans.claim());
+        // The job is queued: the phase stays and a release changes nothing.
+        scans.slot.borrow_mut().claimed = None;
+        scans.release();
+        assert!(scans.running());
+    }
+
+    #[test]
+    fn a_released_claim_restores_the_phase_of_the_scan_before() {
+        let scans = Scans::default();
+        scans.slot.borrow_mut().phase = Phase::Done;
+        assert!(scans.claim());
+        scans.release();
+        assert_eq!(scans.slot.borrow().phase, Phase::Done);
     }
 }
