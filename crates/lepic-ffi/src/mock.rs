@@ -183,6 +183,12 @@ impl MockBackend {
         self.node.pushed_transactions().len()
     }
 
+    /// Makes `chain` the node's chain, for a test that serves a recorded one.
+    #[cfg(test)]
+    pub(crate) fn replace_chain(&self, chain: ChainState) {
+        self.node.update_chain(|state| *state = chain);
+    }
+
     /// Puts every transaction pushed so far into the node's transaction pool.
     pub(crate) fn pool_pushed(&self) {
         let pushed = self.node.pushed_transactions();

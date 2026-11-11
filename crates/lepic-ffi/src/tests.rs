@@ -40,6 +40,7 @@ mod soak;
 #[cfg(unix)]
 #[cfg(feature = "tor")]
 mod tor;
+mod upgrade;
 
 const PIN: &str = "471100";
 
