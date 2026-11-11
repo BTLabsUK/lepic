@@ -7,6 +7,8 @@ Conventional Commit messages at release time.
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-11-11
+
 ### Changed
 
 - **Breaking:** the owner API moved from `/v1` to `/api/v1`, with a new document, new objects
@@ -27,6 +29,10 @@ Conventional Commit messages at release time.
   sealed envelope) instead of `/v1/peer` and `/v1/peer/slates`. The advert `protocol` is 2; a
   listener or wallet on protocol 1 is treated as having no native endpoint and the send falls
   back to `/v2/foreign`.
+- Role `receive` can open the answer to an invoice this wallet issued, post it, and cancel the
+  invoice while it awaits its answer. Finishing, posting or cancelling a send still needs `full`.
+- `invoice issue` and `contact invoice` take `--slate-id`.
+- `api client list` and `api client add` print each client's role.
 
 ### Removed
 
@@ -38,6 +44,9 @@ Conventional Commit messages at release time.
   functions (`pairing_show_card`, `pairing_scan_card`, `pairing_find_words`, `FoundInvite`,
   `PairingCard`, the `offer_words` and meeting-relay arguments of `pairing_invite`).
   Pairing by invite, reply and confirm link and the four SAS words stay.
+- The pairing-words primitive in `lepic-contact` (`PairingWords`, `WordsKey`, `WordsError`),
+  `ContactError::Words`, the `pair_words` fuzz target and `testdata/vectors/pairing/words.json`.
+  The binding's error kinds 65, 71 and 72 keep their numbers; 72 is no longer produced.
 - `epic1 pay --proof`, the `proof` field of the owner API's `epic1/pay` body and the `proof`
   parameter of the binding's `epic1Pay`. Payment proofs a stock wallet puts in a slate are still
   kept.
@@ -50,6 +59,19 @@ Conventional Commit messages at release time.
   contact was heard from and the pairing is older than the request. An answer its sender never
   confirmed no longer blocks a new request from that sender until it expires. A dropped request
   is logged at info with a `reason`.
+- A new pair request from a contact ends the old pairing even when the contact's clock is behind
+  the wallet's. An invite-link pairing is ended so too when the wallet held an earlier request
+  from that contact.
+- API creates (payment send, invoice, address, link) answer 200 with the same object when
+  repeated after serve stopped between making the object and recording its `id`.
+- Links issued by the CLI list with their text at `GET /api/v1/links`.
+- An expired invoice opened again answers 422 `payment_expired` and is not held.
+- A refused `PATCH /api/v1/profile` changes nothing; the name was checked after the flags were
+  applied.
+- A contact's API invite link, label and refused relay are removed with the contact however it
+  is removed, not only by the API's delete.
+- `tx send --json` and `tx resend --json` report the listener's `/api/v1/inbox` as the
+  `destination` of a native send instead of its `/v2/foreign` URL.
 
 ## [0.4.0] - 2026-11-10
 

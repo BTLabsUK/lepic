@@ -996,7 +996,7 @@ checksum = "20870f649af7073d53e38067b2a84312175d56ea15217e1b15bc83506ec50afb"
 
 [[package]]
 name = "lepic-contact"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "base64",
  "chacha20poly1305",
@@ -1013,7 +1013,7 @@ dependencies = [
 
 [[package]]
 name = "lepic-crypto"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "grin_secp256k1zkp",
  "rand_core 0.10.1",
@@ -1023,7 +1023,7 @@ dependencies = [
 
 [[package]]
 name = "lepic-epic1"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "lepic-contact",
  "lepic-crypto",
@@ -1034,7 +1034,7 @@ dependencies = [
 
 [[package]]
 name = "lepic-epicbox"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "bs58",
  "chacha20poly1305",
@@ -1058,7 +1058,7 @@ dependencies = [
 
 [[package]]
 name = "lepic-ffi"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "base64",
  "flutter_rust_bridge",
@@ -1113,7 +1113,7 @@ dependencies = [
 
 [[package]]
 name = "lepic-keychain"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "argon2",
  "bip39",
@@ -1136,7 +1136,7 @@ dependencies = [
 
 [[package]]
 name = "lepic-legacy-rpc"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "http-body-util",
  "hyper",
@@ -1157,7 +1157,7 @@ dependencies = [
 
 [[package]]
 name = "lepic-legacy-slate"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "lepic-crypto",
  "lepic-primitives",
@@ -1168,7 +1168,7 @@ dependencies = [
 
 [[package]]
 name = "lepic-methods"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "http-body-util",
  "hyper",
@@ -1195,7 +1195,7 @@ dependencies = [
 
 [[package]]
 name = "lepic-native-slate"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "lepic-crypto",
  "lepic-primitives",
@@ -1206,7 +1206,7 @@ dependencies = [
 
 [[package]]
 name = "lepic-node"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "base64",
  "futures-util",
@@ -1231,7 +1231,7 @@ dependencies = [
 
 [[package]]
 name = "lepic-peer"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "http-body-util",
  "hyper",
@@ -1250,7 +1250,7 @@ dependencies = [
 
 [[package]]
 name = "lepic-primitives"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "blake2",
  "lepic-crypto",
@@ -1260,7 +1260,7 @@ dependencies = [
 
 [[package]]
 name = "lepic-seal"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "base64",
  "ed25519-dalek",
@@ -1275,7 +1275,7 @@ dependencies = [
 
 [[package]]
 name = "lepic-slate"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "ed25519-dalek",
  "lepic-crypto",
@@ -1291,7 +1291,7 @@ dependencies = [
 
 [[package]]
 name = "lepic-store"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "blake2",
  "chacha20poly1305",
@@ -1311,7 +1311,7 @@ dependencies = [
 
 [[package]]
 name = "lepic-telemetry"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "bip39",
  "jiff",
@@ -1323,7 +1323,7 @@ dependencies = [
 
 [[package]]
 name = "lepic-tor"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "base64",
  "ed25519-dalek",
@@ -1345,7 +1345,7 @@ dependencies = [
 
 [[package]]
 name = "lepic-transport"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "lepic-crypto",
  "lepic-legacy-slate",
@@ -1359,7 +1359,7 @@ dependencies = [
 
 [[package]]
 name = "lepic-wallet"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "blake2",
  "ed25519-dalek",
@@ -1387,7 +1387,7 @@ dependencies = [
 
 [[package]]
 name = "lepic-wallet-contacts"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "blake2",
  "ed25519-dalek",
