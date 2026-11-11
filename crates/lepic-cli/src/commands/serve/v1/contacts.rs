@@ -803,10 +803,21 @@ pub(super) async fn delete<H: Host>(
     let before = existing(service, &request).await?;
     let id = path_id(&request)?;
     let book = service.held.wallet.contact_book();
-    let removed = if notify {
-        book.contact_unpair(&relays(service), id).await
-    } else {
-        book.contact_remove(id).await
+    // A pairing nobody answered yet is cancelled, so a late answer is refused and the same
+    // contact can be asked again; a paired contact is unpaired or removed.
+    let removed = match before
+        .pairing
+        .as_ref()
+        .map(|pairing| pairing.method.as_str())
+    {
+        Some("request") => match book.pairing_request_cancel(id).await {
+            Ok(()) => Ok(true),
+            Err(ContactError::UnknownPairing) => book.pairing_cancel(id).await,
+            Err(error) => Err(error),
+        },
+        Some(_) => book.pairing_cancel(id).await,
+        None if notify => book.contact_unpair(&relays(service), id).await,
+        None => book.contact_remove(id).await,
     }
     .map_err(problem)?;
     if !removed {
