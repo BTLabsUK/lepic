@@ -363,6 +363,7 @@ impl CliError {
                 | SecretError::PasswordFile { .. },
             ) => ErrorKind::Config,
             Self::Secret(SecretError::Mismatch | SecretError::EmptyNew) => ErrorKind::Rejected,
+            Self::Secret(SecretError::Cancelled { .. }) => ErrorKind::Interrupted,
             Self::Arguments(_)
             | Self::Secret(_)
             | Self::Amount(_)
@@ -858,6 +859,10 @@ mod tests {
             ),
             (AmountError::Syntax.into(), ErrorKind::Usage),
             (CliError::Interrupted, ErrorKind::Interrupted),
+            (
+                SecretError::Cancelled { what: "password" }.into(),
+                ErrorKind::Interrupted,
+            ),
             (
                 CliError::SendInterrupted { tx_id: 2 },
                 ErrorKind::Interrupted,
