@@ -37,6 +37,7 @@ lepic-wallet.workspace = true
 lepic-wallet-contacts.workspace = true
 rand = { workspace = true, features = ["std", "std_rng", "sys_rng"] }
 reedline = { workspace = true, features = ["external_printer"] }
+qrcode = { workspace = true }
 # Moves to [workspace.dependencies] at merge.
 rcgen = { version = "0.14.10", default-features = false, features = ["ring", "pem", "zeroize"] }
 rustls = { workspace = true, features = ["std"] }
