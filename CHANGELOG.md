@@ -7,6 +7,8 @@ Conventional Commit messages at release time.
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-11-11
+
 ### Added
 
 - `lepic` with no command, at a terminal, opens an interactive shell (also `lepic shell`): the
@@ -20,8 +22,18 @@ Conventional Commit messages at release time.
   a by-hand `contact accept` and a confirm link from `contact enter`), and `--qr` on those
   commands draws it outside the shell. Never with `--output json` or when standard output is not
   a terminal.
-
-## [0.5.0] - 2026-11-11
+- The shell's welcome card draws the lepic wordmark from the LEPIC branding pack: the l as a bar
+  in Phosphor green and `epic` in the terminal's text colour, or the one-line `▌epic` mark where
+  the window is narrow.
+- An epic1 payment in the shell (`epic1 pay`, `tx send --to-contact`) ends with a short seal
+  animation while the send runs. It never delays the send; any key or Ctrl+C skips it, and it is
+  off without colour, without a terminal, with `--output json`, on `TERM=dumb` and in narrow
+  windows.
+- `SendRequest` takes a maximum fee, and the wallet refuses a send whose fee is above it with
+  `FeeAboveMaximum` (the binding maps it to `InvalidArgument`). The shell's reviewed `tx send`
+  passes the fee it showed, so the check and the send are one step.
+- On Windows the shell ends cleanly on console close, logoff, shutdown and Ctrl+Break, and its
+  history file is owner-only (ACL). On Unix it ends cleanly on SIGTERM.
 
 ### Changed
 
