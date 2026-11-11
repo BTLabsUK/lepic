@@ -8,6 +8,7 @@
 //! in [`MockNode::violations`] and answered with a JSON-RPC error.
 
 mod chain;
+mod recorded;
 mod recording;
 
 use std::collections::VecDeque;
@@ -18,6 +19,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 pub use chain::{ChainOutput, ChainState};
+pub use recorded::RecordedChain;
 pub use recording::{FixtureError, Recording};
 
 use crate::client::{CallPolicy, NodeClient, RetryPolicy, RpcTransport};
