@@ -5,16 +5,22 @@ use lepic_wallet_contacts::{
     ContactRelays, DOMAIN_FILE_MAX, DomainFile, RelayMode, WalletContacts as _,
 };
 
-use super::{Opened, Run};
+#[cfg(unix)]
+use super::Opened;
+use super::Run;
 use crate::cli::{DomainCommand, DomainFileArgs, ProfileCommand, ProfileSetArgs};
 use crate::exit::CliError;
 use crate::host::Host;
+#[cfg(unix)]
+use crate::output::ProfileDomainDocumentReport;
 use crate::output::{
-    ProfileDomainAttachReport, ProfileDomainDocumentReport, ProfileDomainFileReport,
-    ProfileDomainShowReport, ProfileSetReport, ProfileShowReport, Report,
+    ProfileDomainAttachReport, ProfileDomainFileReport, ProfileDomainShowReport, ProfileSetReport,
+    ProfileShowReport, Report,
 };
 use crate::profile::{describe, parse_bits, parse_names};
-use crate::settings::{Origin, Settings, SettingsError};
+#[cfg(unix)]
+use crate::settings::Settings;
+use crate::settings::{Origin, SettingsError};
 
 impl<H: Host> Run<'_, H> {
     pub(super) async fn profile(&mut self, command: ProfileCommand) -> Result<Report, CliError> {
@@ -104,6 +110,7 @@ fn key_hex(key: &lepic_wallet_contacts::VerifyingKey) -> String {
 }
 
 /// The well-known file of this wallet's domain, as a report holding its text.
+#[cfg(unix)]
 pub(super) fn domain_document<N: lepic_node::NodeApi + 'static>(
     opened: &Opened<N>,
     settings: &Settings,

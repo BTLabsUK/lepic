@@ -410,6 +410,7 @@ impl Reply {
 }
 
 /// One HTTP/1.1 request to serve's API on `socket`; the connection closes after the answer.
+#[cfg(unix)]
 pub fn http(socket: &Path, method: &str, path: &str, body: Option<&str>) -> Reply {
     use std::io::Read as _;
     let mut stream = std::os::unix::net::UnixStream::connect(socket).unwrap();

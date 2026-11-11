@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Owner-only files, written so a crash leaves the old content or the new, never part of it.
 
-use std::fs::{self, File, OpenOptions};
+use std::fs::{self, OpenOptions};
 use std::io::{self, Write as _};
 use std::path::{Path, PathBuf};
 
@@ -48,8 +48,8 @@ fn owner_only_new() -> OpenOptions {
 #[cfg(unix)]
 pub(crate) fn sync_folder(path: &Path) -> io::Result<()> {
     match path.parent() {
-        Some(folder) if !folder.as_os_str().is_empty() => File::open(folder)?.sync_all(),
-        _ => File::open(".")?.sync_all(),
+        Some(folder) if !folder.as_os_str().is_empty() => fs::File::open(folder)?.sync_all(),
+        _ => fs::File::open(".")?.sync_all(),
     }
 }
 

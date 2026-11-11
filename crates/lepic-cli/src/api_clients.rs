@@ -181,11 +181,13 @@ impl Clients {
         self.lines.iter().filter_map(|line| line.client.as_ref())
     }
 
+    #[cfg(unix)]
     pub(crate) fn lists(&self, fingerprint: Fingerprint) -> bool {
         self.role(fingerprint).is_some()
     }
 
     /// The role of the client with `fingerprint`; `None` when the file does not list it.
+    #[cfg(unix)]
     pub(crate) fn role(&self, fingerprint: Fingerprint) -> Option<Role> {
         self.clients()
             .find(|client| client.fingerprint == fingerprint)
@@ -338,9 +340,12 @@ mod tests {
         clients.write().unwrap();
         let text = std::fs::read_to_string(dir.path().join(FILE)).unwrap();
         assert_eq!(text, format!("# phones\nnew {fingerprint} receive\n"));
-        let read = Clients::read(dir.path()).unwrap();
-        assert!(read.lists(fingerprint));
-        assert_eq!(read.role(fingerprint), Some(Role::Receive));
+        #[cfg(unix)]
+        {
+            let read = Clients::read(dir.path()).unwrap();
+            assert!(read.lists(fingerprint));
+            assert_eq!(read.role(fingerprint), Some(Role::Receive));
+        }
     }
 
     #[test]

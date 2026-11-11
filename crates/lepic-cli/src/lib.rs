@@ -32,6 +32,7 @@ pub mod output;
 pub mod profile;
 pub mod progress;
 pub mod secret;
+#[cfg(unix)]
 mod service;
 pub mod settings;
 pub mod settings_file;

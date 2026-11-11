@@ -1911,6 +1911,7 @@ struct HttpListener {
     counts: Arc<Counts>,
     port: u16,
     exposure: Exposure,
+    #[cfg(unix)]
     coinbase: CoinbaseAccess,
 }
 
@@ -1958,11 +1959,13 @@ impl HttpListener {
             handle,
             counts,
             exposure,
+            #[cfg(unix)]
             coinbase,
         })
     }
 
     /// What was answered so far.
+    #[cfg(unix)]
     fn report(&self) -> HttpListenReport {
         counted(self.port, self.exposure, &self.counts)
     }
@@ -2656,6 +2659,8 @@ async fn lock_data_dir(dir: &Path) -> Result<Option<lepic_store::DataDirLock>, C
 /// Why a locked `dir` cannot be opened: the `lepic serve` that answers on its socket, which
 /// runs the commands its API has a route for, or another holder.
 async fn in_use(dir: &Path) -> CliError {
+    #[cfg(not(unix))]
+    let _ = dir;
     #[cfg(unix)]
     if let Some(socket) = crate::through_serve::serving(dir).await {
         return CliError::ServeHoldsWallet { socket };
