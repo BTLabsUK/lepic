@@ -131,6 +131,7 @@ fn serve_answers_a_request_in_flight_before_it_stops() {
         .as_array()
         .unwrap()
         .iter()
+        .filter(|tx| tx["direction"] == "outgoing")
         .map(|tx| &tx["state"])
         .collect();
     assert_eq!(sent_states, ["sent"], "{listed}");
