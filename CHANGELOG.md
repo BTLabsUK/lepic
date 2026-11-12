@@ -7,6 +7,10 @@ Conventional Commit messages at release time.
 
 ## [Unreleased]
 
+### Fixed
+
+- A node switch no longer waits for a check of another node's height to end.
+
 ## [0.5.0] - 2026-11-11
 
 ### Added

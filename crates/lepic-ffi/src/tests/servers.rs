@@ -803,3 +803,50 @@ async fn a_node_tip_is_refused_on_a_locked_wallet() {
         WalletErrorKind::Locked
     );
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_switch_does_not_wait_for_a_node_tip_asked_of_another_node() {
+    let mut world = World::new();
+    let (wallet, config) = world.wallet("").await;
+    let wallet = Arc::new(wallet);
+    // The probed node takes every request and never answers, as a dead one behind a filtered
+    // network does; the probe goes through its own backend, which a switch does not cut.
+    let probed = MockBackend::new(20).unwrap();
+    probed.set_stalled(true);
+    world
+        .chain
+        .backend()
+        .serve_at("http://127.0.0.1:3", &probed);
+    let other = MockBackend::new(15).unwrap();
+    world.chain.backend().serve_at(OTHER_NODE, &other);
+
+    let probe = tokio::spawn({
+        let wallet = Arc::clone(&wallet);
+        let config = WalletConfig {
+            node_url: "http://127.0.0.1:3".to_owned(),
+            ..config.clone()
+        };
+        async move { wallet.node_tip_for(config).await }
+    });
+    assert!(eventually(|| probed.stalled_calls() > 0).await);
+
+    let moved = WalletConfig {
+        node_url: OTHER_NODE.to_owned(),
+        ..config
+    };
+    let switched = tokio::time::timeout(
+        // The grace (3 s) and some room; the probe would hold it for good.
+        Duration::from_secs(5),
+        wallet.set_servers(moved),
+    )
+    .await;
+    assert!(
+        matches!(switched, Ok(Ok(()))),
+        "the switch does not wait for the probe: {switched:?}"
+    );
+    assert!(!probe.is_finished(), "the probe still waits on its node");
+    let session = wallet.session();
+    assert_eq!(session.node().get_tip().await.unwrap().height.value(), 15);
+    probed.set_stalled(false);
+    probe.abort();
+}

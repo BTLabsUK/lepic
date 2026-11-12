@@ -1461,10 +1461,17 @@ impl EpicWallet {
     pub async fn node_tip_for(&self, config: WalletConfig) -> Result<NodeTip, WalletError> {
         let mut config = config;
         let node_secret = NodeSecret::take(&mut config);
-        self.run("node_tip_for", |session| async move {
-            session.node_tip_for(&config, &node_secret).await
-        })
-        .await
+        let session = Arc::clone(&self.session);
+        let in_flight = Arc::clone(&self.session.in_flight);
+        // Outside the servers gate: the probe has a backend of its own, which a switch does
+        // not cut, so a switch would wait for a dead node's timeouts.
+        self.boundary()
+            .run_tracked(
+                "node_tip_for",
+                async move { session.node_tip_for(&config, &node_secret).await },
+                &in_flight,
+            )
+            .await
     }
 
     /// Starts the Epicbox listener, unless it runs already, and streams what it does until
