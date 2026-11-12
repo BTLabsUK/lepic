@@ -71,6 +71,15 @@ impl SwitchableBackend {
             .send_replace(None);
     }
 
+    /// [`NodeBackend::drop_connections`] for the node in use.
+    pub(crate) fn drop_connections(&self) {
+        self.0
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .0
+            .drop_connections();
+    }
+
     fn current(&self) -> (NodeBackend, watch::Receiver<Option<tokio::time::Instant>>) {
         let current = self.0.read().unwrap_or_else(PoisonError::into_inner);
         (current.0.clone(), current.1.subscribe())
@@ -119,6 +128,18 @@ pub(crate) enum NodeBackend {
     Offline,
     #[cfg(feature = "mock")]
     Mock(crate::mock::MockBackend),
+}
+
+impl NodeBackend {
+    /// The next request opens a new connection instead of reusing one kept open.
+    pub(crate) fn drop_connections(&self) {
+        match self {
+            Self::Http(http) => http.drop_connections(),
+            Self::Offline => {}
+            #[cfg(feature = "mock")]
+            Self::Mock(_) => {}
+        }
+    }
 }
 
 impl RpcTransport for NodeBackend {
@@ -190,6 +211,13 @@ impl BackendKey {
             secret: secret.0.clone(),
             over_tor,
         }
+    }
+}
+
+impl<T> BackendCache<T> {
+    pub(crate) fn for_each(&self, mut visit: impl FnMut(&T)) {
+        let kept = self.0.lock().unwrap_or_else(PoisonError::into_inner);
+        kept.iter().for_each(|(_, backend)| visit(backend));
     }
 }
 
@@ -573,7 +601,7 @@ mod tests {
 }
 
 #[cfg(test)]
-mod refusal_tests {
+pub(crate) mod refusal_tests {
     use super::*;
     use crate::api::types::WalletConfig;
 
@@ -602,7 +630,7 @@ mod refusal_tests {
 
     /// A node that answers every request on a kept-alive connection, and counts the
     /// connections it accepted.
-    async fn counting_node() -> (String, Arc<std::sync::atomic::AtomicUsize>) {
+    pub(crate) async fn counting_node() -> (String, Arc<std::sync::atomic::AtomicUsize>) {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = format!("http://{}", listener.local_addr().unwrap());

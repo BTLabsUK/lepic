@@ -1474,6 +1474,19 @@ impl EpicWallet {
             .await
     }
 
+    /// Stops reusing the connections kept open to the wallet's node and to the nodes
+    /// [`EpicWallet::node_tip_for`] asked: the next request to each opens a new one. Call it
+    /// when the network changes and when the app comes back to the foreground, where the
+    /// system may have cut a kept connection without a sign of it, so the next request does not
+    /// wait its timeout out on it. Calls in flight end on their connections. It does no I/O
+    /// and waits for no call or node switch. Fails with `Locked` on a locked wallet.
+    #[frb(sync)]
+    pub fn drop_node_connections(&self) -> Result<(), WalletError> {
+        self.boundary().guard("drop_node_connections", || {
+            self.session.drop_node_connections()
+        })
+    }
+
     /// Starts the Epicbox listener, unless it runs already, and streams what it does until
     /// [`EpicWallet::stop_listener`]. The last event is `Stopped`; a listener that fails while
     /// running reports an `Error` event first. When the listener cannot start, for example

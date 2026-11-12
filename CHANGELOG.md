@@ -7,6 +7,18 @@ Conventional Commit messages at release time.
 
 ## [Unreleased]
 
+### Added
+
+- FFI: `EpicWallet::drop_node_connections` closes the pooled node connections, so the next node
+  call opens a fresh one (for a network change or a return from the background). It does no I/O
+  and waits for no other call.
+
+### Changed
+
+- A direct node connection gives the name lookup and the connect a `connect_timeout` each, and
+  tries the node's addresses as RFC 8305 (Happy Eyeballs) says: IPv6 and IPv4 in turn, 250 ms
+  apart, the first to connect wins.
+
 ### Fixed
 
 - A node switch no longer waits for a check of another node's height to end.

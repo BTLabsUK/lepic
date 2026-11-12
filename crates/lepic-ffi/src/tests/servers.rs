@@ -850,3 +850,48 @@ async fn a_switch_does_not_wait_for_a_node_tip_asked_of_another_node() {
     probed.set_stalled(false);
     probe.abort();
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn after_dropping_node_connections_each_node_gets_a_new_connection() {
+    use lepic_node::RpcTransport as _;
+    use std::sync::atomic::Ordering;
+
+    let mut world = World::new();
+    Arc::get_mut(&mut world.runtime.inner).unwrap().nodes = crate::node::NodeFactory::Http;
+    let (wallet, config) = world.wallet("").await;
+    let (url, accepted) = crate::node::refusal_tests::counting_node().await;
+    let at_node = WalletConfig {
+        node_url: url,
+        ..config
+    };
+    switch(wallet.session(), &at_node).await.unwrap();
+    let node = wallet.session().node().transport().clone();
+    let ask_both = || async {
+        node.post("/v2/foreign", b"{}".to_vec()).await.unwrap();
+        // The counting node's answer is no tip; only the connection matters here.
+        wallet.node_tip_for(at_node.clone()).await.ok();
+    };
+    ask_both().await;
+    ask_both().await;
+    assert_eq!(
+        accepted.load(Ordering::SeqCst),
+        2,
+        "the wallet's node and the probe's backend keep one connection each"
+    );
+
+    wallet.drop_node_connections().unwrap();
+    ask_both().await;
+
+    assert_eq!(accepted.load(Ordering::SeqCst), 4);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn dropping_node_connections_is_refused_on_a_locked_wallet() {
+    let mut world = World::new();
+    let (wallet, _) = world.wallet("").await;
+    wallet.lock();
+    assert_eq!(
+        kind(wallet.drop_node_connections()),
+        WalletErrorKind::Locked
+    );
+}

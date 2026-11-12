@@ -2579,6 +2579,16 @@ fn through_socks(_tor: &RelayTor, _address: &str) -> Result<(), WalletError> {
 }
 
 impl Session {
+    /// Makes the next request to the wallet's node, and to each node [`Session::node_tip_for`]
+    /// keeps a backend for, open a new connection. Fails with `Locked` on a locked wallet.
+    pub(crate) fn drop_node_connections(&self) -> Result<(), WalletError> {
+        self.ensure_unlocked()?;
+        self.engine.ports().node.transport().drop_connections();
+        self.node_tips
+            .for_each(|(backend, _)| backend.drop_connections());
+        Ok(())
+    }
+
     /// The tip and version of the node `config` names, asked as the session asks its own
     /// node: through the wallet's tor and onion routes while node requests go over tor, and
     /// directly otherwise or for a loopback node. The session's node stays as it is. Fails with

@@ -42,6 +42,9 @@ it under the runtime's log subscriber:
   this way fails with `Cancelled`, and its write may still have been stored: read the
   transactions again on the next open before taking the failure as the outcome.
 - `set_servers` lets running calls end first and cancels only a running scan.
+- `drop_node_connections` closes the pooled node connections, so the next node call opens a new
+  one. Call it when the network changes or the app returns from the background. It does no I/O,
+  waits for no call or node switch, and leaves calls in flight to end on their own connection.
 
 ### Open, create and restore
 
