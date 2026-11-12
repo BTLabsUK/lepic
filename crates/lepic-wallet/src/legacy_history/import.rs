@@ -691,6 +691,8 @@ fn transport_of(address: &str) -> Option<&'static str> {
     let lower = address.to_ascii_lowercase();
     if is_file_path(address) {
         Some("file")
+    } else if lepic_transport::epicbox_link::is_epicbox_link(address) {
+        Some("epicbox")
     } else if lower.starts_with("http://") || lower.starts_with("https://") {
         if lower.contains(".onion") {
             Some("tor")
@@ -1140,6 +1142,11 @@ mod tests {
         assert_eq!(
             transport_of(&format!("http://{}.onion", "abc")),
             Some("tor")
+        );
+        let key = "b".repeat(52);
+        assert_eq!(
+            transport_of(&format!("https://es{key}@epicbox.epiccash.com/")),
+            Some("epicbox")
         );
         assert_eq!(transport_of("C:\\Users\\a\\send.tx"), Some("file"));
         assert_eq!(transport_of("/home/a/send.tx"), Some("file"));

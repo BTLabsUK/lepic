@@ -437,9 +437,13 @@ fn inspect_names_each_kind_it_reads_and_changes_nothing() {
         };
         let before = payments();
         assert!(!before.is_empty());
+        let key = address.split_once('@').map_or("", |(key, _)| key);
+        let relay_address = format!("{key}@epicbox.example.org");
+        let linked = format!("https://{relay_address}/");
         let cases = [
             (address.as_str(), "epicbox_address", "pay"),
             ("http://203.0.113.7:3415", "http_address", "pay"),
+            (linked.as_str(), "epicbox_address", "pay"),
             (onion, "onion_address", "pay"),
             ("epic:pay?amount=1", "link", "open"),
             ("hello there", "unknown", "none"),
@@ -450,7 +454,12 @@ fn inspect_names_each_kind_it_reads_and_changes_nothing() {
             assert_eq!(read["type"], kind, "{input}: {read}");
             assert_eq!(read["next"], next, "{input}: {read}");
             if next == "pay" {
-                assert_eq!(read["summary"]["to"], input, "{read}");
+                let to = if input == linked {
+                    relay_address.as_str()
+                } else {
+                    input
+                };
+                assert_eq!(read["summary"]["to"], to, "{read}");
             }
         }
 

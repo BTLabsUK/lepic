@@ -1202,6 +1202,14 @@ impl<H: Host> Run<'_, H> {
         destination: DestinationArgs,
         allow_plain_http: bool,
     ) -> Result<(TransportId, Delivery, String), CliError> {
+        // A chat app may have made the address a link; it is still the Epicbox address.
+        let destination = DestinationArgs {
+            to: destination.to.map(|to| {
+                lepic_transport::epicbox_link::epicbox_of_link(&to)
+                    .map_or(to.clone(), str::to_owned)
+            }),
+            ..destination
+        };
         match (destination.to, destination.to_file) {
             (Some(address), _) if is_onion(&address) => {
                 let onion =

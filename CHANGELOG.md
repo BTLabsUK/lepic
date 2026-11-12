@@ -98,6 +98,11 @@ Conventional Commit messages at release time.
 
 ### Fixed
 
+- An Epicbox address a chat app made into a link (`https://<address>@<relay>/`) is read as the
+  Epicbox address, not as a wallet URL: `inspect`, `tx send --to`, a resend (which no longer allows
+  plain HTTP for it) and the old wallet's history import. A wallet URL with a port, a path or no
+  address in its user part is unchanged.
+
 - Pair requests: a second request from the same wallet in the same second was dropped; the newer
   one now replaces the one kept. A request from a contact this wallet is still paired with was
   dropped too; it now ends that pairing as unpaired (`ContactUnpaired`) and is kept, when the

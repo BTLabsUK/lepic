@@ -134,6 +134,8 @@ async fn read<H: Host>(service: &Service<'_, H>, text: &str) -> Result<Read, Pro
     let lower = text.to_ascii_lowercase();
     let kind = if lower.starts_with("epic:") {
         "link"
+    } else if lepic_transport::epicbox_link::is_epicbox_link(text) {
+        "epicbox_address"
     } else if lower.starts_with("http://") || lower.starts_with("https://") {
         if crate::commands::is_onion(text) {
             "onion_address"
@@ -150,7 +152,9 @@ async fn read<H: Host>(service: &Service<'_, H>, text: &str) -> Result<Read, Pro
         return Ok(plain("unknown", "none"));
     };
     let mut read = plain(kind, if kind == "link" { "open" } else { "pay" });
-    read.inspection.summary_mut().to = Some(text.to_owned());
+    // A chat-linked Epicbox address is paid as the address itself.
+    let to = lepic_transport::epicbox_link::epicbox_of_link(text).unwrap_or(text);
+    read.inspection.summary_mut().to = Some(to.to_owned());
     Ok(read)
 }
 

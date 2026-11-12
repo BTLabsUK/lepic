@@ -4,6 +4,7 @@
 
 #[cfg(feature = "legacy")]
 pub mod codecs;
+pub mod epicbox_link;
 pub mod error;
 #[cfg(feature = "legacy")]
 pub mod file;

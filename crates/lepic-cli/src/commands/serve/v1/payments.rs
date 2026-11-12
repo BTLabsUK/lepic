@@ -529,7 +529,8 @@ pub(super) async fn deliver<H: Host>(
         Command::Tx(TxCommand::Resend(ResendArgs {
             tx: TxIdArgs { tx_id: tx.0 },
             plain_http: PlainHttpArg {
-                allow_plain_http: to.starts_with("http://"),
+                allow_plain_http: to.starts_with("http://")
+                    && !lepic_transport::epicbox_link::is_epicbox_link(&to),
             },
             destination: DestinationArgs {
                 to: Some(to),
