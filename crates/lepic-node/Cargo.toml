@@ -26,7 +26,7 @@ secrecy.workspace = true
 serde = { workspace = true, features = ["derive", "std"] }
 serde_json = { workspace = true, features = ["std"] }
 thiserror.workspace = true
-tokio = { workspace = true, features = ["time"] }
+tokio = { workspace = true, features = ["macros", "net", "time"] }
 tower-service.workspace = true
 tracing = { workspace = true, features = ["std", "attributes"] }
 webpki-roots.workspace = true
@@ -35,7 +35,7 @@ zeroize = { workspace = true, features = ["alloc"] }
 [dev-dependencies]
 lepic-node = { path = ".", features = ["mock"] }
 proptest = { workspace = true, features = ["std"] }
-tokio = { workspace = true, features = ["macros", "rt", "net", "io-util", "time"] }
+tokio = { workspace = true, features = ["macros", "rt", "net", "io-util", "test-util", "time"] }
 
 [lints]
 workspace = true

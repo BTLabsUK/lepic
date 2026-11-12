@@ -9,9 +9,8 @@ use std::time::{Duration, Instant};
 use lepic_epicbox::tunnel::OnionRoutes;
 use lepic_node::{
     CallPolicy, DialFuture, HttpTransport, NodeClient, NodeDialer, NodeError, NodeStream,
-    RpcTransport, Tip, is_loopback_host, webpki_tls_config,
+    RpcTransport, Tip, connect_tcp, is_loopback_host, webpki_tls_config,
 };
-use tokio::net::TcpStream;
 use tokio::sync::watch;
 
 use zeroize::Zeroizing;
@@ -365,10 +364,7 @@ fn is_onion_host(host: &str) -> bool {
 
 impl TorNodeDialer {
     async fn connect_directly(&self, host: &str, port: u16) -> io::Result<Box<dyn NodeStream>> {
-        let stream = tokio::time::timeout(self.connect_timeout, TcpStream::connect((host, port)))
-            .await
-            .map_err(|_| io::Error::from(io::ErrorKind::TimedOut))??;
-        stream.set_nodelay(true)?;
+        let stream = connect_tcp(host, port, self.connect_timeout).await?;
         Ok(Box::new(stream))
     }
 }

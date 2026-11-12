@@ -24,7 +24,7 @@ pub use api::{
     PmmrIndices, PoolTransaction, Propagation, Tip, UnspentOutput, UnspentOutputs,
 };
 pub use client::{CallPolicy, NodeClient, RetryPolicy, RpcTransport};
-pub use dial::{DialFuture, NodeDialer, NodeStream};
+pub use dial::{DialFuture, NodeDialer, NodeStream, connect_tcp};
 pub use error::{FieldProblem, JsonProblem, NodeError, NodeRejection, RejectionKind};
 pub use http::{
     HttpSettings, HttpTransport, MAX_RESPONSE_BYTES, is_loopback_host, webpki_tls_config,
