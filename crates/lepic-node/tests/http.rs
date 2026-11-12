@@ -798,6 +798,52 @@ async fn reuses_a_connection_while_it_is_fresh() {
     assert_eq!(server.connections(), 1);
 }
 
+fn no_retry() -> CallPolicy {
+    CallPolicy {
+        retry: RetryPolicy::NONE,
+        ..lepic_node::testing::call_policy()
+    }
+}
+
+fn tip_body() -> Vec<u8> {
+    ok_body(&json!({"height": 10, "last_block_pushed": "11".repeat(32)}))
+}
+
+#[tokio::test]
+async fn after_dropping_connections_the_next_request_opens_a_new_one() {
+    let server = KeepAliveServer::start(Duration::from_secs(5), tip_body()).await;
+    let transport =
+        HttpTransport::new(&server.url(), &settings(), webpki_tls_config().unwrap()).unwrap();
+    let client = NodeClient::new(transport.clone(), no_retry());
+    client.get_tip().await.unwrap();
+    client.get_tip().await.unwrap();
+    assert_eq!(server.connections(), 1);
+
+    // On a clone: the clones share their connections.
+    transport.drop_connections();
+    client.get_tip().await.unwrap();
+
+    assert_eq!(server.connections(), 2);
+}
+
+#[tokio::test]
+async fn after_dropping_connections_a_connection_gone_silent_is_not_waited_on() {
+    let server = KeepAliveServer::start_answering_once(tip_body()).await;
+    let client = client_with(&server.url(), &settings(), no_retry());
+    client.get_tip().await.unwrap();
+
+    client.transport().drop_connections();
+    let answer = tokio::time::timeout(
+        // Well inside the request timeout (10 s) the silent connection would hold it for.
+        Duration::from_secs(2),
+        client.get_tip(),
+    )
+    .await;
+
+    assert!(matches!(answer, Ok(Ok(_))), "{answer:?}");
+    assert_eq!(server.connections(), 2);
+}
+
 #[tokio::test]
 async fn reports_unauthorized_without_retrying() {
     let server = TestServer::start(|_| Reply::Body {

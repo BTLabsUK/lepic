@@ -2,7 +2,7 @@
 //! The HTTP transport: hyper over rustls (ADR 0006), with the limits the node client relies on.
 
 use std::net::IpAddr;
-use std::sync::Arc;
+use std::sync::{Arc, PoisonError, RwLock};
 use std::time::Duration;
 
 use base64::Engine as _;
@@ -61,10 +61,54 @@ pub fn webpki_tls_config() -> Result<Arc<ClientConfig>, NodeError> {
     Ok(Arc::new(config))
 }
 
-/// Posts JSON-RPC requests to one node over HTTP/1.1, plain or TLS.
+type PooledClient = Client<HttpsConnector<NodeConnector>, Full<Bytes>>;
+
+/// The client an [`HttpTransport`] and its clones send through, which
+/// [`HttpTransport::drop_connections`] replaces with one that has no connections yet.
+struct Pool {
+    client: RwLock<PooledClient>,
+    connector: HttpsConnector<NodeConnector>,
+    idle_timeout: Duration,
+}
+
+impl Pool {
+    fn new(connector: HttpsConnector<NodeConnector>, idle_timeout: Duration) -> Self {
+        Self {
+            client: RwLock::new(pooled_client(connector.clone(), idle_timeout)),
+            connector,
+            idle_timeout,
+        }
+    }
+
+    fn client(&self) -> PooledClient {
+        self.client
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+
+    fn renew(&self) {
+        let fresh = pooled_client(self.connector.clone(), self.idle_timeout);
+        let old = std::mem::replace(
+            &mut *self.client.write().unwrap_or_else(PoisonError::into_inner),
+            fresh,
+        );
+        drop(old);
+    }
+}
+
+fn pooled_client(connector: HttpsConnector<NodeConnector>, idle_timeout: Duration) -> PooledClient {
+    Client::builder(TokioExecutor::new())
+        .pool_idle_timeout(idle_timeout)
+        .pool_timer(TokioTimer::new())
+        .build(connector)
+}
+
+/// Posts JSON-RPC requests to one node over HTTP/1.1, plain or TLS. Clones share the
+/// connections.
 #[derive(Clone)]
 pub struct HttpTransport {
-    client: Client<HttpsConnector<NodeConnector>, Full<Bytes>>,
+    pool: Arc<Pool>,
     base_url: String,
     host: String,
     authorization: Option<HeaderValue>,
@@ -130,23 +174,27 @@ impl HttpTransport {
             .https_or_http()
             .enable_http1()
             .wrap_connector(route);
-        let client = Client::builder(TokioExecutor::new())
-            .pool_idle_timeout(settings.pool_idle_timeout)
-            .pool_timer(TokioTimer::new())
-            .build(connector);
         let authorization = settings
             .api_secret
             .as_ref()
             .map(basic_authorization)
             .transpose()?;
         Ok(Self {
-            client,
+            pool: Arc::new(Pool::new(connector, settings.pool_idle_timeout)),
             base_url,
             host,
             authorization,
             request_timeout: settings.request_timeout,
             max_response_bytes: settings.max_response_bytes,
         })
+    }
+
+    /// Stops reusing the connections kept open to the node, for this transport and its clones:
+    /// the next request opens a new one. Call it when the network changed or the app comes
+    /// back to the foreground, where a kept connection may be dead without a sign of it.
+    /// Requests in flight end on their connections; idle ones close. Does no I/O.
+    pub fn drop_connections(&self) {
+        self.pool.renew();
     }
 
     fn build_request(
@@ -170,7 +218,7 @@ impl HttpTransport {
     }
 
     async fn exchange(&self, request: Request<Full<Bytes>>) -> Result<Vec<u8>, NodeError> {
-        let response = self.client.request(request).await.map_err(|error| {
+        let response = self.pool.client().request(request).await.map_err(|error| {
             if error.is_connect() {
                 NodeError::Connect(Box::new(error))
             } else {

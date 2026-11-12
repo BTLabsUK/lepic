@@ -250,6 +250,17 @@ pub struct KeepAliveServer {
 
 impl KeepAliveServer {
     pub async fn start(idle_close: Duration, body: Vec<u8>) -> Self {
+        Self::serve(idle_close, body, usize::MAX).await
+    }
+
+    /// Answers the first request on each connection, then keeps the connection open and
+    /// never answers on it again, as a connection the phone's system cut while the app was in
+    /// the background looks to the client.
+    pub async fn start_answering_once(body: Vec<u8>) -> Self {
+        Self::serve(Duration::MAX, body, 1).await
+    }
+
+    async fn serve(idle_close: Duration, body: Vec<u8>, answers: usize) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         let connections = Arc::new(AtomicUsize::new(0));
@@ -265,7 +276,11 @@ impl KeepAliveServer {
                     let body = body.clone();
                     tokio::spawn(async move {
                         let mut answered = None::<tokio::time::Instant>;
+                        let mut count = 0;
                         while read_request(&mut stream).await.is_some() {
+                            if count >= answers {
+                                continue;
+                            }
                             if answered.is_some_and(|at| at.elapsed() >= idle_close) {
                                 return;
                             }
@@ -279,6 +294,7 @@ impl KeepAliveServer {
                                 return;
                             }
                             answered = Some(tokio::time::Instant::now());
+                            count += 1;
                         }
                     });
                 }
