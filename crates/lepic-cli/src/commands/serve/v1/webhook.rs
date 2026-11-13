@@ -21,6 +21,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::sync::watch;
 use tokio::time::Instant;
+use zeroize::Zeroizing;
 
 use super::super::{Opened, Service};
 use super::{Reply, events};
@@ -75,6 +76,8 @@ struct Timing {
     schedule: [Duration; 7],
     /// The least time between the starts of two requests.
     gap: Duration,
+    /// The wait before the secret file is read again after it could not be used.
+    hold: Duration,
     limits: send::Limits,
 }
 
@@ -82,6 +85,7 @@ impl Timing {
     const LIVE: Self = Self {
         schedule: SCHEDULE,
         gap: Duration::from_millis(100),
+        hold: Duration::from_secs(60),
         limits: send::Limits {
             connect: Duration::from_secs(5),
             total: Duration::from_secs(10),
@@ -94,13 +98,16 @@ impl Timing {
 struct State {
     /// The URL the state is for; another URL starts over.
     url: String,
-    /// The id of the last event delivered.
+    /// The id of the last event delivered, or passed over by the types filter.
     cursor: u64,
     /// Failed attempts at the event after the cursor.
     attempts: u32,
     /// When the next attempt is due, in Unix milliseconds.
     next_at: Option<i64>,
     last_error: Option<String>,
+    /// Why the secret file cannot be used; nothing is sent and no attempt counts until it can.
+    #[serde(default)]
+    config_error: Option<String>,
     disabled: bool,
     /// Rises with each change a handler makes.
     epoch: u64,
@@ -130,6 +137,7 @@ fn load<N: NodeApi + 'static>(opened: &Opened<N>, url: &str) -> Result<State, Cl
         attempts: 0,
         next_at: None,
         last_error: None,
+        config_error: None,
         disabled: false,
         epoch: old.map_or(0, |old| old.epoch.saturating_add(1)),
         source: u64::from_le_bytes(crate::commands::random_bytes()?),
@@ -208,21 +216,28 @@ impl<N: NodeApi + 'static> Driver<'_, N> {
                 () = self.wait_ok() => return Ok(()),
             }
         }
+        // Read first: an event appended after this is not passed over below.
+        let newest = self.opened.wallet.api_event_last_id()?;
         let Some(event) = next_event(self.opened, state.cursor, &self.config.types)? else {
-            return self.wait().await;
+            return self.pass_over(&state, newest).await;
+        };
+        let secrets = match send::secrets(&self.config.secret_file) {
+            Ok(secrets) => secrets,
+            Err(error) => return self.hold(&state, error).await,
         };
         if let Some(last) = self.last {
             tokio::time::sleep_until(last.checked_add(self.timing.gap).unwrap_or(last)).await;
         }
         self.last = Some(Instant::now());
         let id = event.id;
-        let outcome = self.send(state.source, event).await;
+        let outcome = self.send(&secrets, state.source, event).await;
         // No wait since the read: the state still has the epoch of this send, or a handler changed it.
         let mut fresh = load(self.opened, &self.config.url)?;
         if fresh.epoch != state.epoch {
             return Ok(());
         }
         let attempt = state.attempts.saturating_add(1);
+        fresh.config_error = None;
         match outcome {
             Ok(()) => {
                 tracing::debug!(event_id = id, attempt, "webhook delivered");
@@ -265,9 +280,46 @@ impl<N: NodeApi + 'static> Driver<'_, N> {
         save(self.opened, &fresh)
     }
 
-    /// One request for `event`: the secrets are read now, the signature is made for this attempt.
-    async fn send(&self, source: u64, event: model::Event) -> Result<(), String> {
-        let secrets = send::secrets(&self.config.secret_file)?;
+    /// Moves the cursor to `newest` when no event after it is of the types, so the filter does
+    /// not hold it back; waits for the log when there is nothing to move.
+    async fn pass_over(&mut self, state: &State, newest: u64) -> Result<(), CliError> {
+        if newest <= state.cursor {
+            return self.wait().await;
+        }
+        let mut fresh = load(self.opened, &self.config.url)?;
+        if fresh.epoch == state.epoch && fresh.cursor == state.cursor {
+            fresh.cursor = newest;
+            fresh.attempts = 0;
+            fresh.next_at = None;
+            fresh.last_error = None;
+            save(self.opened, &fresh)?;
+        }
+        Ok(())
+    }
+
+    /// Keeps the event while the secret file cannot be used: the reason is stored, no attempt
+    /// counts, and the file is read again after [`Timing::hold`] or when the log wakes the driver.
+    async fn hold(&mut self, state: &State, error: String) -> Result<(), CliError> {
+        let mut fresh = load(self.opened, &self.config.url)?;
+        if fresh.epoch == state.epoch && fresh.config_error.as_deref() != Some(error.as_str()) {
+            tracing::warn!(error = %error, "the webhook secret file cannot be used");
+            fresh.config_error = Some(error);
+            save(self.opened, &fresh)?;
+        }
+        tokio::select! {
+            () = tokio::time::sleep(self.timing.hold) => {}
+            () = self.wait_ok() => {}
+        }
+        Ok(())
+    }
+
+    /// One request for `event`, with a signature made for this attempt.
+    async fn send(
+        &self,
+        secrets: &[Zeroizing<Vec<u8>>],
+        source: u64,
+        event: model::Event,
+    ) -> Result<(), String> {
         let id = format!("evt_{source:016x}_{}", event.id);
         let body = payload(event).map_err(|_| "the event could not be encoded".to_owned())?;
         let timestamp = self.opened.wallet.ports().clock.now().as_second();
@@ -276,7 +328,7 @@ impl<N: NodeApi + 'static> Driver<'_, N> {
             ("webhook-timestamp", timestamp.to_string()),
             (
                 "webhook-signature",
-                send::signature(&secrets, &id, timestamp, &body),
+                send::signature(secrets, &id, timestamp, &body),
             ),
         ];
         send::post(
@@ -328,6 +380,8 @@ pub(in crate::commands::serve) async fn drive<H: Host>(service: &Service<'_, H>)
 fn view(config: &Webhook, state: &State) -> model::Webhook {
     let name = if state.disabled {
         "disabled"
+    } else if state.config_error.is_some() {
+        "config_error"
     } else if state.attempts > 0 {
         "retrying"
     } else {
@@ -340,7 +394,11 @@ fn view(config: &Webhook, state: &State) -> model::Webhook {
         cursor: state.cursor,
         attempts: state.attempts,
         next_attempt_at: state.next_at().map(|at| at.to_string()),
-        last_error: state.last_error.clone(),
+        last_error: state
+            .config_error
+            .clone()
+            .filter(|_| !state.disabled)
+            .or_else(|| state.last_error.clone()),
     }
 }
 
@@ -441,6 +499,7 @@ mod tests {
         Timing {
             schedule: [Duration::from_millis(20); 7],
             gap: Duration::ZERO,
+            hold: Duration::from_millis(20),
             limits: send::Limits {
                 connect: Duration::from_secs(2),
                 total: Duration::from_secs(2),
@@ -844,6 +903,61 @@ mod tests {
             );
             assert_eq!(skipped["data"]["count"], 3);
             assert_eq!(f.receiver.ids(), ["1", "3", "3", "4"]);
+        });
+    }
+
+    #[test]
+    fn the_cursor_moves_past_events_the_types_filter_leaves_out() {
+        with_wallet(|opened| async move {
+            let f = fixture(vec![], &["payment.*"]).await;
+            load(&opened, &f.config.url).unwrap();
+            let wallet = &opened.wallet;
+            wallet.append_api_event("payment.created", OBJECT).unwrap();
+            wallet.append_api_event("contact.created", OBJECT).unwrap();
+            wallet.append_api_event("contact.updated", OBJECT).unwrap();
+            let mut driver = driver(&opened, &f.config, quick());
+            let state = until(&mut driver, |state| state.cursor == 3).await;
+            assert_eq!((state.attempts, state.last_error), (0, None));
+            assert_eq!(f.receiver.ids(), ["1"]);
+            wallet.append_api_event("payment.updated", OBJECT).unwrap();
+            until(&mut driver, |state| state.cursor == 4).await;
+            assert_eq!(f.receiver.ids(), ["1", "4"]);
+        });
+    }
+
+    #[test]
+    fn a_secret_file_it_cannot_use_holds_the_webhook_without_failing_it() {
+        with_wallet(|opened| async move {
+            let f = fixture(vec![], &[]).await;
+            load(&opened, &f.config.url).unwrap();
+            let text = std::fs::read(&f.config.secret_file).unwrap();
+            std::fs::remove_file(&f.config.secret_file).unwrap();
+            opened
+                .wallet
+                .append_api_event("payment.created", OBJECT)
+                .unwrap();
+            let mut driver = driver(&opened, &f.config, quick());
+            let held = until(&mut driver, |state| state.config_error.is_some()).await;
+            assert_eq!((held.cursor, held.attempts, held.disabled), (0, 0, false));
+            assert_eq!(held.last_error, None);
+            let shown = view(&f.config, &held);
+            assert_eq!(shown.state, "config_error");
+            assert!(shown.last_error.unwrap().contains("secret file"));
+            // Holding again counts nothing either.
+            driver.step().await.unwrap();
+            assert_eq!(load(&opened, &f.config.url).unwrap(), held);
+            assert!(f.receiver.ids().is_empty());
+            std::fs::write(&f.config.secret_file, text).unwrap();
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt as _;
+                let mode = std::fs::Permissions::from_mode(0o600);
+                std::fs::set_permissions(&f.config.secret_file, mode).unwrap();
+            }
+            let sent = until(&mut driver, |state| state.cursor == 1).await;
+            assert_eq!(view(&f.config, &sent).state, "active");
+            assert_eq!((sent.attempts, sent.config_error), (0, None));
+            assert_eq!(f.receiver.ids(), ["1"]);
         });
     }
 

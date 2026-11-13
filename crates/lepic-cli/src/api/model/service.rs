@@ -135,9 +135,9 @@ pub(crate) struct Webhook {
     pub(crate) url: String,
     /// The event types it sends; none means all.
     pub(crate) types: Vec<String>,
-    /// `active`, `retrying` or `disabled`.
+    /// `active`, `retrying`, `config_error` or `disabled`.
     pub(crate) state: String,
-    /// The id of the last event delivered.
+    /// The id of the last event delivered, or passed over by the types filter.
     pub(crate) cursor: u64,
     /// Failed attempts at the next event.
     pub(crate) attempts: u32,
