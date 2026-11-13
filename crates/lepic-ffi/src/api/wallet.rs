@@ -12,6 +12,7 @@
 
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 
 use flutter_rust_bridge::frb;
 use lepic_keychain::Seed;
@@ -26,7 +27,7 @@ use crate::api::runtime::LepicRuntime;
 use crate::api::secret_store::AppSecretStore;
 use crate::api::types::{
     Chain, FeeEstimate, FinalizedTx, InboxReport, KernelLocation, LegacyImport, ListenerEvent,
-    ListenerEventKind, NodeRoute, NodeTip, PeerCompat, ReceivedSlate, RefreshProgress,
+    ListenerEventKind, NodeRoute, NodeTip, PeerCompat, Poller, ReceivedSlate, RefreshProgress,
     ScanProgress, SelfSendRequest, SelfSentTx, SendOptions, SentTx, Slate, SlateInfo, SlateWire,
     TransactionDetails, UrSlateProgress, WalletConfig, WalletEvent, WalletOutput, WalletSummary,
 };
@@ -1543,6 +1544,40 @@ impl EpicWallet {
     pub fn listener_running(&self) -> bool {
         self.boundary().guard_or("listener_running", false, || {
             self.session.listener_running()
+        })
+    }
+
+    /// Runs `poller` at most every `interval_secs` for `duration_secs` (ADR 0058) and returns
+    /// the boost's id for [`EpicWallet::end_boost`]. The interval is at least 5 s and the
+    /// window at most 10 min; a value outside is clamped. Several boosts of one poller run at
+    /// the shortest interval until the last one ends. It starts no loop: the app's loop asks
+    /// [`EpicWallet::poll_interval`] before each wait.
+    #[frb(sync)]
+    pub fn boost(&self, poller: Poller, duration_secs: u32, interval_secs: u32) -> u64 {
+        self.boundary().guard_or("boost", 0, || {
+            self.session.boost(
+                poller.engine(),
+                Duration::from_secs(duration_secs.into()),
+                Duration::from_secs(interval_secs.into()),
+            )
+        })
+    }
+
+    /// Ends the boost `id` before its window does. False when it ended already.
+    #[frb(sync)]
+    pub fn end_boost(&self, id: u64) -> bool {
+        self.boundary()
+            .guard_or("end_boost", false, || self.session.boosts().end(id))
+    }
+
+    /// How long `poller` waits before its next run, in seconds: `base_secs` with no boost,
+    /// the boosts' interval while one runs, never more than `base_secs`.
+    #[frb(sync)]
+    pub fn poll_interval(&self, poller: Poller, base_secs: u32) -> u32 {
+        self.boundary().guard_or("poll_interval", base_secs, || {
+            let base = Duration::from_secs(base_secs.into());
+            let interval = self.session.boosts().interval(poller.engine(), base);
+            u32::try_from(interval.as_secs()).unwrap_or(base_secs)
         })
     }
 

@@ -8,7 +8,7 @@ use crate::api::error::{WalletError, WalletErrorKind};
 use crate::api::runtime::LepicRuntime;
 use crate::api::secret_store::AppSecretStore;
 use crate::api::testing::MockChain;
-use crate::api::types::{Chain, WalletConfig};
+use crate::api::types::{Chain, Poller, WalletConfig};
 use crate::api::wallet::{EpicWallet, PinWallet, delete_wallet, wallet_fingerprint};
 use crate::session::SeedOrigin;
 use crate::vault_port::VAULT_KEY;
@@ -1670,4 +1670,29 @@ async fn delete_wallet_removes_scratch_slates_and_the_tor_files() {
     assert!(!dir.join("native-direct").exists());
     assert!(!dir.join("tor").exists());
     assert!(dir.join("kept.txt").exists());
+}
+
+/// A boost shortens the interval its poller asks for, clamped to the limits, and ending it by
+/// its id gives the base back.
+#[tokio::test]
+async fn a_boost_shortens_the_poll_interval_until_it_is_ended() {
+    let fixture = Fixture::new();
+    let wallet = EpicWallet::create(
+        &fixture.runtime,
+        fixture.config(),
+        &AppSecretStore::in_memory(),
+        None,
+        None,
+        "password".to_owned(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(wallet.poll_interval(Poller::Relays, 45), 45);
+    let id = wallet.boost(Poller::Relays, 3600, 1);
+    assert_eq!(wallet.poll_interval(Poller::Relays, 45), 5);
+    assert_eq!(wallet.poll_interval(Poller::Relays, 3), 3);
+    assert_eq!(wallet.poll_interval(Poller::Node, 45), 45);
+    assert!(wallet.end_boost(id));
+    assert!(!wallet.end_boost(id));
+    assert_eq!(wallet.poll_interval(Poller::Relays, 45), 45);
 }

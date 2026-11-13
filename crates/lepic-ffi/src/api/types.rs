@@ -20,6 +20,24 @@ impl Chain {
     }
 }
 
+/// A loop of the app's that [`crate::api::wallet::EpicWallet::boost`] speeds up (ADR 0058).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Poller {
+    /// The contact collect cycle: contact, pairing and epic1 link mailboxes on the relays.
+    Relays,
+    /// The check of the node for a new block, and the refresh it starts.
+    Node,
+}
+
+impl Poller {
+    pub(crate) const fn engine(self) -> lepic_wallet::boost::Poller {
+        match self {
+            Self::Relays => lepic_wallet::boost::Poller::Relays,
+            Self::Node => lepic_wallet::boost::Poller::Node,
+        }
+    }
+}
+
 /// Everything needed to locate a wallet on disk and reach its node and Epicbox relay.
 #[derive(Clone)]
 pub struct WalletConfig {

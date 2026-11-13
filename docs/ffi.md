@@ -45,6 +45,10 @@ it under the runtime's log subscriber:
 - `drop_node_connections` closes the pooled node connections, so the next node call opens a new
   one. Call it when the network changes or the app returns from the background. It does no I/O,
   waits for no call or node switch, and leaves calls in flight to end on their own connection.
+- `boost(poller, duration_secs, interval_secs)` runs the app's `Relays` or `Node` loop faster
+  for a while and returns an id for `end_boost` ([ADR 0058](adr/0058-service-wallet-api.md)). It
+  starts no loop: the app's loop asks `poll_interval(poller, base_secs)` before each wait. The
+  id ends the boost, not a guard object, since Dart's collector drops objects late.
 
 ### Open, create and restore
 

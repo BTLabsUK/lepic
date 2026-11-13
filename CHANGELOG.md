@@ -19,6 +19,8 @@ Conventional Commit messages at release time.
   while (5 s at least, 10 min at most), `DELETE /sync/boost/{id}` ends a boost early, and
   `GET /status` shows the window. It boosts the relays itself after a payment, an invite, an
   accepted pair request and a new link (ADR 0058).
+- FFI: `EpicWallet::boost`, `end_boost` and `poll_interval` let the app run its relay collect
+  or node check faster for a while, under the rules of `lepic serve`'s boost (ADR 0058).
 - `lepic serve`: `payment.confirmations_reached` once a payment has `payment_confirmations`
   confirmations (new setting, 6 unless set, 1 to 1440).
 - `lepic serve`: a payment taken at an epic1 link names it in `link_id`.

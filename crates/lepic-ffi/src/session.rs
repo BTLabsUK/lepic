@@ -1906,6 +1906,20 @@ impl Session {
             .is_some_and(|handle| !handle.is_stopped())
     }
 
+    /// Starts a boost that runs until its window ends or [`Self::boosts`] ends it by its id.
+    pub(crate) fn boost(
+        &self,
+        poller: lepic_wallet::boost::Poller,
+        duration: std::time::Duration,
+        interval: std::time::Duration,
+    ) -> u64 {
+        self.engine.boost(poller, duration, interval).keep()
+    }
+
+    pub(crate) fn boosts(&self) -> &lepic_wallet::boost::Boosts {
+        self.engine.boosts()
+    }
+
     pub(crate) fn subscribe(&self) -> broadcast::Receiver<Event> {
         self.engine.subscribe()
     }
