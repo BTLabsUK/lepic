@@ -53,17 +53,24 @@ fn a_webhook_is_shown_and_resumed() {
         &wallet,
         &["--config", config.to_str().unwrap()],
         |socket, _| {
-            let shown = http(socket, "GET", "/api/v1/webhook", None).ok();
+            // The cursor moves past the events `payment.*` leaves out, which serve may add at
+            // any time, so only its type is checked here; the webhook module tests the moves.
+            let without_cursor = |mut view: serde_json::Value| {
+                assert!(view["cursor"].is_u64(), "{view}");
+                view.as_object_mut().unwrap().remove("cursor");
+                view
+            };
+            let shown = without_cursor(http(socket, "GET", "/api/v1/webhook", None).ok());
             assert_eq!(
                 shown,
                 json!({
                     "url": "http://127.0.0.1:9/hook", "types": ["payment.*"],
-                    "state": "active", "cursor": 0, "attempts": 0
+                    "state": "active", "attempts": 0
                 })
             );
             // Nothing fails, so a resume without `after` changes nothing.
             let same = http(socket, "POST", "/api/v1/webhook/resume", None).ok();
-            assert_eq!(same, shown);
+            assert_eq!(without_cursor(same), shown);
             let moved = http(
                 socket,
                 "POST",
