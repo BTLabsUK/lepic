@@ -31,7 +31,7 @@ fn defaults_apply_when_nothing_is_set() {
     assert_eq!(settings.output, OutputFormat::Human);
     assert_eq!(settings.log_filter, "warn");
     assert_eq!(settings.node.as_str(), "http://127.0.0.1:3413");
-    assert_eq!(settings.relay.url(), "wss://epicbox.epiccash.com:443");
+    assert_eq!(settings.relay.url(), "wss://epicbox.btlabs.uk:443");
 }
 
 #[test]

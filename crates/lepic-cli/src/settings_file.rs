@@ -184,7 +184,7 @@ mod tests {
         );
         assert_eq!(
             servers.epicbox.map(|relay| relay.domain().to_string()),
-            Some("epicbox.epiccash.com".to_owned())
+            Some("epicbox.btlabs.uk".to_owned())
         );
         assert_eq!(servers.meeting_relays.len(), 3);
         assert_eq!(servers.onion_routes.len(), 2);

@@ -18,7 +18,7 @@ servers = ["http://127.0.0.1:3413"]
 # The Epicbox servers the wallet knows, each "host" or "host:port", over TLS. The first is the
 # one in use unless epicbox_relay in config.toml (or LEPIC_EPICBOX_RELAY) names another.
 # Pairing words go to the first few of them. At most 16.
-servers = ["epicbox.epiccash.com", "epicbox.stackwallet.com", "epicbox.epicnet.us", "epicbox.btlabs.uk"]
+servers = ["epicbox.btlabs.uk", "epicbox.epiccash.com", "epicbox.stackwallet.com", "epicbox.epicnet.us"]
 
 [api]
 # The address "ip:port" `lepic serve --owner-tls` listens on for owner calls over mutual TLS,
