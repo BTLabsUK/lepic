@@ -63,6 +63,7 @@ new name to this table in the same change.
 | `reason` | why a message was dropped or quarantined: a stable name |
 | `height` | block height |
 | `tip` | chain tip height |
+| `event_id` | id of an API event |
 | `attempt` | retry number, starting at 1 |
 | `retry_in_ms` | delay before the next attempt |
 | `paused_ms` | length of a process pause, after which Tor deadlines moved |

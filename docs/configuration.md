@@ -82,6 +82,10 @@ Switches take `true` or `false` and default to `false`.
 | `profile` | `LEPIC_PROFILE` | Profile bits told to paired contacts: `no-payments`, `automated`, or a number 0 to 65535. Default 0 |
 | `domain` | `LEPIC_DOMAIN` | A domain the wallet claims to paired contacts, proven by its well-known file. Default none |
 | `shell_idle_lock_minutes` | `LEPIC_SHELL_IDLE_LOCK_MINUTES` | Minutes with no line entered before the interactive shell locks the wallet; 0 never locks it. Default 15 |
+| `webhook_url` | `LEPIC_WEBHOOK_URL` | `lepic serve`: the `https://` endpoint that gets the event log by POST. Needs `webhook_secret_file`. Default none |
+| `webhook_secret_file` | `LEPIC_WEBHOOK_SECRET_FILE` | A file only its owner can read, one `whsec_<base64>` secret per line, read before each delivery |
+| `webhook_types` | `LEPIC_WEBHOOK_TYPES` | Event types the webhook sends, comma-separated, `payment.*` allowed. Default all |
+| `webhook_allow_private` | `LEPIC_WEBHOOK_ALLOW_PRIVATE` | Switch: the webhook URL may be `http://` and may resolve to a loopback, private or link-local address |
 | `settings_file` | `LEPIC_SETTINGS` | The settings file. Default `~/.lepic/settings.toml` |
 
 The Tor keys go together as follows:

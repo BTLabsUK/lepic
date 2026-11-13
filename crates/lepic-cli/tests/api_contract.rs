@@ -255,6 +255,9 @@ fn every_operation_keeps_the_contract() {
 
         // The log, a scan, and the password last.
         walk.call("GET", "/events", None).ok();
+        // No webhook is set here; its delivery has its own tests.
+        walk.call("GET", "/webhook", None);
+        walk.call("POST", "/webhook/resume", None);
         let scan = walk.call("POST", "/wallet/scan", Some(&json!({})));
         assert_eq!(scan.status, 202, "{scan:?}");
         let password = json!({"current": "serving password", "new": "walked password"});

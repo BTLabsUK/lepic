@@ -132,6 +132,26 @@ pub const SETTINGS: &[(&str, &str, &str)] = &[
         "minutes with no line entered before the interactive shell locks the wallet; 0 never",
     ),
     (
+        "webhook_url",
+        "LEPIC_WEBHOOK_URL",
+        "https:// endpoint serve posts each API event to; http:// only with webhook_allow_private",
+    ),
+    (
+        "webhook_secret_file",
+        "LEPIC_WEBHOOK_SECRET_FILE",
+        "file only its owner can read, one whsec_ secret per line, that signs each webhook",
+    ),
+    (
+        "webhook_types",
+        "LEPIC_WEBHOOK_TYPES",
+        "event types the webhook sends, as GET /events takes them (payment.*); all when unset",
+    ),
+    (
+        "webhook_allow_private",
+        "LEPIC_WEBHOOK_ALLOW_PRIVATE",
+        "true lets the webhook url be http:// and name a loopback, private or link-local host",
+    ),
+    (
         "settings_file",
         "LEPIC_SETTINGS",
         "settings.toml with the servers: [node] servers, [epicbox] servers, [api] owner_tls",
@@ -340,6 +360,20 @@ pub struct Settings {
     pub domain: Option<String>,
     /// Minutes without input before the interactive shell locks the wallet; 0 never.
     pub shell_idle_lock_minutes: u64,
+    /// Where `lepic serve` posts the API events; none unless `webhook_url` says so.
+    pub webhook: Option<Webhook>,
+}
+
+/// The webhook of `lepic serve` (ADR 0058).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Webhook {
+    /// `https://`, or `http://` with `allow_private`.
+    pub url: String,
+    pub secret_file: PathBuf,
+    /// Event type patterns; all events when empty.
+    pub types: Vec<String>,
+    /// Allows `http://` and a loopback, private or link-local address.
+    pub allow_private: bool,
 }
 
 /// The output format alone, for reporting errors that happen before the rest resolves.
@@ -355,6 +389,7 @@ pub fn output_format(args: &GlobalArgs, env: &Env) -> OutputFormat {
 }
 
 impl Settings {
+    #[allow(clippy::too_many_lines)] // One line per setting.
     pub fn resolve(args: &GlobalArgs, env: &Env) -> Result<Self, SettingsError> {
         let config = Config::load(args, env)?;
         let lookup = Lookup {
@@ -460,6 +495,7 @@ impl Settings {
             profile: profile(args, &lookup)?,
             domain: domain(args, &lookup)?,
             shell_idle_lock_minutes: shell_idle_lock_minutes(&lookup)?,
+            webhook: webhook(&lookup)?,
         })
     }
 }
@@ -472,6 +508,71 @@ fn payment_confirmations(lookup: &Lookup<'_>) -> Result<u64, SettingsError> {
             text.parse::<u64>().ok().filter(|n| (1..=1440).contains(n))
         })?
         .unwrap_or(6))
+}
+
+/// The webhook the `webhook_*` keys describe. Without `webhook_url` the other three must be unset.
+fn webhook(lookup: &Lookup<'_>) -> Result<Option<Webhook>, SettingsError> {
+    let invalid = |key| {
+        let origin = lookup
+            .raw(key)
+            .map_or(Origin::Default, |(_, origin)| origin);
+        SettingsError::InvalidValue { key, origin }
+    };
+    let allow_private = lookup.switch("webhook_allow_private")?;
+    let types = lookup
+        .parse("webhook_types", parse_event_types)?
+        .unwrap_or_default();
+    let secret_file = lookup.path("webhook_secret_file")?;
+    let Some((url, _)) = lookup.raw("webhook_url") else {
+        for key in ["webhook_secret_file", "webhook_types"] {
+            if lookup.raw(key).is_some() {
+                return Err(invalid(key));
+            }
+        }
+        if allow_private {
+            return Err(invalid("webhook_allow_private"));
+        }
+        return Ok(None);
+    };
+    let uri = url
+        .parse::<hyper::Uri>()
+        .map_err(|_| invalid("webhook_url"))?;
+    let scheme_ok = match uri.scheme_str() {
+        Some("https") => true,
+        Some("http") => allow_private,
+        _ => false,
+    };
+    let host_ok = uri.host().is_some_and(|host| !host.is_empty())
+        && uri
+            .authority()
+            .is_some_and(|authority| !authority.as_str().contains('@'));
+    if !scheme_ok || !host_ok {
+        return Err(invalid("webhook_url"));
+    }
+    let secret_file = secret_file.ok_or_else(|| invalid("webhook_secret_file"))?;
+    Ok(Some(Webhook {
+        url,
+        secret_file,
+        types,
+        allow_private,
+    }))
+}
+
+/// A comma list of event types, `payment.*` style wildcards allowed, at most
+/// `MAX_API_KIND_PATTERNS` of them: what `GET /events` takes as `types`.
+pub(crate) fn parse_event_types(text: &str) -> Option<Vec<String>> {
+    let types: Vec<String> = text.split(',').map(str::to_owned).collect();
+    if types.len() > lepic_store::MAX_API_KIND_PATTERNS {
+        return None;
+    }
+    let valid = types.iter().all(|kind| {
+        let name = kind.strip_suffix(".*").unwrap_or(kind);
+        !name.is_empty()
+            && name
+                .bytes()
+                .all(|byte| byte.is_ascii_lowercase() || byte == b'_' || byte == b'.')
+    });
+    valid.then_some(types)
 }
 
 /// The minutes with no line entered before the shell locks the wallet; 0 never.

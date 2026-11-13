@@ -62,6 +62,10 @@
     {
       "name": "Events",
       "description": "Events operations."
+    },
+    {
+      "name": "Webhooks",
+      "description": "Webhooks operations."
     }
   ],
   "security": [
@@ -2710,6 +2714,77 @@
           }
         }
       }
+    },
+    "/webhook": {
+      "get": {
+        "operationId": "getWebhook",
+        "x-role": "full",
+        "summary": "The webhook: its URL, types, state, cursor and the next attempt.",
+        "tags": [
+          "Webhooks"
+        ],
+        "description": "The webhook is set in the settings (`webhook_url`), not here. 404 `not_found` when none is set.",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Webhook"
+                }
+              }
+            }
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
+    "/webhook/resume": {
+      "post": {
+        "operationId": "resumeWebhook",
+        "x-role": "full",
+        "summary": "Send again from the cursor, or from `after`, now.",
+        "tags": [
+          "Webhooks"
+        ],
+        "description": "Clears the attempt count and the error and starts sending at once. `after` sets the cursor: the next event sent is the first one with a greater id. A webhook that is `disabled` sends again.",
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WebhookResume"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Webhook"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
     }
   },
   "components": {
@@ -5285,6 +5360,67 @@
           "until",
           "interval_seconds"
         ]
+      },
+      "Webhook": {
+        "type": "object",
+        "properties": {
+          "url": {
+            "type": "string",
+            "description": "`webhook_url`."
+          },
+          "types": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "`webhook_types`; empty for all."
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "active",
+              "retrying",
+              "disabled"
+            ],
+            "description": "`retrying` after a failed attempt; `disabled` after the last retry failed, until `POST /webhook/resume`."
+          },
+          "cursor": {
+            "type": "integer",
+            "description": "The id of the last event delivered; 0 before the first."
+          },
+          "attempts": {
+            "type": "integer",
+            "description": "Failed attempts at the next event."
+          },
+          "next_attempt_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the next attempt is due, while `retrying`."
+          },
+          "last_error": {
+            "type": "string",
+            "description": "Why the last attempt failed: a status, `timeout`, `connect`, `refused_address` or similar; never a body."
+          }
+        },
+        "required": [
+          "url",
+          "types",
+          "state",
+          "cursor",
+          "attempts"
+        ],
+        "additionalProperties": false
+      },
+      "WebhookResume": {
+        "type": "object",
+        "properties": {
+          "after": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Event id to set the cursor to."
+          }
+        },
+        "additionalProperties": false
       }
     }
   }

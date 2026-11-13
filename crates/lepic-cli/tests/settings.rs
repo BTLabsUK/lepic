@@ -241,3 +241,61 @@ fn the_shell_idle_lock_defaults_to_fifteen_minutes_and_zero_turns_it_off() {
         })
     ));
 }
+
+#[test]
+fn the_webhook_needs_a_url_a_secret_file_and_https_unless_private_is_allowed() {
+    let home = tempfile::tempdir().unwrap();
+    let resolve =
+        |vars: &[(&str, &str)]| Settings::resolve(&GlobalArgs::default(), &env(home.path(), vars));
+    let invalid = |vars: &[(&str, &str)], key: &str| {
+        assert!(
+            matches!(resolve(vars), Err(SettingsError::InvalidValue { key: found, .. }) if found == key),
+            "{vars:?}"
+        );
+    };
+    assert!(resolve(&[]).unwrap().webhook.is_none());
+    let good = [
+        ("LEPIC_WEBHOOK_URL", "https://hooks.example/in"),
+        ("LEPIC_WEBHOOK_SECRET_FILE", "/run/secrets/hook"),
+    ];
+    let webhook = resolve(&good).unwrap().webhook.unwrap();
+    assert_eq!(webhook.url, "https://hooks.example/in");
+    assert_eq!(webhook.secret_file, PathBuf::from("/run/secrets/hook"));
+    assert!(webhook.types.is_empty() && !webhook.allow_private);
+    let typed = [
+        good[0],
+        good[1],
+        ("LEPIC_WEBHOOK_TYPES", "payment.*,contact.created"),
+    ];
+    assert_eq!(
+        resolve(&typed).unwrap().webhook.unwrap().types,
+        ["payment.*", "contact.created"]
+    );
+    // The secret file is required, and the other keys mean nothing without a URL.
+    invalid(&[good[0]], "webhook_secret_file");
+    invalid(&[good[1]], "webhook_secret_file");
+    invalid(&[("LEPIC_WEBHOOK_TYPES", "payment.*")], "webhook_types");
+    invalid(
+        &[("LEPIC_WEBHOOK_ALLOW_PRIVATE", "true")],
+        "webhook_allow_private",
+    );
+    // Only https, unless private targets are allowed.
+    let http = [("LEPIC_WEBHOOK_URL", "http://127.0.0.1:9/in"), good[1]];
+    invalid(&http, "webhook_url");
+    let allowed = [http[0], http[1], ("LEPIC_WEBHOOK_ALLOW_PRIVATE", "true")];
+    assert!(resolve(&allowed).unwrap().webhook.unwrap().allow_private);
+    for url in [
+        "ftp://hooks.example/",
+        "https://",
+        "hooks.example/in",
+        "https://user:pw@hooks.example/",
+    ] {
+        invalid(&[("LEPIC_WEBHOOK_URL", url), good[1]], "webhook_url");
+    }
+    for types in ["Payment", "payment.*.x", "a b", ",", "payment.*,"] {
+        invalid(
+            &[good[0], good[1], ("LEPIC_WEBHOOK_TYPES", types)],
+            "webhook_types",
+        );
+    }
+}

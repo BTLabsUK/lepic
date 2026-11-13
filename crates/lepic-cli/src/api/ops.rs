@@ -84,6 +84,8 @@ ops! {
     UpdateProfile = "updateProfile",
     GetProfileDomainFile = "getProfileDomainFile",
     ListEvents = "listEvents",
+    GetWebhook = "getWebhook",
+    ResumeWebhook = "resumeWebhook",
 }
 
 impl Op {

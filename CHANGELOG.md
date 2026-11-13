@@ -9,6 +9,9 @@ Conventional Commit messages at release time.
 
 ### Added
 
+- `lepic serve`: a webhook sends the event log by signed HTTP POST (Standard Webhooks), one event
+  at a time with retries, set by `webhook_url`, `webhook_secret_file`, `webhook_types` and
+  `webhook_allow_private`; `GET /webhook` and `POST /webhook/resume` show and restart it.
 - FFI: `EpicWallet::drop_node_connections` closes the pooled node connections, so the next node
   call opens a fresh one (for a network change or a return from the background). It does no I/O
   and waits for no other call.

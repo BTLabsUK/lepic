@@ -21,6 +21,7 @@ clap = { workspace = true, features = ["std", "derive", "help", "usage", "error-
 clap_complete = { workspace = true, features = ["unstable-dynamic"] }
 crossterm = { workspace = true, features = ["events", "windows", "bracketed-paste"] }
 futures-util = { workspace = true, features = ["alloc"] }
+hmac.workspace = true
 http-body-util.workspace = true
 hyper = { workspace = true, features = ["server", "client", "http1"] }
 hyper-util = { workspace = true, features = ["server", "http1", "tokio"] }

@@ -15,6 +15,7 @@ mod network;
 mod payments;
 mod service;
 mod wallet;
+mod webhook;
 
 use hyper::Response;
 use serde_json::Value;
@@ -27,6 +28,7 @@ use crate::host::Host;
 
 pub(super) use events::{Log, writer as event_writer};
 pub(super) use wallet::{Scans, drive as scan_driver};
+pub(super) use webhook::drive as webhook_driver;
 
 /// What a handler answers.
 type Reply = Result<Response<Body>, Problem>;
@@ -118,6 +120,8 @@ impl<H: Host> Service<'_, H> {
                 Op::UpdateProfile => network::update_profile(s, r, c).await,
                 Op::GetProfileDomainFile => network::domain_file(s, r, c).await,
                 Op::ListEvents => events::list(s, r, c).await,
+                Op::GetWebhook => webhook::get(s, r, c).await,
+                Op::ResumeWebhook => webhook::resume(s, r, c).await,
             }
         }
     }

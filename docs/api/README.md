@@ -395,6 +395,69 @@ data: {"id":4,"type":"payment.created","created_at":"2026-11-11T02:55:20.0402800
 
 ```
 
+## Webhooks
+
+A webhook is the event log sent by HTTP POST, for a service that cannot hold a connection open.
+It carries the same events, ids, types and retention as `GET /events`. One endpoint is set in the
+serve settings:
+
+| Key | Meaning |
+|---|---|
+| `webhook_url` | The endpoint. `https://` only |
+| `webhook_secret_file` | A file only its owner can read, one `whsec_<base64>` secret per line. Serve reads it before each delivery |
+| `webhook_types` | The event types to send, as `GET /events` takes them (`payment.*`). All when unset |
+| `webhook_allow_private` | `true` allows `http://` and a loopback, private or link-local address |
+
+Serve does not start when a key is wrong. A new `webhook_url` starts at the newest event.
+
+Each request is one event, the body is the `GET /events` item, and the headers follow
+[Standard Webhooks](https://www.standardwebhooks.com/):
+
+- `webhook-id`: the event id. A retry sends the same id; drop a duplicate by it.
+- `webhook-timestamp`: unix seconds of this attempt.
+- `webhook-signature`: `v1,<base64>` for each secret in the file, space-separated. The value is
+  the HMAC-SHA256 of `{webhook-id}.{webhook-timestamp}.{body}` with the secret's bytes, which are
+  the base64 text after `whsec_`, decoded. To rotate, add the new secret as a second line, switch
+  the receiver, then remove the old line.
+
+```python
+import base64, hashlib, hmac
+
+def valid(secret, headers, body):  # secret: "whsec_...", body: bytes
+    key = base64.b64decode(secret.removeprefix("whsec_"))
+    signed = f"{headers['webhook-id']}.{headers['webhook-timestamp']}.".encode() + body
+    mac = base64.b64encode(hmac.new(key, signed, hashlib.sha256).digest()).decode()
+    return any(hmac.compare_digest(mac, part[3:])
+               for part in headers["webhook-signature"].split() if part.startswith("v1,"))
+```
+
+`data.object` holds only `id`, `kind`, `direction`, `state`, `state_reason`, `account`, `amount`,
+`fee`, `link_id`, `message`, `their_message`, `purpose`, `metadata`, `confirmations`,
+`confirmed_height`, `expires_at_height`, `created_at` and `updated_at`. Read the rest with a
+`GET`. The other `data` fields stay.
+
+Any 2xx within 10 seconds (5 to connect) is delivered. A redirect, another status, a timeout or a
+dropped connection is a failure; the answer body is not read. Serve sends one request at a time,
+in id order, at most 10 a second, so a failing event holds back the ones after it. It tries the
+same event again after 5 seconds, 5 minutes, 30 minutes, 2 hours, 5 hours, 10 hours and 10 hours,
+each ±20 %, then stops with the state `disabled`. The cursor and the schedule are in the wallet
+store, so a restart carries on. A cursor the log has pruned gets an `events.skipped` event first.
+
+Serve resolves the host before each attempt and connects only to a public address: not loopback,
+private, link-local, shared (100.64.0.0/10), multicast, unspecified, documentation or broadcast.
+It follows no redirect and uses no proxy.
+
+`GET /webhook` answers the `url`, `types`, `state` (`active`, `retrying` or `disabled`), `cursor`,
+`attempts`, `next_attempt_at` and `last_error`. `POST /webhook/resume` takes an optional
+`{"after": <event id>}`: it sets the cursor there, clears the failures and sends again; without
+`after` it carries on from the cursor of a webhook that is retrying or disabled. Both need the
+role `full` and answer 404 `not_found` when no webhook is set.
+
+```sh
+curl --unix-socket ./w.sock http://lepic/api/v1/webhook
+curl --unix-socket ./w.sock -X POST -d '{"after":41}' http://lepic/api/v1/webhook/resume
+```
+
 ## Errors
 
 An error is an RFC 9457 problem document with `content-type: application/problem+json`:

@@ -275,7 +275,7 @@ fn read_password_file(path: &Path) -> Result<Zeroizing<String>, SecretError> {
 /// root owns may be readable by its group, or by users an access list names, as a systemd
 /// credential is: only root granted that. A file anyone else owns must be owner-only.
 #[cfg(unix)]
-const fn readable_by_others(mode: u32, owner: u32) -> bool {
+pub(crate) const fn readable_by_others(mode: u32, owner: u32) -> bool {
     let by_group = mode & 0o070 != 0 && owner != 0;
     let by_anyone = mode & 0o007 != 0;
     by_group || by_anyone

@@ -218,7 +218,8 @@ async fn serving<H: Host>(
     );
     let writer = v1::event_writer(service);
     let scanner = v1::scan_driver(service);
-    tokio::pin!(listener, maintenance, writer, scanner);
+    let webhook = v1::webhook_driver(service);
+    tokio::pin!(listener, maintenance, writer, scanner, webhook);
     let tls = service.owner_tls;
     let mut sockets = FuturesUnordered::<LocalBoxFuture<'_, ()>>::new();
     let mut tls_connections = FuturesUnordered::<LocalBoxFuture<'_, ()>>::new();
@@ -247,6 +248,7 @@ async fn serving<H: Host>(
             never = &mut maintenance, if !stopping => match never {},
             never = &mut writer, if !stopping => match never {},
             never = &mut scanner, if !stopping => match never {},
+            never = &mut webhook, if !stopping => match never {},
             Ok(_) = stopped.wait_for(|stopped| *stopped), if !stopping => {}
             event = recv(events.as_mut()), if events.is_some() => match event {
                 Ok(event) => {

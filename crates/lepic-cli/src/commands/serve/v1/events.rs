@@ -73,6 +73,16 @@ impl Log {
     pub(in super::super) const fn refreshed(&self) -> &Notify {
         &self.refreshed
     }
+
+    /// A receiver of the newest event id, for a task that waits for new events.
+    pub(super) fn subscribe(&self) -> watch::Receiver<u64> {
+        self.newest.subscribe()
+    }
+
+    /// Wakes the receivers without a new event.
+    pub(super) fn wake(&self) {
+        self.newest.send_modify(|_| {});
+    }
 }
 
 /// Fills `seen` from logged events, oldest first: the newest `data.object` of each payment and
@@ -661,25 +671,11 @@ fn types(request: &Request) -> Result<Vec<String>, Problem> {
     let Some(types) = request.query().get("types") else {
         return Ok(Vec::new());
     };
-    let invalid = || Problem::invalid("/types", "types: a comma list of event types");
-    let types: Vec<String> = types.split(',').map(str::to_owned).collect();
-    if types.len() > lepic_store::MAX_API_KIND_PATTERNS {
-        return Err(invalid());
-    }
-    for kind in &types {
-        let name = kind.strip_suffix(".*").unwrap_or(kind);
-        let valid = !name.is_empty()
-            && name
-                .bytes()
-                .all(|byte| byte.is_ascii_lowercase() || byte == b'_' || byte == b'.');
-        if !valid {
-            return Err(invalid());
-        }
-    }
-    Ok(types)
+    crate::settings::parse_event_types(types)
+        .ok_or_else(|| Problem::invalid("/types", "types: a comma list of event types"))
 }
 
-fn event(stored: ApiEvent) -> Event {
+pub(super) fn event(stored: ApiEvent) -> Event {
     Event {
         id: stored.id,
         kind: stored.kind,
@@ -690,7 +686,7 @@ fn event(stored: ApiEvent) -> Event {
 
 /// `events.skipped` before the first event after `after`, when the log no longer holds the
 /// events between: its id is the last one it stands for.
-fn skipped_since<N: NodeApi + 'static>(
+pub(super) fn skipped_since<N: NodeApi + 'static>(
     opened: &Opened<N>,
     after: u64,
 ) -> Result<Option<Event>, CliError> {

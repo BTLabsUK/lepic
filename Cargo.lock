@@ -1262,6 +1262,7 @@ dependencies = [
  "clap_complete",
  "crossterm",
  "futures-util",
+ "hmac",
  "http-body-util",
  "hyper",
  "hyper-util",

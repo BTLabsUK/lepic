@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-//! `Status` and `Event`.
+//! `Status`, `Event` and `Webhook`.
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -123,4 +123,22 @@ pub(crate) struct Event {
     pub(crate) created_at: String,
     /// `{object, from_state?, to_state?, reason?, changed?}`; `{count}` for `events.skipped`.
     pub(crate) data: Value,
+}
+
+/// The webhook of serve: where its events go and how the delivery stands.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct Webhook {
+    pub(crate) url: String,
+    /// The event types it sends; none means all.
+    pub(crate) types: Vec<String>,
+    /// `active`, `retrying` or `disabled`.
+    pub(crate) state: String,
+    /// The id of the last event delivered.
+    pub(crate) cursor: u64,
+    /// Failed attempts at the next event.
+    pub(crate) attempts: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) next_attempt_at: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) last_error: Option<String>,
 }
