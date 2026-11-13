@@ -185,7 +185,7 @@ pub(super) struct Classic {
 /// `text` as a classic `epic:` link; `None` for an epic1 link, which `epic1_terms` reads, and for
 /// anything that is not an `epic:` link with an address.
 pub(super) fn classic(text: &str) -> Option<Classic> {
-    let rest = text.strip_prefix("epic:")?;
+    let rest = after_scheme(text)?;
     if is_epic1(text) {
         return None;
     }
@@ -211,10 +211,22 @@ pub(super) fn classic(text: &str) -> Option<Classic> {
     })
 }
 
-/// Whether `text` is an `epic:` link to an epic1 address.
+/// `text` after its `epic:` scheme, in either case; `None` when it has none.
+pub(super) fn after_scheme(text: &str) -> Option<&str> {
+    text.get(.."epic:".len())
+        .filter(|scheme| scheme.eq_ignore_ascii_case("epic:"))
+        .and_then(|_| text.get("epic:".len()..))
+}
+
+/// Whether `text` is an `epic:` link to an epic1 address, in either case: card QRs write
+/// epic1 links in upper case.
 pub(super) fn is_epic1(text: &str) -> bool {
-    text.strip_prefix("epic:")
-        .is_some_and(|rest| rest.starts_with("epic1") || rest.starts_with("tepic1"))
+    after_scheme(text).is_some_and(|rest| starts_with(rest, "epic1") || starts_with(rest, "tepic1"))
+}
+
+fn starts_with(text: &str, prefix: &str) -> bool {
+    text.get(..prefix.len())
+        .is_some_and(|start| start.eq_ignore_ascii_case(prefix))
 }
 
 /// The amount and message an epic1 `link` asks, as `lepic epic1 read` reads them.
@@ -658,6 +670,8 @@ mod tests {
     fn epic1_and_empty_links_are_not_classic() {
         assert!(is_epic1("epic:epic1qq?amount=1"));
         assert!(is_epic1("epic:tepic1qq"));
+        assert!(is_epic1("EPIC:TEPIC1QQ?AMOUNT=1"));
+        assert!(classic("EPIC:TEPIC1QQ").is_none());
         assert!(classic("epic:epic1qq?amount=1").is_none());
         assert!(classic("epic:?amount=1").is_none());
         assert!(classic("abc@host").is_none());

@@ -203,7 +203,7 @@ fn route(body: &mut CreateBody) -> Result<Route, Problem> {
     if handed::is_epic1(to) {
         return Ok(Route::Epic1(to.to_owned()));
     }
-    if to.starts_with("epic:") {
+    if handed::after_scheme(to).is_some() {
         let link = handed::classic(to)
             .ok_or_else(|| Problem::invalid("/to", "to is not an epic: link with an address"))?;
         agree(&mut body.amount, link.amount.as_deref())?;
@@ -619,7 +619,7 @@ pub(in super::super) async fn estimate<H: Host>(
     if body
         .to
         .as_deref()
-        .is_some_and(|to| to.trim().starts_with("epic:"))
+        .is_some_and(|to| handed::after_scheme(to.trim()).is_some())
     {
         settle(service, &mut body, invoice).await?;
     }
