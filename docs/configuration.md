@@ -139,7 +139,7 @@ version = 1
 servers = ["http://127.0.0.1:3413"]
 
 [epicbox]
-servers = ["epicbox.btlabs.uk", "epicbox.epiccash.com", "epicbox.stackwallet.com", "epicbox.epicnet.us"]
+servers = ["epicbox.btlabs.uk", "epicbox.stackwallet.com", "epicbox.epicnet.us", "epicbox.epiccash.com"]
 
 [api]
 # owner_tls = "ip:port"

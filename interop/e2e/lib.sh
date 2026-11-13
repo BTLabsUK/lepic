@@ -9,7 +9,7 @@ E2E_STATE="${LEPIC_E2E_STATE:-${HOME}/epic-build/epic1-suite/state}"
 E2E_NODE="${LEPIC_E2E_NODE:-https://floo-node.btlabs.uk}"
 E2E_RELAY="${LEPIC_E2E_RELAY:-epicbox.btlabs.uk}"
 # A second relay for links that name more than one, and for relay moves.
-E2E_RELAY2="${LEPIC_E2E_RELAY2:-epicbox.stackwallet.com}"
+E2E_RELAY2="${LEPIC_E2E_RELAY2:-relay.btlabs.uk}"
 # Confirmations a send needs on its inputs. The miner runs while cases run, so one is enough.
 E2E_MINCONF="${LEPIC_E2E_MINCONF:-1}"
 # The QA funder and the lock that serialises its use across parallel runs.
