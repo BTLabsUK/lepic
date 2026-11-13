@@ -75,8 +75,14 @@ where
         duration: std::time::Duration,
         interval: std::time::Duration,
     ) -> crate::boost::Lease {
-        self.boosts
-            .boost(poller, duration, interval, self.ports.clock.now())
+        let now = self.ports.clock.now();
+        self.boosts.boost(
+            poller,
+            duration,
+            interval,
+            now,
+            &mut **self.ports.rng.lock(),
+        )
     }
 
     /// The wallet's boosts: for the host loops that poll, and to end one by its id.

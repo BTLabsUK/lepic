@@ -5,7 +5,8 @@
 //! starts no loop of its own. The host asks [`Boosts::interval`] before each sleep and wakes when
 //! [`Boosts::changed`] does.
 //!
-//! Each call starts its own boost and gets a [`Lease`] on it. A poller with several boosts runs
+//! Each call starts its own boost and gets a [`Lease`] on it. Its id is random, so a caller
+//! that may end a boost by its id cannot guess the id of another caller's boost. A poller with several boosts runs
 //! at the shortest interval among them until the last one ends; ending one recomputes that from
 //! the rest. The interval is at least [`MIN_INTERVAL`] and the window at most [`MAX_DURATION`]: a
 //! value outside is clamped.
@@ -14,6 +15,7 @@ use std::sync::{Arc, Mutex, PoisonError, Weak};
 use std::time::Duration;
 
 use jiff::Timestamp;
+use rand_core::CryptoRng;
 use tokio::sync::watch;
 use tokio::time::Instant;
 
@@ -51,7 +53,6 @@ struct Running {
 #[derive(Debug, Default)]
 struct State {
     running: Vec<Running>,
-    last_id: u64,
 }
 
 impl State {
@@ -119,21 +120,31 @@ impl Default for Boosts {
 }
 
 impl Boosts {
-    /// Starts a boost: `poller` runs at most every `interval` for `duration` from `now`. The
-    /// lease ends it when dropped, unless [`Lease::keep`] hands its id on.
+    /// Starts a boost: `poller` runs at most every `interval` for `duration` from `now`. Its
+    /// id is drawn from `rng`. The lease ends it when dropped, unless [`Lease::keep`] hands
+    /// its id on.
     pub fn boost(
         &self,
         poller: Poller,
         duration: Duration,
         interval: Duration,
         now: Timestamp,
+        rng: &mut dyn CryptoRng,
     ) -> Lease {
         let duration = duration.min(MAX_DURATION);
         let start = Instant::now();
         let mut state = self.shared.state();
-        state.last_id = state.last_id.wrapping_add(1);
+        let id = loop {
+            let mut bytes = [0u8; 8];
+            rng.fill_bytes(&mut bytes);
+            // 1 to 2^53 - 1: an integer every JSON reader keeps exact.
+            let id = u64::from_le_bytes(bytes) >> 11;
+            if id != 0 && state.running.iter().all(|boost| boost.id != id) {
+                break id;
+            }
+        };
         let asked = Running {
-            id: state.last_id,
+            id,
             poller,
             ends: start.checked_add(duration).unwrap_or(start),
             until: now.checked_add(duration).unwrap_or(Timestamp::MAX),
@@ -219,6 +230,8 @@ mod tests {
     // Tests may unwrap (docs/rules.md).
     #![allow(clippy::unwrap_used)]
 
+    use rand::SeedableRng;
+
     use super::*;
 
     const BASE: Duration = Duration::from_secs(30);
@@ -231,13 +244,25 @@ mod tests {
         Duration::from_secs(n)
     }
 
+    fn start(
+        boosts: &Boosts,
+        poller: Poller,
+        duration: u64,
+        interval: u64,
+        at: Timestamp,
+    ) -> Lease {
+        let mut rng = rand::rngs::StdRng::seed_from_u64(duration ^ interval);
+        boosts.boost(poller, secs(duration), secs(interval), at, &mut rng)
+    }
+
     #[tokio::test(start_paused = true)]
     async fn a_boost_shortens_the_interval_until_its_window_ends() {
         let boosts = Boosts::default();
         assert_eq!(boosts.interval(Poller::Relays, BASE), BASE);
-        let lease = boosts.boost(Poller::Relays, secs(120), secs(5), now());
+        let lease = start(&boosts, Poller::Relays, 120, 5, now());
         assert_eq!(lease.window().interval, secs(5));
         assert_eq!(lease.window().until, now().checked_add(secs(120)).unwrap());
+        assert!(lease.id() > 1 && lease.id() < 1 << 53, "{}", lease.id());
         assert_eq!(boosts.interval(Poller::Relays, BASE), secs(5));
         assert_eq!(boosts.interval(Poller::Node, BASE), BASE);
         tokio::time::advance(secs(120)).await;
@@ -249,15 +274,14 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn overlapping_boosts_run_at_the_shortest_interval_until_the_last_ends() {
         let boosts = Boosts::default();
-        let long = boosts
-            .boost(Poller::Relays, secs(300), secs(20), now())
-            .keep();
+        let long = start(&boosts, Poller::Relays, 300, 20, now()).keep();
         tokio::time::advance(secs(60)).await;
         let later = now().checked_add(secs(60)).unwrap();
-        let short = boosts.boost(Poller::Relays, secs(60), secs(5), later);
+        let short = start(&boosts, Poller::Relays, 60, 5, later);
         assert_eq!(short.window().interval, secs(5));
         assert_eq!(short.window().until, now().checked_add(secs(300)).unwrap());
         let short = short.keep();
+        assert_ne!(long, short);
         tokio::time::advance(secs(60)).await;
         assert_eq!(boosts.interval(Poller::Relays, BASE), secs(20));
         assert!(boosts.end(long));
@@ -268,8 +292,8 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn ending_a_boost_recomputes_the_window_from_the_rest() {
         let boosts = Boosts::default();
-        let slow = boosts.boost(Poller::Node, secs(600), secs(15), now());
-        let fast = boosts.boost(Poller::Node, secs(60), secs(5), now());
+        let slow = start(&boosts, Poller::Node, 600, 15, now());
+        let fast = start(&boosts, Poller::Node, 60, 5, now());
         let changed = boosts.changed();
         assert!(boosts.end(fast.keep()));
         assert!(changed.has_changed().unwrap());
@@ -284,7 +308,7 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn values_outside_the_limits_are_clamped() {
         let boosts = Boosts::default();
-        let lease = boosts.boost(Poller::Relays, secs(86_400), Duration::ZERO, now());
+        let lease = start(&boosts, Poller::Relays, 86_400, 0, now());
         assert_eq!(lease.window().interval, MIN_INTERVAL);
         assert_eq!(
             lease.window().until,
@@ -295,7 +319,7 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn a_boost_is_never_slower_than_the_base() {
         let boosts = Boosts::default();
-        let _lease = boosts.boost(Poller::Relays, secs(60), secs(300), now());
+        let _lease = start(&boosts, Poller::Relays, 60, 300, now());
         assert_eq!(boosts.interval(Poller::Relays, BASE), BASE);
     }
 
@@ -303,7 +327,7 @@ mod tests {
     async fn each_boost_wakes_the_drivers() {
         let boosts = Boosts::default();
         let changed = boosts.changed();
-        let _lease = boosts.boost(Poller::Relays, secs(60), secs(5), now());
+        let _lease = start(&boosts, Poller::Relays, 60, 5, now());
         assert!(changed.has_changed().unwrap());
     }
 }
