@@ -47,6 +47,21 @@ fn reads_one_transport_amount_and_message() {
 }
 
 #[test]
+fn reads_a_link_written_in_upper_case() {
+    let text = link_text(Network::Floonet, "amount=1.5&message=order-7").to_ascii_uppercase();
+    let link = Epic1Link::parse(&text).unwrap();
+    assert_eq!(link.address, sample(Network::Floonet));
+    assert_eq!(link.amount, Some(parse_amount("1.5").unwrap()));
+    assert_eq!(link.message.as_deref(), Some("ORDER-7"));
+    // An Epicbox key is case-sensitive: upper case leaves its mailbox unusable.
+    let mailbox = format!("epicbox={}", entry(Network::Floonet, "relay.example.com"));
+    let link =
+        Epic1Link::parse(&link_text(Network::Floonet, &mailbox).to_ascii_uppercase()).unwrap();
+    assert!(link.transports.is_empty());
+    assert!(matches!(link.delivery(), Delivery::CannotPay));
+}
+
+#[test]
 fn reads_only_three_transports_and_reports_the_rest() {
     let entries: Vec<String> = (1..=5)
         .map(|n| {

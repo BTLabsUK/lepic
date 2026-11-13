@@ -181,7 +181,8 @@ impl Epic1Link {
 
     /// Reads an `epic:epic1…` or `epic:tepic1…` link. The network is the address's own.
     /// An Epicbox link, or anything whose address part is not an epic1, is
-    /// [`LinkError::NotAnEpic1Link`].
+    /// [`LinkError::NotAnEpic1Link`]. The scheme, the address and the keys are read in either
+    /// case, so a link written in upper case for a QR reads as the same link.
     pub fn parse(text: &str) -> Result<Self, LinkError> {
         if text.len() > MAX_LINK_LEN {
             return Err(LinkError::TooLong {
@@ -189,18 +190,27 @@ impl Epic1Link {
                 max: MAX_LINK_LEN,
             });
         }
-        let rest = text.strip_prefix(SCHEME).ok_or(LinkError::NotAnEpic1Link)?;
+        let rest = text
+            .get(..SCHEME.len())
+            .filter(|scheme| scheme.eq_ignore_ascii_case(SCHEME))
+            .and_then(|_| text.get(SCHEME.len()..))
+            .ok_or(LinkError::NotAnEpic1Link)?;
         let (address_text, query) = match rest.split_once('?') {
             Some((address, query)) => (address, Some(query)),
             None => (rest, None),
         };
-        if !ADDRESS_PREFIXES
-            .iter()
-            .any(|prefix| address_text.starts_with(prefix))
-        {
+        if !ADDRESS_PREFIXES.iter().any(|prefix| {
+            address_text
+                .get(..prefix.len())
+                .is_some_and(|start| start.eq_ignore_ascii_case(prefix))
+        }) {
             return Err(LinkError::NotAnEpic1Link);
         }
-        let address = Epic1Address::decode_any(address_text).map_err(LinkError::Address)?;
+        // The codec reads lower case only; an address all in upper case (a QR) is the same one.
+        let lowered = (!address_text.bytes().any(|byte| byte.is_ascii_lowercase()))
+            .then(|| address_text.to_ascii_lowercase());
+        let address = Epic1Address::decode_any(lowered.as_deref().unwrap_or(address_text))
+            .map_err(LinkError::Address)?;
         let mut link = Self::new(address);
         let mut seen_transports = 0usize;
         let (mut amount_seen, mut message_seen, mut label_seen) = (false, false, false);
@@ -208,7 +218,7 @@ impl Epic1Link {
             let Some((key, value)) = pair.split_once('=') else {
                 continue;
             };
-            match key {
+            match key.to_ascii_lowercase().as_str() {
                 "epicbox" => {
                     let index = seen_transports;
                     seen_transports = seen_transports.saturating_add(1);
