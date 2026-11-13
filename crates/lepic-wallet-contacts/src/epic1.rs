@@ -74,6 +74,9 @@ const LINK_PREFIX: &str = "epic1.link.";
 /// The next on-screen link mailbox of an account: `epic1.ring.<account>`.
 const RING_PREFIX: &str = "epic1.ring.";
 
+/// The link a payment was taken at, `<account>.<screen|printed>.<n>`, by transaction id.
+const TAKEN_PREFIX: &str = "epic1.taken.";
+
 /// The S2 this wallet made for an S1 taken at a link mailbox, by slate id.
 const ANSWER_PREFIX: &str = "epic1.answer.";
 
@@ -454,7 +457,12 @@ fn link_key(account: AccountIndex, kind: Epic1LinkKind, n: u32) -> String {
 }
 
 fn parse_link_key(key: &str) -> Option<(AccountIndex, Epic1LinkKind, u32)> {
-    let mut parts = key.strip_prefix(LINK_PREFIX)?.split('.');
+    parse_link(key.strip_prefix(LINK_PREFIX)?)
+}
+
+/// `<account>.<screen|printed>.<n>` as the link it names.
+fn parse_link(text: &str) -> Option<(AccountIndex, Epic1LinkKind, u32)> {
+    let mut parts = text.split('.');
     let account = parts.next()?.parse().ok()?;
     let kind = Epic1LinkKind::from_key(parts.next()?)?;
     let n = parts.next()?.parse().ok()?;
@@ -466,6 +474,10 @@ fn parse_link_key(key: &str) -> Option<(AccountIndex, Epic1LinkKind, u32)> {
 
 fn ring_key(account: AccountIndex) -> String {
     format!("{RING_PREFIX}{}", account.0)
+}
+
+fn taken_key(tx_id: TxId) -> String {
+    format!("{TAKEN_PREFIX}{}", tx_id.0)
 }
 
 fn answer_key(slate_id: SlateId) -> String {
@@ -1021,6 +1033,23 @@ where
         Ok(links)
     }
 
+    /// The link the payment `tx_id` was taken at: its account, kind and number. `None` for a
+    /// payment not taken at a link, or taken before links were noted.
+    pub async fn epic1_taken_at(
+        &self,
+        tx_id: TxId,
+    ) -> Result<Option<(AccountIndex, Epic1LinkKind, u32)>, ContactError> {
+        let session = self.wallet.session()?;
+        let text = self
+            .contact_work(move |_, _| {
+                Ok(session
+                    .store
+                    .read(|repos| repos.setting(&taken_key(tx_id)))?)
+            })
+            .await?;
+        Ok(text.as_deref().and_then(parse_link))
+    }
+
     /// The S2s this wallet made for payments taken at its link mailboxes.
     pub async fn epic1_answers(
         &self,
@@ -1444,12 +1473,17 @@ where
         };
         let now = self.wallet.ports().clock.now().as_second();
         let session = self.wallet.session()?;
+        let tx_id = received.tx_id;
         self.contact_work(move |_, _| {
             let text = to_text(&state, "epic1 answer")?;
             session.store.write(|repos| {
                 repos.put_setting(&answer_key(slate_id), &text)?;
                 if let Some((kind, n)) = link {
                     mark_used(repos, account, kind, n, now)?;
+                    repos.put_setting(
+                        &taken_key(tx_id),
+                        &format!("{}.{}.{n}", account.0, kind.key()),
+                    )?;
                 }
                 Ok::<_, ContactError>(())
             })
