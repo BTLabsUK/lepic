@@ -227,6 +227,8 @@ fn links_are_made_listed_and_retired() {
         );
         assert_eq!(again.status, 200, "{again:?}");
         assert_eq!(again.json()["id"], id.as_str());
+        let collect = &get(socket, "/status").ok()["collect"];
+        assert_eq!(collect["boost"]["interval_seconds"], 5, "{collect}");
 
         let listed = get(socket, "/links").ok();
         assert_eq!(listed["items"].as_array().unwrap().len(), 1);
@@ -310,6 +312,31 @@ fn a_sync_refreshes_and_answers_the_wallet() {
         assert!(object["height"].is_u64(), "{object}");
         let relays_only = send(socket, "POST", "/sync", &json!({"node": false})).ok_status(200);
         assert!(relays_only["network"].is_string());
+    });
+}
+
+#[test]
+fn a_boost_is_clamped_and_shown_in_the_status() {
+    let (host, wallet) = funded();
+    serving(host, &wallet, |socket, _| {
+        let asked = json!({"poller": "node", "duration_seconds": 86_400, "interval_seconds": 1});
+        let window = send(socket, "POST", "/sync/boost", &asked).ok_status(200);
+        assert_eq!(window["poller"], "node", "{window}");
+        assert_eq!(window["interval_seconds"], 5, "{window}");
+        let status = get(socket, "/status").ok_status(200);
+        assert_eq!(status["refresh"]["boost"], window, "{status}");
+        assert!(status["collect"].get("boost").is_none(), "{status}");
+        for wrong in [
+            json!({"poller": "mempool", "duration_seconds": 60, "interval_seconds": 5}),
+            json!({"poller": "relays", "duration_seconds": 0, "interval_seconds": 5}),
+            json!({"poller": "relays", "duration_seconds": 60, "interval_seconds": 0}),
+        ] {
+            problem(
+                &send(socket, "POST", "/sync/boost", &wrong),
+                400,
+                "invalid_field",
+            );
+        }
     });
 }
 

@@ -158,6 +158,10 @@ impl Host for TestHost {
         MAINTENANCE
     }
 
+    fn collect_interval(&self) -> Duration {
+        MAINTENANCE
+    }
+
     fn api_limits(&self, configured: ApiLimits) -> ApiLimits {
         self.api_limits.unwrap_or(configured)
     }

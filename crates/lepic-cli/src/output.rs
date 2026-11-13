@@ -915,6 +915,8 @@ pub struct ContactInvoiceReport {
     pub amount: String,
     pub purpose: Option<&'static str>,
     pub reference: Option<String>,
+    /// The issuer's message, signed with the slate.
+    pub message: Option<String>,
     pub received_at: String,
     /// Other requests from the same contact for the same amount within ten minutes.
     pub same_amount: Vec<String>,
@@ -2479,7 +2481,7 @@ fn write_contact_invoices(out: &mut Vec<u8>, r: &ContactInvoiceListReport) -> st
     for invoice in &r.invoices {
         writeln!(
             out,
-            "{}  {} EPIC from {}{}{}{}",
+            "{}  {} EPIC from {}{}{}{}{}",
             invoice.slate_id,
             invoice.amount,
             printable(&invoice.contact_name),
@@ -2496,6 +2498,11 @@ fn write_contact_invoices(out: &mut Vec<u8>, r: &ContactInvoiceListReport) -> st
                 .reference
                 .as_deref()
                 .map(|reference| format!(", reference {}", printable(reference)))
+                .unwrap_or_default(),
+            invoice
+                .message
+                .as_deref()
+                .map(|message| format!(", message {}", printable(message)))
                 .unwrap_or_default()
         )?;
         if !invoice.same_amount.is_empty() {
@@ -3531,6 +3538,7 @@ mod tests {
             amount: text("2.5"),
             purpose: Some("deposit"),
             reference: Some(text("order 7")),
+            message: Some(text("thanks")),
             received_at: text("t"),
             same_amount: vec![],
         };
@@ -3542,7 +3550,9 @@ mod tests {
         )
         .to_string();
         assert!(
-            shown.contains("s  2.5 EPIC from Exchange X (verified), deposit, reference order 7"),
+            shown.contains(
+                "s  2.5 EPIC from Exchange X (verified), deposit, reference order 7, message thanks"
+            ),
             "{shown}"
         );
         assert!(shown.contains("from \"Shop\" (not verified)"), "{shown}");

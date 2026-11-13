@@ -54,10 +54,16 @@ pub trait Host {
         Box::pin(std::future::pending())
     }
 
-    /// How often `lepic serve` collects the contact mailboxes and refreshes the wallet, as the
-    /// app's foreground tick does. Tests shorten it.
+    /// How often `lepic serve` refreshes the wallet against the node, about once a block, when
+    /// no boost runs. Tests shorten it.
     fn maintenance_interval(&self) -> Duration {
         Duration::from_secs(60)
+    }
+
+    /// How often `lepic serve` collects the contact mailboxes when no boost runs. Tests shorten
+    /// it.
+    fn collect_interval(&self) -> Duration {
+        Duration::from_secs(30)
     }
 
     /// The bounds of serve's API, from the configured ones. Tests tighten them.

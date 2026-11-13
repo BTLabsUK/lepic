@@ -299,6 +299,35 @@ fn a_sealed_invoice_waits_for_approval_and_is_paid_sealed() {
     });
 }
 
+#[test]
+fn a_contact_invoice_shows_its_message_on_both_sides() {
+    let Paired {
+        host,
+        payer,
+        shop,
+        shop_side,
+        payer_side,
+    } = paired();
+    payer
+        .run(&host, &["contact", "allow-invoices", &payer_side, "on"])
+        .ok();
+    shop.run(&host, &["contact", "collect"]).ok();
+    serving(host, &shop, |socket, client| {
+        let body = json!({
+            "kind": "invoice", "amount": "1.5", "to": format!("contact:{shop_side}"),
+            "message": "order 42", "ttl_blocks": 30,
+        });
+        let made = post(socket, "/api/v1/payments", &body);
+        assert_eq!(made.status, 201, "{made:?}");
+        let made = made.json();
+        assert_eq!(made["message"], "order 42", "{made}");
+        assert_eq!(made["expires_at_height"], support::TIP + 30, "{made}");
+        payer.run(client, &["contact", "collect"]).ok();
+        let held = payer.run(client, &["contact", "invoices"]).ok().json();
+        assert_eq!(held["invoices"][0]["message"], "order 42", "{held}");
+    });
+}
+
 /// `slate` with its TTL cutoff set to `height`.
 fn with_cutoff(slate: &str, height: u64) -> String {
     let mut value: Value = serde_json::from_str(slate).unwrap();

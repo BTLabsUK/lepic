@@ -25,6 +25,8 @@ const HELD: &str = "api.held.";
 const DECLINED: &str = "api.declined.";
 /// The settings key prefix that maps a caller's invoice id to the slate id the engine drew.
 const ALIAS: &str = "api.alias.";
+/// The settings key of the tip up to which confirmations were checked.
+const CONFIRMED_TIP: &str = "api.confirmations.tip";
 
 /// What the API keeps about a payment beside the wallet's own records. Never sent.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -240,6 +242,40 @@ fn is_self_half(details: &TransactionDetails) -> bool {
     is_self(details) && details.transaction.entry.direction == TxDirection::Incoming
 }
 
+/// The payments whose `needed`-th confirmation came since the tip of the last call, oldest
+/// first, and keeps the tip. The first call, and one after the tip went back, finds none.
+pub(in super::super) async fn reached<H: Host>(
+    service: &Service<'_, H>,
+    needed: u64,
+) -> Result<Vec<Payment>, CliError> {
+    let checked = setting(service, CONFIRMED_TIP)?.and_then(|text| text.parse::<u64>().ok());
+    let tip = known_tip(service)?;
+    if tip.is_none() || tip == checked {
+        return Ok(Vec::new());
+    }
+    let book = Book::load(service).await?;
+    let Some(tip) = book.tip else {
+        return Ok(Vec::new());
+    };
+    let mut reached = Vec::new();
+    if let Some(checked) = checked.filter(|checked| *checked < tip) {
+        let at = |details: &TransactionDetails| {
+            details
+                .confirmed_height
+                .map(|height| height.value().saturating_add(needed.saturating_sub(1)))
+        };
+        let due: Vec<_> = book
+            .payments()
+            .filter(|details| at(details).is_some_and(|at| at > checked && at <= tip))
+            .collect();
+        for details in due.into_iter().rev() {
+            reached.push(book.payment(service, details).await?);
+        }
+    }
+    put_setting(service, CONFIRMED_TIP, &tip.to_string())?;
+    Ok(reached)
+}
+
 /// The wallet's transactions and accounts, read once for one answer.
 pub(in super::super) struct Book {
     labels: Vec<(AccountIndex, String)>,
@@ -314,6 +350,12 @@ impl Book {
         if let Some(contact) = contact {
             payment.via = "contact".to_owned();
             payment.counterparty_mut().contact_id = Some(contact.to_string());
+        }
+        if details.transaction.entry.direction == TxDirection::Incoming {
+            let book = service.held.wallet.contact_book();
+            if let Some((account, kind, n)) = book.epic1_taken_at(details.transaction.id).await? {
+                payment.link_id = Some(crate::api::links::link_id(account, kind, n));
+            }
         }
         let note = note(service, &payment.id)?;
         payment.purpose = note.purpose;

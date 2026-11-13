@@ -104,6 +104,11 @@ pub const SETTINGS: &[(&str, &str, &str)] = &[
         "hours an unpaid invoice is kept, 1 to 48",
     ),
     (
+        "payment_confirmations",
+        "LEPIC_PAYMENT_CONFIRMATIONS",
+        "confirmations after which serve logs payment.confirmations_reached, 1 to 1440",
+    ),
+    (
         "host_features",
         "LEPIC_HOST_FEATURES",
         "host feature bits the wallet's marker claims, by name, comma-separated: \
@@ -324,6 +329,8 @@ pub struct Settings {
     pub epic1_onion_listener: bool,
     /// How long an unpaid invoice is kept, on either side.
     pub invoice_expiry: InvoiceExpiry,
+    /// The confirmations after which serve logs `payment.confirmations_reached` (ADR 0058).
+    pub payment_confirmations: u64,
     /// The host bits the wallet's marker claims (ADR 0034), only bits of
     /// `features::HOST_FEATURES`; none unless `host_features` names them.
     pub host_features: u32,
@@ -404,9 +411,6 @@ impl Settings {
         let servers = servers(args, env, &lookup, &config)?;
         let node = node(&lookup, network, &servers, &config)?;
         let relay = relay(&lookup, &servers)?;
-        let invoice_expiry = lookup
-            .parse("invoice_expiry_hours", parse_expiry_hours)?
-            .unwrap_or_default();
         let relay_tor = relay_tor(&lookup)?;
         let host_features = lookup
             .parse("host_features", parse_host_features)?
@@ -448,13 +452,26 @@ impl Settings {
             native_direct: lookup.switch("native_direct")?,
             epic1_web_listener: lookup.switch("epic1_web_listener")?,
             epic1_onion_listener: lookup.switch("epic1_onion_listener")?,
-            invoice_expiry,
+            invoice_expiry: lookup
+                .parse("invoice_expiry_hours", parse_expiry_hours)?
+                .unwrap_or_default(),
+            payment_confirmations: payment_confirmations(&lookup)?,
             host_features,
             profile: profile(args, &lookup)?,
             domain: domain(args, &lookup)?,
             shell_idle_lock_minutes: shell_idle_lock_minutes(&lookup)?,
         })
     }
+}
+
+/// The confirmations a payment needs for `payment.confirmations_reached`: 1 to 1440, 6 unless
+/// set.
+fn payment_confirmations(lookup: &Lookup<'_>) -> Result<u64, SettingsError> {
+    Ok(lookup
+        .parse("payment_confirmations", |text| {
+            text.parse::<u64>().ok().filter(|n| (1..=1440).contains(n))
+        })?
+        .unwrap_or(6))
 }
 
 /// The minutes with no line entered before the shell locks the wallet; 0 never.

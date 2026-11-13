@@ -423,7 +423,11 @@ fn invoice_command(
                 contact: ContactIdArg { contact },
                 amount: body.amount.clone(),
                 purpose: purpose.unwrap_or(PurposeArg::Request),
-                reference: body.message.clone(),
+                reference: None,
+                message: MessageArg {
+                    message: body.message.clone(),
+                },
+                ttl_blocks: body.ttl_blocks,
                 account,
                 slate_id: SendSlateIdArg { slate_id },
             }),
@@ -440,6 +444,7 @@ fn invoice_command(
             message: MessageArg {
                 message: body.message.clone(),
             },
+            ttl_blocks: body.ttl_blocks,
             slate_id: SendSlateIdArg { slate_id },
         })),
     }

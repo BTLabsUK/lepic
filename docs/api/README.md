@@ -297,15 +297,40 @@ Serve keeps a contact's `invite_link`, the `label` given while its pairing waite
 whichever way it is removed: this API, `lepic contact remove`, the app, or a new pairing that
 replaces it.
 
+## Collect and refresh
+
+Serve collects the relays (contact, pairing and epic1 link mailboxes) every 30 seconds and
+refreshes the wallet from the node every 60 seconds. `GET /status` shows each under `collect` and
+`refresh`.
+
+`POST /sync/boost` makes one of them run faster for a while, for a client that expects an
+answer:
+
+```sh
+curl --unix-socket ./w.sock -X POST http://lepic/api/v1/sync/boost \
+  -d '{"poller":"relays","duration_seconds":120,"interval_seconds":5}'
+```
+
+```json
+{"poller":"relays","until":"2026-11-13T16:02:10Z","interval_seconds":5}
+```
+
+`poller` is `relays` or `node`. The interval is at least 5 seconds and the window at most
+10 minutes; serve clamps a value outside and answers the window that took effect. A boost that
+overlaps the running one keeps the later end and the shorter interval. While it runs, `GET
+/status` shows it as `boost` inside `collect` or `refresh`. Serve boosts `relays` for 120 seconds
+at 5 seconds itself after `POST /payments`, `POST /contacts`, `POST /pair-requests/{id}/accept`
+and `POST /links`.
+
 ## Events
 
 Serve keeps an event log. Each event has a rising integer `id`, a `type` like
 `payment.state_changed`, a `created_at` and a `data` object, which holds a snapshot of the object
 after the change where there is one. The types in the document are `payment.created`,
-`payment.state_changed`, `payment.updated`, `contact.created`, `contact.state_changed`,
-`contact.updated`, `contact.removed`, `pair_request.received`, `payload.received`,
-`quarantine.added`, `account.balance_changed`, `wallet.progress`, `relay.updated`,
-`slate.unmatched` and `events.skipped`. The set is open: skip a type you do not know.
+`payment.state_changed`, `payment.updated`, `payment.confirmations_reached`, `contact.created`,
+`contact.state_changed`, `contact.updated`, `contact.removed`, `pair_request.received`,
+`payload.received`, `quarantine.added`, `account.balance_changed`, `wallet.progress`,
+`relay.updated`, `slate.unmatched` and `events.skipped`. The set is open: skip a type you do not know.
 
 `GET /events` returns a page, oldest first. `after` gives the last id you have; `types` takes a
 comma list and allows `payment.*`.
@@ -340,6 +365,12 @@ A `contact.state_changed` entry for a pairing that failed carries one of these a
 `address_proof_missing`, `crossed`. After a restart serve reads the newest logged objects back, so
 `from_state` is present when the log holds the object. When it does not, the entry has `to_state`
 and no `from_state`, and a `contact.updated` entry that does not know the fields has no `changed`.
+
+`payment.confirmations_reached` comes once per payment, when the chain tip reaches its
+`payment_confirmations`-th confirmation (6 unless the setting says 1 to 1440). `data.object` is
+the payment. Serve keeps the tip it last checked, so after a restart it logs the payments that
+reached the count meanwhile, and none twice. It logs none for payments confirmed before the
+first start of a serve that has the event.
 
 Events are kept for 30 days by default. A client that falls behind, or asks from an id that is
 pruned, gets an `events.skipped` event with the count and a `reason` of `lagged` or `pruned`.

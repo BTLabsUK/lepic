@@ -1380,7 +1380,7 @@ impl<H: Host> Run<'_, H> {
                     account: account.index,
                     amount,
                     message: args.message.message,
-                    ttl_blocks: None,
+                    ttl_blocks: args.ttl_blocks,
                 },
                 delivery,
                 slate_id,

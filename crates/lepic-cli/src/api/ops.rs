@@ -32,6 +32,7 @@ ops! {
     ChangeWalletPassword = "changeWalletPassword",
     ScanWallet = "scanWallet",
     SyncNow = "syncNow",
+    BoostSync = "boostSync",
     ListAccounts = "listAccounts",
     CreateAccount = "createAccount",
     ListPayments = "listPayments",

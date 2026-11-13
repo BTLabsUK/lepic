@@ -21,6 +21,6 @@ pub(crate) use handed::{Inspection, OpenResult};
 pub(crate) use network::{Peer, Profile, Relay};
 pub(crate) use payment::{Delivery, Estimate, Handoff, Payment};
 pub(crate) use service::{
-    EpicboxListener, Event, HttpListener, Listeners, OwnerTls, Requests, Status, Task,
+    Boost, EpicboxListener, Event, HttpListener, Listeners, OwnerTls, Requests, Status, Task,
 };
 pub(crate) use wallet::{Account, Address, Balance, Link, Node, Output, Wallet};

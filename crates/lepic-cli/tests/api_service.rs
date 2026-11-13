@@ -258,6 +258,34 @@ fn the_event_stream_yields_the_wallets_events() {
 }
 
 #[test]
+fn a_payment_is_logged_once_it_has_the_confirmations_asked() {
+    let host = TestHost::new();
+    host.fund(SENDER_MNEMONIC, 0, FUNDING, 1);
+    // The funding, at height 1, has 3 confirmations when serve starts.
+    host.node
+        .update_chain(|chain| chain.tip.height = lepic_primitives::amount::Height::new(3));
+    let wallet = Instance::new("serving password");
+    wallet.restore(&host, SENDER_MNEMONIC);
+    let node = host.node.clone();
+    serving(host, &wallet, |socket, _| {
+        let path = "/api/v1/events?types=payment.confirmations_reached";
+        let reached = || http(socket, "GET", path, None).ok()["items"].clone();
+        let status = || http(socket, "GET", "/api/v1/status", None).ok();
+        wait_until("a refresh", || {
+            status()["refresh"]["last_success_at"].is_string()
+        });
+        assert_eq!(reached(), json!([]));
+        node.update_chain(|chain| chain.tip.height = lepic_primitives::amount::Height::new(6));
+        wait_until("payment.confirmations_reached", || {
+            !reached().as_array().unwrap().is_empty()
+        });
+        let items = reached();
+        assert_eq!(items.as_array().unwrap().len(), 1, "{items}");
+        assert_eq!(items[0]["data"]["object"]["confirmations"], 6, "{items}");
+    });
+}
+
+#[test]
 fn a_served_503_carries_retry_after() {
     let host = TestHost::new();
     let wallet = Instance::new("serving password");

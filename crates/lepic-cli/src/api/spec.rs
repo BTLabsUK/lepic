@@ -202,7 +202,7 @@ mod tests {
         for op in Op::ALL {
             assert!(unique.contains(op), "{} is not in the document", op.id());
         }
-        assert_eq!(routed.len(), 58);
+        assert_eq!(routed.len(), 59);
     }
 
     #[test]
@@ -218,7 +218,7 @@ mod tests {
             [count(Role::Read), count(Role::Receive), count(Role::Full)],
             // Post and cancel route at `receive`; their handlers ask `full` of all but an
             // invoice this wallet issued.
-            [23, 8, 27]
+            [23, 9, 27]
         );
         let socket_only: HashSet<Op> = router
             .operations()

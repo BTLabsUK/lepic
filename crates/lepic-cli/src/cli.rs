@@ -705,6 +705,11 @@ pub struct IssueArgs {
     pub account: AccountArg,
     #[command(flatten)]
     pub message: MessageArg,
+    /// Blocks after which the other party must refuse the slate
+    ///
+    /// Unpaid by then, the invoice is expired at the next refresh.
+    #[arg(long, value_name = "BLOCKS")]
+    pub ttl_blocks: Option<u64>,
     #[command(flatten)]
     pub slate_id: SendSlateIdArg,
 }
@@ -1739,6 +1744,13 @@ pub struct ContactInvoiceArgs {
     /// A reference the contact sees with the invoice
     #[arg(long, value_name = "TEXT")]
     pub reference: Option<String>,
+    #[command(flatten)]
+    pub message: MessageArg,
+    /// Blocks after which the other party must refuse the slate
+    ///
+    /// Unpaid by then, the invoice is expired at the next refresh.
+    #[arg(long, value_name = "BLOCKS")]
+    pub ttl_blocks: Option<u64>,
     #[command(flatten)]
     pub account: AccountArg,
     #[command(flatten)]

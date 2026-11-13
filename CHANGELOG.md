@@ -12,8 +12,19 @@ Conventional Commit messages at release time.
 - FFI: `EpicWallet::drop_node_connections` closes the pooled node connections, so the next node
   call opens a fresh one (for a network change or a return from the background). It does no I/O
   and waits for no other call.
+- Serve: `POST /sync/boost` collects the relays or refreshes from the node faster for a while
+  (5 s at least, 10 min at most; overlapping boosts merge), and `GET /status` shows it. Serve
+  boosts the relays itself after a payment, an invite, an accepted pair request and a new link
+  (ADR 0058).
+- Serve: `payment.confirmations_reached` once a payment has `payment_confirmations`
+  confirmations (new setting, 6 unless set, 1 to 1440).
+- Serve: a payment taken at an epic1 link names it in `link_id`.
+- `lepic invoice issue` and `lepic contact invoice` take `--ttl-blocks`; `lepic contact invoice`
+  takes `--message`, and `lepic contact invoices` shows it.
 
 ### Changed
+
+- Serve collects the relays every 30 seconds, was 60.
 
 - A direct node connection gives the name lookup and the connect a `connect_timeout` each, and
   tries the node's addresses as RFC 8305 (Happy Eyeballs) says: IPv6 and IPv4 in turn, 250 ms
@@ -22,6 +33,8 @@ Conventional Commit messages at release time.
 ### Fixed
 
 - A node switch no longer waits for a check of another node's height to end.
+- Serve: an invoice made with `ttl_blocks` carries it, so it shows `expires_at_height` and
+  expires. An invoice to a contact carries its `message` in the slate, so both sides show it.
 
 ## [0.5.0] - 2026-11-11
 

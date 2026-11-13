@@ -344,6 +344,10 @@ lepic tx finalize ./invoice.slate.response   # issuer
 version-4 UUID the caller chose. An id this wallet already used for any transaction is refused
 with exit code 7 and nothing is stored.
 
+Both also take `--ttl-blocks N`: the payer refuses the invoice after N blocks, and the issuer's
+next refresh expires it unpaid. `contact invoice --message TEXT` signs a message into the
+invoice, and the payer's `contact invoices` shows it.
+
 The payer types the amount again, and an invoice for any other amount is refused. A file whose
 name looks like a slate id is given with a directory, as in `./<SLATE_ID>`.
 

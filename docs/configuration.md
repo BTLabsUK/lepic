@@ -77,6 +77,7 @@ Switches take `true` or `false` and default to `false`.
 | `epic1_web_listener` | `LEPIC_EPIC1_WEB_LISTENER` | Switch: the HTTP listener's native endpoint also opens payments sealed to this wallet's epic1 addresses. Off by default: the listener then answers them as envelopes no key opens, so an epic1 address does not show which listener is its wallet |
 | `epic1_onion_listener` | `LEPIC_EPIC1_ONION_LISTENER` | Switch: the same, for the onion listener |
 | `invoice_expiry_hours` | `LEPIC_INVOICE_EXPIRY_HOURS` | Hours an unpaid Epicbox invoice is kept, a whole number of at least 1. Default 24 |
+| `payment_confirmations` | `LEPIC_PAYMENT_CONFIRMATIONS` | Confirmations after which `lepic serve` logs `payment.confirmations_reached`, 1 to 1440. Default 6 |
 | `host_features` | `LEPIC_HOST_FEATURES` | Host feature bits the wallet claims, comma-separated: `device-forwarding`, `name-service`. Default none |
 | `profile` | `LEPIC_PROFILE` | Profile bits told to paired contacts: `no-payments`, `automated`, or a number 0 to 65535. Default 0 |
 | `domain` | `LEPIC_DOMAIN` | A domain the wallet claims to paired contacts, proven by its well-known file. Default none |

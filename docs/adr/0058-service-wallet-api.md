@@ -26,8 +26,9 @@ API's conventions (snake_case, problems with codes, `{items, next_cursor}`).
 
 ### 1. Boost: poll faster for a while
 
-One primitive in `lepic-wallet` (`boost.rs`), held by the `Wallet`, so serve, the contacts crate
-and the FFI call the same function.
+One primitive in `lepic-wallet` (`boost.rs`), held by the `Wallet`, where serve, the contacts crate
+and the FFI can all call it. Today only serve's handlers call it; the app and the FFI move onto it
+later (job `boost-unify`).
 
 ```rust
 pub enum Poller { Relays, Node }
@@ -35,22 +36,27 @@ pub enum Poller { Relays, Node }
 pub struct Window { pub poller: Poller, pub until: Timestamp, pub interval: Duration }
 
 impl Wallet {
-    /// Polls `poller` every `interval` for `duration` from now, merged with any boost it has.
+    /// Polls `poller` every `interval` for `duration` from now, merged with the boost it has,
+    /// and returns the window that took effect.
     pub fn boost(&self, poller: Poller, duration: Duration, interval: Duration) -> Window;
-    /// The interval `poller` runs at now: the boost's while one lasts, else `base`.
-    pub fn poll_interval(&self, poller: Poller, base: Duration) -> Duration;
+    /// The wallet's boosts, for the loops that poll.
+    pub fn boosts(&self) -> &Boosts;
+}
+
+impl Boosts {
+    /// How long `poller` sleeps from now: the boost's interval while one runs, else `base`.
+    pub fn interval(&self, poller: Poller, base: Duration) -> Duration;
     /// The boost `poller` has now, if any.
-    pub fn boost_window(&self, poller: Poller) -> Option<Window>;
-    /// Changes each time a boost starts or changes, so a driver sleeping on the old
-    /// interval wakes.
-    pub fn boosts_changed(&self) -> watch::Receiver<u64>;
+    pub fn window(&self, poller: Poller) -> Option<Window>;
+    /// Changes each time a boost starts or changes, so a loop asleep on the old interval wakes.
+    pub fn changed(&self) -> watch::Receiver<u64>;
 }
 ```
 
 - **Pollers.** `Relays` is the collect cycle: every contact mailbox, pairing mailbox and live
   epic1 link mailbox, on the relays the wallet already uses. `Node` is the wallet refresh. These
   are the two loops that exist. A boost starts no new loop: the host's loop asks
-  `poll_interval` before each sleep and wakes on `boosts_changed`.
+  `boosts().interval` before each sleep and wakes on `boosts().changed()`.
 - **Merge.** One boost per poller at most. A call that overlaps a running boost keeps the later
   end and the shorter interval. When the window ends the poller goes back to its base interval.
 - **Limits, set by LEPIC.** The interval is at least 5 s, the duration at most 10 minutes. A
@@ -75,10 +81,8 @@ impl Wallet {
   {"poller": "relays", "until": "2026-11-13T15:02:00Z", "interval_seconds": 5}
   ```
 
-  A missing or unknown `poller` is 400 `invalid_field`. `GET /status` lists the running boosts
-  under `boosts`.
-
-The job `boost-unify` moves the app's and the FFI's own timers onto this primitive later.
+  A missing or unknown `poller` is 400 `invalid_field`. `GET /status` shows a running boost as
+  `boost` inside `collect` (relays) or `refresh` (node).
 
 ### 2. Webhooks: one endpoint, fed from the event log
 
@@ -148,9 +152,9 @@ This is a bug fix: the document lists `epic:` as a `to` form and `POST /open` po
 
 ### 4. An incoming epic1 payment names its link
 
-- **Added.** One settings row per payment taken at a link: key `epic1.link.<tx id>`, value
-  `printed.<n>` or `screen.<n>`, about 30 bytes. It is written in the same store write that
-  marks the link used. No table, no column, no schema change, no migration. Payments taken
+- **Added.** One settings row per payment taken at a link: key `epic1.taken.<tx id>`, value
+  `<account>.<screen|printed>.<n>`, about 30 bytes. It is written in the same store write that
+  marks the link used. The contacts crate reads it with `epic1_taken_at(tx_id)`. No table, no column, no schema change, no migration. Payments taken
   before this change have no row and no `link_id`.
 - **Shown.** `Payment.link_id` (already in the document) as `<account>.<kind>.<n>`, the id
   `GET /links` uses. So it is in `GET /payments`, in each payment event, and in the webhook.
@@ -177,7 +181,8 @@ expires an issued invoice past its cutoff, and `expires_at_height` already shows
   which neither side's payment shows. Serve now puts it in the I1, as for the other invoices,
   through a new `--message` on `lepic contact invoice`. `--reference` stays for the CLI.
 - **Where it shows.** `GET /payments`, events and webhooks (`message` and `their_message`),
-  `lepic tx show` (the slate messages), and the FFI, whose transaction details already carry the
+  `lepic contact invoices` (the payer's waiting list, new `message` field), `lepic tx show` (the
+  slate messages), and the FFI, whose transaction details already carry the
   verified slate messages (`TransactionDetails.messages`). The app shows whatever its history
   screen reads from there; the app is not changed.
 - **Cost and privacy.** No new storage: the slate is stored already. The message now travels
@@ -229,5 +234,5 @@ query, or from the epic1 link as `epic1 read` reads it.
 - A service needs no open stream: it sets `webhook_url` and a secret file.
 - Webhook delivery is in order and holds back on a failing event; a receiver that answers
   2xx fast and works afterwards never blocks it.
-- Two settings rows per payment at most (link id) and a few for the webhook and the tip; no
+- One settings row per payment taken at a link, and a few for the webhook and the tip; no
   schema change.

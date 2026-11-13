@@ -3,10 +3,12 @@
 
 use std::cell::RefCell;
 use std::convert::Infallible;
+use std::time::Duration;
 
 use hyper::StatusCode;
 use lepic_node::NodeApi as _;
 use lepic_store::AccountIndex;
+use lepic_wallet::boost::Poller;
 use lepic_wallet::event::Event;
 use lepic_wallet_contacts::{CollectTrigger, WalletContacts as _};
 use serde::Deserialize;
@@ -16,8 +18,8 @@ use zeroize::Zeroizing;
 use super::super::Service;
 use super::Reply;
 use crate::api::list::{ListQuery, Order, Page, number_key};
-use crate::api::model::{Account, Balance, Node, Wallet};
-use crate::api::{Category, Context, Problem, Request, accepted, no_content, ok};
+use crate::api::model::{Account, Balance, Boost, Node, Wallet};
+use crate::api::{Category, Context, Op, Problem, Request, accepted, no_content, ok};
 use crate::cli::{Command, WalletCommand, WalletScanArgs};
 use crate::commands::{contact, rekey};
 use crate::exit::CliError;
@@ -375,6 +377,68 @@ pub(super) async fn sync<H: Host>(
     }
     ok(&current(service).await?)
 }
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct BoostBody {
+    poller: String,
+    duration_seconds: u64,
+    interval_seconds: u64,
+}
+
+/// `POST /sync/boost`: runs a poller more often for a while (ADR 0058).
+#[allow(clippy::unused_async)] // Every handler is async.
+pub(super) async fn boost<H: Host>(
+    service: &Service<'_, H>,
+    request: Request,
+    _context: &Context,
+) -> Reply {
+    let body: BoostBody = request.json()?;
+    let poller = match body.poller.as_str() {
+        "relays" => Poller::Relays,
+        "node" => Poller::Node,
+        _ => return Err(Problem::invalid("/poller", "poller: relays or node")),
+    };
+    if body.duration_seconds == 0 {
+        return Err(Problem::invalid(
+            "/duration_seconds",
+            "duration_seconds: at least 1",
+        ));
+    }
+    if body.interval_seconds == 0 {
+        return Err(Problem::invalid(
+            "/interval_seconds",
+            "interval_seconds: at least 1",
+        ));
+    }
+    let window = service.held.wallet.boost(
+        poller,
+        Duration::from_secs(body.duration_seconds),
+        Duration::from_secs(body.interval_seconds),
+    );
+    ok(&Boost::of(window))
+}
+
+/// A call whose answer may come back through a relay: a payment or an invoice, an invite, an
+/// accepted pair request, a link to be paid.
+pub(super) const fn expects_reply(op: Op) -> bool {
+    matches!(
+        op,
+        Op::CreatePayment | Op::CreateContact | Op::AcceptPairRequest | Op::CreateLink
+    )
+}
+
+/// Boosts the relay collect after a call [`expects_reply`] names succeeded.
+pub(super) fn expect_reply<H: Host>(service: &Service<'_, H>) {
+    service.held.wallet.boost(
+        Poller::Relays,
+        REPLY_BOOST,
+        lepic_wallet::boost::MIN_INTERVAL,
+    );
+}
+
+/// How long serve collects every few seconds after a call that waits for a reply.
+const REPLY_BOOST: Duration = Duration::from_secs(120);
 
 pub(super) async fn list_accounts<H: Host>(
     service: &Service<'_, H>,

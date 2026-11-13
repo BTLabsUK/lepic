@@ -207,6 +207,25 @@ fn without_a_home_the_data_directory_must_be_given() {
 }
 
 #[test]
+fn payment_confirmations_default_to_six_and_take_1_to_1440() {
+    let home = tempfile::tempdir().unwrap();
+    let resolve =
+        |vars: &[(&str, &str)]| Settings::resolve(&GlobalArgs::default(), &env(home.path(), vars));
+    assert_eq!(resolve(&[]).unwrap().payment_confirmations, 6);
+    let set = resolve(&[("LEPIC_PAYMENT_CONFIRMATIONS", "1440")]).unwrap();
+    assert_eq!(set.payment_confirmations, 1440);
+    for bad in ["0", "1441", "six"] {
+        assert!(matches!(
+            resolve(&[("LEPIC_PAYMENT_CONFIRMATIONS", bad)]),
+            Err(SettingsError::InvalidValue {
+                key: "payment_confirmations",
+                ..
+            })
+        ));
+    }
+}
+
+#[test]
 fn the_shell_idle_lock_defaults_to_fifteen_minutes_and_zero_turns_it_off() {
     let home = tempfile::tempdir().unwrap();
     let resolve =

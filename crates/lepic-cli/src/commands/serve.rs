@@ -20,12 +20,12 @@ use jiff::Timestamp;
 use lepic_epicbox::RelayEndpoint;
 use lepic_node::NodeApi;
 use lepic_wallet::ApiTlsKey;
+use lepic_wallet::boost::Poller;
 use lepic_wallet::event::Event;
 use lepic_wallet::inbox::{InboxError, InboxSummary, ListenHandle};
 use lepic_wallet_contacts::CollectTrigger;
 use tokio::net::TcpStream;
 use tokio::sync::{broadcast, watch};
-use tokio::time::MissedTickBehavior;
 
 use super::{
     HttpListener, InvoiceSweep, Opened, Run, abort_on, contact, finish_listen, inbox_report,
@@ -124,24 +124,33 @@ impl<H: Host> Service<'_, H> {
     }
 }
 
-/// Collects the contact mailboxes and refreshes the wallet, each every `every` and once at start,
-/// and records how each went in `status`. Relay backoff and outbox retry times are kept between
-/// collects; the first, at start, tries everything at once. A failure is logged and the next
-/// tick tries again.
+/// Collects the contact mailboxes every `collect_every` and refreshes the wallet every
+/// `refresh_every`, each once at start, records how each went in `status`, and tells
+/// `wallet_refreshed` after each refresh that worked. A boost of the wallet (ADR 0058) shortens
+/// either interval while it lasts. Relay backoff and outbox retry times are kept between
+/// collects; the first, at start, tries everything at once. A failure is logged and the next run
+/// tries again.
 async fn maintain<N: NodeApi + 'static>(
     opened: &Opened<N>,
     meeting: &[RelayEndpoint],
-    every: Duration,
+    collect_every: Duration,
+    refresh_every: Duration,
     status: &RefCell<Maintenance>,
+    wallet_refreshed: &tokio::sync::Notify,
 ) -> Infallible {
-    let mut collect = tokio::time::interval(every);
-    collect.set_missed_tick_behavior(MissedTickBehavior::Delay);
-    let mut refresh = tokio::time::interval(every);
-    refresh.set_missed_tick_behavior(MissedTickBehavior::Delay);
+    let boosts = opened.wallet.boosts();
+    let mut boosted = boosts.changed();
+    let after = |last: tokio::time::Instant, poller, base| {
+        last.checked_add(boosts.interval(poller, base))
+            .unwrap_or(last)
+    };
+    let start = tokio::time::Instant::now();
+    let (mut collected, mut refreshed) = (start, start);
+    let (mut next_collect, mut next_refresh) = (start, start);
     let mut trigger = CollectTrigger::Open;
     loop {
         tokio::select! {
-            _ = collect.tick() => {
+            () = tokio::time::sleep_until(next_collect) => {
                 let cycle = contact::collect_online(opened, meeting, trigger).await;
                 trigger = CollectTrigger::Foreground;
                 if let Err(error) = &cycle {
@@ -152,17 +161,28 @@ async fn maintain<N: NodeApi + 'static>(
                 }
                 let now = opened.wallet.ports().clock.now();
                 status.borrow_mut().collect.record(cycle, now);
+                collected = tokio::time::Instant::now();
+                next_collect = after(collected, Poller::Relays, collect_every);
             }
-            _ = refresh.tick() => {
-                let refreshed = opened.wallet.refresh().await.map(drop);
-                if let Err(error) = &refreshed {
+            () = tokio::time::sleep_until(next_refresh) => {
+                let result = opened.wallet.refresh().await.map(drop);
+                if let Err(error) = &result {
                     tracing::warn!(
                         error = %lepic_telemetry::ErrorChain(error),
                         "wallet refresh failed"
                     );
                 }
+                if result.is_ok() {
+                    wallet_refreshed.notify_one();
+                }
                 let now = opened.wallet.ports().clock.now();
-                status.borrow_mut().refresh.record(refreshed, now);
+                status.borrow_mut().refresh.record(result, now);
+                refreshed = tokio::time::Instant::now();
+                next_refresh = after(refreshed, Poller::Node, refresh_every);
+            }
+            Ok(()) = boosted.changed() => {
+                next_collect = next_collect.min(after(collected, Poller::Relays, collect_every));
+                next_refresh = next_refresh.min(after(refreshed, Poller::Node, refresh_every));
             }
         }
     }
@@ -191,8 +211,10 @@ async fn serving<H: Host>(
     let maintenance = maintain(
         opened,
         &service.settings.servers.meeting_relays,
+        service.host.collect_interval(),
         service.host.maintenance_interval(),
         &service.maintenance,
+        service.log.refreshed(),
     );
     let writer = v1::event_writer(service);
     let scanner = v1::scan_driver(service);

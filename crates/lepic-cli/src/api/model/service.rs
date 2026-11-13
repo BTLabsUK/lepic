@@ -73,6 +73,31 @@ pub(crate) struct Task {
     /// The error of the latest failure, kept after a success; absent before any failure.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) last_error: Option<String>,
+    /// The boost that runs now, if any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) boost: Option<Boost>,
+}
+
+/// A poller's boost (ADR 0058): it runs every `interval_seconds` until `until`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct Boost {
+    pub(crate) poller: String,
+    pub(crate) until: String,
+    pub(crate) interval_seconds: u64,
+}
+
+impl Boost {
+    pub(crate) fn of(window: lepic_wallet::boost::Window) -> Self {
+        Self {
+            poller: match window.poller {
+                lepic_wallet::boost::Poller::Relays => "relays",
+                lepic_wallet::boost::Poller::Node => "node",
+            }
+            .to_owned(),
+            until: window.until.to_string(),
+            interval_seconds: window.interval.as_secs(),
+        }
+    }
 }
 
 /// The API's requests since serve started.

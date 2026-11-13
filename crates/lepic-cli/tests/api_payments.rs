@@ -592,6 +592,22 @@ fn an_invoice_with_a_caller_id_is_read_by_either_id() {
 }
 
 #[test]
+fn an_invoice_carries_its_ttl_and_message() {
+    let (host, wallet) = funded();
+    serving(host, &wallet, |socket, _| {
+        let body = json!({
+            "kind": "invoice", "amount": "2", "via": "file",
+            "ttl_blocks": 30, "message": "order 42",
+        });
+        let made = post(socket, "/api/v1/payments", &body);
+        assert_eq!(made.status, 201, "{made:?}");
+        let made = made.json();
+        assert_eq!(made["message"], "order 42", "{made}");
+        assert_eq!(made["expires_at_height"], support::TIP + 30, "{made}");
+    });
+}
+
+#[test]
 fn a_failed_create_leaves_its_id_free() {
     let (host, wallet) = funded();
     serving(host, &wallet, |socket, _| {

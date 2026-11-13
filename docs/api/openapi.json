@@ -315,6 +315,45 @@
         }
       }
     },
+    "/sync/boost": {
+      "post": {
+        "operationId": "boostSync",
+        "x-role": "receive",
+        "summary": "Collect from the relays, or refresh against the node, more often for a while.",
+        "description": "Runs the poller every `interval_seconds` for `duration_seconds` from now, then goes back to its base interval (30 s for `relays`, 60 s for `node`). A boost that overlaps the poller's running one keeps the later end and the shorter interval. The interval is at least 5 s and the duration at most 600 s: values outside are clamped, and the answer is the window that took effect. Serve boosts `relays` for 120 s at 5 s by itself after `POST /payments`, `POST /contacts`, `POST /pair-requests/{id}/accept` and `POST /links`.",
+        "tags": [
+          "Wallet"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BoostRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Boost"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          }
+        }
+      }
+    },
     "/accounts": {
       "get": {
         "operationId": "listAccounts",
@@ -3040,7 +3079,8 @@
             "description": "Which of our addresses it reached."
           },
           "link_id": {
-            "type": "string"
+            "type": "string",
+            "description": "For a payment taken at one of this wallet's epic1 links: the link's id, as `GET /links` lists it. A link's id is used again after the link is retired."
           },
           "purpose": {
             "type": "string",
@@ -3934,6 +3974,10 @@
               "last_error": {
                 "type": "string",
                 "description": "The last failure's error."
+              },
+              "boost": {
+                "$ref": "#/components/schemas/Boost",
+                "description": "Present while a boost runs."
               }
             },
             "required": [
@@ -3954,6 +3998,10 @@
               "last_error": {
                 "type": "string",
                 "description": "The last failure's error."
+              },
+              "boost": {
+                "$ref": "#/components/schemas/Boost",
+                "description": "Present while a boost runs."
               }
             },
             "required": [
@@ -4240,7 +4288,7 @@
           },
           "type": {
             "type": "string",
-            "description": "`resource.what_happened`. An open set: new types may be added, and clients must skip types they do not know. Known types: payment.created, payment.state_changed, payment.updated, contact.created, contact.state_changed, contact.updated, contact.removed, pair_request.received, payload.received, quarantine.added, account.balance_changed, wallet.progress, relay.updated, slate.unmatched, events.skipped.",
+            "description": "`resource.what_happened`. An open set: new types may be added, and clients must skip types they do not know. Known types: payment.created, payment.state_changed, payment.updated, payment.confirmations_reached, contact.created, contact.state_changed, contact.updated, contact.removed, pair_request.received, payload.received, quarantine.added, account.balance_changed, wallet.progress, relay.updated, slate.unmatched, events.skipped.",
             "examples": [
               "payment.state_changed"
             ]
@@ -4709,7 +4757,8 @@
             ]
           },
           "message": {
-            "type": "string"
+            "type": "string",
+            "description": "Signed into the slate, at most 256 bytes. Shows as `message` on this payment and as `their_message` on the other party's, an invoice to a contact included."
           },
           "min_confirmations": {
             "type": "integer"
@@ -4727,7 +4776,7 @@
           },
           "ttl_blocks": {
             "type": "integer",
-            "description": "Blocks after which the payee must refuse the slate. A V2 slate (Epicbox, HTTP) has no TTL field: the wallet keeps the height and expires the send at refresh if it is still unanswered."
+            "description": "Blocks after which the other party must refuse the slate. For a send, a V2 slate (Epicbox, HTTP) has no TTL field: the wallet keeps the height and expires the send at refresh if it is still unanswered. For an invoice, the I1 carries it, the payment shows it as `expires_at_height`, and a refresh past it expires the invoice."
           },
           "fluff": {
             "type": "boolean"
@@ -5185,6 +5234,60 @@
             "description": "Empty string removes it."
           }
         }
+      },
+      "BoostRequest": {
+        "type": "object",
+        "properties": {
+          "poller": {
+            "type": "string",
+            "enum": [
+              "relays",
+              "node"
+            ],
+            "description": "`relays`: the collect from the contact, pairing and link mailboxes. `node`: the wallet refresh."
+          },
+          "duration_seconds": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "How long the boost lasts from now; at most 600."
+          },
+          "interval_seconds": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "How often the poller runs meanwhile; at least 5."
+          }
+        },
+        "required": [
+          "poller",
+          "duration_seconds",
+          "interval_seconds"
+        ]
+      },
+      "Boost": {
+        "type": "object",
+        "properties": {
+          "poller": {
+            "type": "string",
+            "enum": [
+              "relays",
+              "node"
+            ],
+            "description": "`relays`: the collect from the contact, pairing and link mailboxes. `node`: the wallet refresh."
+          },
+          "until": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the poller goes back to its base interval."
+          },
+          "interval_seconds": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "poller",
+          "until",
+          "interval_seconds"
+        ]
       }
     }
   }

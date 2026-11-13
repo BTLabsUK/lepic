@@ -23,7 +23,7 @@ use lepic_node::NodeApi;
 use lepic_store::{AccountIndex, ApiEvent, ContactId, TxId};
 use lepic_wallet::event::{Connection, Event as EngineEvent, PairingFailure, SlateId};
 use serde_json::{Map, Value, json};
-use tokio::sync::{broadcast, watch};
+use tokio::sync::{Notify, broadcast, watch};
 use tokio::time::MissedTickBehavior;
 
 use super::super::{Opened, Service};
@@ -55,6 +55,7 @@ pub(in super::super) struct Log {
     newest: watch::Sender<u64>,
     seen: RefCell<HashMap<String, Value>>,
     progress_at: Cell<Option<Instant>>,
+    refreshed: Notify,
 }
 
 impl Log {
@@ -64,7 +65,13 @@ impl Log {
             newest: watch::Sender::new(newest),
             seen: RefCell::default(),
             progress_at: Cell::new(None),
+            refreshed: Notify::new(),
         }
+    }
+
+    /// Told after each wallet refresh, so the writer checks the confirmations it reached.
+    pub(in super::super) const fn refreshed(&self) -> &Notify {
+        &self.refreshed
     }
 }
 
@@ -394,6 +401,7 @@ pub(in super::super) async fn writer<H: Host>(service: &Service<'_, H>) -> Infal
     loop {
         tokio::select! {
             _ = prune.tick() => prune_log(service),
+            () = service.log.refreshed.notified() => confirmations(service).await,
             event = events.recv() => match event {
                 Ok(event) => engine(service, &event).await,
                 Err(broadcast::error::RecvError::Lagged(count)) => append(
@@ -406,6 +414,21 @@ pub(in super::super) async fn writer<H: Host>(service: &Service<'_, H>) -> Infal
                 }
             },
         }
+    }
+}
+
+/// Logs `payment.confirmations_reached` for each payment that reached `payment_confirmations`
+/// since the last check.
+async fn confirmations<H: Host>(service: &Service<'_, H>) {
+    let needed = service.settings.payment_confirmations;
+    match payments::view::reached(service, needed).await {
+        Ok(reached) => {
+            for payment in reached {
+                let data = json!({ "object": to_value(&payment) });
+                append(service, "payment.confirmations_reached", &data);
+            }
+        }
+        Err(error) => skipped(&Problem::from(error)),
     }
 }
 

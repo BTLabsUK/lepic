@@ -39,6 +39,9 @@ impl<H: Host> Owner for Service<'_, H> {
     fn operate<'a>(&'a self, op: Op, request: Request, context: &'a Context) -> Answer<'a> {
         Box::pin(async move {
             let (reply, fresh) = idempotency::track(self.dispatch(op, request, context)).await;
+            if reply.is_ok() && wallet::expects_reply(op) {
+                wallet::expect_reply(self);
+            }
             // A create that answers an error made nothing: its id can be used again.
             if let (Err(problem), Some((scope, id))) = (&reply, fresh)
                 && idempotency::made_nothing(problem)
@@ -63,6 +66,7 @@ impl<H: Host> Service<'_, H> {
                 Op::ChangeWalletPassword => wallet::change_password(s, r, c).await,
                 Op::ScanWallet => wallet::scan(s, r, c).await,
                 Op::SyncNow => wallet::sync(s, r, c).await,
+                Op::BoostSync => wallet::boost(s, r, c).await,
                 Op::ListAccounts => wallet::list_accounts(s, r, c).await,
                 Op::CreateAccount => wallet::create_account(s, r, c).await,
                 Op::GetNode => wallet::get_node(s, r, c).await,

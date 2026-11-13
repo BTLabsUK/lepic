@@ -916,8 +916,8 @@ async fn issue_invoice<N: lepic_node::NodeApi + 'static>(
             InvoiceRequest {
                 account: account.index,
                 amount,
-                message: None,
-                ttl_blocks: None,
+                message: args.message.message,
+                ttl_blocks: args.ttl_blocks,
             },
             InvoiceDetails {
                 purpose: purpose(args.purpose),
@@ -1241,6 +1241,7 @@ async fn invoices<N: lepic_node::NodeApi + 'static>(
                 amount: format_amount(invoice.amount),
                 purpose: invoice.purpose.map(purpose_name),
                 reference: invoice.reference,
+                message: invoice.message,
                 received_at: invoice.received_at.to_string(),
                 same_amount: invoice
                     .same_amount

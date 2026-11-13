@@ -4,11 +4,12 @@
 use hyper::StatusCode;
 use hyper::body::Bytes;
 use lepic_methods::http::CoinbaseAccess;
+use lepic_wallet::boost::Poller;
 
 use super::super::{Service, TaskStatus};
 use super::Reply;
 use crate::api::model::{
-    EpicboxListener, HttpListener, Listeners, OwnerTls, Requests, Status, Task,
+    Boost, EpicboxListener, HttpListener, Listeners, OwnerTls, Requests, Status, Task,
 };
 use crate::api::{Context, Request, VERSION, ok, response, spec};
 use crate::host::Host;
@@ -48,8 +49,8 @@ pub(super) async fn get_status<H: Host>(
             address: tls.address.to_string(),
             fingerprint: tls.fingerprint.to_string(),
         }),
-        refresh: task(&maintenance.refresh),
-        collect: task(&maintenance.collect),
+        refresh: task(&maintenance.refresh, service, Poller::Node),
+        collect: task(&maintenance.collect, service, Poller::Relays),
         requests: Requests {
             served: requests.served,
             in_flight: requests.in_flight,
@@ -58,11 +59,12 @@ pub(super) async fn get_status<H: Host>(
     })
 }
 
-fn task(status: &TaskStatus) -> Task {
+fn task<H: Host>(status: &TaskStatus, service: &Service<'_, H>, poller: Poller) -> Task {
     Task {
         failures: status.failures,
         last_success_at: status.succeeded_at.map(|at| at.to_string()),
         last_error: status.error.clone(),
+        boost: service.held.wallet.boosts().window(poller).map(Boost::of),
     }
 }
 
