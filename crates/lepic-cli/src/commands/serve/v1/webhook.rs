@@ -757,6 +757,9 @@ mod tests {
                 .wallet
                 .append_api_event("payment.updated", OBJECT)
                 .unwrap();
+            // The first request starts after this; the second at least the gap after the first,
+            // and arrives after it starts, however long the first took to arrive.
+            let started = StdInstant::now();
             let state = until(&mut driver, |state| state.cursor == 2).await;
             assert_eq!(
                 (state.attempts, state.next_at, state.last_error),
@@ -764,7 +767,7 @@ mod tests {
             );
             let seen = f.receiver.seen();
             assert_eq!(f.receiver.ids(), ["1", "2"]);
-            assert!(seen[1].at.duration_since(seen[0].at) >= Duration::from_millis(150));
+            assert!(seen[1].at.duration_since(started) >= Duration::from_millis(150));
             let first = &seen[0];
             assert_eq!(first.header("content-type"), "application/json");
             let body: Value = serde_json::from_slice(&first.body).unwrap();
