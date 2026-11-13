@@ -37,6 +37,7 @@ pub struct Wallet<N, S: StoreOpener, V> {
     contact_notices: OnceLock<Arc<dyn ContactNotices<N, S, V>>>,
     pair_requests: OnceLock<Arc<dyn PairRequests<N, S, V>>>,
     posting: tokio::sync::Mutex<()>,
+    boosts: crate::boost::Boosts,
 }
 
 impl<N, S, V> Wallet<N, S, V>
@@ -62,7 +63,25 @@ where
             contact_notices: OnceLock::new(),
             pair_requests: OnceLock::new(),
             posting: tokio::sync::Mutex::new(()),
+            boosts: crate::boost::Boosts::default(),
         })
+    }
+
+    /// Polls `poller` every `interval` for `duration` from now, merged with the boost it has
+    /// (ADR 0058), and returns the window that took effect.
+    pub fn boost(
+        &self,
+        poller: crate::boost::Poller,
+        duration: std::time::Duration,
+        interval: std::time::Duration,
+    ) -> crate::boost::Window {
+        self.boosts
+            .boost(poller, duration, interval, self.ports.clock.now())
+    }
+
+    /// The wallet's boosts, for the host loops that poll.
+    pub fn boosts(&self) -> &crate::boost::Boosts {
+        &self.boosts
     }
 
     pub fn config(&self) -> &WalletConfig {

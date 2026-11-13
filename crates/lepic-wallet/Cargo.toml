@@ -51,7 +51,7 @@ rand = { workspace = true, features = ["std_rng"] }
 rusqlite.workspace = true
 serde_json = { workspace = true, features = ["std"] }
 tempfile.workspace = true
-tokio = { workspace = true, features = ["rt", "sync", "macros"] }
+tokio = { workspace = true, features = ["rt", "sync", "macros", "test-util"] }
 
 [[test]]
 name = "lifecycle"

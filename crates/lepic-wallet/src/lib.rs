@@ -16,6 +16,7 @@ pub mod account;
 pub mod api_log;
 mod api_tls_key;
 mod app_data;
+pub mod boost;
 mod cancel;
 pub mod chain;
 pub(crate) use lepic_transport::codecs;
