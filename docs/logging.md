@@ -67,7 +67,8 @@ new name to this table in the same change.
 | `attempt` | retry number, starting at 1 |
 | `retry_in_ms` | delay before the next attempt |
 | `paused_ms` | length of a process pause, after which Tor deadlines moved |
-| `rounds` | rounds a listener held before it moved to a fresh socket |
+| `rounds` | rounds a listener held, or challenge intervals it waited without a challenge, before it moved to a fresh socket |
+| `interval_s` | seconds between the relay's challenges as a listener learned them; absent until learned |
 | `code` | close code a relay sent, or a node's error code |
 | `elapsed_ms` | duration of the operation |
 | `error` | the error with its source chain (`ErrorChain`) |

@@ -126,6 +126,19 @@ impl Backoff {
     }
 }
 
+/// When a listener leaves a socket that is still open. Both rules are off by default and never
+/// apply to a drain.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ListenOptions {
+    /// Leave after this many rounds that began with a message held, counted per socket and not
+    /// reset by an acknowledgement. The held message is taken up again on the new socket.
+    pub held_rounds: Option<u32>,
+    /// Leave when the relay has sent no challenge for this many of its challenge intervals. The
+    /// interval is the gap the listener saw between two periodic challenges, at least 30
+    /// seconds, and 60 seconds until it has seen two. The new socket collects what waits.
+    pub challenge_rounds: Option<u32>,
+}
+
 /// How the client talks to its relay.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ClientSettings {
@@ -267,7 +280,7 @@ impl EpicboxClient {
 
     /// Holds a connection, keeps it alive and reconnects after failures until stopped.
     pub fn listen(&self) -> Result<Subscription, ClientError> {
-        self.listen_with_held_rounds(None)
+        self.listen_with(ListenOptions::default())
     }
 
     /// As [`Self::listen`], and the listener moves to a fresh socket after `held_rounds` rounds
@@ -278,13 +291,25 @@ impl EpicboxClient {
         &self,
         held_rounds: Option<u32>,
     ) -> Result<Subscription, ClientError> {
-        Subscription::start(Arc::clone(&self.context), Mode::Listen, held_rounds)
+        self.listen_with(ListenOptions {
+            held_rounds,
+            ..ListenOptions::default()
+        })
+    }
+
+    /// As [`Self::listen`], with the leave-the-socket rules of `options`.
+    pub fn listen_with(&self, options: ListenOptions) -> Result<Subscription, ClientError> {
+        Subscription::start(Arc::clone(&self.context), Mode::Listen, options)
     }
 
     /// Connects once, hands out every pending message, and disconnects when the relay has none
     /// left and every handed-out message was acknowledged. A connection failure ends it.
     pub fn drain(&self) -> Result<Subscription, ClientError> {
-        Subscription::start(Arc::clone(&self.context), Mode::Drain, None)
+        Subscription::start(
+            Arc::clone(&self.context),
+            Mode::Drain,
+            ListenOptions::default(),
+        )
     }
 
     /// Encrypts `plaintext` for `to`, signs exactly the `str` it sends, posts it through this

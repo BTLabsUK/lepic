@@ -14393,6 +14393,7 @@ impl SseDecode for crate::api::policy::HostPolicy {
         let mut var_refuseUnsolicitedPayments = <Option<bool>>::sse_decode(deserializer);
         let mut var_refuseUnsolicitedInvoices = <Option<bool>>::sse_decode(deserializer);
         let mut var_listenerHeldRounds = <Option<u32>>::sse_decode(deserializer);
+        let mut var_listenerChallengeRounds = <Option<u32>>::sse_decode(deserializer);
         let mut var_quarantineMaxBytes = <Option<u64>>::sse_decode(deserializer);
         let mut var_earlyNoticeMaxCount = <Option<u32>>::sse_decode(deserializer);
         let mut var_earlyNoticeMaxAgeS = <Option<u64>>::sse_decode(deserializer);
@@ -14416,6 +14417,7 @@ impl SseDecode for crate::api::policy::HostPolicy {
             refuse_unsolicited_payments: var_refuseUnsolicitedPayments,
             refuse_unsolicited_invoices: var_refuseUnsolicitedInvoices,
             listener_held_rounds: var_listenerHeldRounds,
+            listener_challenge_rounds: var_listenerChallengeRounds,
             quarantine_max_bytes: var_quarantineMaxBytes,
             early_notice_max_count: var_earlyNoticeMaxCount,
             early_notice_max_age_s: var_earlyNoticeMaxAgeS,
@@ -19266,6 +19268,7 @@ impl flutter_rust_bridge::IntoDart for crate::api::policy::HostPolicy {
                 .into_into_dart()
                 .into_dart(),
             self.listener_held_rounds.into_into_dart().into_dart(),
+            self.listener_challenge_rounds.into_into_dart().into_dart(),
             self.quarantine_max_bytes.into_into_dart().into_dart(),
             self.early_notice_max_count.into_into_dart().into_dart(),
             self.early_notice_max_age_s.into_into_dart().into_dart(),
@@ -22849,6 +22852,7 @@ impl SseEncode for crate::api::policy::HostPolicy {
         <Option<bool>>::sse_encode(self.refuse_unsolicited_payments, serializer);
         <Option<bool>>::sse_encode(self.refuse_unsolicited_invoices, serializer);
         <Option<u32>>::sse_encode(self.listener_held_rounds, serializer);
+        <Option<u32>>::sse_encode(self.listener_challenge_rounds, serializer);
         <Option<u64>>::sse_encode(self.quarantine_max_bytes, serializer);
         <Option<u32>>::sse_encode(self.early_notice_max_count, serializer);
         <Option<u64>>::sse_encode(self.early_notice_max_age_s, serializer);

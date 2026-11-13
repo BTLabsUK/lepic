@@ -78,6 +78,9 @@ pub struct HostPolicy {
     /// per socket and not reset by an acknowledgement; the held message is taken up again on the
     /// new socket. From 1 to 64. Default none: the listener keeps its socket.
     pub listener_held_rounds: Option<u32>,
+    /// A listener moves to a fresh socket when the relay sent no challenge for this many of its
+    /// challenge intervals, and so collects what waits for the address. From 2 to 10. Default 3.
+    pub listener_challenge_rounds: Option<u32>,
     /// Bytes of contact messages kept in local quarantine across the wallet, instead of being
     /// dropped once they cannot be taken. Over this, the contact's own oldest entry goes first,
     /// then the wallet's oldest; a larger message is not kept. From 1 to 67,108,864. Default
@@ -237,6 +240,9 @@ impl Policy {
                 .refuse_unsolicited_invoices
                 .unwrap_or(defaults.refuse_unsolicited_invoices),
             listener_held_rounds: policy.listener_held_rounds,
+            listener_challenge_rounds: policy
+                .listener_challenge_rounds
+                .or(defaults.listener_challenge_rounds),
             quarantine_max_bytes: policy.quarantine_max_bytes,
             early_notice_max_count: policy.early_notice_max_count,
             early_notice_max_age: policy.early_notice_max_age_s.map(Duration::from_secs),
@@ -518,6 +524,19 @@ mod tests {
     }
 
     #[test]
+    fn the_listener_leaves_a_socket_without_challenges_after_three_rounds_unless_set() {
+        assert_eq!(Policy::shipped().wallet.listener_challenge_rounds, Some(3));
+        for rounds in [2, 10] {
+            let policy = Policy::resolve(&HostPolicy {
+                listener_challenge_rounds: Some(rounds),
+                ..HostPolicy::default()
+            })
+            .unwrap();
+            assert_eq!(policy.wallet.listener_challenge_rounds, Some(rounds));
+        }
+    }
+
+    #[test]
     fn the_early_notice_buffer_is_off_unless_the_host_sets_both_caps() {
         let shipped = Policy::shipped().wallet;
         assert_eq!(shipped.early_notice_max_count, None);
@@ -558,6 +577,12 @@ mod tests {
             listener_held_rounds: Some(0),
             ..none()
         });
+        for rounds in [0, 1, 11] {
+            refused(HostPolicy {
+                listener_challenge_rounds: Some(rounds),
+                ..none()
+            });
+        }
         refused(HostPolicy {
             quarantine_max_bytes: Some(0),
             ..none()

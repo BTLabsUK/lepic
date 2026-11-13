@@ -12,7 +12,7 @@
 use std::sync::{Arc, Mutex, PoisonError};
 
 use lepic_epicbox::{
-    Backoff, ClientError, ConnectionState, EpicboxAddress, EpicboxClient, Identity,
+    Backoff, ClientError, ConnectionState, EpicboxAddress, EpicboxClient, Identity, ListenOptions,
     RELAY_RETENTION, Rejection, RelayMessageId, Subscription, TRANSPORT_ID,
 };
 use lepic_node::NodeApi;
@@ -208,7 +208,10 @@ impl Epicbox {
     {
         let client = self.inbox_client(wallet).await?;
         let subscription = client
-            .listen_with_held_rounds(wallet.config().policy.listener_held_rounds)
+            .listen_with(ListenOptions {
+                held_rounds: wallet.config().policy.listener_held_rounds,
+                challenge_rounds: wallet.config().policy.listener_challenge_rounds,
+            })
             .map_err(|error| InboxError::Subscription(Box::new(error)))?;
         let method: Arc<dyn Method> = Arc::new(self.clone());
         self.run_inbox(wallet, method, &subscription, Some(handle))

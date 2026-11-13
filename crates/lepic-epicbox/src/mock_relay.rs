@@ -108,6 +108,8 @@ struct Socket {
     resend_rounds: u32,
     /// Frames still read before the socket stops reading, when that switch is set.
     reads_left: Option<usize>,
+    /// Set by [`MockRelay::stall_challenges`]: no challenge and no pushed message.
+    cycle_stopped: bool,
 }
 
 enum Outgoing {
@@ -122,6 +124,7 @@ struct RelayState {
     next_message: u64,
     next_challenge: u64,
     sockets: HashMap<u64, Socket>,
+    sockets_opened: usize,
     listeners: HashMap<String, u64>,
     messages: Vec<Stored>,
     refusing: bool,
@@ -154,6 +157,7 @@ impl MockRelay {
                     next_message: 0,
                     next_challenge: 0,
                     sockets: HashMap::new(),
+                    sockets_opened: 0,
                     listeners: HashMap::new(),
                     messages: Vec::new(),
                     refusing: false,
@@ -342,6 +346,11 @@ impl MockRelay {
         self.lock().sockets.len()
     }
 
+    /// Websocket connections accepted so far, closed ones included.
+    pub fn connections_made(&self) -> usize {
+        self.lock().sockets_opened
+    }
+
     /// Frames received from clients with this `type`, compared without case as the relay does.
     pub fn received(&self, type_name: &str) -> usize {
         self.lock()
@@ -374,6 +383,17 @@ impl MockRelay {
                 .collect();
             for id in ids {
                 state.challenge(id);
+            }
+        });
+    }
+
+    /// Makes every connection open now behave as a stock relay does once its challenge cycle
+    /// stopped: it sends that socket no more challenges and pushes no stored message to it.
+    /// Connections opened afterwards are served as usual.
+    pub fn stall_challenges(&self) {
+        self.update(|state| {
+            for socket in state.sockets.values_mut() {
+                socket.cycle_stopped = true;
             }
         });
     }
@@ -469,8 +489,10 @@ impl MockRelay {
                     resend_attempts: 0,
                     resend_rounds: 0,
                     reads_left: state.stop_reading_after,
+                    cycle_stopped: false,
                 },
             );
+            state.sockets_opened = state.sockets_opened.saturating_add(1);
             state.count_read(id, 0);
             state.challenge(id);
             id
@@ -598,6 +620,9 @@ impl RelayState {
         let challenge = format!("mock-challenge-{}", self.next_challenge);
         if let Some(socket) = self.sockets.get_mut(&id) {
             socket.challenge.clone_from(&challenge);
+            if socket.cycle_stopped {
+                return;
+            }
         }
         if self.unanswered.contains(&Unanswered::Challenge) {
             return;
@@ -796,7 +821,7 @@ impl RelayState {
         let idle = self
             .sockets
             .get(&listener)
-            .is_some_and(|socket| socket.in_flight.is_none());
+            .is_some_and(|socket| socket.in_flight.is_none() && !socket.cycle_stopped);
         if !idle {
             return;
         }

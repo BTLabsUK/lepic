@@ -26,6 +26,14 @@ Conventional Commit messages at release time.
 - `lepic serve`: a payment taken at an epic1 link names it in `link_id`.
 - `lepic invoice issue` and `lepic contact invoice` take `--ttl-blocks`; `lepic contact invoice`
   takes `--message`, and `lepic contact invoices` shows it.
+- `WalletPolicy::listener_challenge_rounds` and `HostPolicy::listener_challenge_rounds` (2 to 10,
+  default 3, `None` is off): a listener moves to a fresh socket when the relay sent no
+  challenge for that many of its challenge intervals. A stock relay stops challenging, and
+  pushing to, a socket after one missed challenge. The interval is the gap the listener saw
+  between two periodic challenges, at least 30 s; until it has seen two the wait is 60 s per
+  round. The new socket collects what waits. Drains are not affected.
+  `EpicboxClient::listen_with` takes `ListenOptions`. The log line carries `rounds` and
+  `interval_s`.
 
 ### Changed
 

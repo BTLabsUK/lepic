@@ -208,6 +208,12 @@ pub struct WalletPolicy {
     /// up again on the new socket. `None` keeps the socket. A drain is not affected. At least
     /// 1, at most [`Self::MAX_LISTENER_HELD_ROUNDS`].
     pub listener_held_rounds: Option<u32>,
+    /// A listener moves to a fresh socket when the relay sent no challenge for this many of its
+    /// challenge intervals. The interval is the gap the listener saw between two of the relay's
+    /// own challenges, at least 30 seconds, and 60 seconds until it has seen two. The new socket
+    /// collects what waits for the address. `None` keeps the socket. A drain is not affected. At
+    /// least 2, at most [`Self::MAX_LISTENER_CHALLENGE_ROUNDS`].
+    pub listener_challenge_rounds: Option<u32>,
     /// Bytes of contact messages kept in local quarantine across the wallet, instead of being
     /// acknowledged and dropped once they cannot be taken (ADR 0049). When the total would pass
     /// this, the contact's own oldest entry goes first, then the wallet's oldest; a message
@@ -240,6 +246,7 @@ impl WalletPolicy {
         refuse_unsolicited_payments: false,
         refuse_unsolicited_invoices: false,
         listener_held_rounds: None,
+        listener_challenge_rounds: Some(3),
         quarantine_max_bytes: None,
         early_notice_max_count: None,
         early_notice_max_age: None,
@@ -258,6 +265,13 @@ impl WalletPolicy {
     /// The bound on [`Self::listener_held_rounds`].
     pub const MAX_LISTENER_HELD_ROUNDS: u32 = 64;
 
+    /// The bound on [`Self::listener_challenge_rounds`].
+    pub const MAX_LISTENER_CHALLENGE_ROUNDS: u32 = 10;
+
+    /// The least [`Self::listener_challenge_rounds`]: one missed challenge is not yet a stalled
+    /// socket.
+    pub const MIN_LISTENER_CHALLENGE_ROUNDS: u32 = 2;
+
     /// The bound on [`Self::contact_hold_patience`], for the same reason: a day, after which the
     /// count of a kept message is forgotten.
     pub const MAX_CONTACT_HOLD_PATIENCE: Duration = Duration::from_secs(24 * 60 * 60);
@@ -272,6 +286,26 @@ impl WalletPolicy {
     /// The bound on [`Self::early_notice_max_age`]: a contact message older than this is not
     /// taken, and a relay keeps none as long.
     pub const MAX_EARLY_NOTICE_AGE: Duration = Duration::from_secs(30 * 24 * 60 * 60);
+}
+
+impl WalletPolicy {
+    fn validate_listener_challenge_rounds(&self) -> Result<(), ConfigError> {
+        let Some(rounds) = self.listener_challenge_rounds else {
+            return Ok(());
+        };
+        if rounds < Self::MIN_LISTENER_CHALLENGE_ROUNDS {
+            return Err(ConfigError::PolicyOutOfRange {
+                what: "listener challenge rounds",
+            });
+        }
+        if rounds > Self::MAX_LISTENER_CHALLENGE_ROUNDS {
+            return Err(ConfigError::PolicyAboveBound {
+                what: "listener challenge rounds",
+                max: u64::from(Self::MAX_LISTENER_CHALLENGE_ROUNDS),
+            });
+        }
+        Ok(())
+    }
 }
 
 impl WalletPolicy {
@@ -346,6 +380,7 @@ impl WalletPolicy {
                 });
             }
         }
+        self.validate_listener_challenge_rounds()?;
         if self.contact_hold_patience > Self::MAX_CONTACT_HOLD_PATIENCE {
             return Err(ConfigError::PolicyAboveBound {
                 what: "contact hold patience in seconds",
@@ -532,6 +567,7 @@ mod tests {
         assert!(!policy.refuse_unsolicited_payments);
         assert!(!policy.refuse_unsolicited_invoices);
         assert_eq!(policy.listener_held_rounds, None);
+        assert_eq!(policy.listener_challenge_rounds, Some(3));
         assert!(policy.validate().is_ok());
     }
 
@@ -554,6 +590,30 @@ mod tests {
         assert!(matches!(
             with(Some(65)),
             Err(ConfigError::PolicyAboveBound { max: 64, .. })
+        ));
+    }
+
+    #[test]
+    fn the_listener_challenge_rounds_are_bounded() {
+        let with = |rounds: Option<u32>| {
+            WalletPolicy {
+                listener_challenge_rounds: rounds,
+                ..WalletPolicy::default()
+            }
+            .validate()
+        };
+        assert!(with(None).is_ok());
+        assert!(with(Some(2)).is_ok());
+        assert!(with(Some(WalletPolicy::MAX_LISTENER_CHALLENGE_ROUNDS)).is_ok());
+        for rounds in [0, 1] {
+            assert!(matches!(
+                with(Some(rounds)),
+                Err(ConfigError::PolicyOutOfRange { .. })
+            ));
+        }
+        assert!(matches!(
+            with(Some(11)),
+            Err(ConfigError::PolicyAboveBound { max: 10, .. })
         ));
     }
 

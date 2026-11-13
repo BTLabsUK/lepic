@@ -31,7 +31,9 @@ use tracing::instrument::WithSubscriber;
 use tracing::{Instrument, debug, info, info_span, warn};
 
 use crate::address::EpicboxAddress;
-use crate::client::{Awaiting, CancelToken, ClientContext, ClientError, TRANSPORT_ID, post_frame};
+use crate::client::{
+    Awaiting, CancelToken, ClientContext, ClientError, ListenOptions, TRANSPORT_ID, post_frame,
+};
 use crate::crypto::{MessageError, ReceivedMessage};
 use crate::frame::{ClientFrame, RelayFrame, RelayMessageId, SlateFrame, WalletMode};
 use crate::prefilter::Admission;
@@ -40,6 +42,12 @@ use crate::session::{Connection, Greeting, ProtocolVersion, deadline_after};
 /// The longest a relay keeps a stored message: the public relay expires them after seven days.
 /// A relay message id received longer ago than this cannot be delivered again.
 pub const RELAY_RETENTION: Duration = Duration::from_secs(7 * 24 * 60 * 60);
+
+/// The shortest challenge interval a listener learns from a relay.
+const CHALLENGE_INTERVAL_FLOOR: Duration = Duration::from_secs(30);
+
+/// The challenge interval a listener assumes until it has seen two periodic challenges.
+const UNLEARNED_CHALLENGE_INTERVAL: Duration = Duration::from_secs(60);
 
 /// How long a connection whose route changed is kept for the messages in flight on it.
 const REROUTE_GRACE: Duration = Duration::from_secs(30);
@@ -198,7 +206,7 @@ impl Subscription {
     pub(crate) fn start(
         context: Arc<ClientContext>,
         mode: Mode,
-        held_rounds: Option<u32>,
+        options: ListenOptions,
     ) -> Result<Self, ClientError> {
         let runtime = Handle::try_current().map_err(|_| ClientError::NoRuntime)?;
         let (commands, receiver) = mpsc::unbounded_channel();
@@ -222,7 +230,8 @@ impl Subscription {
             shared: Arc::clone(&shared),
             commands: receiver,
             mode,
-            held_rounds,
+            held_rounds: options.held_rounds,
+            challenge_rounds: options.challenge_rounds,
             cancel: cancel.clone(),
         };
         // The host's subscriber is scoped to the calling thread, so the task carries it along.
@@ -669,6 +678,9 @@ struct Manager {
     /// A listener moves to a fresh socket after this many rounds with a message held. `None`
     /// keeps the socket. Never applies to a drain.
     held_rounds: Option<u32>,
+    /// A listener leaves a socket that sent no challenge for this many challenge intervals.
+    /// `None` keeps the socket. Never applies to a drain.
+    challenge_rounds: Option<u32>,
     cancel: CancelToken,
 }
 
@@ -828,6 +840,13 @@ struct Session<'a> {
     /// flight on it, or at this instant.
     rotate_by: Option<Instant>,
     rotated: bool,
+    /// When the last challenge arrived; the greeting's counts as the first.
+    last_challenge: Instant,
+    /// Whether the last challenge came on the relay's own schedule, not as the answer to a
+    /// `Made`. The greeting's does.
+    last_challenge_periodic: bool,
+    /// The latest gap between two periodic challenges, at least the floor.
+    challenge_interval: Option<Duration>,
 }
 
 impl<'a> Session<'a> {
@@ -844,6 +863,9 @@ impl<'a> Session<'a> {
             held_rounds: 0,
             rotate_by: None,
             rotated: false,
+            last_challenge: Instant::now(),
+            last_challenge_periodic: true,
+            challenge_interval: None,
         }
     }
 
@@ -910,6 +932,7 @@ impl<'a> Session<'a> {
                 return Ok(self.finish_drain().await);
             }
             let deadline = self.deadline();
+            let challenges_by = self.challenges_by();
             let connection = self.connection.as_mut().ok_or(ClientError::NotConnected)?;
             tokio::select! {
                 biased;
@@ -928,6 +951,15 @@ impl<'a> Session<'a> {
                 }
                 () = sleep_until(reroute_by.unwrap_or_else(Instant::now)), if reroute_by.is_some() => {}
                 () = sleep_until(self.rotate_by.unwrap_or_else(Instant::now)), if self.rotate_by.is_some() => {}
+                () = sleep_until(challenges_by.unwrap_or_else(Instant::now)), if challenges_by.is_some() => {
+                    info!(
+                        rounds = self.manager.challenge_rounds,
+                        interval_s = self.challenge_interval.map(|interval| interval.as_secs()),
+                        "epicbox listener found no challenges, reconnecting"
+                    );
+                    self.leave().await;
+                    return Err(ClientError::Timeout { awaiting: Awaiting::Challenge });
+                }
                 _ = pings.tick() => {
                     if connection.idle_for() > silence_limit {
                         return Err(ClientError::Timeout { awaiting: Awaiting::Traffic });
@@ -960,6 +992,42 @@ impl<'a> Session<'a> {
             (Some(a), Some(b)) => Some(a.min(b)),
             (a, b) => a.or(b),
         }
+    }
+
+    /// When a listener that is subscribed and has nothing in flight gives up on the relay's
+    /// challenges. While a request is unanswered, or a challenge is due after a `Made`, the
+    /// deadlines of those apply.
+    fn challenges_by(&self) -> Option<Instant> {
+        let rounds = self.manager.challenge_rounds?;
+        if self.manager.mode != Mode::Listen
+            || self.subscribed_at.is_none()
+            || self.outstanding.is_some()
+            || self.challenge_due.is_some()
+        {
+            return None;
+        }
+        let interval = self
+            .challenge_interval
+            .unwrap_or(UNLEARNED_CHALLENGE_INTERVAL);
+        self.last_challenge
+            .checked_add(interval.saturating_mul(rounds))
+    }
+
+    /// Notes a challenge that just arrived. The gap between two periodic challenges is the
+    /// relay's interval; one that answers a `Made`, or follows one, says nothing about it.
+    fn note_challenge(&mut self) {
+        let now = Instant::now();
+        let answers_made = self.challenge_due.is_some()
+            || matches!(
+                self.outstanding.as_ref().map(|o| &o.sent),
+                Some(Sent::Made { .. })
+            );
+        if !answers_made && self.last_challenge_periodic {
+            let gap = now.saturating_duration_since(self.last_challenge);
+            self.challenge_interval = Some(gap.max(CHALLENGE_INTERVAL_FLOOR));
+        }
+        self.last_challenge = now;
+        self.last_challenge_periodic = !answers_made;
     }
 
     fn publish_expecting(&self) {
@@ -1033,6 +1101,7 @@ impl<'a> Session<'a> {
     fn handle(&mut self, frame: RelayFrame) -> Result<(), ClientError> {
         match frame {
             RelayFrame::Challenge { str } => {
+                self.note_challenge();
                 self.challenge = str;
                 self.challenge_number = self.challenge_number.wrapping_add(1);
                 self.challenge_due = None;

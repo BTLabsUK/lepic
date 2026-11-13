@@ -186,6 +186,7 @@ first time and raises `Event::AnsweredAgain`.
 | `contact_hold_attempts` / `contact_hold_patience` | 3 / 3 min |
 | `refuse_unsolicited_payments` / `_invoices` | off (ADR 0045) |
 | `listener_held_rounds` | `None` |
+| `listener_challenge_rounds` | `Some(3)` |
 | `quarantine_max_bytes` | `None` (ADR 0049) |
 | `early_notice_max_count` / `_max_age` | `None` (ADR 0049) |
 

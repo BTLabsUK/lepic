@@ -29,7 +29,7 @@ pub use address_signature::{
 };
 pub use client::{
     Awaiting, Backoff, ClientError, ClientSettings, ClientTimings, EpicboxClient, Identity,
-    TRANSPORT_ID,
+    ListenOptions, TRANSPORT_ID,
 };
 pub use client_inbox::{
     ConnectionState, Disconnect, InboxCounters, Mode, RELAY_RETENTION, Rejection, RejectionReason,
