@@ -67,19 +67,19 @@ where
         })
     }
 
-    /// Polls `poller` every `interval` for `duration` from now, merged with the boost it has
-    /// (ADR 0058), and returns the window that took effect.
+    /// Polls `poller` at most every `interval` for `duration` from now (ADR 0058), until the
+    /// lease is dropped or ended with [`crate::boost::Boosts::end`].
     pub fn boost(
         &self,
         poller: crate::boost::Poller,
         duration: std::time::Duration,
         interval: std::time::Duration,
-    ) -> crate::boost::Window {
+    ) -> crate::boost::Lease {
         self.boosts
             .boost(poller, duration, interval, self.ports.clock.now())
     }
 
-    /// The wallet's boosts, for the host loops that poll.
+    /// The wallet's boosts: for the host loops that poll, and to end one by its id.
     pub fn boosts(&self) -> &crate::boost::Boosts {
         &self.boosts
     }
