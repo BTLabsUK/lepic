@@ -72,3 +72,4 @@ they were written, and the file names do not change.
 | [0055](0055-the-wallet-api-v1.md) | The wallet API v1, served from one hand-written document | accepted |
 | [0056](0056-payment-files-in-qr-as-native-slates.md) | Payment files in QR codes as native slates | superseded by 0057 |
 | [0057](0057-payment-qr-codes-as-deflated-text.md) | Payment QR codes carry deflated slate text only | accepted |
+| [0058](0058-service-wallet-api.md) | Serve for service wallets: boost, webhooks, and payment fields | proposed |
