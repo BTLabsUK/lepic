@@ -93,10 +93,11 @@ impl Boosts {
   answers 201 with the boost's id and the poller's window:
 
   ```json
-  {"id": 3, "poller": "relays", "until": "2026-11-13T15:02:00Z", "interval_seconds": 5}
+  {"id": 4815162342108, "poller": "relays", "until": "2026-11-13T15:02:00Z", "interval_seconds": 5}
   ```
 
-  `DELETE /sync/boost/{id}` ends it: 204, or 404 once it has ended. An unknown `poller` is
+  `DELETE /sync/boost/{id}` ends it: 204, or 404 once it has ended. The id is random, below
+  2^53, so a caller cannot end a boost it did not start by guessing. An unknown `poller` is
   400 `invalid_field`, a missing field 400 `invalid_body`. `GET /status` shows a running boost as
   `boost` inside `collect` (relays) or `refresh` (node).
 
@@ -147,8 +148,14 @@ retention, so the webhook, `GET /events` and SSE carry the same events.
   30 days; a cursor older than that gets an `events.skipped` event first, as `GET /events`
   sends.
 - **Status.** `GET /webhook` answers the URL, types, `state` (`active`, `retrying`,
-  `disabled`), the cursor, the attempt count, the next attempt time and the last error. 404
-  `not_found` when no webhook is set. Both calls are role `full`.
+  `config_error`, `disabled`), the cursor, the attempt count, the next attempt time and the
+  last error. 404 `not_found` when no webhook is set. Both calls are role `full`.
+- **Configuration errors.** A secret file serve cannot use (missing, readable by others, too
+  large, not text) is not a failed delivery: the state is `config_error`, `last_error` says
+  why, no attempt counts and the webhook is never disabled for it. Serve reads the file again
+  each minute and on each new event, and sends once it can.
+- **Filtered events.** The cursor moves past events that `webhook_types` leaves out, so a
+  resume or a restart does not scan them again.
 - **SSRF.** The URL's host is resolved before each attempt. Serve connects only to an address
   that is public unicast: not loopback, private (10/8, 172.16/12, 192.168/16, fc00::/7),
   link-local, CGNAT (100.64/10), benchmarking (198.18/15), NAT64 (64:ff9b::/32), multicast,

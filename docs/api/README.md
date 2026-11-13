@@ -317,7 +317,7 @@ curl --unix-socket ./w.sock -X POST http://lepic/api/v1/sync/boost \
 ```
 
 ```json
-{"id":3,"poller":"relays","until":"2026-11-13T16:02:10Z","interval_seconds":5}
+{"id":4815162342108,"poller":"relays","until":"2026-11-13T16:02:10Z","interval_seconds":5}
 ```
 
 `poller` is `relays` or `node`. The interval is at least 5 seconds and the window at most
@@ -452,8 +452,11 @@ private, link-local, shared (100.64.0.0/10), benchmarking (198.18.0.0/15), IETF 
 (2001::/32), IPv4-compatible (::/96), site-local (fec0::/10), discard (100::/64), multicast,
 unspecified, documentation or broadcast. It follows no redirect and uses no proxy.
 
-`GET /webhook` answers the `url`, `types`, `state` (`active`, `retrying` or `disabled`), `cursor`,
-`attempts`, `next_attempt_at` and `last_error`. `POST /webhook/resume` takes an optional
+`GET /webhook` answers the `url`, `types`, `state` (`active`, `retrying`, `config_error` or
+`disabled`), `cursor`, `attempts`, `next_attempt_at` and `last_error`. `config_error` means serve
+cannot use the secret file: nothing is sent, no attempt counts, `last_error` says why, and serve
+reads the file again each minute and on each new event. The cursor moves past events that
+`webhook_types` leaves out. `POST /webhook/resume` takes an optional
 `{"after": <event id>}`: it sets the cursor there, clears the failures and sends again; without
 `after` it carries on from the cursor of a webhook that is retrying or disabled. Both need the
 role `full` and answer 404 `not_found` when no webhook is set.

@@ -5374,7 +5374,7 @@
         "properties": {
           "id": {
             "type": "integer",
-            "description": "Only in the answer to `POST /sync/boost`: the boost it started, for `DELETE /sync/boost/{id}`."
+            "description": "Only in the answer to `POST /sync/boost`: the boost it started, for `DELETE /sync/boost/{id}`. Random, from 1 to 2^53 - 1."
           },
           "poller": {
             "type": "string",
@@ -5419,13 +5419,14 @@
             "enum": [
               "active",
               "retrying",
+              "config_error",
               "disabled"
             ],
-            "description": "`retrying` after a failed attempt; `disabled` after the last retry failed, until `POST /webhook/resume`."
+            "description": "`retrying` after a failed attempt; `config_error` while serve cannot use the secret file (no attempt counts, `last_error` says why); `disabled` after the last retry failed, until `POST /webhook/resume`."
           },
           "cursor": {
             "type": "integer",
-            "description": "The id of the last event delivered. A new `webhook_url` starts at the newest event in the log."
+            "description": "The id of the last event delivered, or passed over because `webhook_types` leaves it out. A new `webhook_url` starts at the newest event in the log."
           },
           "attempts": {
             "type": "integer",
