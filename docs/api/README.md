@@ -317,13 +317,14 @@ curl --unix-socket ./w.sock -X POST http://lepic/api/v1/sync/boost \
 ```
 
 ```json
-{"poller":"relays","until":"2026-11-13T16:02:10Z","interval_seconds":5}
+{"id":3,"poller":"relays","until":"2026-11-13T16:02:10Z","interval_seconds":5}
 ```
 
 `poller` is `relays` or `node`. The interval is at least 5 seconds and the window at most
-10 minutes; serve clamps a value outside and answers the window that took effect. A boost that
-overlaps the running one keeps the later end and the shorter interval. While it runs, `GET
-/status` shows it as `boost` inside `collect` or `refresh`. Serve boosts `relays` for 120 seconds
+10 minutes; serve clamps a value outside. Each call starts its own boost: the poller runs at
+the shortest interval among its boosts until the last one ends. A client that stops waiting
+ends its boost with `DELETE /sync/boost/{id}` (204, or 404 once it has ended). While a boost
+runs, `GET /status` shows the poller's window as `boost` inside `collect` or `refresh`. Serve boosts `relays` for 120 seconds
 at 5 seconds itself after `POST /payments`, `POST /contacts`, `POST /pair-requests/{id}/accept`
 and `POST /links`.
 

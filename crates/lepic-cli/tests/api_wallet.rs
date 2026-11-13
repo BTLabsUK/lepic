@@ -345,16 +345,23 @@ fn a_sync_refreshes_and_answers_the_wallet() {
 }
 
 #[test]
-fn a_boost_is_clamped_and_shown_in_the_status() {
+fn a_boost_is_clamped_shown_in_the_status_and_ended() {
     let (host, wallet) = funded();
     serving(host, &wallet, |socket, _| {
         let asked = json!({"poller": "node", "duration_seconds": 86_400, "interval_seconds": 1});
-        let window = send(socket, "POST", "/sync/boost", &asked).ok_status(200);
+        let mut window = send(socket, "POST", "/sync/boost", &asked).ok_status(201);
         assert_eq!(window["poller"], "node", "{window}");
         assert_eq!(window["interval_seconds"], 5, "{window}");
+        let id = window.as_object_mut().unwrap().remove("id").unwrap();
         let status = get(socket, "/status").ok_status(200);
         assert_eq!(status["refresh"]["boost"], window, "{status}");
         assert!(status["collect"].get("boost").is_none(), "{status}");
+
+        let end = format!("{API}/sync/boost/{id}");
+        assert_eq!(http(socket, "DELETE", &end, None).status, 204);
+        let status = get(socket, "/status").ok_status(200);
+        assert!(status["refresh"].get("boost").is_none(), "{status}");
+        problem(&http(socket, "DELETE", &end, None), 404, "not_found");
         for wrong in [
             json!({"poller": "mempool", "duration_seconds": 60, "interval_seconds": 5}),
             json!({"poller": "relays", "duration_seconds": 0, "interval_seconds": 5}),

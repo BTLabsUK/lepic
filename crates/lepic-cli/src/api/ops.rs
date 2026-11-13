@@ -33,6 +33,7 @@ ops! {
     ScanWallet = "scanWallet",
     SyncNow = "syncNow",
     BoostSync = "boostSync",
+    EndBoost = "endBoost",
     ListAccounts = "listAccounts",
     CreateAccount = "createAccount",
     ListPayments = "listPayments",

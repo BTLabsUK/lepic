@@ -69,6 +69,7 @@ impl<H: Host> Service<'_, H> {
                 Op::ScanWallet => wallet::scan(s, r, c).await,
                 Op::SyncNow => wallet::sync(s, r, c).await,
                 Op::BoostSync => wallet::boost(s, r, c).await,
+                Op::EndBoost => wallet::end_boost(s, r, c).await,
                 Op::ListAccounts => wallet::list_accounts(s, r, c).await,
                 Op::CreateAccount => wallet::create_account(s, r, c).await,
                 Op::GetNode => wallet::get_node(s, r, c).await,

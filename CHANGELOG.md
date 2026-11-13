@@ -16,9 +16,9 @@ Conventional Commit messages at release time.
   call opens a fresh one (for a network change or a return from the background). It does no I/O
   and waits for no other call.
 - `lepic serve`: `POST /sync/boost` collects the relays or refreshes from the node faster for a
-  while (5 s at least, 10 min at most; overlapping boosts merge), and `GET /status` shows it. It
-  boosts the relays itself after a payment, an invite, an accepted pair request and a new link
-  (ADR 0058).
+  while (5 s at least, 10 min at most), `DELETE /sync/boost/{id}` ends a boost early, and
+  `GET /status` shows the window. It boosts the relays itself after a payment, an invite, an
+  accepted pair request and a new link (ADR 0058).
 - `lepic serve`: `payment.confirmations_reached` once a payment has `payment_confirmations`
   confirmations (new setting, 6 unless set, 1 to 1440).
 - `lepic serve`: a payment taken at an epic1 link names it in `link_id`.

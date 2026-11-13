@@ -19,7 +19,7 @@ use super::super::Service;
 use super::Reply;
 use crate::api::list::{ListQuery, Order, Page, number_key};
 use crate::api::model::{Account, Balance, Boost, Node, Wallet};
-use crate::api::{Category, Context, Op, Problem, Request, accepted, no_content, ok};
+use crate::api::{Category, Context, Op, Problem, Request, accepted, created, no_content, ok};
 use crate::cli::{Command, WalletCommand, WalletScanArgs};
 use crate::commands::{contact, rekey};
 use crate::exit::CliError;
@@ -411,12 +411,33 @@ pub(super) async fn boost<H: Host>(
             "interval_seconds: at least 1",
         ));
     }
-    let window = service.held.wallet.boost(
+    let lease = service.held.wallet.boost(
         poller,
         Duration::from_secs(body.duration_seconds),
         Duration::from_secs(body.interval_seconds),
     );
-    ok(&Boost::of(window))
+    let window = Boost::of(lease.window());
+    created(&Boost {
+        id: Some(lease.keep()),
+        ..window
+    })
+}
+
+/// `DELETE /sync/boost/{id}`: ends a boost before its window does.
+#[allow(clippy::unused_async)] // Every handler is async.
+pub(super) async fn end_boost<H: Host>(
+    service: &Service<'_, H>,
+    request: Request,
+    _context: &Context,
+) -> Reply {
+    let ended = request
+        .param("id")?
+        .parse()
+        .is_ok_and(|id| service.held.wallet.boosts().end(id));
+    if !ended {
+        return Err(Problem::not_found("no such boost running"));
+    }
+    no_content()
 }
 
 /// A call whose answer may come back through a relay: a payment or an invoice, an invite, an
@@ -430,11 +451,15 @@ pub(super) const fn expects_reply(op: Op) -> bool {
 
 /// Boosts the relay collect after a call [`expects_reply`] names succeeded.
 pub(super) fn expect_reply<H: Host>(service: &Service<'_, H>) {
-    service.held.wallet.boost(
-        Poller::Relays,
-        REPLY_BOOST,
-        lepic_wallet::boost::MIN_INTERVAL,
-    );
+    service
+        .held
+        .wallet
+        .boost(
+            Poller::Relays,
+            REPLY_BOOST,
+            lepic_wallet::boost::MIN_INTERVAL,
+        )
+        .keep();
 }
 
 /// How long serve collects every few seconds after a call that waits for a reply.

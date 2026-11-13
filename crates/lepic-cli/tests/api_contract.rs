@@ -150,6 +150,13 @@ fn every_operation_keeps_the_contract() {
         walk.call("PATCH", "/wallet", Some(&json!({"issues_addresses": true})))
             .ok();
         walk.call("POST", "/sync", Some(&json!({})));
+        let boost = json!({"poller": "relays", "duration_seconds": 60, "interval_seconds": 5});
+        let boost = walk.call("POST", "/sync/boost", Some(&boost)).json();
+        assert_eq!(
+            walk.call("DELETE", &format!("/sync/boost/{}", boost["id"]), None)
+                .status,
+            204
+        );
         walk.call("GET", "/accounts", None).ok();
         let account = walk.call("POST", "/accounts", Some(&json!({"label": "walk"})));
         assert_eq!(account.status, 201, "{account:?}");

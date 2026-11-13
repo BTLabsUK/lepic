@@ -324,7 +324,7 @@
         "operationId": "boostSync",
         "x-role": "receive",
         "summary": "Collect from the relays, or refresh against the node, more often for a while.",
-        "description": "Runs the poller every `interval_seconds` for `duration_seconds` from now, then goes back to its base interval (30 s for `relays`, 60 s for `node`). A boost that overlaps the poller's running one keeps the later end and the shorter interval. The interval is at least 5 s and the duration at most 600 s: values outside are clamped, and the answer is the window that took effect. Serve boosts `relays` for 120 s at 5 s by itself after `POST /payments`, `POST /contacts`, `POST /pair-requests/{id}/accept` and `POST /links`.",
+        "description": "Runs the poller at most every `interval_seconds` for `duration_seconds` from now, then goes back to its base interval (30 s for `relays`, 60 s for `node`). Each call starts its own boost: a poller with several runs at the shortest interval among them until the last ends, and `DELETE /sync/boost/{id}` ends one before its window does. The interval is at least 5 s and the duration at most 600 s: values outside are clamped. The answer is the boost's `id` and the poller's window with it. Serve boosts `relays` for 120 s at 5 s by itself after `POST /payments`, `POST /contacts`, `POST /pair-requests/{id}/accept` and `POST /links`.",
         "tags": [
           "Wallet"
         ],
@@ -339,8 +339,8 @@
           }
         },
         "responses": {
-          "200": {
-            "description": "OK",
+          "201": {
+            "description": "Created",
             "content": {
               "application/json": {
                 "schema": {
@@ -354,6 +354,40 @@
           },
           "403": {
             "$ref": "#/components/responses/Forbidden"
+          }
+        }
+      }
+    },
+    "/sync/boost/{id}": {
+      "delete": {
+        "operationId": "endBoost",
+        "x-role": "receive",
+        "summary": "End a boost before its window does.",
+        "description": "The poller's window is then that of the boosts left, or its base interval.",
+        "tags": [
+          "Wallet"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "description": "The `id` `POST /sync/boost` answered."
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No content"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
           }
         }
       }
@@ -5338,6 +5372,10 @@
       "Boost": {
         "type": "object",
         "properties": {
+          "id": {
+            "type": "integer",
+            "description": "Only in the answer to `POST /sync/boost`: the boost it started, for `DELETE /sync/boost/{id}`."
+          },
           "poller": {
             "type": "string",
             "enum": [
@@ -5349,7 +5387,7 @@
           "until": {
             "type": "string",
             "format": "date-time",
-            "description": "When the poller goes back to its base interval."
+            "description": "When the last boost of the poller ends, unless one is ended first."
           },
           "interval_seconds": {
             "type": "integer"

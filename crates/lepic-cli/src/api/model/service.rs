@@ -81,6 +81,9 @@ pub(crate) struct Task {
 /// A poller's boost (ADR 0058): it runs every `interval_seconds` until `until`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct Boost {
+    /// The boost a `POST /sync/boost` started, to end with `DELETE /sync/boost/{id}`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) id: Option<u64>,
     pub(crate) poller: String,
     pub(crate) until: String,
     pub(crate) interval_seconds: u64,
@@ -89,6 +92,7 @@ pub(crate) struct Boost {
 impl Boost {
     pub(crate) fn of(window: lepic_wallet::boost::Window) -> Self {
         Self {
+            id: None,
             poller: match window.poller {
                 lepic_wallet::boost::Poller::Relays => "relays",
                 lepic_wallet::boost::Poller::Node => "node",

@@ -36,19 +36,29 @@ pub enum Poller { Relays, Node }
 pub struct Window { pub poller: Poller, pub until: Timestamp, pub interval: Duration }
 
 impl Wallet {
-    /// Polls `poller` every `interval` for `duration` from now, merged with the boost it has,
-    /// and returns the window that took effect.
-    pub fn boost(&self, poller: Poller, duration: Duration, interval: Duration) -> Window;
-    /// The wallet's boosts, for the loops that poll.
+    /// Polls `poller` at most every `interval` for `duration` from now, until the lease is
+    /// dropped or ended by its id.
+    pub fn boost(&self, poller: Poller, duration: Duration, interval: Duration) -> Lease;
+    /// The wallet's boosts: for the loops that poll, and to end one by its id.
     pub fn boosts(&self) -> &Boosts;
 }
 
+impl Lease {
+    pub fn id(&self) -> u64;
+    /// The poller's window once this boost started.
+    pub fn window(&self) -> Window;
+    /// Lets the boost run until its window ends or `Boosts::end(id)`; returns the id.
+    pub fn keep(self) -> u64;
+}   // Dropped without keep(), the lease ends its boost.
+
 impl Boosts {
-    /// How long `poller` sleeps from now: the boost's interval while one runs, else `base`.
+    /// Ends boost `id` if it still runs; false if it had ended.
+    pub fn end(&self, id: u64) -> bool;
+    /// How long `poller` sleeps from now: its boosts' interval while one runs, else `base`.
     pub fn interval(&self, poller: Poller, base: Duration) -> Duration;
-    /// The boost `poller` has now, if any.
+    /// What `poller` runs at now, if a boost runs.
     pub fn window(&self, poller: Poller) -> Option<Window>;
-    /// Changes each time a boost starts or changes, so a loop asleep on the old interval wakes.
+    /// Changes each time a boost starts or ends, so a loop asleep on the old interval wakes.
     pub fn changed(&self) -> watch::Receiver<u64>;
 }
 ```
@@ -57,13 +67,17 @@ impl Boosts {
   epic1 link mailbox, on the relays the wallet already uses. `Node` is the wallet refresh. These
   are the two loops that exist. A boost starts no new loop: the host's loop asks
   `boosts().interval` before each sleep and wakes on `boosts().changed()`.
-- **Merge.** One boost per poller at most. A call that overlaps a running boost keeps the later
-  end and the shorter interval. When the window ends the poller goes back to its base interval.
+- **Merge.** Each call starts its own boost. A poller runs at the shortest interval of the
+  boosts it has, until the last one ends; ending one recomputes the window from the rest. With
+  none left the poller goes back to its base interval.
+- **Ending.** A caller that stops waiting ends its boost: a pairing screen that closes stops its
+  fast polling at once. The id path, `Boosts::end(id)`, is the one the FFI and serve use, since
+  a garbage-collected handle drops at no set time. In Rust a dropped `Lease` ends its boost
+  through the same path; `keep()` hands the id on instead.
 - **Limits, set by LEPIC.** The interval is at least 5 s, the duration at most 10 minutes. A
   value outside is clamped, never refused, and the call returns the window that took effect.
-  Because boosts merge per poller, at most two run at once: that is the cap on concurrent
-  boosts. A caller that boosts again and again keeps one poller at one cycle every 5 s, the rate
-  the app already uses while it waits for a pairing.
+  However many boosts run, a poller runs one cycle at a time, at most every 5 s, the rate the
+  app already uses while it waits for a pairing. Each boost ends within 10 minutes.
 - **Base intervals.** Serve's base collect interval goes from 60 s to 30 s. The refresh stays at
   60 s, about one block.
 - **Serve's own callers.** These boost `Relays` for 2 minutes at 5 s, after they succeed:
@@ -75,13 +89,14 @@ impl Boosts {
   {"poller": "relays", "duration_seconds": 120, "interval_seconds": 5}
   ```
 
-  answers 200 with the window that took effect:
+  answers 201 with the boost's id and the poller's window:
 
   ```json
-  {"poller": "relays", "until": "2026-11-13T15:02:00Z", "interval_seconds": 5}
+  {"id": 3, "poller": "relays", "until": "2026-11-13T15:02:00Z", "interval_seconds": 5}
   ```
 
-  A missing or unknown `poller` is 400 `invalid_field`. `GET /status` shows a running boost as
+  `DELETE /sync/boost/{id}` ends it: 204, or 404 once it has ended. A missing or unknown
+  `poller` is 400 `invalid_field`. `GET /status` shows a running boost as
   `boost` inside `collect` (relays) or `refresh` (node).
 
 ### 2. Webhooks: one endpoint, fed from the event log
@@ -214,7 +229,8 @@ query, or from the epic1 link as `epic1 read` reads it.
 - A `servers` list on a boost. Each poller already reaches the servers that can answer: the
   cycle reads every relay its contacts and links use, the refresh asks the wallet's node. A
   narrower list would miss replies, and no caller has one.
-- A cap on boosts apart from one per poller. Merging already bounds them.
+- A cap on the number of boosts. A poller runs at most every 5 s whatever their number, and
+  each ends within 10 minutes.
 - Several webhooks, an API to create them, and a CLI for them. One URL in the settings, with
   `GET /webhook` and `POST /webhook/resume` on the API, covers a service. More endpoints can
   come when someone needs them.
