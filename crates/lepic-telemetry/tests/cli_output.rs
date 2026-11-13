@@ -125,6 +125,7 @@ fn json_lines_carry_documented_field_names() {
             status = "imported",
             count = 3_u32,
             tip = 1_002_u64,
+            event_id = 4_u64,
             paused_ms = 40_000_u64,
             rounds = 2_u32,
             text = "duplicate commitment",
