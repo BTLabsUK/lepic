@@ -13,10 +13,11 @@ use super::super::Service;
 use super::Reply;
 use super::events::{self, Change};
 use super::payments::{self, view};
-use crate::amount::{format_amount, format_fee};
+use crate::amount::{format_amount, format_fee, parse_amount};
 use crate::api::model::{Handoff, Inspection, OpenResult};
-use crate::api::{Category, Context, Problem, Request, ok};
+use crate::api::{Category, Context, Problem, Request, decode, ok};
 use crate::api_clients::Role;
+use crate::cli::{Command, Epic1Args, Epic1Command, Epic1LinkArg};
 use crate::exit::CliError;
 use crate::host::Host;
 use crate::output::Report;
@@ -151,11 +152,87 @@ async fn read<H: Host>(service: &Service<'_, H>, text: &str) -> Result<Read, Pro
     } else {
         return Ok(plain("unknown", "none"));
     };
-    let mut read = plain(kind, if kind == "link" { "open" } else { "pay" });
+    let mut read = plain(kind, "pay");
     // A chat-linked Epicbox address is paid as the address itself.
     let to = lepic_transport::epicbox_link::epicbox_of_link(text).unwrap_or(text);
-    read.inspection.summary_mut().to = Some(to.to_owned());
+    let summary = read.inspection.summary_mut();
+    summary.to = Some(to.to_owned());
+    if kind == "link" {
+        let (amount, message) = match classic(text) {
+            Some(classic) => (
+                classic
+                    .amount
+                    .and_then(|amount| parse_amount(&amount).ok())
+                    .map(format_amount),
+                classic.message,
+            ),
+            None => epic1_terms(service, text).await.unwrap_or_default(),
+        };
+        summary.amount = amount;
+        summary.message = message;
+    }
     Ok(read)
+}
+
+/// A classic `epic:` link, `epic:ADDRESS?amount=&message=`: the address (Epicbox, or an
+/// `http(s)://` URL) and what the query asks. Unknown keys are ignored.
+pub(super) struct Classic {
+    pub address: String,
+    pub amount: Option<String>,
+    pub message: Option<String>,
+}
+
+/// `text` as a classic `epic:` link; `None` for an epic1 link, which `epic1_terms` reads, and for
+/// anything that is not an `epic:` link with an address.
+pub(super) fn classic(text: &str) -> Option<Classic> {
+    let rest = text.strip_prefix("epic:")?;
+    if is_epic1(text) {
+        return None;
+    }
+    let (address, query) = rest.split_once('?').unwrap_or((rest, ""));
+    if address.is_empty() {
+        return None;
+    }
+    let (mut amount, mut message) = (None, None);
+    for (key, value) in query.split('&').filter_map(|pair| pair.split_once('=')) {
+        let slot = match key {
+            "amount" => &mut amount,
+            "message" | "note" | "memo" => &mut message,
+            _ => continue,
+        };
+        if slot.is_none() {
+            *slot = decode(value, false).ok();
+        }
+    }
+    Some(Classic {
+        address: address.to_owned(),
+        amount,
+        message,
+    })
+}
+
+/// Whether `text` is an `epic:` link to an epic1 address.
+pub(super) fn is_epic1(text: &str) -> bool {
+    text.strip_prefix("epic:")
+        .is_some_and(|rest| rest.starts_with("epic1") || rest.starts_with("tepic1"))
+}
+
+/// The amount and message an epic1 `link` asks, as `lepic epic1 read` reads them.
+pub(super) async fn epic1_terms<H: Host>(
+    service: &Service<'_, H>,
+    link: &str,
+) -> Result<(Option<String>, Option<String>), CliError> {
+    let command = Command::Epic1(Epic1Args {
+        command: Epic1Command::Read(Epic1LinkArg {
+            link: link.to_owned(),
+        }),
+        offline: false,
+        epicbox_off: false,
+    });
+    Ok(match Box::pin(service.command(command)).await? {
+        Report::Epic1Read(read) => (read.amount, read.message),
+        _ => (None, None),
+    })
 }
 
 /// What a sealed file holds, opened with this wallet's keys as `contact open-sealed` opens it.
@@ -559,4 +636,30 @@ async fn finish<H: Host>(service: &Service<'_, H>, read: Read) -> Reply {
         contact: None,
         handoff: None,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{classic, is_epic1};
+
+    #[test]
+    fn a_classic_link_gives_its_address_amount_and_message() {
+        let link = classic("epic:abc@epicbox.example?amount=1.5&message=a%20b+c&x=1").unwrap();
+        assert_eq!(link.address, "abc@epicbox.example");
+        assert_eq!(link.amount.as_deref(), Some("1.5"));
+        assert_eq!(link.message.as_deref(), Some("a b+c"));
+        let url = classic("epic:https://host.example/pay?memo=hi&memo=no").unwrap();
+        assert_eq!(url.address, "https://host.example/pay");
+        assert_eq!(url.amount, None);
+        assert_eq!(url.message.as_deref(), Some("hi"));
+    }
+
+    #[test]
+    fn epic1_and_empty_links_are_not_classic() {
+        assert!(is_epic1("epic:epic1qq?amount=1"));
+        assert!(is_epic1("epic:tepic1qq"));
+        assert!(classic("epic:epic1qq?amount=1").is_none());
+        assert!(classic("epic:?amount=1").is_none());
+        assert!(classic("abc@host").is_none());
+    }
 }

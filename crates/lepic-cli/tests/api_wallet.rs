@@ -200,6 +200,35 @@ fn a_link_on_a_local_relay_is_refused() {
 }
 
 #[test]
+fn an_epic1_link_is_read_by_inspect_and_paid_at_its_amount() {
+    let (host, wallet) = funded();
+    serving_public(host, &wallet, |socket| {
+        issue(socket);
+        send(socket, "POST", "/addresses", &json!({})).ok_status(201);
+        let body = json!({"kind": "printed", "amount": "2", "message": "dues"});
+        let made = send(socket, "POST", "/links", &body).json();
+        let link = made["text"].as_str().unwrap();
+        let read = send(socket, "POST", "/inspect", &json!({ "text": link })).ok();
+        assert_eq!(read["type"], "link", "{read}");
+        assert_eq!(read["next"], "pay", "{read}");
+        assert_eq!(read["summary"]["amount"], "2.00000000", "{read}");
+        assert_eq!(read["summary"]["message"], "dues", "{read}");
+        let wrong = send(
+            socket,
+            "POST",
+            "/payments",
+            &json!({ "to": link, "amount": "3" }),
+        );
+        let bad = problem(&wrong, 400, "invalid_field");
+        assert_eq!(bad["param"], "/amount", "{bad}");
+        // With no amount, the link's is paid through `epic1 pay`.
+        let paid = send(socket, "POST", "/payments", &json!({ "to": link }));
+        assert_eq!(paid.status, 201, "{paid:?}");
+        assert_eq!(paid.json()["amount"], "2.00000000");
+    });
+}
+
+#[test]
 fn links_are_made_listed_and_retired() {
     let (host, wallet) = funded();
     serving_public(host, &wallet, |socket| {

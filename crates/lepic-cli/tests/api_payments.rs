@@ -445,7 +445,7 @@ fn inspect_names_each_kind_it_reads_and_changes_nothing() {
             ("http://203.0.113.7:3415", "http_address", "pay"),
             (linked.as_str(), "epicbox_address", "pay"),
             (onion, "onion_address", "pay"),
-            ("epic:pay?amount=1", "link", "open"),
+            ("epic:pay?amount=1", "link", "pay"),
             ("hello there", "unknown", "none"),
             ("{\"not\":\"a slate\"}", "unknown", "none"),
         ];
@@ -462,6 +462,15 @@ fn inspect_names_each_kind_it_reads_and_changes_nothing() {
                 assert_eq!(read["summary"]["to"], to, "{read}");
             }
         }
+
+        let terms = post(
+            socket,
+            "/api/v1/inspect",
+            &json!({ "text": format!("epic:{address}?amount=1.5&message=for%20tea") }),
+        )
+        .ok();
+        assert_eq!(terms["summary"]["amount"], "1.50000000", "{terms}");
+        assert_eq!(terms["summary"]["message"], "for tea", "{terms}");
 
         let base64 = STANDARD.encode(&address);
         let file = post(socket, "/api/v1/inspect", &json!({ "file_base64": base64 })).ok();
@@ -604,6 +613,34 @@ fn an_invoice_carries_its_ttl_and_message() {
         let made = made.json();
         assert_eq!(made["message"], "order 42", "{made}");
         assert_eq!(made["expires_at_height"], support::TIP + 30, "{made}");
+    });
+}
+
+#[test]
+fn a_classic_epic_link_is_paid_to_its_address_at_its_amount() {
+    let (host, wallet) = funded();
+    serving(host, &wallet, |socket, _| {
+        let to = "epic:abc@epicbox.example?amount=1&message=tea";
+        let wrong = json!({ "to": to, "amount": "2" });
+        let bad = problem(
+            &post(socket, "/api/v1/payments", &wrong),
+            400,
+            "invalid_field",
+        );
+        assert_eq!(bad["param"], "/amount", "{bad}");
+        // The link names the amount: leaving it out, or naming it again, passes the check and
+        // goes on to the send, which refuses this made-up address.
+        for body in [json!({ "to": to }), json!({ "to": to, "amount": "1.0" })] {
+            let reply = post(socket, "/api/v1/payments", &body);
+            assert_ne!(reply.json()["param"], "/amount", "{reply:?}");
+        }
+        let bare = json!({ "to": "epic:abc@epicbox.example" });
+        let bad = problem(
+            &post(socket, "/api/v1/payments", &bare),
+            400,
+            "invalid_field",
+        );
+        assert_eq!(bad["param"], "/amount", "{bad}");
     });
 }
 

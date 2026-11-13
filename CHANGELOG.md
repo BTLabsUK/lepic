@@ -35,6 +35,9 @@ Conventional Commit messages at release time.
 - A node switch no longer waits for a check of another node's height to end.
 - Serve: an invoice made with `ttl_blocks` carries it, so it shows `expires_at_height` and
   expires. An invoice to a contact carries its `message` in the slate, so both sides show it.
+- `lepic serve`: `POST /payments` pays an `epic:` link (classic to its address, epic1 as
+  `epic1 pay`) and takes the link's amount; `POST /inspect` shows the link's amount and message,
+  and its `next` is `pay`.
 
 ## [0.5.0] - 2026-11-11
 

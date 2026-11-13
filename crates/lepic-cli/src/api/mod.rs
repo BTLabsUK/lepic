@@ -144,7 +144,7 @@ impl Request {
 
 /// Percent-decodes a path segment (`plus` false) or a query key or value (`plus` true, `+` is a
 /// space).
-fn decode(text: &str, plus: bool) -> Result<String, Problem> {
+pub(crate) fn decode(text: &str, plus: bool) -> Result<String, Problem> {
     let invalid = || Problem::usage("the path or query is not percent-encoded UTF-8");
     let mut bytes = Vec::with_capacity(text.len());
     let mut rest = text.bytes();

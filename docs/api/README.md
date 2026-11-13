@@ -168,12 +168,17 @@ several answers, and serve starts none. `POST /payments/{id}/finalize` answers
 | `key@host` | Epicbox address |
 | `http://…` or `https://…` | HTTP listener of another wallet |
 | `….onion` | Tor |
-| `epic:…` | A payment link |
+| `epic:…` | A payment link: classic (`epic:ADDRESS?amount=&message=`) or epic1 |
 | `contact:ID` | A contact |
 | `account:LABEL` | One of your own accounts |
 
-Serve does not make payments to `epic:` links or `account:` yet: open the link with `POST /open`
-instead, and move coins between accounts with the CLI. Both answer 400 `invalid_field`.
+A classic `epic:` link is paid to its address. An epic1 link is paid as `lepic epic1 pay` pays
+it. `amount` may be left out when the link names one; naming a different one is 400
+`invalid_field` at `/amount`. A `message` in the body wins over the link's. `POST /inspect` shows
+the link's `amount` and `message`, and `next` is `pay`.
+
+Serve does not pay `account:` yet: move coins between accounts with the CLI. It answers 400
+`invalid_field`.
 
 Without `to`, `via` must be `file`: the payment is made for someone you hand it to. `via` forces
 a route when `to` is not enough. `in_person`, `link`, `peer` and `chain` are in the contract but

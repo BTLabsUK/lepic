@@ -538,7 +538,7 @@
         "tags": [
           "Payments"
         ],
-        "description": "Starts a send (`kind: send`, default) or an invoice (`kind: invoice`). Returns 201, or 200 with the stored payment on an idempotent repeat (same `id`, same body). A different body with the same `id` is 409 `idempotency_mismatch`; a repeat while the first call runs is 409 `in_progress`. Over owner TLS `id` is required.\n\n`to` forms: `key@host` (Epicbox address), `http://` or `https://` URL, `.onion` address, `epic:` link, `contact:ID`, `account:LABEL`.",
+        "description": "Starts a send (`kind: send`, default) or an invoice (`kind: invoice`). Returns 201, or 200 with the stored payment on an idempotent repeat (same `id`, same body). A different body with the same `id` is 409 `idempotency_mismatch`; a repeat while the first call runs is 409 `in_progress`. Over owner TLS `id` is required.\n\n`to` forms: `key@host` (Epicbox address), `http://` or `https://` URL, `.onion` address, `epic:` link, `contact:ID`, `account:LABEL`. An `epic:` link carries its amount and message: a classic one (`epic:ADDRESS?amount=&message=`) is paid to its address, an epic1 link as `lepic epic1 pay` pays it.",
         "requestBody": {
           "required": true,
           "content": {
@@ -4721,7 +4721,7 @@
           },
           "to": {
             "type": "string",
-            "description": "Destination. Forms: `key@host` (Epicbox address); `http://` or `https://` URL; `.onion` address; `epic:` link; `contact:ID`; `account:LABEL` (own account). Without `to`, `via` must be `file` or `in_person`."
+            "description": "Destination. Forms: `key@host` (Epicbox address); `http://` or `https://` URL; `.onion` address; `epic:` link (classic or epic1); `contact:ID`; `account:LABEL` (own account). Without `to`, `via` must be `file` or `in_person`."
           },
           "via": {
             "type": "string",
@@ -4743,7 +4743,7 @@
             "description": "Account label; default account when absent."
           },
           "amount": {
-            "description": "Amount, or the string `max` (estimate only).",
+            "description": "Amount, or the string `max` (estimate only). May be left out when `to` is an `epic:` link that names one; if both name one, they must be equal (400 `invalid_field` at `/amount`).",
             "oneOf": [
               {
                 "$ref": "#/components/schemas/Decimal"
@@ -4818,10 +4818,7 @@
             "description": "Local notes, never sent. The bounds are input validation, not policy."
           }
         },
-        "required": [
-          "amount"
-        ],
-        "description": "Body of `POST /payments` and `POST /payments/estimate`."
+        "description": "Body of `POST /payments` and `POST /payments/estimate`. `amount` is required unless `to` is an `epic:` link that names one."
       },
       "Estimate": {
         "type": "object",

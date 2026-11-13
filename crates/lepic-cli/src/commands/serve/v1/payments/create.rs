@@ -12,6 +12,7 @@ use serde_json::Value;
 use super::super::super::Service;
 use super::super::Reply;
 use super::super::events::{self, Change};
+use super::super::handed;
 use super::view::{self, Note};
 use super::{check_metadata, default_spend};
 use crate::amount::{format_units, parse_amount};
@@ -20,9 +21,9 @@ use crate::api::{Category, Context, Listener, Problem, Request, created, idempot
 use crate::api_clients::Role;
 use crate::cli::{
     AccountArg, Command, ContactArgs, ContactCommand, ContactIdArg, ContactInvoiceArgs,
-    DestinationArgs, FluffArg, HttpReach, InvoiceCommand, IssueArgs, LegacyArg, MessageArg,
-    PlainHttpArg, PurposeArg, SelectionArg, SendArgs, SendDestinationArgs, SendSlateIdArg,
-    SpendArgs, TorBinaryArgs, TxCommand,
+    DestinationArgs, Epic1Args, Epic1Command, Epic1LinkArg, Epic1PayArgs, FluffArg, HttpReach,
+    InvoiceCommand, IssueArgs, LegacyArg, MessageArg, PlainHttpArg, PurposeArg, SelectionArg,
+    SendArgs, SendDestinationArgs, SendSlateIdArg, SpendArgs, TorBinaryArgs, TxCommand,
 };
 use crate::commands::contact::SlateFile;
 use crate::commands::{caller_slate_id, drawn_slate_id};
@@ -44,6 +45,8 @@ struct CreateBody {
     via: Option<String>,
     #[serde(default)]
     account: Option<String>,
+    /// Empty when left out: an `epic:` link may name the amount.
+    #[serde(default)]
     amount: String,
     #[serde(default)]
     message: Option<String>,
@@ -157,10 +160,13 @@ enum Route {
     Contact(String),
     /// An Epicbox, http(s):// or onion address.
     Address(String),
+    /// An epic1 link, paid as `lepic epic1 pay` pays it.
+    Epic1(String),
 }
 
-/// The route of `body`, or 400 for one this wallet cannot take yet.
-fn route(body: &CreateBody) -> Result<Route, Problem> {
+/// The route of `body`, or 400 for one this wallet cannot take yet. A classic `epic:` link is
+/// settled into the body's amount and message and routed as its address.
+fn route(body: &mut CreateBody) -> Result<Route, Problem> {
     let via = body.via.as_deref();
     if !body.deliver || via == Some("file") {
         return Ok(Route::File);
@@ -194,13 +200,44 @@ fn route(body: &CreateBody) -> Result<Route, Problem> {
             "a payment to one of this wallet's own accounts is not supported yet",
         ));
     }
+    if handed::is_epic1(to) {
+        return Ok(Route::Epic1(to.to_owned()));
+    }
     if to.starts_with("epic:") {
-        return Err(Problem::invalid(
-            "/to",
-            "a payment to an epic: link is not supported yet; open the link instead",
-        ));
+        let link = handed::classic(to)
+            .ok_or_else(|| Problem::invalid("/to", "to is not an epic: link with an address"))?;
+        agree(&mut body.amount, link.amount.as_deref())?;
+        if body.message.is_none() {
+            body.message = link.message;
+        }
+        return Ok(Route::Address(link.address));
     }
     Ok(Route::Address(to.to_owned()))
+}
+
+/// Settles `amount` with what an `epic:` link `asked`: taken from the link when left out, else
+/// the same, or 400 at `/amount`.
+fn agree(amount: &mut String, asked: Option<&str>) -> Result<(), Problem> {
+    let parse = |text: &str| {
+        parse_amount(text).map_err(|error| Problem::invalid("/amount", format!("amount: {error}")))
+    };
+    match (amount.is_empty(), asked) {
+        (true, Some(asked)) => asked.clone_into(amount),
+        (true, None) => {
+            return Err(Problem::invalid(
+                "/amount",
+                "amount is required: the link names none",
+            ));
+        }
+        (false, Some(asked)) if parse(amount)? != parse(asked)? => {
+            return Err(Problem::invalid(
+                "/amount",
+                "amount is not the amount the link asks",
+            ));
+        }
+        _ => {}
+    }
+    Ok(())
 }
 
 /// `id` as a lowercase UUID, or 400 at `/id`.
@@ -255,7 +292,7 @@ pub(in super::super) async fn create<H: Host>(
     request: Request,
     context: &Context,
 ) -> Reply {
-    let (body, value) = CreateBody::read(&request)?;
+    let (mut body, value) = CreateBody::read(&request)?;
     let invoice = body.is_invoice()?;
     request.require(if invoice { Role::Receive } else { Role::Full })?;
     let id = match body.id.as_deref() {
@@ -268,6 +305,17 @@ pub(in super::super) async fn create<H: Host>(
         }
         None => None,
     };
+    let route = route(&mut body)?;
+    if let Route::Epic1(link) = &route {
+        if invoice {
+            return Err(Problem::invalid(
+                "/to",
+                "an invoice is not sent to an epic1 link",
+            ));
+        }
+        let (asked, _) = handed::epic1_terms(service, link).await?;
+        agree(&mut body.amount, asked.as_deref())?;
+    }
     if body.amount == MAX {
         return Err(Problem::invalid(
             "/amount",
@@ -279,7 +327,6 @@ pub(in super::super) async fn create<H: Host>(
     check_metadata(&body.metadata)?;
     let purpose = body.purpose()?;
     let spend = body.spend()?;
-    let route = route(&body)?;
     let reach = reach(&request);
     if let Route::Address(to) = &route {
         guard(reach, to)?;
@@ -316,6 +363,10 @@ pub(in super::super) async fn create<H: Host>(
         Route::File => Some(SlateFile::new(&service.settings.data_dir)?),
         _ => None,
     };
+    let epic1 = match &route {
+        Route::Epic1(link) => Some(link.clone()),
+        _ => None,
+    };
     let destination = destination(route, file.as_ref());
     // The slate id is settled and noted before the payment is made, so a call cut short after
     // the payment was stored leaves nothing for its repeat to add.
@@ -332,7 +383,9 @@ pub(in super::super) async fn create<H: Host>(
     if let Some(slate) = slate.as_deref() {
         view::put_note(service, slate, &note)?;
     }
-    let command = if invoice {
+    let command = if let Some(link) = epic1 {
+        epic1_command(&body, link, spend, slate.clone())
+    } else if invoice {
         invoice_command(&body, destination, purpose, slate.clone())
     } else {
         send_command(&body, destination, purpose, spend, id.clone(), reach)
@@ -383,7 +436,7 @@ fn destination(route: Route, file: Option<&SlateFile>) -> SendDestinationArgs {
     let (to, to_contact) = match route {
         Route::File => (None, None),
         Route::Contact(contact) => (None, Some(contact)),
-        Route::Address(to) => (Some(to), None),
+        Route::Address(to) | Route::Epic1(to) => (Some(to), None),
     };
     SendDestinationArgs {
         to,
@@ -448,6 +501,32 @@ fn invoice_command(
             slate_id: SendSlateIdArg { slate_id },
         })),
     }
+}
+
+/// The command that pays the epic1 `link` as `lepic epic1 pay` does.
+fn epic1_command(
+    body: &CreateBody,
+    link: String,
+    spend: SpendArgs,
+    slate_id: Option<String>,
+) -> Command {
+    Command::Epic1(Epic1Args {
+        command: Epic1Command::Pay(Epic1PayArgs {
+            link: Epic1LinkArg { link },
+            amount: Some(body.amount.clone()),
+            account: AccountArg {
+                account: body.account(),
+            },
+            message: MessageArg {
+                message: body.message.clone(),
+            },
+            spend,
+            hosts_ok: false,
+            slate_id: SendSlateIdArg { slate_id },
+        }),
+        offline: false,
+        epicbox_off: false,
+    })
 }
 
 /// The command that makes the send `body` asks for. A purpose goes only to a contact.
