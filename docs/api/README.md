@@ -444,8 +444,8 @@ each ±20 %, then stops with the state `disabled`. The cursor and the schedule a
 store, so a restart carries on. A cursor the log has pruned gets an `events.skipped` event first.
 
 Serve resolves the host before each attempt and connects only to a public address: not loopback,
-private, link-local, shared (100.64.0.0/10), multicast, unspecified, documentation or broadcast.
-It follows no redirect and uses no proxy.
+private, link-local, shared (100.64.0.0/10), benchmarking (198.18.0.0/15), NAT64 (64:ff9b::/32),
+multicast, unspecified, documentation or broadcast. It follows no redirect and uses no proxy.
 
 `GET /webhook` answers the `url`, `types`, `state` (`active`, `retrying` or `disabled`), `cursor`,
 `attempts`, `next_attempt_at` and `last_error`. `POST /webhook/resume` takes an optional

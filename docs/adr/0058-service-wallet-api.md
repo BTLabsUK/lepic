@@ -134,8 +134,8 @@ retention, so the webhook, `GET /events` and SSE carry the same events.
   `not_found` when no webhook is set. Both calls are role `full`.
 - **SSRF.** The URL's host is resolved before each attempt. Serve connects only to an address
   that is public unicast: not loopback, private (10/8, 172.16/12, 192.168/16, fc00::/7),
-  link-local, CGNAT (100.64/10), multicast, unspecified, documentation or broadcast, and an
-  IPv4-mapped IPv6 address is checked as IPv4. It connects to the address it checked, so a
+  link-local, CGNAT (100.64/10), benchmarking (198.18/15), NAT64 (64:ff9b::/32), multicast,
+  unspecified, documentation or broadcast, and an IPv4-mapped IPv6 address is checked as IPv4. It connects to the address it checked, so a
   second resolution cannot point elsewhere. No proxy, no redirect. `webhook_allow_private`
   lifts the address check and allows `http://`.
 

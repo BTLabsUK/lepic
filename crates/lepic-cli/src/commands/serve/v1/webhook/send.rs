@@ -88,8 +88,9 @@ pub(super) fn signature(
     out.join(" ")
 }
 
-/// Whether `ip` is public unicast: not loopback, private, link-local, CGNAT, multicast,
-/// unspecified, documentation or broadcast. An IPv4-mapped IPv6 address counts as its IPv4.
+/// Whether `ip` is public unicast: not loopback, private, link-local, CGNAT, benchmarking,
+/// multicast, unspecified, documentation, broadcast or NAT64. An IPv4-mapped IPv6 address counts
+/// as its IPv4.
 pub(super) fn is_public(ip: IpAddr) -> bool {
     match ip.to_canonical() {
         IpAddr::V4(ip) => {
@@ -102,7 +103,8 @@ pub(super) fn is_public(ip: IpAddr) -> bool {
                 || ip.is_multicast()
                 || ip.is_documentation()
                 || first == 0
-                || (first == 100 && second & 0xc0 == 64))
+                || (first == 100 && second & 0xc0 == 64)
+                || (first == 198 && second & 0xfe == 18))
         }
         IpAddr::V6(ip) => {
             let first = ip.segments()[0];
@@ -112,6 +114,7 @@ pub(super) fn is_public(ip: IpAddr) -> bool {
                 || ip.is_multicast()
                 || first & 0xfe00 == 0xfc00
                 || first & 0xffc0 == 0xfe80
+                || (first == 0x0064 && second == 0xff9b)
                 || (first == 0x2001 && second == 0x0db8))
         }
     }
@@ -300,6 +303,7 @@ mod tests {
             "100.128.0.1",
             "172.15.0.1",
             "172.32.0.1",
+            "198.20.0.1",
             "::ffff:8.8.8.8",
         ] {
             assert!(is_public(ip.parse::<IpAddr>().unwrap()), "{ip}");
@@ -319,6 +323,8 @@ mod tests {
             "255.255.255.255",
             "192.0.2.1",
             "198.51.100.1",
+            "198.18.0.1",
+            "198.19.255.255",
             "203.0.113.1",
             "::1",
             "::",
@@ -327,6 +333,8 @@ mod tests {
             "fe80::1",
             "ff02::1",
             "2001:db8::1",
+            "64:ff9b::a00:1",
+            "64:ff9b:1::1",
             "::ffff:127.0.0.1",
             "::ffff:10.0.0.1",
             "::ffff:169.254.169.254",
