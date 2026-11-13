@@ -1688,7 +1688,7 @@ fn system_rng() -> Result<SharedRng, CliError> {
 }
 
 /// Bytes from the system's random source.
-fn random_bytes<const N: usize>() -> Result<[u8; N], CliError> {
+pub(crate) fn random_bytes<const N: usize>() -> Result<[u8; N], CliError> {
     let mut rng = StdRng::try_from_rng(&mut SysRng).map_err(|error| CliError::Io {
         what: "seed the random number generator",
         source: std::io::Error::other(error),

@@ -641,6 +641,9 @@ fn a_classic_epic_link_is_paid_to_its_address_at_its_amount() {
             "invalid_field",
         );
         assert_eq!(bad["param"], "/amount", "{bad}");
+        // An estimate takes the link's amount the same way.
+        let fee = post(socket, "/api/v1/payments/estimate", &json!({ "to": to })).ok();
+        assert!(fee["fee"].is_string(), "{fee}");
     });
 }
 

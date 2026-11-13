@@ -75,7 +75,8 @@ impl Boosts {
   a garbage-collected handle drops at no set time. In Rust a dropped `Lease` ends its boost
   through the same path; `keep()` hands the id on instead.
 - **Limits, set by LEPIC.** The interval is at least 5 s, the duration at most 10 minutes. A
-  value outside is clamped, never refused, and the call returns the window that took effect.
+  value outside is clamped, never refused, and the call returns the poller's window. A poller
+  never runs slower than its base, so an interval above the base has no effect.
   However many boosts run, a poller runs one cycle at a time, at most every 5 s, the rate the
   app already uses while it waits for a pairing. Each boost ends within 10 minutes.
 - **Base intervals.** Serve's base collect interval goes from 60 s to 30 s. The refresh stays at
@@ -95,8 +96,8 @@ impl Boosts {
   {"id": 3, "poller": "relays", "until": "2026-11-13T15:02:00Z", "interval_seconds": 5}
   ```
 
-  `DELETE /sync/boost/{id}` ends it: 204, or 404 once it has ended. A missing or unknown
-  `poller` is 400 `invalid_field`. `GET /status` shows a running boost as
+  `DELETE /sync/boost/{id}` ends it: 204, or 404 once it has ended. An unknown `poller` is
+  400 `invalid_field`, a missing field 400 `invalid_body`. `GET /status` shows a running boost as
   `boost` inside `collect` (relays) or `refresh` (node).
 
 ### 2. Webhooks: one endpoint, fed from the event log
@@ -116,8 +117,9 @@ retention, so the webhook, `GET /events` and SSE carry the same events.
 - **Request.** `POST <webhook_url>`, `content-type: application/json`, one event per request.
   The body is the event as `GET /events` lists it: `{id, type, created_at, data}`.
   Headers follow Standard Webhooks:
-  - `webhook-id`: the event id. A retry sends the same id, so the receiver can drop a
-    duplicate.
+  - `webhook-id`: `evt_<16 hex>_<event id>`, the hex drawn with each new webhook state, since
+    event ids start at 1 again in a restored wallet. A retry sends the same id, so the receiver
+    can drop a duplicate.
   - `webhook-timestamp`: unix seconds of this attempt.
   - `webhook-signature`: `v1,<base64 HMAC-SHA256(secret, "{id}.{timestamp}.{body}")>`, one
     per line of the secret file, space-separated. To rotate: add the new secret as a second

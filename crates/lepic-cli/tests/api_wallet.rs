@@ -362,17 +362,15 @@ fn a_boost_is_clamped_shown_in_the_status_and_ended() {
         let status = get(socket, "/status").ok_status(200);
         assert!(status["refresh"].get("boost").is_none(), "{status}");
         problem(&http(socket, "DELETE", &end, None), 404, "not_found");
-        for wrong in [
-            json!({"poller": "mempool", "duration_seconds": 60, "interval_seconds": 5}),
-            json!({"poller": "relays", "duration_seconds": 0, "interval_seconds": 5}),
-            json!({"poller": "relays", "duration_seconds": 60, "interval_seconds": 0}),
-        ] {
-            problem(
-                &send(socket, "POST", "/sync/boost", &wrong),
-                400,
-                "invalid_field",
-            );
-        }
+        let mempool = json!({"poller": "mempool", "duration_seconds": 60, "interval_seconds": 5});
+        problem(
+            &send(socket, "POST", "/sync/boost", &mempool),
+            400,
+            "invalid_field",
+        );
+        let zero = json!({"poller": "relays", "duration_seconds": 60, "interval_seconds": 0});
+        let raised = send(socket, "POST", "/sync/boost", &zero).ok_status(201);
+        assert_eq!(raised["interval_seconds"], 5, "{raised}");
     });
 }
 

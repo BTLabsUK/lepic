@@ -243,14 +243,15 @@ fn is_self_half(details: &TransactionDetails) -> bool {
 }
 
 /// The payments whose `needed`-th confirmation came since the tip of the last call, oldest
-/// first, and keeps the tip. The first call, and one after the tip went back, finds none.
+/// first, and keeps the tip. The first call finds none; a tip below the kept one finds none and
+/// leaves it, so a reorg reports no payment twice.
 pub(in super::super) async fn reached<H: Host>(
     service: &Service<'_, H>,
     needed: u64,
 ) -> Result<Vec<Payment>, CliError> {
     let checked = setting(service, CONFIRMED_TIP)?.and_then(|text| text.parse::<u64>().ok());
     let tip = known_tip(service)?;
-    if tip.is_none() || tip == checked {
+    if tip.is_none() || tip <= checked {
         return Ok(Vec::new());
     }
     let book = Book::load(service).await?;
@@ -272,7 +273,8 @@ pub(in super::super) async fn reached<H: Host>(
             reached.push(book.payment(service, details).await?);
         }
     }
-    put_setting(service, CONFIRMED_TIP, &tip.to_string())?;
+    let kept = checked.map_or(tip, |checked| checked.max(tip));
+    put_setting(service, CONFIRMED_TIP, &kept.to_string())?;
     Ok(reached)
 }
 

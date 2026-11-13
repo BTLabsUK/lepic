@@ -215,6 +215,26 @@ fn route(body: &mut CreateBody) -> Result<Route, Problem> {
     Ok(Route::Address(to.to_owned()))
 }
 
+/// [`route`], with the amount an epic1 link asks settled into the body as well.
+async fn settle<H: Host>(
+    service: &Service<'_, H>,
+    body: &mut CreateBody,
+    invoice: bool,
+) -> Result<Route, Problem> {
+    let route = route(body)?;
+    if let Route::Epic1(link) = &route {
+        if invoice {
+            return Err(Problem::invalid(
+                "/to",
+                "an invoice is not sent to an epic1 link",
+            ));
+        }
+        let (asked, _) = handed::epic1_terms(service, link).await?;
+        agree(&mut body.amount, asked.as_deref())?;
+    }
+    Ok(route)
+}
+
 /// Settles `amount` with what an `epic:` link `asked`: taken from the link when left out, else
 /// the same, or 400 at `/amount`.
 fn agree(amount: &mut String, asked: Option<&str>) -> Result<(), Problem> {
@@ -305,17 +325,7 @@ pub(in super::super) async fn create<H: Host>(
         }
         None => None,
     };
-    let route = route(&mut body)?;
-    if let Route::Epic1(link) = &route {
-        if invoice {
-            return Err(Problem::invalid(
-                "/to",
-                "an invoice is not sent to an epic1 link",
-            ));
-        }
-        let (asked, _) = handed::epic1_terms(service, link).await?;
-        agree(&mut body.amount, asked.as_deref())?;
-    }
+    let route = settle(service, &mut body, invoice).await?;
     if body.amount == MAX {
         return Err(Problem::invalid(
             "/amount",
@@ -603,8 +613,16 @@ pub(in super::super) async fn estimate<H: Host>(
     _context: &Context,
 ) -> Reply {
     request.require(Role::Read)?;
-    let (body, _) = CreateBody::read(&request)?;
-    body.is_invoice()?;
+    let (mut body, _) = CreateBody::read(&request)?;
+    let invoice = body.is_invoice()?;
+    // An `epic:` link may name the amount, as for a create.
+    if body
+        .to
+        .as_deref()
+        .is_some_and(|to| to.trim().starts_with("epic:"))
+    {
+        settle(service, &mut body, invoice).await?;
+    }
     let amount = if body.amount == MAX {
         None
     } else {

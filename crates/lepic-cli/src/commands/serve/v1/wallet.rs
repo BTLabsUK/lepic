@@ -399,18 +399,6 @@ pub(super) async fn boost<H: Host>(
         "node" => Poller::Node,
         _ => return Err(Problem::invalid("/poller", "poller: relays or node")),
     };
-    if body.duration_seconds == 0 {
-        return Err(Problem::invalid(
-            "/duration_seconds",
-            "duration_seconds: at least 1",
-        ));
-    }
-    if body.interval_seconds == 0 {
-        return Err(Problem::invalid(
-            "/interval_seconds",
-            "interval_seconds: at least 1",
-        ));
-    }
     let lease = service.held.wallet.boost(
         poller,
         Duration::from_secs(body.duration_seconds),

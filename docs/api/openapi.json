@@ -5354,13 +5354,13 @@
           },
           "duration_seconds": {
             "type": "integer",
-            "minimum": 1,
-            "description": "How long the boost lasts from now; at most 600."
+            "minimum": 0,
+            "description": "How long the boost lasts from now; at most 600, a longer one is cut to 600."
           },
           "interval_seconds": {
             "type": "integer",
-            "minimum": 1,
-            "description": "How often the poller runs meanwhile; at least 5."
+            "minimum": 0,
+            "description": "How often the poller runs meanwhile; at least 5, a shorter one is raised to 5."
           }
         },
         "required": [
@@ -5390,7 +5390,8 @@
             "description": "When the last boost of the poller ends, unless one is ended first."
           },
           "interval_seconds": {
-            "type": "integer"
+            "type": "integer",
+            "description": "The shortest interval the poller's boosts ask. The poller never runs slower than its base: 30 s for `relays`, 60 s for `node`."
           }
         },
         "required": [
@@ -5424,7 +5425,7 @@
           },
           "cursor": {
             "type": "integer",
-            "description": "The id of the last event delivered; 0 before the first."
+            "description": "The id of the last event delivered. A new `webhook_url` starts at the newest event in the log."
           },
           "attempts": {
             "type": "integer",
@@ -5437,7 +5438,7 @@
           },
           "last_error": {
             "type": "string",
-            "description": "Why the last attempt failed: a status, `timeout`, `connect`, `refused_address` or similar; never a body."
+            "description": "Why the last attempt failed, in a sentence: the receiver's status, a timeout, a refused address or a secret file it could not use. Never the receiver's body or the URL."
           }
         },
         "required": [

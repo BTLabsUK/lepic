@@ -94,28 +94,31 @@ pub(super) fn signature(
 pub(super) fn is_public(ip: IpAddr) -> bool {
     match ip.to_canonical() {
         IpAddr::V4(ip) => {
-            let [first, second, ..] = ip.octets();
-            !(ip.is_unspecified()
-                || ip.is_loopback()
+            let [first, second, third, _] = ip.octets();
+            !(ip.is_loopback()
                 || ip.is_private()
                 || ip.is_link_local()
-                || ip.is_broadcast()
                 || ip.is_multicast()
                 || ip.is_documentation()
                 || first == 0
+                || first >= 240
                 || (first == 100 && second & 0xc0 == 64)
+                || (first == 192 && second == 0 && third == 0)
                 || (first == 198 && second & 0xfe == 18))
         }
         IpAddr::V6(ip) => {
-            let first = ip.segments()[0];
-            let second = ip.segments()[1];
-            !(ip.is_unspecified()
-                || ip.is_loopback()
+            let segments = ip.segments();
+            let [first, second, ..] = segments;
+            // ::/96 holds the unspecified and loopback addresses and the IPv4-compatible ones.
+            !(segments[..6] == [0; 6]
                 || ip.is_multicast()
                 || first & 0xfe00 == 0xfc00
                 || first & 0xffc0 == 0xfe80
+                || first & 0xffc0 == 0xfec0
+                || first == 0x2002
                 || (first == 0x0064 && second == 0xff9b)
-                || (first == 0x2001 && second == 0x0db8))
+                || (first == 0x0100 && segments[1..4] == [0; 3])
+                || (first == 0x2001 && (second == 0 || second == 0x0db8)))
         }
     }
 }
@@ -338,6 +341,13 @@ mod tests {
             "::ffff:127.0.0.1",
             "::ffff:10.0.0.1",
             "::ffff:169.254.169.254",
+            "240.0.0.1",
+            "192.0.0.8",
+            "::10.0.0.1",
+            "2002:a00:1::1",
+            "2001:0:4136:e378::1",
+            "fec0::1",
+            "100::1",
         ] {
             assert!(!is_public(ip.parse::<IpAddr>().unwrap()), "{ip}");
         }

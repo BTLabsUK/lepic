@@ -104,6 +104,9 @@ struct State {
     disabled: bool,
     /// Rises with each change a handler makes.
     epoch: u64,
+    /// Drawn with each new state, so `webhook-id` differs between wallets and stores whose
+    /// event ids are the same.
+    source: u64,
 }
 
 impl State {
@@ -129,6 +132,7 @@ fn load<N: NodeApi + 'static>(opened: &Opened<N>, url: &str) -> Result<State, Cl
         last_error: None,
         disabled: false,
         epoch: old.map_or(0, |old| old.epoch.saturating_add(1)),
+        source: u64::from_le_bytes(crate::commands::random_bytes()?),
     };
     save(opened, &state)?;
     Ok(state)
@@ -212,7 +216,7 @@ impl<N: NodeApi + 'static> Driver<'_, N> {
         }
         self.last = Some(Instant::now());
         let id = event.id;
-        let outcome = self.send(event).await;
+        let outcome = self.send(state.source, event).await;
         // No wait since the read: the state still has the epoch of this send, or a handler changed it.
         let mut fresh = load(self.opened, &self.config.url)?;
         if fresh.epoch != state.epoch {
@@ -262,9 +266,9 @@ impl<N: NodeApi + 'static> Driver<'_, N> {
     }
 
     /// One request for `event`: the secrets are read now, the signature is made for this attempt.
-    async fn send(&self, event: model::Event) -> Result<(), String> {
+    async fn send(&self, source: u64, event: model::Event) -> Result<(), String> {
         let secrets = send::secrets(&self.config.secret_file)?;
-        let id = event.id.to_string();
+        let id = format!("evt_{source:016x}_{}", event.id);
         let body = payload(event).map_err(|_| "the event could not be encoded".to_owned())?;
         let timestamp = self.opened.wallet.ports().clock.now().as_second();
         let headers = [
@@ -485,7 +489,10 @@ mod tests {
         fn ids(&self) -> Vec<String> {
             self.seen()
                 .iter()
-                .map(|seen| seen.header("webhook-id").to_owned())
+                .map(|seen| {
+                    let id = seen.header("webhook-id");
+                    id.rsplit('_').next().unwrap_or(id).to_owned()
+                })
                 .collect()
         }
     }
@@ -713,11 +720,16 @@ mod tests {
             );
             assert_eq!(body["data"]["from_state"], "awaiting_answer");
             assert_eq!(body["data"]["to_state"], "paid");
+            let id = first.header("webhook-id");
+            assert!(
+                id.starts_with("evt_") && id.len() == "evt_".len() + 16 + 2,
+                "{id}"
+            );
             let secrets = send::secrets(&f.config.secret_file).unwrap();
             let timestamp: i64 = first.header("webhook-timestamp").parse().unwrap();
             assert_eq!(
                 first.header("webhook-signature"),
-                send::signature(&secrets, "1", timestamp, &first.body)
+                send::signature(&secrets, first.header("webhook-id"), timestamp, &first.body)
             );
         });
     }

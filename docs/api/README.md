@@ -414,7 +414,9 @@ Serve does not start when a key is wrong. A new `webhook_url` starts at the newe
 Each request is one event, the body is the `GET /events` item, and the headers follow
 [Standard Webhooks](https://www.standardwebhooks.com/):
 
-- `webhook-id`: the event id. A retry sends the same id; drop a duplicate by it.
+- `webhook-id`: `evt_<16 hex digits>_<event id>`. The hex part is drawn for each wallet store and
+  `webhook_url`, so two wallets, or one restored, never send the same id. A retry sends the same
+  id; drop a duplicate by it.
 - `webhook-timestamp`: unix seconds of this attempt.
 - `webhook-signature`: `v1,<base64>` for each secret in the file, space-separated. The value is
   the HMAC-SHA256 of `{webhook-id}.{webhook-timestamp}.{body}` with the secret's bytes, which are
@@ -445,8 +447,10 @@ each ±20 %, then stops with the state `disabled`. The cursor and the schedule a
 store, so a restart carries on. A cursor the log has pruned gets an `events.skipped` event first.
 
 Serve resolves the host before each attempt and connects only to a public address: not loopback,
-private, link-local, shared (100.64.0.0/10), benchmarking (198.18.0.0/15), NAT64 (64:ff9b::/32),
-multicast, unspecified, documentation or broadcast. It follows no redirect and uses no proxy.
+private, link-local, shared (100.64.0.0/10), benchmarking (198.18.0.0/15), IETF protocol
+(192.0.0.0/24), reserved (240.0.0.0/4), NAT64 (64:ff9b::/32), 6to4 (2002::/16), Teredo
+(2001::/32), IPv4-compatible (::/96), site-local (fec0::/10), discard (100::/64), multicast,
+unspecified, documentation or broadcast. It follows no redirect and uses no proxy.
 
 `GET /webhook` answers the `url`, `types`, `state` (`active`, `retrying` or `disabled`), `cursor`,
 `attempts`, `next_attempt_at` and `last_error`. `POST /webhook/resume` takes an optional
