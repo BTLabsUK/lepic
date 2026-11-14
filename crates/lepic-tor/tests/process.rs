@@ -29,7 +29,7 @@ use lepic_tor::{
 use sha2::Sha256;
 use tempfile::TempDir;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::net::TcpListener;
+use tokio::net::{TcpListener, TcpSocket};
 
 const COOKIE: [u8; 32] = [7; 32];
 const SEED: [u8; 32] = [9; 32];
@@ -450,9 +450,11 @@ async fn a_listener_that_does_not_answer_keeps_tor_for_sending() {
         ..HONEST
     })
     .await;
-    let closed = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    // Bound but not listening: connects are refused, and no other test can take the port
+    // while `closed` lives.
+    let closed = TcpSocket::new_v4().unwrap();
+    closed.bind("127.0.0.1:0".parse().unwrap()).unwrap();
     let port = closed.local_addr().unwrap().port();
-    drop(closed);
     let tor = TorProcess::start(fake.settings(quick()));
     tor.wait_bootstrapped().await.unwrap();
     let failure = tor.publish_onion(&SEED, port).await.unwrap_err();
