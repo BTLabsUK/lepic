@@ -187,9 +187,31 @@ impl Link {
         self.pending.values().map(|pending| pending.deadline).min()
     }
 
+    /// Forgets mailbox `index` on this socket: its mail in flight and its attachment. Returns
+    /// whether the relay had it attached here.
     pub(super) fn forget_mailbox(&mut self, index: usize) -> bool {
         self.inflight.retain(|_, owner| *owner != index);
         self.attached.remove(&index)
+    }
+
+    /// Asks the relay to stop delivering `mailboxes` (bare keys) on this socket.
+    pub(super) async fn detach(&mut self, mailboxes: Vec<String>) -> Result<(), Lost> {
+        self.send(
+            |reference| MuxClientFrame::Detach {
+                reference,
+                mailboxes,
+            },
+            PendingKind::Detach,
+        )
+        .await
+    }
+
+    /// Forgets mailbox `index` and detaches its key `key` when the relay had it attached here.
+    pub(super) async fn drop_mailbox(&mut self, index: usize, key: String) -> Result<(), Lost> {
+        if self.forget_mailbox(index) {
+            self.detach(vec![key]).await?;
+        }
+        Ok(())
     }
 }
 

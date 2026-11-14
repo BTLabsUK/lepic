@@ -11,7 +11,7 @@ use crate::client::ClientError;
 use crate::mailbox::{Handled, MailboxMessage, RelayedMail, open_message};
 use crate::mux_frame::{
     AttachedFrame, DetachReason, DetachedFrame, ErrorFrame, MAX_ATTACH_PER_FRAME, MailFrame,
-    MuxClientFrame, MuxCode, MuxRelayFrame, OkFrame,
+    MuxCode, MuxRelayFrame, OkFrame,
 };
 use crate::session::deadline_after;
 
@@ -107,10 +107,7 @@ impl Manager {
                     waiting: entry.waiting.unwrap_or_default(),
                 });
             } else if !resumed {
-                let code = entry
-                    .code
-                    .clone()
-                    .unwrap_or_else(|| MuxCode::Other("unspecified".to_owned()));
+                let code = or_unspecified(entry.code.clone());
                 warn!(mailbox = index, code = %code, "epicbox relay refused a mailbox");
                 self.emit(MuxEvent::Refused {
                     mailbox: index,
@@ -126,15 +123,7 @@ impl Manager {
             self.attach(link, missing).await?;
         }
         for chunk in unwanted.chunks(MAX_ATTACH_PER_FRAME) {
-            let mailboxes = chunk.to_vec();
-            link.send(
-                |reference| MuxClientFrame::Detach {
-                    reference,
-                    mailboxes,
-                },
-                PendingKind::Detach,
-            )
-            .await?;
+            link.detach(chunk.to_vec()).await?;
         }
         self.mark_ready(link);
         Ok(())
@@ -269,7 +258,7 @@ impl Manager {
                 if code == Some(MuxCode::RateLimited) {
                     return Err(Lost::RateLimited { retry_after });
                 }
-                let code = code.unwrap_or_else(|| MuxCode::Other("unspecified".to_owned()));
+                let code = or_unspecified(code);
                 for index in indexes {
                     self.emit(MuxEvent::Refused {
                         mailbox: index,
@@ -300,4 +289,9 @@ impl Manager {
             }
         }
     }
+}
+
+/// The code of a refusal, or `unspecified` when the relay gave none.
+fn or_unspecified(code: Option<MuxCode>) -> MuxCode {
+    code.unwrap_or_else(|| MuxCode::Other("unspecified".to_owned()))
 }

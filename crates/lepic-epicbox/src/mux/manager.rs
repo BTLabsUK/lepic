@@ -414,16 +414,7 @@ impl Manager {
                 Ok(done) => {
                     let _ = reply.send(Ok(done.claimed()));
                     for (index, key) in done.removed {
-                        if link.forget_mailbox(index) {
-                            link.send(
-                                |reference| MuxClientFrame::Detach {
-                                    reference,
-                                    mailboxes: vec![key],
-                                },
-                                PendingKind::Detach,
-                            )
-                            .await?;
-                        }
+                        link.drop_mailbox(index, key).await?;
                     }
                     // A resume in flight attaches what it missed once it is answered.
                     if !link.resume_pending && !done.added.is_empty() {
@@ -460,17 +451,8 @@ impl Manager {
             Command::Remove { key, reply } => {
                 let removed = self.remove_claimed(&key);
                 let _ = reply.send(removed.is_some());
-                if let Some(index) = removed
-                    && link.forget_mailbox(index)
-                {
-                    link.send(
-                        |reference| MuxClientFrame::Detach {
-                            reference,
-                            mailboxes: vec![key],
-                        },
-                        PendingKind::Detach,
-                    )
-                    .await?;
+                if let Some(index) = removed {
+                    link.drop_mailbox(index, key).await?;
                 }
             }
         }
