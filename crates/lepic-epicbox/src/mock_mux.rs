@@ -93,6 +93,7 @@ struct State {
     rate_limited: Option<(u32, u64)>,
     received: Vec<Value>,
     sockets_made: u64,
+    pings: u64,
     signatures_checked: u64,
     resumes_accepted: u64,
     acked: Vec<String>,
@@ -119,6 +120,7 @@ impl MuxMockRelay {
                     rate_limited: None,
                     received: Vec::new(),
                     sockets_made: 0,
+                    pings: 0,
                     signatures_checked: 0,
                     resumes_accepted: 0,
                     acked: Vec::new(),
@@ -247,6 +249,11 @@ impl MuxMockRelay {
         self.lock().sockets_made
     }
 
+    /// WebSocket pings the relay received, ever.
+    pub fn pings_received(&self) -> u64 {
+        self.lock().pings
+    }
+
     /// Sockets open now.
     pub fn sockets_open(&self) -> usize {
         self.lock().sockets.len()
@@ -344,7 +351,10 @@ impl MuxMockRelay {
                     Some(Ok(Message::Text(text))) => {
                         self.update(|state| state.handle(id, self.inner.network, text.as_str()));
                     }
-                    Some(Ok(Message::Ping(_) | Message::Pong(_) | Message::Binary(_) | Message::Frame(_))) => {}
+                    Some(Ok(Message::Ping(_))) => {
+                        self.update(|state| state.pings = state.pings.saturating_add(1));
+                    }
+                    Some(Ok(Message::Pong(_) | Message::Binary(_) | Message::Frame(_))) => {}
                     Some(Ok(Message::Close(_)) | Err(_)) | None => break,
                 },
             }

@@ -146,6 +146,15 @@ keeps plain 3.0.0.
   (`Connecting`, `Attached`, `Waiting`, `NotOffered`, `Stopped`), `events()` a `broadcast` of
   `MuxEvent`, and `counters()` gives exact `MuxCounters` (sockets, signatures, attaches, resumes,
   mails, acks, holds, stall reconnects). Logs hold no tokens, keys or message text.
+- Queued mode: `MuxSession::start_queued(settings, connector, identities, options)` opens each
+  mail and queues it instead of calling a handler, so the session loop never waits on the
+  consumer. The consumer calls `take(&[mailbox, ...])` (never waits; oldest first), waits on the
+  `queued()` watch channel, and answers every message with `settle(id, Handled)`: `Stored`
+  acknowledges, `Later` holds. Until it settles, a message counts against the relay's in-flight
+  limit (32 per socket), so a consumer that stops settling stops new mail. Unsettled mail is
+  forgotten when the socket drops and the relay offers it again. `set_mailboxes(identities)` makes
+  the set exactly that list: it attaches what is new, detaches what is gone, and signs only for
+  the new ones.
 
 With feature `mock-relay`, `mock_mux::MuxMockRelay` is an in-process mux/1 relay with knobs to
 refuse the extension, send a bad challenge, stall pushes, rate limit attaches, drop sockets,
@@ -176,7 +185,7 @@ certificate.
 | `Subscription`, `Mode`, `ConnectionState`, `Rejection`, `RejectionReason`, `InboxCounters`, `Disconnect` | Listening and draining |
 | `Prefilter`, `Admission` | Dropping unknown senders before opening |
 | `MailboxClient`, `MailboxHandler`, `MailboxMessage`, `MailboxContent`, `Handled`, `DrainLimits`, `DrainReport` | Other mailboxes |
-| `MuxSession`, `MuxOptions`, `MuxState`, `MuxEvent`, `MuxCounters`, `MuxError`, `MuxCode`, `MuxLimits` | The optional mux/1 session |
+| `MuxSession`, `MuxOptions`, `MuxState`, `MuxEvent`, `MuxCounters`, `MuxError`, `MuxCode`, `MuxLimits` | The optional mux/1 session (`start`, `start_queued`, `take`, `settle`, `set_mailboxes`) |
 | `RelayEndpoint`, `Security`, `Connector`, `TcpConnector`, `UntrustedHosts`, `RelayStream` | Connections |
 | `tunnel` module: `Tunnel`, `TunnelConnector`, `OnionRoutes`, `OnionRoute`, `parse_discovery` | Relays through tor |
 | `TRANSPORT_ID` | `"epicbox"` |

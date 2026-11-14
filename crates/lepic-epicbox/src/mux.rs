@@ -232,6 +232,31 @@ struct Shared {
     counters: CounterCells,
     state: watch::Sender<MuxState>,
     events: broadcast::Sender<MuxEvent>,
+    /// Opened mail of a queued session, in arrival order, until the consumer takes it.
+    queue: Mutex<VecDeque<MailboxMessage>>,
+    /// Counts the mails queued so far. A consumer waits for it to change.
+    queued: watch::Sender<u64>,
+}
+
+impl Shared {
+    fn queue(&self) -> std::sync::MutexGuard<'_, VecDeque<MailboxMessage>> {
+        self.queue.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    fn push(&self, message: MailboxMessage) {
+        self.queue().push_back(message);
+        self.queued
+            .send_modify(|count| *count = count.saturating_add(1));
+    }
+
+    /// Drops the queued mail of one mailbox, or of all when `mailbox` is `None`.
+    fn purge(&self, mailbox: Option<usize>) {
+        let mut queue = self.queue();
+        match mailbox {
+            Some(index) => queue.retain(|message| message.mailbox() != index),
+            None => queue.clear(),
+        }
+    }
 }
 
 enum Command {
@@ -243,6 +268,22 @@ enum Command {
         key: String,
         reply: oneshot::Sender<bool>,
     },
+    Set {
+        identities: Vec<Identity>,
+        reply: oneshot::Sender<Result<Vec<usize>, MuxError>>,
+    },
+    Settle {
+        id: RelayMessageId,
+        handled: Handled,
+    },
+}
+
+/// Where the opened mail of a session goes.
+enum Delivery {
+    /// To a handler, one message at a time, on the session's own task.
+    Inline(Mutex<Box<dyn MailboxHandler>>),
+    /// To the session's queue. The consumer settles each message.
+    Queued,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -285,6 +326,39 @@ impl MuxSession {
         handler: impl MailboxHandler + 'static,
         options: MuxOptions,
     ) -> Result<Self, MuxError> {
+        Self::launch(
+            settings,
+            connector,
+            identities,
+            Delivery::Inline(Mutex::new(Box::new(handler))),
+            options,
+        )
+    }
+
+    /// Starts a session that queues the mail it opens instead of handling it. The consumer
+    /// calls [`MuxSession::take`], and then [`MuxSession::settle`] for every message: until it
+    /// does, the message counts against the relay's in-flight limit, so a consumer that stops
+    /// settling stops new mail, which is the backpressure meant. The session loop never waits
+    /// for the consumer, so pings and the relay's frames keep flowing.
+    ///
+    /// Mail not settled when the socket drops is forgotten here, and the relay offers it again.
+    /// A message settled as stored is acknowledged again if the relay redelivers it.
+    pub fn start_queued(
+        settings: ClientSettings,
+        connector: Arc<dyn Connector>,
+        identities: Vec<Identity>,
+        options: MuxOptions,
+    ) -> Result<Self, MuxError> {
+        Self::launch(settings, connector, identities, Delivery::Queued, options)
+    }
+
+    fn launch(
+        settings: ClientSettings,
+        connector: Arc<dyn Connector>,
+        identities: Vec<Identity>,
+        delivery: Delivery,
+        options: MuxOptions,
+    ) -> Result<Self, MuxError> {
         let runtime = Handle::try_current().map_err(|_| MuxError::NoRuntime)?;
         if identities.len() > MAX_MAILBOXES_PER_SOCKET {
             return Err(MuxError::TooManyMailboxes {
@@ -295,10 +369,13 @@ impl MuxSession {
         let (commands, receiver) = mpsc::unbounded_channel();
         let (state, _) = watch::channel(MuxState::Connecting { attempt: 1 });
         let (events, _) = broadcast::channel(EVENT_BACKLOG);
+        let (queued, _) = watch::channel(0);
         let shared = Arc::new(Shared {
             counters: CounterCells::default(),
             state,
             events,
+            queue: Mutex::new(VecDeque::new()),
+            queued,
         });
         let cancel = CancelToken::new();
         let relay = settings.endpoint.domain().to_string();
@@ -307,7 +384,7 @@ impl MuxSession {
             settings,
             connector,
             options,
-            handler: Mutex::new(Box::new(handler)),
+            delivery,
             entries: BTreeMap::new(),
             keys: HashMap::new(),
             next_index: 0,
@@ -353,6 +430,54 @@ impl MuxSession {
         answer.await.map_err(|_| MuxError::Ended)
     }
 
+    /// Makes the session's mailboxes exactly `identities`: attaches what is new, detaches what is
+    /// gone and keeps the rest, so only new mailboxes cost a signature. Returns the index of
+    /// every distinct identity, in the order given (a repeated identity is listed once). Refused when more
+    /// than [`MAX_MAILBOXES_PER_SOCKET`] distinct identities are given.
+    pub async fn set_mailboxes(&self, identities: Vec<Identity>) -> Result<Vec<usize>, MuxError> {
+        let (reply, answer) = oneshot::channel();
+        self.commands
+            .send(Command::Set { identities, reply })
+            .map_err(|_| MuxError::Ended)?;
+        answer.await.map_err(|_| MuxError::Ended)?
+    }
+
+    /// Takes the queued mail of `mailboxes` (indexes), oldest first. Never waits. Always empty
+    /// for a session started with [`MuxSession::start`].
+    pub fn take(&self, mailboxes: &[usize]) -> Vec<MailboxMessage> {
+        let mut queue = self.shared.queue();
+        let mut taken = Vec::new();
+        let mut kept = VecDeque::with_capacity(queue.len());
+        for message in queue.drain(..) {
+            if mailboxes.contains(&message.mailbox()) {
+                taken.push(message);
+            } else {
+                kept.push_back(message);
+            }
+        }
+        *queue = kept;
+        taken
+    }
+
+    /// A receiver that changes every time mail is queued. Keep it, call
+    /// [`MuxSession::take`], then wait for `changed()`: mail queued in between is not missed.
+    pub fn queued(&self) -> watch::Receiver<u64> {
+        self.shared.queued.subscribe()
+    }
+
+    /// Says what became of a taken message: [`Handled::Stored`] acknowledges it,
+    /// [`Handled::Later`] asks the relay to hold it back for [`MuxOptions::hold`]. Returns at
+    /// once; the frame goes out from the session's task. Settling a message the socket no
+    /// longer owns is harmless: the relay offers it again.
+    pub fn settle(&self, id: &RelayMessageId, handled: Handled) -> Result<(), MuxError> {
+        self.commands
+            .send(Command::Settle {
+                id: id.clone(),
+                handled,
+            })
+            .map_err(|_| MuxError::Ended)
+    }
+
     pub fn state(&self) -> watch::Receiver<MuxState> {
         self.shared.state.subscribe()
     }
@@ -380,6 +505,12 @@ impl MuxSession {
             Err(error) => Err(MuxError::Task(error)),
         }
     }
+}
+
+struct Reconciled {
+    indexes: Vec<usize>,
+    added: Vec<usize>,
+    removed: Vec<(usize, String)>,
 }
 
 struct Entry {
@@ -596,9 +727,9 @@ struct Manager {
     settings: ClientSettings,
     connector: Arc<dyn Connector>,
     options: MuxOptions,
-    /// In a `Mutex` only so that `&Manager` is `Send`: the handler is not `Sync`, and is always
-    /// reached through `&mut`.
-    handler: Mutex<Box<dyn MailboxHandler>>,
+    /// An inline handler is in a `Mutex` only so that `&Manager` is `Send`: it is not `Sync`, and
+    /// is always reached through `&mut`.
+    delivery: Delivery,
     /// The session's mailboxes by index. Indexes are never reused.
     entries: BTreeMap<usize, Entry>,
     keys: HashMap<String, usize>,
@@ -642,6 +773,7 @@ impl Manager {
     fn remove_entry(&mut self, key: &str) -> Option<usize> {
         let index = self.keys.remove(key)?;
         self.entries.remove(&index);
+        self.shared.purge(Some(index));
         Some(index)
     }
 
@@ -704,8 +836,66 @@ impl Manager {
         }
     }
 
+    /// Makes the entries match `identities`. Returns the index of each, what was added and what
+    /// was removed.
+    fn reconcile(&mut self, identities: Vec<Identity>) -> Result<Reconciled, MuxError> {
+        let mut wanted: Vec<(String, Identity)> = Vec::with_capacity(identities.len());
+        for identity in identities {
+            let key = identity.address().key_text();
+            if !wanted.iter().any(|(known, _)| *known == key) {
+                wanted.push((key, identity));
+            }
+        }
+        if wanted.len() > MAX_MAILBOXES_PER_SOCKET {
+            return Err(MuxError::TooManyMailboxes {
+                count: wanted.len(),
+                max: MAX_MAILBOXES_PER_SOCKET,
+            });
+        }
+        let gone: Vec<String> = self
+            .keys
+            .keys()
+            .filter(|key| !wanted.iter().any(|(wanted_key, _)| wanted_key == *key))
+            .cloned()
+            .collect();
+        let mut removed = Vec::with_capacity(gone.len());
+        for key in gone {
+            if let Some(index) = self.remove_entry(&key) {
+                removed.push((index, key));
+            }
+        }
+        let mut indexes = Vec::with_capacity(wanted.len());
+        let mut added = Vec::new();
+        for (key, identity) in wanted {
+            if let Some(&index) = self.keys.get(&key) {
+                indexes.push(index);
+            } else {
+                let index = self.add_entry(identity)?;
+                added.push(index);
+                indexes.push(index);
+            }
+        }
+        Ok(Reconciled {
+            indexes,
+            added,
+            removed,
+        })
+    }
+
+    /// An answer that was settled while no socket owned the message. A stored message is
+    /// remembered, so that the relay's redelivery is acknowledged without being handled again.
+    fn settle_offline(&mut self, id: &RelayMessageId, handled: Handled) {
+        if handled == Handled::Stored {
+            self.stored.insert(id.clone());
+        }
+    }
+
     fn apply_offline(&mut self, command: Command) {
         match command {
+            Command::Set { identities, reply } => {
+                let _ = reply.send(self.reconcile(identities).map(|done| done.indexes));
+            }
+            Command::Settle { id, handled } => self.settle_offline(&id, handled),
             Command::Add { identity, reply } => {
                 let _ = reply.send(self.add_entry(identity));
             }
@@ -753,6 +943,8 @@ impl Manager {
         let mut link = Link::new(connection, negotiated, self.settings.response_timeout);
         let result = self.run_link(&mut link).await;
         link.connection.close().await;
+        // The relay offers unsettled mail again on the next socket.
+        self.shared.purge(None);
         result.map(|()| End::Stopped)
     }
 
@@ -980,6 +1172,41 @@ impl Manager {
 
     async fn apply_online(&mut self, link: &mut Link, command: Command) -> Result<(), Lost> {
         match command {
+            Command::Set { identities, reply } => match self.reconcile(identities) {
+                Ok(done) => {
+                    let _ = reply.send(Ok(done.indexes));
+                    for (index, key) in done.removed {
+                        if link.forget_mailbox(index) {
+                            link.send(
+                                |reference| MuxClientFrame::Detach {
+                                    reference,
+                                    mailboxes: vec![key],
+                                },
+                                PendingKind::Detach,
+                            )
+                            .await?;
+                        }
+                    }
+                    // A resume in flight attaches what it missed once it is answered.
+                    if !link.resume_pending && !done.added.is_empty() {
+                        self.attach(link, done.added).await?;
+                    }
+                }
+                Err(error) => {
+                    let _ = reply.send(Err(error));
+                }
+            },
+            Command::Settle { id, handled } => {
+                if handled == Handled::Stored {
+                    self.stored.insert(id.clone());
+                }
+                if link.inflight.contains_key(&id) {
+                    match handled {
+                        Handled::Stored => self.queue_ack(link, id).await?,
+                        Handled::Later => self.hold(link, id).await?,
+                    }
+                }
+            }
             Command::Add { identity, reply } => match self.add_entry(identity) {
                 Ok(index) => {
                     let _ = reply.send(Ok(index));
@@ -1164,10 +1391,13 @@ impl Manager {
         let content = open_message(&entry.identity, &mail.from, &mail.str, &mail.signature);
         let message = MailboxMessage::new(index, id.clone(), content);
         link.inflight.insert(id.clone(), index);
-        let handler = self
-            .handler
-            .get_mut()
-            .unwrap_or_else(PoisonError::into_inner);
+        let handler = match &mut self.delivery {
+            Delivery::Inline(handler) => handler.get_mut().unwrap_or_else(PoisonError::into_inner),
+            Delivery::Queued => {
+                self.shared.push(message);
+                return Ok(());
+            }
+        };
         match handler.handle(message).await {
             Handled::Stored => {
                 self.stored.insert(id.clone());
@@ -1254,6 +1484,7 @@ impl Manager {
             DetachReason::Limit => {
                 if let Some(index) = index {
                     link.forget_mailbox(index);
+                    self.shared.purge(Some(index));
                     warn!(
                         mailbox = index,
                         "epicbox relay stopped delivering a mailbox: limit"

@@ -381,3 +381,180 @@ async fn stopping_ends_the_session() {
     assert!(state.borrow_and_update().has_ended());
     relay.wait_until(|relay| relay.sockets_open() == 0).await;
 }
+
+fn start_queued(relay: &MuxMockRelay, identities: Vec<Identity>) -> MuxSession {
+    start_queued_with(relay, identities, settings())
+}
+
+fn start_queued_with(
+    relay: &MuxMockRelay,
+    identities: Vec<Identity>,
+    settings: lepic_epicbox::ClientSettings,
+) -> MuxSession {
+    MuxSession::start_queued(settings, relay.connector(), identities, options()).unwrap()
+}
+
+/// Waits for the queue to hold something for `mailboxes`, then takes it.
+async fn take_some(session: &MuxSession, mailboxes: &[usize]) -> Vec<MailboxMessage> {
+    let mut queued = session.queued();
+    within(Duration::from_secs(5), async {
+        loop {
+            let taken = session.take(mailboxes);
+            if !taken.is_empty() {
+                return taken;
+            }
+            queued.changed().await.unwrap();
+        }
+    })
+    .await
+}
+
+fn text_of(message: &MailboxMessage) -> String {
+    match message.content() {
+        MailboxContent::Opened(received) => received.plaintext.expose_str().to_owned(),
+        _ => "unopened".to_owned(),
+    }
+}
+
+#[tokio::test]
+async fn queued_mail_is_opened_taken_and_acknowledged_when_settled() {
+    let relay = MuxMockRelay::new(Network::Mainnet);
+    let session = start_queued(&relay, vec![identity(ALICE), identity(BOB)]);
+    attached(&session).await;
+    let id = post(&relay, BOB, "hello bob");
+    let taken = take_some(&session, &[1]).await;
+    assert_eq!(taken.len(), 1);
+    assert_eq!(text_of(&taken[0]), "hello bob");
+    assert_eq!(taken[0].mailbox(), 1);
+    // Nothing is acknowledged before the consumer settles.
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert!(!relay.is_acked(&id));
+    assert!(session.take(&[0, 1]).is_empty());
+    session.settle(taken[0].msg_id(), Handled::Stored).unwrap();
+    relay.wait_until(|relay| relay.is_acked(&id)).await;
+    assert_eq!(session.counters().acks, 1);
+    assert_eq!(session.counters().holds, 0);
+}
+
+#[tokio::test]
+async fn queued_mail_settled_later_is_held() {
+    let relay = MuxMockRelay::new(Network::Mainnet);
+    let session = start_queued(&relay, vec![identity(ALICE)]);
+    attached(&session).await;
+    let id = post(&relay, ALICE, "not now");
+    let taken = take_some(&session, &[0]).await;
+    session.settle(taken[0].msg_id(), Handled::Later).unwrap();
+    relay.wait_until(|relay| !relay.holds(&id).is_empty()).await;
+    assert_eq!(relay.holds(&id), vec![2]);
+    assert!(!relay.is_acked(&id));
+    assert_eq!(session.counters().acks, 0);
+}
+
+#[tokio::test]
+async fn take_hands_out_only_the_mailboxes_asked_for_in_arrival_order() {
+    let relay = MuxMockRelay::new(Network::Mainnet);
+    let session = start_queued(&relay, vec![identity(ALICE), identity(BOB)]);
+    attached(&session).await;
+    post(&relay, ALICE, "first alice");
+    post(&relay, BOB, "first bob");
+    post(&relay, ALICE, "second alice");
+    until(|| session.counters().mails == 3).await;
+    let bob: Vec<String> = session.take(&[1]).iter().map(text_of).collect();
+    assert_eq!(bob, vec!["first bob".to_owned()]);
+    let alice: Vec<String> = session.take(&[0]).iter().map(text_of).collect();
+    assert_eq!(
+        alice,
+        vec!["first alice".to_owned(), "second alice".to_owned()]
+    );
+    assert!(session.take(&[0, 1, 2]).is_empty());
+}
+
+#[tokio::test]
+async fn unsettled_mail_is_forgotten_when_the_socket_drops_and_offered_again() {
+    let relay = MuxMockRelay::new(Network::Mainnet);
+    let session = start_queued(&relay, vec![identity(ALICE)]);
+    attached(&session).await;
+    let id = post(&relay, ALICE, "twice offered");
+    until(|| session.counters().mails == 1).await;
+    relay.drop_sockets();
+    until(|| session.counters().mails == 2).await;
+    // The first copy went with the first socket: exactly one copy is queued.
+    let taken = take_some(&session, &[0]).await;
+    assert_eq!(taken.len(), 1);
+    assert_eq!(taken[0].msg_id().as_str(), id);
+    assert!(session.take(&[0]).is_empty());
+    session.settle(taken[0].msg_id(), Handled::Stored).unwrap();
+    relay.wait_until(|relay| relay.is_acked(&id)).await;
+    assert_eq!(session.counters().sockets_opened, 2);
+}
+
+#[tokio::test]
+async fn set_mailboxes_signs_only_for_the_new_ones() {
+    let relay = MuxMockRelay::new(Network::Mainnet);
+    let session = start_queued(&relay, vec![identity(ALICE), identity(BOB)]);
+    attached(&session).await;
+    assert_eq!(session.counters().signatures, 2);
+    let indexes = session
+        .set_mailboxes(vec![identity(BOB), identity(CAROL)])
+        .await
+        .unwrap();
+    assert_eq!(indexes, vec![1, 2]);
+    let alice_key = address(ALICE).key_text();
+    let carol_key = address(CAROL).key_text();
+    relay
+        .wait_until(|relay| {
+            let attached = relay.attached();
+            attached.contains(&carol_key) && !attached.contains(&alice_key)
+        })
+        .await;
+    assert_eq!(session.counters().signatures, 3);
+    // The same set again changes nothing and costs nothing.
+    let again = session
+        .set_mailboxes(vec![identity(CAROL), identity(BOB), identity(BOB)])
+        .await
+        .unwrap();
+    assert_eq!(again, vec![2, 1]);
+    assert_eq!(session.counters().signatures, 3);
+    assert_eq!(session.counters().attaches, 2);
+    // A mailbox that came back is new again.
+    let back = session.set_mailboxes(vec![identity(ALICE)]).await.unwrap();
+    assert_eq!(back, vec![3]);
+    assert_eq!(session.counters().signatures, 4);
+    let id = post(&relay, CAROL, "to nobody");
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert!(!relay.is_acked(&id));
+    assert!(session.take(&[1, 2]).is_empty());
+}
+
+#[tokio::test]
+async fn set_mailboxes_refuses_more_than_256_and_changes_nothing() {
+    let relay = MuxMockRelay::new(Network::Mainnet);
+    let session = start_queued(&relay, vec![identity(ALICE)]);
+    attached(&session).await;
+    let too_many: Vec<Identity> = (0..257).map(numbered).collect();
+    assert!(matches!(
+        session.set_mailboxes(too_many).await,
+        Err(MuxError::TooManyMailboxes { count: 257, .. })
+    ));
+    assert_eq!(session.counters().signatures, 1);
+    let id = post(&relay, ALICE, "still here");
+    let taken = take_some(&session, &[0]).await;
+    assert_eq!(taken[0].msg_id().as_str(), id);
+}
+
+#[tokio::test]
+async fn the_session_keeps_pinging_while_mail_sits_unsettled() {
+    let relay = MuxMockRelay::new(Network::Mainnet);
+    let mut quick = settings();
+    quick.ping_interval = Duration::from_millis(60);
+    let session = start_queued_with(&relay, vec![identity(ALICE)], quick);
+    attached(&session).await;
+    post(&relay, ALICE, "one");
+    post(&relay, ALICE, "two");
+    until(|| session.counters().mails == 2).await;
+    // Several silence limits pass with the mail untaken and unsettled.
+    tokio::time::sleep(Duration::from_millis(600)).await;
+    assert!(relay.pings_received() >= 3, "pings seen by the relay");
+    assert_eq!(session.counters().sockets_opened, 1);
+    assert_eq!(session.take(&[0]).len(), 2);
+}
