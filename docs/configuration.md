@@ -124,7 +124,7 @@ code 3 and names the key.
 | Key | Type | Meaning |
 |---|---|---|
 | `[node] servers` | list of URLs | The nodes the wallet knows. The first is the one in use on mainnet |
-| `[epicbox] servers` | list of `host` or `host:port` | The Epicbox relays, reached over TLS. The first is the one in use; pairing words go to the first 3 |
+| `[epicbox] servers` | list of `host` or `host:port` | The Epicbox relays, reached over TLS. The first is the one in use; the first 3 are the meeting relays |
 | `[api] owner_tls` | `"ip:port"` | Where `lepic serve --owner-tls` listens. No default: `--owner-tls` refuses to start without it |
 
 An empty list is allowed when `node_url` or `epicbox_relay` names the server instead. Without
@@ -188,7 +188,7 @@ app's `app-config.toml`.
 | Key | Value | Meaning |
 |---|---|---|
 | `address_default` | `epicbox.epiccash.com` | The relay of an Epicbox address written without one |
-| `pairing_servers` | 3 | How many of the first `[epicbox] servers` take pairing words |
+| `pairing_servers` | 3 | How many of the first `[epicbox] servers` are meeting relays, which the wallet reaches as it reaches its own when it posts an answer to a payment link or an in-person code |
 | `connect_timeout_s` | 15 | The TCP, TLS and websocket handshakes together |
 | `response_timeout_s` | 15 | Each relay answer |
 | `ping_interval_s` | 25 | Websocket pings to the relay |

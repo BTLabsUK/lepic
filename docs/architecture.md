@@ -51,7 +51,7 @@ for the network type, but it does no I/O itself.
 | [`lepic-legacy-slate`](../crates/lepic-legacy-slate/README.md) | pure | V2 and V3 JSON slates as `epic-wallet` writes them, plain or with the LEPIC marker |
 | [`lepic-native-slate`](../crates/lepic-native-slate/README.md) | pure | The binary `lepic.v1` slate |
 | [`lepic-seal`](../crates/lepic-seal/README.md) | pure | Sealed envelopes, armor, contact cards, domain claims |
-| [`lepic-contact`](../crates/lepic-contact/README.md) | pure | Pairing messages, private pairing, key check, SAS, pairing words |
+| [`lepic-contact`](../crates/lepic-contact/README.md) | pure | Pairing messages, private pairing, key check, SAS |
 | [`lepic-node`](../crates/lepic-node/README.md) | I/O | Client for the Epic node's foreign JSON-RPC API, and a mock node |
 | [`lepic-store`](../crates/lepic-store/README.md) | I/O | Wallet database behind repository traits: SQLite, encrypted at rest, or in memory |
 | [`lepic-transport`](../crates/lepic-transport/README.md) | I/O | Transport traits, the method port, format policies, the file method |

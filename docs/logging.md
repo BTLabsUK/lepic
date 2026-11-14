@@ -82,7 +82,6 @@ new name to this table in the same change.
 | `cleared` | number of quarantined messages cleared by a retry |
 | `kind` | kind of a link envelope, or of a node's rejection |
 | `origin` | origin of a native endpoint |
-| `relays` | number of relays offered for pairing words |
 | `online` | whether an in-person code was made with a relay host |
 | `answer`, `same_code` | answer number of an in-person code, and whether an earlier answer had the same check code |
 | `amount` | value of a coinbase output; `debug` only |

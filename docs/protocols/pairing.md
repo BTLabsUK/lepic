@@ -1,15 +1,15 @@
 # Pairing
 
-Two LEPIC wallets pair once, by exchanging an invite link, a reply and a confirm. (Pairing by
-card and by spoken pairing words is no longer implemented.) Each side then holds keys made for that one contact and a
-mailbox on the pairing's home relay. Slates, invoices and notices between them travel sealed and
+Two LEPIC wallets pair once, by exchanging an invite link, a reply and a confirm. Pairing by
+card and by spoken pairing words is no longer implemented. Each side then holds keys made for
+that one contact and a mailbox on the pairing's home relay. Slates, invoices and notices between them travel sealed and
 signed. This guide shows the messages, the calls that make them and the limits in the code. The
 normative rules are in [RFC 0002](../rfcs/0002-contact-pairing.md), and its edge cases in
 [the cases file](../rfcs/0002-contact-pairing-cases.md).
 
 | Crate | Holds |
 |---|---|
-| [`lepic-contact`](../../crates/lepic-contact/README.md) | Invites, reply and confirm, private pairing, the key check, the SAS, pairing words; pure |
+| [`lepic-contact`](../../crates/lepic-contact/README.md) | Invites, reply and confirm, private pairing, the key check, the SAS; pure |
 | [`lepic-seal`](../../crates/lepic-seal/README.md) | The envelope, contact cards, domain claims; re-exported by `lepic-contact` |
 | `lepic-wallet-contacts` | `ContactBook`: pairing records, mailboxes, collecting, sealed sends, invoices, relay moves |
 
@@ -113,7 +113,7 @@ bytes.
 ### Pairing mailboxes
 
 The reply and confirm mailboxes are on the home relay. Their keys derive from a 16-byte seed
-(`code`, `rc`, or the seed from pairing words) by HKDF, and messages to them are posted from a
+(`code` or `rc`) by HKDF, and messages to them are posted from a
 second key of the same seed. The relay sees two unknown keys. These keys are forgotten when the
 pairing ends ([§8.1](../rfcs/0002-contact-pairing.md#81-pairing-mailboxes)).
 

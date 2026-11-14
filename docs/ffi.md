@@ -191,7 +191,7 @@ and Rust.
 
 Never out of Rust: seed bytes, private keys, blinding factors, nonces, vault keys, and the
 generated password of a PIN wallet, which Dart holds only as sealed text. LEPIC never stores or
-logs invite links or pairing words, and the `Debug` output of a config or a store reply leaves
+logs invite links, and the `Debug` output of a config or a store reply leaves
 its secrets out.
 
 ## Errors
@@ -268,7 +268,7 @@ Branch on `kind` or `code`, never on `message`. A code never changes meaning. Co
 | 62 | `ContactNotFound` | No paired contact with that id, or not in the needed state |
 | 63 | `PairingNotFound` | No pairing in progress with that id |
 | 64 | `ContactNotVerified` | The contact's words were not checked |
-| 65 | `PairingWordsUnavailable` | Pairing words need one of LEPIC's built-in relays |
+| 65 | `PairingWordsUnavailable` | No meeting relay is named. Pairing words, which used it, are removed |
 | 66 | `SealingOff` | Sealing is off for the contact |
 | 67 | `NoSlateToSend` | No slate to send, or no outbox entry with that id |
 | 68 | `SealedForAnotherWallet` | Sealed for another wallet, or signed by someone else |
