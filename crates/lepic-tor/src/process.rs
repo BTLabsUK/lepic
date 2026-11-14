@@ -648,6 +648,7 @@ async fn supervise(
                         let mut session = Session {
                             running: &running,
                             progress: &mut progress,
+                            state: &state,
                             network_off: &mut network_off,
                             timings,
                             socks: &socks,
@@ -767,6 +768,7 @@ enum Handled {
 struct Session<'a> {
     running: &'a Running,
     progress: &'a mut Progress,
+    state: &'a watch::Sender<TorState>,
     network_off: &'a mut bool,
     timings: TorTimings,
     socks: &'a SharedSocks,
@@ -792,6 +794,9 @@ impl Session<'_> {
                 )
                 .await;
                 drop(key);
+                // The caller reads the state once answered, so it must no longer show an
+                // earlier publish of the same onion as ready.
+                show(self.state, self.progress);
                 let _ = reply.send(result);
                 Handled::Done
             }
