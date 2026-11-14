@@ -50,9 +50,20 @@ Conventional Commit messages at release time.
 - FFI: `ContactView.awaiting` is true while something is under way with the contact: a message
   in its outbox, a payment not yet finished, or an invoice from it waiting for an answer. A
   host that checks contacts on a timer may check only these.
+- Shared mux/1 sessions: `Epicbox::pushed()` returns the `PushedSessions` of an `Epicbox`,
+  keyed by relay and group, with one owner per consumer (`contacts` and `payments`). A contacts
+  pass on a relay with an attached session takes the mail the session queued instead of opening
+  a socket, and `Epicbox::listen_via` runs the payments listener from a session with the same
+  receive, hold, requeue and acknowledge steps as a socket listener. A relay without mux/1 keeps
+  the 3.0.0 socket drain and `listen`. `PushedSessions::watch` reports session events.
+- FFI: push sessions with the relay for a host: `EpicWallet::start_listener_via`,
+  `contacts_push_start`, `contacts_push_stop`, `epicbox_sessions` and `watch_epicbox_sessions`.
+  A lock ends the sessions, and a relay switch carries the contacts setting to the new relay.
 
 ### Changed
 
+- The default `[epicbox] servers` list is `epicbox.btlabs.uk`, `epicbox.stackwallet.com`,
+  `epicbox.epicnet.us` and `epicbox.epiccash.com`, in that order.
 - `lepic serve` collects the relays every 30 seconds, was 60.
 - A direct node connection gives the name lookup and the connect a `connect_timeout` each, and
   tries the node's addresses as RFC 8305 (Happy Eyeballs) says: IPv6 and IPv4 in turn, 250 ms
@@ -60,7 +71,14 @@ Conventional Commit messages at release time.
 
 ### Fixed
 
-- A node switch no longer waits for a check of another node's height to end.
+- A node switch no longer waits for a check of another node's height to end. The FFI's
+  `node_tip_for` runs outside the gate of a switch of servers, so a probe of a dead node no longer
+  holds the switch and the calls after it.
+- An epic1 link written in upper case, as a QR code needs it, is read: the scheme, the prefix and
+  the keys in either case. `lepic serve` matches `epic:` text and the epic1 prefixes in either
+  case too.
+- An answer that carries none of the initiator's inputs and outputs, as one read from a `lepic.v1`
+  code does, is completed from the stored S1 or I1 before it is checked.
 - `lepic serve`: an invoice made with `ttl_blocks` carries it, so it shows `expires_at_height`
   and expires. An invoice to a contact carries its `message` in the slate, so both sides show it.
 - `lepic serve`: `POST /payments` pays an `epic:` link (classic to its address, epic1 as
@@ -158,6 +176,9 @@ Conventional Commit messages at release time.
 
 ### Fixed
 
+- A connect to an onion is tried again after a wait when tor answers that the onion is not found
+  yet or an introduction or rendezvous failed, within twice the connect timeout, as the first
+  circuit to a fresh onion can fail while its descriptor spreads. Each retry is logged.
 - An Epicbox address a chat app made into a link (`https://<address>@<relay>/`) is read as the
   Epicbox address, not as a wallet URL: `inspect`, `tx send --to`, a resend (which no longer allows
   plain HTTP for it) and the old wallet's history import. A wallet URL with a port, a path or no
