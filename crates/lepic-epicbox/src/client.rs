@@ -30,9 +30,13 @@ pub const TRANSPORT_ID: TransportId = TransportId::new("epicbox");
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum Awaiting {
+    /// The TCP, TLS and websocket handshakes.
     Connection,
+    /// The relay's challenge.
     Challenge,
+    /// The relay's answer to a request.
     Answer,
+    /// Any frame or pong on an open connection.
     Traffic,
 }
 
@@ -47,41 +51,59 @@ impl fmt::Display for Awaiting {
     }
 }
 
+/// Why a call on the Epicbox client failed.
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum ClientError {
+    /// The client was started outside a tokio runtime.
     #[error("no tokio runtime is running")]
     NoRuntime,
+    /// The secret key does not belong to the address it was given with.
     #[error("epicbox secret key does not belong to the address")]
     IdentityMismatch,
+    /// The relay could not be reached.
     #[error("could not connect to the relay")]
     Connect(#[source] io::Error),
+    /// The websocket failed after it opened.
     #[error("websocket failed")]
     Websocket(#[source] Box<tokio_tungstenite::tungstenite::Error>),
+    /// The relay closed the connection.
     #[error("relay closed the connection")]
     Closed,
+    /// The relay sent nothing in time.
     #[error("relay sent nothing in time while the client waited for {awaiting}")]
     Timeout { awaiting: Awaiting },
+    /// The relay refused a request.
     #[error("relay answered with error {kind:?}")]
     Relay { kind: RelayErrorKind },
+    /// The relay speaks a protocol older than this client supports.
     #[error("relay speaks protocol {version}, older than the supported baseline")]
     UnsupportedRelayVersion { version: ProtocolVersion },
+    /// A frame could not be built or read.
     #[error("relay frame could not be built")]
     Frame(#[source] FrameError),
+    /// A message could not be sealed.
     #[error("message could not be sealed")]
     Message(#[source] MessageError),
+    /// The destination is not an Epicbox address.
     #[error("destination is not an epicbox address")]
     Destination(#[source] AddressError),
+    /// The slate is binary; Epicbox carries only text.
     #[error("slate is binary, and epicbox carries only text")]
     BinarySlate,
+    /// The operating system's randomness is unavailable.
     #[error("operating system randomness is unavailable")]
     Randomness(#[source] getrandom::Error),
+    /// The client has no connection to the relay.
     #[error("client is not connected to the relay")]
     NotConnected,
+    /// The subscription has ended and takes no more calls.
     #[error("subscription has ended")]
     Ended,
+    /// The subscription's task panicked or was cancelled.
     #[error("subscription task failed")]
     Task(#[source] tokio::task::JoinError),
+    /// The message was not handed out by this subscription.
     #[error("message is not handed out by this subscription")]
     NotHandedOut,
 }
@@ -99,7 +121,9 @@ impl From<ClientError> for TransportError {
 /// dropped at once do not return at once.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Backoff {
+    /// The ceiling of the first delay.
     pub initial: Duration,
+    /// The largest ceiling.
     pub max: Duration,
 }
 
@@ -135,13 +159,15 @@ pub struct ListenOptions {
     pub held_rounds: Option<u32>,
     /// Leave when the relay has sent no challenge for this many of its challenge intervals. The
     /// interval is the gap the listener saw between two periodic challenges, at least 30
-    /// seconds, and 60 seconds until it has seen two. The greeting is not a periodic challenge. The new socket collects what waits.
+    /// seconds, and 60 seconds until it has seen two. The greeting is not a periodic challenge.
+    /// The new socket collects what waits.
     pub challenge_rounds: Option<u32>,
 }
 
 /// How the client talks to its relay.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ClientSettings {
+    /// The relay.
     pub endpoint: RelayEndpoint,
     /// Sent to the relay in `ClientDetails`.
     pub wallet_version: String,
@@ -152,6 +178,7 @@ pub struct ClientSettings {
     /// Interval of websocket pings. It must stay below the relay proxy's idle timeout. A
     /// connection that hears nothing for two intervals is treated as lost.
     pub ping_interval: Duration,
+    /// The delay between reconnect attempts.
     pub backoff: Backoff,
     /// The bound of a whole mailbox drain. Mailboxes not reached by then wait for the next one.
     pub drain_timeout: Duration,
@@ -160,10 +187,15 @@ pub struct ClientSettings {
 /// The caller's timeouts and reconnect backoff for a relay client.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ClientTimings {
+    /// See [`ClientSettings::connect_timeout`].
     pub connect_timeout: Duration,
+    /// See [`ClientSettings::response_timeout`].
     pub response_timeout: Duration,
+    /// See [`ClientSettings::ping_interval`].
     pub ping_interval: Duration,
+    /// See [`ClientSettings::backoff`].
     pub backoff: Backoff,
+    /// See [`ClientSettings::drain_timeout`].
     pub drain_timeout: Duration,
 }
 
@@ -173,6 +205,8 @@ pub struct ClientTimings {
 pub const RELAY_WALLET_VERSION: &str = "4.1.0";
 
 impl ClientSettings {
+    /// Settings for `endpoint` with the caller's `timings`, telling the relay
+    /// [`RELAY_WALLET_VERSION`].
     pub fn new(endpoint: RelayEndpoint, timings: ClientTimings) -> Self {
         Self {
             endpoint,
@@ -205,6 +239,7 @@ impl Identity {
         Ok(Self { address, secret })
     }
 
+    /// The identity's address.
     pub fn address(&self) -> &EpicboxAddress {
         &self.address
     }
@@ -222,6 +257,7 @@ impl fmt::Debug for Identity {
     }
 }
 
+/// What every connection of a client needs.
 pub(crate) struct ClientContext {
     pub(crate) settings: ClientSettings,
     pub(crate) identity: Identity,
@@ -240,6 +276,7 @@ pub struct EpicboxClient {
 }
 
 impl EpicboxClient {
+    /// A client of `identity` on the relay of `settings`, which connects through `connector`.
     pub fn new(
         settings: ClientSettings,
         identity: Identity,
@@ -270,10 +307,12 @@ impl EpicboxClient {
         }
     }
 
+    /// The address of the client's identity.
     pub fn address(&self) -> &EpicboxAddress {
         self.context.identity.address()
     }
 
+    /// The relay and timings this client uses.
     pub fn settings(&self) -> &ClientSettings {
         &self.context.settings
     }
