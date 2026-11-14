@@ -517,6 +517,7 @@ fn client_frame() -> impl Strategy<Value = ClientFrame> {
                 wallet_version,
                 wallet_mode,
                 protocol_version,
+                ext: None,
             }
         ),
         (wire_text(), wire_text(), wire_text()).prop_map(|(address, ver, signature)| {

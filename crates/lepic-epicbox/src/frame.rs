@@ -75,6 +75,8 @@ pub enum FrameError {
         "challenge is empty, longer than {MAX_CHALLENGE_LEN} bytes, not [A-Za-z0-9_-] or a transaction id"
     )]
     Challenge,
+    #[error("mux/1 challenge is not exactly 22 characters of [A-Za-z0-9_-]")]
+    MuxChallenge,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -93,6 +95,10 @@ pub enum ClientFrame {
         wallet_version: String,
         wallet_mode: WalletMode,
         protocol_version: String,
+        /// Extensions the wallet asks for. Left out of the frame when `None`, so a plain
+        /// 3.0.0 greeting keeps its exact bytes.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        ext: Option<Vec<String>>,
     },
     Subscribe {
         address: String,
@@ -123,6 +129,17 @@ impl ClientFrame {
             wallet_version: wallet_version.to_owned(),
             wallet_mode,
             protocol_version: PROTOCOL_VERSION.to_owned(),
+            ext: None,
+        }
+    }
+
+    /// As [`Self::client_details`], asking the relay for the mux/1 extension.
+    pub fn client_details_with_mux(wallet_version: &str, wallet_mode: WalletMode) -> Self {
+        Self::ClientDetails {
+            wallet_version: wallet_version.to_owned(),
+            wallet_mode,
+            protocol_version: PROTOCOL_VERSION.to_owned(),
+            ext: Some(vec![crate::mux_frame::MUX_EXTENSION.to_owned()]),
         }
     }
 
@@ -188,7 +205,7 @@ impl ClientFrame {
     }
 }
 
-fn signed(text: &str, key: &SecretKey) -> Result<String, FrameError> {
+pub(crate) fn signed(text: &str, key: &SecretKey) -> Result<String, FrameError> {
     sign_text(text, key)
         .map(|signature| signature.to_der_hex())
         .map_err(FrameError::Signature)
@@ -406,7 +423,7 @@ const KNOWN_CLIENT_TYPES: [&str; 6] = [
     "GetVersion",
 ];
 
-fn check_len(text: &str) -> Result<(), FrameError> {
+pub(crate) fn check_len(text: &str) -> Result<(), FrameError> {
     if text.len() > MAX_FRAME_LEN {
         return Err(FrameError::TooLong {
             actual: text.len(),
@@ -429,7 +446,7 @@ struct ErrorFields {
 
 /// Reads the fields of a frame whose type is known. The `type` key is ignored like any other
 /// unknown key, which serde skips without keeping it.
-fn fields<T: DeserializeOwned>(text: &str, type_name: String) -> Result<T, FrameError> {
+pub(crate) fn fields<T: DeserializeOwned>(text: &str, type_name: String) -> Result<T, FrameError> {
     serde_json::from_str(text).map_err(|error| FrameError::Fields {
         type_name,
         source: error.into(),
@@ -438,7 +455,7 @@ fn fields<T: DeserializeOwned>(text: &str, type_name: String) -> Result<T, Frame
 
 /// The frame's `type`, bounded, after checking that the whole text is one JSON object. Every
 /// other value is skipped without being kept, so the work is bounded by the text alone.
-fn probe_type(text: &str) -> Result<String, FrameError> {
+pub(crate) fn probe_type(text: &str) -> Result<String, FrameError> {
     match serde_json::from_str::<TypeProbe>(text).map_err(|error| FrameError::Json(error.into()))? {
         TypeProbe::Object(Some(TypeTag::Text(name))) => Ok(name),
         TypeProbe::Object(Some(TypeTag::NotText) | None) | TypeProbe::NotObject => {
@@ -599,7 +616,7 @@ impl<'de> Visitor<'de> for TagVisitor {
 /// `name` as safe to show in an error or a log: printable ASCII, other characters replaced by
 /// `?`, cut to [`MAX_FRAME_TYPE_LEN`] characters with `...` marking the cut. Known type names
 /// pass unchanged, and a changed name never equals one.
-fn bounded_type_name(name: &str) -> String {
+pub(crate) fn bounded_type_name(name: &str) -> String {
     let printable = |c: char| if c.is_ascii_graphic() { c } else { '?' };
     let mut chars = name.chars();
     let mut bounded: String = chars

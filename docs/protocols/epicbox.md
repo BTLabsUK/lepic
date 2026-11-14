@@ -226,6 +226,23 @@ An address that takes only known senders sets a `Prefilter` with
 decryption, and answers `Admission::Accept` or `Admission::Drop`. A dropped message is
 acknowledged and counted, and is not reported as a rejection.
 
+## mux/1
+
+mux/1 is an optional extension of relay protocol 3.0.0, defined in the relay's
+`docs/mux-1.md` in the `epicbox-relay` repository (draft 2). The
+client greets with `"ext":["mux/1"]` in `ClientDetails`, and a relay that offers it answers `Ok`
+with `ext`, a 22-character `challenge` and `limits`. A plain `Ok` means 3.0.0 only. One socket
+then carries up to 256 mailboxes, attached in `Attach` frames of at most 64 signed entries; the
+relay pushes `Mail`, and the client sends `Ack`, `Hold` and `Waiting` without signatures. A
+single-use `Resume` token restores a session after a reconnect, and a relay restart forgets it
+(`token_unknown`), which sends the client back to a signed attach. Without `ext`, the
+`ClientDetails` bytes are the same as before.
+
+`lepic_epicbox::MuxSession` implements the client side as a transport only: it hands each message
+to a `MailboxHandler` and stores nothing. LEPIC's client is optional and off unless the caller
+starts it; the wallet's listeners, drains and posts use plain 3.0.0 as before. Details are in the
+[crate README](../../crates/lepic-epicbox/README.md#mux1-sessions).
+
 ## Notices
 
 A notice is a short advisory message between LEPIC wallets about an invoice or a payment, sent

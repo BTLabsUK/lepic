@@ -13,7 +13,11 @@ mod frame;
 mod json;
 mod mailbox;
 #[cfg(feature = "mock-relay")]
+pub mod mock_mux;
+#[cfg(feature = "mock-relay")]
 pub mod mock_relay;
+mod mux;
+mod mux_frame;
 mod prefilter;
 mod session;
 #[cfg(any(test, feature = "mock-relay"))]
@@ -50,6 +54,11 @@ pub use mailbox::{
     DrainLimits, DrainReport, Handled, MAX_MAILBOXES_PER_DRAIN, MAX_MESSAGES_PER_MAILBOX,
     MailboxClient, MailboxContent, MailboxEnd, MailboxError, MailboxHandler, MailboxMessage,
     MailboxReport,
+};
+pub use mux::{MuxCounters, MuxError, MuxEvent, MuxOptions, MuxSession, MuxState};
+pub use mux_frame::{
+    MAX_ACK_IDS, MAX_ATTACH_PER_FRAME, MAX_HOLD_SECS, MAX_MAILBOXES_PER_SOCKET, MUX_EXTENSION,
+    MuxCode, MuxLimits,
 };
 pub use prefilter::{Admission, Prefilter};
 pub use session::{

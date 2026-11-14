@@ -461,9 +461,8 @@ impl Connection {
         self.last_heard.elapsed()
     }
 
-    /// The next protocol frame. Control frames, keepalive text, unknown types and frames that do
-    /// not parse are skipped, so none of them ends the session. Cancel-safe.
-    pub(crate) async fn receive(&mut self) -> Result<RelayFrame, ClientError> {
+    /// The next text frame. Control frames and binary frames are skipped. Cancel-safe.
+    pub(crate) async fn receive_text(&mut self) -> Result<String, ClientError> {
         loop {
             let message = self
                 .ws
@@ -479,8 +478,8 @@ impl Connection {
                     error
                 })?;
             self.last_heard = Instant::now();
-            let text = match message {
-                Message::Text(text) => text,
+            match message {
+                Message::Text(text) => return Ok(text.as_str().to_owned()),
                 Message::Close(frame) => {
                     match frame {
                         Some(frame) => info!(
@@ -491,13 +490,26 @@ impl Connection {
                     }
                     return Err(ClientError::Closed);
                 }
-                Message::Binary(_) => {
-                    debug!("epicbox binary frame ignored");
-                    continue;
-                }
-                Message::Ping(_) | Message::Pong(_) | Message::Frame(_) => continue,
-            };
-            match RelayFrame::from_json(text.as_str()) {
+                Message::Binary(_) => debug!("epicbox binary frame ignored"),
+                Message::Ping(_) | Message::Pong(_) | Message::Frame(_) => {}
+            }
+        }
+    }
+
+    /// Sends `text` as one text frame.
+    pub(crate) async fn send_text(&mut self, text: String) -> Result<(), ClientError> {
+        self.ws
+            .send(Message::text(text))
+            .await
+            .map_err(websocket_error)
+    }
+
+    /// The next protocol frame. Control frames, keepalive text, unknown types and frames that do
+    /// not parse are skipped, so none of them ends the session. Cancel-safe.
+    pub(crate) async fn receive(&mut self) -> Result<RelayFrame, ClientError> {
+        loop {
+            let text = self.receive_text().await?;
+            match RelayFrame::from_json(&text) {
                 Ok(RelayFrame::Keepalive) => debug!("epicbox keepalive ignored"),
                 Ok(RelayFrame::Unknown { .. }) => debug!("epicbox frame of unknown type ignored"),
                 Ok(frame) => return Ok(frame),

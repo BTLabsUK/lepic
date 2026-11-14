@@ -61,6 +61,14 @@ pub struct MailboxMessage {
 }
 
 impl MailboxMessage {
+    pub(crate) fn new(mailbox: usize, msg_id: RelayMessageId, content: MailboxContent) -> Self {
+        Self {
+            mailbox,
+            msg_id,
+            content,
+        }
+    }
+
     /// The position of the mailbox in the list given to [`MailboxClient::drain_once`].
     pub fn mailbox(&self) -> usize {
         self.mailbox
@@ -654,18 +662,22 @@ fn stopped(error: ClientError, overall: Instant) -> Stop {
 }
 
 fn open_slate(identity: &Identity, slate: &SlateFrame) -> MailboxContent {
-    match ReceivedMessage::open(
-        &slate.from,
-        &slate.str,
-        &slate.signature,
-        identity.address(),
-        identity.secret(),
-    ) {
+    open_message(identity, &slate.from, &slate.str, &slate.signature)
+}
+
+/// Checks the sender's signature over `text` and decrypts it for `identity`.
+pub(crate) fn open_message(
+    identity: &Identity,
+    from: &str,
+    text: &str,
+    signature: &str,
+) -> MailboxContent {
+    match ReceivedMessage::open(from, text, signature, identity.address(), identity.secret()) {
         Ok(received) => MailboxContent::Opened(received),
         Err(error) => {
             debug!(error = %ErrorChain(&error), "epicbox mailbox message does not open");
             MailboxContent::Unopenable {
-                sender: EpicboxAddress::parse(&slate.from, identity.address().network()).ok(),
+                sender: EpicboxAddress::parse(from, identity.address().network()).ok(),
                 reason: RejectionReason::from(&error),
             }
         }

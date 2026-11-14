@@ -17,7 +17,7 @@ Features:
 
 | Feature | Default | Effect |
 |---|---|---|
-| `mock-relay` | off | `mock_relay::MockRelay`, a relay with the public relay's behaviour, and `testing`, the settings the app ships |
+| `mock-relay` | off | `mock_relay::MockRelay`, a relay with the public relay's behaviour, `mock_mux::MuxMockRelay`, a mux/1 relay, and `testing`, the settings the app ships |
 
 What it does not do:
 
@@ -118,6 +118,39 @@ sender, so it never becomes a live listener, and subscribes as each mailbox in t
 `MAX_MAILBOXES_PER_DRAIN` (50) mailboxes and `MAX_MESSAGES_PER_MAILBOX` (32) messages each; the
 `DrainReport` holds one `MailboxReport` per mailbox.
 
+### mux/1 sessions
+
+`MuxSession` is an optional client for the relay's mux/1 extension
+(`docs/mux-1.md` in the `epicbox-relay` repository): one socket carries
+up to 256 mailboxes, the relay pushes each message when it is stored, and acknowledgements need no
+signature. Nothing starts it. A host that wants it calls `MuxSession::start`; every other path
+keeps plain 3.0.0.
+
+- `start(settings, connector, identities, handler, options)` greets with `ext: ["mux/1"]`. A plain
+  `Ok` means the relay does not offer it: the state becomes `MuxState::NotOffered` and the host
+  keeps its classic listeners. A challenge that is not 22 characters of `[A-Za-z0-9_-]` is refused.
+- The mailboxes are attached in `Attach` frames of at most 64 entries, each signed over the
+  socket's challenge. More than 256 mailboxes give `MuxError::TooManyMailboxes`.
+- A `Mail` goes to the `MailboxHandler` as a `MailboxMessage`. `Handled::Stored` queues an `Ack`
+  (batched over `MuxOptions::ack_window`, at most 256 ids per frame); `Handled::Later` sends
+  `Hold` for `MuxOptions::hold`. A relay id seen before is acknowledged again without calling the
+  handler.
+- After a drop the session reconnects with `Backoff` and sends `Resume` with the single-use token,
+  so no new signature is made. On `token_unknown` (a relay restart) it signs and attaches again.
+  `rate_limited` waits for `retry_after`. `Detached` with `replaced` removes that mailbox for
+  good; `shutdown` reconnects.
+- With `MuxOptions::waiting_every` set, the session sends `Waiting` probes. Two probes in a row
+  that find waiting mail with nothing in flight or held, and no mail between them, reconnect the
+  socket (a stalled push).
+- `attach` and `detach` change the mailbox set while it runs. `state()` is a `watch` channel
+  (`Connecting`, `Attached`, `Waiting`, `NotOffered`, `Stopped`), `events()` a `broadcast` of
+  `MuxEvent`, and `counters()` gives exact `MuxCounters` (sockets, signatures, attaches, resumes,
+  mails, acks, holds, stall reconnects). Logs hold no tokens, keys or message text.
+
+With feature `mock-relay`, `mock_mux::MuxMockRelay` is an in-process mux/1 relay with knobs to
+refuse the extension, send a bad challenge, stall pushes, rate limit attaches, drop sockets,
+restart (forget tokens) and send `Detached`.
+
 ### Connections and tunnels
 
 `RelayEndpoint` names the relay: host, port and `Security` (`Tls`, or `Plain` for a local
@@ -143,6 +176,7 @@ certificate.
 | `Subscription`, `Mode`, `ConnectionState`, `Rejection`, `RejectionReason`, `InboxCounters`, `Disconnect` | Listening and draining |
 | `Prefilter`, `Admission` | Dropping unknown senders before opening |
 | `MailboxClient`, `MailboxHandler`, `MailboxMessage`, `MailboxContent`, `Handled`, `DrainLimits`, `DrainReport` | Other mailboxes |
+| `MuxSession`, `MuxOptions`, `MuxState`, `MuxEvent`, `MuxCounters`, `MuxError`, `MuxCode`, `MuxLimits` | The optional mux/1 session |
 | `RelayEndpoint`, `Security`, `Connector`, `TcpConnector`, `UntrustedHosts`, `RelayStream` | Connections |
 | `tunnel` module: `Tunnel`, `TunnelConnector`, `OnionRoutes`, `OnionRoute`, `parse_discovery` | Relays through tor |
 | `TRANSPORT_ID` | `"epicbox"` |
