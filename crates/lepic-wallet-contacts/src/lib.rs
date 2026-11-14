@@ -203,20 +203,19 @@ pub enum RelayMode {
 
 /// What the pairing engine reaches relays with: the wallet's Epicbox transport, whose relay is
 /// the home relay of the invites this wallet makes and whose connector every drain and post
-/// uses, the meeting relays pairing words are posted to and looked for on, and whether relays
-/// may be reached at all.
+/// uses, the meeting relays, and whether relays may be reached at all.
 #[derive(Clone)]
 pub struct ContactRelays {
     pub epicbox: Epicbox,
-    /// The meeting relays, which the caller names with [`ContactRelays::with_meeting`]: the
-    /// only relays pairing words are posted to and looked for on. None until named.
+    /// The meeting relays, which the caller names with [`ContactRelays::with_meeting`]. The
+    /// wallet reaches them as it reaches its own relay; any other relay it reaches over TLS.
+    /// None until named.
     pub meeting: Vec<RelayEndpoint>,
     pub mode: RelayMode,
 }
 
 impl ContactRelays {
-    /// The relays for `epicbox`, with no meeting relays: enough for every call but pairing
-    /// words.
+    /// The relays for `epicbox`, with no meeting relays.
     pub fn new(epicbox: Epicbox, mode: RelayMode) -> Self {
         Self {
             epicbox,
@@ -370,7 +369,8 @@ pub enum ContactError {
     /// The relay could not be reached or broke off. Nothing that was not stored is lost.
     #[error("relay failed")]
     Relay(#[source] MailboxError),
-    /// No meeting relay was named to offer pairing words on.
+    /// No meeting relay was named: [`meeting_relays`] returns it for an empty list. The pairing
+    /// words it was named for are gone; the kind stays for the codes that carry it.
     #[error("pairing words are not available")]
     WordsUnavailable,
     /// Sealing is off for the contact, or its card says it cannot open sealed files.
@@ -415,7 +415,8 @@ pub enum ContactError {
     /// A key check is allowed once per pairing and per slot, within a day of the new pairing.
     #[error("no key check is allowed for these pairings now")]
     KeyCheckRefused,
-    /// No invite opened with these words on any meeting relay.
+    /// No longer produced: the pairing words it was named for are gone. The kind stays for the
+    /// codes that carry it.
     #[error("no invite found for these words")]
     WordsNotFound,
     /// The contact's card says it does not pay invoices.

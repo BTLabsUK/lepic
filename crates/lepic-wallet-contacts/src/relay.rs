@@ -70,8 +70,7 @@ pub(crate) fn parse_host(host: &str) -> Result<(Domain, Option<u16>), ContactErr
     Ok((domain, port))
 }
 
-/// How many meeting relays one call may name: each costs a connection while words are offered
-/// or looked for.
+/// How many meeting relays one call may name.
 pub const MAX_MEETING_RELAYS: usize = 16;
 
 /// The meeting relays `hosts` name, each `domain[:port]` reached over TLS, lowercased, without
@@ -79,7 +78,7 @@ pub const MAX_MEETING_RELAYS: usize = 16;
 ///
 /// Fails with [`ContactError::RelayAddress`] for a host that is not a domain with an optional
 /// non-zero port or for more than [`MAX_MEETING_RELAYS`] hosts, and with
-/// [`ContactError::WordsUnavailable`] for none.
+/// [`ContactError::WordsUnavailable`] for none (its name is older than its use here).
 pub fn meeting_relays<T: AsRef<str>>(hosts: &[T]) -> Result<Vec<RelayEndpoint>, ContactError> {
     if hosts.is_empty() {
         return Err(ContactError::WordsUnavailable);
