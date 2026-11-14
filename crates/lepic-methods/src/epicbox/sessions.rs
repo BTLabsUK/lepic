@@ -21,7 +21,10 @@ pub const PAYMENTS_OWNER: &str = "payments";
 /// How the contacts collect uses sessions: the group it joins and how the sessions are paced.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PushedConfig {
+    /// The group the contacts collect joins; sessions with the same group on the same relay are
+    /// shared.
     pub group: String,
+    /// How the sessions it starts are paced.
     pub options: MuxOptions,
 }
 
@@ -30,8 +33,11 @@ pub struct PushedConfig {
 pub struct SessionInfo {
     /// The relay as `domain:port`.
     pub relay: String,
+    /// The group the session was started for.
     pub group: String,
+    /// Where the session is now.
     pub state: MuxState,
+    /// What the session has done so far.
     pub counters: MuxCounters,
 }
 
@@ -43,6 +49,7 @@ pub enum SessionEvent {
     /// The session is in `state`. It is the first event of a session, and a new one follows each
     /// change; the last one has ended.
     State {
+        /// The relay as `domain:port`.
         relay: String,
         group: String,
         state: MuxState,
@@ -51,6 +58,8 @@ pub enum SessionEvent {
     MailQueued { relay: String, group: String },
 }
 
+/// The sessions of one [`super::Epicbox`], by relay and group, and the contacts collect's
+/// config. Clones of the method share one registry.
 pub struct PushedSessions {
     registry: Mutex<Registry>,
     /// Counts each time a session is added or removed.
@@ -66,12 +75,16 @@ impl Default for PushedSessions {
     }
 }
 
+/// A session is named by its relay (`domain:port`) and its group.
+type SessionKey = (String, String);
+
 #[derive(Default)]
 struct Registry {
     contacts: Option<PushedConfig>,
-    entries: BTreeMap<(String, String), Entry>,
+    entries: BTreeMap<SessionKey, Entry>,
 }
 
+/// A running session and the owners that keep it alive.
 struct Entry {
     session: Arc<MuxSession>,
     owners: BTreeSet<String>,
@@ -80,6 +93,15 @@ struct Entry {
 impl PushedSessions {
     fn registry(&self) -> MutexGuard<'_, Registry> {
         self.registry.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Every session with its key.
+    fn sessions(&self) -> Vec<(SessionKey, Arc<MuxSession>)> {
+        self.registry()
+            .entries
+            .iter()
+            .map(|(key, entry)| (key.clone(), Arc::clone(&entry.session)))
+            .collect()
     }
 
     fn changed(&self) {
@@ -93,6 +115,7 @@ impl PushedSessions {
         self.registry().contacts = config;
     }
 
+    /// The config the contacts collect reads pushed mail with, if it does.
     pub fn contacts(&self) -> Option<PushedConfig> {
         self.registry().contacts.clone()
     }
@@ -186,9 +209,7 @@ impl PushedSessions {
             })
             .collect()
     }
-}
 
-impl PushedSessions {
     /// Reports what the sessions do, for as long as the returned future is polled: each session
     /// with its state when it appears and at every change, and a note when mail was queued. A
     /// session that was removed reports `Stopped` and is not followed any more. Counters are not
@@ -197,47 +218,12 @@ impl PushedSessions {
         let report = Arc::new(report);
         let mut changes = self.changed.subscribe();
         let mut tasks = JoinSet::new();
-        let mut watched: BTreeMap<(String, String), (Weak<MuxSession>, AbortHandle)> =
-            BTreeMap::new();
+        let mut watched = Watched::new();
         loop {
             changes.borrow_and_update();
-            let current: Vec<((String, String), Arc<MuxSession>)> = self
-                .registry()
-                .entries
-                .iter()
-                .map(|(key, entry)| (key.clone(), Arc::clone(&entry.session)))
-                .collect();
-            watched.retain(|key, (session, handle)| {
-                let kept = current.iter().any(|(known, now)| {
-                    known == key && Weak::ptr_eq(session, &Arc::downgrade(now))
-                });
-                if !kept {
-                    // One that already ended said so itself.
-                    if !handle.is_finished() {
-                        report(SessionEvent::State {
-                            relay: key.0.clone(),
-                            group: key.1.clone(),
-                            state: MuxState::Stopped,
-                        });
-                    }
-                    handle.abort();
-                }
-                kept
-            });
-            for (key, session) in current {
-                if watched.contains_key(&key) {
-                    continue;
-                }
-                let (relay, group) = key.clone();
-                let handle = tasks.spawn(watch_one(
-                    relay,
-                    group,
-                    session.state(),
-                    session.queued(),
-                    Arc::clone(&report),
-                ));
-                watched.insert(key, (Arc::downgrade(&session), handle));
-            }
+            let current = self.sessions();
+            stop_watching_removed(&mut watched, &current, &*report);
+            watch_new(&mut watched, &mut tasks, current, &report);
             // The tasks that ended are not awaited; a finished task of a replaced session is
             // dropped when the join set is.
             while tasks.try_join_next().is_some() {}
@@ -248,6 +234,60 @@ impl PushedSessions {
     }
 }
 
+/// The sessions being followed, with the task that follows each. The weak handle tells a
+/// session apart from a later one started under the same key.
+type Watched = BTreeMap<SessionKey, (Weak<MuxSession>, AbortHandle)>;
+
+/// Aborts the task of each watched session that is no longer in `current` (removed, or replaced
+/// by another under the same key), and reports it as stopped unless it ended on its own.
+fn stop_watching_removed(
+    watched: &mut Watched,
+    current: &[(SessionKey, Arc<MuxSession>)],
+    report: &impl Fn(SessionEvent),
+) {
+    watched.retain(|key, (session, handle)| {
+        let kept = current
+            .iter()
+            .any(|(known, now)| known == key && Weak::ptr_eq(session, &Arc::downgrade(now)));
+        if !kept {
+            // One that already ended said so itself.
+            if !handle.is_finished() {
+                report(SessionEvent::State {
+                    relay: key.0.clone(),
+                    group: key.1.clone(),
+                    state: MuxState::Stopped,
+                });
+            }
+            handle.abort();
+        }
+        kept
+    });
+}
+
+/// Starts a task for each session of `current` that is not watched yet.
+fn watch_new(
+    watched: &mut Watched,
+    tasks: &mut JoinSet<()>,
+    current: Vec<(SessionKey, Arc<MuxSession>)>,
+    report: &Arc<impl Fn(SessionEvent) + Send + Sync + 'static>,
+) {
+    for (key, session) in current {
+        if watched.contains_key(&key) {
+            continue;
+        }
+        let (relay, group) = key.clone();
+        let handle = tasks.spawn(watch_one(
+            relay,
+            group,
+            session.state(),
+            session.queued(),
+            Arc::clone(report),
+        ));
+        watched.insert(key, (Arc::downgrade(&session), handle));
+    }
+}
+
+/// Reports the state changes and queued mail of one session until it ends.
 async fn watch_one(
     relay: String,
     group: String,
