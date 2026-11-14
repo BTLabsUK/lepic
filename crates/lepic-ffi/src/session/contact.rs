@@ -2,6 +2,8 @@
 //! Contact pairing, sealed slates and invoices between paired contacts (RFC 0002), over the
 //! engine's contact calls. Contacts belong to the default account, as invoices do.
 
+use std::sync::Arc;
+
 use lepic_primitives::amount::Amount;
 use lepic_store::{ContactId, ContactOutboxId, ContactOutboxState, ContactState, SealMode, TxId};
 use lepic_wallet::ReceiveRequest;
@@ -381,9 +383,29 @@ impl Session {
         Ok(ContactRelays::new(self.epicbox()?, relay_mode(mode)))
     }
 
+    /// Adds the mailboxes of `contact_id` to the claim of the contacts' push sessions in the
+    /// background, so the reply or confirm of a pairing made just now is pushed at once. It
+    /// waits for the contact turn, which a running collect holds for its whole pass, so the
+    /// pairing call returns first. A claim missed here is made by the next pass.
+    fn claim_pairing_soon(self: &Arc<Self>, relays: ContactRelays, contact_id: ContactId) {
+        if relays.epicbox.pushed().contacts().is_none() {
+            return;
+        }
+        let session = Arc::downgrade(self);
+        drop(self.runtime().boundary.handle.spawn(async move {
+            if let Some(session) = session.upgrade() {
+                session
+                    .engine
+                    .contact_book()
+                    .claim_pushed(&relays, contact_id)
+                    .await;
+            }
+        }));
+    }
+
     #[allow(clippy::too_many_arguments)] // One argument per choice of the Dart call.
     pub(crate) async fn pairing_invite(
-        &self,
+        self: &Arc<Self>,
         name: String,
         kind: ContactKind,
         expiry: InviteExpiry,
@@ -415,6 +437,7 @@ impl Session {
                 },
             )
             .await?;
+        self.claim_pairing_soon(relays, offer.contact_id);
         Ok(PairingInvite {
             contact_id: offer.contact_id.to_string(),
             link: offer.link,
@@ -430,7 +453,7 @@ impl Session {
     }
 
     pub(crate) async fn pairing_accept(
-        &self,
+        self: &Arc<Self>,
         link: String,
         name: String,
         by_hand: bool,
@@ -456,6 +479,7 @@ impl Session {
                 },
             )
             .await?;
+        self.claim_pairing_soon(relays, outcome.contact_id);
         Ok(PairingAnswer {
             contact_id: outcome.contact_id.to_string(),
             reply_link: outcome.reply_link,
@@ -464,36 +488,39 @@ impl Session {
     }
 
     pub(crate) async fn pairing_enter_link(
-        &self,
+        self: &Arc<Self>,
         text: &str,
         mode: ContactRelayMode,
     ) -> Result<PairingLinkResult, WalletError> {
         let text = bounded(text, MAX_LINK_TEXT, "link")?;
         let relays = self.contact_relays(mode)?;
-        Ok(
-            match self
-                .engine
-                .contact_book()
-                .pairing_enter_link(&relays, text)
-                .await?
-            {
-                LinkOutcome::Confirm { contact_id, link } => PairingLinkResult {
-                    outcome: PairingLinkOutcome::Confirm,
-                    contact_id: Some(contact_id.to_string()),
-                    link: Some(link),
-                },
-                LinkOutcome::Paired { contact_id } => PairingLinkResult {
-                    outcome: PairingLinkOutcome::Paired,
-                    contact_id: Some(contact_id.to_string()),
-                    link: None,
-                },
-                LinkOutcome::Ignored => PairingLinkResult {
-                    outcome: PairingLinkOutcome::Ignored,
-                    contact_id: None,
-                    link: None,
-                },
+        let outcome = self
+            .engine
+            .contact_book()
+            .pairing_enter_link(&relays, text)
+            .await?;
+        if let LinkOutcome::Confirm { contact_id, .. } | LinkOutcome::Paired { contact_id } =
+            &outcome
+        {
+            self.claim_pairing_soon(relays, *contact_id);
+        }
+        Ok(match outcome {
+            LinkOutcome::Confirm { contact_id, link } => PairingLinkResult {
+                outcome: PairingLinkOutcome::Confirm,
+                contact_id: Some(contact_id.to_string()),
+                link: Some(link),
             },
-        )
+            LinkOutcome::Paired { contact_id } => PairingLinkResult {
+                outcome: PairingLinkOutcome::Paired,
+                contact_id: Some(contact_id.to_string()),
+                link: None,
+            },
+            LinkOutcome::Ignored => PairingLinkResult {
+                outcome: PairingLinkOutcome::Ignored,
+                contact_id: None,
+                link: None,
+            },
+        })
     }
 
     pub(crate) async fn pairing_sas(
@@ -634,7 +661,7 @@ impl Session {
     }
 
     pub(crate) async fn pairing_standing_invite(
-        &self,
+        self: &Arc<Self>,
         name: String,
     ) -> Result<PairingInvite, WalletError> {
         let relays = self.contact_relays(ContactRelayMode::Online)?;
@@ -643,6 +670,7 @@ impl Session {
             .contact_book()
             .pairing_standing_invite(&relays, DEFAULT_ACCOUNT, &name)
             .await?;
+        self.claim_pairing_soon(relays, offer.contact_id);
         Ok(PairingInvite {
             contact_id: offer.contact_id.to_string(),
             link: offer.link,
@@ -651,7 +679,7 @@ impl Session {
     }
 
     pub(crate) async fn pairing_request_send(
-        &self,
+        self: &Arc<Self>,
         to_address: String,
         name: String,
         mode: ContactRelayMode,
@@ -666,6 +694,7 @@ impl Session {
             .contact_book()
             .pairing_request_send(&relays, DEFAULT_ACCOUNT, &to_address, &name)
             .await?;
+        self.claim_pairing_soon(relays, offer.contact_id);
         let id = offer.contact_id.to_string();
         self.pairings_pending()
             .await?

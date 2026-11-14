@@ -79,6 +79,11 @@ Conventional Commit messages at release time.
   case too.
 - An answer that carries none of the initiator's inputs and outputs, as one read from a `lepic.v1`
   code does, is completed from the stored S1 or I1 before it is checked.
+- FFI: when the contacts read pushed mail, a pairing made, answered or requested now adds its
+  reply or confirm mailbox to the push session at once, in the background, instead of at the
+  next full collect (up to 10 min while live). The pairing call does not wait for it.
+  `ContactBook::claim_pushed` is the engine side.
+- `lepic-methods` builds with only its `epicbox` feature on (it lacked tokio).
 - `lepic serve`: an invoice made with `ttl_blocks` carries it, so it shows `expires_at_height`
   and expires. An invoice to a contact carries its `message` in the slate, so both sides show it.
 - `lepic serve`: `POST /payments` pays an `epic:` link (classic to its address, epic1 as

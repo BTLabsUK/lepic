@@ -201,7 +201,7 @@ enum Job {
 }
 
 /// A mailbox a cycle reads: whose it is, the address, and the relay and onion it is on.
-struct Mailbox {
+pub(crate) struct Mailbox {
     job: Job,
     identity: Identity,
     relay: RelayEndpoint,
@@ -221,16 +221,16 @@ impl Mailbox {
 }
 
 /// The mailboxes of one cycle.
-struct Selection {
+pub(crate) struct Selection {
     /// This cycle's turn, at most [`MAX_MAILBOXES_PER_DRAIN`]: what a socket drain reads.
     turned: Vec<Mailbox>,
     /// Every mailbox the cycle could read, without the turn's limit: what a pushed session
     /// holds. Empty unless asked for.
-    all: Vec<Mailbox>,
+    pub(crate) all: Vec<Mailbox>,
 }
 
 /// `mailboxes` by the `domain:port` of their relay.
-fn group_by_relay(mailboxes: Vec<Mailbox>) -> BTreeMap<String, Vec<Mailbox>> {
+pub(crate) fn group_by_relay(mailboxes: Vec<Mailbox>) -> BTreeMap<String, Vec<Mailbox>> {
     let mut by_relay: BTreeMap<String, Vec<Mailbox>> = BTreeMap::new();
     for mailbox in mailboxes {
         by_relay
@@ -244,7 +244,7 @@ fn group_by_relay(mailboxes: Vec<Mailbox>) -> BTreeMap<String, Vec<Mailbox>> {
 /// Joins the session of `host` and claims all of `mailboxes` on it. `None` when the relay is
 /// read from a socket: the contacts do not read pushed mail, the session cannot be had, or it is
 /// not attached.
-async fn open_pushed(
+pub(crate) async fn open_pushed(
     relays: &ContactRelays,
     host: &str,
     mailboxes: &[Mailbox],
@@ -779,7 +779,7 @@ where
     /// across cycles, leaving out relays in backoff, at most [`MAX_MAILBOXES_PER_DRAIN`] in all.
     /// Pairings take what the contacts leave, and at least all but [`CONTACT_SHARE`]. With
     /// `only`, just those of the contacts it holds, without moving the turns.
-    async fn mailboxes_to_collect(
+    pub(crate) async fn mailboxes_to_collect(
         &self,
         relays: &ContactRelays,
         trigger: CollectTrigger,

@@ -16,8 +16,13 @@ use lepic_methods::epicbox::CONTACTS_OWNER;
 use lepic_primitives::error_chain::ErrorChain;
 use tracing::{debug, warn};
 
-use super::ContactRelays;
+use lepic_node::NodeApi;
+use lepic_store::ContactId;
+use lepic_wallet::ports::{SecretVault, StoreOpener};
+
+use super::collect::{CollectTrigger, group_by_relay, open_pushed};
 use super::relay::mailbox_client;
+use super::{ContactBook, ContactRelays};
 
 /// The mailboxes of one collect pass, read from the mail a shared mux/1 session queued.
 pub(crate) struct PushedMail {
@@ -122,6 +127,48 @@ impl PushedMail {
                 }
             })
             .collect()
+    }
+}
+
+impl<N, S, V> ContactBook<'_, N, S, V>
+where
+    N: NodeApi + 'static,
+    S: StoreOpener + 'static,
+    V: SecretVault + 'static,
+{
+    /// Adds the mailboxes of `contact_id`, its pairing in progress included, to the claim of
+    /// the contacts' push sessions, so a relay pushes the reply or confirm of a pairing made or
+    /// answered since the last pass instead of holding it until the next one. Nothing is read
+    /// and nothing fails: a mailbox left out is claimed by the next pass.
+    ///
+    /// Waits for the contact turn, so a pass that chose its mailboxes before this pairing was
+    /// stored cannot replace the claim afterwards. A running pass holds that turn until it ends,
+    /// so a host calls this after the pairing call has returned, off the caller's path.
+    pub async fn claim_pushed(&self, relays: &ContactRelays, contact_id: ContactId) {
+        if relays.epicbox.pushed().contacts().is_none() {
+            return;
+        }
+        let _turn = self.wallet.contact_turn().await;
+        let selection = match self
+            .mailboxes_to_collect(
+                relays,
+                CollectTrigger::Push,
+                Some(BTreeSet::from([contact_id])),
+                true,
+            )
+            .await
+        {
+            Ok(selection) => selection,
+            Err(error) => {
+                warn!(error = %ErrorChain(&error), "pairing mailboxes not claimed");
+                return;
+            }
+        };
+        for (host, mailboxes) in group_by_relay(selection.all) {
+            if open_pushed(relays, &host, &mailboxes, true).await.is_some() {
+                debug!(peer_relay = %host, count = mailboxes.len(), "pairing mailboxes claimed");
+            }
+        }
     }
 }
 

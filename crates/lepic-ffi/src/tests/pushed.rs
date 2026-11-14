@@ -11,8 +11,9 @@ use super::{Fixture, eventually, kind};
 use crate::api::error::WalletErrorKind;
 use crate::api::secret_store::AppSecretStore;
 use crate::api::types::{
-    EpicboxSessionEvent, EpicboxSessionEventKind, EpicboxSessionState, ListenVia, ListenerEvent,
-    ListenerEventKind, WalletConfig,
+    ContactKind, ContactRelayMode, EpicboxSessionEvent, EpicboxSessionEventKind,
+    EpicboxSessionState, InviteExpiry, ListenVia, ListenerEvent, ListenerEventKind, PairingClass,
+    WalletConfig,
 };
 use crate::node::NodeSecret;
 use crate::session::{SeedOrigin, Session};
@@ -76,6 +77,27 @@ impl Pushed {
             }
         });
         (heard, listening)
+    }
+
+    /// Makes an invite to pair, as the app does, and returns the contact id it names.
+    async fn invite(&self, name: &str) -> String {
+        self.invite_full(name).await.contact_id
+    }
+
+    /// Makes an invite to pair, as the app does.
+    async fn invite_full(&self, name: &str) -> crate::api::types::PairingInvite {
+        self.session
+            .pairing_invite(
+                name.to_owned(),
+                ContactKind::Person,
+                InviteExpiry::OneDay,
+                ContactRelayMode::Online,
+                None,
+                PairingClass::Contact,
+                None,
+            )
+            .await
+            .unwrap()
     }
 }
 
@@ -235,4 +257,95 @@ async fn a_lock_ends_the_sessions_and_the_contacts_setting() {
     assert!(epicbox.pushed().infos().is_empty());
     assert_eq!(epicbox.pushed().contacts(), None);
     assert!(eventually(|| pushed.relay.sockets_open() == 0).await);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_invite_claims_its_reply_mailbox_on_the_contacts_session_at_once() {
+    let pushed = Pushed::start().await;
+    pushed
+        .session
+        .contacts_push_start(via("contacts", None))
+        .unwrap();
+
+    pushed.invite("Anna").await;
+    assert!(
+        eventually(|| pushed.relay.attached().len() == 1).await,
+        "{:?}",
+        pushed.relay.attached()
+    );
+    pushed.invite("Ben").await;
+
+    // The second invite adds its mailbox to the claim; the first stays.
+    assert!(
+        eventually(|| pushed.relay.attached().len() == 2).await,
+        "{:?}",
+        pushed.relay.attached()
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_invite_opens_no_session_while_the_contacts_read_no_pushed_mail() {
+    let pushed = Pushed::start().await;
+
+    pushed.invite("Anna").await;
+
+    assert_eq!(pushed.relay.sockets_made(), 0);
+    assert!(
+        pushed
+            .session
+            .epicbox()
+            .unwrap()
+            .pushed()
+            .infos()
+            .is_empty()
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_invite_returns_while_a_collect_holds_the_contact_turn_and_claims_after() {
+    let pushed = Pushed::start().await;
+    pushed
+        .session
+        .contacts_push_start(via("contacts", None))
+        .unwrap();
+    let turn = pushed.session.engine_wallet().contact_turn().await;
+
+    let made = tokio::time::timeout(Duration::from_secs(5), pushed.invite("Anna")).await;
+
+    assert!(made.is_ok(), "the invite waited for the contact turn");
+    assert!(pushed.relay.attached().is_empty());
+    drop(turn);
+    assert!(
+        eventually(|| pushed.relay.attached().len() == 1).await,
+        "{:?}",
+        pushed.relay.attached()
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_answer_claims_its_confirm_mailbox_on_the_contacts_session() {
+    let anna = Pushed::start().await;
+    let ben = Pushed::start().await;
+    ben.session
+        .contacts_push_start(via("contacts", None))
+        .unwrap();
+    let invite = anna.invite_full("Ben").await;
+
+    ben.session
+        .pairing_accept(
+            invite.link,
+            "Anna".to_owned(),
+            true,
+            ContactRelayMode::Online,
+            PairingClass::Contact,
+            None,
+        )
+        .await
+        .unwrap();
+
+    assert!(
+        eventually(|| ben.relay.attached().len() == 1).await,
+        "{:?}",
+        ben.relay.attached()
+    );
 }
