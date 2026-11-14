@@ -13,7 +13,8 @@ the FFI, the protocols it speaks, and the decisions behind it.
 4. One of the three ways in: [the CLI](cli.md), [the FFI](ffi.md) or the crates directly.
 5. [Configuration](configuration.md) for the settings each of them reads.
 6. [Protocols](protocols/README.md) for the formats on the wire.
-7. [Direction](direction.md) for where the design is heading.
+7. [Direction](direction.md) for where the design is heading, and [Follow-ups](follow-ups.md) for
+   the decided work that is not built yet.
 
 ## Crates
 
@@ -89,6 +90,7 @@ LEPIC matches the formats of the reference wallet and node. Each note describes 
 - [Budgets](budgets.md): the size and performance limits `cargo xtask budget` measures.
 - [Fuzzing](fuzzing.md): the fuzz targets and how to run them.
 - [Interop suite](../interop/README.md): tests against the reference wallet, node and relay.
-- Notes on the [mobile build](spikes/f-03-mobile-build.md) and the
+- Two notes kept from early design work, which record the numbers and the reasons behind them:
+  the [mobile build](spikes/f-03-mobile-build.md) and the
   [Argon2 parameters](spikes/k-03-argon2.md).
 - [SECURITY](../SECURITY.md): how to report a vulnerability.

@@ -32,8 +32,8 @@ and the reference wallet's protocols stay at the edge, for every wallet that is 
 `legacy` feature of `lepic-transport` and `lepic-methods`.
 
 - Native slates are off by default: a wallet sends them only with `native_direct` on in its
-  `WalletConfig` (`native_direct` in the CLI's [settings](configuration.md)). The intent is to turn them on by default between LEPIC wallets once the interop
-  and acceptance runs cover them.
+  `WalletConfig` (`native_direct` in the CLI's [settings](configuration.md)). The intent is to turn them on by
+  default between LEPIC wallets once the interop and acceptance runs cover them.
 - With that change, a send to an HTTP or Tor listener that offers V3 slates goes as V3 rather than
   V2, since V3 carries payment proofs and a TTL.
 - Receiving V2 and V3 slates, decoding V2, the Epicbox 3.0.0 frames and HTTPS sends to stock
@@ -41,8 +41,8 @@ and the reference wallet's protocols stay at the edge, for every wallet that is 
 
 ## Records marked proposed
 
-These records are marked `proposed`. Their designs are in the code; accepting them is a decision
-for the project owner.
+These records are marked `proposed`. The code follows all of them except ADR 0054, which is a
+design that is not built yet. Accepting them is a decision for the project owner.
 
 | Record | Subject |
 |---|---|
@@ -51,7 +51,9 @@ for the project owner.
 | [0033](adr/0033-key-and-domain-registry.md) | One registry of seed-derived keys and signature domains |
 | [0034](adr/0034-trust-versioning-and-probing.md) | Trust, versioning and probing between Epic wallets |
 | [0045](adr/0045-refusing-slates-nobody-asked-for.md) | Refusing slates nobody asked for |
-| [0050](adr/0050-one-wallet-api.md) | One wallet API, served by `lepic serve` |
+| [0050](adr/0050-one-wallet-api.md) | One wallet API, served by `lepic serve` (its paths and bodies are superseded by ADR 0055) |
+| [0054](adr/0054-epic1-over-carriers-derived-mailboxes-short-links.md) | epic1 over carriers: derived mailboxes and a short link; not built |
+| [0058](adr/0058-service-wallet-api.md) | Serve for service wallets: boosts, webhooks and payment fields |
 
 ## Cryptography
 
