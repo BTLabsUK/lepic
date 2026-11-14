@@ -480,6 +480,7 @@ dependencies = [
  "lepic-slate",
  "lepic-transport",
  "thiserror",
+ "tokio",
 ]
 
 [[package]]
