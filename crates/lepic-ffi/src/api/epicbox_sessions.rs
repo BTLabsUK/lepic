@@ -2,20 +2,18 @@
 //! mailboxes. The contacts collect and the payments listener can read from the same session
 //! when they name the same group.
 //!
-//! Everything here is additive: without these calls the wallet reads the relay as before.
-//! The relay must offer mux/1; when it does not, the listener falls back to its own socket and
-//! the contacts collect keeps its sockets. A relay switch moves the contacts setting to the
-//! new relay; sessions on the old one end. Locking the wallet ends all sessions and forgets the
-//! contacts setting: call [`EpicWallet::contacts_push_start`] again after unlocking.
+//! Without these calls the wallet reads the relay on sockets of its own. The relay must offer
+//! mux/1; when it does not, the listener falls back to its own socket and the contacts collect
+//! keeps its sockets. A relay switch moves the contacts setting to the new relay; sessions on
+//! the old one end. Locking the wallet ends all sessions and forgets the contacts setting: call
+//! [`EpicWallet::contacts_push_start`] again after unlocking.
 
 use flutter_rust_bridge::frb;
 
 use crate::api::error::WalletError;
-use crate::api::types::{
-    EpicboxSessionEvent, EpicboxSessionView, ListenVia, ListenerEvent, ListenerEventKind,
-};
+use crate::api::types::{EpicboxSessionEvent, EpicboxSessionView, ListenVia, ListenerEvent};
 use crate::api::wallet::EpicWallet;
-use crate::boundary::end_stream;
+use crate::boundary::{end_stream, spawn_listener};
 use crate::frb_generated::StreamSink;
 use std::sync::Arc;
 use tokio::sync::Notify;
@@ -33,35 +31,7 @@ impl EpicWallet {
             Ok(None) => return,
             Err(error) => return end_stream(&events, Err(error)),
         };
-        let session = Arc::clone(&self.session);
-        let runner = boundary.clone();
-        boundary.handle.spawn(async move {
-            let sink = events.clone();
-            let listening = runner
-                .run("listen", async move {
-                    let report = |event| drop(sink.add(event));
-                    session.listen(&handle, report).await
-                })
-                .await;
-            if let Err(error) = listening {
-                let _ = events.add(ListenerEvent {
-                    kind: ListenerEventKind::Error,
-                    tx_id: None,
-                    slate_id: None,
-                    message: error.to_string(),
-                    reason: None,
-                    retry_in_ms: None,
-                });
-            }
-            let _ = events.add(ListenerEvent {
-                kind: ListenerEventKind::Stopped,
-                tx_id: None,
-                slate_id: None,
-                message: String::new(),
-                reason: None,
-                retry_in_ms: None,
-            });
-        });
+        spawn_listener(&boundary, Arc::clone(&self.session), handle, events);
     }
 
     /// Makes the contacts collect read the mailboxes of contacts on relays that offer mux/1

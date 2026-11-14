@@ -13,8 +13,12 @@ use tokio::runtime::Handle;
 use tracing::instrument::WithSubscriber as _;
 use tracing::{Dispatch, error};
 
+use lepic_wallet::inbox::ListenHandle;
+
 use crate::api::error::{WalletError, WalletErrorKind};
+use crate::api::types::{ListenerEvent, ListenerEventKind};
 use crate::frb_generated::{SseEncode, StreamSink};
+use crate::session::Session;
 
 /// What an operation runs with.
 #[derive(Clone)]
@@ -219,6 +223,44 @@ pub(crate) fn end_stream<T: SseEncode>(sink: &StreamSink<T>, result: Result<(), 
     if let Err(error) = result {
         // A closed stream only means the app stopped listening.
         let _ = sink.add_error(error);
+    }
+}
+
+/// Runs the listener of `session` on the runtime until `handle` is stopped, and streams what it
+/// does to `events`. A listener that fails reports an `Error` event, and the last event is
+/// always `Stopped`.
+pub(crate) fn spawn_listener(
+    boundary: &Boundary,
+    session: Arc<Session>,
+    handle: ListenHandle,
+    events: StreamSink<ListenerEvent>,
+) {
+    let runner = boundary.clone();
+    boundary.handle.spawn(async move {
+        let sink = events.clone();
+        let listening = runner
+            .run("listen", async move {
+                // A closed stream only means the app stopped listening.
+                let report = |event| drop(sink.add(event));
+                session.listen(&handle, report).await
+            })
+            .await;
+        if let Err(error) = listening {
+            let _ = events.add(listener_event(ListenerEventKind::Error, error.to_string()));
+        }
+        let _ = events.add(listener_event(ListenerEventKind::Stopped, String::new()));
+    });
+}
+
+/// A listener event that carries no transaction, slate or retry.
+fn listener_event(kind: ListenerEventKind, message: String) -> ListenerEvent {
+    ListenerEvent {
+        kind,
+        tx_id: None,
+        slate_id: None,
+        message,
+        reason: None,
+        retry_in_ms: None,
     }
 }
 

@@ -27,12 +27,12 @@ use crate::api::runtime::LepicRuntime;
 use crate::api::secret_store::AppSecretStore;
 use crate::api::types::{
     Chain, FeeEstimate, FinalizedTx, InboxReport, KernelLocation, LegacyImport, ListenerEvent,
-    ListenerEventKind, ListingDrain, ListingRef, NodeRoute, NodeTip, PeerCompat, Poller,
-    ReceivedSlate, RefreshProgress, ScanProgress, SelfSendRequest, SelfSentTx, SendOptions, SentTx,
-    Slate, SlateInfo, SlateWire, TransactionDetails, UrSlateProgress, WalletConfig, WalletEvent,
+    ListingDrain, ListingRef, NodeRoute, NodeTip, PeerCompat, Poller, ReceivedSlate,
+    RefreshProgress, ScanProgress, SelfSendRequest, SelfSentTx, SendOptions, SentTx, Slate,
+    SlateInfo, SlateWire, TransactionDetails, UrSlateProgress, WalletConfig, WalletEvent,
     WalletOutput, WalletSummary,
 };
-use crate::boundary::{Boundary, end_stream, guard, guard_or};
+use crate::boundary::{Boundary, end_stream, guard, guard_or, spawn_listener};
 use crate::frb_generated::StreamSink;
 use crate::node::NodeSecret;
 use crate::session::{self, SeedOrigin, Session, normalize_phrase};
@@ -1523,36 +1523,7 @@ impl EpicWallet {
             Ok(None) => return,
             Err(error) => return end_stream(&events, Err(error)),
         };
-        let session = Arc::clone(&self.session);
-        let runner = boundary.clone();
-        boundary.handle.spawn(async move {
-            let sink = events.clone();
-            let listening = runner
-                .run("listen", async move {
-                    // A closed stream only means the app stopped listening.
-                    let report = |event| drop(sink.add(event));
-                    session.listen(&handle, report).await
-                })
-                .await;
-            if let Err(error) = listening {
-                let _ = events.add(ListenerEvent {
-                    kind: ListenerEventKind::Error,
-                    tx_id: None,
-                    slate_id: None,
-                    message: error.to_string(),
-                    reason: None,
-                    retry_in_ms: None,
-                });
-            }
-            let _ = events.add(ListenerEvent {
-                kind: ListenerEventKind::Stopped,
-                tx_id: None,
-                slate_id: None,
-                message: String::new(),
-                reason: None,
-                retry_in_ms: None,
-            });
-        });
+        spawn_listener(&boundary, Arc::clone(&self.session), handle, events);
     }
 
     /// Stops the listener. Its stream ends with `Stopped` shortly after.
