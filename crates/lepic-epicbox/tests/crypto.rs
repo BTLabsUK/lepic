@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+//! Message sealing, opening and signatures, and the errors for each malformed part.
 // Helpers outside `#[test]` functions are not covered by clippy's in-tests settings, and tests may
 // unwrap, index and use plain arithmetic (docs/rules.md).
 #![allow(

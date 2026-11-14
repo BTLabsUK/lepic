@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+//! Address, domain and port parsing and display, with property tests for the round trip.
 // Helpers outside `#[test]` functions are not covered by clippy's in-tests settings, and tests may
 // unwrap, index and use plain arithmetic (docs/rules.md).
 #![allow(

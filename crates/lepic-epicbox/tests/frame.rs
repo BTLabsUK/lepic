@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
+//! Client and relay frames: their exact JSON, the limits on their fields and how unknown
+//! frames are read.
 // Helpers outside `#[test]` functions are not covered by clippy's in-tests settings, and tests may
 // unwrap, index and use plain arithmetic (docs/rules.md).
 #![allow(
