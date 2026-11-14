@@ -269,8 +269,9 @@ enum Command {
         reply: oneshot::Sender<bool>,
     },
     Set {
+        owner: String,
         identities: Vec<Identity>,
-        reply: oneshot::Sender<Result<Vec<usize>, MuxError>>,
+        reply: oneshot::Sender<Result<Claimed, MuxError>>,
     },
     Settle {
         id: RelayMessageId,
@@ -387,6 +388,7 @@ impl MuxSession {
             delivery,
             entries: BTreeMap::new(),
             keys: HashMap::new(),
+            claims: BTreeMap::new(),
             next_index: 0,
             token: None,
             stored: StoredIds::default(),
@@ -395,7 +397,7 @@ impl MuxSession {
             shared: Arc::clone(&shared),
         };
         for identity in identities {
-            manager.add_entry(identity)?;
+            manager.add_claimed(identity)?;
         }
         // The host's subscriber is scoped to the calling thread, so the task carries it along.
         let task = runtime.spawn(manager.run().instrument(span).with_current_subscriber());
@@ -432,12 +434,35 @@ impl MuxSession {
 
     /// Makes the session's mailboxes exactly `identities`: attaches what is new, detaches what is
     /// gone and keeps the rest, so only new mailboxes cost a signature. Returns the index of
-    /// every distinct identity, in the order given (a repeated identity is listed once). Refused when more
-    /// than [`MAX_MAILBOXES_PER_SOCKET`] distinct identities are given.
+    /// every distinct identity, in the order given (a repeated identity is listed once). Refused
+    /// when more than [`MAX_MAILBOXES_PER_SOCKET`] distinct identities are given.
+    ///
+    /// This is [`MuxSession::set_claim`] for the owner `""`, which also holds the identities the
+    /// session started with and those added by [`MuxSession::attach`]. A session with other
+    /// owners keeps their mailboxes.
     pub async fn set_mailboxes(&self, identities: Vec<Identity>) -> Result<Vec<usize>, MuxError> {
+        self.set_claim("", identities)
+            .await
+            .map(|done| done.indexes)
+    }
+
+    /// Sets what `owner` wants attached, for a session that several consumers share. The
+    /// session's mailboxes are the union of every owner's claim: this call attaches what no owner
+    /// had, detaches what no owner wants any more and leaves the rest, so one consumer never
+    /// detaches another's mailboxes. An empty claim releases the owner. Refused, and nothing
+    /// changed, when the union would exceed [`MAX_MAILBOXES_PER_SOCKET`] distinct identities.
+    pub async fn set_claim(
+        &self,
+        owner: &str,
+        identities: Vec<Identity>,
+    ) -> Result<Claimed, MuxError> {
         let (reply, answer) = oneshot::channel();
         self.commands
-            .send(Command::Set { identities, reply })
+            .send(Command::Set {
+                owner: owner.to_owned(),
+                identities,
+                reply,
+            })
             .map_err(|_| MuxError::Ended)?;
         answer.await.map_err(|_| MuxError::Ended)?
     }
@@ -507,10 +532,34 @@ impl MuxSession {
     }
 }
 
+/// The answer to [`MuxSession::set_claim`].
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Claimed {
+    /// The index of each distinct identity of the claim, in the order given.
+    pub indexes: Vec<usize>,
+    /// The indexes of those the session did not have before this call. Mail for them can only
+    /// arrive after this call.
+    pub fresh: Vec<usize>,
+}
+
 struct Reconciled {
     indexes: Vec<usize>,
     added: Vec<usize>,
     removed: Vec<(usize, String)>,
+}
+
+impl Reconciled {
+    fn claimed(&self) -> Claimed {
+        Claimed {
+            indexes: self.indexes.clone(),
+            fresh: self
+                .indexes
+                .iter()
+                .copied()
+                .filter(|index| self.added.contains(index))
+                .collect(),
+        }
+    }
 }
 
 struct Entry {
@@ -733,6 +782,8 @@ struct Manager {
     /// The session's mailboxes by index. Indexes are never reused.
     entries: BTreeMap<usize, Entry>,
     keys: HashMap<String, usize>,
+    /// What each owner wants attached. The session's mailboxes are the union of the claims.
+    claims: BTreeMap<String, Vec<Identity>>,
     next_index: usize,
     /// The token of the last `Attached`. In memory only.
     token: Option<ResumeToken>,
@@ -768,6 +819,23 @@ impl Manager {
         self.keys.insert(key.clone(), index);
         self.entries.insert(index, Entry { identity, key });
         Ok(index)
+    }
+
+    /// Adds an identity to the session and to the claim of owner `""`.
+    fn add_claimed(&mut self, identity: Identity) -> Result<usize, MuxError> {
+        let claimed = identity.clone();
+        let index = self.add_entry(identity)?;
+        self.claims.entry(String::new()).or_default().push(claimed);
+        Ok(index)
+    }
+
+    /// Removes a mailbox from the session and from every claim.
+    fn remove_claimed(&mut self, key: &str) -> Option<usize> {
+        for claim in self.claims.values_mut() {
+            claim.retain(|identity| identity.address().key_text() != key);
+        }
+        self.claims.retain(|_, claim| !claim.is_empty());
+        self.remove_entry(key)
     }
 
     fn remove_entry(&mut self, key: &str) -> Option<usize> {
@@ -836,14 +904,30 @@ impl Manager {
         }
     }
 
-    /// Makes the entries match `identities`. Returns the index of each, what was added and what
-    /// was removed.
-    fn reconcile(&mut self, identities: Vec<Identity>) -> Result<Reconciled, MuxError> {
-        let mut wanted: Vec<(String, Identity)> = Vec::with_capacity(identities.len());
+    /// Sets the claim of `owner` and makes the entries match the union of the claims. Returns
+    /// the index of each identity of the claim, what was added and what was removed.
+    fn reconcile(
+        &mut self,
+        owner: String,
+        identities: Vec<Identity>,
+    ) -> Result<Reconciled, MuxError> {
+        let mut own: Vec<(String, Identity)> = Vec::with_capacity(identities.len());
         for identity in identities {
             let key = identity.address().key_text();
-            if !wanted.iter().any(|(known, _)| *known == key) {
-                wanted.push((key, identity));
+            if !own.iter().any(|(known, _)| *known == key) {
+                own.push((key, identity));
+            }
+        }
+        let mut wanted: Vec<String> = own.iter().map(|(key, _)| key.clone()).collect();
+        for (other, claim) in &self.claims {
+            if *other == owner {
+                continue;
+            }
+            for identity in claim {
+                let key = identity.address().key_text();
+                if !wanted.contains(&key) {
+                    wanted.push(key);
+                }
             }
         }
         if wanted.len() > MAX_MAILBOXES_PER_SOCKET {
@@ -852,10 +936,18 @@ impl Manager {
                 max: MAX_MAILBOXES_PER_SOCKET,
             });
         }
+        if own.is_empty() {
+            self.claims.remove(&owner);
+        } else {
+            self.claims.insert(
+                owner,
+                own.iter().map(|(_, identity)| identity.clone()).collect(),
+            );
+        }
         let gone: Vec<String> = self
             .keys
             .keys()
-            .filter(|key| !wanted.iter().any(|(wanted_key, _)| wanted_key == *key))
+            .filter(|key| !wanted.contains(*key))
             .cloned()
             .collect();
         let mut removed = Vec::with_capacity(gone.len());
@@ -864,9 +956,9 @@ impl Manager {
                 removed.push((index, key));
             }
         }
-        let mut indexes = Vec::with_capacity(wanted.len());
+        let mut indexes = Vec::with_capacity(own.len());
         let mut added = Vec::new();
-        for (key, identity) in wanted {
+        for (key, identity) in own {
             if let Some(&index) = self.keys.get(&key) {
                 indexes.push(index);
             } else {
@@ -892,15 +984,19 @@ impl Manager {
 
     fn apply_offline(&mut self, command: Command) {
         match command {
-            Command::Set { identities, reply } => {
-                let _ = reply.send(self.reconcile(identities).map(|done| done.indexes));
+            Command::Set {
+                owner,
+                identities,
+                reply,
+            } => {
+                let _ = reply.send(self.reconcile(owner, identities).map(|done| done.claimed()));
             }
             Command::Settle { id, handled } => self.settle_offline(&id, handled),
             Command::Add { identity, reply } => {
-                let _ = reply.send(self.add_entry(identity));
+                let _ = reply.send(self.add_claimed(identity));
             }
             Command::Remove { key, reply } => {
-                let _ = reply.send(self.remove_entry(&key).is_some());
+                let _ = reply.send(self.remove_claimed(&key).is_some());
             }
         }
     }
@@ -1172,9 +1268,13 @@ impl Manager {
 
     async fn apply_online(&mut self, link: &mut Link, command: Command) -> Result<(), Lost> {
         match command {
-            Command::Set { identities, reply } => match self.reconcile(identities) {
+            Command::Set {
+                owner,
+                identities,
+                reply,
+            } => match self.reconcile(owner, identities) {
                 Ok(done) => {
-                    let _ = reply.send(Ok(done.indexes));
+                    let _ = reply.send(Ok(done.claimed()));
                     for (index, key) in done.removed {
                         if link.forget_mailbox(index) {
                             link.send(
@@ -1207,7 +1307,7 @@ impl Manager {
                     }
                 }
             }
-            Command::Add { identity, reply } => match self.add_entry(identity) {
+            Command::Add { identity, reply } => match self.add_claimed(identity) {
                 Ok(index) => {
                     let _ = reply.send(Ok(index));
                     // A resume in flight attaches what it missed once it is answered.
@@ -1220,7 +1320,7 @@ impl Manager {
                 }
             },
             Command::Remove { key, reply } => {
-                let removed = self.remove_entry(&key);
+                let removed = self.remove_claimed(&key);
                 let _ = reply.send(removed.is_some());
                 if let Some(index) = removed
                     && link.forget_mailbox(index)

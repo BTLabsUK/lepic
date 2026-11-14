@@ -12,7 +12,8 @@ Conventional Commit messages at release time.
 - `lepic-epicbox`: an optional mux/1 session client (`MuxSession`), one socket for up to 256
   mailboxes with pushed mail, unsigned acknowledgements and token resume, plus a mock mux/1 relay
   behind `mock-relay`. Nothing starts it; plain 3.0.0 is unchanged. A queued mode
-  (`start_queued`, `take`, `settle`, `set_mailboxes`) leaves the wallet work to a consumer.
+  (`start_queued`, `take`, `settle`, `set_mailboxes`) leaves the wallet work to a consumer, and
+  `set_claim(owner, ...)` lets several consumers share one session without detaching each other.
 - `lepic serve`: a webhook sends the event log by signed HTTP POST (Standard Webhooks), one event
   at a time with retries, set by `webhook_url`, `webhook_secret_file`, `webhook_types` and
   `webhook_allow_private`; `GET /webhook` and `POST /webhook/resume` show and restart it.

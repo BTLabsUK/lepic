@@ -55,7 +55,7 @@ pub use mailbox::{
     MailboxClient, MailboxContent, MailboxEnd, MailboxError, MailboxHandler, MailboxMessage,
     MailboxReport,
 };
-pub use mux::{MuxCounters, MuxError, MuxEvent, MuxOptions, MuxSession, MuxState};
+pub use mux::{Claimed, MuxCounters, MuxError, MuxEvent, MuxOptions, MuxSession, MuxState};
 pub use mux_frame::{
     MAX_ACK_IDS, MAX_ATTACH_PER_FRAME, MAX_HOLD_SECS, MAX_MAILBOXES_PER_SOCKET, MUX_EXTENSION,
     MuxCode, MuxLimits,

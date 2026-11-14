@@ -527,6 +527,73 @@ async fn set_mailboxes_signs_only_for_the_new_ones() {
 }
 
 #[tokio::test]
+async fn claims_of_two_owners_do_not_detach_each_other() {
+    let relay = MuxMockRelay::new(Network::Mainnet);
+    let session = start_queued(&relay, vec![identity(ALICE)]);
+    attached(&session).await;
+    // A second owner claims two mailboxes: only those cost a signature.
+    let first = session
+        .set_claim("contacts", vec![identity(BOB), identity(CAROL)])
+        .await
+        .unwrap();
+    assert_eq!(first.indexes, vec![1, 2]);
+    assert_eq!(first.fresh, vec![1, 2]);
+    let carol_key = address(CAROL).key_text();
+    relay
+        .wait_until(|relay| relay.attached().contains(&carol_key))
+        .await;
+    assert_eq!(session.counters().signatures, 3);
+    // The first owner sets its own mailboxes again: the contacts stay attached.
+    let own = session.set_mailboxes(vec![identity(ALICE)]).await.unwrap();
+    assert_eq!(own, vec![0]);
+    // The second owner narrows its claim: only its own mailbox goes.
+    let narrowed = session
+        .set_claim("contacts", vec![identity(BOB)])
+        .await
+        .unwrap();
+    assert_eq!(narrowed.indexes, vec![1]);
+    assert!(narrowed.fresh.is_empty());
+    let bob_key = address(BOB).key_text();
+    let alice_key = address(ALICE).key_text();
+    relay
+        .wait_until(|relay| {
+            let attached = relay.attached();
+            !attached.contains(&carol_key)
+                && attached.contains(&bob_key)
+                && attached.contains(&alice_key)
+        })
+        .await;
+    // Releasing the claim detaches what only it wanted. A mailbox both want stays.
+    session
+        .set_claim("other", vec![identity(BOB)])
+        .await
+        .unwrap();
+    session.set_claim("contacts", Vec::new()).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let attached_now = relay.attached();
+    assert!(attached_now.contains(&bob_key) && attached_now.contains(&alice_key));
+    session.set_claim("other", Vec::new()).await.unwrap();
+    relay
+        .wait_until(|relay| !relay.attached().contains(&bob_key))
+        .await;
+    assert!(relay.attached().contains(&alice_key));
+    assert_eq!(session.counters().signatures, 3);
+}
+
+#[tokio::test]
+async fn claims_together_are_capped_at_256_and_nothing_changes() {
+    let relay = MuxMockRelay::new(Network::Mainnet);
+    let session = start_queued(&relay, vec![identity(ALICE)]);
+    attached(&session).await;
+    let many: Vec<Identity> = (1000..1256).map(numbered).collect();
+    assert!(matches!(
+        session.set_claim("contacts", many).await,
+        Err(MuxError::TooManyMailboxes { count: 257, .. })
+    ));
+    assert_eq!(session.counters().signatures, 1);
+}
+
+#[tokio::test]
 async fn set_mailboxes_refuses_more_than_256_and_changes_nothing() {
     let relay = MuxMockRelay::new(Network::Mainnet);
     let session = start_queued(&relay, vec![identity(ALICE)]);
