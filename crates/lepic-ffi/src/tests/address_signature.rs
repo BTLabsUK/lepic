@@ -10,7 +10,7 @@ use lepic_epicbox::mock_relay::MockRelay;
 use std::sync::Arc;
 
 use super::*;
-use crate::api::types::{InboxReport, ListingRef};
+use crate::api::types::{ListingDrain, ListingRef};
 use crate::api::wallet::verify_address_signature_at;
 
 const PHRASE: &str = "abandon abandon abandon abandon abandon abandon abandon abandon \
@@ -102,14 +102,24 @@ fn listing_ref(service_key: &str, generation: u32) -> ListingRef {
 async fn several_listings_are_drained_in_one_call_with_a_report_each() {
     let mut fixture = Fixture::new();
     let wallet = wallet(&mut fixture, Some(PHRASE)).await;
-    assert_eq!(wallet.drain_epicbox_listings(Vec::new()).await.unwrap(), []);
+    assert!(
+        wallet
+            .drain_epicbox_listings(Vec::new())
+            .await
+            .unwrap()
+            .is_empty()
+    );
     let listings = vec![
         listing_ref(SERVICE_KEY, 0),
         listing_ref(OTHER_SERVICE_KEY, 3),
         listing_ref(SERVICE_KEY, 1),
     ];
-    let reports = wallet.drain_epicbox_listings(listings).await.unwrap();
-    assert_eq!(reports, vec![InboxReport::default(); 3]);
+    let drains = wallet.drain_epicbox_listings(listings).await.unwrap();
+    assert_eq!(drains.len(), 3);
+    for drain in &drains {
+        assert_eq!(drain.report, Some(Default::default()));
+        assert!(drain.error.is_none());
+    }
     // The longest list the call takes.
     let sixteen = (0..16).map(|generation| listing_ref(SERVICE_KEY, generation));
     let reports = wallet
@@ -117,6 +127,26 @@ async fn several_listings_are_drained_in_one_call_with_a_report_each() {
         .await
         .unwrap();
     assert_eq!(reports.len(), 16);
+}
+
+fn exactly_one_set(drain: &ListingDrain) -> bool {
+    drain.report.is_some() != drain.error.is_some()
+}
+
+#[test]
+fn one_failing_listing_keeps_its_error_in_place_and_the_others_their_reports() {
+    use lepic_wallet::inbox::{InboxError, InboxSummary};
+    let taken = InboxSummary {
+        received: 2,
+        ..InboxSummary::default()
+    };
+    let failed = InboxError::NetworkMismatch;
+    let drains = crate::session::listing_drains(vec![Ok(taken), Err(failed), Ok(taken)]);
+    assert_eq!(drains.len(), 3);
+    assert!(drains.iter().all(exactly_one_set));
+    assert_eq!(drains[0].report.unwrap().received, 2);
+    assert!(drains[1].report.is_none() && drains[1].error.is_some());
+    assert_eq!(drains[2].report.unwrap().received, 2);
 }
 
 #[tokio::test]

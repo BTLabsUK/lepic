@@ -27,9 +27,9 @@ use crate::api::runtime::LepicRuntime;
 use crate::api::secret_store::AppSecretStore;
 use crate::api::types::{
     Chain, FeeEstimate, FinalizedTx, InboxReport, KernelLocation, LegacyImport, ListenerEvent,
-    ListenerEventKind, ListingRef, NodeRoute, NodeTip, PeerCompat, Poller, ReceivedSlate,
-    RefreshProgress, ScanProgress, SelfSendRequest, SelfSentTx, SendOptions, SentTx, Slate,
-    SlateInfo, SlateWire, TransactionDetails, UrSlateProgress, WalletConfig, WalletEvent,
+    ListenerEventKind, ListingDrain, ListingRef, NodeRoute, NodeTip, PeerCompat, Poller,
+    ReceivedSlate, RefreshProgress, ScanProgress, SelfSendRequest, SelfSentTx, SendOptions, SentTx,
+    Slate, SlateInfo, SlateWire, TransactionDetails, UrSlateProgress, WalletConfig, WalletEvent,
     WalletOutput, WalletSummary,
 };
 use crate::boundary::{Boundary, end_stream, guard, guard_or};
@@ -1341,15 +1341,16 @@ impl EpicWallet {
     /// hands its connection to the next. After a message the wallet kept, or a connection that
     /// failed, the listings still to come continue on a new connection. At most 16 listings,
     /// which keeps a call short; the whole call is bound by the drain timeout, and listings not
-    /// reached by then are left for the next drain. Returns one report per listing, in the
-    /// order given. Fails with `InvalidArgument` for more than 16 listings or a `service_key`
-    /// that is not a compressed secp256k1 key in hex, before any relay is contacted, and
-    /// otherwise as `drain_epicbox_at` does; the error of the first listing that failed is
-    /// returned, and what the others took stays taken.
+    /// reached by then are left for the next drain. Returns one [`ListingDrain`] per listing, in
+    /// the order given: its report, or the error `drain_epicbox_at` would have failed with (a
+    /// listing not reached fails like a timeout); one listing failing does not hide what the
+    /// others took. The call itself fails with `InvalidArgument` for more than 16 listings or a
+    /// `service_key` that is not a compressed secp256k1 key in hex, before any relay is
+    /// contacted, and when the wallet has no Epicbox.
     pub async fn drain_epicbox_listings(
         &self,
         listings: Vec<ListingRef>,
-    ) -> Result<Vec<InboxReport>, WalletError> {
+    ) -> Result<Vec<ListingDrain>, WalletError> {
         self.run("drain_epicbox_listings", |session| async move {
             session.drain_epicbox_listings(&listings).await
         })

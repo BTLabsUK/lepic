@@ -15177,13 +15177,13 @@ impl SseDecode for Vec<crate::api::types::InPersonAnswerView> {
     }
 }
 
-impl SseDecode for Vec<crate::api::types::InboxReport> {
+impl SseDecode for Vec<crate::api::types::ListingDrain> {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
         let mut len_ = <i32>::sse_decode(deserializer);
         let mut ans_ = Vec::with_capacity(len_ as usize);
         for idx_ in 0..len_ {
-            ans_.push(<crate::api::types::InboxReport>::sse_decode(deserializer));
+            ans_.push(<crate::api::types::ListingDrain>::sse_decode(deserializer));
         }
         return ans_;
     }
@@ -15427,6 +15427,18 @@ impl SseDecode for crate::api::epic1::ListenerSocket {
             0 => crate::api::epic1::ListenerSocket::Web,
             1 => crate::api::epic1::ListenerSocket::Onion,
             _ => unreachable!("Invalid variant for ListenerSocket: {}", inner),
+        };
+    }
+}
+
+impl SseDecode for crate::api::types::ListingDrain {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut var_report = <Option<crate::api::types::InboxReport>>::sse_decode(deserializer);
+        let mut var_error = <Option<crate::api::error::WalletError>>::sse_decode(deserializer);
+        return crate::api::types::ListingDrain {
+            report: var_report,
+            error: var_error,
         };
     }
 }
@@ -15691,6 +15703,17 @@ impl SseDecode for Option<crate::api::types::InPersonHost> {
     }
 }
 
+impl SseDecode for Option<crate::api::types::InboxReport> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        if (<bool>::sse_decode(deserializer)) {
+            return Some(<crate::api::types::InboxReport>::sse_decode(deserializer));
+        } else {
+            return None;
+        }
+    }
+}
+
 impl SseDecode for Option<crate::api::types::KernelLocation> {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
@@ -15908,6 +15931,17 @@ impl SseDecode for Option<u8> {
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
         if (<bool>::sse_decode(deserializer)) {
             return Some(<u8>::sse_decode(deserializer));
+        } else {
+            return None;
+        }
+    }
+}
+
+impl SseDecode for Option<crate::api::error::WalletError> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        if (<bool>::sse_decode(deserializer)) {
+            return Some(<crate::api::error::WalletError>::sse_decode(deserializer));
         } else {
             return None;
         }
@@ -20168,6 +20202,27 @@ impl flutter_rust_bridge::IntoIntoDart<crate::api::epic1::ListenerSocket>
     }
 }
 // Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for crate::api::types::ListingDrain {
+    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+        [
+            self.report.into_into_dart().into_dart(),
+            self.error.into_into_dart().into_dart(),
+        ]
+        .into_dart()
+    }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive
+    for crate::api::types::ListingDrain
+{
+}
+impl flutter_rust_bridge::IntoIntoDart<crate::api::types::ListingDrain>
+    for crate::api::types::ListingDrain
+{
+    fn into_into_dart(self) -> crate::api::types::ListingDrain {
+        self
+    }
+}
+// Codec=Dco (DartCObject based), see doc to use other codecs
 impl flutter_rust_bridge::IntoDart for crate::api::types::ListingRef {
     fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
         [
@@ -23493,12 +23548,12 @@ impl SseEncode for Vec<crate::api::types::InPersonAnswerView> {
     }
 }
 
-impl SseEncode for Vec<crate::api::types::InboxReport> {
+impl SseEncode for Vec<crate::api::types::ListingDrain> {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
         <i32>::sse_encode(self.len() as _, serializer);
         for item in self {
-            <crate::api::types::InboxReport>::sse_encode(item, serializer);
+            <crate::api::types::ListingDrain>::sse_encode(item, serializer);
         }
     }
 }
@@ -23700,6 +23755,14 @@ impl SseEncode for crate::api::epic1::ListenerSocket {
             },
             serializer,
         );
+    }
+}
+
+impl SseEncode for crate::api::types::ListingDrain {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <Option<crate::api::types::InboxReport>>::sse_encode(self.report, serializer);
+        <Option<crate::api::error::WalletError>>::sse_encode(self.error, serializer);
     }
 }
 
@@ -23910,6 +23973,16 @@ impl SseEncode for Option<crate::api::types::InPersonHost> {
     }
 }
 
+impl SseEncode for Option<crate::api::types::InboxReport> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <bool>::sse_encode(self.is_some(), serializer);
+        if let Some(value) = self {
+            <crate::api::types::InboxReport>::sse_encode(value, serializer);
+        }
+    }
+}
+
 impl SseEncode for Option<crate::api::types::KernelLocation> {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
@@ -24096,6 +24169,16 @@ impl SseEncode for Option<u8> {
         <bool>::sse_encode(self.is_some(), serializer);
         if let Some(value) = self {
             <u8>::sse_encode(value, serializer);
+        }
+    }
+}
+
+impl SseEncode for Option<crate::api::error::WalletError> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <bool>::sse_encode(self.is_some(), serializer);
+        if let Some(value) = self {
+            <crate::api::error::WalletError>::sse_encode(value, serializer);
         }
     }
 }

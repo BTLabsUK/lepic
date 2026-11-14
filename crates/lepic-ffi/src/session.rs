@@ -65,11 +65,11 @@ use crate::api::runtime::{ClaimHolder, ClaimedStores, RuntimeInner};
 use crate::api::secret_store::AppSecretStore;
 use crate::api::types::{
     FeeEstimate, FinalizedTx, FoundDuring, ImportedTx, InboxReport, KernelLocation, LegacyImport,
-    LegacyImportStatus, ListenerEvent, ListenerEventKind, ListingRef, NodeRoute, NodeTip,
-    OutputCategory, OutputStatus, PeerCompat, ReceivedSlate, ScanFound, ScanProgress, ScanResult,
-    SelfInputs, SelfOutputs, SelfSendRequest, SelfSentTx, SendOptions, SentTx, Slate, SlateMessage,
-    SlateStage, SlateWire, TransactionDetails, TransportConnection, TransportState, TxOrigin,
-    TxStatus, WalletConfig, WalletEvent, WalletEventKind, WalletOutput, WalletSummary,
+    LegacyImportStatus, ListenerEvent, ListenerEventKind, ListingDrain, ListingRef, NodeRoute,
+    NodeTip, OutputCategory, OutputStatus, PeerCompat, ReceivedSlate, ScanFound, ScanProgress,
+    ScanResult, SelfInputs, SelfOutputs, SelfSendRequest, SelfSentTx, SendOptions, SentTx, Slate,
+    SlateMessage, SlateStage, SlateWire, TransactionDetails, TransportConnection, TransportState,
+    TxOrigin, TxStatus, WalletConfig, WalletEvent, WalletEventKind, WalletOutput, WalletSummary,
 };
 use crate::boundary::InFlight;
 use crate::frb_generated::StreamSink;
@@ -346,6 +346,25 @@ fn listing(
 
 fn service_domain(domain: &str) -> Result<lepic_epicbox::ServiceDomain, WalletError> {
     lepic_epicbox::ServiceDomain::parse(domain).map_err(|error| invalid(error.to_string()))
+}
+
+/// One [`ListingDrain`] per result, in order: the report, or the error in its place.
+pub(crate) fn listing_drains(
+    results: Vec<Result<lepic_wallet::inbox::InboxSummary, lepic_wallet::inbox::InboxError>>,
+) -> Vec<ListingDrain> {
+    results
+        .into_iter()
+        .map(|result| match result {
+            Ok(summary) => ListingDrain {
+                report: Some(inbox_report(&summary)),
+                error: None,
+            },
+            Err(error) => ListingDrain {
+                report: None,
+                error: Some(error.into()),
+            },
+        })
+        .collect()
 }
 
 fn inbox_report(summary: &lepic_wallet::inbox::InboxSummary) -> InboxReport {
@@ -1715,7 +1734,7 @@ impl Session {
     pub(crate) async fn drain_epicbox_listings(
         &self,
         listings: &[ListingRef],
-    ) -> Result<Vec<InboxReport>, WalletError> {
+    ) -> Result<Vec<ListingDrain>, WalletError> {
         if listings.len() > MAX_DRAIN_LISTINGS {
             return Err(invalid(format!(
                 "at most {MAX_DRAIN_LISTINGS} listings to drain at once"
@@ -1726,12 +1745,9 @@ impl Session {
             .map(|entry| listing(&entry.service_key, entry.generation))
             .collect::<Result<Vec<_>, _>>()?;
         let epicbox = self.epicbox()?;
-        epicbox
-            .drain_many_at(&self.engine, &parsed)
-            .await
-            .into_iter()
-            .map(|result| Ok(inbox_report(&result?)))
-            .collect()
+        Ok(listing_drains(
+            epicbox.drain_many_at(&self.engine, &parsed).await,
+        ))
     }
 
     /// Never logs the message or the signature.

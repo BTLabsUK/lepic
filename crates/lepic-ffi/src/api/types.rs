@@ -4,6 +4,8 @@ use flutter_rust_bridge::frb;
 use lepic_primitives::params::Network;
 use lepic_store::TxState;
 
+use super::error::WalletError;
+
 /// Which Epic chain the wallet talks to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Chain {
@@ -419,6 +421,14 @@ impl From<lepic_wallet::details::TxFlow> for TxFlow {
 pub struct ListingRef {
     pub service_key: String,
     pub generation: u32,
+}
+
+/// The outcome of one listing in `EpicWallet::drain_epicbox_listings`. Exactly one of the two
+/// fields is set: the report when the listing was drained, the error when it was not.
+#[derive(Debug, Clone)]
+pub struct ListingDrain {
+    pub report: Option<InboxReport>,
+    pub error: Option<WalletError>,
 }
 
 /// Where the chain holds a transaction kernel: the height of the block with it and its index
