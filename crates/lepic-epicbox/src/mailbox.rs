@@ -18,7 +18,7 @@ use std::time::Duration;
 use lepic_primitives::error_chain::ErrorChain;
 use lepic_transport::transport::BoxFuture;
 use tokio::time::{Instant, timeout, timeout_at};
-use tracing::{Instrument, debug, info, info_span, warn};
+use tracing::{Instrument, Span, debug, info, info_span, warn};
 
 use crate::address::EpicboxAddress;
 use crate::client::{
@@ -66,8 +66,11 @@ pub struct MailboxMessage {
 /// checks when it is posted again with [`MailboxClient::repost`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RelayedMail {
+    /// The sender's address.
     pub from: String,
+    /// The encrypted message.
     pub str: String,
+    /// The sender's signature over `str`.
     pub signature: String,
 }
 
@@ -106,14 +109,17 @@ impl MailboxMessage {
         Self { mailbox, ..self }
     }
 
+    /// The relay's id for the message, which acknowledges it.
     pub fn msg_id(&self) -> &RelayMessageId {
         &self.msg_id
     }
 
+    /// What the message turned out to be.
     pub fn content(&self) -> &MailboxContent {
         &self.content
     }
 
+    /// What the message turned out to be, taken out of it.
     pub fn into_content(self) -> MailboxContent {
         self.content
     }
@@ -124,10 +130,13 @@ impl MailboxMessage {
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum MailboxContent {
+    /// The sender's signature held and the message decrypted for the mailbox.
     Opened(ReceivedMessage),
+    /// The message did not open.
     Unopenable {
         /// The sender `from` names, when it parsed. Not proven.
         sender: Option<EpicboxAddress>,
+        /// Why it was rejected.
         reason: RejectionReason,
     },
 }
@@ -144,6 +153,7 @@ pub enum Handled {
 
 /// Receives the messages of a drain, one at a time and in the relay's order.
 pub trait MailboxHandler: Send {
+    /// Handles one message and says whether it may be acknowledged.
     fn handle(&mut self, message: MailboxMessage) -> BoxFuture<'_, Handled>;
 }
 
@@ -173,6 +183,7 @@ pub struct MailboxReport {
     pub handed_out: usize,
     /// Messages acknowledged after the handler stored them.
     pub acknowledged: usize,
+    /// How the drain of the mailbox ended.
     pub end: MailboxEnd,
 }
 
@@ -190,6 +201,7 @@ impl MailboxReport {
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct DrainReport {
+    /// One report per mailbox, in the order given.
     pub mailboxes: Vec<MailboxReport>,
     /// Connections the drain opened.
     pub connections: usize,
@@ -209,10 +221,13 @@ pub enum MailboxError {
     /// The relay answered in a way the protocol does not allow, or refused a request.
     #[error("relay broke the protocol")]
     Protocol(#[source] ClientError),
+    /// The relay handed out a message without the id that acknowledges it.
     #[error("relay sent a message without a message id")]
     MissingMessageId,
+    /// More than [`MAX_MAILBOXES_PER_DRAIN`] mailboxes were given.
     #[error("{count} mailboxes are more than one drain takes")]
     TooManyMailboxes { count: usize },
+    /// The message could not be sealed or signed here.
     #[error("message could not be prepared")]
     Local(#[source] ClientError),
     /// A post was sent but the relay's answer did not come: the relay may hold the message.
@@ -224,22 +239,23 @@ impl MailboxError {
     /// A failure before or while greeting the relay: a refusal is the relay's, anything else
     /// means it could not be reached.
     fn setting_up(error: ClientError) -> Self {
-        match error {
-            ClientError::Relay { .. }
-            | ClientError::UnsupportedRelayVersion { .. }
-            | ClientError::Frame(_) => Self::Protocol(error),
-            ClientError::Message(_) | ClientError::Randomness(_) => Self::Local(error),
-            _ => Self::Unreachable(error),
-        }
+        Self::classify(error, Self::Unreachable)
     }
 
+    /// A failure after the relay greeted: a refusal is the relay's, anything else lost the
+    /// connection.
     fn after_greeting(error: ClientError) -> Self {
+        Self::classify(error, Self::Lost)
+    }
+
+    /// Sorts out the relay's refusals and local failures; anything else becomes `other`.
+    fn classify(error: ClientError, other: fn(ClientError) -> Self) -> Self {
         match error {
             ClientError::Relay { .. }
             | ClientError::UnsupportedRelayVersion { .. }
             | ClientError::Frame(_) => Self::Protocol(error),
             ClientError::Message(_) | ClientError::Randomness(_) => Self::Local(error),
-            _ => Self::Lost(error),
+            _ => other(error),
         }
     }
 }
@@ -295,14 +311,17 @@ impl MailboxClient {
         )
     }
 
+    /// The same client with other drain bounds.
     pub fn with_limits(self, limits: DrainLimits) -> Self {
         Self { limits, ..self }
     }
 
+    /// The relay and timings this client uses.
     pub fn settings(&self) -> &ClientSettings {
         &self.settings
     }
 
+    /// The bounds of each drain.
     pub fn limits(&self) -> DrainLimits {
         self.limits
     }
@@ -351,28 +370,14 @@ impl MailboxClient {
     ) -> Result<(), MailboxError> {
         let message = seal(plaintext, to, from.secret()).map_err(MailboxError::Local)?;
         let frame = ClientFrame::post_slate(from.address(), to, &message);
-        let context = ClientContext {
-            settings: self.settings.clone(),
-            identity: from.clone(),
-            connector: Arc::clone(&self.connector),
-            prefilter: None,
-        };
         let span = info_span!(
             "epicbox_mailbox_post",
             transport = TRANSPORT_ID.as_str(),
             relay = %self.settings.endpoint.domain(),
         );
-        post_frame_reporting(&context, &frame)
-            .instrument(span)
-            .await
-            .map_err(|failed| match MailboxError::setting_up(failed.error) {
-                MailboxError::Unreachable(error) if failed.sent => MailboxError::Unanswered(error),
-                error => error,
-            })
+        self.post_frame(from, &frame, span).await
     }
-}
 
-impl MailboxClient {
     /// Posts `mail` again to `own`, exactly as its sender signed it, so that another install
     /// listening on the same address can collect it. The relay queues the copy behind what it
     /// already holds. Acknowledge the original only after this succeeds. Fails as
@@ -384,18 +389,29 @@ impl MailboxClient {
             str: mail.str.clone(),
             signature: mail.signature.clone(),
         };
-        let context = ClientContext {
-            settings: self.settings.clone(),
-            identity: own.clone(),
-            connector: Arc::clone(&self.connector),
-            prefilter: None,
-        };
         let span = info_span!(
             "epicbox_mailbox_repost",
             transport = TRANSPORT_ID.as_str(),
             relay = %self.settings.endpoint.domain(),
         );
-        post_frame_reporting(&context, &frame)
+        self.post_frame(own, &frame, span).await
+    }
+
+    /// Posts `frame` as `identity` on a short connection of its own, inside `span`. A failure to
+    /// reach the relay becomes [`MailboxError::Unanswered`] once the frame was sent.
+    async fn post_frame(
+        &self,
+        identity: &Identity,
+        frame: &ClientFrame,
+        span: Span,
+    ) -> Result<(), MailboxError> {
+        let context = ClientContext {
+            settings: self.settings.clone(),
+            identity: identity.clone(),
+            connector: Arc::clone(&self.connector),
+            prefilter: None,
+        };
+        post_frame_reporting(&context, frame)
             .instrument(span)
             .await
             .map_err(|failed| match MailboxError::setting_up(failed.error) {
