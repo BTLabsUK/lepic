@@ -29,8 +29,8 @@ the full guide.
   each wallet needs its own store.
 - **Password and PIN wallets.** A PIN wallet's password is generated and sealed inside Rust;
   Dart holds only the sealed text.
-- **Streams.** Wallet events, the Epicbox listener, refresh and scan progress, tor and logs
-  arrive as Dart streams.
+- **Streams.** Wallet events, the Epicbox listener, push session states, refresh and scan
+  progress, tor and logs arrive as Dart streams.
 - **Typed errors.** Every failure is a `WalletError` with a `WalletErrorKind` and a fixed number.
 
 ## Secrets that cross the boundary
@@ -55,6 +55,7 @@ As [ADR 0014](../../docs/adr/0014-secrets-at-the-flutter-boundary.md) requires:
 | Wallet | `EpicWallet`, `PinWallet`, `WalletConfig`, `NetTuning`, `HostPolicy`, `PinSettings` |
 | Store | `AppSecretStore`, `SecretReply` |
 | Payments | `wallet`, `invoice`, `contact`, `http`, `tor`, `in_person` and `epic1` modules |
+| Epicbox push sessions | `epicbox_sessions` module: `start_listener_via`, `contacts_push_start`, `contacts_push_stop`, `epicbox_sessions`, `watch_epicbox_sessions` |
 | Data | `at_rest`, `app_data` |
 | Errors | `WalletError`, `WalletErrorKind` |
 
