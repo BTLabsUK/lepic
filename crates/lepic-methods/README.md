@@ -67,6 +67,7 @@ With `epicbox-wallet`, two loops hand messages to the engine with `Wallet::arriv
 |---|---|---|
 | `drain(wallet)` | Background work on mobile | Takes every stored message once, stops at the first transient failure and leaves the rest on the relay |
 | `listen(wallet, ...)` | App in the foreground | Holds a connection and handles messages as they arrive, retrying a held message with backoff |
+| `listen_via(wallet, ..., group, options)` | App in the foreground | The same, reading from a shared mux/1 session; falls back to `listen` when the relay has no mux/1 |
 
 A message is acknowledged once its effect is stored, or once its rejection is recorded. A
 transient failure leaves it unacknowledged, and the relay holds back everything behind it. An
@@ -80,6 +81,18 @@ sends, one of three drawn at random (`NOTICE_LENGTHS`, `NATIVE_NOTICE_LENGTHS`,
 address per listing, drained on its own connection. `drain_many_at` drains several listings in
 turn on one connection while each ends quiet, and moves to a new connection after a message it
 kept or a connection that failed.
+
+`listen` moves to a fresh socket when the relay goes quiet or a held message stays held. The
+wallet policy sets both bounds: `listener_challenge_rounds` (default 3) and
+`listener_held_rounds` (default off). A drain is not affected.
+
+`Epicbox::pushed()` returns the `PushedSessions` of the transport, shared by its clones. A
+session is named by the relay and a group the host picks. Two owners that name the same group
+on the same relay share one socket, each with its own claim on the mailboxes, and the session
+lives until its last owner lets go. The owners are `CONTACTS_OWNER` (the contacts collect, set
+up with `set_contacts(PushedConfig)`) and `PAYMENTS_OWNER` (`listen_via`). `infos` lists the
+sessions with their state and counters, `watch` reports `SessionEvent`s, `release(owner)` lets
+an owner go and `clear` drops them all.
 
 ### HTTP and Tor
 
@@ -117,6 +130,7 @@ is kept under and posts a sealed envelope the way the method reaches the listene
 | `method`, `transport`, `policy`, `error`, `codecs` | Re-exports of `lepic-transport` |
 | `file::FileTransport`, `file::FilePolicy`, `file::response_path` | The file method |
 | `epicbox::Epicbox`, `EpicboxPolicy`, `EpicboxNotices`, `EpicboxTransportError`, `peer_key`, `relay_network` | The Epicbox method |
+| `epicbox::PushedSessions`, `PushedConfig`, `SessionInfo`, `SessionEvent`, `CONTACTS_OWNER`, `PAYMENTS_OWNER` | The shared mux/1 sessions |
 | `http::Http`, `HttpPolicy`, `is_direct`, `TRANSPORT_ID` | The HTTP method |
 | `http::Receiver`, `Host`, `Counts`, `refuse`, `coinbase_request`, `coinbase_answer` | The listener's handler |
 | `http::HttpPeer`, `DirectPeer`, `Probe`, `ProbeError` | The native endpoint over HTTP |
