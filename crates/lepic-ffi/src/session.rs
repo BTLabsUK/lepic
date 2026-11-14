@@ -65,11 +65,12 @@ use crate::api::runtime::{ClaimHolder, ClaimedStores, RuntimeInner};
 use crate::api::secret_store::AppSecretStore;
 use crate::api::types::{
     FeeEstimate, FinalizedTx, FoundDuring, ImportedTx, InboxReport, KernelLocation, LegacyImport,
-    LegacyImportStatus, ListenerEvent, ListenerEventKind, ListingDrain, ListingRef, NodeRoute,
-    NodeTip, OutputCategory, OutputStatus, PeerCompat, ReceivedSlate, ScanFound, ScanProgress,
-    ScanResult, SelfInputs, SelfOutputs, SelfSendRequest, SelfSentTx, SendOptions, SentTx, Slate,
-    SlateMessage, SlateStage, SlateWire, TransactionDetails, TransportConnection, TransportState,
-    TxOrigin, TxStatus, WalletConfig, WalletEvent, WalletEventKind, WalletOutput, WalletSummary,
+    LegacyImportStatus, ListenVia, ListenerEvent, ListenerEventKind, ListingDrain, ListingRef,
+    NodeRoute, NodeTip, OutputCategory, OutputStatus, PeerCompat, ReceivedSlate, ScanFound,
+    ScanProgress, ScanResult, SelfInputs, SelfOutputs, SelfSendRequest, SelfSentTx, SendOptions,
+    SentTx, Slate, SlateMessage, SlateStage, SlateWire, TransactionDetails, TransportConnection,
+    TransportState, TxOrigin, TxStatus, WalletConfig, WalletEvent, WalletEventKind, WalletOutput,
+    WalletSummary,
 };
 use crate::boundary::InFlight;
 use crate::frb_generated::StreamSink;
@@ -352,9 +353,7 @@ fn service_domain(domain: &str) -> Result<lepic_epicbox::ServiceDomain, WalletEr
 }
 
 /// One [`ListingDrain`] per result, in order: the report, or the error in its place.
-pub(crate) fn listing_drains(
-    results: Vec<Result<lepic_wallet::inbox::InboxSummary, lepic_wallet::inbox::InboxError>>,
-) -> Vec<ListingDrain> {
+pub(crate) fn listing_drains(results: Vec<Result<InboxSummary, InboxError>>) -> Vec<ListingDrain> {
     results
         .into_iter()
         .map(|result| match result {
@@ -370,7 +369,7 @@ pub(crate) fn listing_drains(
         .collect()
 }
 
-fn inbox_report(summary: &lepic_wallet::inbox::InboxSummary) -> InboxReport {
+fn inbox_report(summary: &InboxSummary) -> InboxReport {
     InboxReport {
         received: summary.received,
         finalized: summary.finalized,
@@ -1284,7 +1283,8 @@ impl Session {
             (None, Some(from)) => ScanStart::Height(from),
             (None, None) => ScanStart::LastScanned,
         };
-        #[allow(unused_mut)]
+        // Only a test build changes the options after this.
+        #[cfg_attr(not(test), allow(unused_mut))]
         let mut options = ScanOptions {
             start,
             delete_unconfirmed,
@@ -1737,6 +1737,9 @@ impl Session {
         Ok(inbox_report(&summary))
     }
 
+    /// Drains the mailbox of each of `listings`, at most [`MAX_DRAIN_LISTINGS`], and reports
+    /// each in its place. Fails with `InvalidArgument` for too many or a listing that does not
+    /// parse, and with `Unsupported` when no relay is configured.
     pub(crate) async fn drain_epicbox_listings(
         &self,
         listings: &[ListingRef],
@@ -1862,11 +1865,12 @@ impl Session {
     /// As [`Self::claim_listener`], with the listener reading the relay through a push session.
     pub(crate) fn claim_listener_via(
         &self,
-        via: crate::api::types::ListenVia,
+        via: ListenVia,
     ) -> Result<Option<ListenHandle>, WalletError> {
         self.claim_listener_with(Some(pushed::Via::new(via)?))
     }
 
+    /// [`Self::claim_listener`] for a listener that reads the relay through `via` if given.
     fn claim_listener_with(
         &self,
         via: Option<pushed::Via>,

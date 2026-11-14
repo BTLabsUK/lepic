@@ -36,7 +36,7 @@ impl Default for Choices {
     }
 }
 
-/// A checked [`ListenVia`].
+/// A checked [`ListenVia`]: the group to join and how its sessions are paced.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Via {
     pub(crate) group: String,
@@ -44,6 +44,8 @@ pub(crate) struct Via {
 }
 
 impl Via {
+    /// Checks `via`: a group of 1 to 64 characters without control characters, and a waiting
+    /// check every 1 to 86,400 seconds if given. Fails with `InvalidArgument` otherwise.
     pub(crate) fn new(via: ListenVia) -> Result<Self, WalletError> {
         if via.group.is_empty()
             || via.group.len() > MAX_GROUP
@@ -69,7 +71,8 @@ impl Via {
     }
 }
 
-fn state(state: MuxState) -> EpicboxSessionState {
+/// The state the app sees for a session's `state`.
+fn session_state(state: MuxState) -> EpicboxSessionState {
     match state {
         MuxState::Connecting { .. } => EpicboxSessionState::Connecting,
         MuxState::Attached => EpicboxSessionState::Attached,
@@ -80,7 +83,8 @@ fn state(state: MuxState) -> EpicboxSessionState {
     }
 }
 
-fn event(event: SessionEvent) -> Option<EpicboxSessionEvent> {
+/// The event the app hears for a session `event`; `None` for one it has no kind for.
+fn session_event(event: SessionEvent) -> Option<EpicboxSessionEvent> {
     match event {
         SessionEvent::State {
             relay,
@@ -90,7 +94,7 @@ fn event(event: SessionEvent) -> Option<EpicboxSessionEvent> {
             kind: EpicboxSessionEventKind::State,
             relay,
             group,
-            state: Some(state(now)),
+            state: Some(session_state(now)),
         }),
         SessionEvent::MailQueued { relay, group } => Some(EpicboxSessionEvent {
             kind: EpicboxSessionEventKind::MailQueued,
@@ -103,6 +107,8 @@ fn event(event: SessionEvent) -> Option<EpicboxSessionEvent> {
 }
 
 impl Session {
+    /// Makes the contacts collect read pushed mail through sessions of `via.group`. Fails with
+    /// `InvalidArgument` as [`Via::new`] does and with `Unsupported` when no relay is configured.
     pub(crate) fn contacts_push_start(&self, via: ListenVia) -> Result<(), WalletError> {
         let via = Via::new(via)?;
         self.epicbox()?.pushed().set_contacts(Some(PushedConfig {
@@ -112,6 +118,7 @@ impl Session {
         Ok(())
     }
 
+    /// Makes the contacts collect use sockets again and lets go of its sessions.
     pub(crate) async fn contacts_push_stop(&self) -> Result<(), WalletError> {
         let epicbox = self.epicbox()?;
         epicbox.pushed().set_contacts(None);
@@ -131,7 +138,7 @@ impl Session {
             .map(|info| EpicboxSessionView {
                 relay: info.relay,
                 group: info.group,
-                state: state(info.state),
+                state: session_state(info.state),
                 sockets_opened: info.counters.sockets_opened,
                 attaches: info.counters.attaches,
                 resumes: info.counters.resumes,
@@ -154,7 +161,7 @@ impl Session {
             let report = report.clone();
             tokio::select! {
                 () = epicbox.pushed().watch(move |found| {
-                    if let Some(found) = event(found) {
+                    if let Some(found) = session_event(found) {
                         report(found);
                     }
                 }) => return Ok(()),

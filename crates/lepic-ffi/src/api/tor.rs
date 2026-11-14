@@ -106,6 +106,7 @@ pub struct TorEvent {
 }
 
 impl TorEvent {
+    // Only a tor build raises tor events.
     #[cfg_attr(not(feature = "tor"), allow(dead_code))]
     pub(crate) const fn of(kind: TorEventKind) -> Self {
         Self {
