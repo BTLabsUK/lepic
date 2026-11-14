@@ -207,6 +207,7 @@ impl Subscription {
         context: Arc<ClientContext>,
         mode: Mode,
         options: ListenOptions,
+        carry: Option<Carry>,
     ) -> Result<Self, ClientError> {
         let runtime = Handle::try_current().map_err(|_| ClientError::NoRuntime)?;
         let (commands, receiver) = mpsc::unbounded_channel();
@@ -217,6 +218,7 @@ impl Subscription {
             commands,
             status,
             disconnect: Mutex::new(None),
+            carried: Mutex::new(None),
         });
         let cancel = CancelToken::new();
         let ack_timeout = context.settings.response_timeout.saturating_mul(2);
@@ -232,6 +234,7 @@ impl Subscription {
             mode,
             held_rounds: options.held_rounds,
             challenge_rounds: options.challenge_rounds,
+            carry,
             cancel: cancel.clone(),
         };
         // The host's subscriber is scoped to the calling thread, so the task carries it along.
@@ -262,6 +265,17 @@ impl Subscription {
 
     pub fn state(&self) -> watch::Receiver<ConnectionState> {
         self.shared.status.subscribe()
+    }
+
+    /// The connection a drain started with [`crate::EpicboxClient::drain_on`] handed back, once
+    /// it has ended quiet. `None` for any other end: a drain that kept a message, was stopped or
+    /// failed closes its connection.
+    pub fn take_connection(&self) -> Option<DrainConnection> {
+        self.shared
+            .carried
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take()
     }
 
     /// The version the relay reported in the current or last session; `None` when it did not
@@ -453,6 +467,39 @@ struct Shared {
     commands: mpsc::UnboundedSender<Command>,
     status: watch::Sender<ConnectionState>,
     disconnect: Mutex<Option<Disconnect>>,
+    /// The connection a quiet drain handed back, until [`Subscription::take_connection`].
+    carried: Mutex<Option<DrainConnection>>,
+}
+
+/// A greeted relay connection a finished drain hands on, so the next drain, possibly for another
+/// address, uses it instead of opening one.
+///
+/// It is only ever handed on from a drain that ended quiet: nothing outstanding, nothing held,
+/// every message handed out acknowledged. The relay holds back every address on a connection
+/// while a message it sent there is not acknowledged, so a connection with a kept message is
+/// closed instead (see [`crate::mailbox`]).
+pub struct DrainConnection {
+    connection: Connection,
+    greeting: Greeting,
+}
+
+impl DrainConnection {
+    /// Closes the connection.
+    pub async fn close(self) {
+        self.connection.close().await;
+    }
+}
+
+impl std::fmt::Debug for DrainConnection {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DrainConnection").finish_non_exhaustive()
+    }
+}
+
+/// A drain that may run on a connection handed in and hands its connection back when it ends
+/// quiet.
+pub(crate) struct Carry {
+    pub(crate) incoming: Option<DrainConnection>,
 }
 
 /// Why the last connection ended and how long the client waits before the next attempt.
@@ -681,6 +728,8 @@ struct Manager {
     /// A listener leaves a socket that sent no challenge for this many challenge intervals.
     /// `None` keeps the socket. Never applies to a drain.
     challenge_rounds: Option<u32>,
+    /// Set for a drain that hands its connection on.
+    carry: Option<Carry>,
     cancel: CancelToken,
 }
 
@@ -725,9 +774,10 @@ impl Manager {
             );
             self.shared
                 .set_state(ConnectionState::Connecting { attempt });
+            let cancel = self.cancel.clone();
             let opened = tokio::select! {
                 biased;
-                () = self.cancel.cancelled() => return Ok(End::Stopped),
+                () = cancel.cancelled() => return Ok(End::Stopped),
                 opened = self.open() => opened,
             };
             let failure = match opened {
@@ -768,7 +818,12 @@ impl Manager {
         }
     }
 
-    async fn open(&self) -> Result<(Connection, Greeting), ClientError> {
+    async fn open(&mut self) -> Result<(Connection, Greeting), ClientError> {
+        if let Some(handed) = self.carry.as_mut().and_then(|carry| carry.incoming.take()) {
+            self.shared
+                .update(|inbox| inbox.relay_version = handed.greeting.version);
+            return Ok((handed.connection, handed.greeting));
+        }
         let settings = &self.context.settings;
         let mut connection = Connection::open(
             self.context.connector.as_ref(),
@@ -1298,7 +1353,27 @@ impl<'a> Session<'a> {
         End::Stopped
     }
 
+    /// Ends a drain. One that hands its connection on keeps it open, with the latest challenge,
+    /// for [`Subscription::take_connection`]; `is_drained` already holds, so it is quiet.
     async fn finish_drain(&mut self) -> End {
+        if self.manager.carry.is_some()
+            && let Some(connection) = self.connection.take()
+        {
+            let greeting = Greeting {
+                challenge: std::mem::take(&mut self.challenge),
+                version: self.manager.shared.lock().relay_version,
+            };
+            *self
+                .manager
+                .shared
+                .carried
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner) = Some(DrainConnection {
+                connection,
+                greeting,
+            });
+            return End::Drained;
+        }
         self.leave().await;
         End::Drained
     }

@@ -17,7 +17,7 @@ use tokio::time::Instant;
 use tracing::{Instrument, debug, info_span, warn};
 
 use crate::address::{AddressError, EpicboxAddress};
-use crate::client_inbox::{Mode, Subscription};
+use crate::client_inbox::{Carry, DrainConnection, Mode, Subscription};
 use crate::crypto::{MessageError, NONCE_LEN, Nonce, SALT_LEN, Salt, SignedMessage};
 use crate::frame::{ClientFrame, FrameError, RelayErrorKind, WalletMode};
 use crate::prefilter::Prefilter;
@@ -299,7 +299,7 @@ impl EpicboxClient {
 
     /// As [`Self::listen`], with the leave-the-socket rules of `options`.
     pub fn listen_with(&self, options: ListenOptions) -> Result<Subscription, ClientError> {
-        Subscription::start(Arc::clone(&self.context), Mode::Listen, options)
+        Subscription::start(Arc::clone(&self.context), Mode::Listen, options, None)
     }
 
     /// Connects once, hands out every pending message, and disconnects when the relay has none
@@ -309,6 +309,26 @@ impl EpicboxClient {
             Arc::clone(&self.context),
             Mode::Drain,
             ListenOptions::default(),
+            None,
+        )
+    }
+
+    /// As [`Self::drain`], on `connection` when one is given, which an earlier drain handed on
+    /// (possibly for another address, as this client's identity subscribes on it). When this
+    /// drain ends quiet (nothing outstanding, nothing held, every message acknowledged), its
+    /// connection stays open for [`Subscription::take_connection`]; otherwise it is closed. A
+    /// connection the relay already closed fails the drain as any connection failure does.
+    pub fn drain_on(
+        &self,
+        connection: Option<DrainConnection>,
+    ) -> Result<Subscription, ClientError> {
+        Subscription::start(
+            Arc::clone(&self.context),
+            Mode::Drain,
+            ListenOptions::default(),
+            Some(Carry {
+                incoming: connection,
+            }),
         )
     }
 

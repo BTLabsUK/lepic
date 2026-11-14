@@ -34,7 +34,10 @@ async fn listener(relay: &MockRelay, options: ListenOptions) -> Subscription {
 }
 
 async fn next(inbound: &dyn Inbound) -> Envelope {
-    within(LONG, inbound.next_envelope()).await.unwrap().unwrap()
+    within(LONG, inbound.next_envelope())
+        .await
+        .unwrap()
+        .unwrap()
 }
 
 /// Two periodic challenges `gap` apart, so the listener learns that interval, then a moment for
@@ -53,12 +56,20 @@ async fn a_listener_reconnects_after_the_learned_interval_and_collects_the_waiti
     let bob = listener(&relay, rounds(3)).await;
     teach_interval(&relay, 40).await;
     relay.stall_challenges();
-    let id = relay.store(&address(ALICE), &address(BOB), &sealed(ALICE, BOB, "waiting"));
+    let id = relay.store(
+        &address(ALICE),
+        &address(BOB),
+        &sealed(ALICE, BOB, "waiting"),
+    );
 
     // The last challenge came at 81 s and the learned gap is 41 s, so the listener leaves at 204 s; we are at 197 s.
     sleep(seconds(115)).await;
     assert_eq!(relay.connections_made(), 1, "still on the stalled socket");
-    assert_eq!(relay.deliveries(&id), 0, "the stalled socket was not pushed to");
+    assert_eq!(
+        relay.deliveries(&id),
+        0,
+        "the stalled socket was not pushed to"
+    );
 
     sleep(seconds(20)).await;
     assert_eq!(relay.connections_made(), 2);

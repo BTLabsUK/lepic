@@ -308,6 +308,9 @@ pub(crate) fn relay_address(address: &str, network: Network) -> Option<EpicboxAd
     EpicboxAddress::parse(address, relay_network(network)).ok()
 }
 
+/// The most listings one `drain_epicbox_listings` call takes.
+pub(crate) const MAX_DRAIN_LISTINGS: usize = 16;
+
 /// Longest message [`crate::api::wallet::EpicWallet::sign_with_address_key_at`] or
 /// [`crate::api::wallet::EpicWallet::device_link_sign`] signs, or a verify checks.
 pub(crate) const MAX_ADDRESS_SIGNED_LEN: usize = 64 * 1024;
@@ -1707,6 +1710,28 @@ impl Session {
         let epicbox = self.epicbox()?;
         let summary = epicbox.drain_at(&self.engine, &listing).await?;
         Ok(inbox_report(&summary))
+    }
+
+    pub(crate) async fn drain_epicbox_listings(
+        &self,
+        listings: &[ListingRef],
+    ) -> Result<Vec<InboxReport>, WalletError> {
+        if listings.len() > MAX_DRAIN_LISTINGS {
+            return Err(invalid(format!(
+                "at most {MAX_DRAIN_LISTINGS} listings to drain at once"
+            )));
+        }
+        let parsed = listings
+            .iter()
+            .map(|entry| listing(&entry.service_key, entry.generation))
+            .collect::<Result<Vec<_>, _>>()?;
+        let epicbox = self.epicbox()?;
+        epicbox
+            .drain_many_at(&self.engine, &parsed)
+            .await
+            .into_iter()
+            .map(|result| Ok(inbox_report(&result?)))
+            .collect()
     }
 
     /// Never logs the message or the signature.

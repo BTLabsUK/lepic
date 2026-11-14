@@ -10,6 +10,7 @@ use lepic_epicbox::mock_relay::MockRelay;
 use std::sync::Arc;
 
 use super::*;
+use crate::api::types::{InboxReport, ListingRef};
 use crate::api::wallet::verify_address_signature_at;
 
 const PHRASE: &str = "abandon abandon abandon abandon abandon abandon abandon abandon \
@@ -84,6 +85,59 @@ async fn a_listing_address_is_the_same_on_every_device_and_never_the_payments_ad
     ] {
         assert_eq!(
             kind(here.epicbox_address_at(bad.to_owned(), 0).await),
+            WalletErrorKind::InvalidArgument,
+            "{bad}"
+        );
+    }
+}
+
+fn listing_ref(service_key: &str, generation: u32) -> ListingRef {
+    ListingRef {
+        service_key: service_key.to_owned(),
+        generation,
+    }
+}
+
+#[tokio::test]
+async fn several_listings_are_drained_in_one_call_with_a_report_each() {
+    let mut fixture = Fixture::new();
+    let wallet = wallet(&mut fixture, Some(PHRASE)).await;
+    assert_eq!(wallet.drain_epicbox_listings(Vec::new()).await.unwrap(), []);
+    let listings = vec![
+        listing_ref(SERVICE_KEY, 0),
+        listing_ref(OTHER_SERVICE_KEY, 3),
+        listing_ref(SERVICE_KEY, 1),
+    ];
+    let reports = wallet.drain_epicbox_listings(listings).await.unwrap();
+    assert_eq!(reports, vec![InboxReport::default(); 3]);
+    // The longest list the call takes.
+    let sixteen = (0..16).map(|generation| listing_ref(SERVICE_KEY, generation));
+    let reports = wallet
+        .drain_epicbox_listings(sixteen.collect())
+        .await
+        .unwrap();
+    assert_eq!(reports.len(), 16);
+}
+
+#[tokio::test]
+async fn more_than_sixteen_listings_or_a_bad_key_are_refused_before_any_relay_is_asked() {
+    let mut fixture = Fixture::new();
+    let wallet = wallet(&mut fixture, Some(PHRASE)).await;
+    let seventeen = (0..17).map(|generation| listing_ref(SERVICE_KEY, generation));
+    assert_eq!(
+        kind(wallet.drain_epicbox_listings(seventeen.collect()).await),
+        WalletErrorKind::InvalidArgument
+    );
+    // One bad key among good ones refuses the whole call.
+    for bad in [
+        "",
+        "02",
+        &SERVICE_KEY[2..],
+        &format!("05{}", &SERVICE_KEY[2..]),
+    ] {
+        let listings = vec![listing_ref(SERVICE_KEY, 0), listing_ref(bad, 0)];
+        assert_eq!(
+            kind(wallet.drain_epicbox_listings(listings).await),
             WalletErrorKind::InvalidArgument,
             "{bad}"
         );

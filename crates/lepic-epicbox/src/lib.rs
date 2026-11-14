@@ -32,8 +32,8 @@ pub use client::{
     ListenOptions, TRANSPORT_ID,
 };
 pub use client_inbox::{
-    ConnectionState, Disconnect, InboxCounters, Mode, RELAY_RETENTION, Rejection, RejectionReason,
-    Subscription,
+    ConnectionState, Disconnect, DrainConnection, InboxCounters, Mode, RELAY_RETENTION, Rejection,
+    RejectionReason, Subscription,
 };
 pub use crypto::{
     Destination, EncryptedMessage, KEY_LEN, MAX_MESSAGE_LEN, MessageError, MessageField,

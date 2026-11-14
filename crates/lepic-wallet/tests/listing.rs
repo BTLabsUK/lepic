@@ -19,8 +19,9 @@ mod support;
 mod world;
 
 use lepic_crypto::{PublicKey, SecretKey};
-use lepic_epicbox::EpicboxAddress;
+use lepic_epicbox::{EpicboxAddress, Network as RelayNetwork};
 use lepic_keychain::Identifier;
+use lepic_methods::epicbox::Epicbox;
 use lepic_primitives::amount::Amount;
 use lepic_slate::model::{ProofAddress, SlateId};
 use lepic_store::{ReceiveListing, TxDirection, TxState};
@@ -29,6 +30,7 @@ use lepic_wallet::inbox::InboxSummary;
 use lepic_wallet::namespace::Listing;
 use lepic_wallet::selection::SelectionStrategy;
 use lepic_wallet::send::{Delivery, SendRequest, SentSlate};
+use std::time::Duration;
 use uuid::Uuid;
 use world::{ACCOUNT, AMOUNT, Party, World};
 
@@ -49,6 +51,41 @@ impl World {
     fn drain_listing(&self, party: &Party, listing: &Listing) -> InboxSummary {
         self.block_on(party.epicbox.drain_at(&party.wallet, listing))
             .unwrap()
+    }
+
+    fn drain_listings(&self, party: &Party, listings: &[Listing]) -> Vec<InboxSummary> {
+        self.block_on(party.epicbox.drain_many_at(&party.wallet, listings))
+            .into_iter()
+            .map(|result| result.unwrap())
+            .collect()
+    }
+
+    /// As [`Self::drain_listings`] through `epicbox`, a client of its own.
+    fn drain_listings_through(
+        &self,
+        epicbox: &Epicbox,
+        party: &Party,
+        listings: &[Listing],
+    ) -> Vec<InboxSummary> {
+        self.block_on(epicbox.drain_many_at(&party.wallet, listings))
+            .into_iter()
+            .map(|result| result.unwrap())
+            .collect()
+    }
+
+    /// Three listings of one service, each with a payment waiting at the relay; the payer is
+    /// funded for three sends.
+    fn three_listings_with_a_payment_each(&self) -> Vec<Listing> {
+        let service = name_service();
+        self.payer.fund(10, world::FUNDING);
+        self.payer.fund(11, world::FUNDING);
+        let listings: Vec<Listing> = (0..3)
+            .map(|generation| Listing::new(*service.service_key(), generation))
+            .collect();
+        for listing in &listings {
+            self.pay(&self.listing_address(&self.issuer, listing));
+        }
+        listings
     }
 
     fn drain_payments(&self, party: &Party) -> InboxSummary {
@@ -213,4 +250,77 @@ fn listing_keys_come_back_from_the_phrase_and_differ_by_listing() {
             first.public_key()
         );
     }
+}
+
+#[test]
+fn three_listings_are_drained_on_one_relay_connection() {
+    let world = World::new();
+    let listings = world.three_listings_with_a_payment_each();
+    let subscribed = world.relay.subscribing_connections();
+
+    let summaries = world.drain_listings(&world.issuer, &listings);
+
+    assert_eq!(
+        summaries
+            .iter()
+            .map(|summary| summary.received)
+            .collect::<Vec<_>>(),
+        [1, 1, 1]
+    );
+    assert_eq!(world.relay.subscribing_connections() - subscribed, 1);
+    for listing in &listings {
+        let address = world.listing_address(&world.issuer, listing);
+        assert_eq!(world.relay.pending(&address), 0);
+    }
+    // Each payment was answered from its own listing: the payer finalizes all three.
+    assert_eq!(world.drain_payments(&world.payer).finalized, 3);
+}
+
+#[test]
+fn listings_after_a_kept_message_continue_on_a_new_connection() {
+    let world = World::new();
+    let service = name_service();
+    let listings: Vec<Listing> = (0..3)
+        .map(|generation| Listing::new(*service.service_key(), generation))
+        .collect();
+    world.pay(&world.listing_address(&world.issuer, &listings[0]));
+    // The relay does not answer the post of the reply, so the wallet keeps the payment for
+    // another try.
+    world.relay.set_unroutable(&world.payer.address);
+    // A client that gives up on the unanswered post after a second.
+    let mut settings = world::settings();
+    settings.response_timeout = Duration::from_secs(1);
+    let epicbox = Epicbox::new(settings, RelayNetwork::Floonet, world.relay.connector());
+    let subscribed = world.relay.subscribing_connections();
+
+    let summaries = world.drain_listings_through(&epicbox, &world.issuer, &listings);
+
+    assert_eq!(summaries[0].held, 1);
+    assert_eq!((summaries[1].held, summaries[2].held), (0, 0));
+    // The first listing's connection was closed with the kept message; the other two share one.
+    assert_eq!(world.relay.subscribing_connections() - subscribed, 2);
+    assert_eq!(
+        world
+            .relay
+            .pending(&world.listing_address(&world.issuer, &listings[0])),
+        1
+    );
+
+    // Once answers can go out again the kept payment is answered; the wallet had stored it.
+    world.relay.set_routable(&world.payer.address);
+    let again = world.drain_listings_through(&epicbox, &world.issuer, &listings[..1]);
+    assert_eq!((again[0].held, again[0].repeated), (0, 1));
+    assert_eq!(
+        world
+            .relay
+            .pending(&world.listing_address(&world.issuer, &listings[0])),
+        0
+    );
+}
+
+#[test]
+fn an_empty_list_of_listings_opens_no_connection() {
+    let world = World::new();
+    assert!(world.drain_listings(&world.issuer, &[]).is_empty());
+    assert_eq!(world.relay.connections_made(), 0);
 }

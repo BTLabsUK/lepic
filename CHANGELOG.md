@@ -34,6 +34,10 @@ Conventional Commit messages at release time.
   round. The new socket collects what waits. Drains are not affected.
   `EpicboxClient::listen_with` takes `ListenOptions`. The log line carries `rounds` and
   `interval_s`.
+- FFI: `EpicWallet::drain_epicbox_listings` drains up to 16 listing addresses in one call, on
+  one relay connection where it can. A listing that ends quiet hands its connection to the
+  next; after a message the wallet kept, or a failed connection, the rest continue on a new
+  one. `Epicbox::drain_many_at` and `EpicboxClient::drain_on` are the engine side.
 
 ### Changed
 

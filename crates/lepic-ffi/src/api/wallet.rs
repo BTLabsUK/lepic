@@ -27,9 +27,10 @@ use crate::api::runtime::LepicRuntime;
 use crate::api::secret_store::AppSecretStore;
 use crate::api::types::{
     Chain, FeeEstimate, FinalizedTx, InboxReport, KernelLocation, LegacyImport, ListenerEvent,
-    ListenerEventKind, NodeRoute, NodeTip, PeerCompat, Poller, ReceivedSlate, RefreshProgress,
-    ScanProgress, SelfSendRequest, SelfSentTx, SendOptions, SentTx, Slate, SlateInfo, SlateWire,
-    TransactionDetails, UrSlateProgress, WalletConfig, WalletEvent, WalletOutput, WalletSummary,
+    ListenerEventKind, ListingRef, NodeRoute, NodeTip, PeerCompat, Poller, ReceivedSlate,
+    RefreshProgress, ScanProgress, SelfSendRequest, SelfSentTx, SendOptions, SentTx, Slate,
+    SlateInfo, SlateWire, TransactionDetails, UrSlateProgress, WalletConfig, WalletEvent,
+    WalletOutput, WalletSummary,
 };
 use crate::boundary::{Boundary, end_stream, guard, guard_or};
 use crate::frb_generated::StreamSink;
@@ -1331,6 +1332,26 @@ impl EpicWallet {
     ) -> Result<InboxReport, WalletError> {
         self.run("drain_epicbox_at", |session| async move {
             session.drain_epicbox_at(&service_key, generation).await
+        })
+        .await
+    }
+
+    /// Takes what waits at each of `listings` as [`EpicWallet::drain_epicbox_at`] does for one,
+    /// one after the other, on one relay connection where it can: a listing that ends quiet
+    /// hands its connection to the next. After a message the wallet kept, or a connection that
+    /// failed, the listings still to come continue on a new connection. At most 16 listings,
+    /// which keeps a call short; the whole call is bound by the drain timeout, and listings not
+    /// reached by then are left for the next drain. Returns one report per listing, in the
+    /// order given. Fails with `InvalidArgument` for more than 16 listings or a `service_key`
+    /// that is not a compressed secp256k1 key in hex, before any relay is contacted, and
+    /// otherwise as `drain_epicbox_at` does; the error of the first listing that failed is
+    /// returned, and what the others took stays taken.
+    pub async fn drain_epicbox_listings(
+        &self,
+        listings: Vec<ListingRef>,
+    ) -> Result<Vec<InboxReport>, WalletError> {
+        self.run("drain_epicbox_listings", |session| async move {
+            session.drain_epicbox_listings(&listings).await
         })
         .await
     }

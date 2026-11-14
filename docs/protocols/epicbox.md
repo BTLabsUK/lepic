@@ -166,7 +166,16 @@ own client and connection.
 |---|---|---|---|
 | `EpicboxClient::listen` | `Listen` | `listener` | Holds the connection, pings, reconnects with backoff until stopped |
 | `EpicboxClient::drain` | `Drain` | `send` | Connects once, takes every waiting message, disconnects |
+| `EpicboxClient::drain_on` | `Drain` | `send` | A drain on a connection handed in, which it hands back when it ended quiet |
 | `MailboxClient::drain_once` | — | `send` | Subscribes as each mailbox in turn on one connection |
+
+`Epicbox::drain_many_at` (`lepic-methods`) drains several listing addresses with `drain_on`: the
+connection is greeted once, and each listing subscribes in turn, signing the latest challenge.
+A drain hands its connection back only when it ended quiet: nothing outstanding, nothing held,
+every message it handed out acknowledged. Otherwise it closes the connection, because the relay
+holds back every address on a connection while a message it sent there is unacknowledged. The
+listings still to come then continue on a new connection. The whole call is bound by the
+drain timeout.
 
 A drain never becomes a live listener, so it never takes live delivery from a listener elsewhere.
 Stored messages reach both. `Subscription::state` reports a `ConnectionState`: `Connecting`,

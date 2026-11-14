@@ -77,7 +77,9 @@ A notice about a payment over Epicbox is padded to the length of a first slate t
 sends, one of three drawn at random (`NOTICE_LENGTHS`, `NATIVE_NOTICE_LENGTHS`,
 `notice_lengths_for`). `EpicboxNotices` matches notices for a wallet with no relay to reach.
 `address_at`, `sign_with_address_key_at` and `drain_at` serve listing addresses: one
-address per listing, drained on its own connection.
+address per listing, drained on its own connection. `drain_many_at` drains several listings in
+turn on one connection while each ends quiet, and moves to a new connection after a message it
+kept or a connection that failed.
 
 ### HTTP and Tor
 

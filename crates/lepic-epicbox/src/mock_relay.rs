@@ -110,6 +110,8 @@ struct Socket {
     reads_left: Option<usize>,
     /// Set by [`MockRelay::stall_challenges`]: no challenge and no pushed message.
     cycle_stopped: bool,
+    /// Whether this socket has had a `Subscribe` accepted.
+    ever_subscribed: bool,
 }
 
 enum Outgoing {
@@ -125,6 +127,8 @@ struct RelayState {
     next_challenge: u64,
     sockets: HashMap<u64, Socket>,
     sockets_opened: usize,
+    /// Sockets that had a `Subscribe` accepted, counted once each.
+    sockets_subscribed: usize,
     listeners: HashMap<String, u64>,
     messages: Vec<Stored>,
     refusing: bool,
@@ -158,6 +162,7 @@ impl MockRelay {
                     next_challenge: 0,
                     sockets: HashMap::new(),
                     sockets_opened: 0,
+                    sockets_subscribed: 0,
                     listeners: HashMap::new(),
                     messages: Vec::new(),
                     refusing: false,
@@ -207,6 +212,13 @@ impl MockRelay {
     pub fn set_unroutable(&self, address: &EpicboxAddress) {
         self.update(|state| {
             state.unroutable.insert(address.key_text());
+        });
+    }
+
+    /// Answers posts to `address` again, after [`Self::set_unroutable`].
+    pub fn set_routable(&self, address: &EpicboxAddress) {
+        self.update(|state| {
+            state.unroutable.remove(&address.key_text());
         });
     }
 
@@ -351,6 +363,12 @@ impl MockRelay {
         self.lock().sockets_opened
     }
 
+    /// Connections that had a `Subscribe` accepted, closed ones included. A connection that only
+    /// posts a slate is not counted.
+    pub fn subscribing_connections(&self) -> usize {
+        self.lock().sockets_subscribed
+    }
+
     /// Frames received from clients with this `type`, compared without case as the relay does.
     pub fn received(&self, type_name: &str) -> usize {
         self.lock()
@@ -490,6 +508,7 @@ impl MockRelay {
                     resend_rounds: 0,
                     reads_left: state.stop_reading_after,
                     cycle_stopped: false,
+                    ever_subscribed: false,
                 },
             );
             state.sockets_opened = state.sockets_opened.saturating_add(1);
@@ -736,6 +755,11 @@ impl RelayState {
         }
         socket.address = Some(address);
         socket.queue = Some(queue.clone());
+        let first_subscribe = !socket.ever_subscribed;
+        socket.ever_subscribed = true;
+        if first_subscribe {
+            self.sockets_subscribed = self.sockets_subscribed.saturating_add(1);
+        }
         // The public relay retries an unacknowledged message on the same socket after a few
         // subscribes, and gives up on the address's unacknowledged messages after a few rounds.
         if socket.resend_attempts >= RESEND_AFTER && socket.resend_rounds <= RESEND_AFTER {
