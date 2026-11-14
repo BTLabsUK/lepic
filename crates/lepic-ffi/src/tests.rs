@@ -31,6 +31,7 @@ mod outputs;
 mod password;
 mod payment_qr;
 mod peer;
+mod pushed;
 mod resend;
 mod scan;
 mod selection;

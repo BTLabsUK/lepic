@@ -2234,3 +2234,59 @@ pub struct EpictxView {
     /// When the sender stops honouring the slate, in unix seconds; advisory.
     pub expires: Option<u64>,
 }
+
+/// How the Epicbox listener reads mail from the relay over one shared push session (mux/1),
+/// instead of its own socket. Falls back to the socket when the relay does not offer it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ListenVia {
+    /// The session's group. The contacts collect that names the same group on the same relay
+    /// shares the socket.
+    pub group: String,
+    /// How often the session asks the relay whether mail waits, in seconds; `None` never asks.
+    pub waiting_every_s: Option<u32>,
+}
+
+/// Where a push session of the relay is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EpicboxSessionState {
+    Connecting,
+    Attached,
+    /// The connection dropped; the session retries with backoff.
+    Reconnecting,
+    /// The relay does not offer push sessions. Nothing was started.
+    NotOffered,
+    Stopped,
+}
+
+/// A push session of the relay in use.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EpicboxSessionView {
+    /// The relay as `domain:port`.
+    pub relay: String,
+    pub group: String,
+    pub state: EpicboxSessionState,
+    pub sockets_opened: u64,
+    pub attaches: u64,
+    pub resumes: u64,
+    pub mails: u64,
+    pub duplicates: u64,
+    pub stall_reconnects: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EpicboxSessionEventKind {
+    /// The session is in `state`. The first event of a session, then one per change.
+    State,
+    /// The relay pushed mail the session queued, for the contacts collect or the listener.
+    MailQueued,
+}
+
+/// What [`crate::api::epicbox_sessions`] streams.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EpicboxSessionEvent {
+    pub kind: EpicboxSessionEventKind,
+    pub relay: String,
+    pub group: String,
+    /// The new state, for `State`.
+    pub state: Option<EpicboxSessionState>,
+}

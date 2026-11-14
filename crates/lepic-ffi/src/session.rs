@@ -26,7 +26,7 @@ use lepic_transport::file::{FileTransport, response_path};
 use lepic_transport::transport::{BoxFuture, Destination, Exchange as _, Location, TransportId};
 use lepic_wallet::details::TransactionDetails as EngineTransactionDetails;
 use lepic_wallet::event::{Balance, Connection, TransportState as EngineTransportState};
-use lepic_wallet::inbox::ListenHandle;
+use lepic_wallet::inbox::{InboxError, InboxSummary, ListenHandle};
 use lepic_wallet::legacy_history::{
     ImportWorkDir, LegacyImportOutcome, LegacyImportStatus as EngineLegacyStatus,
     TxOrigin as EngineTxOrigin,
@@ -99,6 +99,7 @@ pub(crate) use http::ThisDevice;
 pub(crate) use tor::TorReport;
 mod in_person;
 mod invoice;
+mod pushed;
 mod servers;
 
 use servers::EpicboxSlot;
@@ -211,6 +212,8 @@ pub(crate) struct Session {
     listener: Mutex<Option<ListenHandle>>,
     /// The handle a listener that a server switch ended continues with.
     relisten: Mutex<Option<ListenHandle>>,
+    /// What the app chose for push sessions, kept across a server switch.
+    pub(crate) pushed: pushed::Choices,
     /// Held by a listener while it is subscribed, so a server switch can wait for its end.
     listen_run: tokio::sync::Mutex<()>,
     /// Held for reading by every wallet call and for writing by a server switch.
@@ -661,6 +664,7 @@ impl Session {
             file: transports.file,
             listener: Mutex::default(),
             relisten: Mutex::default(),
+            pushed: pushed::Choices::default(),
             listen_run: tokio::sync::Mutex::default(),
             servers: tokio::sync::RwLock::default(),
             http: transports.http,
@@ -736,6 +740,8 @@ impl Session {
         }
         lock(&self.balance).take();
         if let Some(epicbox) = &self.epicbox {
+            // The sessions hold the relay identity, so they end with the lock.
+            epicbox.current().pushed().clear();
             epicbox.current().detach();
         }
         // Before the engine locks, so a database that closes at the lock releases the
@@ -1850,11 +1856,27 @@ impl Session {
     /// Starts listening unless a listener runs. Returns the handle to stop it with, or `None`
     /// when one was running already.
     pub(crate) fn claim_listener(&self) -> Result<Option<ListenHandle>, WalletError> {
+        self.claim_listener_with(None)
+    }
+
+    /// As [`Self::claim_listener`], with the listener reading the relay through a push session.
+    pub(crate) fn claim_listener_via(
+        &self,
+        via: crate::api::types::ListenVia,
+    ) -> Result<Option<ListenHandle>, WalletError> {
+        self.claim_listener_with(Some(pushed::Via::new(via)?))
+    }
+
+    fn claim_listener_with(
+        &self,
+        via: Option<pushed::Via>,
+    ) -> Result<Option<ListenHandle>, WalletError> {
         self.epicbox()?;
         let mut slot = lock(&self.listener);
         if slot.as_ref().is_some_and(|handle| !handle.is_stopped()) {
             return Ok(None);
         }
+        *lock(&self.pushed.listen_via) = via;
         let handle = ListenHandle::new();
         *slot = Some(handle.clone());
         Ok(Some(handle))
@@ -1910,8 +1932,15 @@ impl Session {
         }
         let epicbox = self.epicbox()?;
         let mut events = self.engine.subscribe();
-        let listen = epicbox.listen(&self.engine, handle);
-        tokio::pin!(listen);
+        let via = lock(&self.pushed.listen_via).clone();
+        // Boxed: the two futures nest the wallet's generics deeply enough to overflow the
+        // compiler's layout query when held in this loop.
+        let mut listen: BoxFuture<'_, Result<InboxSummary, InboxError>> = match &via {
+            Some(via) => {
+                Box::pin(epicbox.listen_via(&self.engine, handle, &via.group, via.options))
+            }
+            None => Box::pin(epicbox.listen(&self.engine, handle)),
+        };
         let result = loop {
             tokio::select! {
                 result = &mut listen => break result,

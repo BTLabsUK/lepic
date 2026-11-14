@@ -895,3 +895,34 @@ async fn dropping_node_connections_is_refused_on_a_locked_wallet() {
         WalletErrorKind::Locked
     );
 }
+
+/// The contacts setting for push sessions follows the wallet to the new relay, and the old
+/// relay's registry is left empty.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_switch_moves_the_contacts_push_setting_to_the_new_relay() {
+    let mut world = World::new();
+    let (bob, bob_config) = world.wallet("one.example").await;
+    let bob = bob.session();
+    bob.contacts_push_start(crate::api::types::ListenVia {
+        group: "contacts".to_owned(),
+        waiting_every_s: Some(45),
+    })
+    .unwrap();
+    let before = bob.epicbox().unwrap();
+
+    switch(
+        bob,
+        &WalletConfig {
+            epicbox_domain: "two.example".to_owned(),
+            ..bob_config
+        },
+    )
+    .await
+    .unwrap();
+
+    let after = bob.epicbox().unwrap();
+    let kept = after.pushed().contacts().expect("moved");
+    assert_eq!(kept.group, "contacts");
+    assert_eq!(kept.options.waiting_every, Some(Duration::from_secs(45)));
+    assert_eq!(before.pushed().contacts(), None);
+}

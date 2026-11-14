@@ -42,7 +42,9 @@ mod inbox;
 mod listing;
 mod sessions;
 
-pub use sessions::{CONTACTS_OWNER, PAYMENTS_OWNER, PushedConfig, PushedSessions, SessionInfo};
+pub use sessions::{
+    CONTACTS_OWNER, PAYMENTS_OWNER, PushedConfig, PushedSessions, SessionEvent, SessionInfo,
+};
 
 /// The relay network of addresses for a wallet on `network`.
 pub fn relay_network(network: WalletNetwork) -> Network {

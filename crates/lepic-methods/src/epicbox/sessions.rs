@@ -7,9 +7,11 @@
 //! and a session lives until its last owner lets go.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
 
 use lepic_epicbox::{MuxCounters, MuxError, MuxOptions, MuxSession, MuxState};
+use tokio::sync::watch;
+use tokio::task::{AbortHandle, JoinSet};
 
 /// The claim owner of the contacts collect.
 pub const CONTACTS_OWNER: &str = "contacts";
@@ -33,9 +35,35 @@ pub struct SessionInfo {
     pub counters: MuxCounters,
 }
 
-#[derive(Default)]
+/// What a host hears about the sessions of one [`super::Epicbox`] through
+/// [`PushedSessions::watch`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum SessionEvent {
+    /// The session is in `state`. It is the first event of a session, and a new one follows each
+    /// change; the last one has ended.
+    State {
+        relay: String,
+        group: String,
+        state: MuxState,
+    },
+    /// The relay pushed mail the session queued. It may be for any owner of the session.
+    MailQueued { relay: String, group: String },
+}
+
 pub struct PushedSessions {
     registry: Mutex<Registry>,
+    /// Counts each time a session is added or removed.
+    changed: watch::Sender<u64>,
+}
+
+impl Default for PushedSessions {
+    fn default() -> Self {
+        Self {
+            registry: Mutex::default(),
+            changed: watch::channel(0).0,
+        }
+    }
 }
 
 #[derive(Default)]
@@ -52,6 +80,11 @@ struct Entry {
 impl PushedSessions {
     fn registry(&self) -> MutexGuard<'_, Registry> {
         self.registry.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    fn changed(&self) {
+        self.changed
+            .send_modify(|count| *count = count.wrapping_add(1));
     }
 
     /// Makes the contacts collect read pushed mail (`Some`) or go back to sockets (`None`). Does
@@ -100,6 +133,8 @@ impl PushedSessions {
                 owners: BTreeSet::from([owner.to_owned()]),
             },
         );
+        drop(registry);
+        self.changed();
         Ok(session)
     }
 
@@ -120,6 +155,7 @@ impl PushedSessions {
                 true
             });
         }
+        self.changed();
         for session in claimed {
             // An ended session has nothing to release.
             let _ = session.set_claim(owner, Vec::new()).await;
@@ -128,9 +164,12 @@ impl PushedSessions {
 
     /// Stops every session and forgets the contacts config.
     pub fn clear(&self) {
-        let mut registry = self.registry();
-        registry.contacts = None;
-        registry.entries.clear();
+        {
+            let mut registry = self.registry();
+            registry.contacts = None;
+            registry.entries.clear();
+        }
+        self.changed();
     }
 
     /// Every session, by relay and group.
@@ -145,6 +184,110 @@ impl PushedSessions {
                 counters: entry.session.counters(),
             })
             .collect()
+    }
+}
+
+impl PushedSessions {
+    /// Reports what the sessions do, for as long as the returned future is polled: each session
+    /// with its state when it appears and at every change, and a note when mail was queued. A
+    /// session that was removed reports `Stopped` and is not followed any more. Counters are not
+    /// part of the events; read them with [`PushedSessions::infos`].
+    pub async fn watch(&self, report: impl Fn(SessionEvent) + Send + Sync + 'static) {
+        let report = Arc::new(report);
+        let mut changes = self.changed.subscribe();
+        let mut tasks = JoinSet::new();
+        let mut watched: BTreeMap<(String, String), (Weak<MuxSession>, AbortHandle)> =
+            BTreeMap::new();
+        loop {
+            changes.borrow_and_update();
+            let current: Vec<((String, String), Arc<MuxSession>)> = self
+                .registry()
+                .entries
+                .iter()
+                .map(|(key, entry)| (key.clone(), Arc::clone(&entry.session)))
+                .collect();
+            watched.retain(|key, (session, handle)| {
+                let kept = current.iter().any(|(known, now)| {
+                    known == key && Weak::ptr_eq(session, &Arc::downgrade(now))
+                });
+                if !kept {
+                    // One that already ended said so itself.
+                    if !handle.is_finished() {
+                        report(SessionEvent::State {
+                            relay: key.0.clone(),
+                            group: key.1.clone(),
+                            state: MuxState::Stopped,
+                        });
+                    }
+                    handle.abort();
+                }
+                kept
+            });
+            for (key, session) in current {
+                if watched.contains_key(&key) {
+                    continue;
+                }
+                let (relay, group) = key.clone();
+                let handle = tasks.spawn(watch_one(
+                    relay,
+                    group,
+                    session.state(),
+                    session.queued(),
+                    Arc::clone(&report),
+                ));
+                watched.insert(key, (Arc::downgrade(&session), handle));
+            }
+            // The tasks that ended are not awaited; a finished task of a replaced session is
+            // dropped when the join set is.
+            while tasks.try_join_next().is_some() {}
+            if changes.changed().await.is_err() {
+                return;
+            }
+        }
+    }
+}
+
+async fn watch_one(
+    relay: String,
+    group: String,
+    mut state: watch::Receiver<MuxState>,
+    mut queued: watch::Receiver<u64>,
+    report: Arc<impl Fn(SessionEvent) + Send + Sync + 'static>,
+) {
+    let say = |state| {
+        report(SessionEvent::State {
+            relay: relay.clone(),
+            group: group.clone(),
+            state,
+        });
+    };
+    say(*state.borrow_and_update());
+    queued.borrow_and_update();
+    loop {
+        tokio::select! {
+            changed = state.changed() => {
+                if changed.is_err() {
+                    say(MuxState::Stopped);
+                    return;
+                }
+                let now = *state.borrow_and_update();
+                say(now);
+                if now.has_ended() {
+                    return;
+                }
+            }
+            changed = queued.changed() => {
+                if changed.is_err() {
+                    say(MuxState::Stopped);
+                    return;
+                }
+                queued.borrow_and_update();
+                report(SessionEvent::MailQueued {
+                    relay: relay.clone(),
+                    group: group.clone(),
+                });
+            }
+        }
     }
 }
 

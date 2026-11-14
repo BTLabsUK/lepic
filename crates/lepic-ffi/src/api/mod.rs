@@ -6,6 +6,7 @@ pub mod at_rest;
 pub mod contact;
 pub mod diagnostics;
 pub mod epic1;
+pub mod epicbox_sessions;
 pub mod error;
 pub mod http;
 pub mod in_person;

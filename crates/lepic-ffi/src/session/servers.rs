@@ -216,7 +216,16 @@ impl Session {
             // Before anything changes, so a refusal leaves the old relay in place.
             transport.attach_wallet(&self.engine)?;
             self.move_listener().await;
-            slot.replace(transport.clone()).detach();
+            // The contacts setting moves to the new relay; the old relay's sessions end.
+            transport
+                .pushed()
+                .set_contacts(slot.current().pushed().contacts());
+            let old = slot.replace(transport.clone());
+            old.pushed().clear();
+            old.detach();
+            self.pushed
+                .epoch
+                .send_modify(|count| *count = count.wrapping_add(1));
             info!(relay = %transport.settings().endpoint.domain(), "epicbox relay switched");
         }
         self.engine.ports().node.transport().replace(node);

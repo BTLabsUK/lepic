@@ -71,7 +71,7 @@ lepic-wallet = { workspace = true, optional = true, default-features = false }
 serde = { workspace = true, optional = true, features = ["derive", "std"] }
 serde_json = { workspace = true, optional = true, features = ["std"] }
 thiserror.workspace = true
-tokio = { workspace = true, optional = true, features = ["macros", "rt", "time"] }
+tokio = { workspace = true, optional = true, features = ["macros", "rt", "sync", "time"] }
 tracing = { workspace = true, optional = true, features = ["std", "attributes"] }
 
 [[test]]
