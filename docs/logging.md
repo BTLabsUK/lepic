@@ -70,6 +70,9 @@ new name to this table in the same change.
 | `rounds` | rounds a listener held, or challenge intervals it waited without a challenge, before it moved to a fresh socket |
 | `interval_s` | seconds between the relay's challenges as a listener learned them; absent until learned |
 | `code` | close code a relay sent, or a node's error code |
+| `mailbox` | index a mux/1 session gave a mailbox |
+| `attach_per_frame`, `mailboxes_per_socket`, `inflight_per_socket` | the limits a relay granted a mux/1 session |
+| `retry`, `wait_s` | retry number and wait in seconds while an onion is not reachable yet |
 | `elapsed_ms` | duration of the operation |
 | `error` | the error with its source chain (`ErrorChain`) |
 | `text` | message a node's rejection carried |
