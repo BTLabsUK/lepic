@@ -1166,6 +1166,78 @@ async fn outage_listener_reconnects_after_it_and_delivers_once() {
 // ---------------------------------------------------------------------------------------------
 // c. Two devices on one mailbox
 
+/// A timestamped record of one case, printed when the case fails.
+#[derive(Clone)]
+struct Journal {
+    started: Instant,
+    lines: Arc<Mutex<Vec<String>>>,
+}
+
+impl Journal {
+    fn new() -> Self {
+        Self {
+            started: Instant::now(),
+            lines: Arc::new(Mutex::new(Vec::new())),
+        }
+    }
+
+    fn note(&self, line: impl Into<String>) {
+        let at = self.started.elapsed().as_secs_f64();
+        self.lines
+            .lock()
+            .unwrap()
+            .push(format!("{at:9.3} {}", line.into()));
+    }
+
+    fn mails(&self, who: &str, what: &str, mails: &[MailboxMessage]) {
+        let list: Vec<String> = mails
+            .iter()
+            .map(|m| format!("[{} {} {:?}]", m.mailbox(), m.msg_id(), text_of(m)))
+            .collect();
+        self.note(format!("{who} {what} {}: {}", mails.len(), list.join(" ")));
+    }
+
+    /// Records the events and state changes of `session` as `who`.
+    fn watch(&self, who: &'static str, session: &MuxSession) {
+        let mut events = session.events();
+        let journal = self.clone();
+        tokio::spawn(async move {
+            loop {
+                match events.recv().await {
+                    Ok(event) => journal.note(format!("{who} event {event:?}")),
+                    Err(broadcast::error::RecvError::Lagged(n)) => {
+                        journal.note(format!("{who} events lagged {n}"));
+                    }
+                    Err(broadcast::error::RecvError::Closed) => return,
+                }
+            }
+        });
+        let mut state = session.state();
+        let journal = self.clone();
+        tokio::spawn(async move {
+            journal.note(format!("{who} state {:?}", *state.borrow_and_update()));
+            while state.changed().await.is_ok() {
+                journal.note(format!("{who} state {:?}", *state.borrow_and_update()));
+            }
+        });
+    }
+}
+
+/// Prints the journal when the case panics.
+struct PrintOnPanic(Journal);
+
+impl Drop for PrintOnPanic {
+    fn drop(&mut self) {
+        if std::thread::panicking() {
+            println!("MUX_ROBUST_JOURNAL begin");
+            for line in self.0.lines.lock().unwrap().iter() {
+                println!("MUX_ROBUST_JOURNAL {line}");
+            }
+            println!("MUX_ROBUST_JOURNAL end");
+        }
+    }
+}
+
 /// Two sessions, A and B, take one mailbox from each other in turn: the one that loses it gets
 /// `Replaced`, is holding one unsettled message at that moment, and that message is handed over
 /// to the winner. A message posted after each move reaches the winner. No message is lost or
@@ -1176,12 +1248,30 @@ async fn two_devices_flip_a_mailbox_without_loss_or_duplicates() {
     let Some(rig) = rig("two_devices") else {
         return;
     };
+    // Client logs, for example a lost socket, go to the output when RUST_LOG asks for them.
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+        .with_test_writer()
+        .try_init();
     let flips = env_u64("LEPIC_ROBUST_FLIPS", 10);
     let (sender, mailbox) = (rig.fresh(), rig.fresh());
+    let journal = Journal::new();
+    let _print = PrintOnPanic(journal.clone());
+    journal.note(format!("mailbox {}", mailbox.address()));
     let sessions = [
         rig.session(vec![mailbox.clone()], MuxOptions::default(), None),
         rig.session(Vec::new(), MuxOptions::default(), None),
     ];
+    journal.watch("A", &sessions[0]);
+    journal.watch("B", &sessions[1]);
+    let name = |n: usize| if n == 0 { "A" } else { "B" };
+    let snapshot = |sessions: &[MuxSession; 2]| {
+        format!(
+            "counters A {} B {}",
+            counters_json(&sessions[0].counters()),
+            counters_json(&sessions[1].counters())
+        )
+    };
     let mut events: Vec<_> = sessions.iter().map(MuxSession::events).collect();
     let mut queued: Vec<_> = sessions.iter().map(MuxSession::queued).collect();
     // Where the mailbox is on each session, by index.
@@ -1197,7 +1287,9 @@ async fn two_devices_flip_a_mailbox_without_loss_or_duplicates() {
         let next = 1 - holder;
         // The holder takes a message and does not settle it.
         let text = format!("in flight at flip {flip}");
+        journal.note(format!("post {text:?}"));
         rig.post(&sender, &mailbox, &text).await;
+        journal.note(format!("posted {text:?}"));
         posted.push(text.clone());
         let flying = next_mail(
             &sessions[holder],
@@ -1206,6 +1298,7 @@ async fn two_devices_flip_a_mailbox_without_loss_or_duplicates() {
             SHORT,
         )
         .await;
+        journal.mails(name(holder), "took", &flying);
         // A second message may follow the first within a moment; collect what is there.
         let mut flying = flying;
         flying.extend(
@@ -1217,6 +1310,8 @@ async fn two_devices_flip_a_mailbox_without_loss_or_duplicates() {
             )
             .await,
         );
+        journal.mails(name(holder), "holds in flight", &flying);
+        journal.note(snapshot(&sessions));
         assert_eq!(
             flying.len(),
             1,
@@ -1233,10 +1328,13 @@ async fn two_devices_flip_a_mailbox_without_loss_or_duplicates() {
         let moved = Instant::now();
         let mut detached = false;
         if let Some(old) = index[next] {
+            journal.note(format!("{} detach (index {old})", name(next)));
             detached = sessions[next].detach(mailbox.address()).await.unwrap();
-            let _ = old;
+            journal.note(format!("{} detached: {detached}", name(next)));
         }
+        journal.note(format!("{} attach", name(next)));
         let new_index = sessions[next].attach(mailbox.clone()).await.unwrap();
+        journal.note(format!("{} attach answered: index {new_index}", name(next)));
         index[next] = Some(new_index);
         let replaced = within(SHORT, "Replaced on the holder", async {
             loop {
@@ -1251,6 +1349,7 @@ async fn two_devices_flip_a_mailbox_without_loss_or_duplicates() {
         let replaced_s = secs(moved);
         assert_eq!(Some(replaced), index[holder]);
         let handed = next_mail(&sessions[next], &mut queued[next], &[new_index], SHORT).await;
+        journal.mails(name(next), "took handed over", &handed);
         let handed_s = secs(moved);
         let handed_ids: Vec<String> = handed.iter().map(|m| m.msg_id().to_string()).collect();
         if handed_ids.contains(&flying_id) {
@@ -1264,11 +1363,15 @@ async fn two_devices_flip_a_mailbox_without_loss_or_duplicates() {
         }
         // The loser settles late: its settle must not store anything twice.
         let late = sessions[holder].settle(flying[0].msg_id(), Handled::Stored);
+        journal.note(format!("{} late settle: {late:?}", name(holder)));
 
         let text = format!("after flip {flip}");
+        journal.note(format!("post {text:?}"));
         rig.post(&sender, &mailbox, &text).await;
+        journal.note(format!("posted {text:?}"));
         posted.push(text.clone());
         let after = next_mail(&sessions[next], &mut queued[next], &[new_index], SHORT).await;
+        journal.mails(name(next), "took", &after);
         for mail in &after {
             sessions[next]
                 .settle(mail.msg_id(), Handled::Stored)
@@ -1277,6 +1380,8 @@ async fn two_devices_flip_a_mailbox_without_loss_or_duplicates() {
         }
         // Anything the loser still queues for the mailbox is a duplicate.
         let stray = sessions[holder].take(&[index[holder].unwrap()]);
+        journal.mails(name(holder), "stray", &stray);
+        journal.note(snapshot(&sessions));
         rounds.push(json!({
             "flip": flip,
             "to": if next == 0 { "A" } else { "B" },
