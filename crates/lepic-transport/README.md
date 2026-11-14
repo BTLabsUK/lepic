@@ -48,6 +48,7 @@ calls these traits and never names a transport or a codec.
 | `file` (`legacy`) | `FileTransport`, `FilePolicy`, `FILE`, `response_path`, `MAX_WIRE_SLATE_LEN` |
 | `marker` | `features` (`MARKER`, `PAIR_REQUESTS`, `NATIVE_SLATES`, `LEPIC_FEATURES`, `claimed`, …); `v2`, `v3` with `legacy` |
 | `host_rule` | `classify_name`, `classify_addr`, `classify_resolved`, `HostClass`, `RefusedHost`, `HostReport` |
+| `epicbox_link` | `epicbox_of_link`, `is_epicbox_link`: the Epicbox address a chat app turned into an `https://key@relay/` link |
 | `loopback` (`loopback`) | `LoopbackTransport` |
 | `error` | `TransportError`, `FileError`, `FileOperation`, `FormatError` |
 
