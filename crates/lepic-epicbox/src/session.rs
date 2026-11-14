@@ -42,7 +42,9 @@ const CLOSE_GRACE: Duration = Duration::from_millis(250);
 /// relays.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Security {
+    /// `wss://`: TLS, checked against the endpoint's domain.
     Tls,
+    /// `ws://`: no encryption, for loopback relays only.
     Plain,
 }
 
@@ -68,14 +70,17 @@ impl RelayEndpoint {
         }
     }
 
+    /// The relay's host name.
     pub fn domain(&self) -> &Domain {
         &self.domain
     }
 
+    /// The port, filled in from the security when the address named none.
     pub fn port(&self) -> u16 {
         self.port
     }
 
+    /// Whether the websocket runs over TLS.
     pub fn security(&self) -> Security {
         self.security
     }
@@ -106,6 +111,7 @@ impl<T: AsyncRead + AsyncWrite + Unpin + Send> RelayStream for T {}
 /// Opens byte streams to relays. [`TcpConnector`] reaches real relays; the mock relay provides
 /// an in-memory one.
 pub trait Connector: Send + Sync {
+    /// Opens a byte stream to `endpoint`.
     fn connect<'a>(
         &'a self,
         endpoint: &'a RelayEndpoint,
@@ -238,8 +244,10 @@ fn refuse_onion(endpoint: &RelayEndpoint) -> io::Result<()> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 #[non_exhaustive]
 pub enum EndpointError {
+    /// A plain websocket was asked for a host that is not loopback.
     #[error("plain websocket relay is not a loopback host")]
     PlainToRemoteHost,
+    /// A relay named by untrusted input is a loopback or unspecified address.
     #[error("the relay host is a loopback or unspecified address")]
     LoopbackHost,
 }
@@ -251,6 +259,7 @@ pub struct TcpConnector {
 }
 
 impl TcpConnector {
+    /// A connector that uses `tls` for TLS endpoints.
     pub fn new(tls: Arc<ClientConfig>) -> Self {
         Self { tls }
     }
@@ -327,8 +336,11 @@ impl Connector for TcpConnector {
 /// The protocol version a relay reports through `GetVersion`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct ProtocolVersion {
+    /// The major version.
     pub major: u16,
+    /// The minor version.
     pub minor: u16,
+    /// The patch version.
     pub patch: u16,
 }
 

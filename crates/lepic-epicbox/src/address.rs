@@ -3,6 +3,9 @@
 // Ported from EpicCash/epic-wallet libwallet/src/epicbox_address.rs, libwallet/src/base58.rs
 // (Apache-2.0); see NOTICE and upstream.toml.
 
+//! Epicbox addresses: a base58check public key on one network and the relay that holds its
+//! messages.
+
 use std::fmt;
 
 use lepic_crypto::{CryptoError, PublicKey};
@@ -24,7 +27,9 @@ const CHECKSUM_LEN: usize = 4;
 /// The chain an address belongs to. Its version bytes keep mainnet and floonet keys apart.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Network {
+    /// The main Epic Cash chain.
     Mainnet,
+    /// The test chain.
     Floonet,
 }
 
@@ -37,25 +42,35 @@ impl Network {
     }
 }
 
+/// Why an address, domain or port did not parse.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[non_exhaustive]
 pub enum AddressError {
+    /// The text is longer than [`MAX_ADDRESS_LEN`].
     #[error("address has {actual} bytes, the limit is {max}")]
     TooLong { actual: usize, max: usize },
+    /// The key part does not have 52 characters.
     #[error("address key has {actual} characters, expected 52")]
     KeyLength { actual: usize },
+    /// The key part has a character outside the base58 alphabet.
     #[error("address key is not base58")]
     NotBase58,
+    /// The key's checksum does not match its bytes.
     #[error("address checksum does not match")]
     Checksum,
+    /// The key's version bytes name another network.
     #[error("address is not a {expected:?} address")]
     WrongNetwork { expected: Network },
+    /// The key bytes are not a point on the curve.
     #[error("address key is not a valid public key")]
     InvalidPublicKey(#[source] CryptoError),
+    /// The domain is empty, too long or has a character other than a letter, digit or dot.
     #[error("address domain is empty, too long or has characters outside [a-zA-Z0-9.]")]
     InvalidDomain,
+    /// The port is not a number from 0 to 65535.
     #[error("address port is not a number from 0 to 65535")]
     InvalidPort,
+    /// The address has no `@domain` and the caller gave no default.
     #[error("address names no domain and no default domain was given")]
     MissingDomain,
 }
@@ -83,6 +98,7 @@ impl std::hash::Hash for Domain {
 }
 
 impl Domain {
+    /// Checks `text` as a relay host name.
     pub fn parse(text: &str) -> Result<Self, AddressError> {
         let allowed = |c: char| c.is_ascii_alphanumeric() || c == '.';
         if text.is_empty() || text.len() > MAX_DOMAIN_LEN || !text.chars().all(allowed) {
@@ -91,6 +107,7 @@ impl Domain {
         Ok(Self(text.to_owned()))
     }
 
+    /// The name as given.
     pub fn as_str(&self) -> &str {
         &self.0
     }
@@ -125,6 +142,7 @@ pub struct EpicboxAddress {
 }
 
 impl EpicboxAddress {
+    /// Builds an address from its parts.
     pub fn new(public_key: PublicKey, network: Network, domain: Domain, port: Option<u16>) -> Self {
         Self {
             public_key,
@@ -188,18 +206,22 @@ impl EpicboxAddress {
         Ok(Self::new(public_key, network, domain, port))
     }
 
+    /// The key that owns the address.
     pub fn public_key(&self) -> &PublicKey {
         &self.public_key
     }
 
+    /// The chain the key belongs to.
     pub fn network(&self) -> Network {
         self.network
     }
 
+    /// The relay that holds the address's messages.
     pub fn domain(&self) -> &Domain {
         &self.domain
     }
 
+    /// The relay port as written in the address, `None` when it named none.
     pub fn port(&self) -> Option<u16> {
         self.port
     }

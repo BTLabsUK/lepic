@@ -4,6 +4,9 @@
 // Ported from EpicCash/epic-wallet libwallet/src/crypto.rs, libwallet/src/message.rs (Apache-2.0);
 // see NOTICE and upstream.toml.
 
+//! Epicbox message crypto: ECDH and PBKDF2 for the key, ChaCha20-Poly1305 for the slate, and
+//! ECDSA over SHA-256 for the sender's signature.
+
 use std::fmt;
 
 use chacha20poly1305::aead::AeadInOut;
@@ -16,9 +19,13 @@ use zeroize::Zeroizing;
 use crate::address::{AddressError, EpicboxAddress};
 use crate::json::JsonProblem;
 
+/// Bytes in a message's PBKDF2 salt.
 pub const SALT_LEN: usize = 8;
+/// Bytes in a message's ChaCha20-Poly1305 nonce.
 pub const NONCE_LEN: usize = 12;
+/// Bytes in the Poly1305 tag at the end of a ciphertext.
 pub const TAG_LEN: usize = 16;
+/// Bytes in a message key.
 pub const KEY_LEN: usize = 32;
 /// Longer `str` text is rejected before it is parsed. It bounds the ciphertext as well.
 pub const MAX_MESSAGE_LEN: usize = 4 * 1024 * 1024;
@@ -31,6 +38,7 @@ pub fn sign_text(text: &str, key: &SecretKey) -> Result<EcdsaSignature, CryptoEr
     EcdsaSignature::sign(&text_digest(text), key)
 }
 
+/// Checks a [`sign_text`] signature over `text` against `key`.
 pub fn verify_text(
     text: &str,
     signature: &EcdsaSignature,
@@ -48,6 +56,7 @@ fn text_digest(text: &str) -> Message {
 pub struct Salt([u8; SALT_LEN]);
 
 impl Salt {
+    /// The salt's bytes.
     pub fn as_bytes(&self) -> &[u8; SALT_LEN] {
         &self.0
     }
@@ -65,6 +74,7 @@ impl From<[u8; SALT_LEN]> for Salt {
 pub struct Nonce([u8; NONCE_LEN]);
 
 impl Nonce {
+    /// The nonce's bytes.
     pub fn as_bytes(&self) -> &[u8; NONCE_LEN] {
         &self.0
     }
@@ -116,6 +126,7 @@ impl fmt::Debug for MessageKey {
 pub struct Plaintext(String);
 
 impl Plaintext {
+    /// The text. Callers must not log it.
     pub fn expose_str(&self) -> &str {
         &self.0
     }
@@ -131,40 +142,56 @@ impl fmt::Debug for Plaintext {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum MessageField {
+    /// The hex ciphertext.
     EncryptedMessage,
+    /// The hex salt.
     Salt,
+    /// The hex nonce.
     Nonce,
 }
 
+/// Why a message could not be sealed, parsed or opened.
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum MessageError {
+    /// The `str` text is longer than [`MAX_MESSAGE_LEN`].
     #[error("message has {actual} bytes, the limit is {max}")]
     TooLong { actual: usize, max: usize },
+    /// The `str` text is not the message JSON.
     #[error("message is not the expected json")]
     Json(#[source] JsonProblem),
+    /// A field is not hex.
     #[error("message field {field:?} is not hex")]
     InvalidHex { field: MessageField },
+    /// A field decoded to the wrong number of bytes.
     #[error("message field {field:?} has {actual} bytes, expected {expected}")]
     WrongLength {
         field: MessageField,
         expected: usize,
         actual: usize,
     },
+    /// The ciphertext is too short to hold the tag.
     #[error("ciphertext has {actual} bytes, shorter than the {TAG_LEN}-byte tag")]
     CiphertextTooShort { actual: usize },
+    /// The message key could not be derived from the two keys.
     #[error("message key could not be derived")]
     Key(#[source] CryptoError),
+    /// The cipher refused to encrypt.
     #[error("message could not be encrypted")]
     Encryption,
+    /// The tag did not match: wrong key or altered ciphertext.
     #[error("message did not decrypt with this key")]
     Decryption,
+    /// The decrypted bytes are not UTF-8.
     #[error("decrypted message is not utf-8")]
     NotUtf8,
+    /// The sender's address does not parse.
     #[error("sender address is invalid")]
     Sender(#[source] AddressError),
+    /// The sender's signature is malformed or does not verify.
     #[error("message signature is invalid")]
     Signature(#[source] CryptoError),
+    /// The message names another key as its destination.
     #[error("message is addressed to another key")]
     NotAddressedToUs,
 }
@@ -179,14 +206,17 @@ pub struct Destination {
 }
 
 impl Destination {
+    /// The destination key as base58check text.
     pub fn public_key(&self) -> &str {
         &self.public_key
     }
 
+    /// The destination relay's domain as the sender wrote it.
     pub fn domain(&self) -> &str {
         &self.domain
     }
 
+    /// The destination port as the sender wrote it.
     pub fn port(&self) -> Option<u16> {
         self.port
     }
@@ -286,10 +316,12 @@ impl EncryptedMessage {
         .map_err(|error| MessageError::Json(error.into()))
     }
 
+    /// Where the sender addressed the message.
     pub fn destination(&self) -> &Destination {
         &self.destination
     }
 
+    /// Whether the destination key is `own`'s key. Domain and port are not compared.
     pub fn is_addressed_to(&self, own: &EpicboxAddress) -> bool {
         self.destination.public_key == own.key_text()
     }
@@ -299,10 +331,12 @@ impl EncryptedMessage {
         &self.ciphertext
     }
 
+    /// The message's salt.
     pub fn salt(&self) -> &Salt {
         &self.salt
     }
 
+    /// The message's nonce.
     pub fn nonce(&self) -> &Nonce {
         &self.nonce
     }
@@ -313,6 +347,7 @@ impl EncryptedMessage {
         MessageKey::derive(peer, own, &self.salt).map_err(MessageError::Key)
     }
 
+    /// Decrypts with a key already derived and checks the tag.
     pub fn decrypt_with_key(&self, key: &MessageKey) -> Result<Plaintext, MessageError> {
         let body_len =
             self.ciphertext
@@ -338,6 +373,7 @@ impl EncryptedMessage {
             .map_err(|_| MessageError::NotUtf8)
     }
 
+    /// Derives the key from `sender` and `own`, then decrypts.
     pub fn open(&self, sender: &PublicKey, own: &SecretKey) -> Result<Plaintext, MessageError> {
         self.decrypt_with_key(&self.key(sender, own)?)
     }
@@ -346,11 +382,15 @@ impl EncryptedMessage {
 /// A message ready for `PostSlate`: the `str` text and the sender's signature over exactly it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SignedMessage {
+    /// The message JSON, sent as the frame's `str`.
     pub str: String,
+    /// The sender's signature over `str`.
     pub signature: EcdsaSignature,
 }
 
 impl SignedMessage {
+    /// Encrypts `plaintext` to `destination` and signs the result. The caller draws `salt` and
+    /// `nonce` from a secure RNG for every message.
     pub fn seal(
         plaintext: &str,
         destination: &EpicboxAddress,
@@ -367,7 +407,9 @@ impl SignedMessage {
 /// A message from a `Slate` frame that was signed by its sender, addressed to us, and decrypted.
 #[derive(Debug)]
 pub struct ReceivedMessage {
+    /// The address that signed the message.
     pub sender: EpicboxAddress,
+    /// The decrypted text.
     pub plaintext: Plaintext,
 }
 

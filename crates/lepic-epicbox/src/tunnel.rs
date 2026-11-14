@@ -52,7 +52,9 @@ pub trait Tunnel: Send + Sync {
 /// The host and port a connection through the tunnel asks for.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct DialTarget {
+    /// The host name or onion.
     pub host: String,
+    /// The port.
     pub port: u16,
 }
 
@@ -60,10 +62,13 @@ pub struct DialTarget {
 /// instead. The onion must present the domain's certificate.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OnionRoute {
+    /// The relay's domain.
     pub domain: Domain,
+    /// The relay's port.
     pub port: u16,
     /// `<56 characters>.onion`.
     pub onion: String,
+    /// The port to dial on the onion.
     pub onion_port: u16,
 }
 
@@ -74,6 +79,7 @@ pub struct OnionRoute {
 pub struct OnionRoutes(RwLock<Vec<OnionRoute>>);
 
 impl OnionRoutes {
+    /// Holds `routes`.
     pub fn new(routes: Vec<OnionRoute>) -> Self {
         Self(RwLock::new(routes))
     }

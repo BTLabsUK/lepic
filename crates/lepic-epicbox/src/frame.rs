@@ -3,6 +3,8 @@
 // Ported from EpicCash/epic-wallet impls/src/epicbox/protocol.rs (Apache-2.0); see NOTICE and
 // upstream.toml.
 
+//! The JSON frames of the Epicbox protocol, 3.0.0, as the wallet sends and reads them.
+
 use std::fmt;
 
 use lepic_crypto::{CryptoError, SecretKey};
@@ -52,38 +54,49 @@ fn looks_like_transaction_id(text: &str) -> bool {
     is_uuid || (text.len() == HEX_ID_LEN && text.bytes().all(lower_hex))
 }
 
+/// Why a frame could not be read or written.
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum FrameError {
+    /// The text is longer than [`MAX_FRAME_LEN`].
     #[error("frame has {actual} bytes, the limit is {max}")]
     TooLong { actual: usize, max: usize },
+    /// The text is not JSON, or a frame did not encode.
     #[error("frame is not valid json")]
     Json(#[source] JsonProblem),
+    /// The JSON object has no string `type`.
     #[error("frame has no string \"type\"")]
     MissingType,
+    /// A known frame type is missing a field or has one of the wrong shape.
     #[error("frame of type {type_name} has missing or invalid fields")]
     Fields {
         type_name: String,
         #[source]
         source: JsonProblem,
     },
+    /// A relay received a client frame type it does not know.
     #[error("client frame type {type_name} is unknown")]
     UnknownClientType { type_name: String },
+    /// Signing failed.
     #[error("frame could not be signed")]
     Signature(#[source] CryptoError),
     #[error(
         "challenge is empty, longer than {MAX_CHALLENGE_LEN} bytes, not [A-Za-z0-9_-] or a transaction id"
     )]
+    /// A challenge is not one the address key may sign.
     Challenge,
+    /// A mux/1 challenge does not have its fixed shape.
     #[error("mux/1 challenge is not exactly 22 characters of [A-Za-z0-9_-]")]
     MuxChallenge,
 }
 
+/// How the wallet uses the socket, sent in `ClientDetails`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum WalletMode {
     /// Must be sent before subscribing, or the relay does not push live messages to the socket.
     Listener,
+    /// Posts only.
     Send,
 }
 
@@ -91,6 +104,7 @@ pub enum WalletMode {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum ClientFrame {
+    /// The greeting: wallet version, mode, protocol version and extensions.
     ClientDetails {
         wallet_version: String,
         wallet_mode: WalletMode,
@@ -100,30 +114,34 @@ pub enum ClientFrame {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         ext: Option<Vec<String>>,
     },
+    /// Asks for an address's messages, signed over the latest challenge.
     Subscribe {
         address: String,
         ver: String,
         signature: String,
     },
+    /// Sends a signed message to another address.
     PostSlate {
         from: String,
         to: String,
         str: String,
         signature: String,
     },
+    /// Acknowledges a stored message so the relay deletes it.
     Made {
         address: String,
         signature: String,
         ver: String,
         epicboxmsgid: String,
     },
-    Unsubscribe {
-        address: String,
-    },
+    /// Stops delivery for an address.
+    Unsubscribe { address: String },
+    /// Asks for the relay's protocol version.
     GetVersion,
 }
 
 impl ClientFrame {
+    /// The 3.0.0 greeting with no extensions.
     pub fn client_details(wallet_version: &str, wallet_mode: WalletMode) -> Self {
         Self::ClientDetails {
             wallet_version: wallet_version.to_owned(),
@@ -159,6 +177,7 @@ impl ClientFrame {
         })
     }
 
+    /// Posts `message` from `from` to `to`.
     pub fn post_slate(from: &EpicboxAddress, to: &EpicboxAddress, message: &SignedMessage) -> Self {
         Self::PostSlate {
             from: from.to_string(),
@@ -168,6 +187,7 @@ impl ClientFrame {
         }
     }
 
+    /// Acknowledges `epicboxmsgid`, signed by the address key.
     pub fn made(
         own: &EpicboxAddress,
         epicboxmsgid: &RelayMessageId,
@@ -181,12 +201,14 @@ impl ClientFrame {
         })
     }
 
+    /// Stops delivery for `own`.
     pub fn unsubscribe(own: &EpicboxAddress) -> Self {
         Self::Unsubscribe {
             address: own.key_text(),
         }
     }
 
+    /// The frame as wire JSON.
     pub fn to_json(&self) -> Result<String, FrameError> {
         serde_json::to_string(self).map_err(|error| FrameError::Json(error.into()))
     }
@@ -216,11 +238,17 @@ pub(crate) fn signed(text: &str, key: &SecretKey) -> Result<String, FrameError> 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(from = "String", into = "String")]
 pub enum RelayErrorKind {
+    /// The relay's catch-all error.
     UnknownError,
+    /// The relay could not read the request.
     InvalidRequest,
+    /// A signature did not verify.
     InvalidSignature,
+    /// The signed challenge is not the relay's current one.
     InvalidChallenge,
+    /// The socket holds as many subscriptions as the relay allows.
     TooManySubscriptions,
+    /// A kind this version does not know, cut to [`MAX_FRAME_TYPE_LEN`].
     Other(String),
 }
 
@@ -257,6 +285,7 @@ pub const MAX_RELAY_MESSAGE_ID_LEN: usize = 64;
 #[error(
     "relay message id is empty, longer than {MAX_RELAY_MESSAGE_ID_LEN} bytes or not [A-Za-z0-9_-]"
 )]
+/// A relay message id that breaks the rules of [`RelayMessageId`].
 pub struct InvalidRelayMessageId;
 
 /// The id a relay gives a stored message, which `Made` names to acknowledge it. Never empty, at
@@ -267,6 +296,7 @@ pub struct InvalidRelayMessageId;
 pub struct RelayMessageId(String);
 
 impl RelayMessageId {
+    /// Checks `text` and keeps it as an id.
     pub fn parse(text: &str) -> Result<Self, InvalidRelayMessageId> {
         if Self::is_valid(text) {
             Ok(Self(text.to_owned()))
@@ -275,11 +305,13 @@ impl RelayMessageId {
         }
     }
 
+    /// Whether `text` is a valid id.
     pub fn is_valid(text: &str) -> bool {
         let allowed = |b: u8| b.is_ascii_alphanumeric() || b == b'-' || b == b'_';
         !text.is_empty() && text.len() <= MAX_RELAY_MESSAGE_ID_LEN && text.bytes().all(allowed)
     }
 
+    /// The id as text.
     pub fn as_str(&self) -> &str {
         &self.0
     }
@@ -313,12 +345,18 @@ impl std::fmt::Display for RelayMessageId {
 /// subscription carried `ver`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SlateFrame {
+    /// The sender's address.
     pub from: String,
+    /// The message JSON.
     pub str: String,
+    /// The sender's DER signature over `str`, as hex.
     pub signature: String,
+    /// A challenge the relay sends with the message. The client does not read it.
     pub challenge: String,
+    /// The id to acknowledge with `Made`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub epicboxmsgid: Option<RelayMessageId>,
+    /// The protocol version, sent when the subscription carried `ver`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ver: Option<String>,
 }
@@ -345,28 +383,27 @@ enum KnownRelayFrame {
 /// A frame the relay sends to the wallet.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RelayFrame {
-    Challenge {
-        str: String,
-    },
+    /// A new challenge to sign.
+    Challenge { str: String },
     /// Answers several requests, so it cannot be matched to one.
     Ok,
+    /// An error the relay reports.
     Error {
         kind: RelayErrorKind,
         description: String,
     },
+    /// A message for a subscribed address.
     Slate(SlateFrame),
-    GetVersion {
-        str: String,
-    },
+    /// The relay's protocol version.
+    GetVersion { str: String },
     /// A JSON frame of a type this version does not know; the client ignores it.
-    Unknown {
-        type_name: String,
-    },
+    Unknown { type_name: String },
     /// Text that is not a JSON object, such as the bare `pong` the relay answers a ping with.
     Keepalive,
 }
 
 impl RelayFrame {
+    /// Decodes a frame from the relay. Unknown types and non-JSON text are not errors.
     pub fn from_json(text: &str) -> Result<Self, FrameError> {
         check_len(text)?;
         if !text.trim_start().starts_with('{') {
