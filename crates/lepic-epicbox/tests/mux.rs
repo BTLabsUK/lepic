@@ -581,6 +581,33 @@ async fn claims_of_two_owners_do_not_detach_each_other() {
 }
 
 #[tokio::test]
+async fn adding_to_a_claim_keeps_the_rest_of_it() {
+    let relay = MuxMockRelay::new(Network::Mainnet);
+    let session = start_queued(&relay, vec![identity(ALICE)]);
+    attached(&session).await;
+    session
+        .set_claim("contacts", vec![identity(BOB)])
+        .await
+        .unwrap();
+    let more = session
+        .add_to_claim("contacts", vec![identity(CAROL)])
+        .await
+        .unwrap();
+    assert_eq!(more.indexes, vec![2]);
+    assert_eq!(more.fresh, vec![2]);
+    let keys = [address(BOB).key_text(), address(CAROL).key_text()];
+    relay
+        .wait_until(|relay| keys.iter().all(|key| relay.attached().contains(key)))
+        .await;
+    // Releasing the claim detaches both.
+    session.set_claim("contacts", Vec::new()).await.unwrap();
+    relay
+        .wait_until(|relay| keys.iter().all(|key| !relay.attached().contains(key)))
+        .await;
+    assert!(relay.attached().contains(&address(ALICE).key_text()));
+}
+
+#[tokio::test]
 async fn claims_together_are_capped_at_256_and_nothing_changes() {
     let relay = MuxMockRelay::new(Network::Mainnet);
     let session = start_queued(&relay, vec![identity(ALICE)]);

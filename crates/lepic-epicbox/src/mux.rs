@@ -270,6 +270,8 @@ enum Command {
     },
     Set {
         owner: String,
+        /// Add to the owner's claim instead of replacing it.
+        merge: bool,
         identities: Vec<Identity>,
         reply: oneshot::Sender<Result<Claimed, MuxError>>,
     },
@@ -456,10 +458,31 @@ impl MuxSession {
         owner: &str,
         identities: Vec<Identity>,
     ) -> Result<Claimed, MuxError> {
+        self.send_claim(owner, identities, false).await
+    }
+
+    /// Adds `identities` to what `owner` already claims and keeps the rest of its claim. The
+    /// answer lists the given identities only. For a look at a few mailboxes that must not
+    /// release the others.
+    pub async fn add_to_claim(
+        &self,
+        owner: &str,
+        identities: Vec<Identity>,
+    ) -> Result<Claimed, MuxError> {
+        self.send_claim(owner, identities, true).await
+    }
+
+    async fn send_claim(
+        &self,
+        owner: &str,
+        identities: Vec<Identity>,
+        merge: bool,
+    ) -> Result<Claimed, MuxError> {
         let (reply, answer) = oneshot::channel();
         self.commands
             .send(Command::Set {
                 owner: owner.to_owned(),
+                merge,
                 identities,
                 reply,
             })
@@ -909,6 +932,7 @@ impl Manager {
     fn reconcile(
         &mut self,
         owner: String,
+        merge: bool,
         identities: Vec<Identity>,
     ) -> Result<Reconciled, MuxError> {
         let mut own: Vec<(String, Identity)> = Vec::with_capacity(identities.len());
@@ -918,7 +942,17 @@ impl Manager {
                 own.push((key, identity));
             }
         }
+        let mut kept: Vec<Identity> = Vec::new();
+        if merge && let Some(claim) = self.claims.get(&owner) {
+            for identity in claim {
+                let key = identity.address().key_text();
+                if !own.iter().any(|(known, _)| *known == key) {
+                    kept.push(identity.clone());
+                }
+            }
+        }
         let mut wanted: Vec<String> = own.iter().map(|(key, _)| key.clone()).collect();
+        wanted.extend(kept.iter().map(|identity| identity.address().key_text()));
         for (other, claim) in &self.claims {
             if *other == owner {
                 continue;
@@ -936,13 +970,15 @@ impl Manager {
                 max: MAX_MAILBOXES_PER_SOCKET,
             });
         }
-        if own.is_empty() {
+        let claim: Vec<Identity> = own
+            .iter()
+            .map(|(_, identity)| identity.clone())
+            .chain(kept)
+            .collect();
+        if claim.is_empty() {
             self.claims.remove(&owner);
         } else {
-            self.claims.insert(
-                owner,
-                own.iter().map(|(_, identity)| identity.clone()).collect(),
-            );
+            self.claims.insert(owner, claim);
         }
         let gone: Vec<String> = self
             .keys
@@ -986,10 +1022,14 @@ impl Manager {
         match command {
             Command::Set {
                 owner,
+                merge,
                 identities,
                 reply,
             } => {
-                let _ = reply.send(self.reconcile(owner, identities).map(|done| done.claimed()));
+                let _ = reply.send(
+                    self.reconcile(owner, merge, identities)
+                        .map(|done| done.claimed()),
+                );
             }
             Command::Settle { id, handled } => self.settle_offline(&id, handled),
             Command::Add { identity, reply } => {
@@ -1270,9 +1310,10 @@ impl Manager {
         match command {
             Command::Set {
                 owner,
+                merge,
                 identities,
                 reply,
-            } => match self.reconcile(owner, identities) {
+            } => match self.reconcile(owner, merge, identities) {
                 Ok(done) => {
                     let _ = reply.send(Ok(done.claimed()));
                     for (index, key) in done.removed {

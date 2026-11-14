@@ -156,8 +156,8 @@ keeps plain 3.0.0.
   the set exactly that list: it attaches what is new, detaches what is gone, and signs only for
   the new ones. Consumers that share a session use `set_claim(owner, identities)` instead: the
   attached set is the union of every owner's claim, so one owner never detaches another's
-  mailboxes, and an empty claim releases the owner (`set_mailboxes` is the owner `""`, which also
-  holds the mailboxes the session started with).
+  mailboxes, an empty claim releases the owner, and `add_to_claim` adds without replacing.
+  `set_mailboxes` is the owner `""`, which also holds the mailboxes the session started with.
 
 With feature `mock-relay`, `mock_mux::MuxMockRelay` is an in-process mux/1 relay with knobs to
 refuse the extension, send a bad challenge, stall pushes, rate limit attaches, drop sockets,
