@@ -637,8 +637,8 @@ pub struct ContactAcceptReport {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ContactLinkReport {
-    /// `confirm` (send `link` back by hand), `paired`, `ignored`, or `invite` (pairing words
-    /// found the invite `link`, to answer).
+    /// `confirm` (send `link` back by hand), `paired`, `ignored`, or `invite` (an invite `link` was
+    /// found, to answer).
     #[serde(deserialize_with = "pairing_outcome")]
     pub outcome: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]

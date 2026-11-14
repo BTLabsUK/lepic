@@ -37,7 +37,7 @@ pub struct Servers {
     pub node: Option<NodeEndpoint>,
     /// The relay in use: the first of `[epicbox] servers`, `None` when it lists none.
     pub epicbox: Option<RelayEndpoint>,
-    /// Where pairing words are posted and looked for: the first few of `[epicbox] servers`.
+    /// The meeting relays: the first few of `[epicbox] servers`.
     pub meeting_relays: Vec<RelayEndpoint>,
     /// The hosts known to be TLS onion services.
     pub onion_routes: Vec<OnionRoute>,

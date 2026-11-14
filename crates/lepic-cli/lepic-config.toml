@@ -31,7 +31,7 @@ node = "http://127.0.0.1:13413"
 [epicbox]
 # The server of an Epicbox address written without one: the one older wallets assumed.
 address_default = "epicbox.epiccash.com"
-# Pairing words go to this many of the first servers in settings.toml [epicbox] servers.
+# This many of the first servers in settings.toml [epicbox] servers are meeting relays.
 pairing_servers = 3
 # The TCP, TLS and websocket handshakes with the relay together.
 connect_timeout_s = 15

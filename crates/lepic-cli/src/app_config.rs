@@ -33,7 +33,7 @@ pub const MAX_ONION_ROUTES: usize = 256;
 pub struct AppConfig {
     /// The server of an Epicbox address written without one.
     pub address_default: Domain,
-    /// How many of the user's first Epicbox servers pairing words go to.
+    /// How many of the user's first Epicbox servers are meeting relays.
     pub pairing_servers: usize,
     /// The node of a floonet wallet that names none.
     pub floonet_node: NodeEndpoint,

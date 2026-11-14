@@ -181,8 +181,8 @@ fn contact_report(view: &ContactView) -> Result<ContactReport, CliError> {
     })
 }
 
-/// The CLI's relays: its Epicbox transport, and the first Epicbox servers of the settings file,
-/// where pairing words are offered and looked for. `--offline` and `--epicbox-off` keep every
+/// The CLI's relays: its Epicbox transport, and the first Epicbox servers of the settings file as
+/// meeting relays, which the wallet reaches as it reaches its own. `--offline` and `--epicbox-off` keep every
 /// contact command off the relays.
 fn relays<N: lepic_node::NodeApi + 'static>(
     opened: &Opened<N>,
