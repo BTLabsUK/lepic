@@ -17,6 +17,8 @@ guide and command reference.
   first copy of the user's `~/.lepic/settings.toml`, and `lepic-config.toml`, compiled into the
   binary.
 - No features. The API of `lepic serve` is built on Unix only.
+- `lepic` with no command, at a terminal, opens the interactive shell, which can also start the
+  API for as long as it runs.
 
 ## Core concepts
 
@@ -43,6 +45,7 @@ guide and command reference.
 | Settings | `settings::{Settings, Env, SETTINGS, CONFIG_ENV}`, `settings_file`, `app_config` |
 | Results | `exit::ErrorKind`, `output`, `hint` |
 | Secrets and storage | `secret::SecretInput`, `vault`, `stores` |
+| Values people type | `amount` (EPIC with up to eight decimals), `profile` (the owner's profile bits), `progress` (stderr lines for long commands) |
 
 ## Related
 
