@@ -512,6 +512,7 @@ mod tests {
 
     use super::*;
     use crate::frame::{ClientFrame, MAX_FRAME_LEN, WalletMode};
+    use proptest::prelude::*;
 
     const CHALLENGE: &str = "b3JkKQ1y0f5C3cS0nVb1zw";
 
@@ -669,5 +670,126 @@ mod tests {
         );
         assert!(format!("{resume:?}").contains("[redacted]"));
         assert!(!format!("{resume:?}").contains("q9-_Z"));
+    }
+
+    /// Valid relay frames the mutations start from.
+    const RELAY_SAMPLES: [&str; 6] = [
+        r#"{"type":"Ok","ref":"1","ext":["mux/1"],"challenge":"b3JkKQ1y0f5C3cS0nVb1zw","limits":{"attach_per_frame":64,"mailboxes_per_socket":256,"inflight_per_socket":32,"hold_max_s":3600}}"#,
+        r#"{"type":"Attached","ref":"2","mailboxes":[{"mailbox":"k","ok":true,"waiting":3},{"mailbox":"j","ok":false,"code":"bad_signature"}],"token":"q9-_Z","token_expires":86400}"#,
+        r#"{"type":"Mail","mailbox":"k","id":"abc_DEF-123","from":"f","str":"s","signature":"g","created":7}"#,
+        r#"{"type":"Detached","mailbox":"k","reason":"replaced"}"#,
+        r#"{"type":"Error","kind":"InvalidRequest","code":"rate_limited","description":"d","ref":"3","retry_after":9}"#,
+        r#"{"type":"Ok","waiting":{"k":2},"inflight":1,"held":0}"#,
+    ];
+
+    fn mux_client_frame() -> impl Strategy<Value = MuxClientFrame> {
+        let reference = proptest::option::of("[ -~]{0,64}");
+        let id = "[A-Za-z0-9_-]{1,64}".prop_map(|id| RelayMessageId::parse(&id).unwrap());
+        let token = "[A-Za-z0-9_-]{1,64}".prop_map(|token| ResumeToken::parse(&token).unwrap());
+        let entry = ("[ -~]{0,80}", "[0-9a-f]{0,140}")
+            .prop_map(|(address, signature)| AttachEntry { address, signature });
+        prop_oneof![
+            (reference.clone(), proptest::collection::vec(entry, 0..8)).prop_map(
+                |(reference, mailboxes)| MuxClientFrame::Attach {
+                    reference,
+                    mailboxes
+                }
+            ),
+            (
+                reference.clone(),
+                proptest::collection::vec("[ -~]{0,80}", 0..8)
+            )
+                .prop_map(|(reference, mailboxes)| MuxClientFrame::Detach {
+                    reference,
+                    mailboxes
+                }),
+            (reference.clone(), token)
+                .prop_map(|(reference, token)| MuxClientFrame::Resume { reference, token }),
+            (
+                reference.clone(),
+                proptest::collection::vec(id.clone(), 0..8)
+            )
+                .prop_map(|(reference, ids)| MuxClientFrame::Ack { reference, ids }),
+            (reference.clone(), id, any::<u32>()).prop_map(|(reference, id, seconds)| {
+                MuxClientFrame::Hold {
+                    reference,
+                    id,
+                    seconds,
+                }
+            }),
+            reference.prop_map(|reference| MuxClientFrame::Waiting { reference }),
+        ]
+    }
+
+    /// `sample` cut at a char boundary, or with one char replaced.
+    fn mutated(sample: &str, at: usize, cut: bool, with: char) -> String {
+        let at = sample
+            .char_indices()
+            .map(|(index, _)| index)
+            .nth(at.checked_rem(sample.chars().count()).unwrap_or(0))
+            .unwrap_or(0);
+        if cut {
+            return sample[..at].to_owned();
+        }
+        let mut out = String::with_capacity(sample.len().saturating_add(4));
+        for (index, ch) in sample.char_indices() {
+            out.push(if index == at { with } else { ch });
+        }
+        out
+    }
+
+    proptest! {
+        #[test]
+        fn mux_client_frames_round_trip(frame in mux_client_frame()) {
+            let text = frame.to_json().unwrap();
+            prop_assert_eq!(MuxClientFrame::from_json(&text).unwrap(), Some(frame));
+        }
+
+        #[test]
+        fn mux_decoders_never_panic(text in any::<String>()) {
+            let _ = MuxRelayFrame::from_json(&text);
+            let _ = MuxClientFrame::from_json(&text);
+        }
+
+        #[test]
+        fn mux_decoders_never_panic_on_json_shaped_text(
+            type_name in prop_oneof![
+                Just("Ok".to_owned()), Just("Attached".to_owned()), Just("Mail".to_owned()),
+                Just("Detached".to_owned()), Just("Error".to_owned()), Just("Attach".to_owned()),
+                Just("Ack".to_owned()), Just("Hold".to_owned()), Just("Resume".to_owned()),
+                "[ -~]{0,70}",
+            ],
+            tail in "[ -~]{0,200}",
+        ) {
+            let text = format!("{{\"type\":{},{tail}", serde_json::Value::String(type_name));
+            let _ = MuxRelayFrame::from_json(&text);
+            let _ = MuxClientFrame::from_json(&text);
+        }
+
+        #[test]
+        fn mutated_relay_frames_decode_or_error(
+            sample in 0..RELAY_SAMPLES.len(),
+            at in any::<usize>(),
+            cut in any::<bool>(),
+            with in any::<char>(),
+        ) {
+            let text = mutated(RELAY_SAMPLES[sample], at, cut, with);
+            let _ = MuxRelayFrame::from_json(&text);
+        }
+    }
+
+    #[test]
+    fn every_relay_sample_decodes_and_text_over_the_limit_is_refused() {
+        for sample in RELAY_SAMPLES {
+            assert!(MuxRelayFrame::from_json(sample).is_ok(), "{sample}");
+        }
+        let long = "x".repeat(MAX_FRAME_LEN + 1);
+        assert!(MuxRelayFrame::from_json(&long).is_err());
+        assert!(MuxClientFrame::from_json(&long).is_err());
+        let at_limit = " ".repeat(MAX_FRAME_LEN);
+        assert!(!matches!(
+            MuxRelayFrame::from_json(&at_limit),
+            Err(FrameError::TooLong { .. })
+        ));
     }
 }
