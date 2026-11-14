@@ -114,7 +114,7 @@ Constants:
 
 | Constant | Value |
 |---|---|
-| `PROTOCOL` | `1`; an additive change keeps it, a break takes another path |
+| `PROTOCOL` | `2`; an additive change keeps it, a break takes another number |
 | `FORMAT_LEPIC_V1` | `"lepic.v1"` |
 | `PEER_PATH` | `"/api/v1/inbox"`, the one path for `GET` and `POST` |
 | `ENVELOPE_MEDIA_TYPE` | `"application/vnd.lepic.epictx"` |
