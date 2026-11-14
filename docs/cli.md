@@ -421,7 +421,7 @@ request id exits with code 6.
 | `contact key-check`, `keys` | Checks and settles a pairing whose keys changed |
 | `contact move CONTACT --apply HOST` | Moves to the relay a contact asked for |
 | `contact move-home HOST [--drain-days N]` | Moves this wallet's home relay for every contact |
-| `contact export FILE`, `import FILE` | Backs up and restores the pairing records; through the API on the socket only |
+| `contact export FILE`, `import FILE` | Backs up and restores the pairing records; the API allows both on the socket, not over TLS |
 
 `tx send --to-contact ID` pays a contact; `contact collect` posts what is still queued and takes
 the answer. A send the contact cannot take locks nothing.
@@ -675,7 +675,7 @@ curl --unix-socket /home/user/.lepic/floonet/lepic.sock http://lepic/api/v1/stat
 ```
 
 ```json
-{"version":"0.4.0","uptime_s":5,"listeners":{"epicbox":{"state":"connected"}},"refresh":{"failures":0,"last_success_at":"2026-11-11T02:55:09.797663717Z"},"collect":{"failures":0,"last_success_at":"2026-11-11T02:55:09.816610725Z"},"requests":{"served":0,"in_flight":1,"refused":0}}
+{"version":"0.5.0","uptime_s":5,"listeners":{"epicbox":{"state":"connected"}},"refresh":{"failures":0,"last_success_at":"2026-11-11T02:55:09.797663717Z"},"collect":{"failures":0,"last_success_at":"2026-11-11T02:55:09.816610725Z"},"requests":{"served":0,"in_flight":1,"refused":0}}
 ```
 
 `refresh` has `"failures":0` and a `last_success_at` when serve reaches the node. If it cannot,
