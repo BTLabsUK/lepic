@@ -31,9 +31,14 @@ strictly and checked against the request that was made before the engine sees it
   accepted transaction is answered with an error.
 - **Plain HTTP only to loopback.** `HttpTransport` refuses an `http://` URL to a remote host
   (`NodeError::PlainHttpToRemoteHost`), so the API secret never crosses a network unencrypted.
+- **Kept connections.** `HttpTransport::drop_connections` stops reusing the connections kept
+  open, so the next request opens a new one. A host calls it when the network changes or the app
+  returns to the foreground.
 - **Dialers.** A `NodeDialer` given to `HttpTransport::with_dialer` opens the byte streams, so a
   host can route node traffic through Tor. TLS and the `Host` header follow the node URL
-  whatever the dialer connects to.
+  whatever the dialer connects to. `connect_tcp(host, port, budget)` is a ready TCP connect for a
+  dialer: the name lookup and the connect phase each get `budget`, and the addresses are tried as
+  RFC 8305 (Happy Eyeballs v2) says.
 
 ## Public API
 
@@ -41,8 +46,8 @@ strictly and checked against the request that was made before the engine sees it
 |---|---|
 | Port | `NodeApi`, `Tip`, `NodeVersion`, `BlockHeaderInfo`, `LocatedKernel`, `OutputLocation`, `UnspentOutput`, `UnspentOutputs`, `PmmrIndices`, `PoolTransaction`, `Propagation`, `MAX_POOL_KERNELS` |
 | Client | `NodeClient` (`new`, `with_known_tip`, `ready_for_txs`), `CallPolicy`, `RetryPolicy`, `RpcTransport`, `HttpNodeClient` |
-| HTTP | `HttpTransport` (`new`, `with_dialer`), `HttpSettings`, `webpki_tls_config`, `is_loopback_host`, `MAX_RESPONSE_BYTES` |
-| Dialing | `NodeDialer`, `NodeStream`, `DialFuture` |
+| HTTP | `HttpTransport` (`new`, `with_dialer`, `drop_connections`), `HttpSettings`, `webpki_tls_config`, `is_loopback_host`, `MAX_RESPONSE_BYTES` |
+| Dialing | `NodeDialer`, `NodeStream`, `DialFuture`, `connect_tcp` |
 | Errors | `NodeError`, `NodeRejection`, `RejectionKind`, `FieldProblem`, `JsonProblem` |
 | Tests | `decode` (also for fuzz targets); `mock` and `testing` behind the `mock` feature |
 

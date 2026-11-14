@@ -168,7 +168,7 @@ app's `app-config.toml`.
 
 | Key | Value | Meaning |
 |---|---|---|
-| `connect_timeout_s` | 15 | Opening a connection to the node |
+| `connect_timeout_s` | 15 | Opening a connection to the node. A dial without Tor in the FFI gives the name lookup and the connect this long each |
 | `request_timeout_s` | 90 | From sending a request to the last byte of its answer |
 | `idle_timeout_s` | 10 | How long an idle connection is kept |
 | `retry_attempts` | 3 | Tries of a failed read, the first included |
