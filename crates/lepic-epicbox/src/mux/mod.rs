@@ -42,21 +42,29 @@ use self::manager::Manager;
 /// Events kept for a receiver that is slow to read.
 const EVENT_BACKLOG: usize = 256;
 
+/// Why a call on a mux/1 session failed.
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum MuxError {
+    /// The session was started outside a tokio runtime.
     #[error("no tokio runtime is running")]
     NoRuntime,
+    /// More mailboxes were asked for than one socket carries.
     #[error("a mux/1 socket carries at most {max} mailboxes, {count} were asked for")]
     TooManyMailboxes { count: usize, max: usize },
+    /// The mailbox is already on the session.
     #[error("the mailbox is already on the session")]
     DuplicateMailbox,
+    /// The relay does not offer mux/1; the session has ended.
     #[error("the relay does not offer mux/1")]
     NotOffered,
+    /// The session has ended and takes no more commands.
     #[error("the mux/1 session has ended")]
     Ended,
+    /// The session failed on the socket.
     #[error("the mux/1 session failed")]
     Client(#[from] ClientError),
+    /// The session's task panicked or was cancelled.
     #[error("the mux/1 task failed")]
     Task(#[source] JoinError),
 }
@@ -86,18 +94,21 @@ impl Default for MuxOptions {
 }
 
 impl MuxOptions {
+    /// Sets [`MuxOptions::hold`].
     #[must_use]
     pub fn with_hold(mut self, hold: Duration) -> Self {
         self.hold = hold;
         self
     }
 
+    /// Sets [`MuxOptions::waiting_every`].
     #[must_use]
     pub fn with_waiting_every(mut self, every: Option<Duration>) -> Self {
         self.waiting_every = every;
         self
     }
 
+    /// Sets [`MuxOptions::ack_window`].
     #[must_use]
     pub fn with_ack_window(mut self, window: Duration) -> Self {
         self.ack_window = window;
@@ -153,6 +164,7 @@ pub enum MuxEvent {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct MuxCounters {
+    /// Sockets opened, the first one included.
     pub sockets_opened: u64,
     /// Attach signatures made, one per mailbox per signed attach.
     pub signatures: u64,
@@ -506,6 +518,7 @@ impl MuxSession {
             .map_err(|_| MuxError::Ended)
     }
 
+    /// The session's state, as it changes.
     pub fn state(&self) -> watch::Receiver<MuxState> {
         self.shared.state.subscribe()
     }
@@ -516,6 +529,7 @@ impl MuxSession {
         self.shared.events.subscribe()
     }
 
+    /// The work the session has done so far.
     pub fn counters(&self) -> MuxCounters {
         self.shared.counters.snapshot()
     }

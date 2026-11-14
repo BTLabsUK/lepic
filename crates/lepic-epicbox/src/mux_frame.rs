@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 //! The frames of the mux/1 extension: one websocket carrying many proven mailboxes. The wire
-//! format is `docs/protocols/epicbox-mux.md` (draft 2). Decoding follows [`crate::frame`]: the frame
-//! length is bounded first, the `type` is read without buffering the frame, unknown fields are
-//! ignored and unknown types are not errors.
+//! format is `docs/protocols/epicbox-mux.md`. Decoding follows [`crate::frame`]: the frame length
+//! is bounded first, the `type` is read without buffering the frame, unknown fields are ignored
+//! and unknown types are not errors.
 
 use std::collections::HashMap;
 use std::fmt;
@@ -18,7 +18,7 @@ use crate::frame::{
 pub const MUX_EXTENSION: &str = "mux/1";
 
 /// The length of the socket challenge the relay issues: 16 random bytes in unpadded base64url.
-pub const MUX_CHALLENGE_LEN: usize = 22;
+pub(crate) const MUX_CHALLENGE_LEN: usize = 22;
 
 /// Mailboxes in one `Attach` frame, whatever the relay says.
 pub const MAX_ATTACH_PER_FRAME: usize = 64;
@@ -27,7 +27,7 @@ pub const MAX_ATTACH_PER_FRAME: usize = 64;
 pub const MAX_MAILBOXES_PER_SOCKET: usize = 256;
 
 /// Messages in flight on one socket, whatever the relay says.
-pub const MAX_INFLIGHT_PER_SOCKET: usize = 1024;
+pub(crate) const MAX_INFLIGHT_PER_SOCKET: usize = 1024;
 
 /// Ids in one `Ack` frame.
 pub const MAX_ACK_IDS: usize = 256;
@@ -66,9 +66,13 @@ impl MuxChallenge {
 /// spec's defaults. Values are clamped to what this client supports, and none is below one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MuxLimits {
+    /// Mailboxes one `Attach` frame may name.
     pub attach_per_frame: usize,
+    /// Mailboxes one socket may have attached.
     pub mailboxes_per_socket: usize,
+    /// Messages pushed and not yet acknowledged or held, across the socket.
     pub inflight_per_socket: usize,
+    /// The longest hold, in seconds.
     pub hold_max_s: u32,
 }
 
