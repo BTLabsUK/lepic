@@ -48,6 +48,10 @@ const MAX_RETRY_AFTER: Duration = Duration::from_secs(3600);
 /// How long an acknowledgement of an `internal` error waits before it is sent again.
 const INTERNAL_RETRY: Duration = Duration::from_secs(1);
 
+/// Greetings left unanswered, one after another, before a relay that never offered mux/1 is taken
+/// as not offering it.
+const MAX_GREETING_TIMEOUTS: u32 = 3;
+
 /// How long leaving a socket may take.
 const LEAVE_GRACE: Duration = Duration::from_millis(500);
 
@@ -150,8 +154,10 @@ pub enum MuxEvent {
     Attached { mailbox: usize, waiting: u64 },
     /// The relay refused the mailbox. It is not tried again on this socket.
     Refused { mailbox: usize, code: MuxCode },
-    /// The mailbox was attached on another socket. It is removed from the session and never
-    /// attached again by it.
+    /// The mailbox was attached on another socket. It keeps its index, but the session does not
+    /// attach it again, whatever an owner's claim says, until no owner claims it any more and one
+    /// claims it afresh (which gives it a new index), or the session is started anew. Attaching it
+    /// again by itself would make two instances of one wallet take it from each other.
     Replaced { mailbox: usize },
     /// The relay stopped delivering the mailbox because an operator limit was lowered.
     Limit { mailbox: usize },
@@ -322,6 +328,10 @@ impl MuxSession {
     /// Starts a session on the current tokio runtime. `identities` are the mailboxes to attach,
     /// at most [`MAX_MAILBOXES_PER_SOCKET`], numbered from zero in the order given. Every
     /// message of every mailbox goes to `handler`, one at a time.
+    ///
+    /// The handler runs on the session's own task: while it works, pings, acknowledgements and
+    /// the relay's frames wait. It must not block or take long. A consumer that cannot promise
+    /// that uses [`MuxSession::start_queued`], whose loop never waits for it.
     pub fn start(
         settings: ClientSettings,
         connector: Arc<dyn Connector>,
@@ -391,6 +401,10 @@ impl MuxSession {
             entries: BTreeMap::new(),
             keys: HashMap::new(),
             claims: BTreeMap::new(),
+            replaced: HashSet::new(),
+            mailbox_cap: MAX_MAILBOXES_PER_SOCKET,
+            offered: false,
+            greeting_timeouts: 0,
             next_index: 0,
             token: None,
             stored: StoredIds::default(),
@@ -452,7 +466,13 @@ impl MuxSession {
     /// session's mailboxes are the union of every owner's claim: this call attaches what no owner
     /// had, detaches what no owner wants any more and leaves the rest, so one consumer never
     /// detaches another's mailboxes. An empty claim releases the owner. Refused, and nothing
-    /// changed, when the union would exceed [`MAX_MAILBOXES_PER_SOCKET`] distinct identities.
+    /// changed, when the union would exceed [`MAX_MAILBOXES_PER_SOCKET`] distinct identities (or
+    /// fewer, when the relay's limit is lower).
+    ///
+    /// An owner is one of the callers inside LEPIC that share a session (the contacts collect
+    /// and the payments listener name theirs); a host does not pick owners. A mailbox that
+    /// another socket took over ([`MuxEvent::Replaced`]) stays in the claim and keeps its index,
+    /// but is not attached again until no owner claims it.
     pub async fn set_claim(
         &self,
         owner: &str,
@@ -472,12 +492,20 @@ impl MuxSession {
         self.send_claim(owner, identities, true).await
     }
 
-    async fn send_claim(
+    /// Empties the claim of `owner` without waiting for the session to apply it. The command is
+    /// queued before this returns, so a later claim of the same owner is applied after it. For a
+    /// caller that must not wait: a session that is still opening its socket applies commands
+    /// only once it has one.
+    pub fn release_claim(&self, owner: &str) -> Result<(), MuxError> {
+        self.queue_claim(owner, Vec::new(), false).map(drop)
+    }
+
+    fn queue_claim(
         &self,
         owner: &str,
         identities: Vec<Identity>,
         merge: bool,
-    ) -> Result<Claimed, MuxError> {
+    ) -> Result<oneshot::Receiver<Result<Claimed, MuxError>>, MuxError> {
         let (reply, answer) = oneshot::channel();
         self.commands
             .send(Command::Set {
@@ -487,6 +515,16 @@ impl MuxSession {
                 reply,
             })
             .map_err(|_| MuxError::Ended)?;
+        Ok(answer)
+    }
+
+    async fn send_claim(
+        &self,
+        owner: &str,
+        identities: Vec<Identity>,
+        merge: bool,
+    ) -> Result<Claimed, MuxError> {
+        let answer = self.queue_claim(owner, identities, merge)?;
         answer.await.map_err(|_| MuxError::Ended)?
     }
 
@@ -651,6 +689,10 @@ impl fmt::Display for Lost {
 
 enum Refusal {
     NotOffered,
+    /// The relay answered the greeting with an `Error` (other than a rate limit).
+    Rejected(ClientError),
+    /// The greeting got no answer in time.
+    Silent(ClientError),
     Failed(ClientError),
 }
 
@@ -807,6 +849,16 @@ struct Manager {
     keys: HashMap<String, usize>,
     /// What each owner wants attached. The session's mailboxes are the union of the claims.
     claims: BTreeMap<String, Vec<Identity>>,
+    /// Keys of mailboxes another socket took over. They stay in the session, so that indexes do
+    /// not move, but are never attached from here (see [`MuxEvent::Replaced`]).
+    replaced: HashSet<String>,
+    /// How many mailboxes the session may hold: the smaller of the relay's limit and
+    /// [`MAX_MAILBOXES_PER_SOCKET`], as far as the relay has said.
+    mailbox_cap: usize,
+    /// A relay has offered mux/1 to this session at least once.
+    offered: bool,
+    /// Greetings in a row that got no answer.
+    greeting_timeouts: u32,
     next_index: usize,
     /// The token of the last `Attached`. In memory only.
     token: Option<ResumeToken>,
@@ -827,10 +879,10 @@ impl Manager {
     }
 
     fn add_entry(&mut self, identity: Identity) -> Result<usize, MuxError> {
-        if self.entries.len() >= MAX_MAILBOXES_PER_SOCKET {
+        if self.entries.len() >= self.mailbox_cap {
             return Err(MuxError::TooManyMailboxes {
                 count: self.entries.len().saturating_add(1),
-                max: MAX_MAILBOXES_PER_SOCKET,
+                max: self.mailbox_cap,
             });
         }
         let key = identity.address().key_text();
@@ -864,6 +916,7 @@ impl Manager {
     fn remove_entry(&mut self, key: &str) -> Option<usize> {
         let index = self.keys.remove(key)?;
         self.entries.remove(&index);
+        self.replaced.remove(key);
         self.shared.purge(Some(index));
         Some(index)
     }
@@ -964,10 +1017,10 @@ impl Manager {
                 }
             }
         }
-        if wanted.len() > MAX_MAILBOXES_PER_SOCKET {
+        if wanted.len() > self.mailbox_cap {
             return Err(MuxError::TooManyMailboxes {
                 count: wanted.len(),
-                max: MAX_MAILBOXES_PER_SOCKET,
+                max: self.mailbox_cap,
             });
         }
         let claim: Vec<Identity> = own
@@ -1008,6 +1061,18 @@ impl Manager {
             added,
             removed,
         })
+    }
+
+    /// The mailboxes this socket should carry and does not: every one but those another socket
+    /// took over.
+    fn unattached(&self, link: &Link) -> Vec<usize> {
+        self.entries
+            .iter()
+            .filter(|(index, entry)| {
+                !link.attached.contains(index) && !self.replaced.contains(&entry.key)
+            })
+            .map(|(index, _)| *index)
+            .collect()
     }
 
     /// An answer that was settled while no socket owned the message. A stored message is
@@ -1065,11 +1130,33 @@ impl Manager {
                 connection.close().await;
                 return Ok(End::NotOffered);
             }
-            Err(Refusal::Failed(error)) => {
+            Err(Refusal::Rejected(error)) if !self.offered => {
+                // A relay that has never offered mux/1 and answers the greeting with an error
+                // will not carry the session; the caller has the 3.0.0 listener for it.
+                info!(error = %ErrorChain(&error), "epicbox relay answered the mux/1 greeting with an error");
+                connection.close().await;
+                return Ok(End::NotOffered);
+            }
+            Err(Refusal::Silent(error)) if !self.offered => {
+                self.greeting_timeouts = self.greeting_timeouts.saturating_add(1);
+                connection.close().await;
+                if self.greeting_timeouts >= MAX_GREETING_TIMEOUTS {
+                    info!("epicbox relay does not answer the mux/1 greeting");
+                    return Ok(End::NotOffered);
+                }
+                return Err(Lost::Client(error));
+            }
+            Err(Refusal::Rejected(error) | Refusal::Silent(error) | Refusal::Failed(error)) => {
                 connection.close().await;
                 return Err(Lost::Client(error));
             }
         };
+        self.offered = true;
+        self.greeting_timeouts = 0;
+        self.mailbox_cap = negotiated
+            .limits
+            .mailboxes_per_socket
+            .clamp(1, MAX_MAILBOXES_PER_SOCKET);
         debug!(
             attach_per_frame = negotiated.limits.attach_per_frame,
             mailboxes_per_socket = negotiated.limits.mailboxes_per_socket,
@@ -1088,7 +1175,7 @@ impl Manager {
     /// ignored: only the challenge of the `Ok` is signed.
     async fn negotiate(&self, connection: &mut Connection) -> Result<Negotiated, Refusal> {
         let timed_out = || {
-            Refusal::Failed(ClientError::Timeout {
+            Refusal::Silent(ClientError::Timeout {
                 awaiting: Awaiting::Answer,
             })
         };
@@ -1111,7 +1198,12 @@ impl Manager {
             match MuxRelayFrame::from_json(&text) {
                 Ok(MuxRelayFrame::Ok(ok)) => return Self::accept(ok),
                 Ok(MuxRelayFrame::Error(error)) => {
-                    return Err(Refusal::Failed(ClientError::Relay { kind: error.kind }));
+                    let refusal = ClientError::Relay { kind: error.kind };
+                    return Err(if error.code == Some(MuxCode::RateLimited) {
+                        Refusal::Failed(refusal)
+                    } else {
+                        Refusal::Rejected(refusal)
+                    });
                 }
                 Ok(_) => debug!("epicbox frame ignored during mux negotiation"),
                 Err(FrameError::MuxChallenge) => {
@@ -1149,7 +1241,7 @@ impl Manager {
 
     /// Resumes with the token, or attaches every mailbox with signatures.
     async fn begin(&mut self, link: &mut Link) -> Result<(), Lost> {
-        if self.entries.is_empty() {
+        if self.entries.len() == self.replaced.len() {
             self.token = None;
             self.mark_ready(link);
             return Ok(());
@@ -1165,7 +1257,7 @@ impl Manager {
             )
             .await
         } else {
-            let all: Vec<usize> = self.entries.keys().copied().collect();
+            let all = self.unattached(link);
             self.attach(link, all).await
         }
     }
@@ -1251,7 +1343,7 @@ impl Manager {
                 Wake::Text(text) => {
                     self.handle_text(link, &text?).await?;
                     if std::mem::take(&mut link.fallback_attach) {
-                        let all: Vec<usize> = self.entries.keys().copied().collect();
+                        let all = self.unattached(link);
                         self.attach(link, all).await?;
                     }
                 }
@@ -1475,12 +1567,7 @@ impl Manager {
             link.resume_pending = false;
             self.emit(MuxEvent::Resumed);
             // The session the relay held may differ from ours: sign for what it dropped.
-            let missing: Vec<usize> = self
-                .entries
-                .keys()
-                .copied()
-                .filter(|index| !link.attached.contains(index))
-                .collect();
+            let missing = self.unattached(link);
             self.attach(link, missing).await?;
         }
         for chunk in unwanted.chunks(MAX_ATTACH_PER_FRAME) {
@@ -1516,8 +1603,9 @@ impl Manager {
             return Ok(());
         }
         if link.inflight.len() >= link.limits.inflight_per_socket {
-            warn!("epicbox relay pushed more mail than its in-flight limit, message dropped");
-            return Ok(());
+            // Not handed out, and not forgotten: a hold frees the relay's slot for it.
+            warn!("epicbox relay pushed more mail than its in-flight limit, message held");
+            return self.hold(link, mail.id).await;
         }
         let id = mail.id.clone();
         if self.stored.contains(&id) {
@@ -1618,8 +1706,9 @@ impl Manager {
                 if let Some(index) = index {
                     // Another socket holds the mailbox. Never attached again from here, or two
                     // instances would take it from each other in a loop.
-                    self.remove_entry(&detached.mailbox);
+                    self.replaced.insert(detached.mailbox.clone());
                     link.forget_mailbox(index);
+                    self.shared.purge(Some(index));
                     info!(
                         mailbox = index,
                         "epicbox mailbox replaced by another socket"

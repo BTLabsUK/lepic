@@ -235,6 +235,11 @@ impl Pushed {
         for message in taken {
             let (msg_id, relayed) = (message.msg_id().clone(), message.relayed().cloned());
             let token = AckToken::new(msg_id.as_str().to_owned());
+            // After a reconnect the relay pushes a message again that was taken and is not
+            // settled yet. The copy in hand stands; its settlement covers the new push too.
+            if local.relayed.contains_key(&token) {
+                continue;
+            }
             if let Some(relayed) = relayed {
                 local.relayed.insert(token.clone(), relayed);
             }
@@ -309,6 +314,8 @@ impl Pushed {
     }
 
     fn keep(&self, item: &Item) {
+        // The relay offers it again after the hold, as a new message to take.
+        self.local().relayed.remove(item.ack_token());
         if let Some(msg_id) = item.relay_id() {
             let _: Result<(), MuxError> =
                 self.session.settle(msg_id, lepic_epicbox::Handled::Later);
@@ -513,7 +520,7 @@ impl Epicbox {
             outcome = work => outcome,
             never = forward => match never {},
         };
-        self.pushed().release(PAYMENTS_OWNER).await;
+        self.pushed().release(PAYMENTS_OWNER);
         let not_offered = *session.state().borrow() == MuxState::NotOffered;
         if (matches!(outcome, Ok(None)) || not_offered) && !handle.is_stopped() {
             info!("relay does not offer mux/1, listening on a socket");
@@ -916,5 +923,95 @@ where
                 Ok(Handled::Rejected)
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    // Tests may unwrap (docs/rules.md).
+    #![allow(clippy::unwrap_used)]
+
+    use std::time::Duration;
+
+    use lepic_crypto::{PublicKey, SecretKey};
+    use lepic_epicbox::mock_mux::MuxMockRelay;
+    use lepic_epicbox::{
+        Domain, EpicboxAddress, Network, Nonce, RelayEndpoint, Salt, Security, SignedMessage,
+    };
+
+    use super::*;
+
+    fn identity(byte: u8) -> Identity {
+        let secret = SecretKey::from_array([byte; 32]).unwrap();
+        let address = EpicboxAddress::new(
+            PublicKey::from_secret_key(&secret).unwrap(),
+            Network::Mainnet,
+            Domain::parse("relay.test").unwrap(),
+            Some(443),
+        );
+        Identity::new(secret, address).unwrap()
+    }
+
+    async fn until(condition: impl Fn() -> bool) {
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while !condition() {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("timed out");
+    }
+
+    #[tokio::test]
+    async fn a_message_pushed_again_while_still_in_hand_is_not_queued_twice() {
+        let settings = lepic_epicbox::testing::client_settings(RelayEndpoint::new(
+            Domain::parse("relay.test").unwrap(),
+            None,
+            Security::Plain,
+        ));
+        let relay = MuxMockRelay::new(Network::Mainnet);
+        let receiver = identity(1);
+        let sender = identity(2);
+        let sender_secret = SecretKey::from_array([2; 32]).unwrap();
+        let session = Arc::new(
+            MuxSession::start_queued(
+                settings.clone(),
+                relay.connector(),
+                vec![receiver.clone()],
+                MuxOptions::default(),
+            )
+            .unwrap(),
+        );
+        let pushed = Pushed::new(
+            Arc::clone(&session),
+            0,
+            receiver.clone(),
+            MailboxClient::new(settings, relay.connector()),
+        );
+        until(|| *session.state().borrow() == MuxState::Attached).await;
+        let message = SignedMessage::seal(
+            "{}",
+            receiver.address(),
+            &sender_secret,
+            Salt::from([4; 8]),
+            Nonce::from([5; 12]),
+        )
+        .unwrap();
+        let id = relay.store(sender.address(), receiver.address(), &message);
+        until(|| session.counters().mails == 1).await;
+        assert!(pushed.fill());
+        assert_eq!(pushed.local().ready.len(), 1);
+
+        // The socket drops with the message taken and not settled: the relay pushes it again.
+        relay.drop_sockets();
+        until(|| session.counters().mails == 2).await;
+        pushed.fill();
+        assert_eq!(pushed.local().ready.len(), 1, "queued once");
+
+        // Settling the copy in hand acknowledges the message on the new socket.
+        let item = pushed.next_envelope().unwrap();
+        pushed.acknowledge(&item);
+        relay.wait_until(|relay| relay.is_acked(&id)).await;
+        assert!(pushed.next_envelope().is_none());
     }
 }

@@ -5,8 +5,9 @@
 //! It offers the extension when asked, sends a 22-character challenge, verifies each `Attach`
 //! signature against it, issues single-use resume tokens that a restart forgets, pushes stored
 //! mail up to the in-flight limit and answers `Ack`, `Hold`, `Detach` and `Waiting`. Switches
-//! make it refuse the extension, send a challenge of the wrong shape, stop pushing, drop
-//! sockets, send `Detached`, or answer attaches with `rate_limited`. It records every frame it
+//! make it refuse the extension, answer the greeting with an `Error` or not at all, send a
+//! challenge of the wrong shape, stop pushing, push past the in-flight limit, drop sockets,
+//! send `Detached`, or answer attaches with `rate_limited`. It records every frame it
 //! receives. Tests wait on its state with [`MuxMockRelay::wait_until`].
 
 use std::collections::{HashMap, HashSet};
@@ -57,6 +58,14 @@ enum Phase {
     Done,
 }
 
+/// How the relay treats the `ClientDetails` greeting.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Greeting {
+    Answer,
+    Error,
+    Silent,
+}
+
 struct StoredMail {
     id: String,
     key: String,
@@ -88,6 +97,8 @@ struct State {
     messages: Vec<StoredMail>,
     offering: bool,
     bad_challenge: bool,
+    greeting: Greeting,
+    ignoring_limit: bool,
     stalling_pushes: bool,
     first_challenge: bool,
     rate_limited: Option<(u32, u64)>,
@@ -115,6 +126,8 @@ impl MuxMockRelay {
                     messages: Vec::new(),
                     offering: true,
                     bad_challenge: false,
+                    greeting: Greeting::Answer,
+                    ignoring_limit: false,
                     stalling_pushes: false,
                     first_challenge: true,
                     rate_limited: None,
@@ -146,6 +159,34 @@ impl MuxMockRelay {
     /// Sends a negotiation challenge of the wrong shape from now on.
     pub fn set_bad_challenge(&self, bad: bool) {
         self.update(|state| state.bad_challenge = bad);
+    }
+
+    /// Answers the greeting with an `Error` frame, as a relay that does not know the extension
+    /// field may.
+    pub fn answer_greeting_with_error(&self, erroring: bool) {
+        self.update(|state| {
+            state.greeting = if erroring {
+                Greeting::Error
+            } else {
+                Greeting::Answer
+            };
+        });
+    }
+
+    /// Does not answer the greeting at all.
+    pub fn ignore_greeting(&self, ignoring: bool) {
+        self.update(|state| {
+            state.greeting = if ignoring {
+                Greeting::Silent
+            } else {
+                Greeting::Answer
+            };
+        });
+    }
+
+    /// Pushes mail without counting what is in flight, as a relay with a bug would.
+    pub fn ignore_inflight_limit(&self, ignoring: bool) {
+        self.update(|state| state.ignoring_limit = ignoring);
     }
 
     /// Stops pushing mail, as a relay whose push path is broken does. `Waiting` still reports
@@ -472,6 +513,14 @@ impl State {
     }
 
     fn negotiate(&mut self, id: u64, ext: Option<&Vec<String>>) {
+        match self.greeting {
+            Greeting::Answer => {}
+            Greeting::Error => {
+                self.send(id, error("InvalidRequest", "bad_frame", None, None));
+                return;
+            }
+            Greeting::Silent => return,
+        }
         let asked = ext.is_some_and(|ext| ext.iter().any(|name| name == "mux/1"));
         if !(asked && self.offering) {
             self.send(id, json!({"type": "Ok"}).to_string());
@@ -756,7 +805,7 @@ impl State {
             .count();
         let mut frames = Vec::new();
         for message in &mut self.messages {
-            if inflight >= INFLIGHT_LIMIT {
+            if inflight >= INFLIGHT_LIMIT && !self.ignoring_limit {
                 break;
             }
             if message.phase == Phase::Pending && attached.contains(&message.key) {

@@ -115,7 +115,7 @@ impl Session {
     pub(crate) async fn contacts_push_stop(&self) -> Result<(), WalletError> {
         let epicbox = self.epicbox()?;
         epicbox.pushed().set_contacts(None);
-        epicbox.pushed().release(CONTACTS_OWNER).await;
+        epicbox.pushed().release(CONTACTS_OWNER);
         Ok(())
     }
 

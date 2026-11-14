@@ -128,7 +128,12 @@ keeps plain 3.0.0.
 
 - `start(settings, connector, identities, handler, options)` greets with `ext: ["mux/1"]`. A plain
   `Ok` means the relay does not offer it: the state becomes `MuxState::NotOffered` and the host
-  keeps its classic listeners. A challenge that is not 22 characters of `[A-Za-z0-9_-]` is refused.
+  keeps its classic listeners. A session that has never attached reads two more answers the same
+  way: an `Error` to the greeting at once, and no answer to the greeting at all on the third try
+  in a row. A session that attached once keeps retrying, as it does after any lost socket. A
+  challenge that is not 22 characters of `[A-Za-z0-9_-]` is refused. The handler of `start` runs on
+  the session's own task, so it must not block (a blocked handler stops pings); a consumer that
+  cannot promise that uses queued mode.
 - The mailboxes are attached in `Attach` frames of at most 64 entries, each signed over the
   socket's challenge. More than 256 mailboxes give `MuxError::TooManyMailboxes`.
 - A `Mail` goes to the `MailboxHandler` as a `MailboxMessage`. `Handled::Stored` queues an `Ack`
@@ -137,8 +142,10 @@ keeps plain 3.0.0.
   handler.
 - After a drop the session reconnects with `Backoff` and sends `Resume` with the single-use token,
   so no new signature is made. On `token_unknown` (a relay restart) it signs and attaches again.
-  `rate_limited` waits for `retry_after`. `Detached` with `replaced` removes that mailbox for
-  good; `shutdown` reconnects.
+  `rate_limited` waits for `retry_after`. `Detached` with `replaced` ends delivery for that
+  mailbox: it keeps its index, no later attach, resume or reconcile puts it back, and it is
+  attached again only after no owner claims it and one claims it afresh (it then has a new
+  index), or in a new session. `shutdown` reconnects.
 - With `MuxOptions::waiting_every` set, the session sends `Waiting` probes. Two probes in a row
   that find waiting mail with nothing in flight or held, and no mail between them, reconnect the
   socket (a stalled push).
@@ -151,13 +158,17 @@ keeps plain 3.0.0.
   consumer. The consumer calls `take(&[mailbox, ...])` (never waits; oldest first), waits on the
   `queued()` watch channel, and answers every message with `settle(id, Handled)`: `Stored`
   acknowledges, `Later` holds. Until it settles, a message counts against the relay's in-flight
-  limit (32 per socket), so a consumer that stops settling stops new mail. Unsettled mail is
+  limit (32 per socket), so a consumer that stops settling stops new mail. A relay that pushes
+  past the limit anyway gets a `Hold` for the extra message, which is offered again later. Unsettled mail is
   forgotten when the socket drops and the relay offers it again. `set_mailboxes(identities)` makes
   the set exactly that list: it attaches what is new, detaches what is gone, and signs only for
   the new ones. Consumers that share a session use `set_claim(owner, identities)` instead: the
   attached set is the union of every owner's claim, so one owner never detaches another's
   mailboxes, an empty claim releases the owner, and `add_to_claim` adds without replacing.
   `set_mailboxes` is the owner `""`, which also holds the mailboxes the session started with.
+  Owners are internal callers: the session holds at most the lower of 256 and the relay's
+  `mailboxes_per_socket` across all claims. `release_claim(owner)` empties a claim without
+  waiting for the session to apply it.
 
 With feature `mock-relay`, `mock_mux::MuxMockRelay` is an in-process mux/1 relay with knobs to
 refuse the extension, send a bad challenge, stall pushes, rate limit attaches, drop sockets,

@@ -170,12 +170,6 @@ impl TryFrom<String> for ResumeToken {
     }
 }
 
-impl From<ResumeToken> for String {
-    fn from(token: ResumeToken) -> Self {
-        token.0.as_str().to_owned()
-    }
-}
-
 impl<'de> Deserialize<'de> for ResumeToken {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         let text = Zeroizing::new(String::deserialize(deserializer)?);

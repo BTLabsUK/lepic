@@ -139,8 +139,9 @@ impl PushedSessions {
     }
 
     /// Lets go of every session `owner` uses: its claim is emptied, and a session nobody else
-    /// owns is stopped.
-    pub async fn release(&self, owner: &str) {
+    /// owns is stopped. Does not wait for a session to apply the claim: one that is still
+    /// opening its socket would hold the caller up.
+    pub fn release(&self, owner: &str) {
         let mut claimed = Vec::new();
         {
             let mut registry = self.registry();
@@ -158,7 +159,7 @@ impl PushedSessions {
         self.changed();
         for session in claimed {
             // An ended session has nothing to release.
-            let _ = session.set_claim(owner, Vec::new()).await;
+            let _ = session.release_claim(owner);
         }
     }
 

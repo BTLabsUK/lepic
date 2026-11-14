@@ -2281,7 +2281,7 @@ pub enum EpicboxSessionEventKind {
     MailQueued,
 }
 
-/// What [`crate::api::epicbox_sessions`] streams.
+/// What [`crate::api::wallet::EpicWallet::watch_epicbox_sessions`] streams.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EpicboxSessionEvent {
     pub kind: EpicboxSessionEventKind,

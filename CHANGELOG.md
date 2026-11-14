@@ -14,6 +14,8 @@ Conventional Commit messages at release time.
   behind `mock-relay`. Nothing starts it; plain 3.0.0 is unchanged. A queued mode
   (`start_queued`, `take`, `settle`, `set_mailboxes`) leaves the wallet work to a consumer, and
   `set_claim(owner, ...)` lets several consumers share one session without detaching each other.
+  A mailbox the relay reports `replaced` is not attached again by a reconcile or a reconnect,
+  and a session whose relay never answered the greeting properly ends as not offered.
 - `lepic serve`: a webhook sends the event log by signed HTTP POST (Standard Webhooks), one event
   at a time with retries, set by `webhook_url`, `webhook_secret_file`, `webhook_types` and
   `webhook_allow_private`; `GET /webhook` and `POST /webhook/resume` show and restart it.

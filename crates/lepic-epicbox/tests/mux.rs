@@ -156,6 +156,70 @@ async fn a_plain_ok_ends_the_session_as_not_offered() {
 }
 
 #[tokio::test]
+async fn an_error_answer_to_the_greeting_ends_a_new_session_as_not_offered() {
+    let relay = MuxMockRelay::new(Network::Mainnet);
+    relay.answer_greeting_with_error(true);
+    let (session, _) = start(&relay, vec![identity(ALICE)], options());
+    let mut state = session.state();
+    within(
+        Duration::from_secs(5),
+        state.wait_for(|state| *state == MuxState::NotOffered),
+    )
+    .await
+    .unwrap();
+    // No retry: the greeting was sent once.
+    assert_eq!(relay.received("ClientDetails"), 1);
+    assert_eq!(relay.received("Attach"), 0);
+    assert!(matches!(session.stop().await, Err(MuxError::NotOffered)));
+}
+
+#[tokio::test]
+async fn a_relay_that_never_answers_the_greeting_ends_as_not_offered_after_three_tries() {
+    let relay = MuxMockRelay::new(Network::Mainnet);
+    relay.ignore_greeting(true);
+    let mut quick = settings();
+    quick.response_timeout = Duration::from_millis(100);
+    let session = start_queued_with(&relay, vec![identity(ALICE)], quick);
+    let mut state = session.state();
+    within(
+        Duration::from_secs(5),
+        state.wait_for(|state| *state == MuxState::NotOffered),
+    )
+    .await
+    .unwrap();
+    assert_eq!(relay.received("ClientDetails"), 3);
+}
+
+#[tokio::test]
+async fn a_session_that_attached_once_keeps_trying_when_the_greeting_goes_unanswered() {
+    let relay = MuxMockRelay::new(Network::Mainnet);
+    let mut quick = settings();
+    quick.response_timeout = Duration::from_millis(100);
+    let session = start_queued_with(&relay, vec![identity(ALICE)], quick);
+    attached(&session).await;
+    relay.ignore_greeting(true);
+    relay.drop_sockets();
+    // More than the three tries a new session gets.
+    until(|| relay.received("ClientDetails") >= 6).await;
+    assert!(!session.state().borrow().has_ended());
+    relay.ignore_greeting(false);
+    attached(&session).await;
+}
+
+#[tokio::test]
+async fn a_session_that_attached_once_keeps_trying_when_the_greeting_gets_an_error() {
+    let relay = MuxMockRelay::new(Network::Mainnet);
+    let session = start_queued(&relay, vec![identity(ALICE)]);
+    attached(&session).await;
+    relay.answer_greeting_with_error(true);
+    relay.drop_sockets();
+    until(|| relay.received("ClientDetails") >= 3).await;
+    assert!(!session.state().borrow().has_ended());
+    relay.answer_greeting_with_error(false);
+    attached(&session).await;
+}
+
+#[tokio::test]
 async fn a_challenge_of_the_wrong_shape_is_refused() {
     let relay = MuxMockRelay::new(Network::Mainnet);
     relay.set_bad_challenge(true);
@@ -283,6 +347,93 @@ async fn a_replaced_mailbox_is_not_attached_again() {
     assert_eq!(relay.attached().len(), 1);
     assert_eq!(session.counters().signatures, 2);
     assert_eq!(session.counters().attaches, 1);
+}
+
+/// Waits for the `Replaced` event of `mailbox`.
+async fn replaced(events: &mut tokio::sync::broadcast::Receiver<MuxEvent>, mailbox: usize) {
+    within(Duration::from_secs(5), async {
+        loop {
+            if let MuxEvent::Replaced { mailbox: found } = events.recv().await.unwrap()
+                && found == mailbox
+            {
+                return;
+            }
+        }
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn setting_the_claim_again_does_not_attach_a_replaced_mailbox() {
+    let relay = MuxMockRelay::new(Network::Mainnet);
+    let session = start_queued(&relay, vec![identity(ALICE), identity(BOB)]);
+    let mut events = session.events();
+    attached(&session).await;
+    let alice_key = address(ALICE).key_text();
+    relay.send_detached(&address(ALICE), "replaced");
+    replaced(&mut events, 0).await;
+    relay
+        .wait_until(|relay| !relay.attached().contains(&alice_key))
+        .await;
+    // A reconcile with the same identities keeps the index and sends no new attach.
+    let claimed = session
+        .set_claim("", vec![identity(ALICE), identity(BOB)])
+        .await
+        .unwrap();
+    assert_eq!(claimed.indexes, vec![0, 1]);
+    assert!(claimed.fresh.is_empty());
+    // The same after the socket was lost: the resume covers bob only.
+    relay.drop_sockets();
+    relay
+        .wait_until(|relay| relay.resumes_accepted() == 1)
+        .await;
+    let id = post(&relay, BOB, "still here");
+    let taken = take_some(&session, &[1]).await;
+    assert_eq!(taken[0].msg_id().as_str(), id);
+    assert!(!relay.attached().contains(&alice_key));
+    assert_eq!(session.counters().signatures, 2);
+    assert_eq!(session.counters().attaches, 1);
+}
+
+#[tokio::test]
+async fn a_replaced_mailbox_is_attached_again_once_it_was_let_go_and_claimed_afresh() {
+    let relay = MuxMockRelay::new(Network::Mainnet);
+    let session = start_queued(&relay, vec![identity(ALICE), identity(BOB)]);
+    let mut events = session.events();
+    attached(&session).await;
+    let alice_key = address(ALICE).key_text();
+    relay.send_detached(&address(ALICE), "replaced");
+    replaced(&mut events, 0).await;
+    session.set_mailboxes(vec![identity(BOB)]).await.unwrap();
+    let again = session
+        .set_mailboxes(vec![identity(ALICE), identity(BOB)])
+        .await
+        .unwrap();
+    assert_ne!(again[0], 0, "a new index");
+    relay
+        .wait_until(|relay| relay.attached().contains(&alice_key))
+        .await;
+    let id = post(&relay, ALICE, "back again");
+    let taken = take_some(&session, &[again[0]]).await;
+    assert_eq!(taken[0].msg_id().as_str(), id);
+}
+
+#[tokio::test]
+async fn mail_over_the_in_flight_limit_is_held_not_dropped() {
+    let relay = MuxMockRelay::new(Network::Mainnet);
+    relay.ignore_inflight_limit(true);
+    let session = start_queued(&relay, vec![identity(ALICE)]);
+    attached(&session).await;
+    relay.stall_pushes(true);
+    let ids: Vec<String> = (0..34)
+        .map(|n| post(&relay, ALICE, &format!("mail {n}")))
+        .collect();
+    relay.stall_pushes(false);
+    relay
+        .wait_until(|relay| ids[32..].iter().all(|id| !relay.holds(id).is_empty()))
+        .await;
+    assert_eq!(session.take(&[0]).len(), 32);
+    assert!(ids[..32].iter().all(|id| relay.holds(id).is_empty()));
 }
 
 #[tokio::test]
