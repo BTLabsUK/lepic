@@ -37,6 +37,8 @@ use lepic_epicbox::{
 pub use lepic_epicbox::{RELAY_RETENTION, TRANSPORT_ID};
 
 #[cfg(feature = "epicbox-wallet")]
+mod identity;
+#[cfg(feature = "epicbox-wallet")]
 mod inbox;
 #[cfg(feature = "epicbox-wallet")]
 mod listing;

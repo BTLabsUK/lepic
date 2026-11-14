@@ -5,10 +5,10 @@
 
 use std::sync::Arc;
 
-use lepic_crypto::{EcdsaSignature, PublicKey};
+use lepic_crypto::EcdsaSignature;
 use lepic_epicbox::{
-    Awaiting, ClientError, DrainConnection, EpicboxAddress, Identity, RELAY_RETENTION,
-    ServiceDomain, TRANSPORT_ID,
+    Awaiting, ClientError, DrainConnection, EpicboxAddress, RELAY_RETENTION, ServiceDomain,
+    TRANSPORT_ID,
 };
 use lepic_node::NodeApi;
 use lepic_transport::method::Method;
@@ -19,8 +19,7 @@ use tokio::time::{Instant, timeout_at};
 use tracing::instrument;
 
 use super::Epicbox;
-use super::inbox::{PruneSchedule, Run, Source};
-use super::relay_network;
+use super::inbox::{Run, Source};
 
 impl Epicbox {
     /// The Epicbox address of `wallet`'s `listing` on this method's relay. Needs no relay.
@@ -121,35 +120,56 @@ impl Epicbox {
                 results.push(Err(not_reached()));
                 continue;
             }
-            let handed = carried.take();
-            let reused = handed.is_some();
-            let mut outcome = timeout_at(
-                deadline,
-                self.drain_listing_on(wallet, listing, handed, &mut carried),
-            )
-            .await;
-            if reused
-                && matches!(
-                    outcome,
-                    Ok(Err(InboxError::Subscription(_) | InboxError::Transport(_)))
-                )
-            {
-                carried = None;
-                outcome = timeout_at(
-                    deadline,
-                    self.drain_listing_on(wallet, listing, None, &mut carried),
-                )
+            let outcome = self
+                .drain_listing_before(deadline, wallet, listing, &mut carried)
                 .await;
-            }
-            results.push(outcome.unwrap_or_else(|_| {
-                carried = None;
-                Err(not_reached())
-            }));
+            results.push(outcome);
         }
         if let Some(connection) = carried {
             connection.close().await;
         }
         results
+    }
+
+    /// One listing's drain of [`Epicbox::drain_many_at`], on the connection `carried` holds if
+    /// there is one, and cut off at `deadline`. A carried connection that fails is replaced and
+    /// the listing tried once more. `carried` receives the connection for the next listing
+    /// when this drain ended quiet, and is `None` otherwise.
+    async fn drain_listing_before<N, S, V>(
+        &self,
+        deadline: Instant,
+        wallet: &Wallet<N, S, V>,
+        listing: &Listing,
+        carried: &mut Option<DrainConnection>,
+    ) -> Result<InboxSummary, InboxError>
+    where
+        N: NodeApi + 'static,
+        S: StoreOpener + 'static,
+        V: SecretVault + 'static,
+    {
+        let handed = carried.take();
+        let reused = handed.is_some();
+        let mut outcome = timeout_at(
+            deadline,
+            self.drain_listing_on(wallet, listing, handed, carried),
+        )
+        .await;
+        let connection_failed = matches!(
+            outcome,
+            Ok(Err(InboxError::Subscription(_) | InboxError::Transport(_)))
+        );
+        if reused && connection_failed {
+            *carried = None;
+            outcome = timeout_at(
+                deadline,
+                self.drain_listing_on(wallet, listing, None, carried),
+            )
+            .await;
+        }
+        outcome.unwrap_or_else(|_| {
+            *carried = None;
+            Err(not_reached())
+        })
     }
 
     /// One listing's drain on `handed` when given. `carried` receives the connection when the
@@ -176,15 +196,13 @@ impl Epicbox {
             .drain_on(handed)
             .map_err(|error| InboxError::Subscription(Box::new(error)))?;
         let method: Arc<dyn Method> = Arc::new(at_listing);
-        let run = Run {
+        let run = Run::new(
             wallet,
             method,
-            source: Source::Socket(&subscription),
-            listen: None,
-            backoff: self.settings().backoff,
-            pruning: PruneSchedule::default(),
-            listing: Some(*listing),
-        };
+            Source::Socket(&subscription),
+            self.settings().backoff,
+        )
+        .at_listing(*listing);
         let consumed = run.consume().await;
         let stopped = subscription
             .stop()
@@ -199,33 +217,6 @@ impl Epicbox {
         }
         stopped?;
         consumed
-    }
-
-    fn listing_identity<N, S, V>(
-        &self,
-        wallet: &Wallet<N, S, V>,
-        listing: &Listing,
-    ) -> Result<Identity, InboxError>
-    where
-        N: NodeApi + 'static,
-        S: StoreOpener + 'static,
-        V: SecretVault + 'static,
-    {
-        let network = relay_network(wallet.config().network);
-        if self.network() != network {
-            return Err(InboxError::NetworkMismatch);
-        }
-        let secret = wallet.listing_secret(listing)?;
-        let public = PublicKey::from_secret_key(&secret)
-            .map_err(|error| InboxError::Wallet(WalletError::Keychain(error.into())))?;
-        let endpoint = &self.settings().endpoint;
-        let address = EpicboxAddress::new(
-            public,
-            network,
-            endpoint.domain().clone(),
-            Some(endpoint.port()),
-        );
-        Identity::new(secret, address).map_err(|error| InboxError::Identity(Box::new(error)))
     }
 }
 
