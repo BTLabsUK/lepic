@@ -38,7 +38,7 @@ that picks a codec for an unknown slate. A pure crate. The codecs themselves liv
 | `codec` | `Codec`, `CodecId`, `MediaType`, `WireSlate`, `WireContent`, `EncodeContext`, `MAX_WIRE_SLATE_LEN` |
 | `registry` | `CodecRegistry` (`register`, `detect`, `decode`, `encode`) |
 | `origin` | `WireOrigin`, `LegacyHeader` |
-| `ur_slate` | `encode_ur_slate`, `decode_ur_slate`, `encode_ur_binary`, `decode_ur_parts` |
+| `ur_slate` | `encode_ur_slate`, `encode_ur_slate_split` (a single-code limit apart from the fragment length), `decode_ur_slate`, `encode_ur_binary`, `decode_ur_parts` |
 | `error`, `validate` | `SlateError`, `DecodeError`, `EncodeError`, `RegistryError`; shared decode checks |
 
 ## Related
