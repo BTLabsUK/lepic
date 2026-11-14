@@ -18,6 +18,7 @@ epicbox = [
     "dep:lepic-epicbox",
     "dep:lepic-primitives",
     "dep:lepic-slate",
+    "dep:tokio",
 ]
 epicbox-wallet = [
     "epicbox",
