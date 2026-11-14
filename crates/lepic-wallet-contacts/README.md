@@ -45,7 +45,7 @@ let book = wallet.contact_book();
 `install` gives the engine what it takes from this crate: the reply key a file or paste S1 or
 I1 carries, the `lepic.v1` conversions of native slates over Epicbox, sealed notices to
 contacts, and pairing requests. `ContactRelays` holds the wallet's `Epicbox` method, whose
-relay is the home relay of this wallet's invites, the meeting relays for pairing words, and the
+relay is the home relay of this wallet's invites, the meeting relays for epic1 links and in-person answers, and the
 `RelayMode`:
 
 | `RelayMode` | Relays reached |
