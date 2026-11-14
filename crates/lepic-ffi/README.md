@@ -41,8 +41,7 @@ As [ADR 0014](../../docs/adr/0014-secrets-at-the-flutter-boundary.md) requires:
   `WalletConfig.node_api_secret`.
 - **Out of Rust:** the recovery phrase, only from `mnemonic` and `mnemonic_with_pin`, for the
   backup screen.
-- **Both ways:** pairing invite links and the five pairing words. LEPIC never stores or logs
-  them.
+- **Both ways:** pairing invite, reply and confirm links. LEPIC never stores or logs them.
 - **To the app's store only:** the sealed vault and the PIN key.
 - **Never out:** seed bytes, private keys, blinding factors, nonces, vault keys and a PIN
   wallet's generated password.
