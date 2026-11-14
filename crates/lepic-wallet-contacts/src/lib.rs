@@ -369,8 +369,7 @@ pub enum ContactError {
     /// The relay could not be reached or broke off. Nothing that was not stored is lost.
     #[error("relay failed")]
     Relay(#[source] MailboxError),
-    /// No meeting relay was named: [`meeting_relays`] returns it for an empty list. The pairing
-    /// words it was named for are gone; the kind stays for the codes that carry it.
+    /// No meeting relay was named: [`meeting_relays`] returns it for an empty list.
     #[error("pairing words are not available")]
     WordsUnavailable,
     /// Sealing is off for the contact, or its card says it cannot open sealed files.
@@ -415,8 +414,7 @@ pub enum ContactError {
     /// A key check is allowed once per pairing and per slot, within a day of the new pairing.
     #[error("no key check is allowed for these pairings now")]
     KeyCheckRefused,
-    /// No longer produced: the pairing words it was named for are gone. The kind stays for the
-    /// codes that carry it.
+    /// Not produced; kept for its error code.
     #[error("no invite found for these words")]
     WordsNotFound,
     /// The contact's card says it does not pay invoices.

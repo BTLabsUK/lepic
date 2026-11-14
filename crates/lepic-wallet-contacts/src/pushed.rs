@@ -9,7 +9,9 @@
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
-use lepic_epicbox::{Handled, Identity, MailboxEnd, MailboxHandler, MuxSession, MuxState};
+use lepic_epicbox::{
+    Handled, Identity, MailboxEnd, MailboxHandler, MuxSession, MuxState, RelayEndpoint,
+};
 use lepic_methods::epicbox::CONTACTS_OWNER;
 use lepic_primitives::error_chain::ErrorChain;
 use tracing::{debug, warn};
@@ -37,7 +39,7 @@ impl PushedMail {
     pub(crate) async fn open(
         relays: &ContactRelays,
         host: &str,
-        endpoint: lepic_epicbox::RelayEndpoint,
+        endpoint: RelayEndpoint,
         onion: Option<&str>,
         identities: &[Identity],
         add: bool,
@@ -128,7 +130,7 @@ impl PushedMail {
 fn join_session(
     relays: &ContactRelays,
     host: &str,
-    endpoint: lepic_epicbox::RelayEndpoint,
+    endpoint: RelayEndpoint,
     onion: Option<&str>,
 ) -> Option<Arc<MuxSession>> {
     let pushed = relays.epicbox.pushed();
