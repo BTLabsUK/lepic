@@ -133,11 +133,16 @@ fn json_lines_carry_documented_field_names() {
             cleared = 1_u32,
             kind = "invoice",
             origin = "http://127.0.0.1",
-            relays = 2_u32,
             online = true,
             answer = 1_u32,
             same_code = false,
             amount = 1_000_000_u64,
+            mailbox = 0_u32,
+            attach_per_frame = 16_u32,
+            mailboxes_per_socket = 64_u32,
+            inflight_per_socket = 32_u32,
+            retry = 1_u32,
+            wait_s = 5_u64,
             "slate sent"
         );
     });
