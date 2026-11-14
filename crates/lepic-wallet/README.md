@@ -173,6 +173,20 @@ first time and raises `Event::AnsweredAgain`.
   time, within `TWIN_REQUEUE_WINDOW` (24 h).
 - Open receipts nobody asked for are capped by `WalletPolicy` (10 per sender key, 100 in all).
 
+### Boosts and the API log
+
+`boost::Boosts` lets a host poll faster for a while (ADR 0058). The host runs one loop for each
+`Poller`: `Relays` for the contact collect cycle and `Node` for the refresh. It asks
+`Boosts::interval(poller, base)` before each sleep and wakes on `changed()`. `boost` returns a
+`Lease` that ends the boost when dropped, unless `keep()` hands its random id on for
+`Boosts::end`. A poller with several boosts runs at the shortest interval among them. An interval
+below `MIN_INTERVAL` (5 s) and a window above `MAX_DURATION` (10 min) are clamped. `Boosts` starts
+no loop of its own.
+
+`api_log` keeps the serve API's event log and idempotency records in the wallet's store:
+`append_api_event`, `api_events_after`, `prune_api_events`, `put_api_request`, `api_request`
+and the matching prune and delete calls.
+
 ### Policy
 
 `WalletPolicy` holds the values a host chooses (ADR 0036). `WalletPolicy::DEFAULT`:
