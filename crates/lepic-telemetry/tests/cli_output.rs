@@ -128,6 +128,7 @@ fn json_lines_carry_documented_field_names() {
             event_id = 4_u64,
             paused_ms = 40_000_u64,
             rounds = 2_u32,
+            interval_s = 60_u64,
             text = "duplicate commitment",
             cleared = 1_u32,
             kind = "invoice",
