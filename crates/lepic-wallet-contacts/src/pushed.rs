@@ -17,6 +17,7 @@ use tracing::{debug, warn};
 use super::ContactRelays;
 use super::relay::mailbox_client;
 
+/// The mailboxes of one collect pass, read from the mail a shared mux/1 session queued.
 pub(crate) struct PushedMail {
     session: Arc<MuxSession>,
     /// The session's index of each mailbox, by position in the list given to `open`.
@@ -41,28 +42,8 @@ impl PushedMail {
         identities: &[Identity],
         add: bool,
     ) -> Option<Self> {
-        let pushed = relays.epicbox.pushed();
-        let config = pushed.contacts()?;
-        let session = pushed
-            .get_or_start(host, &config.group, CONTACTS_OWNER, || {
-                mailbox_client(relays, endpoint, onion).start_mux_queued(Vec::new(), config.options)
-            })
-            .inspect_err(|error| {
-                warn!(peer_relay = %host, error = %ErrorChain(error), "mux/1 session not started");
-            })
-            .ok()?;
-        if session.state().borrow().has_ended() {
-            return None;
-        }
-        let mut keys: Vec<String> = Vec::with_capacity(identities.len());
-        let mut unique: Vec<Identity> = Vec::with_capacity(identities.len());
-        for identity in identities {
-            let key = identity.address().key_text();
-            if !keys.contains(&key) {
-                keys.push(key);
-                unique.push(identity.clone());
-            }
-        }
+        let session = join_session(relays, host, endpoint, onion)?;
+        let (keys, unique) = without_repeats(identities);
         let claimed = if add {
             session.add_to_claim(CONTACTS_OWNER, unique).await
         } else {
@@ -72,12 +53,14 @@ impl PushedMail {
             warn!(peer_relay = %host, error = %ErrorChain(error), "mux/1 claim not set");
         })
         .ok()?;
-        let mut indexes = Vec::with_capacity(identities.len());
-        for identity in identities {
-            let key = identity.address().key_text();
-            let place = keys.iter().position(|known| *known == key)?;
-            indexes.push(*claimed.indexes.get(place)?);
-        }
+        let indexes = identities
+            .iter()
+            .map(|identity| {
+                let key = identity.address().key_text();
+                let place = keys.iter().position(|known| *known == key)?;
+                claimed.indexes.get(place).copied()
+            })
+            .collect::<Option<Vec<usize>>>()?;
         let fresh = indexes
             .iter()
             .enumerate()
@@ -138,6 +121,44 @@ impl PushedMail {
             })
             .collect()
     }
+}
+
+/// The contacts session of `host`, started on first use, or `None` when the contacts do not
+/// read pushed mail, it could not be started, or it has ended.
+fn join_session(
+    relays: &ContactRelays,
+    host: &str,
+    endpoint: lepic_epicbox::RelayEndpoint,
+    onion: Option<&str>,
+) -> Option<Arc<MuxSession>> {
+    let pushed = relays.epicbox.pushed();
+    let config = pushed.contacts()?;
+    let session = pushed
+        .get_or_start(host, &config.group, CONTACTS_OWNER, || {
+            mailbox_client(relays, endpoint, onion).start_mux_queued(Vec::new(), config.options)
+        })
+        .inspect_err(|error| {
+            warn!(peer_relay = %host, error = %ErrorChain(error), "mux/1 session not started");
+        })
+        .ok()?;
+    if session.state().borrow().has_ended() {
+        return None;
+    }
+    Some(session)
+}
+
+/// `identities` once per address, in order, with the key text of each address.
+fn without_repeats(identities: &[Identity]) -> (Vec<String>, Vec<Identity>) {
+    let mut keys: Vec<String> = Vec::with_capacity(identities.len());
+    let mut unique: Vec<Identity> = Vec::with_capacity(identities.len());
+    for identity in identities {
+        let key = identity.address().key_text();
+        if !keys.contains(&key) {
+            keys.push(key);
+            unique.push(identity.clone());
+        }
+    }
+    (keys, unique)
 }
 
 #[cfg(test)]
