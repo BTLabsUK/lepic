@@ -249,6 +249,7 @@ fn view(view: EngineContactView) -> ContactView {
         ended_reason: view.ended_reason.map(end_reason),
         ended_at_ms: view.ended_at.map(ms),
         native_slates: view.native_slates,
+        awaiting: view.awaiting,
     }
 }
 

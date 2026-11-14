@@ -309,6 +309,10 @@ pub struct ContactView {
     pub peer_enc_key: Option<[u8; 32]>,
     pub ended_reason: Option<PairingEndReason>,
     pub ended_at: Option<Timestamp>,
+    /// Something is under way with this contact: a message waiting to go out, a payment not yet
+    /// finished, or an invoice from it waiting for an answer. The rule collecting uses to keep a
+    /// contact that something waits on.
+    pub awaiting: bool,
 }
 
 /// A pairing that ended in a collecting cycle; its record is kept.

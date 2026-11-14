@@ -38,6 +38,9 @@ Conventional Commit messages at release time.
   one relay connection where it can. A listing that ends quiet hands its connection to the
   next; after a message the wallet kept, or a failed connection, the rest continue on a new
   one. `Epicbox::drain_many_at` and `EpicboxClient::drain_on` are the engine side.
+- FFI: `ContactView.awaiting` is true while something is under way with the contact: a message
+  in its outbox, a payment not yet finished, or an invoice from it waiting for an answer. A
+  host that checks contacts on a timer may check only these.
 
 ### Changed
 

@@ -1390,7 +1390,10 @@ where
 /// Whether something waits on the contact (RFC 0002 8.4): an outbox entry not yet delivered,
 /// a slate this wallet exchanged with it whose transaction waits for an answer or a posting,
 /// such as a payment sent through its mailbox, or an invoice from it waiting for the user.
-fn has_pending(repos: &dyn Repositories, contact_id: ContactId) -> Result<bool, StoreError> {
+pub(crate) fn has_pending(
+    repos: &dyn Repositories,
+    contact_id: ContactId,
+) -> Result<bool, StoreError> {
     for stored in repos.contact_outbox(contact_id)? {
         if stored.entry.state == ContactOutboxState::Queued {
             return Ok(true);

@@ -1135,6 +1135,11 @@ pub struct ContactView {
     /// contact claims native slates and the pairing is not private.
     #[frb(default = false)]
     pub native_slates: bool,
+    /// Something is under way with this contact: a message waiting to go out, a payment not yet
+    /// finished, or an invoice from it waiting for an answer. A host checking contacts on a
+    /// timer may check only these.
+    #[frb(default = false)]
+    pub awaiting: bool,
 }
 
 /// Whether a contact's domain claim is proven by the well-known file its domain serves.

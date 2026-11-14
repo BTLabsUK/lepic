@@ -14063,6 +14063,7 @@ impl SseDecode for crate::api::types::ContactView {
             <Option<crate::api::types::PairingEndReason>>::sse_decode(deserializer);
         let mut var_endedAtMs = <Option<i64>>::sse_decode(deserializer);
         let mut var_nativeSlates = <bool>::sse_decode(deserializer);
+        let mut var_awaiting = <bool>::sse_decode(deserializer);
         return crate::api::types::ContactView {
             contact_id: var_contactId,
             label: var_label,
@@ -14093,6 +14094,7 @@ impl SseDecode for crate::api::types::ContactView {
             ended_reason: var_endedReason,
             ended_at_ms: var_endedAtMs,
             native_slates: var_nativeSlates,
+            awaiting: var_awaiting,
         };
     }
 }
@@ -18837,6 +18839,7 @@ impl flutter_rust_bridge::IntoDart for crate::api::types::ContactView {
             self.ended_reason.into_into_dart().into_dart(),
             self.ended_at_ms.into_into_dart().into_dart(),
             self.native_slates.into_into_dart().into_dart(),
+            self.awaiting.into_into_dart().into_dart(),
         ]
         .into_dart()
     }
@@ -22630,6 +22633,7 @@ impl SseEncode for crate::api::types::ContactView {
         <Option<crate::api::types::PairingEndReason>>::sse_encode(self.ended_reason, serializer);
         <Option<i64>>::sse_encode(self.ended_at_ms, serializer);
         <bool>::sse_encode(self.native_slates, serializer);
+        <bool>::sse_encode(self.awaiting, serializer);
     }
 }
 

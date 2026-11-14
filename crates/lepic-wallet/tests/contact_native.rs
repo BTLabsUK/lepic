@@ -670,6 +670,44 @@ fn a_contact_that_does_not_claim_native_slates_gets_v3() {
     assert_eq!(invoice_flow(&world, shop_side, ben_side), (V3, V3));
 }
 
+/// Whether `party` sees something under way with its contact `contact`, as its contact view says.
+fn awaiting(world: &World, party: &Party, contact: ContactId) -> bool {
+    world
+        .block_on(party.wallet.contact_book().contact(contact))
+        .unwrap()
+        .awaiting
+}
+
+/// A contact view is `awaiting` while a message waits in the outbox or a payment waits for an
+/// answer, and not once the payment is finished.
+#[test]
+fn a_contact_is_awaiting_until_its_payment_is_finished() {
+    let (world, shop_side, ben_side) = paired((true, true), WalletPolicy::default());
+    world.payer.fund(1, FUNDING);
+    assert!(!awaiting(&world, &world.payer, ben_side));
+    assert!(!awaiting(&world, &world.issuer, shop_side));
+
+    // The slate waits in the outbox, then travels; the payment is still waiting for an answer.
+    let tx_id = send_s1(&world, ben_side);
+    assert!(awaiting(&world, &world.payer, ben_side));
+    world.collect(&world.payer);
+    assert_eq!(tx_state(&world.payer, tx_id), TxState::Sent);
+    assert!(awaiting(&world, &world.payer, ben_side));
+    assert!(
+        world
+            .block_on(world.payer.wallet.contact_book().contacts())
+            .unwrap()
+            .iter()
+            .any(|view| view.contact_id == ben_side && view.awaiting)
+    );
+
+    // The answer comes back and the payment is posted: nothing is under way.
+    world.collect(&world.issuer);
+    world.collect(&world.payer);
+    assert_eq!(tx_state(&world.payer, tx_id), TxState::Posted);
+    assert!(!awaiting(&world, &world.payer, ben_side));
+}
+
 /// The mailbox `party` posts to for its contact `contact`.
 fn peer_mailbox(party: &Party, contact: ContactId) -> EpicboxAddress {
     let mailbox = party.read(|repos| repos.contact_mailbox(contact)).unwrap();

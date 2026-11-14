@@ -29,6 +29,7 @@ pub(crate) fn view(
     network: lepic_primitives::params::Network,
     native_direct: bool,
     now: jiff::Timestamp,
+    awaiting: bool,
 ) -> ContactView {
     let facts = &record.facts;
     let home_relay = mailbox.map(|mailbox| mailbox.home_relay.clone());
@@ -73,6 +74,7 @@ pub(crate) fn view(
         peer_enc_key: record.peer.as_ref().map(|peer| peer.enc_key),
         ended_reason: facts.ended_reason,
         ended_at: facts.ended_at,
+        awaiting,
     }
 }
 
@@ -226,7 +228,15 @@ where
                         continue;
                     }
                     let mailbox = repos.contact_mailbox(record.contact_id)?;
-                    views.push(view(&record, mailbox.as_ref(), network, native_direct, now));
+                    let awaiting = super::collect::has_pending(repos, record.contact_id)?;
+                    views.push(view(
+                        &record,
+                        mailbox.as_ref(),
+                        network,
+                        native_direct,
+                        now,
+                        awaiting,
+                    ));
                 }
                 Ok::<_, StoreError>(views)
             })?)
@@ -294,7 +304,15 @@ where
                         continue;
                     }
                     let mailbox = repos.contact_mailbox(record.contact_id)?;
-                    views.push(view(&record, mailbox.as_ref(), network, native_direct, now));
+                    let awaiting = super::collect::has_pending(repos, record.contact_id)?;
+                    views.push(view(
+                        &record,
+                        mailbox.as_ref(),
+                        network,
+                        native_direct,
+                        now,
+                        awaiting,
+                    ));
                 }
                 Ok::<_, StoreError>(views)
             })?)
@@ -312,7 +330,15 @@ where
             session.store.read(|repos| {
                 let record = paired(repos, contact_id)?;
                 let mailbox = repos.contact_mailbox(contact_id)?;
-                Ok(view(&record, mailbox.as_ref(), network, native_direct, now))
+                let awaiting = super::collect::has_pending(repos, contact_id)?;
+                Ok(view(
+                    &record,
+                    mailbox.as_ref(),
+                    network,
+                    native_direct,
+                    now,
+                    awaiting,
+                ))
             })
         })
         .await
