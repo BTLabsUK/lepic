@@ -17,6 +17,8 @@
 //! - `LEPIC_MUX_STALL_S`: how long the stall lasts, default 14.
 //! - `LEPIC_MUX_ATTACH_LIMIT`: the relay's attach frames per minute and socket, default 30.
 //! - `LEPIC_MUX_IDLE_S`: seconds an idle session sits in case 7; 0, the default, skips it.
+//! - `LEPIC_MUX_PEER`: another relay, `wss://host:port`. Case 8 posts on `LEPIC_MUX_RELAY` to a
+//!   mailbox of the peer and reads it there, so the relay must forward to it.
 
 #![allow(
     clippy::unwrap_used,
@@ -39,8 +41,8 @@ use lepic_crypto::{PublicKey, SecretKey};
 use lepic_epicbox::testing::client_settings;
 use lepic_epicbox::{
     ClientSettings, Connector, Domain, EpicboxAddress, Handled, Identity, MailboxClient,
-    MailboxMessage, MuxCounters, MuxEvent, MuxOptions, MuxSession, MuxState, Network,
-    RelayEndpoint, Security, TcpConnector,
+    MailboxContent, MailboxHandler, MailboxMessage, MuxCounters, MuxEvent, MuxOptions, MuxSession,
+    MuxState, Network, RelayEndpoint, Security, TcpConnector,
 };
 use serde_json::{Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -90,6 +92,11 @@ fn live(case: &str) -> Option<Live> {
         println!("MUX_LIVE skipped {case}: LEPIC_MUX_RELAY is not set");
         return None;
     };
+    Some(live_at(&url))
+}
+
+/// A relay by its `ws://` or `wss://` URL.
+fn live_at(url: &str) -> Live {
     let (security, rest) = if let Some(rest) = url.strip_prefix("wss://") {
         (Security::Tls, rest)
     } else if let Some(rest) = url.strip_prefix("ws://") {
@@ -112,12 +119,12 @@ fn live(case: &str) -> Option<Live> {
     .unwrap()
     .with_root_certificates(roots)
     .with_no_client_auth();
-    Some(Live {
+    Live {
         settings: client_settings(endpoint),
         connector: Arc::new(TcpConnector::new(Arc::new(tls))),
         host,
         port,
-    })
+    }
 }
 
 fn env_u64(name: &str, default: u64) -> u64 {
@@ -667,6 +674,76 @@ async fn idle_session() {
             "idle_s": idle_s,
             "state": format!("{state:?}"),
             "counters": counters_json(&counters),
+        }),
+    );
+}
+
+/// Keeps the texts of the messages it is handed and acknowledges them.
+#[derive(Default)]
+struct Texts(Vec<String>);
+
+impl MailboxHandler for Texts {
+    fn handle(
+        &mut self,
+        message: MailboxMessage,
+    ) -> lepic_transport::transport::BoxFuture<'_, Handled> {
+        Box::pin(async move {
+            if let MailboxContent::Opened(received) = message.content() {
+                self.0.push(received.plaintext.expose_str().to_owned());
+            }
+            Handled::Stored
+        })
+    }
+}
+
+/// One message posted on the relay to a mailbox of `LEPIC_MUX_PEER`: the relay forwards it, and
+/// a drain on the peer reads it.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "needs two relays: LEPIC_MUX_RELAY and LEPIC_MUX_PEER"]
+async fn forward_to_a_peer() {
+    let Some(live) = live("forward_to_a_peer") else {
+        return;
+    };
+    let Ok(peer_url) = std::env::var("LEPIC_MUX_PEER") else {
+        println!("MUX_LIVE skipped forward_to_a_peer: LEPIC_MUX_PEER is not set");
+        return;
+    };
+    let peer = live_at(&peer_url);
+    let (sender, mailbox) = (live.fresh(), peer.fresh());
+    let text = format!("forwarded {}", mailbox.address());
+    let started = Instant::now();
+    live.client()
+        .post(&sender, mailbox.address(), &text)
+        .await
+        .unwrap();
+    let post_s = secs(started);
+    let mut drains = 0_u32;
+    let read = loop {
+        let mut texts = Texts::default();
+        let drained = peer
+            .client()
+            .drain_once(std::slice::from_ref(&mailbox), &mut texts)
+            .await;
+        drains += 1;
+        if let Err(error) = &drained {
+            println!("MUX_LIVE forward drain {drains} failed: {error}");
+        }
+        if texts.0.contains(&text) {
+            break secs(started);
+        }
+        assert!(
+            started.elapsed() < Duration::from_secs(180),
+            "not forwarded within 180 s"
+        );
+        tokio::time::sleep(Duration::from_secs(2)).await;
+    };
+    report(
+        "forward_to_a_peer",
+        json!({
+            "to": mailbox.address().to_string(),
+            "post_s": post_s,
+            "post_to_read_on_peer_s": read,
+            "drains": drains,
         }),
     );
 }
