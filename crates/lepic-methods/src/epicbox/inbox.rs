@@ -9,16 +9,20 @@
 //! the engine gives back as [`Outcome::Requeue`] is posted back to the address for another
 //! install of the wallet before it is acknowledged.
 
-use std::sync::{Arc, Mutex, PoisonError};
+use std::collections::{HashMap, VecDeque};
+use std::error::Error as StdError;
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use lepic_epicbox::{
     Backoff, ClientError, ConnectionState, EpicboxAddress, EpicboxClient, Identity, ListenOptions,
-    RELAY_RETENTION, Rejection, RelayMessageId, Subscription, TRANSPORT_ID,
+    MailboxClient, MailboxContent, MuxError, MuxOptions, MuxSession, MuxState, RELAY_RETENTION,
+    RejectionReason, RelayMessageId, RelayedMail, Subscription, TRANSPORT_ID,
 };
 use lepic_node::NodeApi;
 use lepic_primitives::error_chain::ErrorChain;
+use lepic_slate::codec::{MediaType, WireSlate};
 use lepic_transport::method::Method;
-use lepic_transport::transport::{AckToken, Envelope, Inbound};
+use lepic_transport::transport::{AckToken, Destination, Envelope, Inbound};
 use lepic_wallet::event::{
     Connection, Event, TransportDisconnect, TransportState, TransportStatus,
 };
@@ -29,9 +33,8 @@ use lepic_wallet::namespace::Listing;
 use lepic_wallet::{SecretVault, StoreOpener, Wallet};
 use tracing::{debug, info, instrument, warn};
 
-use super::Epicbox;
-
-use super::{NATIVE_NOTICE_LENGTHS, relay_network};
+use super::sessions::PAYMENTS_OWNER;
+use super::{Epicbox, NATIVE_NOTICE_LENGTHS, relay_network};
 
 // The engine drops a notice longer than this, so the longest padding must fit.
 const _: () = assert!(NATIVE_NOTICE_LENGTHS[2] <= lepic_wallet::notice::MAX_NOTICE_LEN);
@@ -72,30 +75,244 @@ enum Disposition {
 }
 
 enum Item {
-    /// An envelope with the relay message id the subscription handed it out under, if any.
+    /// An envelope with the relay message id the source handed it out under, if any.
     Envelope(Envelope, Option<RelayMessageId>),
-    Rejection(Rejection),
+    Rejection(Rejected),
+}
+
+/// A message that could not be opened, to be recorded and acknowledged.
+struct Rejected {
+    token: AckToken,
+    msg_id: Option<RelayMessageId>,
+    reason: RejectionReason,
 }
 
 impl Item {
-    fn envelope(subscription: &Subscription, envelope: Envelope) -> Self {
-        let msg_id = subscription.relay_message_id(envelope.ack_token());
-        Self::Envelope(envelope, msg_id)
-    }
-
     fn ack_token(&self) -> &AckToken {
         match self {
             Self::Envelope(envelope, _) => envelope.ack_token(),
-            Self::Rejection(rejection) => rejection.ack_token(),
+            Self::Rejection(rejected) => &rejected.token,
+        }
+    }
+
+    fn relay_id(&self) -> Option<&RelayMessageId> {
+        match self {
+            Self::Envelope(_, msg_id) => msg_id.as_ref(),
+            Self::Rejection(rejected) => rejected.msg_id.as_ref(),
         }
     }
 
     fn msg_id(&self) -> Option<&str> {
+        self.relay_id().map(RelayMessageId::as_str)
+    }
+}
+
+type Failure = Box<dyn StdError + Send + Sync>;
+
+/// Where a run takes its messages from: a socket of its own, or mail a shared mux/1 session
+/// pushed.
+pub(super) enum Source<'a> {
+    Socket(&'a Subscription),
+    Pushed(&'a Pushed),
+}
+
+impl Source<'_> {
+    fn next_rejection(&self) -> Option<Item> {
         match self {
-            Self::Envelope(_, msg_id) => msg_id.as_ref(),
-            Self::Rejection(rejection) => rejection.msg_id(),
+            Self::Socket(subscription) => subscription.next_rejection().map(|rejection| {
+                Item::Rejection(Rejected {
+                    token: rejection.ack_token().clone(),
+                    msg_id: rejection.msg_id().cloned(),
+                    reason: rejection.reason(),
+                })
+            }),
+            Self::Pushed(pushed) => pushed.next_rejection(),
         }
-        .map(RelayMessageId::as_str)
+    }
+
+    async fn next_envelope(&self) -> Result<Option<Item>, InboxError> {
+        match self {
+            Self::Socket(subscription) => Ok(subscription
+                .next_envelope()
+                .await
+                .map_err(InboxError::Transport)?
+                .map(|envelope| {
+                    let msg_id = subscription.relay_message_id(envelope.ack_token());
+                    Item::Envelope(envelope, msg_id)
+                })),
+            Self::Pushed(pushed) => Ok(pushed.next_envelope()),
+        }
+    }
+
+    async fn delivery_available(&self) {
+        match self {
+            Self::Socket(subscription) => subscription.delivery_available().await,
+            Self::Pushed(pushed) => pushed.delivery_available().await,
+        }
+    }
+
+    fn has_ended(&self) -> bool {
+        match self {
+            Self::Socket(subscription) => subscription.state().borrow().has_ended(),
+            Self::Pushed(pushed) => pushed.session.state().borrow().has_ended(),
+        }
+    }
+
+    async fn acknowledge(&self, item: &Item) -> Result<(), Failure> {
+        match self {
+            Self::Socket(subscription) => subscription
+                .acknowledge(item.ack_token())
+                .await
+                .map_err(Into::into),
+            Self::Pushed(pushed) => {
+                pushed.acknowledge(item);
+                Ok(())
+            }
+        }
+    }
+
+    /// Posts the message of `item` back to the address, for another install.
+    async fn requeue(&self, item: &Item) -> Result<(), Failure> {
+        match self {
+            Self::Socket(subscription) => subscription
+                .requeue(item.ack_token())
+                .await
+                .map_err(Into::into),
+            Self::Pushed(pushed) => pushed.requeue(item).await,
+        }
+    }
+
+    /// `item` stays unsettled because the run ends: a session asks the relay to hold it back.
+    fn keep(&self, item: &Item) {
+        if let Self::Pushed(pushed) = self {
+            pushed.keep(item);
+        }
+    }
+}
+
+/// The payments mailbox of a shared mux/1 session, read from the mail the session queued.
+pub(super) struct Pushed {
+    session: Arc<MuxSession>,
+    index: usize,
+    identity: Identity,
+    client: MailboxClient,
+    local: Mutex<Local>,
+}
+
+#[derive(Default)]
+struct Local {
+    ready: VecDeque<Item>,
+    rejected: VecDeque<Item>,
+    /// How each taken message was signed, for [`Pushed::requeue`], until it is acknowledged.
+    relayed: HashMap<AckToken, RelayedMail>,
+}
+
+impl Pushed {
+    pub(super) fn new(
+        session: Arc<MuxSession>,
+        index: usize,
+        identity: Identity,
+        client: MailboxClient,
+    ) -> Self {
+        Self {
+            session,
+            index,
+            identity,
+            client,
+            local: Mutex::new(Local::default()),
+        }
+    }
+
+    fn local(&self) -> MutexGuard<'_, Local> {
+        self.local.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Moves the mail the session queued for the mailbox into the local queues. Returns whether
+    /// there is anything to deliver.
+    fn fill(&self) -> bool {
+        let taken = self.session.take(&[self.index]);
+        let mut local = self.local();
+        for message in taken {
+            let (msg_id, relayed) = (message.msg_id().clone(), message.relayed().cloned());
+            let token = AckToken::new(msg_id.as_str().to_owned());
+            if let Some(relayed) = relayed {
+                local.relayed.insert(token.clone(), relayed);
+            }
+            match message.into_content() {
+                MailboxContent::Opened(received) => {
+                    let reply_to = Destination::new(received.sender.to_string());
+                    let wire = WireSlate::text(
+                        MediaType::JSON,
+                        received.plaintext.expose_str().to_owned(),
+                    );
+                    local.ready.push_back(Item::Envelope(
+                        Envelope::new(token, Some(reply_to), wire),
+                        Some(msg_id),
+                    ));
+                }
+                MailboxContent::Unopenable { reason, .. } => {
+                    local.rejected.push_back(Item::Rejection(Rejected {
+                        token,
+                        msg_id: Some(msg_id),
+                        reason,
+                    }));
+                }
+                _ => {}
+            }
+        }
+        !local.ready.is_empty() || !local.rejected.is_empty()
+    }
+
+    fn next_rejection(&self) -> Option<Item> {
+        self.fill();
+        self.local().rejected.pop_front()
+    }
+
+    fn next_envelope(&self) -> Option<Item> {
+        self.fill();
+        self.local().ready.pop_front()
+    }
+
+    /// Waits until mail is waiting or the session has ended.
+    async fn delivery_available(&self) {
+        let mut queued = self.session.queued();
+        let mut state = self.session.state();
+        loop {
+            if self.fill() || state.borrow_and_update().has_ended() {
+                return;
+            }
+            tokio::select! {
+                changed = queued.changed() => if changed.is_err() { return },
+                changed = state.changed() => if changed.is_err() { return },
+            }
+        }
+    }
+
+    fn acknowledge(&self, item: &Item) {
+        self.local().relayed.remove(item.ack_token());
+        if let Some(msg_id) = item.relay_id() {
+            // A session that ended has nothing to tell the relay: it offers the message again.
+            let _: Result<(), MuxError> =
+                self.session.settle(msg_id, lepic_epicbox::Handled::Stored);
+        }
+    }
+
+    async fn requeue(&self, item: &Item) -> Result<(), Failure> {
+        let mail = self.local().relayed.get(item.ack_token()).cloned();
+        let Some(mail) = mail else {
+            return Err(Box::new(ClientError::NotHandedOut));
+        };
+        self.client
+            .repost(&self.identity, &mail)
+            .await
+            .map_err(Into::into)
+    }
+
+    fn keep(&self, item: &Item) {
+        if let Some(msg_id) = item.relay_id() {
+            let _: Result<(), MuxError> =
+                self.session.settle(msg_id, lepic_epicbox::Handled::Later);
+        }
     }
 }
 
@@ -218,6 +435,98 @@ impl Epicbox {
             .await
     }
 
+    /// Like [`Epicbox::listen`], but reads the wallet's mail from a mux/1 session on this
+    /// transport's relay that other consumers share: the session of `group` in
+    /// [`Epicbox::pushed`], opened on the first call and kept while another owner uses it. The
+    /// wallet's mailbox is the payments claim of that session.
+    ///
+    /// A message is handled, held, requeued and acknowledged as [`Epicbox::listen`] does it. The
+    /// connection events differ: [`TransportState::Disconnected`] follows a session that is
+    /// waiting to reconnect. When the relay does not offer mux/1, this falls back to
+    /// [`Epicbox::listen`] with its own socket, so the host needs no second code path. Fails as
+    /// [`Epicbox::listen`] does.
+    #[instrument(skip_all, fields(wallet = %wallet.config().name, transport = TRANSPORT_ID.as_str(), group))]
+    pub async fn listen_via<N, S, V>(
+        &self,
+        wallet: &Wallet<N, S, V>,
+        handle: &ListenHandle,
+        group: &str,
+        options: MuxOptions,
+    ) -> Result<InboxSummary, InboxError>
+    where
+        N: NodeApi + 'static,
+        S: StoreOpener + 'static,
+        V: SecretVault + 'static,
+    {
+        self.inbox_client(wallet).await?;
+        let identity = self.identity(wallet)?;
+        let endpoint = &self.settings().endpoint;
+        let relay = format!("{}:{}", endpoint.domain(), endpoint.port());
+        let client = MailboxClient::new(self.settings().clone(), self.connector());
+        let started = self
+            .pushed()
+            .get_or_start(&relay, group, PAYMENTS_OWNER, || {
+                client.start_mux_queued(Vec::new(), options)
+            });
+        let session = match started {
+            Ok(session) => session,
+            Err(error) => {
+                warn!(error = %ErrorChain(&error), "mux/1 session not started, listening on a socket");
+                return self.listen(wallet, handle).await;
+            }
+        };
+        let method: Arc<dyn Method> = Arc::new(self.clone());
+        let work = async {
+            let claimed = tokio::select! {
+                biased;
+                () = handle.stopped() => return Ok(Some(InboxSummary::default())),
+                claimed = session.set_claim(PAYMENTS_OWNER, vec![identity.clone()]) => claimed,
+            };
+            let index = match claimed {
+                Ok(claimed) => claimed.indexes.first().copied(),
+                Err(error) => {
+                    debug!(error = %ErrorChain(&error), "mux/1 claim refused");
+                    None
+                }
+            };
+            let Some(index) = index else {
+                return Ok(None);
+            };
+            let pushed = Pushed::new(Arc::clone(&session), index, identity, client.clone());
+            let run = Run {
+                wallet,
+                method,
+                source: Source::Pushed(&pushed),
+                listen: Some(handle),
+                backoff: backoff(self),
+                pruning: PruneSchedule::default(),
+                listing: None,
+            };
+            run.consume().await.map(Some)
+        };
+        let forward = async {
+            forward_mux_states(wallet, &session, Connection::Listener).await;
+            std::future::pending::<std::convert::Infallible>().await
+        };
+        let outcome = tokio::select! {
+            biased;
+            outcome = work => outcome,
+            never = forward => match never {},
+        };
+        self.pushed().release(PAYMENTS_OWNER).await;
+        let not_offered = *session.state().borrow() == MuxState::NotOffered;
+        if (matches!(outcome, Ok(None)) || not_offered) && !handle.is_stopped() {
+            info!("relay does not offer mux/1, listening on a socket");
+            return self.listen(wallet, handle).await;
+        }
+        wallet.emit(Event::Transport(TransportStatus {
+            transport: TRANSPORT_ID,
+            connection: Connection::Listener,
+            state: TransportState::Stopped,
+        }));
+        outcome.map(Option::unwrap_or_default)
+    }
+
     /// The attached client for a drain or a listen, after pruning the relay inbox. Pruning runs
     /// before the subscription starts, so the host sees every connection state.
     async fn inbox_client<N, S, V>(
@@ -250,7 +559,7 @@ impl Epicbox {
         let run = Run {
             wallet,
             method,
-            subscription,
+            source: Source::Socket(subscription),
             listen,
             backoff: backoff(self),
             pruning: PruneSchedule::default(),
@@ -314,6 +623,50 @@ async fn forward_states<N, S, V>(
     }
 }
 
+/// Emits the connection events of a mux/1 session until it ends. A relay that does not offer
+/// mux/1 emits nothing: the listener goes on over a socket and reports that one.
+async fn forward_mux_states<N, S, V>(
+    wallet: &Wallet<N, S, V>,
+    session: &MuxSession,
+    connection: Connection,
+) where
+    N: NodeApi + 'static,
+    S: StoreOpener + 'static,
+    V: SecretVault + 'static,
+{
+    let mut states = session.state();
+    let mut last = None;
+    loop {
+        let state = *states.borrow_and_update();
+        let mapped = match state {
+            MuxState::Connecting { .. } => TransportState::Connecting,
+            MuxState::Attached => TransportState::Connected,
+            MuxState::NotOffered => return,
+            MuxState::Stopped => TransportState::Stopped,
+            _ => TransportState::Disconnected,
+        };
+        if last != Some(mapped) {
+            last = Some(mapped);
+            wallet.emit(Event::Transport(TransportStatus {
+                transport: TRANSPORT_ID,
+                connection,
+                state: mapped,
+            }));
+            if let MuxState::Waiting { delay, .. } = state {
+                wallet.emit(Event::TransportDisconnected(TransportDisconnect {
+                    transport: TRANSPORT_ID,
+                    connection,
+                    reason: "connection ended".to_owned(),
+                    retry_in: Some(delay),
+                }));
+            }
+        }
+        if state.has_ended() || states.changed().await.is_err() {
+            return;
+        }
+    }
+}
+
 /// One drain or listen of a subscription for a wallet: what its messages are taken with.
 pub(super) struct Run<'a, N, S, V>
 where
@@ -324,7 +677,7 @@ where
     pub(super) wallet: &'a Wallet<N, S, V>,
     /// The method the engine answers over: at a listing, one that sends from its address.
     pub(super) method: Arc<dyn Method>,
-    pub(super) subscription: &'a Subscription,
+    pub(super) source: Source<'a>,
     pub(super) listen: Option<&'a ListenHandle>,
     pub(super) backoff: Backoff,
     pub(super) pruning: PruneSchedule,
@@ -338,26 +691,26 @@ where
     V: SecretVault + 'static,
 {
     pub(super) async fn consume(&self) -> Result<InboxSummary, InboxError> {
-        let subscription = self.subscription;
+        let source = &self.source;
         let listen = self.listen;
         let mut summary = InboxSummary::default();
         loop {
-            let item = match subscription.next_rejection() {
-                Some(rejection) => Item::Rejection(rejection),
+            let item = match source.next_rejection() {
+                Some(rejection) => rejection,
                 None => {
                     let next = match listen {
-                        None => subscription.next_envelope().await,
+                        None => source.next_envelope().await,
                         Some(handle) => tokio::select! {
                             biased;
                             () = handle.stopped() => return Ok(summary),
-                            next = subscription.next_envelope() => next,
+                            next = source.next_envelope() => next,
                         },
                     };
-                    match next.map_err(InboxError::Transport)? {
-                        Some(envelope) => Item::envelope(subscription, envelope),
+                    match next? {
+                        Some(item) => item,
                         // A rejection may have arrived while no envelope did.
-                        None if listen.is_none() => match subscription.next_rejection() {
-                            Some(rejection) => Item::Rejection(rejection),
+                        None if listen.is_none() => match source.next_rejection() {
+                            Some(rejection) => rejection,
                             None => return Ok(summary),
                         },
                         None => {
@@ -367,9 +720,9 @@ where
                             tokio::select! {
                                 biased;
                                 () = handle.stopped() => return Ok(summary),
-                                () = subscription.delivery_available() => {}
+                                () = source.delivery_available() => {}
                             }
-                            if subscription.state().borrow().has_ended() {
+                            if source.has_ended() {
                                 return Ok(summary);
                             }
                             continue;
@@ -380,6 +733,7 @@ where
             match self.settle(&item).await {
                 Some(handled) => summary.count(handled),
                 None => {
+                    source.keep(&item);
                     summary.held = summary.held.saturating_add(1);
                     return Ok(summary);
                 }
@@ -431,8 +785,8 @@ where
     async fn acknowledge(&self, item: &Item, handled: Handled) {
         let msg_id = item.msg_id().unwrap_or("");
         let mut attempt: u32 = 0;
-        while let Err(error) = self.subscription.acknowledge(item.ack_token()).await {
-            warn!(msg_id, error = %ErrorChain(&error), "epicbox acknowledgement failed");
+        while let Err(error) = self.source.acknowledge(item).await {
+            warn!(msg_id, error = %ErrorChain(&*error), "epicbox acknowledgement failed");
             let Some(handle) = self.listen else {
                 return;
             };
@@ -454,16 +808,16 @@ where
     async fn handle(&self, item: &Item, attempt: u32) -> Disposition {
         let msg_id = item.msg_id().map(str::to_owned);
         let outcome = match item {
-            Item::Rejection(rejection) => {
+            Item::Rejection(rejected) => {
                 debug!(
                     msg_id = msg_id.as_deref().unwrap_or(""),
-                    error = ?rejection.reason(),
+                    error = ?rejected.reason,
                     "epicbox rejection recorded"
                 );
                 Ok(Handled::Rejected)
             }
             Item::Envelope(envelope, _) => {
-                self.handle_envelope(msg_id.as_deref(), envelope, attempt)
+                self.handle_envelope(msg_id.as_deref(), item, envelope, attempt)
                     .await
             }
         };
@@ -505,6 +859,7 @@ where
     async fn handle_envelope(
         &self,
         msg_id: Option<&str>,
+        item: &Item,
         envelope: &Envelope,
         attempt: u32,
     ) -> Result<Handled, Hold> {
@@ -517,20 +872,20 @@ where
         match self.wallet.arrived(&self.method, arrival).await {
             Ok(handled) => Ok(handled),
             Err(Outcome::Hold(hold)) => Err(hold),
-            Err(Outcome::Requeue(answer)) => self.requeue(msg_id, envelope, answer).await,
+            Err(Outcome::Requeue(answer)) => self.requeue(msg_id, item, answer).await,
         }
     }
 
-    /// Posts the message of `answer` back to the subscription's address for another install,
+    /// Posts the message of `answer` back to the source's address for another install,
     /// then lets it be acknowledged. A post that fails holds the message, until it first
     /// arrived the engine's hold patience ago: then it is refused for good.
     async fn requeue(
         &self,
         msg_id: Option<&str>,
-        envelope: &Envelope,
+        item: &Item,
         answer: Requeue,
     ) -> Result<Handled, Hold> {
-        match self.subscription.requeue(envelope.ack_token()).await {
+        match self.source.requeue(item).await {
             Ok(()) => {
                 let count = self.wallet.requeued(&answer).await;
                 info!(
@@ -544,13 +899,13 @@ where
             }
             Err(error) => {
                 if !self.wallet.requeue_failed(msg_id).await? {
-                    return Err(Hold::Requeue(Box::new(error)));
+                    return Err(Hold::Requeue(error));
                 }
                 warn!(
                     slate_id = %answer.slate_id,
                     stage = answer.stage.as_str(),
                     msg_id = msg_id.unwrap_or(""),
-                    error = %ErrorChain(&error),
+                    error = %ErrorChain(&*error),
                     "answer for an unknown slate not requeued"
                 );
                 warn!(

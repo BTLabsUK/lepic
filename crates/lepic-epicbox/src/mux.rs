@@ -28,7 +28,7 @@ use tracing::{Instrument, debug, info, info_span, warn};
 use crate::address::EpicboxAddress;
 use crate::client::{Awaiting, CancelToken, ClientError, ClientSettings, Identity, TRANSPORT_ID};
 use crate::frame::{ClientFrame, FrameError, RelayMessageId, WalletMode, signed};
-use crate::mailbox::{Handled, MailboxHandler, MailboxMessage, open_message};
+use crate::mailbox::{Handled, MailboxHandler, MailboxMessage, RelayedMail, open_message};
 use crate::mux_frame::{
     AttachEntry, AttachedFrame, DetachReason, DetachedFrame, ErrorFrame, MAX_ACK_IDS,
     MAX_ATTACH_PER_FRAME, MAX_MAILBOXES_PER_SOCKET, MailFrame, MuxChallenge, MuxClientFrame,
@@ -1530,7 +1530,14 @@ impl Manager {
             return Ok(());
         };
         let content = open_message(&entry.identity, &mail.from, &mail.str, &mail.signature);
-        let message = MailboxMessage::new(index, id.clone(), content);
+        let mut message = MailboxMessage::new(index, id.clone(), content);
+        if matches!(self.delivery, Delivery::Queued) {
+            message = message.with_relayed(RelayedMail {
+                from: mail.from.clone(),
+                str: mail.str.clone(),
+                signature: mail.signature.clone(),
+            });
+        }
         link.inflight.insert(id.clone(), index);
         let handler = match &mut self.delivery {
             Delivery::Inline(handler) => handler.get_mut().unwrap_or_else(PoisonError::into_inner),

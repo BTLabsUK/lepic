@@ -53,7 +53,7 @@ pub use json::JsonProblem;
 pub use mailbox::{
     DrainLimits, DrainReport, Handled, MAX_MAILBOXES_PER_DRAIN, MAX_MESSAGES_PER_MAILBOX,
     MailboxClient, MailboxContent, MailboxEnd, MailboxError, MailboxHandler, MailboxMessage,
-    MailboxReport,
+    MailboxReport, RelayedMail,
 };
 pub use mux::{Claimed, MuxCounters, MuxError, MuxEvent, MuxOptions, MuxSession, MuxState};
 pub use mux_frame::{

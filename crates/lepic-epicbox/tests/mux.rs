@@ -11,9 +11,11 @@ use std::time::Duration;
 use client_support::{ALICE, BOB, CAROL, address, sealed, secret, settings, until, within};
 use lepic_crypto::{PublicKey, SecretKey};
 use lepic_epicbox::mock_mux::MuxMockRelay;
+use lepic_epicbox::mock_relay::MockRelay;
 use lepic_epicbox::{
-    ClientFrame, Domain, EpicboxAddress, Handled, Identity, MailboxContent, MailboxHandler,
-    MailboxMessage, MuxError, MuxEvent, MuxOptions, MuxSession, MuxState, Network, WalletMode,
+    ClientFrame, Domain, EpicboxAddress, Handled, Identity, MailboxClient, MailboxContent,
+    MailboxHandler, MailboxMessage, MuxError, MuxEvent, MuxOptions, MuxSession, MuxState, Network,
+    WalletMode,
 };
 use lepic_transport::transport::BoxFuture;
 
@@ -434,6 +436,24 @@ async fn queued_mail_is_opened_taken_and_acknowledged_when_settled() {
     relay.wait_until(|relay| relay.is_acked(&id)).await;
     assert_eq!(session.counters().acks, 1);
     assert_eq!(session.counters().holds, 0);
+}
+
+#[tokio::test]
+async fn queued_mail_can_be_posted_again_as_the_relay_sent_it() {
+    let relay = MuxMockRelay::new(Network::Mainnet);
+    let session = start_queued(&relay, vec![identity(BOB)]);
+    attached(&session).await;
+    post(&relay, BOB, "hello again");
+    let taken = take_some(&session, &[0]).await;
+    let mail = taken[0].relayed().unwrap().clone();
+    assert_eq!(mail.from, address(CAROL).to_string());
+    assert_eq!(mail.str, sealed(CAROL, BOB, "hello again").str);
+
+    let other = MockRelay::new(Network::Mainnet);
+    let client = MailboxClient::new(settings(), other.connector());
+    client.repost(&identity(BOB), &mail).await.unwrap();
+
+    assert_eq!(other.pending(&address(BOB)), 1);
 }
 
 #[tokio::test]

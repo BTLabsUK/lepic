@@ -19,7 +19,7 @@ use tokio::time::{Instant, timeout_at};
 use tracing::instrument;
 
 use super::Epicbox;
-use super::inbox::{PruneSchedule, Run};
+use super::inbox::{PruneSchedule, Run, Source};
 use super::relay_network;
 
 impl Epicbox {
@@ -179,7 +179,7 @@ impl Epicbox {
         let run = Run {
             wallet,
             method,
-            subscription: &subscription,
+            source: Source::Socket(&subscription),
             listen: None,
             backoff: self.settings().backoff,
             pruning: PruneSchedule::default(),

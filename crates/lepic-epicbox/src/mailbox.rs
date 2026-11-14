@@ -59,6 +59,16 @@ pub struct MailboxMessage {
     mailbox: usize,
     msg_id: RelayMessageId,
     content: MailboxContent,
+    relayed: Option<RelayedMail>,
+}
+
+/// The `from`, `str` and `signature` of a message as the relay sent them, which is all the relay
+/// checks when it is posted again with [`MailboxClient::repost`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RelayedMail {
+    pub from: String,
+    pub str: String,
+    pub signature: String,
 }
 
 impl MailboxMessage {
@@ -67,7 +77,21 @@ impl MailboxMessage {
             mailbox,
             msg_id,
             content,
+            relayed: None,
         }
+    }
+
+    /// The message with the text the relay sent it as, for a consumer that may post it again.
+    #[must_use]
+    pub(crate) fn with_relayed(mut self, relayed: RelayedMail) -> Self {
+        self.relayed = Some(relayed);
+        self
+    }
+
+    /// The message as the relay sent it. Only a message read from a queued
+    /// [`crate::MuxSession`] carries it.
+    pub fn relayed(&self) -> Option<&RelayedMail> {
+        self.relayed.as_ref()
     }
 
     /// The position of the mailbox in the list given to [`MailboxClient::drain_once`].
@@ -348,6 +372,39 @@ impl MailboxClient {
     }
 }
 
+impl MailboxClient {
+    /// Posts `mail` again to `own`, exactly as its sender signed it, so that another install
+    /// listening on the same address can collect it. The relay queues the copy behind what it
+    /// already holds. Acknowledge the original only after this succeeds. Fails as
+    /// [`MailboxClient::post`] does.
+    pub async fn repost(&self, own: &Identity, mail: &RelayedMail) -> Result<(), MailboxError> {
+        let frame = ClientFrame::PostSlate {
+            from: mail.from.clone(),
+            to: own.address().to_string(),
+            str: mail.str.clone(),
+            signature: mail.signature.clone(),
+        };
+        let context = ClientContext {
+            settings: self.settings.clone(),
+            identity: own.clone(),
+            connector: Arc::clone(&self.connector),
+            prefilter: None,
+        };
+        let span = info_span!(
+            "epicbox_mailbox_repost",
+            transport = TRANSPORT_ID.as_str(),
+            relay = %self.settings.endpoint.domain(),
+        );
+        post_frame_reporting(&context, &frame)
+            .instrument(span)
+            .await
+            .map_err(|failed| match MailboxError::setting_up(failed.error) {
+                MailboxError::Unreachable(error) if failed.sent => MailboxError::Unanswered(error),
+                error => error,
+            })
+    }
+}
+
 impl fmt::Debug for MailboxClient {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("MailboxClient")
@@ -496,6 +553,7 @@ impl Drain<'_> {
                 mailbox: index,
                 msg_id: msg_id.clone(),
                 content,
+                relayed: None,
             };
             if handler.handle(message).await == Handled::Later {
                 debug!(msg_id = %msg_id, "epicbox mailbox message kept for later");
