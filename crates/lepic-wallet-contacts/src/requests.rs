@@ -951,7 +951,7 @@ mod tests {
         assert!(ends(&store, 3, answered + Duration::from_secs(1)));
     }
 
-    /// Without a request known to be older the pairing's own time decides, as before.
+    /// Without a request known to be older the pairing's own time decides.
     #[test]
     fn another_pairing_compares_its_creation_with_the_request() {
         let store = MemoryStore::new(StoreKeys::from_bytes([1; 32], [1; 32]));

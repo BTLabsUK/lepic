@@ -165,7 +165,7 @@ where
 {
     /// Sends `request` to the listener at `to` over `method`, the HTTP or Tor method `peer`
     /// reaches the listener's native endpoint for. `legacy` asks for the legacy dialect whatever
-    /// the listener advertises; the send is then [`lepic_wallet::Wallet::send`] as before.
+    /// the listener advertises; the send is then [`lepic_wallet::Wallet::send`].
     ///
     /// Fails, with nothing stored, with [`DirectError::PinnedNoAdvert`],
     /// [`DirectError::PinChanged`] or [`DirectError::Probe`] for a pinned origin,

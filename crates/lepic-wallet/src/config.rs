@@ -289,6 +289,9 @@ impl WalletPolicy {
 }
 
 impl WalletPolicy {
+    /// Checks [`Self::listener_challenge_rounds`] against its bounds:
+    /// [`ConfigError::PolicyOutOfRange`] below the least, [`ConfigError::PolicyAboveBound`] above
+    /// the most.
     fn validate_listener_challenge_rounds(&self) -> Result<(), ConfigError> {
         let Some(rounds) = self.listener_challenge_rounds else {
             return Ok(());
@@ -306,9 +309,7 @@ impl WalletPolicy {
         }
         Ok(())
     }
-}
 
-impl WalletPolicy {
     /// Fails with [`ConfigError::PolicyOutOfRange`] for a value below 1 and
     /// [`ConfigError::PolicyAboveBound`] for one above its bound.
     pub fn validate(&self) -> Result<(), ConfigError> {

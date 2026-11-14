@@ -390,7 +390,7 @@ fn a_contact_send_reports_the_format_it_sealed() {
     }
 }
 
-/// Off by default: V3 envelopes as before, and no contact claims native slates, because a wallet
+/// Off by default: V3 envelopes, and no contact claims native slates, because a wallet
 /// claims them in its pairing only while its own switch is on.
 #[test]
 fn both_wallets_off_send_v3_slates_as_stored() {
