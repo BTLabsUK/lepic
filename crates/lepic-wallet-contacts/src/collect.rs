@@ -200,6 +200,7 @@ enum Job {
     Contact(ContactId, bool),
 }
 
+/// A mailbox a cycle reads: whose it is, the address, and the relay and onion it is on.
 struct Mailbox {
     job: Job,
     identity: Identity,
@@ -208,6 +209,7 @@ struct Mailbox {
 }
 
 impl Mailbox {
+    /// A copy, for the list of every mailbox beside the cycle's turn.
     fn duplicate(&self) -> Self {
         Self {
             job: self.job,
@@ -227,6 +229,7 @@ struct Selection {
     all: Vec<Mailbox>,
 }
 
+/// `mailboxes` by the `domain:port` of their relay.
 fn group_by_relay(mailboxes: Vec<Mailbox>) -> BTreeMap<String, Vec<Mailbox>> {
     let mut by_relay: BTreeMap<String, Vec<Mailbox>> = BTreeMap::new();
     for mailbox in mailboxes {
@@ -236,6 +239,47 @@ fn group_by_relay(mailboxes: Vec<Mailbox>) -> BTreeMap<String, Vec<Mailbox>> {
             .push(mailbox);
     }
     by_relay
+}
+
+/// Joins the session of `host` and claims all of `mailboxes` on it. `None` when the relay is
+/// read from a socket: the contacts do not read pushed mail, the session cannot be had, or it is
+/// not attached.
+async fn open_pushed(
+    relays: &ContactRelays,
+    host: &str,
+    mailboxes: &[Mailbox],
+    add_to_claims: bool,
+) -> Option<PushedMail> {
+    let first = mailboxes.first()?;
+    let identities: Vec<Identity> = mailboxes
+        .iter()
+        .map(|mailbox| mailbox.identity.clone())
+        .collect();
+    PushedMail::open(
+        relays,
+        host,
+        first.relay.clone(),
+        first.onion.as_deref(),
+        &identities,
+        add_to_claims,
+    )
+    .await
+    .filter(PushedMail::is_live)
+}
+
+/// Counts how each mailbox of a drain ended in `report`.
+fn count_ends(report: &mut CollectReport, ends: impl IntoIterator<Item = MailboxEnd>) {
+    for end in ends {
+        let counter = match end {
+            MailboxEnd::Capped => &mut report.capped,
+            MailboxEnd::Kept => &mut report.kept,
+            MailboxEnd::Refused => &mut report.refused,
+            MailboxEnd::TimedOut => &mut report.timed_out,
+            MailboxEnd::NotReached => &mut report.not_reached,
+            _ => continue,
+        };
+        *counter = counter.saturating_add(1);
+    }
 }
 
 #[derive(Default, Serialize, Deserialize)]
@@ -435,8 +479,6 @@ where
     /// The turn the other contacts take across cycles is left as it was; everything else a
     /// cycle does runs as it always does.
     #[instrument(skip_all, fields(wallet = %self.wallet.config().name))]
-    // One cycle in its order: the steps share the report and the turn.
-    #[allow(clippy::too_many_lines)]
     pub async fn contacts_collect_only(
         &self,
         relays: &ContactRelays,
@@ -469,14 +511,13 @@ where
         let selection = self
             .mailboxes_to_collect(relays, trigger, only, reads_pushed_mail)
             .await?;
-        let by_relay = group_by_relay(selection.turned);
+        let mut by_relay = group_by_relay(selection.turned);
         let mut all_by_relay = group_by_relay(selection.all);
         let hosts: BTreeSet<String> = by_relay
             .keys()
             .chain(all_by_relay.keys())
             .cloned()
             .collect();
-        let mut by_relay = by_relay;
         let ended_before = self.ended_since(&BTreeSet::new()).await?;
         let ended_before: BTreeSet<ContactId> =
             ended_before.iter().map(|ended| ended.contact_id).collect();
@@ -484,127 +525,16 @@ where
         for host in hosts {
             // A relay whose session is attached is read from the session, with every mailbox
             // the contacts have on it; any other from a socket, with this cycle's turn.
-            let mut pushed = None;
-            let mut mailboxes = by_relay.remove(&host).unwrap_or_default();
-            if let Some(all) = all_by_relay.remove(&host)
-                && let Some(first) = all.first()
-            {
-                let identities: Vec<Identity> =
-                    all.iter().map(|mailbox| mailbox.identity.clone()).collect();
-                let opened = PushedMail::open(
-                    relays,
-                    &host,
-                    first.relay.clone(),
-                    first.onion.as_deref(),
-                    &identities,
-                    add_to_claims,
-                )
-                .await;
-                if let Some(opened) = opened.filter(PushedMail::is_live) {
-                    pushed = Some(opened);
-                    mailboxes = all;
-                }
-            }
-            let Some(first) = mailboxes.first() else {
-                continue;
+            let turn = by_relay.remove(&host).unwrap_or_default();
+            let (mailboxes, pushed) = match all_by_relay.remove(&host) {
+                Some(all) => match open_pushed(relays, &host, &all, add_to_claims).await {
+                    Some(pushed) => (all, Some(pushed)),
+                    None => (turn, None),
+                },
+                None => (turn, None),
             };
-            let client = mailbox_client(relays, first.relay.clone(), first.onion.as_deref());
-            let identities: Vec<Identity> = mailboxes
-                .iter()
-                .map(|mailbox| mailbox.identity.clone())
-                .collect();
-            let jobs: Vec<Job> = mailboxes.iter().map(|mailbox| mailbox.job).collect();
-            // What a drain that reached the relay may conclude about: all of a socket drain's
-            // mailboxes, and the pushed ones the relay has had time to push mail for.
-            let seen = |position: usize| {
-                pushed
-                    .as_ref()
-                    .is_none_or(|pushed| !pushed.fresh().contains(&position))
-            };
-            let pairings: Vec<PairingId> = jobs
-                .iter()
-                .enumerate()
-                .filter(|(position, _)| seen(*position))
-                .filter_map(|(_, job)| match job {
-                    Job::Reply(pairing_id) | Job::Confirm(pairing_id) => Some(*pairing_id),
-                    Job::Contact(..) => None,
-                })
-                .collect();
-            let contacts: Vec<ContactId> = jobs
-                .iter()
-                .enumerate()
-                .filter(|(position, _)| seen(*position))
-                .filter_map(|(_, job)| match job {
-                    Job::Contact(contact_id, true) => Some(*contact_id),
-                    _ => None,
-                })
-                .collect();
-            let started = self.wallet.ports().clock.now();
-            let mut handler = Collector {
-                wallet: self,
-                relays,
-                jobs,
-                messages: 0,
-                paired: 0,
-                failed: Vec::new(),
-                told: &mut told,
-            };
-            report.mailboxes = report.mailboxes.saturating_add(identities.len());
-            let drained = match &pushed {
-                Some(pushed) => Ok(pushed.collect(&mut handler).await),
-                None => client
-                    .drain_once(&identities, &mut handler)
-                    .await
-                    .map(|drain| drain.mailboxes.iter().map(|mailbox| mailbox.end).collect()),
-            };
-            report.messages = report.messages.saturating_add(handler.messages);
-            report.paired = report.paired.saturating_add(handler.paired);
-            report.failed.append(&mut handler.failed);
-            match drained {
-                Ok(ends) => {
-                    for end in ends {
-                        match end {
-                            MailboxEnd::Capped => report.capped = report.capped.saturating_add(1),
-                            MailboxEnd::Kept => report.kept = report.kept.saturating_add(1),
-                            MailboxEnd::Refused => {
-                                report.refused = report.refused.saturating_add(1);
-                            }
-                            MailboxEnd::TimedOut => {
-                                report.timed_out = report.timed_out.saturating_add(1);
-                            }
-                            MailboxEnd::NotReached => {
-                                report.not_reached = report.not_reached.saturating_add(1);
-                            }
-                            _ => {}
-                        }
-                    }
-                    self.relay_answered(&host).await?;
-                    // The relay held everything that reached it by `started`: what is past
-                    // its deadline then has had its last chance.
-                    for failed in self.end_drained_pairings(pairings, started).await? {
-                        self.wallet.emit(Event::PairingFailed(failed));
-                        report.failed.push(failed);
-                    }
-                    // The wait for an unheard contact counts only after a drain that reached
-                    // its relay, so a wallet that cannot collect never ends a pairing.
-                    let mut ended = self.count_heard_wait(contacts, started).await?;
-                    report.ended.append(&mut ended);
-                }
-                Err(error @ (MailboxError::Unreachable(_) | MailboxError::Lost(_))) => {
-                    warn!(peer_relay = %host, error = %ErrorChain(&error), "home relay not answering");
-                    report.not_reached = report.not_reached.saturating_add(identities.len());
-                    self.relay_failed(&host).await?;
-                    self.wallet
-                        .emit(Event::HomeRelayUnreachable(UnreachableRelay {
-                            relay: host.clone(),
-                        }));
-                    report.unreachable.push(host);
-                }
-                Err(error) => {
-                    warn!(peer_relay = %host, error = %ErrorChain(&error), "mailbox drain failed");
-                    report.not_reached = report.not_reached.saturating_add(identities.len());
-                }
-            }
+            self.collect_relay(relays, host, mailboxes, pushed, &mut told, &mut report)
+                .await?;
         }
         report.quarantined = told.quarantined;
         report.quarantine_dropped = told.quarantine_dropped;
@@ -639,6 +569,106 @@ where
             Err(error) => warn!(error = %ErrorChain(&error), "contact outbox not run"),
         }
         Ok(report)
+    }
+
+    /// Drains the `mailboxes` of the relay `host`, from `pushed` when the relay's session is
+    /// attached, else on a socket, and adds what came of it to `report`. A relay that does not
+    /// answer is reported there, not returned as an error.
+    async fn collect_relay(
+        &self,
+        relays: &ContactRelays,
+        host: String,
+        mailboxes: Vec<Mailbox>,
+        pushed: Option<PushedMail>,
+        told: &mut Told,
+        report: &mut CollectReport,
+    ) -> Result<(), ContactError> {
+        let Some(first) = mailboxes.first() else {
+            return Ok(());
+        };
+        let client = mailbox_client(relays, first.relay.clone(), first.onion.as_deref());
+        let identities: Vec<Identity> = mailboxes
+            .iter()
+            .map(|mailbox| mailbox.identity.clone())
+            .collect();
+        let jobs: Vec<Job> = mailboxes.iter().map(|mailbox| mailbox.job).collect();
+        // What a drain that reached the relay may conclude about: all of a socket drain's
+        // mailboxes, and the pushed ones the relay has had time to push mail for.
+        let seen = |position: usize| {
+            pushed
+                .as_ref()
+                .is_none_or(|pushed| !pushed.fresh().contains(&position))
+        };
+        let pairings: Vec<PairingId> = jobs
+            .iter()
+            .enumerate()
+            .filter(|(position, _)| seen(*position))
+            .filter_map(|(_, job)| match job {
+                Job::Reply(pairing_id) | Job::Confirm(pairing_id) => Some(*pairing_id),
+                Job::Contact(..) => None,
+            })
+            .collect();
+        let contacts: Vec<ContactId> = jobs
+            .iter()
+            .enumerate()
+            .filter(|(position, _)| seen(*position))
+            .filter_map(|(_, job)| match job {
+                Job::Contact(contact_id, true) => Some(*contact_id),
+                _ => None,
+            })
+            .collect();
+        let started = self.wallet.ports().clock.now();
+        let mut handler = Collector {
+            wallet: self,
+            relays,
+            jobs,
+            messages: 0,
+            paired: 0,
+            failed: Vec::new(),
+            told,
+        };
+        report.mailboxes = report.mailboxes.saturating_add(identities.len());
+        let drained = match &pushed {
+            Some(pushed) => Ok(pushed.collect(&mut handler).await),
+            None => client
+                .drain_once(&identities, &mut handler)
+                .await
+                .map(|drain| drain.mailboxes.iter().map(|mailbox| mailbox.end).collect()),
+        };
+        report.messages = report.messages.saturating_add(handler.messages);
+        report.paired = report.paired.saturating_add(handler.paired);
+        report.failed.append(&mut handler.failed);
+        match drained {
+            Ok(ends) => {
+                count_ends(report, ends);
+                self.relay_answered(&host).await?;
+                // The relay held everything that reached it by `started`: what is past its
+                // deadline then has had its last chance.
+                for failed in self.end_drained_pairings(pairings, started).await? {
+                    self.wallet.emit(Event::PairingFailed(failed));
+                    report.failed.push(failed);
+                }
+                // The wait for an unheard contact counts only after a drain that reached its
+                // relay, so a wallet that cannot collect never ends a pairing.
+                let mut ended = self.count_heard_wait(contacts, started).await?;
+                report.ended.append(&mut ended);
+            }
+            Err(error @ (MailboxError::Unreachable(_) | MailboxError::Lost(_))) => {
+                warn!(peer_relay = %host, error = %ErrorChain(&error), "home relay not answering");
+                report.not_reached = report.not_reached.saturating_add(identities.len());
+                self.relay_failed(&host).await?;
+                self.wallet
+                    .emit(Event::HomeRelayUnreachable(UnreachableRelay {
+                        relay: host.clone(),
+                    }));
+                report.unreachable.push(host);
+            }
+            Err(error) => {
+                warn!(peer_relay = %host, error = %ErrorChain(&error), "mailbox drain failed");
+                report.not_reached = report.not_reached.saturating_add(identities.len());
+            }
+        }
+        Ok(())
     }
 
     /// The ended pairings, leaving out those in `before`.
