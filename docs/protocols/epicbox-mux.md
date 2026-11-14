@@ -1,6 +1,6 @@
 # mux/1: one socket, many mailboxes
 
-Status: **agreed, frozen** (draft 2). A relay and a client (`lepic-epicbox`) both implement it, and the client passed a live run against a relay. Wire changes from here need a new version (mux/2).
+Status: stable. The client is `lepic-epicbox` ([sessions](../../crates/lepic-epicbox/README.md)). A change to the wire needs a new version (mux/2).
 
 mux/1 is an optional extension to the Epicbox 3.0.0 websocket protocol. One socket carries any number of proven mailboxes. The relay pushes each message as soon as it is stored. The client acknowledges messages without signatures. A token lets a client resume a session after a reconnect without signing again.
 
@@ -187,7 +187,7 @@ Delivery rules:
 {"type":"Detached","mailbox":"<key>","reason":"replaced"}
 ```
 
-The relay stopped delivering this mailbox on this socket. Reasons: `replaced` (attached or subscribed on another socket), `limit` (operator limit lowered), `shutdown` (relay draining). The client may attach it again, which will in turn replace the other socket.
+The relay stopped delivering this mailbox on this socket. Reasons: `replaced` (attached on another mux/1 socket), `limit` (operator limit lowered), `shutdown` (relay draining). The client may attach it again, which will in turn replace the other socket.
 
 ### Shutdown
 
@@ -233,7 +233,3 @@ R: {"type":"Ok","ext":["mux/1"],"challenge":"P0a...",...}
 C: {"type":"Resume","ref":"r1","token":"q9..."}
 R: {"type":"Attached","ref":"r1","mailboxes":[...],"token":"Hk...","token_expires":...}
 ```
-
-## 8. Open points
-
-None. Settled in draft 2: a mux/1 holder wins over 3.0.0 sockets, and only mux-vs-mux sends `replaced` (section 3); tokens live 24 h; 3.1.0 cancel stays out of mux/1.

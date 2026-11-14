@@ -165,6 +165,7 @@ own client and connection.
 | Call | `Mode` | Greets as | Does |
 |---|---|---|---|
 | `EpicboxClient::listen` | `Listen` | `listener` | Holds the connection, pings, reconnects with backoff until stopped |
+| `EpicboxClient::listen_with` | `Listen` | `listener` | The same, with `ListenOptions`: leave a socket after held rounds or missed challenges |
 | `EpicboxClient::drain` | `Drain` | `send` | Connects once, takes every waiting message, disconnects |
 | `EpicboxClient::drain_on` | `Drain` | `send` | A drain on a connection handed in, which it hands back when it ended quiet |
 | `MailboxClient::drain_once` | — | `send` | Subscribes as each mailbox in turn on one connection |
@@ -229,7 +230,7 @@ acknowledged and counted, and is not reported as a rejection.
 ## mux/1
 
 mux/1 is an optional extension of relay protocol 3.0.0, defined in
-[`epicbox-mux.md`](epicbox-mux.md) (draft 2). The
+[`epicbox-mux.md`](epicbox-mux.md). The
 client greets with `"ext":["mux/1"]` in `ClientDetails`, and a relay that offers it answers `Ok`
 with `ext`, a 22-character `challenge` and `limits`. A plain `Ok` means 3.0.0 only. One socket
 then carries up to 256 mailboxes, attached in `Attach` frames of at most 64 signed entries; the
@@ -239,9 +240,11 @@ single-use `Resume` token restores a session after a reconnect, and a relay rest
 `ClientDetails` bytes are the same as before.
 
 `lepic_epicbox::MuxSession` implements the client side as a transport only: it hands each message
-to a `MailboxHandler` and stores nothing. LEPIC's client is optional and off unless the caller
-starts it; the wallet's listeners, drains and posts use plain 3.0.0 as before. Details are in the
-[crate README](../../crates/lepic-epicbox/README.md#mux1-sessions).
+to a `MailboxHandler` and stores nothing. The payments listener and the contacts collect can read
+from one shared session per relay and group (`lepic-methods`, `lepic-wallet-contacts`); a host
+switches this on, and a relay that does not offer mux/1 keeps the socket path. `lepic-ffi` exposes
+it as Epicbox sessions ([FFI](../ffi.md)); the CLI uses sockets. Drains and posts use plain 3.0.0.
+Details are in the [crate README](../../crates/lepic-epicbox/README.md#mux1-sessions).
 
 ## Notices
 
@@ -316,8 +319,8 @@ contact's own oldest entry goes first, then the wallet's oldest.
 a message held. The held message is taken up again there.
 
 `listener_challenge_rounds` (2 to 10, `None` is off) moves a listener to a fresh socket when the
-relay sent no challenge for that many challenge intervals. A stock relay stops challenging a
-socket after one missed challenge, and then pushes no message to it. The listener learns the
+relay sent no challenge for that many challenge intervals. A relay stops challenging a
+socket after one missed challenge and pushes no message to it. The listener learns the
 interval from two periodic challenges (not the greeting, and not the ones that answer a
 `Made`), at least 30 seconds; until then it waits 60 seconds per round. It does not leave while a request is unanswered.
 
