@@ -42,3 +42,4 @@ lepic-epicbox = { path = ".", features = ["mock-relay"] }
 proptest = { workspace = true, features = ["std"] }
 tokio = { workspace = true, features = ["io-util", "macros", "net", "rt", "rt-multi-thread", "sync", "test-util", "time"] }
 tracing.workspace = true
+webpki-roots.workspace = true
