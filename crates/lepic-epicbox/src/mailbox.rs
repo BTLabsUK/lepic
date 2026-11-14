@@ -28,6 +28,7 @@ use crate::client::{
 use crate::client_inbox::RejectionReason;
 use crate::crypto::ReceivedMessage;
 use crate::frame::{ClientFrame, RelayFrame, RelayMessageId, SlateFrame, WalletMode};
+use crate::mux::{MuxError, MuxOptions, MuxSession};
 use crate::session::{Connection, Connector, RelayEndpoint, RelayStream, deadline_after};
 use crate::tunnel::DialTarget;
 
@@ -72,6 +73,13 @@ impl MailboxMessage {
     /// The position of the mailbox in the list given to [`MailboxClient::drain_once`].
     pub fn mailbox(&self) -> usize {
         self.mailbox
+    }
+
+    /// The same message numbered `mailbox`, for a consumer that keeps its own list of mailboxes,
+    /// such as one reading a shared [`crate::MuxSession`].
+    #[must_use]
+    pub fn renumbered(self, mailbox: usize) -> Self {
+        Self { mailbox, ..self }
     }
 
     pub fn msg_id(&self) -> &RelayMessageId {
@@ -246,6 +254,21 @@ impl MailboxClient {
             }),
             ..self
         }
+    }
+
+    /// A queued mux/1 session (see [`MuxSession::start_queued`]) on this client's relay, dialed
+    /// the way this client dials it.
+    pub fn start_mux_queued(
+        &self,
+        identities: Vec<Identity>,
+        options: MuxOptions,
+    ) -> Result<MuxSession, MuxError> {
+        MuxSession::start_queued(
+            self.settings.clone(),
+            Arc::clone(&self.connector),
+            identities,
+            options,
+        )
     }
 
     pub fn with_limits(self, limits: DrainLimits) -> Self {

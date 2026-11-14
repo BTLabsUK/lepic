@@ -148,6 +148,7 @@ impl ResumeToken {
         Ok(Self(Zeroizing::new(text.to_owned())))
     }
 
+    #[cfg(any(test, feature = "mock-relay"))]
     pub(crate) fn expose(&self) -> &str {
         &self.0
     }
@@ -336,6 +337,7 @@ pub(crate) enum MuxClientFrame {
     },
 }
 
+#[cfg(any(test, feature = "mock-relay"))]
 const MUX_CLIENT_TYPES: [&str; 6] = ["Attach", "Detach", "Resume", "Ack", "Hold", "Waiting"];
 
 impl MuxClientFrame {
@@ -344,12 +346,14 @@ impl MuxClientFrame {
     }
 
     /// Whether `type_name` names a frame only a mux/1 socket takes.
+    #[cfg(any(test, feature = "mock-relay"))]
     pub(crate) fn is_mux_type(type_name: &str) -> bool {
         MUX_CLIENT_TYPES.contains(&type_name)
     }
 
     /// Decodes a frame as a relay receives it, for a relay or a mock. `None` when the type is not
     /// a mux/1 frame.
+    #[cfg(any(test, feature = "mock-relay"))]
     pub(crate) fn from_json(text: &str) -> Result<Option<Self>, FrameError> {
         check_len(text)?;
         let type_name = probe_type(text)?;

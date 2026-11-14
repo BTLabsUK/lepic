@@ -40,6 +40,9 @@ pub use lepic_epicbox::{RELAY_RETENTION, TRANSPORT_ID};
 mod inbox;
 #[cfg(feature = "epicbox-wallet")]
 mod listing;
+mod sessions;
+
+pub use sessions::{CONTACTS_OWNER, PAYMENTS_OWNER, PushedConfig, PushedSessions, SessionInfo};
 
 /// The relay network of addresses for a wallet on `network`.
 pub fn relay_network(network: WalletNetwork) -> Network {
@@ -187,6 +190,7 @@ struct Inner {
     connector: Arc<dyn Connector>,
     policy: EpicboxPolicy,
     client: RwLock<Option<EpicboxClient>>,
+    pushed: PushedSessions,
 }
 
 impl Epicbox {
@@ -200,6 +204,7 @@ impl Epicbox {
                 connector,
                 policy: EpicboxPolicy,
                 client: RwLock::new(None),
+                pushed: PushedSessions::default(),
             }),
         }
     }
@@ -207,6 +212,11 @@ impl Epicbox {
     /// The client settings of the relay this transport talks to.
     pub fn settings(&self) -> &ClientSettings {
         &self.inner.settings
+    }
+
+    /// The mux/1 sessions of this transport, shared by its clones.
+    pub fn pushed(&self) -> &PushedSessions {
+        &self.inner.pushed
     }
 
     /// The relay network the addresses of this transport are read on.

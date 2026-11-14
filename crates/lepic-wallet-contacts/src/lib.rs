@@ -37,6 +37,7 @@ mod outbox;
 mod pairing;
 mod payload;
 mod private;
+mod pushed;
 mod quarantine;
 mod relay;
 mod requests;

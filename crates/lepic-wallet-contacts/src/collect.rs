@@ -27,6 +27,7 @@ use tracing::{debug, info, instrument, warn};
 
 use super::keys::{box_identity, contact_keys, contact_network, enc_secret, pairing_mailbox};
 use super::pairing::{Taken, peer_card};
+use super::pushed::PushedMail;
 use super::quarantine::{Message, QuarantineReason};
 use super::relay::{check_online, endpoint_for, host_text, mailbox_client};
 use super::{
@@ -204,6 +205,37 @@ struct Mailbox {
     identity: Identity,
     relay: RelayEndpoint,
     onion: Option<String>,
+}
+
+impl Mailbox {
+    fn duplicate(&self) -> Self {
+        Self {
+            job: self.job,
+            identity: self.identity.clone(),
+            relay: self.relay.clone(),
+            onion: self.onion.clone(),
+        }
+    }
+}
+
+/// The mailboxes of one cycle.
+struct Selection {
+    /// This cycle's turn, at most [`MAX_MAILBOXES_PER_DRAIN`]: what a socket drain reads.
+    turned: Vec<Mailbox>,
+    /// Every mailbox the cycle could read, without the turn's limit: what a pushed session
+    /// holds. Empty unless asked for.
+    all: Vec<Mailbox>,
+}
+
+fn group_by_relay(mailboxes: Vec<Mailbox>) -> BTreeMap<String, Vec<Mailbox>> {
+    let mut by_relay: BTreeMap<String, Vec<Mailbox>> = BTreeMap::new();
+    for mailbox in mailboxes {
+        by_relay
+            .entry(host_text(&mailbox.relay))
+            .or_default()
+            .push(mailbox);
+    }
+    by_relay
 }
 
 #[derive(Default, Serialize, Deserialize)]
@@ -432,19 +464,47 @@ where
         self.move_in_person_mailboxes(relays).await?;
         self.send_address_cards(relays).await?;
         let only = only.map(|ids| ids.iter().copied().collect::<BTreeSet<ContactId>>());
-        let mailboxes = self.mailboxes_to_collect(relays, trigger, only).await?;
-        let mut by_relay: BTreeMap<String, Vec<Mailbox>> = BTreeMap::new();
-        for mailbox in mailboxes {
-            by_relay
-                .entry(host_text(&mailbox.relay))
-                .or_default()
-                .push(mailbox);
-        }
+        let reads_pushed_mail = relays.epicbox.pushed().contacts().is_some();
+        let add_to_claims = only.is_some();
+        let selection = self
+            .mailboxes_to_collect(relays, trigger, only, reads_pushed_mail)
+            .await?;
+        let by_relay = group_by_relay(selection.turned);
+        let mut all_by_relay = group_by_relay(selection.all);
+        let hosts: BTreeSet<String> = by_relay
+            .keys()
+            .chain(all_by_relay.keys())
+            .cloned()
+            .collect();
+        let mut by_relay = by_relay;
         let ended_before = self.ended_since(&BTreeSet::new()).await?;
         let ended_before: BTreeSet<ContactId> =
             ended_before.iter().map(|ended| ended.contact_id).collect();
         let mut told = Told::default();
-        for (host, mailboxes) in by_relay {
+        for host in hosts {
+            // A relay whose session is attached is read from the session, with every mailbox
+            // the contacts have on it; any other from a socket, with this cycle's turn.
+            let mut pushed = None;
+            let mut mailboxes = by_relay.remove(&host).unwrap_or_default();
+            if let Some(all) = all_by_relay.remove(&host)
+                && let Some(first) = all.first()
+            {
+                let identities: Vec<Identity> =
+                    all.iter().map(|mailbox| mailbox.identity.clone()).collect();
+                let opened = PushedMail::open(
+                    relays,
+                    &host,
+                    first.relay.clone(),
+                    first.onion.as_deref(),
+                    &identities,
+                    add_to_claims,
+                )
+                .await;
+                if let Some(opened) = opened.filter(PushedMail::is_live) {
+                    pushed = Some(opened);
+                    mailboxes = all;
+                }
+            }
             let Some(first) = mailboxes.first() else {
                 continue;
             };
@@ -454,16 +514,27 @@ where
                 .map(|mailbox| mailbox.identity.clone())
                 .collect();
             let jobs: Vec<Job> = mailboxes.iter().map(|mailbox| mailbox.job).collect();
+            // What a drain that reached the relay may conclude about: all of a socket drain's
+            // mailboxes, and the pushed ones the relay has had time to push mail for.
+            let seen = |position: usize| {
+                pushed
+                    .as_ref()
+                    .is_none_or(|pushed| !pushed.fresh().contains(&position))
+            };
             let pairings: Vec<PairingId> = jobs
                 .iter()
-                .filter_map(|job| match job {
+                .enumerate()
+                .filter(|(position, _)| seen(*position))
+                .filter_map(|(_, job)| match job {
                     Job::Reply(pairing_id) | Job::Confirm(pairing_id) => Some(*pairing_id),
                     Job::Contact(..) => None,
                 })
                 .collect();
             let contacts: Vec<ContactId> = jobs
                 .iter()
-                .filter_map(|job| match job {
+                .enumerate()
+                .filter(|(position, _)| seen(*position))
+                .filter_map(|(_, job)| match job {
                     Job::Contact(contact_id, true) => Some(*contact_id),
                     _ => None,
                 })
@@ -479,14 +550,20 @@ where
                 told: &mut told,
             };
             report.mailboxes = report.mailboxes.saturating_add(identities.len());
-            let drained = client.drain_once(&identities, &mut handler).await;
+            let drained = match &pushed {
+                Some(pushed) => Ok(pushed.collect(&mut handler).await),
+                None => client
+                    .drain_once(&identities, &mut handler)
+                    .await
+                    .map(|drain| drain.mailboxes.iter().map(|mailbox| mailbox.end).collect()),
+            };
             report.messages = report.messages.saturating_add(handler.messages);
             report.paired = report.paired.saturating_add(handler.paired);
             report.failed.append(&mut handler.failed);
             match drained {
-                Ok(drain) => {
-                    for mailbox in &drain.mailboxes {
-                        match mailbox.end {
+                Ok(ends) => {
+                    for end in ends {
+                        match end {
                             MailboxEnd::Capped => report.capped = report.capped.saturating_add(1),
                             MailboxEnd::Kept => report.kept = report.kept.saturating_add(1),
                             MailboxEnd::Refused => {
@@ -677,7 +754,8 @@ where
         relays: &ContactRelays,
         trigger: CollectTrigger,
         only: Option<BTreeSet<ContactId>>,
-    ) -> Result<Vec<Mailbox>, ContactError> {
+        with_all: bool,
+    ) -> Result<Selection, ContactError> {
         let network = self.wallet.config().network;
         let session = self.wallet.session()?;
         let relays_for_work = relays.clone();
@@ -705,9 +783,20 @@ where
                     take_turn(repos, PENDING_CURSOR_KEY, &mut pending, pending_taken)?;
                     take_turn(repos, CURSOR_KEY, &mut contacts, taken)?;
                 }
+                let mut all = if with_all {
+                    pending.iter().map(Mailbox::duplicate).collect()
+                } else {
+                    Vec::new()
+                };
                 pending.truncate(pending_taken);
-                let mut mailboxes = pending;
-                for (record, home, onion, salt, read) in contacts.into_iter().take(taken) {
+                let mut turned = pending;
+                for (position, (record, home, onion, salt, read)) in
+                    contacts.into_iter().enumerate()
+                {
+                    let in_turn = position < taken;
+                    if !in_turn && !with_all {
+                        break;
+                    }
                     if backoffs.waiting(&host_text(&home), now) {
                         continue;
                     }
@@ -715,14 +804,20 @@ where
                     else {
                         continue;
                     };
-                    mailboxes.push(Mailbox {
+                    let mailbox = Mailbox {
                         job: Job::Contact(record.contact_id, read == BoxRead::Current),
                         identity: box_identity(&keys, network, &home)?,
                         relay: home,
                         onion,
-                    });
+                    };
+                    if with_all {
+                        all.push(mailbox.duplicate());
+                    }
+                    if in_turn {
+                        turned.push(mailbox);
+                    }
                 }
-                Ok(mailboxes)
+                Ok(Selection { turned, all })
             })
         })
         .await

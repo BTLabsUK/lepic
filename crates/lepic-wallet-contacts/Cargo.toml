@@ -51,6 +51,8 @@ sqlite = ["lepic-store/sqlite", "lepic-wallet/sqlite"]
 test-support = ["dep:rustls"]
 
 [dev-dependencies]
+# The pushed-mail tests run a mux/1 session against the mock relay.
+lepic-epicbox = { workspace = true, features = ["mock-relay"] }
 # The error samples are built in this crate's own tests as well.
 rustls.workspace = true
 proptest = { workspace = true, features = ["std"] }
