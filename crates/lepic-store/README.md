@@ -19,7 +19,7 @@ encrypted at rest. `MemoryStore` behaves the same without a file, for tests of t
   returns `Err` leaves nothing behind.
 - **Repositories.** `Repositories` joins the traits for accounts, outputs, transactions, slates,
   private contexts, the relay inbox and outbox, settings, invoices, peers, peer pins, imported
-  history, contacts and transaction records.
+  history, contacts, transaction records, and the serve API's event log and request records.
 - **Encryption at rest.** The database file is encrypted with SQLite3 Multiple Ciphers under a
   `StoreKey` (ADR 0032). A key check file beside it tells a wrong key from a damaged file.
   `open_wallet_dir` opens the encrypted database, or copies a plain one into it, checks the copy
@@ -46,6 +46,7 @@ encrypted at rest. `MemoryStore` behaves the same without a file, for tests of t
 | Keys and contexts | `StoreKeys`, `ContextKey`, `ContextRepository`, `PrivateContext`, `ParticipantId`, `PeerTagKey` |
 | Wallet records | `AccountRepository`, `OutputRepository` (`OutputRecord`, `OutputStatus`, `KeyId`), `TransactionRepository` (`TxId`, `TxState`), `TxRecordRepository` (`TxWatch`), `SlateRepository`, `SettingsRepository` |
 | Messaging records | `RelayRepository` (inbox and outbox), `InvoiceRepository` (`PendingInvoice`, `MAX_PARKED_INVOICES`), `PeerRepository`, `PeerPinRepository` |
+| API log | `ApiLogRepository`, `ApiEvent`, `ApiRequest`: the event log and the request records that make creates idempotent, with the `MAX_API_*` bounds |
 | Contacts | `ContactRepository`, `ContactRecord`, `PendingPairing`, `MAX_CONTACTS`, `MAX_PENDING_PAIRINGS`; `export_contacts`, `import_contacts`, `CONTACT_BACKUP_VERSION` (`sqlite`) |
 | Import | `ImportedRepository`, `ImportedTransaction`, `ImportedOutput`; `legacy` (`sqlite`) |
 | Files (`sqlite` for the lock) | `file::write_owner_only_atomic`, `lock_data_dir`, `try_lock_data_dir`, `DataDirLock`, `LOCK_FILE` |
