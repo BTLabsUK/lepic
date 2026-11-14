@@ -91,6 +91,18 @@ backs off for 30 s, 2 min, 10 min, then 30 min. Each message is acknowledged onl
 effect is stored. What happened reaches the host as `lepic_wallet::event::Event`s, such as
 `PairingReplied`, `ContactUpdated` and `HomeRelayUnreachable`, and as a `CollectReport`.
 
+A cycle starts with a `CollectTrigger`. `Open` and `Pull` read every mailbox and try relays in
+backoff and the whole outbox at once. `Foreground` reads the mailboxes of contacts with something
+pending, or all of them when they sit on at most three relays. `Push` reads every mailbox and
+keeps relay backoff and outbox retry times. `ContactView::awaiting` is the pending rule: a
+message waiting to go out, a payment not yet finished, or an invoice from the contact waiting for
+an answer.
+
+On a relay whose `mux/1` session is attached (see `lepic-methods`), a cycle reads the mail the
+session queued for all the contacts' mailboxes on that relay instead of opening a socket. The
+same handler takes each message, so the effects and acknowledgements are the same. Any other
+relay is drained over a socket.
+
 A message that opened under a contact's key but could not be taken is kept in quarantine
 (ADR 0049): `contact_quarantine`, `contact_quarantine_retry`, `contact_quarantine_discard`.
 
