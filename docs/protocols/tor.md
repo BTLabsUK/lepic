@@ -215,8 +215,12 @@ A send opens a SOCKS5 stream to `<onion>:80` through the wallet's tor:
 
 `Tor::send(to, wire)` then makes two calls on that circuit:
 
-1. `check_version`. A first call that times out is tried once more on a new circuit, since the
-   first circuit to an onion can take much longer.
+1. `check_version`. A connect that fails in a way waiting can mend is tried again on a new
+   circuit, after waits of 2, 5 and 10 seconds (`RETRY_WAITS`), within twice the connect
+   timeout. These are a timeout and the tor replies `OnionNotFound`, `OnionIntroductionFailed`,
+   `OnionRendezvousFailed`, `OnionIntroductionTimedOut`, `TtlExpired` and `HostUnreachable`. The
+   first circuit to an onion can take much longer than the next, and a service that has just
+   published its descriptor is not yet found everywhere. Each retry is logged as a warning.
 2. `receive_tx` with the S1. The answer must name the same slate id, else it is refused as
    malformed. The S2 is held under the slate id until `take_reply(slate_id)` takes it to
    finalize. At most `MAX_HELD_REPLIES`, 64, are held.
