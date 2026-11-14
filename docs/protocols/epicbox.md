@@ -301,8 +301,8 @@ a message held. The held message is taken up again there.
 `listener_challenge_rounds` (2 to 10, `None` is off) moves a listener to a fresh socket when the
 relay sent no challenge for that many challenge intervals. A stock relay stops challenging a
 socket after one missed challenge, and then pushes no message to it. The listener learns the
-interval from two periodic challenges (not the ones that answer a `Made`), at least 30 seconds;
-until then it waits 60 seconds per round. It does not leave while a request is unanswered.
+interval from two periodic challenges (not the greeting, and not the ones that answer a
+`Made`), at least 30 seconds; until then it waits 60 seconds per round. It does not leave while a request is unanswered.
 
 ## Over Tor
 

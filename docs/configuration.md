@@ -317,7 +317,7 @@ default below. A value out of range fails the create, restore or open call with
 | `refuse_unsolicited_payments` | off | |
 | `refuse_unsolicited_invoices` | off | |
 | `listener_held_rounds` | no limit | 1 to 64 |
-| `listener_challenge_rounds` | 3 | 2 to 10 |
+| `listener_challenge_rounds` | 3 | 2 to 10; the interval is the gap between two periodic challenges (not the greeting), at least 30 s, 60 s until two are seen |
 | `quarantine_max_bytes` | no limit | 1 to 67108864 |
 | `early_notice_max_count` | no limit | 1 to 10000, set with `early_notice_max_age_s` |
 | `early_notice_max_age_s` | no limit | 1 to 2592000 |

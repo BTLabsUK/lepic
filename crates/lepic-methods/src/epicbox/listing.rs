@@ -115,6 +115,12 @@ impl Epicbox {
         let mut results = Vec::with_capacity(listings.len());
         let mut carried: Option<DrainConnection> = None;
         for listing in listings {
+            if Instant::now() >= deadline {
+                // The deadline passed: the rest are not reached, not polled once.
+                carried = None;
+                results.push(Err(not_reached()));
+                continue;
+            }
             let handed = carried.take();
             let reused = handed.is_some();
             let mut outcome = timeout_at(
@@ -137,9 +143,7 @@ impl Epicbox {
             }
             results.push(outcome.unwrap_or_else(|_| {
                 carried = None;
-                Err(InboxError::Subscription(Box::new(ClientError::Timeout {
-                    awaiting: Awaiting::Connection,
-                })))
+                Err(not_reached())
             }));
         }
         if let Some(connection) = carried {
@@ -223,4 +227,11 @@ impl Epicbox {
         );
         Identity::new(secret, address).map_err(|error| InboxError::Identity(Box::new(error)))
     }
+}
+
+/// The outcome of a listing the drain deadline cut off.
+fn not_reached() -> InboxError {
+    InboxError::Subscription(Box::new(ClientError::Timeout {
+        awaiting: Awaiting::Connection,
+    }))
 }

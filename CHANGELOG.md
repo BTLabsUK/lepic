@@ -30,7 +30,7 @@ Conventional Commit messages at release time.
   default 3, `None` is off): a listener moves to a fresh socket when the relay sent no
   challenge for that many of its challenge intervals. A stock relay stops challenging, and
   pushing to, a socket after one missed challenge. The interval is the gap the listener saw
-  between two periodic challenges, at least 30 s; until it has seen two the wait is 60 s per
+  between two periodic challenges (the greeting is not one), at least 30 s; until it has seen two the wait is 60 s per
   round. The new socket collects what waits. Drains are not affected.
   `EpicboxClient::listen_with` takes `ListenOptions`. The log line carries `rounds` and
   `interval_s`.
@@ -38,6 +38,8 @@ Conventional Commit messages at release time.
   one relay connection where it can. A listing that ends quiet hands its connection to the
   next; after a message the wallet kept, or a failed connection, the rest continue on a new
   one. `Epicbox::drain_many_at` and `EpicboxClient::drain_on` are the engine side.
+  It returns one `ListingDrain` per listing, with a report or the listing's own error, so one
+  failing listing does not hide what the others took.
 - FFI: `ContactView.awaiting` is true while something is under way with the contact: a message
   in its outbox, a payment not yet finished, or an invoice from it waiting for an answer. A
   host that checks contacts on a timer may check only these.

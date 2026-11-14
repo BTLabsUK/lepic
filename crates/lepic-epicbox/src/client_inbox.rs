@@ -46,7 +46,8 @@ pub const RELAY_RETENTION: Duration = Duration::from_secs(7 * 24 * 60 * 60);
 /// The shortest challenge interval a listener learns from a relay.
 const CHALLENGE_INTERVAL_FLOOR: Duration = Duration::from_secs(30);
 
-/// The challenge interval a listener assumes until it has seen two periodic challenges.
+/// The challenge interval a listener assumes until it has seen two periodic challenges (the
+/// greeting is not one).
 const UNLEARNED_CHALLENGE_INTERVAL: Duration = Duration::from_secs(60);
 
 /// How long a connection whose route changed is kept for the messages in flight on it.
@@ -898,7 +899,8 @@ struct Session<'a> {
     /// When the last challenge arrived; the greeting's counts as the first.
     last_challenge: Instant,
     /// Whether the last challenge came on the relay's own schedule, not as the answer to a
-    /// `Made`. The greeting's does.
+    /// `Made`. The greeting's does not: the gap from it to the first periodic challenge
+    /// depends on when the connection opened, so it teaches nothing.
     last_challenge_periodic: bool,
     /// The latest gap between two periodic challenges, at least the floor.
     challenge_interval: Option<Duration>,
@@ -919,7 +921,7 @@ impl<'a> Session<'a> {
             rotate_by: None,
             rotated: false,
             last_challenge: Instant::now(),
-            last_challenge_periodic: true,
+            last_challenge_periodic: false,
             challenge_interval: None,
         }
     }

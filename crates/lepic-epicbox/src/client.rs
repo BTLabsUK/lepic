@@ -135,7 +135,7 @@ pub struct ListenOptions {
     pub held_rounds: Option<u32>,
     /// Leave when the relay has sent no challenge for this many of its challenge intervals. The
     /// interval is the gap the listener saw between two periodic challenges, at least 30
-    /// seconds, and 60 seconds until it has seen two. The new socket collects what waits.
+    /// seconds, and 60 seconds until it has seen two. The greeting is not a periodic challenge. The new socket collects what waits.
     pub challenge_rounds: Option<u32>,
 }
 

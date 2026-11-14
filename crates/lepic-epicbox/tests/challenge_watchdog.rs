@@ -95,6 +95,25 @@ async fn a_listener_that_learned_no_interval_reconnects_after_three_minutes() {
 }
 
 #[tokio::test(start_paused = true)]
+async fn the_greeting_does_not_teach_the_interval() {
+    let relay = MockRelay::new(Network::Mainnet);
+    let bob = listener(&relay, rounds(3)).await;
+    // One periodic challenge 5 s after the greeting: that gap is not the relay's interval.
+    sleep(seconds(5)).await;
+    relay.send_challenges();
+    sleep(seconds(1)).await;
+    relay.stall_challenges();
+
+    // The last challenge came at 5 s; the assumed 60 s gives 185 s. We are at 176 s.
+    sleep(seconds(170)).await;
+    assert_eq!(relay.connections_made(), 1);
+    sleep(seconds(20)).await;
+    assert_eq!(relay.connections_made(), 2);
+    reach(&bob, |state| state == ConnectionState::Subscribed).await;
+    bob.stop().await.unwrap();
+}
+
+#[tokio::test(start_paused = true)]
 async fn a_relay_that_challenges_on_time_is_never_left() {
     let relay = MockRelay::new(Network::Mainnet);
     let bob = listener(&relay, rounds(3)).await;
