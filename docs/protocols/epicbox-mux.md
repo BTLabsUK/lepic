@@ -187,7 +187,7 @@ Delivery rules:
 {"type":"Detached","mailbox":"<key>","reason":"replaced"}
 ```
 
-The relay stopped delivering this mailbox on this socket. Reasons: `replaced` (attached on another mux/1 socket), `limit` (operator limit lowered), `shutdown` (relay draining). The client may attach it again, which will in turn replace the other socket.
+The relay stopped delivering this mailbox on this socket. Reasons: `replaced` (attached on another mux/1 socket), `limit` (operator limit lowered), `shutdown` (relay draining). After `shutdown` the client reconnects and resumes. After `replaced` it must not attach the mailbox again on its own (section 3).
 
 ### Shutdown
 
