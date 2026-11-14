@@ -236,6 +236,25 @@ they arrive, until the host stops it. Both hand each message to the engine's inb
 what it is: a slate to answer, a reply to finalize, or a notice. A message that fails for a
 transient reason stays on the relay for the next attempt.
 
+A listener leaves a socket that has gone quiet: when the relay sends no periodic challenge for
+`listener_challenge_rounds` of its intervals (3 by default), it opens a fresh socket, which
+collects what waits. Several listings of one wallet are drained in one batch
+(`drain_epicbox_listings`), and a failed listing does not stop the others.
+
+**Push sessions** (Epicbox `mux/1`, [spec](protocols/epicbox-mux.md)). A relay that offers `mux/1`
+pushes mail over one socket that serves many mailboxes, so the host does not poll. `lepic-epicbox`
+holds the session client. In `lepic-methods` the payments listener and in `lepic-wallet-contacts`
+the contacts collect each claim their mailboxes on a shared session, one session per relay and
+group, and fall back to their own sockets when the relay does not offer it. The FFI exposes this as
+"Epicbox sessions"; the CLI does not use push sessions.
+
+**Boosts and the service API.** `lepic serve` holds one wallet open and answers `/api/v1` for a
+service that takes payments (see the [API guide](api/README.md)). A client can ask for a boost, a
+short window in which the contact collect or the node refresh polls faster (at most every 5
+seconds, for at most 10 minutes). Serve can also send its event log to a webhook set in
+settings. Apps call the same boosts through the FFI. The host runs the polling loops; the engine only holds
+the leases (`lepic-wallet`, `boost`).
+
 ## Mobile
 
 `lepic-ffi` exposes the engine to Dart with flutter_rust_bridge (ADR 0007). The generated Dart

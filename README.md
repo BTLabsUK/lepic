@@ -28,12 +28,14 @@ Status: beta. The APIs may change before 1.0.
 | Part | What it is | Where |
 |---|---|---|
 | Library | The engine and its crates, used in-process from Rust | [`crates/`](docs/architecture.md#crates) |
-| CLI | `lepic`, a command-line wallet on the same engine | [CLI](docs/cli.md) |
+| CLI | `lepic`, a command-line wallet on the same engine, with an interactive shell | [CLI](docs/cli.md) |
+| Service API | `lepic serve`, the wallet API for a service that takes payments (`/api/v1`, webhooks) | [API guide](docs/api/README.md) |
 | FFI | `lepic-ffi`, the API apps call through flutter_rust_bridge | [FFI](docs/ffi.md) |
 | Flutter binding | `lepic-flutter`, the Dart package over the FFI library | [its own repository](https://github.com/BTLabsUK/lepic-flutter) |
 
 A slate travels by file, over Epicbox, or directly over HTTP or Tor. Between two LEPIC wallets it
-can also go as a sealed native slate (EPICTX) to a paired contact or an epic1 link. The
+can also go as a sealed native slate (EPICTX) to a paired contact or an epic1 link, or in person as
+QR codes. Epicbox listening uses push sessions (`mux/1`) where the relay offers them. The
 [protocols](docs/protocols/README.md) pages describe each format, and
 [configuration](docs/configuration.md) lists the settings.
 
@@ -175,7 +177,8 @@ Each crate has a README; [architecture](docs/architecture.md) shows how they dep
 
 - [Docs index](docs/README.md)
 - [Architecture](docs/architecture.md)
-- [CLI](docs/cli.md), [FFI](docs/ffi.md), [configuration](docs/configuration.md)
+- [CLI](docs/cli.md), [service API](docs/api/README.md), [FFI](docs/ffi.md),
+  [configuration](docs/configuration.md)
 - [Protocols](docs/protocols/README.md)
 - [Architecture decision records](docs/adr/README.md), [RFCs](docs/rfcs/)
 - [Direction](docs/direction.md)
