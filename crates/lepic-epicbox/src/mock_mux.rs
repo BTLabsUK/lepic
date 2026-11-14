@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-//! An in-process relay that speaks mux/1 (the relay's `docs/mux-1.md`), for tests of
+//! An in-process relay that speaks mux/1 (`docs/protocols/epicbox-mux.md`), for tests of
 //! [`crate::MuxSession`].
 //!
 //! It offers the extension when asked, sends a 22-character challenge, verifies each `Attach`

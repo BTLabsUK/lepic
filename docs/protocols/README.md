@@ -28,6 +28,7 @@ it to learn a reply key or a native-slate claim; other wallets ignore it.
 | [epic1](epic1.md) | The epic1 address, links and their transports, paying a link |
 | [Pairing](pairing.md) | Invite, reply, confirm, SAS, private pairings, contact mailboxes, sealed slates, contact invoices, key checks, domain proof, relay moves |
 | [Epicbox](epicbox.md) | Addresses, encryption, frames, listening and draining, notices, messages that cannot be taken yet |
+| [Epicbox mux/1](epicbox-mux.md) | The optional push extension: one socket for many mailboxes, tokens to resume, acknowledgements without signatures |
 | [Tor](tor.md) | The onion service and its key, the tor process, SOCKS5, Epicbox and the node over Tor |
 | [HTTP](http.md) | The foreign JSON-RPC API and the native direct endpoint |
 

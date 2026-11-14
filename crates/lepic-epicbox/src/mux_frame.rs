@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 //! The frames of the mux/1 extension: one websocket carrying many proven mailboxes. The wire
-//! format is the relay's `docs/mux-1.md` (draft 2). Decoding follows [`crate::frame`]: the frame
+//! format is `docs/protocols/epicbox-mux.md` (draft 2). Decoding follows [`crate::frame`]: the frame
 //! length is bounded first, the `type` is read without buffering the frame, unknown fields are
 //! ignored and unknown types are not errors.
 

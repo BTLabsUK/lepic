@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 //! A mux/1 session: one websocket that carries many mailboxes, which the relay pushes to as mail
-//! arrives. The wire format is `mux_frame`; the relay's `docs/mux-1.md` is the specification.
+//! arrives. The wire format is `mux_frame`; `docs/protocols/epicbox-mux.md` is the specification.
 //!
 //! This is a transport only. It negotiates the extension, proves every mailbox once per socket,
 //! hands each message to a [`MailboxHandler`] and acknowledges it once the handler stored it. It

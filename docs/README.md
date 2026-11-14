@@ -48,6 +48,7 @@ the hosts (CLI and FFI) wire everything together. [Architecture](architecture.md
 - [epic1](protocols/epic1.md): epic1 addresses and payment links.
 - [Pairing](protocols/pairing.md): contacts, mailboxes and invoices between contacts.
 - [Epicbox](protocols/epicbox.md): the relay client and the notices LEPIC sends over it.
+- [Epicbox mux/1](protocols/epicbox-mux.md): the push extension for many mailboxes on one socket.
 - [Tor](protocols/tor.md): the wallet's onion service and reaching the node and relay over Tor.
 - [HTTP](protocols/http.md): the foreign API and the native direct endpoint.
 

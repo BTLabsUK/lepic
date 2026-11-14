@@ -228,8 +228,8 @@ acknowledged and counted, and is not reported as a rejection.
 
 ## mux/1
 
-mux/1 is an optional extension of relay protocol 3.0.0, defined in the relay's
-`docs/mux-1.md` in the `epicbox-relay` repository (draft 2). The
+mux/1 is an optional extension of relay protocol 3.0.0, defined in
+[`epicbox-mux.md`](epicbox-mux.md) (draft 2). The
 client greets with `"ext":["mux/1"]` in `ClientDetails`, and a relay that offers it answers `Ok`
 with `ext`, a 22-character `challenge` and `limits`. A plain `Ok` means 3.0.0 only. One socket
 then carries up to 256 mailboxes, attached in `Attach` frames of at most 64 signed entries; the

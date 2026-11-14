@@ -121,7 +121,7 @@ sender, so it never becomes a live listener, and subscribes as each mailbox in t
 ### mux/1 sessions
 
 `MuxSession` is an optional client for the relay's mux/1 extension
-(`docs/mux-1.md` in the `epicbox-relay` repository): one socket carries
+(`docs/protocols/epicbox-mux.md`): one socket carries
 up to 256 mailboxes, the relay pushes each message when it is stored, and acknowledgements need no
 signature. Nothing starts it. A host that wants it calls `MuxSession::start`; every other path
 keeps plain 3.0.0.
