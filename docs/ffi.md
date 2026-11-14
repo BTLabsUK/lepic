@@ -107,7 +107,8 @@ Calls that report over time take a `StreamSink`, which Dart sees as a `Stream`.
 | Call | Stream of | Ends |
 |---|---|---|
 | `EpicWallet::events` | `WalletEvent`: session, balance, transaction, sync, transport, invoice, pairing and contact changes | When the wallet is dropped |
-| `start_listener` | `ListenerEvent` of the Epicbox listener | With `Stopped` after `stop_listener` |
+| `start_listener`, `start_listener_via` | `ListenerEvent` of the Epicbox listener | With `Stopped` after `stop_listener` |
+| `watch_epicbox_sessions` | `EpicboxSessionEvent`: a session's state, and a note when mail was queued | When the wallet is dropped, or with `Unsupported` when no relay is configured |
 | `refresh`, `scan` | `RefreshProgress`, `ScanProgress` | When the call completes |
 | `start_tor` | `TorEvent`: `Starting`, `Bootstrapped`, `Publishing`, `Ready`, `Sending`, `Received`, `Refused`, `Failed`, `Stopped` | With `Stopped` |
 | `start_http_listener` | `HttpListenerEvent` | With `Stopped` |
@@ -126,7 +127,8 @@ A stream that cannot start ends with a `WalletError` as its error and no event.
 | `policy` | `HostPolicy` and `PinSettings` |
 | `wallet` | Open and create, balance, transactions, refresh and scan, send and receive by slate, file and Epicbox, QR slate codes, fees, cancel and repost, address signatures |
 | `invoice` | Issue and pay invoices by slate or file, `sweep_invoices` |
-| `contact` | Pairing with invite links ([RFC 0002](rfcs/0002-contact-pairing.md)), contacts, sealed slates and invoices, outbox, export and import |
+| `contact` | Pairing with invite links ([RFC 0002](rfcs/0002-contact-pairing.md)), contacts, sealed slates and invoices, outbox, export and import. `ContactView.awaiting` is true while a message waits to go out, a payment is unfinished or an invoice waits for an answer, so a timer can check only those contacts |
+| `epicbox_sessions` | Push sessions with the relay: `start_listener_via`, `contacts_push_start`, `contacts_push_stop`, `epicbox_sessions`, `watch_epicbox_sessions` |
 | `http` | Sends to an `http(s)` listener and the wallet's own listener, with pinned peer keys ([ADR 0017](adr/0017-foreign-api-over-http.md)) |
 | `tor` | The wallet's own tor, its onion address, and Epicbox, node and HTTP traffic over it ([ADR 0018](adr/0018-tor-on-desktop.md)) |
 | `in_person` | EPICTX between two phones by QR code ([RFC 0003](rfcs/0003-epictx-native-slates.md)) |
@@ -139,6 +141,41 @@ A stream that cannot start ends with a `WalletError` as its error and no event.
 
 On iOS, `start_tor` starts nothing: its stream reports `Failed` and then `Stopped`. The wallet's
 `tor_wanted` setting is ignored there.
+
+### Epicbox push sessions
+
+A relay that offers `mux/1` ([spec](protocols/epicbox-mux.md)) pushes mail over one socket for many
+mailboxes. The `epicbox_sessions` calls let the app use it:
+
+- `start_listener_via(ListenVia, sink)` starts the payments listener like `start_listener`, but
+  reads the relay through a push session. When the relay does not offer `mux/1`, it listens on a
+  socket as before.
+- `contacts_push_start(ListenVia)` makes the contacts collect read the contacts' mailboxes
+  through push sessions from the next collect on. `contacts_push_stop` goes back to sockets.
+- A `ListenVia` has a `group` and `waiting_every_s`. Two consumers that name the same group on
+  the same relay share one socket. `waiting_every_s` is how often the session asks the relay
+  whether mail waits (`None` never asks; 0 or over a day is `InvalidArgument`).
+- `epicbox_sessions()` lists the sessions as `EpicboxSessionView`: relay, group, `state`
+  (`Connecting`, `Attached`, `Reconnecting`, `NotOffered`, `Stopped`) and counters (sockets
+  opened, attaches, resumes, mails, duplicates, stall reconnects).
+
+### Polling and connections
+
+- `boost(poller, duration_secs, interval_secs)` returns an id, and `end_boost(id)` ends it. A boost
+  makes one poller (`Relays`, the contact collect, or `Node`, the node refresh) run faster for a
+  while: at least every 5 seconds, for at most 10 minutes; values outside are clamped. It starts no
+  loop. The app asks `poll_interval(poller, base_secs)` before each wait.
+- `drop_node_connections()` closes the connections kept open to the node. Call it when the
+  network changes and when the app returns to the foreground. It fails with `Locked` on a locked
+  wallet.
+- `drain_epicbox_listings(listings)` drains up to 16 listing addresses, on one connection where it
+  can. It returns one `ListingDrain` (a report or an error) per listing, in order.
+- `encode_ur_slate(json, max_fragment_len, single_code_max_len)`: a slate of at most
+  `single_code_max_len` bytes (0 to 1024) is one code. `decode_ur_slate` fails with
+  `ForeignUrCode` for an in-person code or answer.
+- `HostPolicy.listener_challenge_rounds` (2 to 10, default 3) moves the listener to a new socket
+  when the relay sent no challenge for that many intervals; see
+  [Epicbox](protocols/epicbox.md#messages-that-cannot-be-taken-yet).
 
 ## Secrets at the boundary
 
