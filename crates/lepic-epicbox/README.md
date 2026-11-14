@@ -92,8 +92,15 @@ with several addresses runs one client per address.
   is safe: receivers deduplicate.
 - `listen()` holds a connection, keeps it alive with pings and reconnects with `Backoff` after
   a failure. It registers as the address's live listener.
+- `listen_with(ListenOptions)` adds a watchdog with two rules, both off by default. With
+  `held_rounds` the listener moves to a fresh socket after that many rounds that began with a
+  message held. With `challenge_rounds` it moves when the relay sent no challenge for that many
+  of its challenge intervals (at least 30 seconds each, 60 until two are seen). The held message
+  and the waiting mail are taken up again on the new socket.
 - `drain()` connects once, takes every stored message and ends. It never takes live delivery
-  from a listener elsewhere.
+  from a listener elsewhere. `drain_on(connection)` reuses a `DrainConnection` that an earlier
+  drain handed on with `Subscription::take_connection`, so several addresses on one relay drain
+  over one socket. A drain that ended with mail outstanding closes its connection instead.
 - `with_prefilter` asks a `Prefilter` about each message's claimed sender before opening it;
   `Admission::Drop` acknowledges the message and forgets it.
 
@@ -123,8 +130,9 @@ sender, so it never becomes a live listener, and subscribes as each mailbox in t
 `MuxSession` is an optional client for the relay's mux/1 extension
 (`docs/protocols/epicbox-mux.md`): one socket carries
 up to 256 mailboxes, the relay pushes each message when it is stored, and acknowledgements need no
-signature. Nothing starts it. A host that wants it calls `MuxSession::start`; every other path
-keeps plain 3.0.0.
+signature. The crate starts nothing by itself. A host calls `MuxSession::start`; every other path
+keeps plain 3.0.0. `lepic-methods` shares one session per relay and group for its hosts, and
+`lepic-ffi` exposes those sessions to the app.
 
 - `start(settings, connector, identities, handler, options)` greets with `ext: ["mux/1"]`. A plain
   `Ok` means the relay does not offer it: the state becomes `MuxState::NotOffered` and the host
@@ -195,11 +203,11 @@ certificate.
 | `EncryptedMessage`, `SignedMessage`, `ReceivedMessage`, `MessageKey`, `Salt`, `Nonce`, `Destination` | One message |
 | `sign_text`, `verify_text`, `sign_listing_message`, `listing_message_verifies`, `ServiceDomain` | Signatures |
 | `ClientFrame`, `RelayFrame`, `SlateFrame`, `RelayMessageId`, `RelayErrorKind`, `WalletMode` | Frames |
-| `EpicboxClient`, `Identity`, `ClientSettings`, `ClientTimings`, `Backoff`, `ClientError` | The client |
-| `Subscription`, `Mode`, `ConnectionState`, `Rejection`, `RejectionReason`, `InboxCounters`, `Disconnect` | Listening and draining |
+| `EpicboxClient`, `Identity`, `ClientSettings`, `ClientTimings`, `Backoff`, `ListenOptions`, `ClientError` | The client |
+| `Subscription`, `DrainConnection`, `Mode`, `ConnectionState`, `Rejection`, `RejectionReason`, `InboxCounters`, `Disconnect` | Listening and draining |
 | `Prefilter`, `Admission` | Dropping unknown senders before opening |
 | `MailboxClient`, `MailboxHandler`, `MailboxMessage`, `MailboxContent`, `Handled`, `DrainLimits`, `DrainReport` | Other mailboxes |
-| `MuxSession`, `MuxOptions`, `MuxState`, `MuxEvent`, `MuxCounters`, `MuxError`, `MuxCode`, `MuxLimits` | The optional mux/1 session (`start`, `start_queued`, `take`, `settle`, `set_mailboxes`) |
+| `MuxSession`, `MuxOptions`, `MuxState`, `MuxEvent`, `MuxCounters`, `MuxError`, `MuxCode`, `MuxLimits`, `Claimed` | The optional mux/1 session (`start`, `start_queued`, `take`, `settle`, `set_mailboxes`) |
 | `RelayEndpoint`, `Security`, `Connector`, `TcpConnector`, `UntrustedHosts`, `RelayStream` | Connections |
 | `tunnel` module: `Tunnel`, `TunnelConnector`, `OnionRoutes`, `OnionRoute`, `parse_discovery` | Relays through tor |
 | `TRANSPORT_ID` | `"epicbox"` |
