@@ -1,0 +1,221 @@
+{
+  "contacts": [
+    {
+      "allow_invoices": false,
+      "claimed_name": "Fixture owner",
+      "contact_id": "b6e7444d41113f76120335bd4eefc56c",
+      "created_at_ms": 1794374182893,
+      "home_relay": "relay.example.org:443",
+      "kind": "Some(Person)",
+      "label": "",
+      "seal": "On",
+      "state": "Paired",
+      "status": "Paired",
+      "verified_at_ms": null
+    }
+  ],
+  "ids": {
+    "cancelled": 4,
+    "contact": "b6e7444d41113f76120335bd4eefc56c",
+    "mined": 3,
+    "pending": 5
+  },
+  "outputs": [
+    {
+      "category": "None",
+      "commitment": "086ea9327b70dea4cb02d77cf5c21849f0f7c6f81bb2de339cb856561218c05afc",
+      "confirmations": 30,
+      "height": 1,
+      "is_coinbase": false,
+      "lock_height": 1,
+      "mmr_index": 1,
+      "status": "Spent",
+      "tx_id": 3,
+      "value": 1000000000
+    },
+    {
+      "category": "Some(Locked)",
+      "commitment": "088a9badec7634f0c09308805804c598fb08cbe9f3d49fe81ec52ed8fedcbd1319",
+      "confirmations": 11,
+      "height": 20,
+      "is_coinbase": false,
+      "lock_height": 0,
+      "mmr_index": 3,
+      "status": "Locked",
+      "tx_id": 5,
+      "value": 849200000
+    },
+    {
+      "category": "Some(AwaitingFinalization)",
+      "commitment": "08a53c71908b24aadfba978298f94b4886b6dcf5f68f2405e53eb291df6b7bda91",
+      "confirmations": 0,
+      "height": 30,
+      "is_coinbase": false,
+      "lock_height": 0,
+      "mmr_index": null,
+      "status": "Unconfirmed",
+      "tx_id": 5,
+      "value": 648400000
+    },
+    {
+      "category": "Some(Spendable)",
+      "commitment": "09086e54d7773ee5edc5e224ce0580f7bc6891dbf2cb3885a461232901bf8822c9",
+      "confirmations": 30,
+      "height": 1,
+      "is_coinbase": false,
+      "lock_height": 1,
+      "mmr_index": 2,
+      "status": "Unspent",
+      "tx_id": 2,
+      "value": 1000000000
+    }
+  ],
+  "store_at_rest": "StoreAtRest { state: Encrypted, reason: \"\", rollback_set_aside: false }",
+  "summary": {
+    "awaiting_confirmation": 0,
+    "awaiting_finalization": 648400000,
+    "immature": 0,
+    "last_confirmed_height": 30,
+    "locked": 849200000,
+    "minimum_confirmations": 6,
+    "spendable": 1000000000,
+    "total": 1849200000,
+    "validated_with_node": false
+  },
+  "transactions": [
+    {
+      "amount_credited": 648400000,
+      "amount_debited": 849200000,
+      "confirmed_at_ms": null,
+      "confirmed_height": null,
+      "counterparty": null,
+      "created_at_ms": 1794374184239,
+      "direction": "Outgoing",
+      "fee": 800000,
+      "flow": "Payment",
+      "kernel_excess": "096feac7bbdaa20cb57f9858e020477e6108f21c0b6708381015713558a8d14ee0",
+      "messages": [
+        {
+          "role": "Sender",
+          "text": "pending payment"
+        }
+      ],
+      "origin": "Wallet",
+      "output_commits": [
+        "08a53c71908b24aadfba978298f94b4886b6dcf5f68f2405e53eb291df6b7bda91"
+      ],
+      "slate_id": "1ae14a77-10fd-4680-b1c4-5217403ef872",
+      "spent_commits": [
+        "088a9badec7634f0c09308805804c598fb08cbe9f3d49fe81ec52ed8fedcbd1319"
+      ],
+      "status": "Posted",
+      "transport": "file",
+      "ttl_cutoff_height": 1470,
+      "tx_id": 5
+    },
+    {
+      "amount_credited": 748400000,
+      "amount_debited": 849200000,
+      "confirmed_at_ms": null,
+      "confirmed_height": null,
+      "counterparty": null,
+      "created_at_ms": 1794374184139,
+      "direction": "Outgoing",
+      "fee": 800000,
+      "flow": "Payment",
+      "kernel_excess": null,
+      "messages": [
+        {
+          "role": "Sender",
+          "text": "cancelled payment"
+        }
+      ],
+      "origin": "Wallet",
+      "output_commits": [],
+      "slate_id": "15ae375e-4a90-4c02-aebe-a53124e5033d",
+      "spent_commits": [
+        "088a9badec7634f0c09308805804c598fb08cbe9f3d49fe81ec52ed8fedcbd1319"
+      ],
+      "status": "Cancelled",
+      "transport": "file",
+      "ttl_cutoff_height": 1470,
+      "tx_id": 4
+    },
+    {
+      "amount_credited": 849200000,
+      "amount_debited": 1000000000,
+      "confirmed_at_ms": 1794374184115,
+      "confirmed_height": 20,
+      "counterparty": null,
+      "created_at_ms": 1794374183857,
+      "direction": "Outgoing",
+      "fee": 800000,
+      "flow": "Payment",
+      "kernel_excess": "09cfd0e36b89d7b502e1a47196f5299515ae6cce8044b82e83f8f0ec69863612a3",
+      "messages": [
+        {
+          "role": "Sender",
+          "text": "mined payment"
+        }
+      ],
+      "origin": "Wallet",
+      "output_commits": [
+        "088a9badec7634f0c09308805804c598fb08cbe9f3d49fe81ec52ed8fedcbd1319"
+      ],
+      "slate_id": "16c3d1e6-da71-4d32-bbe3-3119258252ee",
+      "spent_commits": [
+        "086ea9327b70dea4cb02d77cf5c21849f0f7c6f81bb2de339cb856561218c05afc"
+      ],
+      "status": "Confirmed",
+      "transport": "file",
+      "ttl_cutoff_height": 1460,
+      "tx_id": 3
+    },
+    {
+      "amount_credited": 1000000000,
+      "amount_debited": 0,
+      "confirmed_at_ms": 1551398460000,
+      "confirmed_height": 1,
+      "counterparty": null,
+      "created_at_ms": 1551398460000,
+      "direction": "Incoming",
+      "fee": null,
+      "flow": "Payment",
+      "kernel_excess": null,
+      "messages": [],
+      "origin": "FoundByScan",
+      "output_commits": [
+        "09086e54d7773ee5edc5e224ce0580f7bc6891dbf2cb3885a461232901bf8822c9"
+      ],
+      "slate_id": null,
+      "spent_commits": [],
+      "status": "Confirmed",
+      "transport": null,
+      "ttl_cutoff_height": null,
+      "tx_id": 2
+    },
+    {
+      "amount_credited": 1000000000,
+      "amount_debited": 0,
+      "confirmed_at_ms": 1551398460000,
+      "confirmed_height": 1,
+      "counterparty": null,
+      "created_at_ms": 1551398460000,
+      "direction": "Incoming",
+      "fee": null,
+      "flow": "Payment",
+      "kernel_excess": null,
+      "messages": [],
+      "origin": "FoundByScan",
+      "output_commits": [
+        "086ea9327b70dea4cb02d77cf5c21849f0f7c6f81bb2de339cb856561218c05afc"
+      ],
+      "slate_id": null,
+      "spent_commits": [],
+      "status": "Confirmed",
+      "transport": null,
+      "ttl_cutoff_height": null,
+      "tx_id": 1
+    }
+  ]
+}

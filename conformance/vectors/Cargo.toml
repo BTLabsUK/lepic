@@ -1,0 +1,26 @@
+[package]
+name = "vectors"
+description = "Generates LEPIC golden vectors by running the reference epic and epic-wallet code"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+blake2-rfc.workspace = true
+epic_api.workspace = true
+epic_chain.workspace = true
+epic_core.workspace = true
+epic_keychain.workspace = true
+epic_pool.workspace = true
+epic_util.workspace = true
+epic_wallet_impls.workspace = true
+epic_wallet_libwallet.workspace = true
+ring.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tempfile.workspace = true
+thiserror.workspace = true
+
+[lints]
+workspace = true

@@ -1,0 +1,1813 @@
+// SPDX-License-Identifier: Apache-2.0
+//! The invoice flow between two LEPIC wallets over the file method: the issuer stores and
+//! delivers I1, the payer stores its locked inputs and returns I2, the issuer finalizes, stores
+//! I3, drops its private context and posts. Slates that do not fit the step, or whose data does
+//! not check, are refused with nothing stored; finalizing again is harmless.
+
+// Tests may unwrap, index and panic (docs/rules.md), including in helpers that clippy does not
+// treat as test code.
+#![allow(clippy::unwrap_used, clippy::indexing_slicing, clippy::panic)]
+
+use crate::invoice_harness;
+use crate::support;
+
+use invoice_harness::{ACCOUNT, FUNDING, ISSUER_MNEMONIC, PAYER_MNEMONIC, Party};
+use lepic_crypto::SecretKey;
+use lepic_keychain::Identifier;
+use lepic_legacy_slate::v2_json::V2JsonCodec;
+use lepic_legacy_slate::v3_json::V3JsonCodec;
+use lepic_node::mock::{ChainOutput, ChainState, MockFailure, MockNode};
+use lepic_node::{LocatedKernel, NodeVersion, Propagation, Tip};
+use lepic_primitives::amount::{Amount, Fee, Height};
+use lepic_primitives::hash::Hash;
+use lepic_primitives::params::Network;
+use lepic_slate::codec::{EncodeContext, MediaType, WireSlate};
+use lepic_slate::error::{DecodeError, ValidationError};
+use lepic_slate::model::SlateId;
+use lepic_slate::registry::CodecRegistry;
+use lepic_slate::role::Role;
+use lepic_slate::stage::Stage;
+use lepic_store::{
+    OutputRecord, OutputStatus, ParticipantId, SlateStage, StoredTransaction, TxDirection, TxId,
+    TxState,
+};
+use lepic_transport::file::FilePolicy;
+use lepic_transport::policy::FormatPolicy;
+use lepic_wallet::details::ExpiredReason;
+use lepic_wallet::event::{Balance, TransactionState};
+use lepic_wallet::finalize::FinalizeError;
+use lepic_wallet::invoice::{
+    BuiltI1, I1Plan, I1Randomness, I2Plan, I2Randomness, INVOICE_TTL_BLOCKS,
+    INVOICE_TTL_MARGIN_BLOCKS, InvoiceError, InvoiceField, MAX_INVOICE_TTL_LAG_BLOCKS,
+    MAX_INVOICE_TTL_LEAD_BLOCKS, PayRequest, build_i1, build_i2, build_i3,
+};
+use lepic_wallet::refresh::BalanceCategory;
+use lepic_wallet::selection::SelectionStrategy;
+use lepic_wallet::send::ChangeOutput;
+use lepic_wallet::{Event, WalletError};
+use serde_json::Value;
+use uuid::Uuid;
+
+const AMOUNT: u64 = 300_000_000;
+const TIP: u64 = 4;
+
+/// A TTL two blocks longer than the issuer's margin: the issuer finalizes a payment of it at
+/// `TIP + 1` and refuses it from `TIP + 2`.
+const MARGIN_TTL: u64 = INVOICE_TTL_MARGIN_BLOCKS + 2;
+
+fn node() -> MockNode {
+    node_at(TIP)
+}
+
+fn node_at(tip: u64) -> MockNode {
+    MockNode::from_chain(ChainState::new(
+        NodeVersion {
+            node_version: "4.0.4".to_owned(),
+            block_header_version: 6,
+        },
+        Tip {
+            height: Height::new(tip),
+            last_block_pushed: Hash::from_slice(&[0; 32]).unwrap(),
+        },
+    ))
+}
+
+fn request() -> PayRequest {
+    PayRequest {
+        minimum_confirmations: 1,
+        strategy: SelectionStrategy::Smallest,
+        ..PayRequest::new(ACCOUNT, Amount::new(AMOUNT))
+    }
+}
+
+/// A payer holding one coinbase output of `funding` at child 0.
+fn payer(node: &MockNode, funding: u64) -> Party {
+    let payer = Party::new(PAYER_MNEMONIC, node);
+    payer.fund(0, funding);
+    payer.set_next_child(1);
+    payer
+}
+
+/// An issued invoice, the I1 the issuer delivered and the I2 a LEPIC payer answered.
+struct Flow {
+    node: MockNode,
+    issuer: Party,
+    payer: Party,
+    tx_id: TxId,
+    slate_id: Uuid,
+    i1: WireSlate,
+    i2: WireSlate,
+}
+
+fn flow(issuer_message: Option<&str>, request: PayRequest) -> Flow {
+    flow_issued_with_ttl(issuer_message, None, request)
+}
+
+fn flow_issued_with_ttl(
+    issuer_message: Option<&str>,
+    issuer_ttl_blocks: Option<u64>,
+    request: PayRequest,
+) -> Flow {
+    let node = node();
+    let issuer = Party::new(ISSUER_MNEMONIC, &node);
+    let issued = issuer
+        .issue_with_ttl(AMOUNT, issuer_message, issuer_ttl_blocks)
+        .unwrap();
+    let i1 = issuer.delivered().unwrap();
+    let payer = payer(&node, FUNDING);
+    let i2 = payer.pay(&i1, request).unwrap().reply;
+    Flow {
+        node,
+        issuer,
+        payer,
+        tx_id: issued.tx_id,
+        slate_id: Uuid::from_bytes(*issued.slate_id.as_bytes()),
+        i1,
+        i2,
+    }
+}
+
+fn transaction(party: &Party, slate_id: Uuid, direction: TxDirection) -> StoredTransaction {
+    party
+        .read(|repos| repos.transaction_by_slate(slate_id, direction))
+        .unwrap()
+}
+
+impl Flow {
+    fn state(&self) -> TxState {
+        transaction(&self.issuer, self.slate_id, TxDirection::Incoming)
+            .entry
+            .state
+    }
+
+    fn has_context(&self) -> bool {
+        self.issuer
+            .read(|repos| repos.context(self.slate_id, ParticipantId(1)))
+            .is_some()
+    }
+
+    fn has_i3(&self) -> bool {
+        self.issuer
+            .read(|repos| repos.slate(self.slate_id, SlateStage::Invoice3))
+            .is_some()
+    }
+
+    /// Nothing of a finalize was stored: the invoice still waits for its payment.
+    fn assert_untouched(&self) {
+        assert_eq!(self.state(), TxState::Received);
+        assert!(self.has_context());
+        assert!(!self.has_i3());
+        assert!(self.node.pushed_transactions().is_empty());
+    }
+}
+
+type Change = Box<dyn FnOnce(&mut Value)>;
+
+fn slate_value(wire: &WireSlate) -> Value {
+    serde_json::from_str(wire.as_text().unwrap()).unwrap()
+}
+
+/// `wire` with its JSON changed by `change`.
+fn tampered(wire: &WireSlate, change: impl FnOnce(&mut Value)) -> WireSlate {
+    let mut slate: Value = serde_json::from_str(wire.as_text().unwrap()).unwrap();
+    change(&mut slate);
+    WireSlate::text(MediaType::JSON, slate.to_string())
+}
+
+fn participant<'a>(slate: &'a mut Value, id: &str) -> &'a mut Value {
+    slate["participant_data"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|participant| participant["id"] == id)
+        .unwrap()
+}
+
+fn transaction_events(
+    events: &mut tokio::sync::broadcast::Receiver<Event>,
+) -> Vec<(TxState, TxState)> {
+    let mut changes = Vec::new();
+    while let Ok(event) = events.try_recv() {
+        if let Event::Transaction(TransactionState { from, to, .. }) = event {
+            changes.push((from, to));
+        }
+    }
+    changes
+}
+
+#[test]
+fn a_restored_wallet_issues_invoices_only_after_its_restore_scan() {
+    let node = node();
+    let issuer = Party::restored_without_scan(ISSUER_MNEMONIC, &node);
+
+    let error = issuer.issue(AMOUNT, None).unwrap_err();
+
+    assert!(
+        matches!(
+            error,
+            InvoiceError::Wallet(WalletError::RestoreScanRequired)
+        ),
+        "{error:?}"
+    );
+    assert!(issuer.read(|repos| repos.transactions(ACCOUNT)).is_empty());
+    assert!(issuer.delivered().is_none());
+    issuer
+        .block_on(issuer.wallet.scan(
+            lepic_wallet::scan::ScanOptions::restore(Network::Floonet),
+            &lepic_wallet::scan::ScanCancel::new(),
+        ))
+        .unwrap();
+    issuer.issue(AMOUNT, None).unwrap();
+}
+
+#[test]
+fn a_restored_wallet_pays_an_invoice_with_change_only_after_its_restore_scan() {
+    let node = node();
+    let issuer = Party::new(ISSUER_MNEMONIC, &node);
+    issuer.issue(AMOUNT, None).unwrap();
+    let i1 = issuer.delivered().unwrap();
+    let payer = Party::restored_without_scan(PAYER_MNEMONIC, &node);
+    payer.fund(0, FUNDING);
+    payer.set_next_child(1);
+
+    let error = payer.pay(&i1, request()).unwrap_err();
+
+    assert!(
+        matches!(
+            error,
+            InvoiceError::Wallet(WalletError::RestoreScanRequired)
+        ),
+        "{error:?}"
+    );
+    assert!(payer.read(|repos| repos.transactions(ACCOUNT)).is_empty());
+    let funding = payer.read(|repos| repos.outputs(ACCOUNT, None));
+    assert!(
+        funding
+            .iter()
+            .all(|output| output.status == OutputStatus::Unspent)
+    );
+}
+
+#[test]
+fn issuing_stores_the_invoice_and_delivers_the_i1() {
+    let node = node();
+    let issuer = Party::new(ISSUER_MNEMONIC, &node);
+
+    let issued = issuer.issue(AMOUNT, Some("for the bike")).unwrap();
+
+    assert_eq!(issued.amount, Amount::new(AMOUNT));
+    let delivered = issuer.delivered().unwrap();
+    let text = delivered.as_text().unwrap();
+    // The file method writes every slate in the V3 shape with a version 3 header (ADR 0015).
+    assert!(text.starts_with(r#"{"version_info":{"version":3,"orig_version":3,"#));
+    assert!(text.contains(r#""ttl_cutoff_height":null"#));
+    let slate_id = Uuid::from_bytes(*issued.slate_id.as_bytes());
+    let entry = transaction(&issuer, slate_id, TxDirection::Incoming);
+    assert_eq!(entry.id, issued.tx_id);
+    assert_eq!(entry.entry.state, TxState::Received);
+    assert_eq!(entry.entry.amount_credited, Amount::new(AMOUNT));
+    assert_eq!(entry.entry.fee, None);
+    let outputs = issuer.read(|repos| repos.outputs_of_transaction(issued.tx_id));
+    assert_eq!(outputs.len(), 1);
+    assert_eq!(outputs[0].status, OutputStatus::Unconfirmed);
+    assert_eq!(outputs[0].amount, Amount::new(AMOUNT));
+    assert!(
+        issuer
+            .read(|repos| repos.context(slate_id, ParticipantId(1)))
+            .is_some()
+    );
+    assert!(
+        issuer
+            .read(|repos| repos.slate(slate_id, SlateStage::Invoice1))
+            .is_some()
+    );
+}
+
+#[test]
+fn the_i1_of_an_issued_invoice_is_encoded_again_as_it_was_delivered() {
+    let node = node();
+    let issuer = Party::new(ISSUER_MNEMONIC, &node);
+    let issued = issuer.issue(AMOUNT, Some("for the bike")).unwrap();
+    let delivered = issuer.delivered().unwrap();
+
+    let again = issuer
+        .block_on(issuer.wallet.issued_invoice(&issuer.method, issued.tx_id))
+        .unwrap();
+
+    assert_eq!(again.as_bytes(), delivered.as_bytes());
+    let unknown = issuer.block_on(issuer.wallet.issued_invoice(&issuer.method, TxId(999)));
+    assert!(
+        matches!(
+            unknown,
+            Err(InvoiceError::Wallet(WalletError::UnknownTransaction(TxId(
+                999
+            ))))
+        ),
+        "{unknown:?}"
+    );
+
+    issuer.block_on(issuer.wallet.cancel(issued.tx_id)).unwrap();
+    let cancelled = issuer.block_on(issuer.wallet.issued_invoice(&issuer.method, issued.tx_id));
+    assert!(
+        matches!(
+            cancelled,
+            Err(InvoiceError::NotFinalizable {
+                state: TxState::Cancelled,
+                ..
+            })
+        ),
+        "{cancelled:?}"
+    );
+}
+
+#[test]
+fn paying_locks_the_inputs_and_stores_the_i2_reply() {
+    let flow = flow(Some("for the bike"), request());
+
+    let entry = transaction(&flow.payer, flow.slate_id, TxDirection::Outgoing);
+    assert_eq!(entry.entry.state, TxState::Sent);
+    assert_eq!(entry.entry.amount_debited, Amount::new(FUNDING));
+    let fee = entry.entry.fee.unwrap();
+    let outputs = flow.payer.read(|repos| repos.outputs(ACCOUNT, None));
+    let locked: Vec<_> = outputs
+        .iter()
+        .filter(|output| output.status == OutputStatus::Locked)
+        .collect();
+    assert_eq!(locked.len(), 1);
+    assert_eq!(locked[0].amount, Amount::new(FUNDING));
+    let change: Vec<_> = outputs
+        .iter()
+        .filter(|output| output.status == OutputStatus::Unconfirmed)
+        .collect();
+    assert_eq!(change.len(), 1);
+    assert_eq!(
+        change[0].amount.value(),
+        FUNDING - AMOUNT - fee.value(),
+        "change pays amount and fee"
+    );
+    let stored = flow
+        .payer
+        .read(|repos| repos.slate(flow.slate_id, SlateStage::Invoice2))
+        .unwrap();
+    assert_eq!(stored.bytes, flow.i2.as_bytes());
+    // The payer keeps no private context; the issuer signs last.
+    assert!(
+        flow.payer
+            .read(|repos| repos.context(flow.slate_id, ParticipantId(0)))
+            .is_none()
+    );
+}
+
+#[test]
+fn finalizing_stores_i3_drops_the_context_and_posts_the_transaction() {
+    let flow = flow(Some("for the bike"), request());
+    let mut events = flow.issuer.wallet.subscribe();
+
+    let finalized = flow.issuer.finalize(&flow.i2).unwrap();
+
+    assert_eq!(finalized.tx_id, flow.tx_id);
+    assert_eq!(finalized.slate.stage(), Stage::I3);
+    let issuer = finalized.slate.participant(Role::Receiver).unwrap();
+    assert_eq!(issuer.message.as_ref().unwrap().text(), "for the bike");
+    finalized.transaction.validate().unwrap();
+    assert_eq!(
+        flow.node.pushed_transactions(),
+        vec![finalized.transaction.clone()]
+    );
+    assert_eq!(flow.state(), TxState::Posted);
+    assert!(!flow.has_context());
+    assert!(flow.has_i3());
+    assert_eq!(
+        transaction_events(&mut events),
+        vec![
+            (TxState::Received, TxState::Finalized),
+            (TxState::Finalized, TxState::Posted),
+        ]
+    );
+}
+
+#[test]
+fn finalizing_the_same_i2_again_returns_the_stored_result_without_posting_again() {
+    let flow = flow(None, request());
+    let first = flow.issuer.finalize(&flow.i2).unwrap();
+
+    let second = flow.issuer.finalize(&flow.i2).unwrap();
+
+    assert!(first.pushed && !second.pushed);
+    assert_eq!(
+        lepic_wallet::Finalized {
+            pushed: true,
+            ..second
+        },
+        first
+    );
+    assert_eq!(flow.node.pushed_transactions().len(), 1);
+    assert_eq!(flow.state(), TxState::Posted);
+}
+
+#[test]
+fn another_payment_of_a_finalized_invoice_is_refused() {
+    let flow = flow(None, request());
+    flow.issuer.finalize(&flow.i2).unwrap();
+    // A second wallet of the same seed pays from a different output.
+    let other = payer(&flow.node, FUNDING + 1);
+    let other_i2 = other.pay(&flow.i1, request()).unwrap().reply;
+
+    let error = flow.issuer.finalize(&other_i2).unwrap_err();
+
+    assert!(
+        matches!(error, InvoiceError::AlreadyFinalized { tx_id, .. } if tx_id == flow.tx_id),
+        "{error:?}"
+    );
+    assert_eq!(flow.node.pushed_transactions().len(), 1);
+}
+
+#[test]
+fn a_post_the_node_refused_is_retried_by_finalizing_again() {
+    let flow = flow(None, request());
+    flow.node
+        .fail_next("push_transaction", MockFailure::Unreachable);
+
+    let error = flow.issuer.finalize(&flow.i2).unwrap_err();
+
+    assert!(
+        matches!(error, InvoiceError::NotPosted { tx_id, .. } if tx_id == flow.tx_id),
+        "{error:?}"
+    );
+    assert_eq!(flow.state(), TxState::Finalized);
+    assert!(flow.has_i3());
+
+    flow.issuer.finalize(&flow.i2).unwrap();
+
+    assert_eq!(flow.state(), TxState::Posted);
+    assert_eq!(flow.node.pushed_transactions().len(), 1);
+}
+
+#[test]
+fn a_payers_ttl_reaches_the_issuer_over_the_file_method() {
+    let flow = flow(
+        None,
+        PayRequest {
+            ttl_blocks: Some(MARGIN_TTL),
+            ..request()
+        },
+    );
+    // The payer raised the version 2 header of the I1 to 3, so the issuer reads the TTL.
+    let i2: Value = serde_json::from_str(flow.i2.as_text().unwrap()).unwrap();
+    assert_eq!(i2["ttl_cutoff_height"], (TIP + MARGIN_TTL).to_string());
+    assert_eq!(i2["version_info"]["version"], 3);
+    assert_eq!(i2["version_info"]["orig_version"], 3);
+    flow.node
+        .update_chain(|chain| chain.tip.height = Height::new(TIP + 1));
+
+    let finalized = flow.issuer.finalize(&flow.i2).unwrap();
+
+    assert_eq!(
+        finalized.slate.ttl_cutoff_height(),
+        Some(Height::new(TIP + MARGIN_TTL))
+    );
+    assert_eq!(flow.state(), TxState::Posted);
+}
+
+#[test]
+fn an_invoice_issued_with_a_ttl_carries_its_cutoff_to_the_payers_i2() {
+    let flow = flow_issued_with_ttl(None, Some(MARGIN_TTL), request());
+
+    let i1: Value = serde_json::from_str(flow.i1.as_text().unwrap()).unwrap();
+    assert_eq!(i1["ttl_cutoff_height"], (TIP + MARGIN_TTL).to_string());
+    // A payer that sets no TTL of its own keeps the issuer's.
+    let i2: Value = serde_json::from_str(flow.i2.as_text().unwrap()).unwrap();
+    assert_eq!(i2["ttl_cutoff_height"], (TIP + MARGIN_TTL).to_string());
+    let finalized = flow.issuer.finalize(&flow.i2).unwrap();
+    assert_eq!(
+        finalized.slate.ttl_cutoff_height(),
+        Some(Height::new(TIP + MARGIN_TTL))
+    );
+}
+
+#[test]
+fn a_payers_later_ttl_is_cut_to_the_cutoff_the_invoice_was_issued_with() {
+    let flow = flow_issued_with_ttl(
+        None,
+        Some(MARGIN_TTL),
+        PayRequest {
+            ttl_blocks: Some(MARGIN_TTL + 10),
+            ..request()
+        },
+    );
+
+    let i2: Value = serde_json::from_str(flow.i2.as_text().unwrap()).unwrap();
+    assert_eq!(i2["ttl_cutoff_height"], (TIP + MARGIN_TTL).to_string());
+}
+
+#[test]
+fn a_payers_earlier_ttl_is_kept() {
+    let flow = flow_issued_with_ttl(
+        None,
+        Some(MARGIN_TTL),
+        PayRequest {
+            ttl_blocks: Some(2),
+            ..request()
+        },
+    );
+
+    let i2: Value = serde_json::from_str(flow.i2.as_text().unwrap()).unwrap();
+    assert_eq!(i2["ttl_cutoff_height"], (TIP + 2).to_string());
+}
+
+#[test]
+fn finalizing_refuses_a_payment_from_the_margin_before_the_issued_cutoff_when_the_i2_drops_it() {
+    let flow = flow_issued_with_ttl(None, Some(MARGIN_TTL), request());
+    // Read under a version 2 header, the I2 loses its TTL, as `epic-wallet`'s file method
+    // loses it.
+    let i2 = tampered(&flow.i2, |slate| {
+        slate["version_info"]["version"] = Value::from(2);
+        slate["version_info"]["orig_version"] = Value::from(2);
+    });
+    flow.node
+        .update_chain(|chain| chain.tip.height = Height::new(TIP + 2));
+
+    let error = flow.issuer.finalize(&i2).unwrap_err();
+
+    assert!(
+        matches!(error, InvoiceError::Expired { cutoff, tip }
+            if cutoff == Height::new(TIP + 2) && tip == Height::new(TIP + 2)),
+        "{error:?}"
+    );
+    flow.assert_untouched();
+}
+
+#[test]
+fn finalizing_refuses_a_payment_from_the_margin_before_the_issued_cutoff_when_the_i2_moves_it() {
+    let flow = flow_issued_with_ttl(None, Some(MARGIN_TTL), request());
+    let i2 = tampered(&flow.i2, |slate| {
+        slate["ttl_cutoff_height"] = Value::from((TIP + 100).to_string());
+    });
+    flow.node
+        .update_chain(|chain| chain.tip.height = Height::new(TIP + 2));
+
+    let error = flow.issuer.finalize(&i2).unwrap_err();
+
+    assert!(
+        matches!(error, InvoiceError::Expired { cutoff, .. } if cutoff == Height::new(TIP + 2)),
+        "{error:?}"
+    );
+    flow.assert_untouched();
+}
+
+#[test]
+fn finalizing_refuses_a_payment_from_the_margin_before_the_issued_cutoff() {
+    let flow = flow_issued_with_ttl(None, Some(MARGIN_TTL), request());
+    let cutoff = TIP + MARGIN_TTL;
+    flow.node.update_chain(|chain| {
+        chain.tip.height = Height::new(cutoff - INVOICE_TTL_MARGIN_BLOCKS);
+    });
+
+    let error = flow.issuer.finalize(&flow.i2).unwrap_err();
+
+    // The error names the height the issuer stopped at, the margin before the cutoff.
+    assert!(
+        matches!(error, InvoiceError::Expired { cutoff: stopped, tip }
+            if stopped == Height::new(cutoff - INVOICE_TTL_MARGIN_BLOCKS) && tip == stopped),
+        "{error:?}"
+    );
+    flow.assert_untouched();
+}
+
+#[test]
+fn finalizing_refuses_a_payment_one_block_before_the_issued_cutoff() {
+    let flow = flow_issued_with_ttl(None, Some(MARGIN_TTL), request());
+    flow.node
+        .update_chain(|chain| chain.tip.height = Height::new(TIP + MARGIN_TTL - 1));
+
+    let error = flow.issuer.finalize(&flow.i2).unwrap_err();
+
+    assert!(matches!(error, InvoiceError::Expired { .. }), "{error:?}");
+    flow.assert_untouched();
+}
+
+#[test]
+fn finalizing_takes_a_payment_one_block_before_the_margin_before_the_issued_cutoff() {
+    let flow = flow_issued_with_ttl(None, Some(MARGIN_TTL), request());
+    let cutoff = TIP + MARGIN_TTL;
+    flow.node.update_chain(|chain| {
+        chain.tip.height = Height::new(cutoff - INVOICE_TTL_MARGIN_BLOCKS - 1);
+    });
+
+    flow.issuer.finalize(&flow.i2).unwrap();
+
+    assert_eq!(flow.state(), TxState::Posted);
+}
+
+/// A flow whose invoice was issued with [`MARGIN_TTL`] and finalized at `TIP`, where the node
+/// refused the post.
+fn finalized_not_posted() -> Flow {
+    let flow = flow_issued_with_ttl(None, Some(MARGIN_TTL), request());
+    flow.node
+        .fail_next("push_transaction", MockFailure::Unreachable);
+    let error = flow.issuer.finalize(&flow.i2).unwrap_err();
+    assert!(matches!(error, InvoiceError::NotPosted { .. }), "{error:?}");
+    assert_eq!(flow.state(), TxState::Finalized);
+    flow
+}
+
+#[test]
+fn a_failed_post_is_retried_until_the_cutoff_inside_the_margin() {
+    let flow = finalized_not_posted();
+    flow.node
+        .update_chain(|chain| chain.tip.height = Height::new(TIP + MARGIN_TTL - 1));
+
+    flow.issuer.finalize(&flow.i2).unwrap();
+
+    assert_eq!(flow.state(), TxState::Posted);
+    assert_eq!(flow.node.pushed_transactions().len(), 1);
+}
+
+#[test]
+fn a_failed_post_is_not_retried_from_the_cutoff() {
+    let flow = finalized_not_posted();
+    let cutoff = Height::new(TIP + MARGIN_TTL);
+    flow.node.update_chain(|chain| chain.tip.height = cutoff);
+
+    let error = flow.issuer.finalize(&flow.i2).unwrap_err();
+    assert!(
+        matches!(error, InvoiceError::Expired { cutoff: at, tip } if at == cutoff && tip == cutoff),
+        "{error:?}"
+    );
+    let error = flow
+        .issuer
+        .block_on(flow.issuer.wallet.post(flow.tx_id, Propagation::Stem))
+        .unwrap_err();
+    assert!(
+        matches!(error, FinalizeError::Expired { cutoff: at, .. } if at == cutoff),
+        "{error:?}"
+    );
+
+    assert_eq!(flow.state(), TxState::Finalized);
+    assert!(flow.node.pushed_transactions().is_empty());
+}
+
+#[test]
+fn a_failed_post_of_an_invoice_issued_without_a_ttl_is_retried_late() {
+    let flow = flow(None, request());
+    flow.node
+        .fail_next("push_transaction", MockFailure::Unreachable);
+    flow.issuer.finalize(&flow.i2).unwrap_err();
+    flow.node
+        .update_chain(|chain| chain.tip.height = Height::new(TIP + INVOICE_TTL_BLOCKS));
+
+    flow.issuer
+        .block_on(flow.issuer.wallet.post(flow.tx_id, Propagation::Stem))
+        .unwrap();
+
+    assert_eq!(flow.state(), TxState::Posted);
+}
+
+#[test]
+fn an_unpaid_invoice_expires_at_its_cutoff() {
+    let node = node();
+    let issuer = Party::new(ISSUER_MNEMONIC, &node);
+    let issued = issuer.issue_with_ttl(AMOUNT, None, Some(2)).unwrap();
+    node.update_chain(|chain| chain.tip.height = Height::new(TIP + 2));
+
+    issuer.block_on(issuer.wallet.refresh()).unwrap();
+
+    let slate_id = Uuid::from_bytes(*issued.slate_id.as_bytes());
+    let entry = transaction(&issuer, slate_id, TxDirection::Incoming);
+    assert_eq!(entry.entry.state, TxState::Expired);
+    let details = issuer
+        .block_on(issuer.wallet.transaction_details(issued.tx_id))
+        .unwrap();
+    assert_eq!(details.expired_reason, Some(ExpiredReason::NoAnswer));
+    assert!(
+        issuer
+            .read(|repos| repos.outputs_of_transaction(issued.tx_id))
+            .is_empty()
+    );
+    assert!(
+        issuer
+            .read(|repos| repos.context(slate_id, ParticipantId(1)))
+            .is_none()
+    );
+}
+
+#[test]
+fn a_ttl_under_a_version_two_header_does_not_reach_the_issuer() {
+    let flow = flow(
+        None,
+        PayRequest {
+            ttl_blocks: Some(2),
+            ..request()
+        },
+    );
+    // A payer that writes the V3 shape under the version 2 header of the I1, as `epic-wallet`'s
+    // file method does; the file method then reads the slate without its TTL.
+    let i2 = tampered(&flow.i2, |slate| {
+        slate["version_info"]["version"] = Value::from(2);
+        slate["version_info"]["orig_version"] = Value::from(2);
+    });
+    flow.node
+        .update_chain(|chain| chain.tip.height = Height::new(TIP + 5));
+
+    let finalized = flow.issuer.finalize(&i2).unwrap();
+
+    assert_eq!(finalized.slate.ttl_cutoff_height(), None);
+    assert_eq!(flow.state(), TxState::Posted);
+}
+
+#[test]
+fn an_invoice_for_another_amount_than_approved_is_refused() {
+    let node = node();
+    let issuer = Party::new(ISSUER_MNEMONIC, &node);
+    issuer.issue(AMOUNT, None).unwrap();
+    let i1 = issuer.delivered().unwrap();
+    let payer = payer(&node, FUNDING);
+
+    let error = payer
+        .pay(
+            &i1,
+            PayRequest {
+                amount: Amount::new(AMOUNT - 1),
+                ..request()
+            },
+        )
+        .unwrap_err();
+
+    assert!(
+        matches!(
+            error,
+            InvoiceError::AmountMismatch { invoiced, approved }
+                if invoiced == Amount::new(AMOUNT) && approved == Amount::new(AMOUNT - 1)
+        ),
+        "{error:?}"
+    );
+    assert!(payer.read(|repos| repos.transactions(ACCOUNT)).is_empty());
+}
+
+#[test]
+fn an_invoice_is_paid_once() {
+    let flow = flow(None, request());
+
+    let error = flow.payer.pay(&flow.i1, request()).unwrap_err();
+
+    assert!(
+        matches!(error, InvoiceError::AlreadyPaid { .. }),
+        "{error:?}"
+    );
+    assert_eq!(
+        flow.payer.read(|repos| repos.transactions(ACCOUNT)).len(),
+        1
+    );
+}
+
+#[test]
+fn paying_refuses_a_slate_that_is_not_an_invoice() {
+    let flow = flow(None, request());
+    let other = payer(&flow.node, FUNDING);
+
+    let error = other.pay(&flow.i2, request()).unwrap_err();
+
+    assert!(
+        matches!(error, InvoiceError::WrongStage { stage: Stage::I2 }),
+        "{error:?}"
+    );
+    assert!(other.read(|repos| repos.transactions(ACCOUNT)).is_empty());
+}
+
+/// An I1 in the V3 shape with a version 3 header, which the file method reads with its TTL,
+/// with its cutoff set to `cutoff`.
+fn with_cutoff(i1: &WireSlate, cutoff: u64) -> WireSlate {
+    tampered(i1, |slate| {
+        slate["version_info"]["version"] = Value::from(3);
+        slate["version_info"]["orig_version"] = Value::from(3);
+        slate["ttl_cutoff_height"] = Value::from(cutoff.to_string());
+        slate["payment_proof"] = Value::Null;
+    })
+}
+
+#[test]
+fn paying_refuses_an_invoice_past_its_ttl() {
+    let node = node();
+    let issuer = Party::new(ISSUER_MNEMONIC, &node);
+    issuer.issue(AMOUNT, None).unwrap();
+    let i1 = with_cutoff(&issuer.delivered().unwrap(), TIP);
+    let payer = payer(&node, FUNDING);
+
+    let error = payer.pay(&i1, request()).unwrap_err();
+
+    assert!(matches!(error, InvoiceError::Expired { .. }), "{error:?}");
+    assert!(payer.read(|repos| repos.transactions(ACCOUNT)).is_empty());
+}
+
+#[test]
+fn paying_refuses_an_invoice_from_the_margin_before_its_ttl() {
+    let node = node();
+    let issuer = Party::new(ISSUER_MNEMONIC, &node);
+    issuer.issue(AMOUNT, None).unwrap();
+    // The issuer would refuse to finalize a payment from here on.
+    let i1 = with_cutoff(
+        &issuer.delivered().unwrap(),
+        TIP + INVOICE_TTL_MARGIN_BLOCKS,
+    );
+    let payer = payer(&node, FUNDING);
+
+    let error = payer.pay(&i1, request()).unwrap_err();
+
+    assert!(
+        matches!(error, InvoiceError::Expired { cutoff, tip }
+            if cutoff == Height::new(TIP) && tip == Height::new(TIP)),
+        "{error:?}"
+    );
+    assert!(payer.read(|repos| repos.transactions(ACCOUNT)).is_empty());
+}
+
+#[test]
+fn pays_an_invoice_one_block_before_the_margin_before_its_ttl() {
+    let node = node();
+    let issuer = Party::new(ISSUER_MNEMONIC, &node);
+    issuer.issue(AMOUNT, None).unwrap();
+    let i1 = with_cutoff(
+        &issuer.delivered().unwrap(),
+        TIP + INVOICE_TTL_MARGIN_BLOCKS + 1,
+    );
+    let payer = payer(&node, FUNDING);
+
+    let paid = payer.pay(&i1, request()).unwrap();
+
+    let i2: Value = serde_json::from_str(paid.reply.as_text().unwrap()).unwrap();
+    assert_eq!(
+        i2["ttl_cutoff_height"],
+        (TIP + INVOICE_TTL_MARGIN_BLOCKS + 1).to_string()
+    );
+}
+
+/// The I1 an issuer delivered, as the file method reads it with its TTL, with `ttl_cutoff_height`
+/// and `height` set.
+fn issued_at(issuer: &Party, height: u64, cutoff: u64) -> WireSlate {
+    tampered(&issuer.delivered().unwrap(), |slate| {
+        slate["version_info"]["version"] = Value::from(3);
+        slate["version_info"]["orig_version"] = Value::from(3);
+        slate["height"] = Value::from(height.to_string());
+        slate["ttl_cutoff_height"] = Value::from(cutoff.to_string());
+        slate["payment_proof"] = Value::Null;
+    })
+}
+
+#[test]
+fn paying_refuses_an_invoice_whose_cutoff_lies_further_ahead_than_any_issuer_sets_it() {
+    let node = node();
+    let issuer = Party::new(ISSUER_MNEMONIC, &node);
+    issuer.issue(AMOUNT, None).unwrap();
+    let i1 = issued_at(&issuer, TIP, TIP + MAX_INVOICE_TTL_LEAD_BLOCKS + 1);
+    let payer = payer(&node, FUNDING);
+
+    let error = payer.pay(&i1, request()).unwrap_err();
+
+    assert!(
+        matches!(error, InvoiceError::TtlTooFarAhead { cutoff, limit }
+            if cutoff == Height::new(TIP + MAX_INVOICE_TTL_LEAD_BLOCKS + 1)
+                && limit == Height::new(TIP + MAX_INVOICE_TTL_LEAD_BLOCKS)),
+        "{error:?}"
+    );
+    assert!(payer.read(|repos| repos.transactions(ACCOUNT)).is_empty());
+}
+
+#[test]
+fn pays_an_invoice_whose_cutoff_lies_as_far_ahead_as_allowed() {
+    let node = node();
+    let issuer = Party::new(ISSUER_MNEMONIC, &node);
+    issuer.issue(AMOUNT, None).unwrap();
+    let i1 = issued_at(&issuer, TIP, TIP + MAX_INVOICE_TTL_LEAD_BLOCKS);
+    let payer = payer(&node, FUNDING);
+
+    payer.pay(&i1, request()).unwrap();
+}
+
+#[test]
+fn paying_on_floonet_refuses_a_request_issued_on_mainnet() {
+    let node = node();
+    let issuer = Party::new(ISSUER_MNEMONIC, &node);
+    issuer.issue(AMOUNT, None).unwrap();
+    // A mainnet tip, which the floonet bound on slate heights still allows.
+    let mainnet_tip = 3_770_000;
+    let i1 = issued_at(&issuer, mainnet_tip, mainnet_tip + INVOICE_TTL_BLOCKS);
+    let payer = payer(&node, FUNDING);
+
+    let error = payer.pay(&i1, request()).unwrap_err();
+
+    assert!(
+        matches!(error, InvoiceError::TtlTooFarAhead { .. }),
+        "{error:?}"
+    );
+    assert!(payer.read(|repos| repos.transactions(ACCOUNT)).is_empty());
+}
+
+/// A mainnet tip, which the floonet bound on node tips still allows when the node starts there.
+const MAINNET_TIP: u64 = 3_770_000;
+
+#[test]
+fn paying_on_mainnet_refuses_a_request_issued_on_floonet() {
+    let node = node_at(MAINNET_TIP);
+    let issuer = Party::new(ISSUER_MNEMONIC, &node);
+    issuer.issue(AMOUNT, None).unwrap();
+    let floonet_tip = 800;
+    let i1 = issued_at(&issuer, floonet_tip, floonet_tip + INVOICE_TTL_BLOCKS);
+    let payer = payer(&node, FUNDING);
+
+    let error = payer.pay(&i1, request()).unwrap_err();
+
+    assert!(
+        matches!(error, InvoiceError::TtlTooFarBehind { cutoff, limit }
+            if cutoff == Height::new(floonet_tip + INVOICE_TTL_BLOCKS)
+                && limit == Height::new(MAINNET_TIP - MAX_INVOICE_TTL_LAG_BLOCKS)),
+        "{error:?}"
+    );
+    assert!(payer.read(|repos| repos.transactions(ACCOUNT)).is_empty());
+}
+
+#[test]
+fn paying_calls_a_request_expired_as_long_ago_as_the_lag_bound_expired() {
+    let node = node_at(MAINNET_TIP);
+    let issuer = Party::new(ISSUER_MNEMONIC, &node);
+    issuer.issue(AMOUNT, None).unwrap();
+    let cutoff = MAINNET_TIP - MAX_INVOICE_TTL_LAG_BLOCKS;
+    let i1 = issued_at(&issuer, cutoff - INVOICE_TTL_BLOCKS, cutoff);
+    let payer = payer(&node, FUNDING);
+
+    let error = payer.pay(&i1, request()).unwrap_err();
+
+    assert!(
+        matches!(error, InvoiceError::Expired { cutoff: at, tip }
+            if at == Height::new(cutoff - INVOICE_TTL_MARGIN_BLOCKS)
+                && tip == Height::new(MAINNET_TIP)),
+        "{error:?}"
+    );
+    let below = tampered(&i1, |slate| {
+        slate["ttl_cutoff_height"] = Value::from((cutoff - 1).to_string());
+    });
+    assert!(
+        matches!(
+            payer.pay(&below, request()).unwrap_err(),
+            InvoiceError::TtlTooFarBehind { .. }
+        ),
+        "one block further is another chain's"
+    );
+}
+
+#[test]
+fn paying_calls_a_recently_expired_request_expired() {
+    let node = node_at(MAINNET_TIP);
+    let issuer = Party::new(ISSUER_MNEMONIC, &node);
+    issuer.issue(AMOUNT, None).unwrap();
+    let cutoff = MAINNET_TIP - 1;
+    let i1 = issued_at(&issuer, cutoff - INVOICE_TTL_BLOCKS, cutoff);
+    let payer = payer(&node, FUNDING);
+
+    let error = payer.pay(&i1, request()).unwrap_err();
+
+    assert!(
+        matches!(error, InvoiceError::Expired { cutoff: at, .. }
+            if at == Height::new(cutoff - INVOICE_TTL_MARGIN_BLOCKS)),
+        "{error:?}"
+    );
+}
+
+#[test]
+fn paying_refuses_an_invoice_whose_message_signature_does_not_verify() {
+    let node = node();
+    let issuer = Party::new(ISSUER_MNEMONIC, &node);
+    issuer.issue(AMOUNT, Some("for the bike")).unwrap();
+    let i1 = tampered(&issuer.delivered().unwrap(), |slate| {
+        participant(slate, "1")["message"] = Value::from("for the car");
+    });
+    let payer = payer(&node, FUNDING);
+
+    let error = payer.pay(&i1, request()).unwrap_err();
+
+    assert!(
+        matches!(
+            error,
+            InvoiceError::MessageSignature {
+                role: Role::Receiver,
+                ..
+            }
+        ),
+        "{error:?}"
+    );
+    assert!(payer.read(|repos| repos.transactions(ACCOUNT)).is_empty());
+}
+
+#[test]
+fn finalizing_refuses_a_payment_that_changed_the_invoice() {
+    let flow = flow(None, request());
+    let payer_excess = {
+        let mut i2: Value = serde_json::from_str(flow.i2.as_text().unwrap()).unwrap();
+        participant(&mut i2, "0")["public_blind_excess"].clone()
+    };
+    let issuer_commit = slate_value(&flow.i1)["tx"]["body"]["outputs"][0]["commit"].clone();
+    let is_issuers = move |output: &Value| output["commit"] == issuer_commit;
+    // A second payer of the same seed answers the same invoice from another output.
+    let other_change = {
+        let other = payer(&flow.node, FUNDING + 1);
+        let other_i2 = slate_value(&other.pay(&flow.i1, request()).unwrap().reply);
+        let outputs = other_i2["tx"]["body"]["outputs"].as_array().unwrap();
+        outputs
+            .iter()
+            .find(|output| !is_issuers(output))
+            .unwrap()
+            .clone()
+    };
+    let dropped = is_issuers.clone();
+    let replaced = is_issuers;
+    let cases: [(InvoiceField, Change); 6] = [
+        (
+            InvoiceField::Lock,
+            Box::new(|slate| {
+                slate["lock_height"] = Value::from("5");
+                let kernel = &mut slate["tx"]["body"]["kernels"][0];
+                kernel["features"] = Value::from("HeightLocked");
+                kernel["lock_height"] = Value::from("5");
+            }),
+        ),
+        (
+            InvoiceField::Outputs,
+            Box::new(move |slate| {
+                let outputs = slate["tx"]["body"]["outputs"].as_array_mut().unwrap();
+                outputs.retain(|output| !dropped(output));
+            }),
+        ),
+        (
+            InvoiceField::Outputs,
+            Box::new(move |slate| {
+                let outputs = slate["tx"]["body"]["outputs"].as_array_mut().unwrap();
+                let issuers = outputs.iter().position(replaced).unwrap();
+                outputs[issuers] = other_change;
+            }),
+        ),
+        (
+            InvoiceField::Amount,
+            Box::new(|slate| slate["amount"] = Value::from((AMOUNT + 1).to_string())),
+        ),
+        (
+            InvoiceField::Offset,
+            // The issuer's RNG repeats the byte 1, so its offset is all 01.
+            Box::new(|slate| slate["tx"]["offset"] = Value::from("02".repeat(32))),
+        ),
+        (
+            InvoiceField::Issuer,
+            Box::new(move |slate| participant(slate, "1")["public_nonce"] = payer_excess),
+        ),
+    ];
+    for (field, change) in cases {
+        let error = flow
+            .issuer
+            .finalize(&tampered(&flow.i2, change))
+            .unwrap_err();
+
+        assert!(
+            matches!(error, InvoiceError::Mismatch { field: got } if got == field),
+            "{field}: {error:?}"
+        );
+        flow.assert_untouched();
+    }
+}
+
+#[test]
+fn finalizing_refuses_a_payer_signature_over_another_fee() {
+    let flow = flow(None, request());
+    let raised = tampered(&flow.i2, |slate| {
+        let fee = slate["fee"].as_str().unwrap().parse::<u64>().unwrap() + 1_000_000;
+        slate["fee"] = Value::from(fee.to_string());
+        slate["tx"]["body"]["kernels"][0]["fee"] = Value::from(fee.to_string());
+    });
+
+    let error = flow.issuer.finalize(&raised).unwrap_err();
+
+    assert!(
+        matches!(error, InvoiceError::PayerSignature(_)),
+        "{error:?}"
+    );
+    flow.assert_untouched();
+}
+
+#[test]
+fn finalizing_refuses_a_slate_that_answers_no_issued_invoice() {
+    let flow = flow(None, request());
+    let foreign = tampered(&flow.i2, |slate| {
+        slate["id"] = Value::from("0436430c-2b02-624c-2032-570501212bff");
+    });
+
+    let unknown = flow.issuer.finalize(&foreign).unwrap_err();
+    let early = flow.issuer.finalize(&flow.i1).unwrap_err();
+
+    assert!(
+        matches!(unknown, InvoiceError::UnknownSlate { .. }),
+        "{unknown:?}"
+    );
+    assert!(
+        matches!(early, InvoiceError::WrongStage { stage: Stage::I1 }),
+        "{early:?}"
+    );
+    flow.assert_untouched();
+}
+
+#[test]
+fn a_cancelled_invoice_is_not_finalized() {
+    let flow = flow(None, request());
+    flow.issuer
+        .block_on(flow.issuer.wallet.cancel(flow.tx_id))
+        .unwrap();
+    assert!(!flow.has_context());
+    assert!(
+        flow.issuer
+            .read(|repos| repos.outputs_of_transaction(flow.tx_id))
+            .is_empty()
+    );
+
+    let error = flow.issuer.finalize(&flow.i2).unwrap_err();
+
+    assert!(
+        matches!(
+            error,
+            InvoiceError::NotFinalizable {
+                state: TxState::Cancelled,
+                ..
+            }
+        ),
+        "{error:?}"
+    );
+    assert!(flow.node.pushed_transactions().is_empty());
+}
+
+#[test]
+fn a_locked_wallet_issues_nothing() {
+    let node = node();
+    let issuer = Party::new(ISSUER_MNEMONIC, &node);
+    issuer.wallet.lock();
+
+    let error = issuer.issue(AMOUNT, None).unwrap_err();
+
+    assert!(
+        matches!(error, InvoiceError::Wallet(WalletError::Locked)),
+        "{error:?}"
+    );
+    assert!(issuer.delivered().is_none());
+}
+
+#[test]
+fn an_invoice_to_an_address_is_refused_with_nothing_stored_or_sent() {
+    let node = node();
+    let issuer = Party::new(ISSUER_MNEMONIC, &node);
+
+    let error = issuer
+        .block_on(issuer.wallet.issue_invoice(
+            &issuer.method,
+            lepic_wallet::invoice::InvoiceRequest {
+                account: ACCOUNT,
+                amount: Amount::new(AMOUNT),
+                message: None,
+                ttl_blocks: None,
+            },
+            lepic_wallet::send::Delivery::Deliver {
+                to: lepic_transport::transport::Destination::new("peer".to_owned()),
+            },
+        ))
+        .unwrap_err();
+
+    assert!(matches!(error, InvoiceError::ToAddress), "{error:?}");
+    assert!(issuer.read(|repos| repos.transactions(ACCOUNT)).is_empty());
+    assert!(issuer.delivered().is_none());
+}
+
+#[test]
+fn finalizing_refuses_a_payer_message_whose_signature_does_not_verify() {
+    let flow = flow(
+        None,
+        PayRequest {
+            message: Some("paid in full".to_owned()),
+            ..request()
+        },
+    );
+    let forged = tampered(&flow.i2, |slate| {
+        participant(slate, "0")["message"] = Value::from("paid in part");
+    });
+
+    let error = flow.issuer.finalize(&forged).unwrap_err();
+
+    assert!(
+        matches!(
+            error,
+            InvoiceError::MessageSignature {
+                role: Role::Sender,
+                ..
+            }
+        ),
+        "{error:?}"
+    );
+    flow.assert_untouched();
+}
+
+#[test]
+fn finalizing_refuses_an_i2_from_the_margin_before_the_payers_cutoff() {
+    let flow = flow(
+        None,
+        PayRequest {
+            ttl_blocks: Some(MARGIN_TTL),
+            ..request()
+        },
+    );
+    flow.node
+        .update_chain(|chain| chain.tip.height = Height::new(TIP + 2));
+
+    let error = flow.issuer.finalize(&flow.i2).unwrap_err();
+
+    assert!(
+        matches!(error, InvoiceError::Expired { cutoff, tip }
+            if cutoff == Height::new(TIP + 2) && tip == Height::new(TIP + 2)),
+        "{error:?}"
+    );
+    flow.assert_untouched();
+}
+
+/// The I1 the issuer's wallet built: its RNG repeats the byte 1, so every value it drew is
+/// all 01.
+fn rebuilt_i1(flow: &Flow) -> BuiltI1 {
+    let ones = || SecretKey::from_array([1; 32]).unwrap();
+    // The I1's output took the last key the counter handed out.
+    let child = flow
+        .issuer
+        .read(|repos| repos.account(ACCOUNT))
+        .unwrap()
+        .next_child
+        .checked_sub(1)
+        .unwrap();
+    let built = build_i1(
+        &flow.issuer.keychain,
+        &I1Plan {
+            account: ACCOUNT,
+            amount: Amount::new(AMOUNT),
+            height: Height::new(TIP),
+            ttl_cutoff_height: None,
+            key_id: Identifier::new(3, [0, 0, child, 0]).unwrap(),
+            message: None,
+        },
+        I1Randomness {
+            slate_id: SlateId::from_random_bytes([1; 16]),
+            offset: ones(),
+            nonce: ones(),
+            message_nonce: ones(),
+        },
+    )
+    .unwrap();
+    let delivered = FilePolicy.decode(&codecs(), &flow.i1).unwrap();
+    assert_eq!(delivered.with_origin(None), built.slate);
+    built
+}
+
+fn codecs() -> CodecRegistry {
+    let base_fee = Network::Floonet.params().default_base_fee();
+    let mut codecs = CodecRegistry::new();
+    codecs
+        .register(Box::new(V3JsonCodec::new(base_fee)))
+        .unwrap();
+    codecs
+        .register(Box::new(V2JsonCodec::new(base_fee)))
+        .unwrap();
+    codecs
+}
+
+#[test]
+fn a_fee_below_the_minimum_is_refused_even_when_the_payer_signed_it() {
+    let flow = flow(None, request());
+    let issued = rebuilt_i1(&flow);
+    let base_fee = Network::Floonet.params().default_base_fee();
+    let minimum = finalized_fee(&flow);
+    let fee = Fee::new(minimum.value() - 100_000);
+    let funding = flow
+        .payer
+        .read(|repos| repos.outputs(ACCOUNT, None))
+        .into_iter()
+        .find(|output| output.amount == Amount::new(FUNDING))
+        .unwrap();
+    let low = build_i2(
+        &flow.payer.keychain,
+        &issued.slate,
+        &I2Plan {
+            fee,
+            height: Height::new(TIP),
+            ttl_cutoff_height: None,
+            inputs: vec![OutputRecord {
+                status: OutputStatus::Unspent,
+                tx: None,
+                ..funding
+            }],
+            change: vec![ChangeOutput {
+                key_id: Identifier::new(3, [0, 0, 9, 0]).unwrap(),
+                amount: Amount::new(FUNDING - AMOUNT - fee.value()),
+            }],
+            message: None,
+        },
+        &I2Randomness {
+            nonce: SecretKey::from_array([2; 32]).unwrap(),
+            message_nonce: SecretKey::from_array([2; 32]).unwrap(),
+        },
+    )
+    .unwrap();
+
+    let built = build_i3(base_fee, &issued, &low).unwrap_err();
+    assert!(
+        matches!(built, InvoiceError::FeeBelowMinimum { fee: got, minimum: needed }
+            if got == fee && needed == minimum),
+        "{built:?}"
+    );
+
+    // Over the wire the legacy decoder refuses the fee before the issuer's own check.
+    let wire = FilePolicy
+        .encode_reply(
+            &codecs(),
+            &low,
+            &EncodeContext {
+                block_header_version: 6,
+            },
+        )
+        .unwrap();
+    let error = flow.issuer.finalize(&wire).unwrap_err();
+    assert!(
+        matches!(
+            error,
+            InvoiceError::Decode(DecodeError::Validation(
+                ValidationError::FeeBelowMinimum { .. }
+            ))
+        ),
+        "{error:?}"
+    );
+    flow.assert_untouched();
+}
+
+/// The fee the payer chose, which selection sets to the minimum for the body.
+fn finalized_fee(flow: &Flow) -> Fee {
+    transaction(&flow.payer, flow.slate_id, TxDirection::Outgoing)
+        .entry
+        .fee
+        .unwrap()
+}
+
+#[test]
+fn invoice_error_text_carries_no_amounts() {
+    let errors = [
+        InvoiceError::AmountMismatch {
+            invoiced: Amount::new(123_456_789),
+            approved: Amount::new(987_654_321),
+        },
+        InvoiceError::FeeBelowMinimum {
+            fee: Fee::new(123_456_789),
+            minimum: Fee::new(987_654_321),
+        },
+    ];
+    for error in errors {
+        let text = error.to_string();
+        assert!(
+            !text.contains("123456789") && !text.contains("987654321"),
+            "{text}"
+        );
+    }
+}
+
+#[test]
+fn a_payment_without_change_is_confirmed_by_its_kernel() {
+    // One input and the issuer's output: weight 4, at the floonet base fee of 100,000.
+    const NO_CHANGE_FEE: u64 = 400_000;
+    let node = node();
+    let issuer = Party::new(ISSUER_MNEMONIC, &node);
+    let issued = issuer.issue(AMOUNT, None).unwrap();
+    let slate_id = Uuid::from_bytes(*issued.slate_id.as_bytes());
+    let payer = payer(&node, AMOUNT + NO_CHANGE_FEE);
+    let paid = payer.pay(&issuer.delivered().unwrap(), request()).unwrap();
+    let finalized = issuer.finalize(&paid.reply).unwrap();
+    let payment = transaction(&payer, slate_id, TxDirection::Outgoing);
+    assert_eq!(payment.entry.amount_credited, Amount::ZERO);
+
+    let kernel = *finalized.transaction.kernels().first().unwrap();
+    let before = payer
+        .block_on(payer.wallet.transaction_details(payment.id))
+        .unwrap();
+    // The payer never receives the I3; its kernel comes from the stored I2.
+    assert_eq!(before.kernel_excess, Some(kernel.excess));
+    assert_eq!(before.confirmed_height, None);
+    node.update_chain(|chain| {
+        chain.tip.height = Height::new(TIP + 1);
+        chain.kernels.push(LocatedKernel {
+            kernel,
+            height: Height::new(TIP + 1),
+            mmr_index: 1,
+        });
+    });
+    payer.block_on(payer.wallet.refresh()).unwrap();
+
+    assert_eq!(
+        transaction(&payer, slate_id, TxDirection::Outgoing)
+            .entry
+            .state,
+        TxState::Confirmed
+    );
+    let after = payer
+        .block_on(payer.wallet.transaction_details(payment.id))
+        .unwrap();
+    assert_eq!(after.kernel_excess, Some(kernel.excess));
+    assert_eq!(after.confirmed_height, Some(Height::new(TIP + 1)));
+}
+
+#[test]
+fn a_finalized_invoice_the_node_refused_is_posted_by_post() {
+    let flow = flow(None, request());
+    flow.node
+        .fail_next("push_transaction", MockFailure::Unreachable);
+    flow.issuer.finalize(&flow.i2).unwrap_err();
+    assert_eq!(flow.state(), TxState::Finalized);
+
+    flow.issuer
+        .block_on(
+            flow.issuer
+                .wallet
+                .post(flow.tx_id, lepic_node::Propagation::Fluff),
+        )
+        .unwrap();
+
+    assert_eq!(flow.state(), TxState::Posted);
+    assert_eq!(flow.node.pushed_transactions().len(), 1);
+}
+
+#[test]
+fn a_refused_push_of_an_invoice_whose_kernel_is_on_chain_is_posted() {
+    let flow = flow(None, request());
+    flow.node
+        .fail_next("push_transaction", MockFailure::Unreachable);
+    flow.issuer.finalize(&flow.i2).unwrap_err();
+    let stored = flow
+        .issuer
+        .read(|repos| repos.slate(flow.slate_id, SlateStage::Invoice3))
+        .unwrap();
+    let i3 = lepic_slate::codec::Codec::decode(
+        &V3JsonCodec::new(Network::Floonet.params().default_base_fee()),
+        &WireSlate::binary(MediaType::JSON, stored.bytes),
+    )
+    .unwrap();
+    flow.node.update_chain(|chain| {
+        chain.tip.height = Height::new(TIP + 1);
+        chain.kernels.push(LocatedKernel {
+            kernel: i3.kernel().unwrap(),
+            height: Height::new(TIP + 1),
+            mmr_index: 1,
+        });
+    });
+    flow.node.fail_next(
+        "push_transaction",
+        MockFailure::Rejected(lepic_node::RejectionKind::Internal),
+    );
+
+    flow.issuer.finalize(&flow.i2).unwrap();
+
+    assert_eq!(flow.state(), TxState::Posted);
+    assert!(flow.node.pushed_transactions().is_empty());
+}
+
+/// The issuer's balance and the category of the output its invoice `tx_id` asks for.
+fn issuer_figures(issuer: &Party, tx_id: TxId) -> (Balance, Option<BalanceCategory>) {
+    let balance = issuer.wallet.balance(ACCOUNT).unwrap();
+    let outputs = issuer.wallet.outputs(ACCOUNT).unwrap();
+    let mine: Vec<_> = outputs
+        .iter()
+        .filter(|details| details.output.tx == Some(tx_id))
+        .collect();
+    assert!(mine.len() <= 1, "{mine:?}");
+    (balance, mine.first().and_then(|details| details.category))
+}
+
+fn assert_counts_nowhere(balance: &Balance) {
+    assert_eq!(balance.total, Amount::ZERO);
+    assert_eq!(balance.spendable, Amount::ZERO);
+    assert_eq!(balance.awaiting_confirmation, Amount::ZERO);
+    assert_eq!(balance.awaiting_finalization, Amount::ZERO);
+    assert_eq!(balance.immature, Amount::ZERO);
+    assert_eq!(balance.locked, Amount::ZERO);
+}
+
+#[test]
+fn an_unpaid_invoice_counts_in_no_balance_figure() {
+    let node = node();
+    let issuer = Party::new(ISSUER_MNEMONIC, &node);
+
+    let issued = issuer.issue(AMOUNT, None).unwrap();
+
+    let (balance, category) = issuer_figures(&issuer, issued.tx_id);
+    assert_counts_nowhere(&balance);
+    assert_eq!(category, Some(BalanceCategory::UnpaidInvoice));
+    let outputs = issuer.wallet.outputs(ACCOUNT).unwrap();
+    assert_eq!(outputs[0].output.amount, Amount::new(AMOUNT));
+    assert_eq!(outputs[0].confirmations, 0);
+}
+
+#[test]
+fn a_paid_invoice_awaits_finalization_then_confirmation() {
+    let flow = flow(None, request());
+    // The payer paid; the issuer has not read the payment yet.
+    let (balance, category) = issuer_figures(&flow.issuer, flow.tx_id);
+    assert_counts_nowhere(&balance);
+    assert_eq!(category, Some(BalanceCategory::UnpaidInvoice));
+
+    let finalized = flow.issuer.finalize(&flow.i2).unwrap();
+
+    let (balance, category) = issuer_figures(&flow.issuer, flow.tx_id);
+    assert_eq!(balance.awaiting_finalization, Amount::new(AMOUNT));
+    assert_eq!(balance.total, Amount::ZERO);
+    assert_eq!(category, Some(BalanceCategory::AwaitingFinalization));
+
+    let output = flow
+        .issuer
+        .read(|repos| repos.outputs_of_transaction(flow.tx_id))
+        .pop()
+        .unwrap();
+    let on_chain = finalized
+        .transaction
+        .outputs()
+        .iter()
+        .find(|candidate| candidate.commitment == output.id.commitment)
+        .unwrap()
+        .clone();
+    let kernel = *finalized.transaction.kernels().first().unwrap();
+    flow.node.update_chain(|chain| {
+        chain.tip.height = Height::new(TIP + 1);
+        chain.kernels.push(LocatedKernel {
+            kernel,
+            height: Height::new(TIP + 1),
+            mmr_index: 1,
+        });
+        crate::support::mine_output(
+            chain,
+            ChainOutput {
+                commitment: on_chain.commitment,
+                features: on_chain.features,
+                proof: on_chain.proof,
+                height: Height::new(TIP + 1),
+                mmr_index: 1,
+                spent: false,
+            },
+        );
+    });
+    flow.issuer.block_on(flow.issuer.wallet.refresh()).unwrap();
+
+    assert_eq!(flow.state(), TxState::Confirmed);
+    let (balance, category) = issuer_figures(&flow.issuer, flow.tx_id);
+    assert_eq!(balance.awaiting_confirmation, Amount::new(AMOUNT));
+    assert_eq!(balance.awaiting_finalization, Amount::ZERO);
+    assert_eq!(balance.total, Amount::new(AMOUNT));
+    assert_eq!(category, Some(BalanceCategory::AwaitingConfirmation));
+}
+
+#[test]
+fn a_cancelled_invoice_leaves_nothing_in_the_balance() {
+    let flow = flow(None, request());
+
+    flow.issuer
+        .block_on(flow.issuer.wallet.cancel(flow.tx_id))
+        .unwrap();
+
+    let (balance, category) = issuer_figures(&flow.issuer, flow.tx_id);
+    assert_counts_nowhere(&balance);
+    assert_eq!(category, None);
+}
+
+#[test]
+fn a_payers_change_still_awaits_finalization() {
+    // The payer's change of an unfinalized payment is not an invoice of its own.
+    let flow = flow(None, request());
+    let payment = transaction(&flow.payer, flow.slate_id, TxDirection::Outgoing);
+    let outputs = flow.payer.wallet.outputs(ACCOUNT).unwrap();
+    let change: Vec<_> = outputs
+        .iter()
+        .filter(|details| {
+            details.output.tx == Some(payment.id)
+                && details.output.status == OutputStatus::Unconfirmed
+        })
+        .collect();
+    assert_eq!(change.len(), 1);
+    assert_eq!(
+        change[0].category,
+        Some(BalanceCategory::AwaitingFinalization)
+    );
+    let balance = flow.payer.wallet.balance(ACCOUNT).unwrap();
+    assert_eq!(balance.awaiting_finalization, change[0].output.amount);
+}
+
+/// The payer's input of `flow`'s payment, put on chain unspent at height 1.
+fn payer_input_on_chain(flow: &Flow) -> lepic_crypto::Commitment {
+    let input = flow
+        .payer
+        .read(|repos| repos.outputs(ACCOUNT, Some(OutputStatus::Locked)))
+        .remove(0);
+    flow.node.update_chain(|chain| {
+        crate::support::mine_output(
+            chain,
+            ChainOutput {
+                commitment: input.id.commitment,
+                features: input.id.features,
+                proof: support::some_proof(),
+                height: Height::new(1),
+                mmr_index: 1,
+                spent: false,
+            },
+        );
+    });
+    input.id.commitment
+}
+
+fn payer_input_spent(flow: &Flow) {
+    flow.node.update_chain(|chain| {
+        for output in &mut chain.outputs {
+            output.spent = true;
+        }
+    });
+}
+
+fn tip_at(flow: &Flow, height: u64) {
+    flow.node
+        .update_chain(|chain| chain.tip.height = Height::new(height));
+}
+
+fn watched(flow: &Flow) -> bool {
+    flow.issuer
+        .read(|repos| repos.tx_watch(flow.tx_id))
+        .is_some()
+}
+
+/// The payer cancelled and spent the inputs of its payment elsewhere before the issuer posted
+/// it: the node refuses the post and the payment can never be mined.
+#[test]
+fn a_post_whose_payer_spent_the_inputs_elsewhere_ends_the_invoice_with_its_own_error() {
+    let flow = flow(None, request());
+    payer_input_spent(&flow);
+    tip_at(&flow, TIP + 1);
+    flow.node
+        .fail_next("push_transaction", MockFailure::PoolRefused);
+
+    let error = flow.issuer.finalize(&flow.i2).unwrap_err();
+
+    assert!(
+        matches!(error, InvoiceError::PeerInputsSpent { tx_id, .. } if tx_id == flow.tx_id),
+        "{error:?}"
+    );
+    assert_eq!(flow.state(), TxState::Cancelled);
+    assert!(
+        flow.issuer
+            .read(|repos| repos.outputs_of_transaction(flow.tx_id))
+            .is_empty()
+    );
+    assert!(watched(&flow));
+    // A repost finds nothing to post.
+    let error = flow
+        .issuer
+        .block_on(flow.issuer.wallet.post(flow.tx_id, Propagation::Stem))
+        .unwrap_err();
+    assert!(
+        matches!(error, FinalizeError::NotPostable { .. }),
+        "{error:?}"
+    );
+}
+
+/// A repost of a finalized invoice whose payer's inputs are gone fails with the typed error of
+/// the wallet's post, and the transaction ends cancelled.
+#[test]
+fn a_repost_whose_payer_spent_the_inputs_elsewhere_fails_with_peer_inputs_spent() {
+    let flow = finalized_not_posted();
+    payer_input_spent(&flow);
+    tip_at(&flow, TIP + 1);
+    flow.node
+        .fail_next("push_transaction", MockFailure::PoolRefused);
+
+    let error = flow
+        .issuer
+        .block_on(flow.issuer.wallet.post(flow.tx_id, Propagation::Stem))
+        .unwrap_err();
+
+    assert!(
+        matches!(error, FinalizeError::PeerInputsSpent { tx_id, .. } if tx_id == flow.tx_id),
+        "{error:?}"
+    );
+    assert_eq!(flow.state(), TxState::Cancelled);
+    assert!(flow.node.pushed_transactions().is_empty());
+}
+
+#[test]
+fn a_pool_refusal_with_the_payers_inputs_on_chain_is_only_not_posted() {
+    let flow = flow(None, request());
+    payer_input_on_chain(&flow);
+    tip_at(&flow, TIP + 1);
+    flow.node
+        .fail_next("push_transaction", MockFailure::PoolRefused);
+
+    let error = flow.issuer.finalize(&flow.i2).unwrap_err();
+
+    assert!(matches!(error, InvoiceError::NotPosted { .. }), "{error:?}");
+    assert_eq!(flow.state(), TxState::Finalized);
+}
+
+/// A node still syncing, not yet past the invoice's height, may simply not have the payer's
+/// inputs: the refusal stays a failed post.
+#[test]
+fn a_pool_refusal_from_a_node_not_past_the_invoice_height_is_only_not_posted() {
+    let flow = flow(None, request());
+    flow.node
+        .fail_next("push_transaction", MockFailure::PoolRefused);
+
+    let error = flow.issuer.finalize(&flow.i2).unwrap_err();
+
+    assert!(matches!(error, InvoiceError::NotPosted { .. }), "{error:?}");
+    assert_eq!(flow.state(), TxState::Finalized);
+}
+
+/// The issuer posted the payment, the node dropped it and the payer spent its inputs elsewhere:
+/// a refresh ends the payment instead of leaving it waiting to confirm, and its kernel stays
+/// watched, so a late mining of it still confirms it.
+#[test]
+fn a_posted_invoice_whose_payer_spent_the_inputs_ends_at_a_refresh_and_stays_watched() {
+    let flow = flow(None, request());
+    payer_input_on_chain(&flow);
+    let finalized = flow.issuer.finalize(&flow.i2).unwrap();
+    assert_eq!(flow.state(), TxState::Posted);
+    tip_at(&flow, TIP + 1);
+    flow.issuer.block_on(flow.issuer.wallet.refresh()).unwrap();
+    assert_eq!(flow.state(), TxState::Posted, "inputs unspent");
+
+    payer_input_spent(&flow);
+    let pushed = flow.node.pushed_transactions()[0].clone();
+    flow.node.update_chain(|chain| chain.pool.push(pushed));
+    flow.issuer.block_on(flow.issuer.wallet.refresh()).unwrap();
+    assert_eq!(flow.state(), TxState::Posted, "kernel in the pool");
+
+    flow.node.update_chain(|chain| chain.pool.clear());
+    flow.issuer.block_on(flow.issuer.wallet.refresh()).unwrap();
+    assert_eq!(flow.state(), TxState::Cancelled);
+    assert!(watched(&flow));
+    assert!(
+        flow.issuer
+            .read(|repos| repos.outputs_of_transaction(flow.tx_id))
+            .is_empty()
+    );
+
+    let kernel = *finalized.transaction.kernels().first().unwrap();
+    flow.node.update_chain(|chain| {
+        chain.tip.height = Height::new(TIP + 2);
+        chain.kernels.push(LocatedKernel {
+            kernel,
+            height: Height::new(TIP + 2),
+            mmr_index: 1,
+        });
+    });
+    flow.issuer.block_on(flow.issuer.wallet.refresh()).unwrap();
+    assert_eq!(flow.state(), TxState::Confirmed);
+}
+
+/// An issued invoice whose post the node never took ends at its cutoff, from which it is no
+/// longer posted, unless the node holds its kernel; it stays watched. The node stays
+/// unreachable, so the refreshes before the cutoff do not post it either.
+#[test]
+fn a_finalized_invoice_the_node_never_took_expires_at_its_cutoff() {
+    let flow = finalized_not_posted();
+    flow.node
+        .fail_every("push_transaction", MockFailure::Unreachable);
+    payer_input_on_chain(&flow);
+    tip_at(&flow, TIP + MARGIN_TTL - 1);
+    flow.issuer.block_on(flow.issuer.wallet.refresh()).unwrap();
+    assert_eq!(flow.state(), TxState::Finalized);
+
+    tip_at(&flow, TIP + MARGIN_TTL);
+    let i3 = flow
+        .issuer
+        .read(|repos| repos.slate(flow.slate_id, SlateStage::Invoice3))
+        .unwrap();
+    let i3 = codecs()
+        .decode(&WireSlate::binary(MediaType::JSON, i3.bytes))
+        .unwrap();
+    let pooled = lepic_primitives::tx::Transaction::new(
+        i3.offset().clone(),
+        lepic_primitives::tx::TransactionBody::new(
+            i3.inputs().to_vec(),
+            i3.outputs().to_vec(),
+            vec![i3.kernel().unwrap()],
+        ),
+    );
+    flow.node.update_chain(|chain| chain.pool.push(pooled));
+    flow.issuer.block_on(flow.issuer.wallet.refresh()).unwrap();
+    assert_eq!(flow.state(), TxState::Finalized, "kernel in the pool");
+
+    flow.node.update_chain(|chain| chain.pool.clear());
+    flow.issuer.block_on(flow.issuer.wallet.refresh()).unwrap();
+
+    assert_eq!(flow.state(), TxState::Expired);
+    assert!(watched(&flow));
+    let details = flow
+        .issuer
+        .block_on(flow.issuer.wallet.transaction_details(flow.tx_id))
+        .unwrap();
+    assert_eq!(details.expired_reason, Some(ExpiredReason::NotMined));
+}

@@ -1,0 +1,2391 @@
+//! Plain data exchanged with Dart. Amounts are in the smallest unit (1 EPIC = 100_000_000).
+
+use flutter_rust_bridge::frb;
+use lepic_primitives::params::Network;
+use lepic_store::TxState;
+
+use super::error::WalletError;
+
+/// Which Epic chain the wallet talks to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Chain {
+    Mainnet,
+    Floonet,
+}
+
+impl Chain {
+    pub(crate) const fn network(self) -> Network {
+        match self {
+            Self::Mainnet => Network::Mainnet,
+            Self::Floonet => Network::Floonet,
+        }
+    }
+}
+
+/// A loop of the app's that [`crate::api::wallet::EpicWallet::boost`] speeds up (ADR 0058).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Poller {
+    /// The FFI's delivery loop: contact, pairing and epic1 delivery mailboxes on the relays.
+    Relays,
+    /// The check of the node for a new block, and the refresh it starts.
+    Node,
+}
+
+impl Poller {
+    pub(crate) const fn engine(self) -> lepic_wallet::boost::Poller {
+        match self {
+            Self::Relays => lepic_wallet::boost::Poller::Relays,
+            Self::Node => lepic_wallet::boost::Poller::Node,
+        }
+    }
+}
+
+/// Everything needed to locate a wallet on disk and reach its node and Epicbox relay.
+#[derive(Clone)]
+pub struct WalletConfig {
+    /// Directory owned by this wallet; it must exist. The database is `wallet.sqlite3` in it.
+    pub data_dir: String,
+    pub chain: Chain,
+    /// Node API root, such as `https://node.example:3413`. Credentials never go in the URL.
+    pub node_url: String,
+    /// Basic-auth secret for the node, when it needs one.
+    pub node_api_secret: Option<String>,
+    /// Epicbox relay domain, such as `relay.example.org`. Empty disables Epicbox. A loopback
+    /// host (`localhost` or `127.x.x.x`) is reached over a plain websocket, any other over TLS.
+    pub epicbox_domain: String,
+    pub epicbox_port: u16,
+    /// The hosts known to be onion services, from the app's settings, in effect from the
+    /// wallet's first connection. Read when a wallet is created, restored or opened, checked
+    /// as `EpicWallet::set_onion_routes` checks them (an invalid one fails the call with
+    /// `InvalidArgument`), and replaced later only by that call:
+    /// `set_servers` and `node_tip_for` ignore them. Empty leaves no route. Ignored in a build
+    /// without tor.
+    pub onion_routes: Vec<crate::api::tor::OnionRoute>,
+    /// Timeouts, retries and limits for the node, the relay, HTTP and tor, from the app's
+    /// configuration. Read when a wallet is created, restored or opened, and by `node_tip`;
+    /// `set_servers` and `node_tip_for` keep the open wallet's. A zero, or a minimum above its
+    /// maximum, fails the call with `InvalidArgument`.
+    pub tuning: NetTuning,
+    /// An offline session, for a cold wallet. Every call to the node or the Epicbox relay fails
+    /// at once with `Offline`, before any name lookup or connect. Sending, receiving and
+    /// finalizing by slate text or file, and their invoice stages, use the highest chain tip
+    /// the last refresh confirmed (with none, they fail with `Offline`); finalizing stores the
+    /// transaction `finalized` without posting it, with `FinalizedTx.posted` false. Read when a
+    /// wallet is created, restored or opened; changing it means opening the wallet again, and
+    /// `set_servers` and `node_tip_for` fail with `InvalidArgument` for another value.
+    pub offline: bool,
+    /// The app will start the wallet's tor for this session. Node requests, the Epicbox relay
+    /// connection and HTTP sends then wait for tor from the session's first connection, and
+    /// never go directly until `stop_tor` (or tor is never started and they time out), as
+    /// after `expect_tor`. With `false` they go directly until tor is expected or started,
+    /// unless the last session on `data_dir` expected tor and was not stopped. Read when a
+    /// wallet is created, restored or opened. Ignored on iOS and in a build without tor.
+    pub tor_wanted: bool,
+    /// The feature bits the app claims to other LEPIC wallets: one constant of the app's
+    /// build, the same for every user, never a setting. LEPIC keeps only the host bits, 4
+    /// (linked-device forwarding) and 5 (name service), and ignores the rest. Read when a wallet
+    /// is created, restored or opened.
+    pub host_features: u32,
+    /// The app's profile of its owner, sent to paired contacts in bits 16 to 31 of the pairing
+    /// features; LEPIC does not read a bit. 0 for none. Read when a
+    /// wallet is created, restored or opened.
+    pub profile: u16,
+    /// The domain this wallet claims to its paired contacts, proven by the well-known file the
+    /// domain serves (`contact_domain_verify`). `None` for an app wallet, which claims none.
+    /// Read when a wallet is created, restored or opened.
+    pub domain: Option<String>,
+    /// Limits and presets that are the app's to choose. [`HostPolicy::default`], every field
+    /// `None`, is what LEPIC did before they were fields. Read when a wallet is created,
+    /// restored or opened.
+    pub policy: crate::api::policy::HostPolicy,
+}
+
+/// The app configuration's `[node]`, `[epicbox]`, `[http]` and `[tor]` tuning keys. Every
+/// field is required: LEPIC has no defaults of its own.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NetTuning {
+    pub node: NodeTuning,
+    pub epicbox: EpicboxTuning,
+    pub http: HttpTuning,
+    pub tor: TorTuning,
+}
+
+/// Requests to the node.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NodeTuning {
+    pub connect_timeout_s: u32,
+    /// From sending a request to the last byte of its answer.
+    pub request_timeout_s: u32,
+    /// How long an idle connection is kept; below the node server's keep-alive timeout.
+    pub idle_timeout_s: u32,
+    /// Tries of a read, the first included.
+    pub retry_attempts: u32,
+    pub retry_backoff_min_ms: u32,
+    pub retry_backoff_max_ms: u32,
+    /// Outputs asked for in one request.
+    pub outputs_per_request: u32,
+    /// Output requests in flight at once.
+    pub concurrent_requests: u32,
+}
+
+/// The Epicbox relay connection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[frb(non_opaque)]
+pub struct EpicboxTuning {
+    /// The TCP, TLS and websocket handshakes together.
+    pub connect_timeout_s: u32,
+    /// Each relay answer.
+    pub response_timeout_s: u32,
+    /// Below the relay proxy's idle timeout.
+    pub ping_interval_s: u32,
+    pub reconnect_min_s: u32,
+    pub reconnect_max_s: u32,
+    /// One whole mailbox drain.
+    pub drain_timeout_s: u32,
+    /// The least a relay connection through tor is given.
+    pub tor_connect_timeout_s: u32,
+    /// Asking a relay for its onion through tor.
+    pub onion_discovery_timeout_s: u32,
+    /// How long a relay that could not be asked is not asked again.
+    pub onion_discovery_retry_s: u32,
+    /// The base interval of the delivery loop's tick: how often it posts what is due, ends what
+    /// expired and asks the push sessions what waits. A boost of `Poller::Relays` shortens it;
+    /// pushed mail is read as it arrives.
+    #[frb(default = 30)]
+    pub collect_every_s: u32,
+}
+
+/// The wallet's HTTP listener, which tor's onion forwards to too, and sends to other
+/// wallets' listeners.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HttpTuning {
+    pub header_timeout_s: u32,
+    pub body_timeout_s: u32,
+    pub request_timeout_s: u32,
+    pub answer_timeout_s: u32,
+    pub max_connections: u32,
+    pub max_connections_per_address: u32,
+    pub requests_per_minute: u32,
+    pub receives_per_minute: u32,
+    pub send_connect_timeout_s: u32,
+    pub send_request_timeout_s: u32,
+}
+
+/// The wallet's tor. Ignored in a build without tor, but still checked.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TorTuning {
+    pub bootstrap_timeout_s: u32,
+    /// Bootstrap without a cached consensus.
+    pub cold_bootstrap_timeout_s: u32,
+    /// Bootstrap progress unchanged this long is a network failure.
+    pub stall_timeout_s: u32,
+    pub cold_stall_timeout_s: u32,
+    /// The onion's descriptor uploaded.
+    pub publish_timeout_s: u32,
+    /// Reaching a host or an onion through tor.
+    pub connect_timeout_s: u32,
+    /// One send to an onion, to the last byte of its answer.
+    pub request_timeout_s: u32,
+}
+
+impl std::fmt::Debug for WalletConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("WalletConfig")
+            .field("data_dir", &self.data_dir)
+            .field("chain", &self.chain)
+            .field("node_url", &self.node_url)
+            .field(
+                "node_api_secret",
+                &self.node_api_secret.as_ref().map(|_| "[redacted]"),
+            )
+            .field("epicbox_domain", &self.epicbox_domain)
+            .field("epicbox_port", &self.epicbox_port)
+            .field("onion_routes", &self.onion_routes)
+            .field("tuning", &self.tuning)
+            .field("offline", &self.offline)
+            .field("host_features", &self.host_features)
+            .field("profile", &self.profile)
+            .field("domain", &self.domain)
+            .finish()
+    }
+}
+
+/// What `node_tip` learns from a node's foreign API, which needs no API secret.
+#[derive(Debug, Clone)]
+pub struct NodeTip {
+    pub height: u64,
+    pub node_version: String,
+    /// Whether the node is synced and takes transactions, as epic-server 4.1.0 and later
+    /// answer. `None` from an older node, which does not know the question, or when the
+    /// question failed.
+    pub ready_for_txs: Option<bool>,
+    /// When the tip block was mined, in milliseconds since the Unix epoch, as its header
+    /// says. `None` when the header could not be fetched.
+    pub tip_time_ms: Option<i64>,
+}
+
+/// The balance of the default account, in the categories `epic-wallet info` reports.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WalletSummary {
+    pub last_confirmed_height: u64,
+    /// The confirmations an output needs to count as spendable.
+    pub minimum_confirmations: u64,
+    pub total: u64,
+    pub spendable: u64,
+    pub awaiting_confirmation: u64,
+    pub awaiting_finalization: u64,
+    pub immature: u64,
+    pub locked: u64,
+    /// False when the numbers come from an earlier refresh instead of one that just ended.
+    pub validated_with_node: bool,
+}
+
+/// A slate as the text exchanged with the other wallet, and the local transaction it belongs to.
+#[derive(Debug, Clone)]
+pub struct Slate {
+    pub tx_id: u32,
+    pub slate_id: String,
+    pub json: String,
+}
+
+/// The answer to a received slate, from `EpicWallet::receive_slate` and
+/// `EpicWallet::receive_file`.
+#[derive(Debug, Clone)]
+pub struct ReceivedSlate {
+    pub tx_id: u32,
+    pub slate_id: String,
+    /// The reply for the sender.
+    pub json: String,
+    /// The slate was received before: `tx_id` is the transaction that receive created and
+    /// `json` the reply it stored, byte for byte. Nothing was stored this time; show it as
+    /// already answered, not as a second payment.
+    pub repeated: bool,
+    /// How the reply is written: `Legacy`, the JSON in `json`.
+    pub format: SlateWire,
+}
+
+/// A send that was stored and handed to its transport.
+#[derive(Debug, Clone)]
+pub struct SentTx {
+    pub tx_id: u32,
+    pub slate_id: String,
+    pub amount: u64,
+    pub fee: u64,
+    /// How the S1 went out.
+    pub format: SlateWire,
+    /// The bytes the longest post of the payment takes on the relay, the S1 or the answer the
+    /// receiver sends back. None when the slate went another way.
+    pub slate_bytes: Option<u32>,
+    /// The most bytes the relay takes in one post, beside `slate_bytes`.
+    pub slate_limit: Option<u32>,
+}
+
+/// How a slate went out or is written: as legacy JSON, or as a native slate (RFC 0003). Sends
+/// to an Epicbox address, a listener or a file go as legacy JSON.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SlateWire {
+    Legacy,
+    Native,
+}
+
+/// A send or issued invoice that was finalized and, unless the session is offline, accepted by
+/// the node.
+#[derive(Debug, Clone)]
+pub struct FinalizedTx {
+    pub tx_id: u32,
+    pub slate_id: String,
+    /// `false` in an offline session: the transaction is stored `finalized` and nothing went to
+    /// the node. `EpicWallet::finished_payment` gives its final slate to post elsewhere.
+    pub posted: bool,
+}
+
+/// An output of the wallet, from `EpicWallet::outputs`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WalletOutput {
+    /// The Pedersen commitment, 66 lowercase hex characters: the output's id on chain.
+    pub commitment: String,
+    pub value: u64,
+    pub status: OutputStatus,
+    /// Where it counts in `WalletSummary`; `None` for a spent output and an unconfirmed
+    /// coinbase output, which count nowhere.
+    pub category: Option<OutputCategory>,
+    /// A mining reward, spendable only from `lock_height`.
+    pub is_coinbase: bool,
+    /// The height it was mined at, or for an output not on chain yet, the tip it was made at.
+    pub height: u64,
+    /// The first height at which it may be spent.
+    pub lock_height: u64,
+    /// Its position in the chain's output set, once a scan or refresh found it there.
+    pub mmr_index: Option<u64>,
+    /// At `WalletSummary.last_confirmed_height`; zero while unconfirmed.
+    pub confirmations: u64,
+    /// The transaction that made the output or, once a send locks or spends it, that send.
+    pub tx_id: Option<u32>,
+}
+
+/// An output's state, as `epic-wallet outputs` shows it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OutputStatus {
+    /// Not on chain yet: change or a received output of a transaction in progress.
+    Unconfirmed,
+    Unspent,
+    /// An input of a send that is not confirmed yet.
+    Locked,
+    Spent,
+}
+
+/// Where an output counts in `WalletSummary`. Values are only added, at the end.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OutputCategory {
+    Spendable,
+    AwaitingConfirmation,
+    AwaitingFinalization,
+    Immature,
+    Locked,
+    /// The output an invoice this wallet issued asks for, while nobody has paid it. It counts
+    /// in no figure of `WalletSummary`; once a payment is finalized it is
+    /// `AwaitingFinalization`.
+    UnpaidInvoice,
+}
+
+/// Where a transaction stands, as stored by the wallet.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TxStatus {
+    /// Our send, waiting for the recipient's answer.
+    Sent,
+    /// A payment we signed, waiting for the sender to post it.
+    Received,
+    /// Our send, finalized but not yet accepted by the node.
+    Finalized,
+    Posted,
+    Confirmed,
+    Cancelled,
+    /// The time to live passed before the transaction completed.
+    Expired,
+}
+
+impl From<TxState> for TxStatus {
+    fn from(state: TxState) -> Self {
+        match state {
+            TxState::Sent => Self::Sent,
+            TxState::Received => Self::Received,
+            TxState::Finalized => Self::Finalized,
+            TxState::Posted => Self::Posted,
+            TxState::Confirmed => Self::Confirmed,
+            TxState::Cancelled => Self::Cancelled,
+            TxState::Expired => Self::Expired,
+        }
+    }
+}
+
+/// Which way a transaction moves funds, seen from this wallet.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TxDirection {
+    /// A send of ours, or a payment of an invoice.
+    Outgoing,
+    /// A payment to us, or an output a scan restored.
+    Incoming,
+}
+
+impl From<lepic_store::TxDirection> for TxDirection {
+    fn from(direction: lepic_store::TxDirection) -> Self {
+        match direction {
+            lepic_store::TxDirection::Outgoing => Self::Outgoing,
+            lepic_store::TxDirection::Incoming => Self::Incoming,
+        }
+    }
+}
+
+/// Which slate flow a transaction belongs to. With `TxDirection` it tells the four kinds
+/// apart: an incoming payment was received and an outgoing one sent; an incoming invoice was
+/// issued by this wallet and an outgoing one paid by it. Values are only added, at the end.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TxFlow {
+    /// The sender started it. Also an output a scan restored.
+    Payment,
+    /// The receiver started it with an invoice.
+    Invoice,
+}
+
+impl From<lepic_wallet::details::TxFlow> for TxFlow {
+    fn from(flow: lepic_wallet::details::TxFlow) -> Self {
+        match flow {
+            lepic_wallet::details::TxFlow::Payment => Self::Payment,
+            lepic_wallet::details::TxFlow::Invoice => Self::Invoice,
+        }
+    }
+}
+
+/// A listing of this wallet with a name service: the service's compressed secp256k1 key in hex
+/// (66 digits) and the listing's generation, raised after each leave.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ListingRef {
+    pub service_key: String,
+    pub generation: u32,
+}
+
+/// The outcome of one listing in `EpicWallet::drain_epicbox_listings`. Exactly one of the two
+/// fields is set: the report when the listing was drained, the error when it was not.
+#[derive(Debug, Clone)]
+pub struct ListingDrain {
+    pub report: Option<InboxReport>,
+    pub error: Option<WalletError>,
+}
+
+/// Where the chain holds a transaction kernel: the height of the block with it and its index
+/// in the kernel MMR.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct KernelLocation {
+    pub height: u64,
+    pub mmr_index: u64,
+}
+
+/// One stored transaction of the default account. Times are milliseconds since the Unix epoch,
+/// by the device clock.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TransactionDetails {
+    pub tx_id: u32,
+    pub direction: TxDirection,
+    pub status: TxStatus,
+    /// `None` for an output a scan restored.
+    pub slate_id: Option<String>,
+    /// The transport that carried the slate, such as `epicbox` or `file`, when known.
+    pub transport: Option<String>,
+    pub amount_credited: u64,
+    pub amount_debited: u64,
+    /// `None` when this wallet did not learn the fee, as for a restored output.
+    pub fee: Option<u64>,
+    pub created_at_ms: i64,
+    /// When this wallet saw the transaction confirmed. `None` unless it is confirmed.
+    pub confirmed_at_ms: Option<i64>,
+    /// The height of the block that confirmed it. `None` while unconfirmed.
+    pub confirmed_height: Option<u64>,
+    /// Hex of the final kernel's excess, once this wallet has seen the final transaction. `None`
+    /// before that, for a payment taken by receive, and for a restored output.
+    pub kernel_excess: Option<String>,
+    /// The other party's Epicbox address: where a send went or where a slate came from. `None`
+    /// for files, slates passed in as text and restored outputs.
+    pub counterparty: Option<String>,
+    /// For a payment received at a listing address (`EpicWallet::drain_epicbox_at`), that
+    /// listing. `None` for every other transaction.
+    pub receive_listing: Option<ListingRef>,
+    /// The height from which the slate may no longer be completed. `None` when it sets none.
+    pub ttl_cutoff_height: Option<u64>,
+    /// A send waiting for its answer whose slate no delivery attempt got to the other party
+    /// yet: every attempt failed, or none finished, as when the app was killed before the
+    /// first. Show it as not delivered and offer
+    /// [`crate::api::wallet::EpicWallet::resend_epicbox`] (or the resend of the transport it
+    /// used). Also `true` while the send call that makes it is still running; `false` once an
+    /// attempt delivered it, and for any other transaction.
+    pub undelivered: bool,
+    /// The parties' messages whose signatures verify, in the order the parties joined, as the
+    /// latest stored stage of the slate carries them. Empty for a restored output.
+    pub messages: Vec<SlateMessage>,
+    /// Whether it is a payment or an invoice, from the slate stages the wallet stored.
+    pub flow: TxFlow,
+    /// Made by this wallet, imported from an old wallet's history, or an output a scan found
+    /// with no record of who sent it.
+    pub origin: TxOrigin,
+    /// What the old wallet recorded of an imported transaction. `None` for any other.
+    pub imported: Option<ImportedTx>,
+    /// For origin `FoundByScan`: which scan found it and how it is dated. `None` for any other
+    /// origin, and for an entry a scan stored before LEPIC recorded this.
+    pub found: Option<ScanFound>,
+    /// Hex of the commitments of the outputs the transaction created for this wallet, change
+    /// included, spent or not. The same after the outputs are spent, and for an output a scan
+    /// found, the same after a restore finds it again. For an imported entry, and for one a
+    /// scan stored before LEPIC recorded this, only the outputs no transaction has spent yet.
+    /// Empty when the wallet stores none, as for a cancelled send.
+    pub output_commits: Vec<String>,
+    /// Hex of the commitments of this wallet's outputs the transaction spent: for a send or an
+    /// invoice payment made here, its inputs; for origin `OtherWallet` outgoing, the outputs
+    /// the other wallet spent. Empty for any other.
+    pub spent_commits: Vec<String>,
+    /// For a payment received over Epicbox that still waits for its sender: when the sender
+    /// reported that it posted the transaction (`PaymentPosted`), while that report is under an
+    /// hour old. Advisory: show it as the sender's report, never as received; the payment
+    /// confirms when a refresh finds the kernel. `None` for every other transaction.
+    pub sender_reported_posted_at_ms: Option<i64>,
+    /// For a received payment this wallet answered and that is not confirmed: when its sender
+    /// reported that it cancelled the payment (`PaymentCancelled`). Kept after the payment
+    /// ended here; cleared once the chain confirms it. Advisory: nothing was released on the
+    /// report; a cancel here still runs its own checks. Also, for the payment of an invoice:
+    /// when its issuer cancelled the invoice on the Epicbox relay, which cancelled the payment
+    /// here too. `None` for every other transaction.
+    pub sender_reported_cancelled_at_ms: Option<i64>,
+    /// For a send this wallet made: when its receiver refused it unanswered, as a wallet set to
+    /// refuse payments nobody asked for does (ADR 0045). A send declined now is erased with its
+    /// change and its inputs unlocked (`PaymentDeclined`), so this is set only on a send an
+    /// older version recorded as declined, or one a decline could not erase: a send to the
+    /// wallet itself, or one an open recovery holds. Show the send as declined by the receiver.
+    /// `None` for every other transaction.
+    pub receiver_declined_at_ms: Option<i64>,
+    /// For a send over stock Epicbox still waiting for its answer: when a refresh marked it
+    /// unanswered, a day after it was made. Such a receiver may be offline or at its open
+    /// receipt caps, and cannot say so. Show the send as not answered; an answer that comes
+    /// later still finalizes it. `delivery` reads `Uncertain` from the same time. `None` for
+    /// every other transaction, and once the send leaves `Sent`.
+    pub unanswered_at_ms: Option<i64>,
+    /// For origin `OtherWallet` outgoing: no completed scan has covered its blocks yet, so the
+    /// node's answers are its only evidence. Show it as unverified until a scan confirms it.
+    /// `false` for every other transaction.
+    pub unverified: bool,
+    /// A block reward: an incoming transaction with no slate whose output is a coinbase
+    /// output, built for a mining node or found by a scan. Its output stays immature until
+    /// the `lock_height` of its `WalletOutput`. `false` for every other transaction.
+    pub coinbase: bool,
+    /// Whether `EpicWallet::relay_cancel_transaction` can ask the Epicbox relay to cancel the
+    /// transaction: it was filed on a relay that cancels transactions (Epicbox 3.1.0) under a
+    /// relay transaction id, and is neither posted nor ended. The relay may still refuse.
+    /// `false` for a transaction restored from a backup, which keeps no relay ids.
+    pub relay_cancellable: bool,
+    /// For status `Expired`: why the wallet ended it. `None` for any other status, and for an
+    /// expiry with no recorded reason.
+    pub expired_reason: Option<ExpiredReason>,
+    /// For status `Cancelled`: why the wallet ended it. `None` for any other status, and for a
+    /// send the user or its counterparty cancelled.
+    pub cancelled_reason: Option<CancelledReason>,
+    /// The latest recovery of this send (`EpicWallet::recover_transaction`), in any state.
+    /// `None` for a transaction never recovered.
+    pub recovery: Option<TransactionRecovery>,
+    /// For an entry of the self-send pair of an open recovery: the `tx_id` of the send it
+    /// recovers. The wallet neither posts nor cancels the entry until the recovery ends.
+    /// `None` for any other transaction.
+    pub recovery_of: Option<u32>,
+    /// Whether `EpicWallet::recover_transaction` takes the transaction by what the wallet
+    /// stores: a send that is finalized, posted, cancelled or expired, with no open recovery,
+    /// whose inputs are all held for it and pay the recovery's fee. The node may still refuse
+    /// it: the call then fails with `InPool` or `OnChain`.
+    pub recoverable: bool,
+    /// Where the post of the payment's slate stands, when the wallet posted it to a route of
+    /// an epic1 link or a contact's mailbox. `None` before the first post and for any other
+    /// transaction.
+    pub delivery: Option<DeliveryView>,
+    /// The wallet's pushes of the finalized transaction to the node. `None` until the first
+    /// push.
+    pub post: Option<NodePostView>,
+    /// A payment received at the account's epic1 address: a link's payment or an epic1 file
+    /// opened here. LEPIC lists its transport as for any other receive. `false` for every other
+    /// transaction.
+    pub received_at_epic1: bool,
+}
+
+/// Where the post of a payment's slate stands.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DeliveryState {
+    /// Waiting to be posted.
+    Queued,
+    /// A route took it.
+    Sent,
+    /// The post went unanswered and is posted again on the same route; it may have arrived.
+    /// For a send over stock Epicbox, the receiver has not answered for a day
+    /// (`TransactionDetails.unanswered_at_ms`); nothing is posted again.
+    Uncertain,
+    /// No route took it, or its time or cutoff ran out.
+    Failed,
+}
+
+/// The post of a payment's slate, from `TransactionDetails.delivery`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeliveryView {
+    pub state: DeliveryState,
+    /// When the state was last written.
+    pub updated_at_ms: i64,
+    /// Why the post is uncertain or failed, as the route or the wallet gave it.
+    pub error: Option<String>,
+}
+
+/// What the node did with a push of a transaction.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NodePostOutcome {
+    Accepted,
+    Refused,
+    Unreachable,
+}
+
+/// The pushes of a finalized transaction to the node, from `TransactionDetails.post`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NodePostView {
+    pub attempts: u32,
+    /// What the node did with the latest push.
+    pub last_outcome: NodePostOutcome,
+    /// The node's text for the latest push, when it refused it or could not be reached.
+    pub last_error: Option<String>,
+    pub last_attempt_at_ms: i64,
+    /// The height from which a refresh pushes the transaction again, while it is `Finalized`
+    /// or `Posted`; `None` in any other state.
+    pub next_attempt_height: Option<u64>,
+    /// The node accepted one of the pushes.
+    pub accepted_once: bool,
+}
+
+/// Why the wallet ended a transaction `Expired`. Values are only added, at the end.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExpiredReason {
+    /// A send whose every push the node's pool refused until its cutoff passed. Its inputs are
+    /// spendable again. If another node mines it after all, it becomes `Confirmed`.
+    RejectedByNode,
+    /// A payment or invoice this wallet started whose answer never reached it before its
+    /// cutoff. No kernel of it can be mined.
+    NoAnswer,
+    /// A transaction that was answered but not mined before its cutoff. Its kernel may still be
+    /// mined.
+    NotMined,
+}
+
+/// Why the wallet ended a transaction `Cancelled`. Values are only added, at the end.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CancelledReason {
+    /// A recovery spent the send's inputs back to this wallet and reached its confirmations,
+    /// so the send can never be mined.
+    Recovered,
+}
+
+/// Where a recovery stands. Values are only added, at the end.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RecoveryState {
+    /// Stored, and no push has reached the node yet. A refresh pushes it again.
+    Uncertain,
+    /// The node took it; its kernel is not on chain yet.
+    Posted,
+    /// Its kernel is on chain, with fewer confirmations than `needed`.
+    Confirming,
+    /// It reached `needed` confirmations: the send is `Cancelled` and its coins are back.
+    Done,
+    /// It ended without being mined, as when the node refused it. `error` says why. The send
+    /// is as it was before the recovery.
+    Failed,
+}
+
+/// A recovery of a send: a send to this wallet that spends the send's own inputs, so the send
+/// can never be mined and its coins come back. Pay again only once it is `Done`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TransactionRecovery {
+    /// The outgoing entry of the recovery's self-send pair. Both entries are ordinary
+    /// transactions in the list.
+    pub sent_tx_id: u32,
+    /// The incoming entry of the recovery's self-send pair.
+    pub received_tx_id: u32,
+    pub state: RecoveryState,
+    /// The blocks from the one holding the recovery's kernel up to the last confirmed height,
+    /// counting both. 0 until the chain holds the kernel.
+    pub confirmations: u64,
+    /// The confirmations at which the recovery ends the send.
+    pub needed: u64,
+    /// The recovery's fee in base units.
+    pub fee: Option<u64>,
+    /// Why the last push of the recovery failed, or why the recovery failed. `None` once the
+    /// chain holds its kernel.
+    pub error: Option<String>,
+}
+
+/// What the Epicbox relay did with `EpicWallet::relay_cancel_transaction`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RelayCancelOutcome {
+    /// The relay cancelled the transaction: it refuses further slates of it and tells the other
+    /// party, whose wallet cancels it too.
+    Cancelled,
+    /// The relay took no action: it does not know the transaction, or this wallet is not one of
+    /// its parties. It does not say which.
+    NotFoundOrNotParticipant,
+    /// The relay in use cannot cancel transactions (before Epicbox 3.1.0).
+    Unsupported,
+    /// The transaction was never filed on the relay under an id, so there is nothing to cancel
+    /// there: it was sent another way, by an older version, or restored from a backup.
+    NoRelayId,
+}
+
+/// Which scan stored an entry for an output it found with no record.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FoundDuring {
+    /// The first scan from the beginning of the chain after the wallet was created from a
+    /// recovery phrase or a `wallet.seed` file: an output the wallet held before that.
+    Restore,
+    /// Any other scan: a later rescan, or the first scan of a wallet created with a new seed.
+    /// The output may still be older than the scan.
+    Rescan,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ScanFound {
+    pub during: FoundDuring,
+    /// `created_at_ms` is the time of the output's block. False when the node did not give
+    /// the block's header and the time of the scan was used.
+    pub dated_by_block: bool,
+}
+
+/// Where a transaction in the list came from. Values are only added, at the end.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TxOrigin {
+    Wallet,
+    /// Imported by `EpicWallet::import_legacy_history`. Its `created_at_ms` and
+    /// `confirmed_at_ms` are the old wallet's.
+    Imported,
+    /// An output a scan found that no record explains. `created_at_ms` is the time of its
+    /// block when the node told it, else the time of the scan.
+    FoundByScan,
+    /// What another wallet on the same recovery phrase did, as the chain shows it. Outgoing:
+    /// outputs of this wallet a refresh found spent with no transaction here; `amount_debited`
+    /// is their value, `amount_credited` the outputs in the same blocks taken for its change,
+    /// `fee` unknown, `spent_commits` the outputs spent. Incoming: an output a refresh's
+    /// update scan found with no record here, one entry per output, `created_at_ms` its block's
+    /// time. A restore or a scan from genesis stores such outputs as `FoundByScan` instead.
+    OtherWallet,
+}
+
+/// The type the old wallet's log gave an imported transaction. Values are only added, at the
+/// end.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ImportedTxKind {
+    Coinbase,
+    Received,
+    Sent,
+    ReceivedCancelled,
+    SentCancelled,
+    SentMempool,
+    ReceivedMempool,
+    SentCreated,
+}
+
+impl From<lepic_store::ImportedKind> for ImportedTxKind {
+    fn from(kind: lepic_store::ImportedKind) -> Self {
+        use lepic_store::ImportedKind as Kind;
+        match kind {
+            Kind::Coinbase => Self::Coinbase,
+            Kind::Received => Self::Received,
+            Kind::Sent => Self::Sent,
+            Kind::ReceivedCancelled => Self::ReceivedCancelled,
+            Kind::SentCancelled => Self::SentCancelled,
+            Kind::SentMempool => Self::SentMempool,
+            Kind::ReceivedMempool => Self::ReceivedMempool,
+            Kind::SentCreated => Self::SentCreated,
+        }
+    }
+}
+
+/// How the chain scan judged an imported transaction. Values are only added, at the end.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChainCheck {
+    /// Nothing on chain confirmed or contradicted it yet.
+    Unchecked,
+    /// A scan found an output it created, or the node holds its kernel.
+    OnChain,
+    /// The old wallet had it cancelled, but a scan found an output it created: the chain has
+    /// it, and the funds count.
+    CancelledButOnChain,
+    /// The old wallet held an output of it as unspent that a full scan did not find, for
+    /// example because another copy of the wallet spent it. The balance does not count it.
+    UnspentNotOnChain,
+}
+
+impl From<lepic_store::ChainCheck> for ChainCheck {
+    fn from(check: lepic_store::ChainCheck) -> Self {
+        match check {
+            lepic_store::ChainCheck::Unchecked => Self::Unchecked,
+            lepic_store::ChainCheck::OnChain => Self::OnChain,
+            lepic_store::ChainCheck::CancelledButOnChain => Self::CancelledButOnChain,
+            lepic_store::ChainCheck::UnspentNotOnChain => Self::UnspentNotOnChain,
+        }
+    }
+}
+
+/// What the old wallet recorded of an imported transaction beyond the common fields.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ImportedTx {
+    /// The old wallet's own transaction id, as its list showed it.
+    pub source_id: u32,
+    pub kind: ImportedTxKind,
+    pub input_count: u32,
+    pub output_count: u32,
+    pub check: ChainCheck,
+}
+
+/// Why `EpicWallet::import_legacy_history` imported nothing, or that it did. Values are only
+/// added, at the end.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LegacyImportStatus {
+    Imported,
+    /// This history was imported before; links and dates were brought up to date.
+    AlreadyImported,
+    /// The folder holds no wallet database.
+    NoHistory,
+    /// The folder holds an older wallet database format, from an epic-wallet older than 3.3,
+    /// which is not read. The scan restores its funds.
+    OldFormat,
+    /// The database is encrypted, damaged or not an epic-wallet database.
+    Unreadable,
+    /// The database kept changing while it was copied: close the old wallet and try again.
+    SourceBusy,
+    TooLarge,
+    /// No output of the history is one this wallet's recovery phrase makes, so it cannot be
+    /// shown to be this wallet's: another wallet's, or one with no output to check.
+    OtherWallet,
+    /// This wallet already holds a different imported history.
+    OtherHistory,
+}
+
+/// What `EpicWallet::import_legacy_history` did. Counts are of records, not of money.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LegacyImport {
+    pub status: LegacyImportStatus,
+    pub transactions: u32,
+    pub outputs: u32,
+    pub accounts_named: u32,
+    /// Outputs a scan had already found, now shown under the imported transaction.
+    pub linked: u32,
+    /// Records of the old wallet left out: unreadable, of another seed, or outside the
+    /// wallet's accounts.
+    pub skipped: u32,
+    /// Unfinished imported transactions the node showed on chain, now confirmed.
+    pub confirmed_by_kernel: u32,
+    /// Outputs found by a scan with no record, now dated by their block.
+    pub dated: u32,
+}
+
+/// What a send would take and pay, from `EpicWallet::estimate_fee` and
+/// `EpicWallet::estimate_max`. Nothing is locked.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FeeEstimate {
+    /// What the receiver gets; `fee` comes on top.
+    pub amount: u64,
+    pub fee: u64,
+    /// How many of the wallet's outputs the send spends.
+    pub input_count: u32,
+    /// What comes back to the wallet as change.
+    pub change: u64,
+    /// The value of the outputs the send spends, `amount + fee + change`: locked from the send
+    /// until it confirms.
+    pub locked: u64,
+    /// The outputs `change` comes back in; zero when there is no change.
+    pub change_outputs: u32,
+    /// The predicted bytes of a stock receiver's answer to the send on the relay's classic
+    /// lane, measured on the slate the send would build, without a destination. None without
+    /// Epicbox. Over `slate_limit` the estimate still answers, so the app can warn; the send
+    /// itself fails with `SlateTooLarge`.
+    pub slate_bytes: Option<u32>,
+    /// The most bytes the relay takes in one post, beside `slate_bytes`.
+    pub slate_limit: Option<u32>,
+}
+
+/// A send to the wallet itself, from `EpicWallet::send_to_self`, finalized and posted.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SelfSentTx {
+    /// The outgoing transaction: it spent the inputs and holds the change outputs.
+    pub tx_id: u32,
+    /// The incoming transaction: it holds the output of `amount`.
+    pub received_tx_id: u32,
+    pub amount: u64,
+    pub fee: u64,
+    /// How many outputs it spent.
+    pub input_count: u32,
+    /// How many outputs it made: the received one and the change.
+    pub output_count: u32,
+}
+
+/// The outputs `EpicWallet::send_to_self` spends.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SelfInputs {
+    /// Every output that may be spent, the smallest first, at most 500 of them: a wallet with
+    /// more spends the 500 smallest and keeps the rest spendable.
+    All,
+    /// The fewest of the smallest outputs that cover the amounts and the fee, at most 500.
+    /// Only with [`SelfOutputs::Amounts`].
+    Smallest,
+    /// Exactly the outputs [`SelfSendRequest::named`] names, and nothing else.
+    Named,
+}
+
+/// The outputs `EpicWallet::send_to_self` makes, from 1 to 10 in all.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SelfOutputs {
+    /// [`SelfSendRequest::count`] outputs of nearly equal value, the inputs' value less the
+    /// fee, the last one also taking the remainder: 1 merges the inputs into one.
+    Count,
+    /// One output per entry of [`SelfSendRequest::amounts`], and what the inputs hold beyond
+    /// the amounts and the fee as one more output when it is above zero.
+    Amounts,
+}
+
+/// What `EpicWallet::send_to_self` spends and makes. Split, merge and spend-back tools are
+/// built on it: a split into `n` is `All` with `Count` `n`, a merge `All` with `Count` 1.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SelfSendRequest {
+    pub inputs: SelfInputs,
+    /// The outputs `Named` spends, by `WalletOutput.commitment`; empty for the others.
+    pub named: Vec<String>,
+    pub outputs: SelfOutputs,
+    /// The outputs `Count` makes, 1 to 10; 0 for `Amounts`.
+    pub count: u32,
+    /// The base units of each output `Amounts` makes, 1 to 10 of them, each at least 1; empty
+    /// for `Count`.
+    pub amounts: Vec<u64>,
+}
+
+/// How `node_tip` reaches the node. The host states it every time; there is no default.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NodeRoute {
+    /// The SOCKS5 proxy the host runs, such as its tor, as a loopback `ip:port`: the request
+    /// goes through it with the node's name for the proxy to resolve, so an onion node works,
+    /// and never directly. `None` goes directly. A loopback node is reached directly either
+    /// way, as an open wallet reaches it.
+    pub socks: Option<String>,
+}
+
+/// How a send chooses the outputs it spends, as `epic-wallet send --selection_strategy`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SelectionStrategy {
+    /// The fewest of the smallest outputs that cover amount and fee, so the rest of the balance
+    /// stays spendable while the send confirms. The default, as in `epic-wallet send` and the
+    /// Epic GUI wallet.
+    Smallest,
+    /// Every spendable output, up to 500: the whole balance is locked until the send confirms,
+    /// and the wallet holds fewer, larger outputs afterwards. Suits sending everything.
+    All,
+}
+
+/// How a send chooses its inputs and change. A call given `None` uses `Smallest` with one
+/// change output.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SendOptions {
+    pub strategy: SelectionStrategy,
+    /// The outputs the change is split into, in equal parts with the remainder on the last,
+    /// from 1 to 10; each one adds to the fee. A send whose inputs cover amount and fee
+    /// exactly makes no change output.
+    pub change_outputs: u32,
+    /// Commitments, 66 hex characters each, of outputs the send or estimate must not take,
+    /// for example ones another wallet on the same phrase is spending. At most 500; an
+    /// output this wallet does not hold is ignored.
+    pub exclude_outputs: Vec<String>,
+}
+
+/// How far a slate has progressed: `S` stages are a send, `I` stages an invoice.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SlateStage {
+    /// A send to the recipient: sign it with `receive_slate`.
+    S1,
+    /// The recipient's answer to a send: finalize it with `finalize_and_post`.
+    S2,
+    /// A finalized send.
+    S3,
+    /// An invoice, asking the payer to pay.
+    I1,
+    /// A paid invoice, for the issuer to finalize.
+    I2,
+    /// A finalized invoice.
+    I3,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SlateRole {
+    Sender,
+    Receiver,
+}
+
+impl From<lepic_wallet::slate::Role> for SlateRole {
+    fn from(role: lepic_wallet::slate::Role) -> Self {
+        match role {
+            lepic_wallet::slate::Role::Sender => Self::Sender,
+            lepic_wallet::slate::Role::Receiver => Self::Receiver,
+        }
+    }
+}
+
+/// A participant's free-text message as the slate carries it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SlateMessage {
+    pub role: SlateRole,
+    pub text: String,
+}
+
+/// What a slate says, from `inspect_slate`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SlateInfo {
+    pub slate_id: String,
+    /// The `version_info.version` the slate declares, 2 or 3, which decides how it is read.
+    pub version: u16,
+    pub stage: SlateStage,
+    pub amount: u64,
+    pub fee: u64,
+    /// The height from which the slate may no longer be completed. `None` when it sets none.
+    pub ttl_cutoff_height: Option<u64>,
+    /// In the order the participants joined.
+    pub messages: Vec<SlateMessage>,
+}
+
+/// How far the QR parts scanned so far got, from `decode_ur_slate`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UrSlateProgress {
+    /// Set once every fragment is recovered; `json` then holds the slate text.
+    pub complete: bool,
+    /// Fragments recovered so far, from pure parts and fountain parts.
+    pub received_fragments: u32,
+    /// Fragments of the code; 0 when no part was given.
+    pub fragment_count: u32,
+    /// The slate JSON text, not yet checked as a slate: pass it to `inspect_slate`.
+    pub json: Option<String>,
+}
+
+/// Progress of `EpicWallet::scan`.
+#[derive(Debug, Clone)]
+pub struct ScanProgress {
+    /// 0..=100.
+    pub percent: Option<u8>,
+    /// Block height reached so far.
+    pub height: u64,
+    /// Height the scan ends at.
+    pub target_height: u64,
+    pub message: String,
+    /// Set on the last event of a scan that completed.
+    pub finished: bool,
+    /// What the scan did, on the last event of a scan that completed only.
+    pub result: Option<ScanResult>,
+}
+
+/// What a completed `EpicWallet::scan` did. Counts are outputs of this wallet. A
+/// `start_height` above `end_height` means the start was above the chain tip and nothing was
+/// scanned.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScanResult {
+    pub start_height: u64,
+    pub end_height: u64,
+    /// The scan continued one that was cancelled or failed instead of starting over; the
+    /// counts cover only the part scanned this time.
+    pub resumed: bool,
+    /// Found on chain, whether stored before or not.
+    pub found: u64,
+    /// Found on chain but not stored, now stored with a received transaction each.
+    pub restored: u64,
+    /// Stored as spent but found unspent; their transactions were cancelled.
+    pub revived: u64,
+    /// Locked outputs made spendable again: found on chain by a scan with
+    /// `delete_unconfirmed`, or inputs of a transaction the scan cancelled.
+    pub unlocked: u64,
+    /// Outputs not on chain that were deleted: not found by a scan with
+    /// `delete_unconfirmed`, or the change of a transaction the scan cancelled.
+    pub deleted: u64,
+}
+
+/// Progress of `EpicWallet::refresh`. Only the last event of a successful refresh has `summary`.
+#[derive(Debug, Clone)]
+pub struct RefreshProgress {
+    /// 0..=100, never falling.
+    pub percent: u8,
+    pub message: String,
+    pub summary: Option<WalletSummary>,
+}
+
+/// What one Epicbox drain did.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct InboxReport {
+    /// Payments signed and answered.
+    pub received: u32,
+    /// Answers to our sends that were finalized and posted.
+    pub finalized: u32,
+    /// Messages already handled before.
+    pub repeated: u32,
+    /// Messages refused for good.
+    pub rejected: u32,
+    /// Messages left on the relay for a later drain.
+    pub held: u32,
+    /// Notices about invoices accepted from the other party: `posted`, `declined` and
+    /// `withdrawn`, each also reported as its event.
+    pub notices: u32,
+    /// Messages acknowledged and forgotten: notices not from the other party of their invoice,
+    /// of a kind this version does not know, oversize or malformed.
+    pub dropped: u32,
+    /// Notices for a slate this wallet does not hold yet, kept to apply when it arrives.
+    pub buffered: u32,
+}
+
+/// An invoice this wallet issued to a contact, from `EpicWallet::contact_issue_invoice`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IssuedInvoice {
+    pub tx_id: u32,
+    pub slate_id: String,
+    pub amount: u64,
+}
+
+/// A paid invoice, from `EpicWallet::contact_pay_invoice`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PaidInvoice {
+    pub tx_id: u32,
+    pub slate_id: String,
+    pub amount: u64,
+    pub fee: u64,
+    /// How the I2 was sealed for the contact: `Native` when the invoice came as a native slate.
+    pub format: SlateWire,
+}
+
+/// An invoice paid by file, from `EpicWallet::pay_invoice_slate` and
+/// `EpicWallet::pay_invoice_file`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PaidInvoiceSlate {
+    pub tx_id: u32,
+    pub slate_id: String,
+    /// What the issuer receives.
+    pub amount: u64,
+    /// What this wallet pays on top.
+    pub fee: u64,
+    /// The I2 for the issuer.
+    pub json: String,
+    /// How the I2 is written: `Legacy`, the JSON in `json`.
+    pub format: SlateWire,
+}
+
+/// What one `EpicWallet::sweep_invoices` did.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InvoiceSweep {
+    /// Slate ids of waiting invoices deleted unpaid, and of declined ones.
+    pub deleted: Vec<String>,
+    /// Invoices this wallet issued that were cancelled unpaid; a late payment is refused.
+    pub cancelled: Vec<u32>,
+    /// Payments of invoices whose time to live passed with the transaction neither on chain
+    /// nor in the node's pool. Nothing was changed: offer the user `cancel_transaction`.
+    pub cancellable: Vec<u32>,
+}
+
+/// Whether contact calls may reach relays, as the user set the app: `Online` or `Offline`
+/// (nothing connects anywhere). Calls that need a relay fail with `ContactsOffline` before
+/// connecting. Contact, device, epic1, in-person and pairing calls go through mailboxes; a
+/// switch for the classic Epicbox address does not reach them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ContactRelayMode {
+    Online,
+    Offline,
+}
+
+/// Where a mailbox of the list comes from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MailboxOrigin {
+    /// The app ships it.
+    Shipped,
+    /// The user added it.
+    Added,
+}
+
+/// A mailbox of the list with its health as the running sessions saw it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MailboxView {
+    /// `domain` on port 443, `domain:port` on any other.
+    pub host: String,
+    pub origin: MailboxOrigin,
+    /// Whether the mailbox offered push at its last greeting; none before any answer.
+    pub push: Option<bool>,
+    /// The mailbox is known to lack mux/1: it is reachable, but the wallet never posts native
+    /// mail there and reads no slot on it. Show it apart from an unreachable mailbox.
+    pub no_mux: bool,
+    /// When a socket last attached to it; none when none has yet.
+    pub last_success_at_ms: Option<i64>,
+    /// Sockets lost since the last success.
+    pub failures: u32,
+    pub last_error: Option<String>,
+}
+
+/// The user's changes to the shipped list, for the app to store in its settings and pass to
+/// [`crate::api::wallet::EpicWallet::mailbox_set`] after each open.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MailboxChanges {
+    pub added: Vec<String>,
+    pub removed: Vec<String>,
+}
+
+/// One step of a mailbox test.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MailboxProbeStep {
+    Passed,
+    /// The step failed; [`MailboxProbe::failure`] says why.
+    Failed,
+    /// An earlier step failed.
+    NotReached,
+}
+
+/// A test of one mailbox: a TLS connection, the mailbox's greeting, and push offered in it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MailboxProbe {
+    pub host: String,
+    pub tls: MailboxProbeStep,
+    pub greeting: MailboxProbeStep,
+    pub push: MailboxProbeStep,
+    /// Why the step that failed failed; none when every step passed.
+    pub failure: Option<String>,
+    /// Every step passed.
+    pub passed: bool,
+}
+
+/// What [`crate::api::wallet::EpicWallet::mailbox_add`] did.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MailboxAdded {
+    /// The mailbox joined the list. False when its test failed and `anyway` was not given, or
+    /// when it was in the list already.
+    pub added: bool,
+    pub probe: MailboxProbe,
+    pub changes: MailboxChanges,
+}
+
+/// What [`crate::api::wallet::EpicWallet::mailbox_remove`] did.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MailboxRemoved {
+    /// The mailbox left the list; false when it was not in it.
+    pub removed: bool,
+    pub changes: MailboxChanges,
+}
+
+/// What a contact says it is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+///
+/// Deprecated: always written for wallets that read it, never to be read for meaning;
+/// to be removed (docs/adr/0041 or RFC 0002 6.1).
+pub enum ContactKind {
+    Person,
+    Shop,
+    Exchange,
+}
+
+/// How long an invite may be used. An invite with pairing words lasts 10 minutes instead.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InviteExpiry {
+    OneHour,
+    OneDay,
+    SevenDays,
+}
+
+/// Where a contact stands in pairing (RFC 0002 10.2). Values are only added, at the end.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PairingState {
+    /// An invite of ours waits for a reply.
+    PendingInvite,
+    /// Our reply waits for the inviter's confirmation.
+    PendingReply,
+    /// Paired, the words not checked: show the outline shield.
+    Paired,
+    /// The user confirmed the words: show the shield with a check.
+    Verified,
+    /// A key check found other keys for a contact the user already has: this pairing seals
+    /// nothing and takes no invoices until the user keeps the old keys or uses the new ones.
+    KeysChanged,
+}
+
+/// Whether sends to a contact are sealed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SealState {
+    On,
+    Off,
+    /// The last send went plain because the contact could not open sealed text; the next one
+    /// is sealed again.
+    Degraded,
+}
+
+/// One entry of the words check or of pairing words: an emoji and its English name. Show both.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SasEntry {
+    pub emoji: String,
+    pub name: String,
+}
+
+/// A paired contact, from `EpicWallet::contacts` and `EpicWallet::contact`. Holds no key.
+/// Times are milliseconds since the Unix epoch.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[frb(non_opaque)]
+pub struct ContactView {
+    /// 32 lowercase hex characters; the id every contact call takes.
+    pub contact_id: String,
+    /// The user's own name for the contact.
+    pub label: String,
+    /// The name the contact gives itself, unverified: show it only as "calls themselves".
+    pub claimed_name: Option<String>,
+    /// Deprecated: always written for wallets that read it, never to be read for meaning;
+    /// to be removed (docs/adr/0041 or RFC 0002 6.1).
+    pub kind: Option<ContactKind>,
+    pub state: PairingState,
+    /// The four entries of the words check, to show it again; empty before the pairing
+    /// completed.
+    pub sas: Vec<SasEntry>,
+    pub verified_at_ms: Option<i64>,
+    pub allow_invoices: bool,
+    pub seal: SealState,
+    /// The app's address-book entry this pairing is attached to.
+    pub app_contact: Option<String>,
+    /// `domain:port` of the relay the contact's messages to this wallet go through, for
+    /// "Delivered via ...".
+    pub home_relay: Option<String>,
+    /// The pairing came from a backup and may also live on another device.
+    pub imported_from_backup: bool,
+    /// Nothing sealed from the contact opened for 90 days: warn before a sealed send that the
+    /// contact needs LEPIC to open it.
+    pub lapsed: bool,
+    /// When an envelope from the contact was last opened (Unix milliseconds), if ever: of the
+    /// pairings attached to one address-book contact, the one heard from last is the one the
+    /// contact still uses.
+    pub last_sealed_in_ms: Option<i64>,
+    /// The contact removed this pairing on its side and said so: nothing sent through it
+    /// arrives any more. Offer to remove it here too.
+    pub removed_by_peer: bool,
+    /// `domain:port` of the relay the contact asked to move to, while messages still go to the
+    /// relay in use; `None` when it asked for no move. Apply it with
+    /// `EpicWallet::contact_apply_relay_move`.
+    pub requested_relay: Option<String>,
+    /// The contact's payments address, `key@relay`, only when an address proof of this
+    /// pairing verified over a card naming it. A later proof that fails keeps it; `None` for a
+    /// contact that proved none.
+    pub payments_address: Option<String>,
+    pub created_at_ms: i64,
+    /// Where the pairing stands, derived: Ended, then KeysChanged, then Waiting until the
+    /// contact's wallet was heard, then Verified or Paired.
+    pub status: PairingStatus,
+    /// When the contact's wallet was first heard in this pairing ("Paired with Anna").
+    pub peer_heard_at_ms: Option<i64>,
+    /// "Anna confirmed too": set while the contact's accepted match verdict is for this
+    /// pairing's words.
+    pub peer_verified_at_ms: Option<i64>,
+    /// The feature bits the contact claimed in this pairing; 0 when none came.
+    pub peer_features: u32,
+    /// The profile the contact sent, `peer_features` from bit 16 up moved down; 0 when none
+    /// came. LEPIC reads no bit of it.
+    pub peer_profile: u32,
+    /// The capability bits on the contact's card: bit 0 opens sealed files, 1 pays invoices,
+    /// 2 issues invoices, 3 asks for the fixed hint; 0 before a card arrives.
+    /// `contact_issue_invoice` fails with `ContactRefusesInvoices` without bit 1.
+    pub peer_caps: u16,
+    /// The domain the contact claimed in this pairing. Unverified until the app fetches the
+    /// domain's well-known file and passes it to `contact_domain_verify`.
+    pub peer_domain: Option<String>,
+    /// The contact's claim as received, kept for a later check.
+    pub peer_domain_attestation: Option<Vec<u8>>,
+    /// The contact's X25519 encryption key (card tag 05), 32 bytes, from the card stored for
+    /// it; `None` before its card arrived. A completed pairing shows the contact holds it, so
+    /// a host may recognise a service by it.
+    pub peer_enc_key: Option<Vec<u8>>,
+    pub ended_reason: Option<PairingEndReason>,
+    pub ended_at_ms: Option<i64>,
+    /// Something is under way with this contact: a message waiting to go out, a payment not yet
+    /// finished, or an invoice from it waiting for an answer. A host checking contacts on a
+    /// timer may check only these.
+    #[frb(default = false)]
+    pub awaiting: bool,
+}
+
+/// Whether a contact's domain claim is proven by the well-known file its domain serves.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DomainVerdict {
+    /// A key the file lists for the wallet's network signed the claim for this pairing.
+    pub proven: bool,
+    /// When not proven, the reason as one snake_case word: `file_too_large`,
+    /// `file_malformed`, `unsupported_version`, `network_absent`, `domain_mismatch` or
+    /// `no_key_matches`. `None` when proven.
+    pub refused: Option<String>,
+}
+
+/// Where a pairing stands; derived from its record, never stored.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PairingStatus {
+    /// Stored, but the contact's wallet has not been heard in it yet ("Waiting for Anna's
+    /// wallet"). No sealed send or invoice.
+    Waiting,
+    Paired,
+    Verified,
+    KeysChanged,
+    /// Ended: nothing new goes through; slates in flight settle unless it ended by this
+    /// side's mismatch. Remove deletes it.
+    Ended,
+}
+
+/// Why a pairing ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PairingEndReason {
+    /// This side's words check did not match.
+    Mismatch,
+    /// The contact reported that the words did not match.
+    PeerMismatch,
+    /// The contact removed the pairing.
+    Unpaired,
+    /// The contact's wallet was never heard during seven days of reading its mailbox.
+    NeverFinished,
+}
+
+/// What changed, for `ContactUpdated`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ContactChange {
+    /// Newer details, same keys.
+    Card,
+    /// `payments_address` was set or changed.
+    Address,
+    /// The contact's wallet was heard for the first time ("Paired with Anna").
+    Heard,
+    /// The contact's match verdict was accepted ("Anna confirmed too").
+    PeerVerified,
+    /// The pairing ended; `ended_reason` says why.
+    Ended,
+}
+
+/// A new invite, from `EpicWallet::pairing_invite`. `link` lets anyone who sees it pair as
+/// this contact until it is used or expires: share it, show it as a QR code, never store it.
+/// `Debug` does not show the link.
+#[derive(Clone, PartialEq, Eq)]
+pub struct PairingInvite {
+    pub contact_id: String,
+    /// `epiccash://pair/1/...`.
+    pub link: String,
+    pub expires_at_ms: i64,
+}
+
+/// What an invite claims, for the "Pair with Anna?" sheet, from `EpicWallet::pairing_preview`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InvitePreview {
+    /// The inviter's own name for itself, not checked.
+    pub claimed_name: String,
+    /// Deprecated: always written for wallets that read it, never to be read for meaning;
+    /// to be removed (docs/adr/0041 or RFC 0002 6.1).
+    pub kind: ContactKind,
+    pub expires_at_ms: i64,
+    /// `domain:port` of the relay the pairing's messages go through.
+    pub home_relay: String,
+    /// The invite comes from a service, such as an exchange.
+    pub service: bool,
+    /// Answer it with this class in `EpicWallet::pairing_accept`.
+    pub pairing_class: PairingClass,
+    /// This wallet made the invite: standing, waiting or cancelled. `EpicWallet::pairing_accept`
+    /// refuses it with `AlreadyPaired`.
+    pub own: bool,
+}
+
+/// Which kind of pairing an invite makes. Values are only added, at the end.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PairingClass {
+    /// A contact: slates, invoices and notices, and the app's payloads once both sides have
+    /// heard each other (paired or verified); listed by `EpicWallet::contacts`.
+    Contact,
+    /// Two wallets of one owner: only the app's payloads (`EpicWallet::contact_post_payload`),
+    /// listed by `EpicWallet::private_pairings` and nowhere else. Its invite travels by QR or
+    /// paste only, never as words. Its keys and channel come from random secrets the two
+    /// wallets exchange while pairing, so the recovery phrase alone neither finds, reads nor
+    /// writes it. Payloads pass once both sides matched the words check.
+    Private,
+}
+
+impl std::fmt::Debug for PairingInvite {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PairingInvite")
+            .field("contact_id", &self.contact_id)
+            .field("link", &"<redacted>")
+            .field("expires_at_ms", &self.expires_at_ms)
+            .finish()
+    }
+}
+
+/// An answered invite, from `EpicWallet::pairing_accept`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PairingAnswer {
+    pub contact_id: String,
+    /// `epiccash://pair-reply/1/...`, for "Send by hand" and for a post that failed.
+    pub reply_link: String,
+    /// The reply reached the relay; the delivery loop reads the confirmation later.
+    pub posted: bool,
+}
+
+/// What a pasted reply or confirm link did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PairingLinkOutcome {
+    /// A reply to one of this wallet's invites paired the contact: send `link`, the
+    /// confirmation, back by hand.
+    Confirm,
+    /// A confirmation finished a pairing this wallet answered.
+    Paired,
+    /// The link answers nothing this wallet waits for.
+    Ignored,
+}
+
+/// The result of `EpicWallet::pairing_enter_link`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PairingLinkResult {
+    pub outcome: PairingLinkOutcome,
+    /// Set for `Confirm` and `Paired`.
+    pub contact_id: Option<String>,
+    /// The confirmation link, for `Confirm`.
+    pub link: Option<String>,
+}
+
+/// The user's answer to the words check.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SasDecision {
+    /// "They match": the contact becomes verified.
+    Match,
+    /// "They don't match": the pairing is removed on this side.
+    Mismatch,
+    /// "Skip for now": paired, not verified.
+    Skip,
+}
+
+/// A pairing in progress, from `EpicWallet::pairings_pending`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PendingPairingView {
+    pub contact_id: String,
+    /// `true`: an invite of ours waits for a reply. `false`: our reply waits for the
+    /// confirmation.
+    pub inviter: bool,
+    /// The name in the invite: ours as inviter, the inviter's own, unverified, as invitee.
+    pub invite_name: String,
+    pub label: String,
+    /// When it stops waiting; it may still take a late reply or confirm at the first read of its
+    /// relay after that, for up to an hour.
+    pub expires_at_ms: i64,
+    pub created_at_ms: i64,
+    /// The relay where the pairing's mailboxes live, `domain:port`, as `HomeRelayUnreachable`
+    /// names it.
+    pub home_relay: String,
+    /// Inviter: where the pairing request went. Invitee: the request's sender.
+    pub expect_address: Option<String>,
+}
+
+/// Whether the user keeps the old keys or uses the new ones after keys changed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KeysDecision {
+    /// The new pairing is removed; the old one stays as it was.
+    KeepOld,
+    /// The old pairing is removed; the new one goes on as paired.
+    UseNew,
+}
+
+/// What a sealed slate or a contact invoice is for, as its sender says.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SlatePurpose {
+    Payment,
+    /// An invoice from a service, such as an exchange deposit.
+    DepositRequest,
+    Withdrawal,
+    Refund,
+    /// A request between people.
+    Request,
+}
+
+/// Sealed text opened by `EpicWallet::sealed_open`: who it is from and what it holds.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SealedSlateView {
+    /// The contact that signed it; `None` for an answer sealed to a slate this wallet started.
+    pub contact_id: Option<String>,
+    pub stage: SlateStage,
+    pub slate_id: String,
+    pub amount: u64,
+    pub fee: u64,
+    pub purpose: Option<SlatePurpose>,
+    /// The sender's reference, such as an order number; shown as it is, never trusted.
+    pub reference: Option<String>,
+    /// Unix seconds; advisory.
+    pub expires: Option<u64>,
+    /// The messages whose signatures verify, in the order the participants joined, as
+    /// `TransactionDetails.messages` shows them: control characters, bidirectional formatting
+    /// and zero-width characters removed. Written by the other side; show them as quoted text.
+    pub messages: Vec<SlateMessage>,
+}
+
+/// A sealed S1 received or a sealed I1 paid, with the answer to send back.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SealedAnswer {
+    pub tx_id: u32,
+    pub slate_id: String,
+    pub amount: u64,
+    pub fee: u64,
+    /// Armored sealed text when `sealed`, else plain slate JSON.
+    pub answer: String,
+    pub sealed: bool,
+    /// `Native` when `answer` is a native slate (`BEGINEPICTX.`), else `Legacy`.
+    pub format: SlateWire,
+}
+
+/// An invoice a contact sent, waiting for the user to pay or decline it, from
+/// `EpicWallet::contact_invoices`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ContactInvoiceView {
+    pub slate_id: String,
+    pub contact_id: String,
+    /// What the contact asks for; the fee comes on top.
+    pub amount: u64,
+    pub purpose: Option<SlatePurpose>,
+    pub reference: Option<String>,
+    /// Unix seconds; advisory.
+    pub expires: Option<u64>,
+    /// The issuer's message, only when its signature verifies, with control characters,
+    /// bidirectional formatting and zero-width characters removed. Written by the contact;
+    /// show it as quoted text.
+    pub message: Option<String>,
+    pub received_at_ms: i64,
+    /// Other waiting invoices for the same amount from the same contact within 10 minutes:
+    /// warn before paying twice.
+    pub same_amount: Vec<String>,
+}
+
+/// Where a message for a contact stands.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OutboxState {
+    Queued,
+    Delivered,
+    /// Undelivered for a day; retrying stopped. Offer "Send again".
+    Stuck,
+}
+
+/// A payload a paired contact sent, from `EpicWallet::contact_payloads`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ContactPayloadView {
+    /// The sender's id for it, 32 hex characters; a repeat is kept once.
+    pub id: String,
+    pub contact_id: String,
+    pub received_at_ms: i64,
+    /// The bytes as the contact's app sent them; LEPIC does not read them.
+    pub payload: Vec<u8>,
+}
+
+/// A contact's message kept in quarantine, from `EpicWallet::contact_quarantine`. The envelope
+/// stays in the wallet.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct QuarantinedMessageView {
+    /// The id `EpicWallet::contact_quarantine_retry` and `contact_quarantine_discard` take.
+    pub id: String,
+    pub contact_id: String,
+    /// `hold_bound`, `undecodable_slate`, `unknown_notice`, `receipt_cap` or `receive_refused`.
+    pub reason: String,
+    pub first_seen_ms: i64,
+    /// Retries so far.
+    pub attempts: u32,
+    /// Bytes of the envelope.
+    pub size: u64,
+}
+
+/// What `EpicWallet::contact_quarantine_retry` did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct QuarantineRetryReport {
+    pub retried: u32,
+    /// Handled, and gone from quarantine.
+    pub cleared: u32,
+    /// Not handled, kept with one more attempt counted.
+    pub kept: u32,
+}
+
+/// A message for a contact's mailbox, from `EpicWallet::contact_outbox`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OutboxEntryView {
+    /// The id `EpicWallet::contact_outbox_resend` takes.
+    pub id: u64,
+    pub contact_id: String,
+    pub slate_id: String,
+    pub stage: SlateStage,
+    pub state: OutboxState,
+    pub attempts: u32,
+    pub created_at_ms: i64,
+    pub delivered_at_ms: Option<i64>,
+    /// A payment delivered two hours ago or more that the contact has not posted: offer
+    /// "Send again".
+    pub not_posted_yet: bool,
+}
+
+/// What `EpicWallet::contacts_import` restored.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ContactImportSummary {
+    pub imported: u32,
+    /// Pairings this wallet holds already; they were kept as they are.
+    pub skipped_existing: u32,
+    /// Pairings whose contact this wallet holds under another pairing; kept as they are.
+    pub skipped_conflict: u32,
+}
+
+/// Why a pairing in progress ended, for `PairingFailed`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PairingFailureReason {
+    /// Something changed the invite on the way. Nothing was stored; pair again.
+    ChangedOnTheWay,
+    /// The inviter's card named another kind than its invite did: nothing was stored.
+    KindDiffers,
+    /// The invite expired before a reply came.
+    Expired,
+    /// This wallet answered and no confirmation came in time, or, as the inviter, its
+    /// confirmation never reached the relay in time: the other side cannot have finished, so
+    /// nothing of the pairing is kept. Pair again.
+    NotConfirmed,
+    /// The inviter refused the reply: the invite was used, expired or cancelled.
+    Refused,
+    /// The answer came from another wallet than the one the request went to, or from the
+    /// request's sender: nothing was stored.
+    OtherAddress,
+    /// The answer to a request carried no address proof: nothing was stored.
+    AddressProofMissing,
+    /// Another pairing with the same wallet was in progress and won.
+    Crossed,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ListenerEventKind {
+    /// Subscribed at the relay.
+    Connected,
+    /// The connection dropped or could not be made; the listener retries with backoff.
+    Disconnected,
+    /// Signed an incoming payment and answered it.
+    Received,
+    /// A payment signed before arrived again and was answered with the reply stored then.
+    /// Nothing changed; it is not a second payment.
+    Repeated,
+    /// Finalized and posted one of our sends.
+    Finalized,
+    /// The listener failed; `message` says why. `Stopped` follows.
+    Error,
+    /// The listener ended; no more events follow.
+    Stopped,
+}
+
+#[derive(Debug, Clone)]
+pub struct ListenerEvent {
+    pub kind: ListenerEventKind,
+    /// Local id of the transaction, for `Received`, `Repeated` and `Finalized`.
+    pub tx_id: Option<u32>,
+    pub message: String,
+    /// For `Disconnected`: why the connection ended (close frame, I/O error, timeout), as text
+    /// without secrets. `None` for other kinds.
+    pub reason: Option<String>,
+    /// For `Disconnected`: milliseconds until the listener tries again. `None` for other kinds
+    /// and when it does not retry.
+    pub retry_in_ms: Option<u64>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SessionState {
+    Unlocked,
+    Locked,
+    Closed,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TransportState {
+    Connecting,
+    Connected,
+    Disconnected,
+    Stopped,
+}
+
+/// Which of a transport's connections changed. A drain connects on its own beside a running
+/// listener; only `Listener` says anything about the listener's health.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TransportConnection {
+    /// The connection the Epicbox listener holds.
+    Listener,
+    /// A one-time drain of the payments address.
+    PaymentsDrain,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WalletEventKind {
+    /// `session` is set.
+    Session,
+    /// The balance of one account after a refresh: `account` and `balance` are set.
+    Balance,
+    /// A transaction changed state: `tx_id`, `from` and `to` are set. A transaction a received
+    /// slate just created has `to` set to `Received` and no `from`.
+    Transaction,
+    /// Scan progress: `height` and `target_height` are set.
+    Sync,
+    /// A transport's connection changed: `transport`, `transport_connection` and
+    /// `transport_state` are set.
+    Transport,
+    /// The stream fell behind and `missed` events were dropped. Refresh to catch up.
+    Missed,
+    /// An invoice this wallet issued was paid and finalized: `tx_id` and `slate_id` are set.
+    /// Its posting follows as `Transaction`.
+    InvoiceFinalized,
+    /// An invoice expired unpaid: `slate_id` is set, and `tx_id` for one this wallet issued,
+    /// which was cancelled. A waiting invoice was deleted.
+    InvoiceExpired,
+    /// The issuer of an invoice this wallet paid reports that it posted the transaction:
+    /// `tx_id` (the payment), `slate_id` and `kernel_excess` are set. Advisory; the payment
+    /// confirms when a refresh finds the kernel.
+    InvoicePosted,
+    /// The payer declined an invoice this wallet issued: `tx_id` and `slate_id` are set.
+    /// Nothing changed; cancel the invoice with `cancel_transaction` to free its output.
+    InvoiceDeclined,
+    /// The issuer withdrew an invoice: `slate_id` is set. A waiting one was deleted. For one
+    /// this wallet already paid, `tx_id` names the payment: offer the user
+    /// `cancel_transaction`; nothing was cancelled.
+    InvoiceWithdrawn,
+    /// A split or consolidation was stored and finalized: `tx_id` names its outgoing
+    /// transaction, `account` and `amount` are set. Nothing was received from anyone, so
+    /// it is never a `Transaction` event with `to` `received`; the posting and confirmation
+    /// of both of its transactions follow as `Transaction`.
+    SelfSend,
+    /// An answer arrived over Epicbox for a slate this wallet does not know: `slate_id`,
+    /// `slate_stage` (`S2`, the answer to a send, or `I2`, the payment of an invoice) and
+    /// `sender` are set. Another install of the same wallet, on the same recovery phrase, may
+    /// have made that send or issued that invoice. The answer is left on the relay and
+    /// requeued for that install for up to a day, so tell the user to open it there to finish
+    /// the payment. Nothing changed here. Raised once per answer; treat a repeat for the same
+    /// `slate_id` as one. Nothing
+    /// verifies `slate_id` or `sender`: anyone who knows the payments address can raise this
+    /// with any id. Only inform the user; never act on it or show the sender as trusted.
+    UnknownSlate,
+    /// A received payment that waited for its sender can never complete and was ended as a
+    /// cancel ends it: `tx_id` and `slate_id` are set, after the `Transaction` event that
+    /// moved it to `Cancelled`. The sender's inputs were spent by another transaction, most
+    /// likely the answer another install of this wallet, on the same recovery phrase, gave
+    /// to the same payment. Tell the user that another install took this payment and offer a
+    /// rescan to see it in the balance.
+    ReceiveSuperseded,
+    /// The sender of a payment this wallet received over Epicbox reports that it posted the
+    /// transaction: `tx_id`, `slate_id` and `kernel_excess` are set. Raised once per payment,
+    /// while it waits for its sender, and only from that payment's sender with the kernel this
+    /// wallet's answer implies. Advisory: nothing changed. Refresh now; the payment confirms
+    /// when a refresh finds the kernel. Until then its `sender_reported_posted_at_ms` is set.
+    PaymentPosted,
+    /// A reply to one of this wallet's invites paired a contact: `contact_id` is set. Show the
+    /// words check.
+    PairingReplied,
+    /// A pairing this wallet answered, or one in person, completed: `contact_id` is set. Show
+    /// the words check.
+    PairingConfirmed,
+    /// A pairing in progress ended without a contact: `contact_id` names the pairing, which is
+    /// gone, and `pairing_failure` says why.
+    PairingFailed,
+    /// A contact sent newer details, such as its relay; its keys did not change:
+    /// `contact_id` is set.
+    ContactUpdated,
+    /// A contact's relay did not answer; reading from it backs off: `relay` is set,
+    /// `domain:port`. Turn "Delivered via" into a notice.
+    HomeRelayUnreachable,
+    /// A key check proved the contact still holds its old keys: the old pairing, `contact_id`,
+    /// keeps its keys and trust, and the new pairing was folded into it ("Anna's keys are
+    /// back").
+    ContactKeysRestored,
+    /// A key check found no old keys, or went unanswered for a day: the new pairing,
+    /// `contact_id`, is in `KeysChanged` until the user decides with `contact_keys_resolve`.
+    ContactKeysChanged,
+    /// A verified contact that may send invoices sent one; it waits in `contact_invoices`:
+    /// `contact_id`, `slate_id`, `amount` and, when the contact gave them, `purpose`,
+    /// `reference`, `expires` and `message` are set. Nothing was paid.
+    InvoiceFromContact,
+    /// A contact's withdrawal arrived and was received; the answer is queued for the contact:
+    /// `contact_id`, `tx_id`, `slate_id` and `amount` are set.
+    WithdrawalFromContact,
+    /// A contact's sealed payment arrived in its mailbox and was received; the answer is
+    /// queued for the contact: `contact_id`, `tx_id`, `slate_id` and `amount` are set.
+    SealedReceived,
+    /// Something in a contact's mailbox did not open with this wallet's keys and was dropped:
+    /// `contact_id` is set. Anyone who knows the mailbox can cause this: only inform the user,
+    /// for example that pairing again checks the keys.
+    SealedUnopenable,
+    /// A message reached the contact's relay: `contact_id` and `slate_id` are set.
+    OutboxDelivered,
+    /// A message could not be delivered for a day and stopped retrying: `contact_id` and
+    /// `slate_id` are set. Offer "Send again".
+    OutboxStuck,
+    /// The contact answered a payment this wallet sent through its mailbox and the payment
+    /// was finalized: `contact_id`, `tx_id`, `slate_id` and `amount` are set. Its posting
+    /// follows as `Transaction`. An answer the contact sent again raises it again for the same
+    /// `tx_id`; treat a repeat as the same payment.
+    ContactPaymentFinalized,
+    /// The contact `contact_id` removed this pairing on its side and said so in a signed
+    /// notice: nothing sent through it arrives any more. The pairing stays, with
+    /// `ContactView::removed_by_peer` set, until the user removes it too. Raised once.
+    ContactUnpaired,
+    /// The contact `contact_id` sent a payload; read it with `EpicWallet::contact_payloads`.
+    ContactPayload,
+    /// The sender of a payment this wallet received and answered, over Epicbox or as a paired
+    /// contact, reports that it cancelled the payment: `tx_id` and `slate_id` are set. Raised
+    /// once per payment, while it waits for its sender, and only from that payment's sender.
+    /// Advisory: nothing changed and nothing was released. The payment's
+    /// `sender_reported_cancelled_at_ms` is set from now on; whether to cancel it here is the
+    /// app's choice, and `EpicWallet::cancel` keeps its own checks.
+    PaymentCancelled,
+    /// The node did not take a finalized transaction: `tx_id`, `slate_id` and `message` (why)
+    /// are set. The transaction stays finalized, its inputs locked. While the session is
+    /// online, the wallet's refresh pushes it again until it is mined or its cutoff passes;
+    /// `EpicWallet::repost_transaction` pushes it at once, and cancelling it gives it up. The
+    /// event comes once per distinct failure: again only when the kind of failure or the node's
+    /// text changes.
+    NotPosted,
+    /// The contact `contact_id` sent newer details that name its mailbox on another relay,
+    /// `relay` (`domain:port`). The details were stored, with a `ContactUpdated`, and messages
+    /// still go to the relay in use. Whether to follow is the app's choice: apply the move with
+    /// `EpicWallet::contact_apply_relay_move`. Raised once per newer card; after a restart,
+    /// `ContactView::requested_relay` still shows the request.
+    ContactRelayMoveRequested,
+    /// Payloads from the pairing `contact_id` were left on the relay because the payloads kept and
+    /// not acknowledged fill its cap. Raised at most once per pairing in a tick of the delivery
+    /// loop. They arrive after `EpicWallet::contact_payloads_ack` makes room.
+    ContactPayloadsParked,
+    /// The receiver of a send this wallet made refused it unanswered, as a wallet set to refuse
+    /// payments nobody asked for does (ADR 0045), and said so authenticated: a paired contact,
+    /// or the payee of an epic1 payment to the send's reply key. `tx_id` and `slate_id` are
+    /// set. The send never happened: it was erased with its change and its inputs unlocked, so
+    /// `tx_id` no longer names a stored transaction. Raised once per send. A cancellation the
+    /// relay reports raises nothing.
+    PaymentDeclined,
+    /// An answer to an in-person code this wallet showed was taken, from its reply mailbox or
+    /// by `EpicWallet::in_person_take`: `tx_id`, `slate_id`, `slate_stage` (`S2` or `I2`),
+    /// `answer`, `check_code` and `same_code` are set. Nothing was finalized: show the answer
+    /// with its check code, and finalize the one the user picks with
+    /// `EpicWallet::in_person_finalize`. Raised once per answer.
+    InPersonAnswer,
+    /// The recovery of a send moved to another state: `tx_id` (the send) and `recovery_state`
+    /// are set. Raised once per change; read `TransactionDetails.recovery` for the rest.
+    RecoveryChanged,
+    /// The post of a payment's slate changed: `slate_id`, `relay` and `delivery_state` are set.
+    /// It went `Uncertain` (unanswered, and posted again on the same route), `Failed` (no route
+    /// took it, or its time or cutoff ran out), or from `Uncertain` to `Sent` (the same route
+    /// took it later). Raised once per change.
+    DeliveryChanged,
+    /// A new payment nobody asked for was refused at an open receipt cap, the sender's or the
+    /// wallet's in all: `slate_id`, `transport`, `receipt_cap` and, when the transport names
+    /// the sender's key, `sender` are set. Nothing was signed or stored and no receipt was
+    /// cancelled. Advisory: the count drops as open receipts confirm or end. Raised once per
+    /// refused delivery, so a relay that offers the same payment again raises it again; over
+    /// stock Epicbox the sender is not told.
+    PaymentRefused,
+}
+
+/// An open receipt cap, for `PaymentRefused`. Values are only added, at the end.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReceiptCap {
+    /// The cap on open receipts from one sender's key.
+    PerSender,
+    /// The cap on open receipts in all.
+    Total,
+}
+
+/// How a key check from `EpicWallet::contact_key_check` stands.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KeyCheckStart {
+    /// On its way, or already; the delivery loop reads the answer.
+    Sent,
+    /// No check may run now (one a day per slot, within a day of the new pairing): the new
+    /// pairing is in `KeysChanged` already and `ContactKeysChanged` was raised.
+    KeysChanged,
+}
+
+/// What the wallet reports while it runs, from `EpicWallet::events`. Only the fields its
+/// `kind` names are set.
+#[derive(Debug, Clone)]
+pub struct WalletEvent {
+    pub kind: WalletEventKind,
+    pub session: Option<SessionState>,
+    pub account: Option<u32>,
+    pub balance: Option<WalletSummary>,
+    pub tx_id: Option<u32>,
+    pub from: Option<TxStatus>,
+    pub to: Option<TxStatus>,
+    pub height: Option<u64>,
+    pub target_height: Option<u64>,
+    pub transport: Option<String>,
+    pub transport_state: Option<TransportState>,
+    pub transport_connection: Option<TransportConnection>,
+    pub missed: Option<u64>,
+    pub slate_id: Option<String>,
+    pub amount: Option<u64>,
+    /// Hex of the kernel excess, for `InvoicePosted` and `PaymentPosted`.
+    pub kernel_excess: Option<String>,
+    /// The Epicbox address a message came from, for `UnknownSlate`; for `PaymentRefused`, the
+    /// sender's key as the transport names it.
+    pub sender: Option<String>,
+    /// The slate's stage, `S2` or `I2`, for `UnknownSlate`.
+    pub slate_stage: Option<String>,
+    /// The contact or pairing a contact event is about.
+    pub contact_id: Option<String>,
+    /// Why a pairing ended, for `PairingFailed`.
+    pub pairing_failure: Option<PairingFailureReason>,
+    /// `domain:port`, for `HomeRelayUnreachable` and `ContactRelayMoveRequested`; for
+    /// `DeliveryChanged`, the route the post went to: an Epicbox address, or the endpoint of an
+    /// `http` or `tor` entry.
+    pub relay: Option<String>,
+    /// For `InvoiceFromContact`, as the contact gave them.
+    pub purpose: Option<SlatePurpose>,
+    pub reference: Option<String>,
+    /// Unix seconds; advisory.
+    pub expires: Option<u64>,
+    /// For `InvoiceFromContact`, the issuer's message as `ContactInvoiceView.message` gives it;
+    /// for `NotPosted`, why the node did not take the transaction.
+    pub message: Option<String>,
+    /// For `ContactUpdated`: what changed.
+    pub contact_change: Option<ContactChange>,
+    /// For `ContactUpdated` with `Ended`.
+    pub ended_reason: Option<PairingEndReason>,
+    /// For `InPersonAnswer`: the answer's number among the answers to its code, from 1.
+    pub answer: Option<u32>,
+    /// For `InPersonAnswer`: the four digits the answering wallet shows for the answer.
+    pub check_code: Option<String>,
+    /// For `InPersonAnswer`: an earlier answer to the code had the same check code.
+    pub same_code: Option<bool>,
+    /// For `RecoveryChanged`: the state the recovery moved to.
+    pub recovery_state: Option<RecoveryState>,
+    /// For `DeliveryChanged`: the state the post moved to.
+    pub delivery_state: Option<DeliveryState>,
+    /// For `PaymentRefused`: the cap that refused it; `None` for a cap a later core adds.
+    pub receipt_cap: Option<ReceiptCap>,
+}
+
+impl WalletEvent {
+    pub(crate) const fn of(kind: WalletEventKind) -> Self {
+        Self {
+            kind,
+            session: None,
+            account: None,
+            balance: None,
+            tx_id: None,
+            from: None,
+            to: None,
+            height: None,
+            target_height: None,
+            transport: None,
+            transport_state: None,
+            transport_connection: None,
+            missed: None,
+            slate_id: None,
+            amount: None,
+            kernel_excess: None,
+            sender: None,
+            slate_stage: None,
+            contact_id: None,
+            pairing_failure: None,
+            relay: None,
+            purpose: None,
+            reference: None,
+            expires: None,
+            message: None,
+            contact_change: None,
+            ended_reason: None,
+            answer: None,
+            check_code: None,
+            same_code: None,
+            recovery_state: None,
+            delivery_state: None,
+            receipt_cap: None,
+        }
+    }
+}
+
+/// A reply mailbox an in-person code names, as `EpicWallet::in_person_read` reports it: show
+/// it before the answer is posted there.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InPersonHost {
+    pub host: String,
+    pub port: u16,
+    /// The host is in the wallet's relay list.
+    pub in_relay_list: bool,
+    /// The host is an address on the local network rather than the internet.
+    pub local_network: bool,
+}
+
+/// An in-person code to show, from `EpicWallet::in_person_invoice` or
+/// `EpicWallet::in_person_send`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InPersonCode {
+    pub tx_id: u32,
+    pub slate_id: String,
+    /// The raw `lepic.v1` slate to show: as one byte-mode QR code, or as the parts
+    /// `in_person_qr_parts` gives.
+    pub bytes: Vec<u8>,
+    /// The code is good until this height.
+    pub ttl_cutoff: u64,
+    /// `domain:port` of the reply mailbox the code names; `None` when it names none and the
+    /// answer comes back by scan.
+    pub mailbox: Option<String>,
+    /// How the code is written: always `Native`, a raw `lepic.v1` slate.
+    pub format: SlateWire,
+}
+
+/// A scanned in-person code, read by `EpicWallet::in_person_read`. Nothing is stored.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InPersonRead {
+    pub slate_id: String,
+    /// `S1` for a send to receive, `I1` for an invoice to pay.
+    pub stage: SlateStage,
+    pub amount: u64,
+    /// The fee of the send; for an invoice, the estimated fee of paying it, `None` when no
+    /// estimate could be made.
+    pub fee: Option<u64>,
+    /// The other party's message, as it gave it: show it as quoted text.
+    pub message: Option<String>,
+    /// The code is good until this height.
+    pub ttl_cutoff: u64,
+    /// The reply mailbox the answer would be posted to; `None` when the answer is shown back.
+    pub mailbox: Option<InPersonHost>,
+}
+
+/// The answer to a scanned in-person code, from `EpicWallet::in_person_pay` or
+/// `EpicWallet::in_person_receive`. It is stored.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InPersonReply {
+    pub tx_id: u32,
+    pub slate_id: String,
+    /// The sealed answer: post it with `EpicWallet::in_person_post`, or show it as one
+    /// byte-mode QR code, as `armored` text or as the parts `in_person_qr_parts` gives.
+    pub envelope: Vec<u8>,
+    /// `envelope` as `BEGINEPICTX.` text.
+    pub armored: String,
+    pub mailbox: Option<InPersonHost>,
+    /// How the answer is written: always `Native`, a sealed `lepic.v1` slate.
+    pub format: SlateWire,
+}
+
+/// An answer posted by `EpicWallet::in_person_post`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InPersonPosted {
+    /// Four digits to show now that the answer is posted: the other party finalizes the
+    /// answer that shows the same. Show them only after posting.
+    pub check_code: String,
+    /// How the answer went out: always `Native`, a sealed `lepic.v1` slate.
+    pub format: SlateWire,
+}
+
+/// An answer taken for a code this wallet showed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InPersonAnswerView {
+    /// The answer's number among the answers to its code, from 1.
+    pub number: u32,
+    pub check_code: String,
+    /// An earlier answer to the code had the same check code: the user cannot tell the two
+    /// apart by it.
+    pub same_code: bool,
+    pub received_at_ms: i64,
+}
+
+/// A code this wallet showed and the answers taken for it, from
+/// `EpicWallet::in_person_answers`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InPersonCodeView {
+    pub tx_id: u32,
+    pub slate_id: String,
+    /// `S1` or `I1`.
+    pub stage: SlateStage,
+    pub ttl_cutoff: u64,
+    pub mailbox: Option<String>,
+    /// No more answers are taken.
+    pub closed: bool,
+    /// The number of the answer finalized.
+    pub finalized: Option<u32>,
+    pub answers: Vec<InPersonAnswerView>,
+}
+
+/// An answer taken by `EpicWallet::in_person_take` or `EpicWallet::in_person_take_qr`.
+/// Nothing was finalized.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InPersonTaken {
+    pub tx_id: u32,
+    pub slate_id: String,
+    /// `S1` or `I1`: the code the answer is for.
+    pub stage: SlateStage,
+    /// The answer's number among the answers to its code, from 1.
+    pub answer: u32,
+    pub check_code: String,
+    /// An earlier answer to the code had the same check code.
+    pub same_code: bool,
+    /// The same answer was taken before; nothing new was stored.
+    pub duplicate: bool,
+}
+
+/// How far the scanned parts of an in-person QR code got, from `in_person_qr_read`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InPersonQrProgress {
+    pub complete: bool,
+    pub received_fragments: u32,
+    pub fragment_count: u32,
+    /// Once `complete`: the code or answer, to pass to `EpicWallet::in_person_read` or
+    /// `EpicWallet::in_person_take`. Not yet checked.
+    pub bytes: Option<Vec<u8>>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn wallet_config_debug_redacts_the_node_api_secret() {
+        let config = WalletConfig {
+            policy: Default::default(),
+            data_dir: "/data".to_owned(),
+            chain: Chain::Floonet,
+            node_url: "http://127.0.0.1:3413".to_owned(),
+            node_api_secret: Some("node-secret-value".to_owned()),
+            epicbox_domain: String::new(),
+            epicbox_port: 443,
+            onion_routes: Vec::new(),
+            tuning: crate::tuning::shipped(),
+            offline: false,
+            tor_wanted: false,
+            host_features: 0,
+            profile: 0,
+            domain: None,
+        };
+        let printed = format!("{config:?}");
+        assert!(!printed.contains("node-secret-value"));
+        assert!(printed.contains("[redacted]"));
+    }
+}
+
+/// An epic1 address with its link: the public address of the default account from
+/// `EpicWallet::epic1_address`, or a request link from `EpicWallet::epic1_link_make`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Epic1Link {
+    /// The link text, `epic:epic1…`, to share or copy.
+    pub link: String,
+    /// The text to draw as a QR code: the address and the amount, without the message. A link
+    /// with neither an amount nor a route entry is written in upper case, which a QR code holds
+    /// in fewer modules; a reader takes it as the same link.
+    pub qr: String,
+    /// The epic1 address the link pays.
+    pub address: String,
+}
+
+/// What an epic1 link asks, from `EpicWallet::epic1_link_read`. Nothing is stored.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Epic1LinkRead {
+    /// The payee: the epic1 address.
+    pub address: String,
+    /// The amount the link asks, in base units; `None` when the payer chooses it.
+    pub amount: Option<u64>,
+    pub message: Option<String>,
+    pub label: Option<String>,
+    /// The host of the `http` or `tor` entry a payment is posted to first; `None` when it is
+    /// posted to the payee's mailbox on the relays of the list.
+    pub http_host: Option<String>,
+    /// How many `mailbox=` entries the link holds. A payment never goes to a mailbox a link
+    /// names: it is read past, and none is connected to.
+    pub ignored_mailboxes: u32,
+}
+
+/// What [`crate::api::wallet::EpicWallet::epic1_restore`] did.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Epic1Restored {
+    /// Payments taken and answers finalized.
+    pub taken: u32,
+    /// The mailboxes of the list that were not read, each with why. Payments on them are found
+    /// once the delivery loop reads them.
+    pub not_read: Vec<Epic1NotRead>,
+}
+
+/// A mailbox a restore did not read.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Epic1NotRead {
+    /// The mailbox, `domain:port`.
+    pub host: String,
+    pub reason: Epic1NotReadReason,
+}
+
+/// Why a restore did not read a mailbox.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Epic1NotReadReason {
+    /// The mailbox does not offer push (mux/1).
+    NoPush,
+    /// No session to the mailbox could be had, or none of its sessions answered.
+    NotAnswering,
+    /// Some of the slots to read could not be watched on it.
+    SlotsLeftOut,
+}
+
+/// One post of an epic1 payment on a route of its link.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Epic1Attempt {
+    pub host: String,
+    /// Why the post failed; `None` when it went through.
+    pub error: Option<String>,
+    /// The post failed after the payment was sent: the relay may hold it, and the payee may
+    /// still take it from there.
+    pub uncertain: bool,
+}
+
+/// A payment made to an epic1 link, from `EpicWallet::epic1_pay`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Epic1Paid {
+    pub tx_id: u32,
+    pub slate_id: String,
+    pub address: String,
+    /// The posts made, in order; the last went through when `posted` is set.
+    pub attempts: Vec<Epic1Attempt>,
+    /// The route, from 0, the payment was posted on.
+    pub posted: Option<u32>,
+    /// The first route, from 0, that may hold the payment though its post failed. Show that
+    /// the payment may still arrive and do not offer to pay again.
+    pub uncertain: Option<u32>,
+    /// How the payment is written: always `Native`, a sealed `lepic.v1` slate.
+    pub format: SlateWire,
+}
+
+/// An answer this wallet made for a payment taken at one of its delivery mailboxes, as
+/// `EpicWallet::epic1_answers` lists it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Epic1AnswerView {
+    pub tx_id: u32,
+    pub slate_id: String,
+    /// The relay of the payer's reply mailbox, the one the payment was read from.
+    pub mailbox: String,
+    pub posted: bool,
+}
+
+/// A slate in sealed text as it arrived, from `EpicWallet::epictx_open`. Nothing is stored.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EpictxView {
+    /// The contact whose signature the envelope carries; `None` for an anonymous envelope.
+    pub contact_id: Option<String>,
+    /// The body is a `lepic.v1` slate (RFC 0003).
+    pub native: bool,
+    /// The slate as JSON: the view of a `lepic.v1` slate (RFC 0003 5.10), or the V3 JSON of
+    /// another.
+    pub slate_json: String,
+    pub purpose: Option<SlatePurpose>,
+    /// The sender's own reference, shown and never trusted for crediting.
+    pub reference: Option<String>,
+    /// When the sender stops honouring the slate, in unix seconds; advisory.
+    pub expires: Option<u64>,
+}
+
+/// How the Epicbox listener reads mail from the relay over one shared push session (mux/1),
+/// instead of its own socket. Falls back to the socket when the relay does not offer it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ListenVia {
+    /// The session's group. While tor is off the delivery loop reads the contact mailboxes in
+    /// the same group, so both share one socket per relay.
+    pub group: String,
+    /// How often the session asks the relay whether mail waits, in seconds; `None` never asks.
+    pub waiting_every_s: Option<u32>,
+}
+
+/// Where a push session of the relay is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EpicboxSessionState {
+    Connecting,
+    Attached,
+    /// The connection dropped; the session retries with backoff.
+    Reconnecting,
+    /// The relay does not offer push sessions. Nothing was started.
+    NotOffered,
+    Stopped,
+}
+
+/// A push session of the relay in use.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EpicboxSessionView {
+    /// The relay as `domain:port`.
+    pub relay: String,
+    pub group: String,
+    pub state: EpicboxSessionState,
+    pub sockets_opened: u64,
+    pub attaches: u64,
+    pub resumes: u64,
+    pub mails: u64,
+    pub duplicates: u64,
+    pub stall_reconnects: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EpicboxSessionEventKind {
+    /// The session is in `state`. The first event of a session, then one per change.
+    State,
+    /// The relay pushed mail the session queued, for the delivery loop or the listener.
+    MailQueued,
+    /// No mailbox of the list can be reached: each lost its last socket or answered without
+    /// push. Told once, until a mailbox comes back; `relay` and `group` are empty.
+    NoneReachable,
+    /// A socket of `relay` attached after no mailbox could be reached; `group` is empty.
+    MailboxBack,
+}
+
+/// What [`crate::api::wallet::EpicWallet::watch_epicbox_sessions`] streams.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EpicboxSessionEvent {
+    pub kind: EpicboxSessionEventKind,
+    pub relay: String,
+    pub group: String,
+    /// The new state, for `State`.
+    pub state: Option<EpicboxSessionState>,
+}

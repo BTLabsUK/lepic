@@ -1,0 +1,61 @@
+#!/usr/bin/env bash
+# Enforces the commit message rules in CONTRIBUTING.md.
+# Usage: commit-msg <message-file>                  (git hook)
+#        commit-msg --no-autosquash <message-file>  (commits in CI)
+#        commit-msg --subject "<subject>"           (pull request titles in CI)
+set -euo pipefail
+
+types='feat|fix|perf|refactor|test|docs|build|ci|chore|revert'
+scopes='primitives|crypto|keychain|slate|seal|contact|node|store|transport|methods|epicbox|wallet|telemetry|ffi|cli|xtask|conformance|fuzz|interop|deps|ci|docs|repo'
+
+fail() {
+    printf 'commit-msg: %s\n' "$1" >&2
+    printf 'subject was: %s\n' "$subject" >&2
+    printf 'rules: CONTRIBUTING.md\n' >&2
+    exit 1
+}
+
+check_subject() {
+    [[ "$subject" =~ ^($types)(\(($scopes)\))?!?:\ [a-z0-9].*[^.]$ ]] \
+        || fail "subject must be 'type(scope): description', lowercase description, no trailing period"
+    (( ${#subject} <= 72 )) || fail "subject is ${#subject} characters, the limit is 72"
+}
+
+if [[ "${1:-}" == "--subject" ]]; then
+    subject="${2:-}"
+    check_subject
+    exit 0
+fi
+
+# Autosquash subjects are fine while a branch is reworked locally, but must be squashed before
+# review, so CI passes --no-autosquash and they then fail the subject rule.
+allow_autosquash=true
+if [[ "${1:-}" == "--no-autosquash" ]]; then
+    allow_autosquash=false
+    shift
+fi
+
+msg_file="$1"
+subject="$(grep -v '^#' "$msg_file" | head -n 1)"
+
+if [[ "$allow_autosquash" == true ]]; then
+    case "$subject" in
+        fixup!\ *|squash!\ *|amend!\ *) exit 0 ;;
+    esac
+fi
+
+check_subject
+
+[[ "$(sed -n '2p' "$msg_file")" == "" ]] || fail "line 2 must be blank"
+
+grep -Eq '^Signed-off-by: .+ <.+>$' "$msg_file" || fail "missing Signed-off-by trailer, commit with -s"
+
+if grep -Eq '^[^#].{72,}' <(tail -n +3 "$msg_file" | grep -v '^Signed-off-by:' | grep -Ev 'https?://'); then
+    fail "body lines must wrap at 72 characters"
+fi
+
+branch="$(git symbolic-ref --short -q HEAD 2>/dev/null || true)"
+if [[ "$branch" =~ ^[a-z]+/([a-z])-([0-9]{2})- ]]; then
+    task_id="${BASH_REMATCH[1]^^}-${BASH_REMATCH[2]}"
+    grep -Eq "^Refs: ${task_id}\$" "$msg_file" || fail "branch $branch needs a 'Refs: ${task_id}' footer"
+fi

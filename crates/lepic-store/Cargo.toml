@@ -1,0 +1,49 @@
+[package]
+name = "lepic-store"
+description = "SQLite wallet storage behind repository traits."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+blake2.workspace = true
+chacha20poly1305 = { workspace = true, features = ["alloc", "zeroize"] }
+getrandom = { workspace = true, features = ["std"] }
+jiff.workspace = true
+lepic-primitives.workspace = true
+rusqlite = { workspace = true, optional = true }
+serde = { workspace = true, features = ["derive", "std"], optional = true }
+serde_json = { workspace = true, features = ["std"], optional = true }
+sha2 = { workspace = true, optional = true }
+thiserror.workspace = true
+tokio = { workspace = true, features = ["time"], optional = true }
+tracing = { workspace = true, features = ["std"], optional = true }
+uuid.workspace = true
+zeroize = { workspace = true, features = ["alloc"] }
+
+[features]
+default = ["sqlite"]
+sqlite = ["dep:rusqlite", "dep:serde", "dep:serde_json", "dep:sha2", "dep:tokio", "dep:tracing"]
+# Writes a large wallet history for benchmarks.
+seed = ["dep:serde_json"]
+
+[dev-dependencies]
+tempfile.workspace = true
+tokio = { workspace = true, features = ["macros", "rt", "time"] }
+
+[[test]]
+name = "store"
+required-features = ["sqlite"]
+
+[[test]]
+name = "at_rest_probe"
+required-features = ["sqlite"]
+
+[[test]]
+name = "vectors"
+required-features = ["sqlite"]
+
+[lints]
+workspace = true

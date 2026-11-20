@@ -1,0 +1,34 @@
+diff --git a/crates/lepic-epicbox/src/mock_relay.rs b/crates/lepic-epicbox/src/mock_relay.rs
+index 5b4743f9c..fe8351e45 100644
+--- a/crates/lepic-epicbox/src/mock_relay.rs
++++ b/crates/lepic-epicbox/src/mock_relay.rs
+@@ -502,6 +502,29 @@ impl MockRelay {
+             .count()
+     }
+ 
++    /// The messages waiting for `address`, oldest first, as `(from, str, signature, txid)`.
++    /// Added for the `cli-0.6.0` upgrade fixture generator only.
++    pub fn waiting(
++        &self,
++        address: &EpicboxAddress,
++    ) -> Vec<(String, String, String, Option<String>)> {
++        let state = self.lock();
++        let queue = state.queue_name(&address.key_text(), Some(address.domain().as_str()));
++        state
++            .messages
++            .iter()
++            .filter(|m| m.queue == queue && !m.made)
++            .map(|m| {
++                (
++                    m.from.clone(),
++                    m.str.clone(),
++                    m.signature.clone(),
++                    m.txid.clone(),
++                )
++            })
++            .collect()
++    }
++
+     /// Messages for `address` sent to a socket but not yet acknowledged with `Made`: in the
+     /// hands of a client.
+     pub fn in_hand(&self, address: &EpicboxAddress) -> usize {

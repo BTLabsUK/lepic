@@ -1,0 +1,25 @@
+{
+  "schema": 1,
+  "area": "keys",
+  "name": "pairing_verdicts",
+  "generator": "conformance/vectors/keys",
+  "upstream": {
+    "repo": "https://github.com/EpicCash/epic-wallet",
+    "commit": "845b3fcf4df12ed0139929c62157015447a9d063"
+  },
+  "inputs": {
+    "domain": "lepic-wallet pairing verdict v1",
+    "sas": [
+      "7b49eb6f",
+      "00000000",
+      "ffffffff"
+    ]
+  },
+  "expected": {
+    "hashes": [
+      "7947b716d02b42cfc794f16a204d80405fc891efeb5a653a78f4fbb34954f156",
+      "5b4f12d3bedefc7eeb9d615cff7ce3e094b35eed5ab27feb7bada016e09e83f3",
+      "c3e033e316ca699659bc6b1d54ab601dad6eb6cdd0e67a2db3b3bb5e4f5a5e85"
+    ]
+  }
+}

@@ -1,0 +1,23 @@
+[package]
+name = "lepic-interop-capture"
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+publish = false
+description = "Opens the Epicbox messages LEPIC posted to the peer wallet during an interop gate run"
+
+# Its own workspace, like ../probe: a test tool outside the product graph and its lints.
+[workspace]
+
+[[bin]]
+name = "open-frames"
+path = "src/main.rs"
+
+[dependencies]
+# Versions as the product workspace pins them.
+anyhow = { version = "1.0.104", features = ["std"] }
+lepic-crypto = { path = "../../crates/lepic-crypto" }
+lepic-epicbox = { path = "../../crates/lepic-epicbox" }
+lepic-keychain = { path = "../../crates/lepic-keychain" }
+lepic-primitives = { path = "../../crates/lepic-primitives" }
+serde_json = { version = "1.0.154", default-features = false, features = ["std"] }

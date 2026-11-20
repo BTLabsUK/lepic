@@ -1,0 +1,43 @@
+[package]
+name = "lepic-tor"
+description = "Tor on desktop: the wallet's onion service and sending to onion addresses over a tor child process."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+# The settings the app ships, for tests of this crate and the crates above it.
+testing = ["lepic-legacy-rpc/testing"]
+
+[dependencies]
+base64 = { workspace = true, features = ["alloc"] }
+ed25519-dalek = { workspace = true, features = ["zeroize"] }
+getrandom = { workspace = true, features = ["std"] }
+hmac = { workspace = true, features = ["zeroize"] }
+http-body-util.workspace = true
+hyper = { workspace = true, features = ["client", "http1"] }
+hyper-util = { workspace = true, features = ["tokio"] }
+lepic-legacy-rpc.workspace = true
+serde = { workspace = true, features = ["derive", "std"] }
+serde_json = { workspace = true, features = ["std"] }
+sha2 = { workspace = true, features = ["zeroize"] }
+sha3.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["fs", "io-util", "macros", "net", "process", "rt", "sync", "time"] }
+tracing = { workspace = true, features = ["std", "attributes"] }
+zeroize.workspace = true
+
+[dev-dependencies]
+lepic-tor = { path = ".", features = ["testing"] }
+ed25519-dalek = { workspace = true, features = ["hazmat", "zeroize"] }
+hmac.workspace = true
+proptest = { workspace = true, features = ["std"] }
+serde_json = { workspace = true, features = ["std"] }
+sha2.workspace = true
+tempfile.workspace = true
+tokio = { workspace = true, features = ["fs", "io-util", "macros", "net", "process", "rt", "rt-multi-thread", "sync", "time"] }

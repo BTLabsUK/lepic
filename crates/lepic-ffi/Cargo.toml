@@ -1,0 +1,58 @@
+[package]
+name = "lepic-ffi"
+description = "flutter_rust_bridge API over the LEPIC wallet engine for mobile and desktop apps."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[lib]
+crate-type = ["lib", "cdylib", "staticlib"]
+
+[features]
+default = ["tor"]
+# The wallet's own tor (ADR 0018), Epicbox and node requests over it (ADR 0021, ADR 0022) and
+# sends to onions: `lepic-tor` and everything that needs it (ADR 0026). Without it every Tor
+# function of the API stays, with the same signature, and fails with `Unsupported` or reports
+# Tor as off, so one generated binding serves both builds.
+tor = ["dep:lepic-tor", "lepic-methods/tor", "lepic-wallet-contacts/tor"]
+# An in-process scripted node and Epicbox relay for the binding's own tests
+# (the binding repository's `test/`). Never in an app build.
+mock = ["lepic-node/mock", "lepic-epicbox/mock-relay", "lepic-keychain/test-kdf"]
+
+[dependencies]
+base64 = { workspace = true, features = ["alloc"] }
+flutter_rust_bridge = { workspace = true, features = ["anyhow", "dart-opaque", "portable-atomic", "rust-async", "thread-pool"] }
+getrandom = { workspace = true, features = ["std", "sys_rng"] }
+jiff = { workspace = true, features = ["std"] }
+lepic-epicbox.workspace = true
+lepic-keychain.workspace = true
+lepic-methods = { workspace = true, features = ["epicbox-wallet", "http"] }
+lepic-node.workspace = true
+lepic-primitives.workspace = true
+lepic-store.workspace = true
+lepic-telemetry.workspace = true
+lepic-tor = { workspace = true, optional = true }
+lepic-transport.workspace = true
+lepic-wallet.workspace = true
+lepic-wallet-contacts.workspace = true
+rand = { workspace = true, features = ["std_rng"] }
+sha2.workspace = true
+tokio = { workspace = true, features = ["fs", "net", "rt", "rt-multi-thread", "sync", "time"] }
+tracing = { workspace = true, features = ["std", "attributes"] }
+zeroize.workspace = true
+
+[dev-dependencies]
+lepic-wallet-contacts = { workspace = true, features = ["test-support"] }
+hmac.workspace = true
+lepic-epicbox = { workspace = true, features = ["mock-relay"] }
+# Without the default features, so `--no-default-features` tests the build without Tor.
+lepic-ffi = { path = ".", default-features = false, features = ["mock"] }
+serde_json = { workspace = true, features = ["std"] }
+tempfile.workspace = true
+tokio-rustls.workspace = true
+tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "test-util"] }
+
+[lints]
+workspace = true

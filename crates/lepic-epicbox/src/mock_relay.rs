@@ -1,0 +1,1724 @@
+// SPDX-License-Identifier: Apache-2.0
+//! An in-process relay with the semantics of the public relay (`docs/compat/epicbox.md`), for
+//! deterministic tests of the client, the engine and the bindings.
+//!
+//! It sends a challenge on connect, verifies `Subscribe`, `PostSlate` and `Made` signatures,
+//! stores messages until `Made`, delivers the oldest pending message one at a time per socket,
+//! redelivers an unacknowledged message to a new socket and, after three more subscribes, to the
+//! same socket, discards an address's unacknowledged messages after three such rounds, keeps one
+//! live listener per address, passes each newly posted message through to an idle listener,
+//! answers the JSON `ping` with bare `pong` text, and closes sockets that send text that is not
+//! JSON. A `Subscribe` for another address switches the socket to it, and `Made` is checked
+//! against the address the socket last subscribed with, as on the public relay. Unlike the
+//! public relay it stores every message itself instead of forwarding to other domains, and its
+//! messages do not expire. All domains share one queue per key, unless
+//! [`MockRelay::set_relays_apart`] makes each domain a relay of its own. Switches make it refuse
+//! or stall connections, leave chosen frames unanswered, or stop reading a connection. Tests
+//! wait on its state with [`MockRelay::wait_until`] instead of polling.
+//!
+//! It reports protocol 3.0.0 unless [`MockRelay::set_version`] names 3.1.0 or later within major
+//! 3. Such a relay also takes the cancel protocol: `epicboxtxid` and `epicboxtxidsig` on
+//! `PostSlate` (verified against the `from` key), `epicboxtxid` on the `Slate` frames it
+//! pushes, `CancelTx`, and `TransactionCancelled`. A cancel is kept for the other participant
+//! until a socket acknowledges it with its next accepted `Subscribe`, as the public relay does.
+//! A 3.0.0 relay ignores every one of those fields and frames.
+
+use std::collections::{HashMap, HashSet};
+use std::io;
+use std::pin::pin;
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::time::Duration;
+
+use futures_util::{SinkExt, StreamExt};
+use lepic_transport::transport::BoxFuture;
+use serde_json::{Value, json};
+use tokio::io::DuplexStream;
+use tokio::net::TcpListener;
+use tokio::runtime::Handle;
+use tokio::sync::{Notify, mpsc};
+use tokio::task::JoinHandle;
+use tokio::time::Instant;
+use tokio_tungstenite::tungstenite::Message;
+use tokio_tungstenite::tungstenite::protocol::CloseFrame;
+use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
+
+use crate::address::{EpicboxAddress, Network, decode_key};
+use crate::crypto::{EncryptedMessage, SignedMessage, verify_text};
+use crate::frame::{
+    CANCEL_FORM_EXTENSION, CANCEL_PROTOCOL_VERSION, CANCEL_SIGNATURE_PREFIX, MAX_FRAME_LEN,
+    PROTOCOL_VERSION,
+};
+use crate::mux_frame::MUX_EXTENSION;
+use crate::session::{Connector, ProtocolVersion, RelayEndpoint, RelayStream};
+
+mod mux;
+
+/// Buffer of each in-memory connection; writes beyond it wait for the reader.
+const PIPE_CAPACITY: usize = 64 * 1024;
+
+/// Close code the public relay uses for text that is not JSON.
+const CLOSE_NOT_JSON: u16 = 3000;
+
+/// Subscribes while a message is unacknowledged after which the relay sends it again on the same
+/// socket, and redelivery rounds after which it discards the address's unacknowledged messages.
+const RESEND_AFTER: u32 = 3;
+
+/// The largest payload a websocket control frame carries.
+const MAX_CONTROL_PAYLOAD: usize = 125;
+
+/// Pings that fill a connection which is not read: their pongs exceed [`PIPE_CAPACITY`].
+const FILL_PINGS: usize = 1024;
+
+/// A frame the relay can be told to leave unanswered with [`MockRelay::set_unanswered`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum Unanswered {
+    /// The challenge sent on connect and after each accepted `Made`.
+    Challenge,
+    ClientDetails,
+    Subscribe,
+    PostSlate,
+    /// The answer to a `PostSlate` the relay stored, as when the answer is lost on its way.
+    PostAnswer,
+    Made,
+    /// A `CancelTx`, as a relay that takes the cancel and is lost before it answers.
+    CancelTx,
+}
+
+/// A relay shared by every connection made through its [`MockRelay::connector`].
+#[derive(Clone)]
+pub struct MockRelay {
+    inner: Arc<Inner>,
+}
+
+struct Inner {
+    network: Network,
+    state: Mutex<RelayState>,
+    /// Woken after every change that the relay's queries can report.
+    changed: Notify,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Stored {
+    id: String,
+    queue: String,
+    from: String,
+    str: String,
+    signature: String,
+    made: bool,
+    /// The transaction id posted with the message, on a relay with cancel.
+    txid: Option<String>,
+    /// The mux/1 socket the message was pushed to and has not acknowledged.
+    pushed_to: Option<u64>,
+    /// When the hold a mux/1 client put on the message ends.
+    held_until: Option<Instant>,
+}
+
+impl Stored {
+    /// Whether a mux/1 socket may be pushed the message or a `Subscribe` collect it at `now`.
+    fn offerable(&self, now: Instant) -> bool {
+        !self.made && self.pushed_to.is_none() && self.held_until.is_none_or(|until| until <= now)
+    }
+}
+
+/// The two queues of a transaction the relay knows by its `epicboxtxid`.
+#[derive(Debug, Clone)]
+struct TxRecord {
+    from_key: String,
+    from_queue: String,
+    to_key: String,
+    to_queue: String,
+}
+
+/// A cancel the relay keeps for `queue` until a client acknowledges it.
+#[derive(Debug, Clone)]
+struct Tombstone {
+    txid: String,
+    /// The relay domain the cancel was made on, when relays are apart.
+    relay: Option<String>,
+    queue: String,
+    acked: bool,
+}
+
+struct Socket {
+    outgoing: mpsc::UnboundedSender<Outgoing>,
+    challenge: String,
+    listener_mode: bool,
+    address: Option<String>,
+    /// The relay domain the connection was made to; `None` for one served over TCP.
+    domain: Option<String>,
+    /// The queue the socket last subscribed to: its address, with the domain when relays are
+    /// apart.
+    queue: Option<String>,
+    versioned: bool,
+    /// The message this socket was sent and has not acknowledged.
+    in_flight: Option<String>,
+    /// Subscribes answered `Ok` while a message was in flight.
+    resend_attempts: u32,
+    /// Redeliveries made after `RESEND_AFTER` such subscribes.
+    resend_rounds: u32,
+    /// Frames still read before the socket stops reading, when that switch is set.
+    reads_left: Option<usize>,
+    /// Set by [`MockRelay::stall_challenges`]: no challenge and no pushed message.
+    cycle_stopped: bool,
+    /// Whether this socket has had a `Subscribe` accepted.
+    ever_subscribed: bool,
+    /// Whether the socket negotiated cancel: the relay is 3.1.0 or later and the last accepted
+    /// `Subscribe` named 3.1.0 or later.
+    cancel: bool,
+    /// The `TransactionCancelled` sent to this socket that its next accepted `Subscribe`
+    /// acknowledges: the txid and the queue it was kept for.
+    pending_cancel_ack: Option<(String, String)>,
+    /// Whether the socket negotiated mux/1.
+    mux: bool,
+    /// The queues a mux/1 socket attached, each with the key the client named it by.
+    attached: HashMap<String, String>,
+    /// When the socket's current `Waiting` window began, and the `Waiting` frames it had in it.
+    waiting_window: (Instant, u32),
+}
+
+enum Outgoing {
+    Text(String),
+    Ping,
+    StopReading,
+    Close(u16),
+}
+
+/// How many mailboxes one mux/1 socket held after one of its `Attach` or `Detach` frames.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MailboxCount {
+    /// The socket, numbered by the relay in the order it was accepted.
+    pub socket: u64,
+    pub mailboxes: usize,
+}
+
+struct RelayState {
+    next_socket: u64,
+    next_message: u64,
+    next_challenge: u64,
+    sockets: HashMap<u64, Socket>,
+    sockets_opened: usize,
+    /// The mailboxes a mux/1 socket held after each `Attach` or `Detach` it sent, in order.
+    mailbox_counts: Vec<MailboxCount>,
+    /// Sockets that had a `Subscribe` accepted, counted once each.
+    sockets_subscribed: usize,
+    listeners: HashMap<String, u64>,
+    messages: Vec<Stored>,
+    refusing: bool,
+    /// Whether `Subscribe`, `PostSlate` and `Made` are answered `Busy`, as an overloaded relay does.
+    busy: bool,
+    /// Relay domains that refuse new connections.
+    domains_down: HashSet<String>,
+    /// Keys of addresses whose posts are never answered.
+    unroutable: HashSet<String>,
+    /// Keys of addresses whose posts are answered `InvalidRequest`.
+    post_refused: HashSet<String>,
+    /// The `kind` and `description` of the `Error` every post is answered with, when set.
+    post_refusal: Option<(String, String)>,
+    /// Keys of addresses whose posts are stored and answered with text that is not a frame.
+    post_garbled: HashSet<String>,
+    /// Relay domains whose posts are answered `InvalidRequest`, whatever the key.
+    domains_refused: HashSet<String>,
+    /// Relay domains whose posts are never answered, whatever the key.
+    domains_unanswered: HashSet<String>,
+    /// Each domain keeps its own queues, as separate relays do.
+    apart: bool,
+    stalling: bool,
+    stalled: Vec<DuplexStream>,
+    unanswered: HashSet<Unanswered>,
+    stop_reading_after: Option<usize>,
+    version: Option<String>,
+    received: HashMap<String, usize>,
+    /// Frames received by `type`, per relay domain the connection was made to.
+    received_on: HashMap<(String, String), usize>,
+    deliveries: HashMap<String, usize>,
+    pings: usize,
+    /// Transactions posted with an `epicboxtxid`, by txid and, when relays are apart, the relay
+    /// domain they were posted to.
+    txids: HashMap<(String, Option<String>), TxRecord>,
+    /// Transaction ids in the order they were posted.
+    posted_txids: Vec<String>,
+    tombstones: Vec<Tombstone>,
+    /// Times a `TransactionCancelled` for a txid was sent to any socket as a tombstone.
+    cancel_deliveries: HashMap<String, usize>,
+    /// Kind of the `Error` every `CancelTx` is answered with, when set.
+    cancel_error: Option<String>,
+    /// Whether frames carry the relay-to-relay `cancelrequestid`.
+    relay_request_ids: bool,
+    /// Whether the relay checks cancels signed over `epicbox-cancel/1:<txid>` and echoes the
+    /// extension to a client that offers it. Cancels signed over the bare id are always taken.
+    cancel_form: bool,
+    /// The signature form of each `CancelTx` that was accepted, oldest first.
+    cancel_forms: Vec<CancelForm>,
+    /// Whether a client that asks for mux/1 gets it.
+    offer_mux: bool,
+    /// Ends of holds set since the socket task last looked, each to push mail again at.
+    hold_wakes: Vec<Instant>,
+    /// The `Waiting` frames a mux/1 socket may send per window, and the window, as Epicmail
+    /// counts them; `None` takes every one.
+    waiting_limit: Option<(u32, Duration)>,
+    /// Every `Waiting` frame received, with its socket, oldest first.
+    waiting_asked: Vec<(u64, Instant)>,
+    /// `Waiting` frames answered `rate_limited`.
+    waiting_refused: usize,
+}
+
+/// The text an accepted `CancelTx` signature covered.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CancelForm {
+    /// The bare transaction id.
+    Bare,
+    /// `epicbox-cancel/1:` and the transaction id.
+    Separated,
+}
+
+impl MockRelay {
+    /// A relay for addresses on `network` that reports protocol 3.0.0.
+    pub fn new(network: Network) -> Self {
+        Self {
+            inner: Arc::new(Inner {
+                network,
+                state: Mutex::new(RelayState {
+                    next_socket: 0,
+                    next_message: 0,
+                    next_challenge: 0,
+                    sockets: HashMap::new(),
+                    sockets_opened: 0,
+                    mailbox_counts: Vec::new(),
+                    sockets_subscribed: 0,
+                    listeners: HashMap::new(),
+                    messages: Vec::new(),
+                    refusing: false,
+                    busy: false,
+                    domains_down: HashSet::new(),
+                    unroutable: HashSet::new(),
+                    domains_refused: HashSet::new(),
+                    domains_unanswered: HashSet::new(),
+                    apart: false,
+                    post_refused: HashSet::new(),
+                    post_refusal: None,
+                    post_garbled: HashSet::new(),
+                    stalling: false,
+                    stalled: Vec::new(),
+                    unanswered: HashSet::new(),
+                    stop_reading_after: None,
+                    version: Some(PROTOCOL_VERSION.to_owned()),
+                    received: HashMap::new(),
+                    received_on: HashMap::new(),
+                    deliveries: HashMap::new(),
+                    pings: 0,
+                    txids: HashMap::new(),
+                    posted_txids: Vec::new(),
+                    tombstones: Vec::new(),
+                    cancel_deliveries: HashMap::new(),
+                    cancel_error: None,
+                    cancel_form: false,
+                    cancel_forms: Vec::new(),
+                    relay_request_ids: false,
+                    offer_mux: false,
+                    hold_wakes: Vec::new(),
+                    waiting_limit: None,
+                    waiting_asked: Vec::new(),
+                    waiting_refused: 0,
+                }),
+                changed: Notify::new(),
+            }),
+        }
+    }
+
+    /// Connects in memory, whatever the endpoint says.
+    pub fn connector(&self) -> Arc<dyn Connector> {
+        Arc::new(MockConnector {
+            relay: self.clone(),
+        })
+    }
+
+    /// Serves websocket connections from `listener` until the task is aborted.
+    pub fn serve(&self, listener: TcpListener) -> io::Result<JoinHandle<()>> {
+        let runtime = Handle::try_current().map_err(io::Error::other)?;
+        let relay = self.clone();
+        Ok(runtime.spawn(async move {
+            while let Ok((stream, _)) = listener.accept().await {
+                relay.accept(stream, None);
+            }
+        }))
+    }
+
+    /// Offers mux/1 to a client that asks for it, or answers it a plain `Ok` as a 3.0.0 relay
+    /// does (the default). Either way one store serves both: mail is pushed to the mux/1 socket
+    /// that attached its mailbox, a mux/1 `Ack` removes it for every query and `Subscribe`, and
+    /// a `Subscribe` collects what no mux/1 socket holds or a hold keeps back.
+    pub fn offer_mux(&self, offering: bool) {
+        self.update(|state| state.offer_mux = offering);
+    }
+
+    /// Takes at most `per_window` mux/1 `Waiting` frames per socket in each `window` from the
+    /// socket's start, as Epicmail takes 60 a minute, and answers the rest `rate_limited` with
+    /// the seconds left of the window. `None` takes every one (the default). Starts the counts
+    /// of [`Self::waiting_refused`] and [`Self::most_waiting_within`] afresh.
+    pub fn limit_waiting(&self, limit: Option<(u32, Duration)>) {
+        self.update(|state| {
+            state.waiting_limit = limit;
+            state.waiting_asked.clear();
+            state.waiting_refused = 0;
+        });
+    }
+
+    /// `Waiting` frames answered `rate_limited`.
+    pub fn waiting_refused(&self) -> usize {
+        self.lock().waiting_refused
+    }
+
+    /// The most `Waiting` frames one socket sent within any `window`, closed sockets included.
+    pub fn most_waiting_within(&self, window: Duration) -> usize {
+        let state = self.lock();
+        let mut most = 0;
+        for (index, (socket, at)) in state.waiting_asked.iter().enumerate() {
+            let within = state
+                .waiting_asked
+                .iter()
+                .skip(index)
+                .filter(|(other, later)| {
+                    other == socket && later.saturating_duration_since(*at) < window
+                })
+                .count();
+            most = most.max(within);
+        }
+        most
+    }
+
+    /// Answers `Subscribe`, `PostSlate` and `Made` with `{"type":"Error","kind":"Busy"}`, as a
+    /// relay that is overloaded does, or normally again with `false`.
+    pub fn set_busy(&self, busy: bool) {
+        self.update(|state| state.busy = busy);
+    }
+
+    /// Refuses new connections, as an unreachable relay does.
+    pub fn set_refusing(&self, refusing: bool) {
+        self.update(|state| state.refusing = refusing);
+    }
+
+    /// Refuses new connections made to relay `domain`, as a relay that is down does, or takes
+    /// them again. Connections already open stay.
+    pub fn set_domain_down(&self, domain: &str, down: bool) {
+        self.update(|state| {
+            if down {
+                state.domains_down.insert(domain.to_owned());
+            } else {
+                state.domains_down.remove(domain);
+            }
+        });
+    }
+
+    /// Leaves posts to `address` unanswered, as the relay does when it forwards a message to
+    /// another domain that does not take it.
+    pub fn set_unroutable(&self, address: &EpicboxAddress) {
+        self.update(|state| {
+            state.unroutable.insert(address.key_text());
+        });
+    }
+
+    /// Answers posts to `address` again, after [`Self::set_unroutable`].
+    pub fn set_routable(&self, address: &EpicboxAddress) {
+        self.update(|state| {
+            state.unroutable.remove(&address.key_text());
+        });
+    }
+
+    /// Answers posts to any address under relay `domain` with `InvalidRequest`, as the relay
+    /// does when forwarding to a domain that does not answer.
+    pub fn set_domain_refused(&self, domain: &str) {
+        self.update(|state| {
+            state.domains_refused.insert(domain.to_owned());
+        });
+    }
+
+    /// Answers posts under relay `domain` again, after [`Self::set_domain_refused`].
+    pub fn set_domain_accepted(&self, domain: &str) {
+        self.update(|state| {
+            state.domains_refused.remove(domain);
+        });
+    }
+
+    /// Leaves posts to any address under relay `domain` unanswered and unstored, whatever the
+    /// key, as a relay does when it forwards to a domain that does not take the message. Posts
+    /// to other domains are answered as before.
+    pub fn set_domain_unanswered(&self, domain: &str) {
+        self.update(|state| {
+            state.domains_unanswered.insert(domain.to_owned());
+        });
+    }
+
+    /// Answers posts under relay `domain` again, after [`Self::set_domain_unanswered`].
+    pub fn set_domain_answered(&self, domain: &str) {
+        self.update(|state| {
+            state.domains_unanswered.remove(domain);
+        });
+    }
+
+    /// Answers posts to `address` with `InvalidRequest`, as the relay does when forwarding a
+    /// message to another domain fails.
+    pub fn set_post_refused(&self, address: &EpicboxAddress) {
+        self.update(|state| {
+            state.post_refused.insert(address.key_text());
+        });
+    }
+
+    /// Answers every post with an `Error` of this `kind` and `description`, as a relay that
+    /// refuses posts for a limit does, or normally again with `None`.
+    pub fn set_post_refusal(&self, refusal: Option<(&str, &str)>) {
+        self.update(|state| {
+            state.post_refusal =
+                refusal.map(|(kind, description)| (kind.to_owned(), description.to_owned()));
+        });
+    }
+
+    /// Answers posts to `address` again, after [`Self::set_post_refused`].
+    pub fn set_post_accepted(&self, address: &EpicboxAddress) {
+        self.update(|state| {
+            state.post_refused.remove(&address.key_text());
+        });
+    }
+
+    /// Stores posts to `address` and answers them with text that is not a relay frame.
+    pub fn set_post_garbled(&self, address: &EpicboxAddress) {
+        self.update(|state| {
+            state.post_garbled.insert(address.key_text());
+        });
+    }
+
+    /// Keeps one queue per relay domain from now on, as separate relays do: a message posted to
+    /// `key@domain` reaches only connections made to `domain`. Off, every domain shares one
+    /// queue per key. Messages stored before the switch stay in the queue they were stored in.
+    pub fn set_relays_apart(&self, apart: bool) {
+        self.update(|state| state.apart = apart);
+    }
+
+    /// Accepts new connections but never answers on them, as a relay stuck mid-handshake does.
+    pub fn set_stalling(&self, stalling: bool) {
+        self.update(|state| state.stalling = stalling);
+    }
+
+    /// Leaves `frame` unanswered from now on, or answers it again. A withheld challenge is
+    /// never sent; a withheld request is counted by [`Self::received`] and otherwise ignored.
+    pub fn set_unanswered(&self, frame: Unanswered, unanswered: bool) {
+        self.update(|state| {
+            if unanswered {
+                state.unanswered.insert(frame);
+            } else {
+                state.unanswered.remove(&frame);
+            }
+        });
+    }
+
+    /// Stops reading every subscribed connection, as a relay whose process hangs does. Frames
+    /// queued for it still go out, and the client's writes wait once the buffer is full.
+    pub fn stop_reading_subscribed(&self) {
+        self.send_to_subscribed(|| Outgoing::StopReading);
+    }
+
+    /// Sends `count` websocket pings with the largest payload to every subscribed connection.
+    /// The client answers each with a pong, so this fills a connection that is not read.
+    pub fn ping_subscribed(&self, count: usize) {
+        for _ in 0..count {
+            self.send_to_subscribed(|| Outgoing::Ping);
+        }
+    }
+
+    /// Makes each connection opened from now on read `frames` protocol frames, then stop reading
+    /// and fill itself with pings before it answers the last frame read, as a relay that hangs
+    /// mid-conversation does. With `Some(0)` it stops before the first challenge; `None` restores
+    /// normal reading.
+    pub fn set_stop_reading_after(&self, frames: Option<usize>) {
+        self.update(|state| state.stop_reading_after = frames);
+    }
+
+    // Not through `update`: nothing a query reports changes, so no `wait_until` needs waking.
+    fn send_to_subscribed(&self, outgoing: impl Fn() -> Outgoing) {
+        for socket in self.lock().sockets.values() {
+            if socket.address.is_some() {
+                let _ = socket.outgoing.send(outgoing());
+            }
+        }
+    }
+
+    /// The version `GetVersion` reports; `None` leaves `GetVersion` unanswered.
+    pub fn set_version(&self, version: Option<&str>) {
+        self.update(|state| state.version = version.map(str::to_owned));
+    }
+
+    /// Stores a message as if another wallet had posted it, and returns its message id.
+    pub fn store(
+        &self,
+        from: &EpicboxAddress,
+        to: &EpicboxAddress,
+        message: &SignedMessage,
+    ) -> String {
+        self.update(|state| {
+            let queue = state.queue_name(&to.key_text(), Some(to.domain().as_str()));
+            let id = state.store(
+                queue.clone(),
+                from.to_string(),
+                message.str.clone(),
+                message.signature.to_der_hex(),
+            );
+            state.pass_through(&queue, &id);
+            id
+        })
+    }
+
+    /// Stores a message as [`Self::store`] does, posted with transaction id `txid`, as a
+    /// relay with cancel keeps it: `from` and `to` are the two participants who may cancel it.
+    pub fn store_with_txid(
+        &self,
+        from: &EpicboxAddress,
+        to: &EpicboxAddress,
+        message: &SignedMessage,
+        txid: &str,
+    ) -> String {
+        self.update(|state| {
+            let queue = state.queue_name(&to.key_text(), Some(to.domain().as_str()));
+            let id = state.store(
+                queue.clone(),
+                from.to_string(),
+                message.str.clone(),
+                message.signature.to_der_hex(),
+            );
+            state.record_txid(&id, txid, from, to, &queue);
+            state.pass_through(&queue, &id);
+            id
+        })
+    }
+
+    /// Cancels transaction `txid` as its participant `canceller` would: the other participant
+    /// is told of it, now if it has an idle listener that negotiated cancel, otherwise on its
+    /// next accepted `Subscribe`. Returns whether the relay knows the txid and `canceller`
+    /// takes part in it.
+    /// When relays are apart, the transaction is cancelled on every relay it was posted to.
+    pub fn cancel_as(&self, canceller: &EpicboxAddress, txid: &str) -> bool {
+        self.update(|state| {
+            let relays: Vec<Option<String>> = state
+                .txids
+                .keys()
+                .filter(|(id, _)| id == txid)
+                .map(|(_, relay)| relay.clone())
+                .collect();
+            let mut known = false;
+            for relay in relays {
+                known |= state.record_cancel(txid, &canceller.key_text(), relay);
+            }
+            known
+        })
+    }
+
+    /// Answers every `CancelTx` with an `Error` of this kind, or normally again with `None`.
+    pub fn set_cancel_error(&self, kind: Option<&str>) {
+        self.update(|state| state.cancel_error = kind.map(str::to_owned));
+    }
+
+    /// Makes the relay check cancels signed over `epicbox-cancel/1:<txid>` and echo the
+    /// extension to a client that offers it, or not (the default: a relay that knows only the
+    /// bare form).
+    pub fn set_cancel_form(&self, on: bool) {
+        self.update(|state| state.cancel_form = on);
+    }
+
+    /// The signature form of every accepted `CancelTx`, oldest first.
+    pub fn cancel_forms(&self) -> Vec<CancelForm> {
+        self.lock().cancel_forms.clone()
+    }
+
+    /// Adds the relay-to-relay `cancelrequestid` to the `Ok`, `Slate` and `TransactionCancelled`
+    /// frames a relay with cancel sends. A client must ignore it.
+    pub fn set_relay_request_ids(&self, on: bool) {
+        self.update(|state| state.relay_request_ids = on);
+    }
+
+    /// Transaction ids posted so far, oldest first.
+    pub fn posted_txids(&self) -> Vec<String> {
+        self.lock().posted_txids.clone()
+    }
+
+    /// The transaction id message `msg_id` was posted with.
+    pub fn txid_of(&self, msg_id: &str) -> Option<String> {
+        self.lock()
+            .messages
+            .iter()
+            .find(|m| m.id == msg_id)
+            .and_then(|m| m.txid.clone())
+    }
+
+    /// Cancels kept for `address` that no socket has acknowledged.
+    pub fn unacked_cancels(&self, address: &EpicboxAddress) -> usize {
+        let state = self.lock();
+        let queue = state.queue_name(&address.key_text(), Some(address.domain().as_str()));
+        state
+            .tombstones
+            .iter()
+            .filter(|t| t.queue == queue && !t.acked)
+            .count()
+    }
+
+    /// Whether any participant cancelled `txid`, on any relay.
+    pub fn is_cancelled(&self, txid: &str) -> bool {
+        self.lock().tombstones.iter().any(|t| t.txid == txid)
+    }
+
+    /// Whether any participant cancelled `txid` on relay `domain`, when relays are apart.
+    pub fn is_cancelled_on(&self, domain: &str, txid: &str) -> bool {
+        self.lock()
+            .tombstones
+            .iter()
+            .any(|t| t.txid == txid && t.relay.as_deref() == Some(domain))
+    }
+
+    /// How often the cancel of `txid` was sent to a socket as a kept cancel.
+    pub fn cancel_deliveries(&self, txid: &str) -> usize {
+        self.lock()
+            .cancel_deliveries
+            .get(txid)
+            .copied()
+            .unwrap_or(0)
+    }
+
+    /// How often the message with this id was sent to any socket.
+    pub fn deliveries(&self, msg_id: &str) -> usize {
+        self.lock().deliveries.get(msg_id).copied().unwrap_or(0)
+    }
+
+    /// Messages for `address` not yet acknowledged with `Made`.
+    pub fn pending(&self, address: &EpicboxAddress) -> usize {
+        let state = self.lock();
+        let queue = state.queue_name(&address.key_text(), Some(address.domain().as_str()));
+        state
+            .messages
+            .iter()
+            .filter(|m| m.queue == queue && !m.made)
+            .count()
+    }
+
+    /// Messages for `address` sent to a socket but not yet acknowledged with `Made`: in the
+    /// hands of a client.
+    pub fn in_hand(&self, address: &EpicboxAddress) -> usize {
+        let state = self.lock();
+        let queue = state.queue_name(&address.key_text(), Some(address.domain().as_str()));
+        state
+            .messages
+            .iter()
+            .filter(|m| m.queue == queue && !m.made && state.deliveries.contains_key(&m.id))
+            .count()
+    }
+
+    /// The open mux/1 sockets that hold the mailbox of `address` attached, numbered as in
+    /// [`MailboxCount::socket`]. Two installs on one mailbox never both hold it.
+    pub fn holders(&self, address: &EpicboxAddress) -> Vec<u64> {
+        let state = self.lock();
+        let queue = state.queue_name(&address.key_text(), Some(address.domain().as_str()));
+        let mut holders: Vec<u64> = state
+            .sockets
+            .iter()
+            .filter(|(_, socket)| socket.attached.contains_key(&queue))
+            .map(|(id, _)| *id)
+            .collect();
+        holders.sort_unstable();
+        holders
+    }
+
+    /// Open websocket connections.
+    pub fn connections(&self) -> usize {
+        self.lock().sockets.len()
+    }
+
+    /// Websocket connections accepted so far, closed ones included.
+    pub fn connections_made(&self) -> usize {
+        self.lock().sockets_opened
+    }
+
+    /// How many mailboxes a mux/1 socket held after each `Attach` or `Detach` frame it sent,
+    /// oldest first, closed sockets included.
+    pub fn mailbox_counts(&self) -> Vec<MailboxCount> {
+        self.lock().mailbox_counts.clone()
+    }
+
+    /// Connections that had a `Subscribe` accepted, closed ones included. A connection that only
+    /// posts a slate is not counted.
+    pub fn subscribing_connections(&self) -> usize {
+        self.lock().sockets_subscribed
+    }
+
+    /// Frames received from clients with this `type`, compared without case as the relay does.
+    pub fn received(&self, type_name: &str) -> usize {
+        self.lock()
+            .received
+            .get(&type_name.to_ascii_lowercase())
+            .copied()
+            .unwrap_or(0)
+    }
+
+    /// Frames received with this `type` on connections made to relay `domain`, compared without
+    /// case as the relay does.
+    pub fn received_on(&self, domain: &str, type_name: &str) -> usize {
+        self.lock()
+            .received_on
+            .get(&(domain.to_owned(), type_name.to_ascii_lowercase()))
+            .copied()
+            .unwrap_or(0)
+    }
+
+    /// Websocket ping frames received from clients.
+    pub fn pings(&self) -> usize {
+        self.lock().pings
+    }
+
+    /// Sends `text` as is to every open connection.
+    pub fn broadcast(&self, text: &str) {
+        for socket in self.lock().sockets.values() {
+            let _ = socket.outgoing.send(Outgoing::Text(text.to_owned()));
+        }
+    }
+
+    /// Sends a fresh challenge to every subscribed connection, as the relay's interval does.
+    pub fn send_challenges(&self) {
+        self.update(|state| {
+            let ids: Vec<u64> = state
+                .sockets
+                .iter()
+                .filter(|(_, socket)| socket.address.is_some())
+                .map(|(id, _)| *id)
+                .collect();
+            for id in ids {
+                state.challenge(id);
+            }
+        });
+    }
+
+    /// Makes every connection open now behave as a stock relay does once its challenge cycle
+    /// stopped: it sends that socket no more challenges and pushes no stored message to it.
+    /// Connections opened afterwards are served as usual.
+    pub fn stall_challenges(&self) {
+        self.update(|state| {
+            for socket in state.sockets.values_mut() {
+                socket.cycle_stopped = true;
+            }
+        });
+    }
+
+    /// Drops every message not yet acknowledged and returns how many, as the relay does with
+    /// messages it has kept for 7 days.
+    pub fn expire_all(&self) -> usize {
+        self.update(|state| {
+            let before = state.messages.len();
+            state.messages.retain(|m| m.made);
+            before.saturating_sub(state.messages.len())
+        })
+    }
+
+    /// Closes every connection and keeps every stored message, as a relay restart does.
+    pub fn disconnect_all(&self) {
+        self.update(|state| {
+            for socket in state.sockets.values() {
+                let _ = socket.outgoing.send(Outgoing::Close(1001));
+            }
+            state.sockets.clear();
+            state.listeners.clear();
+            state.stalled.clear();
+            for stored in &mut state.messages {
+                stored.pushed_to = None;
+            }
+        });
+    }
+
+    /// Ends every hold a mux/1 client put on a message and pushes the mail again, as the relay
+    /// does once a hold's time is up.
+    pub fn end_holds(&self) {
+        self.update(|state| {
+            for stored in &mut state.messages {
+                stored.held_until = None;
+            }
+            state.push_all();
+        });
+    }
+
+    /// Resolves once `condition` holds. It is checked now and again after every change the
+    /// relay's queries can report, so a test waits on what the relay saw rather than on time.
+    pub async fn wait_until(&self, condition: impl Fn(&Self) -> bool) {
+        loop {
+            let mut changed = pin!(self.inner.changed.notified());
+            changed.as_mut().enable();
+            if condition(self) {
+                return;
+            }
+            changed.await;
+        }
+    }
+
+    // Every update leaves the state consistent before it can panic, so a poisoned lock is still
+    // safe to use.
+    fn lock(&self) -> MutexGuard<'_, RelayState> {
+        self.inner
+            .state
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Applies `change` and wakes every [`Self::wait_until`].
+    fn update<T>(&self, change: impl FnOnce(&mut RelayState) -> T) -> T {
+        let result = change(&mut self.lock());
+        self.inner.changed.notify_waiters();
+        result
+    }
+
+    fn accept<S>(&self, stream: S, domain: Option<String>)
+    where
+        S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
+    {
+        let relay = self.clone();
+        let Ok(runtime) = Handle::try_current() else {
+            return;
+        };
+        runtime.spawn(async move { relay.run_socket(stream, domain).await });
+    }
+
+    async fn run_socket<S>(self, stream: S, domain: Option<String>)
+    where
+        S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send,
+    {
+        let config = tokio_tungstenite::tungstenite::protocol::WebSocketConfig::default()
+            .max_message_size(Some(MAX_FRAME_LEN))
+            .max_frame_size(Some(MAX_FRAME_LEN));
+        let Ok(mut ws) = tokio_tungstenite::accept_async_with_config(stream, Some(config)).await
+        else {
+            return;
+        };
+        let (outgoing, mut queued) = mpsc::unbounded_channel();
+        let id = self.update(|state| {
+            let id = state.next_socket;
+            state.next_socket = state.next_socket.wrapping_add(1);
+            state.sockets.insert(
+                id,
+                Socket {
+                    outgoing,
+                    challenge: String::new(),
+                    listener_mode: false,
+                    address: None,
+                    domain,
+                    queue: None,
+                    versioned: false,
+                    in_flight: None,
+                    resend_attempts: 0,
+                    resend_rounds: 0,
+                    reads_left: state.stop_reading_after,
+                    cycle_stopped: false,
+                    ever_subscribed: false,
+                    cancel: false,
+                    pending_cancel_ack: None,
+                    mux: false,
+                    attached: HashMap::new(),
+                    waiting_window: (Instant::now(), 0),
+                },
+            );
+            state.sockets_opened = state.sockets_opened.saturating_add(1);
+            state.count_read(id, 0);
+            state.challenge(id);
+            id
+        });
+        let mut reading = true;
+        loop {
+            tokio::select! {
+                next = queued.recv() => match next {
+                    Some(Outgoing::Text(text)) => {
+                        if ws.send(Message::text(text)).await.is_err() {
+                            break;
+                        }
+                    }
+                    Some(Outgoing::Ping) => {
+                        let payload = vec![0_u8; MAX_CONTROL_PAYLOAD];
+                        if ws.send(Message::Ping(payload.into())).await.is_err() {
+                            break;
+                        }
+                    }
+                    Some(Outgoing::StopReading) => reading = false,
+                    Some(Outgoing::Close(code)) => {
+                        let frame = CloseFrame { code: CloseCode::from(code), reason: "".into() };
+                        let _ = ws.send(Message::Close(Some(frame))).await;
+                        break;
+                    }
+                    None => break,
+                },
+                incoming = ws.next(), if reading => match incoming {
+                    Some(Ok(Message::Text(text))) => {
+                        let wakes = self.update(|state| {
+                            state.count_read(id, 1);
+                            state.handle(id, self.inner.network, text.as_str());
+                            std::mem::take(&mut state.hold_wakes)
+                        });
+                        for at in wakes {
+                            self.push_at(at);
+                        }
+                    }
+                    Some(Ok(Message::Ping(_))) => {
+                        self.update(|state| state.pings = state.pings.saturating_add(1));
+                    }
+                    Some(Ok(Message::Binary(_) | Message::Pong(_) | Message::Frame(_))) => {}
+                    Some(Ok(Message::Close(_)) | Err(_)) | None => break,
+                },
+            }
+        }
+        self.update(|state| state.drop_socket(id));
+    }
+}
+
+impl MockRelay {
+    /// Pushes mail again once a hold ends at `at`.
+    fn push_at(&self, at: Instant) {
+        let relay = self.clone();
+        let Ok(runtime) = Handle::try_current() else {
+            return;
+        };
+        runtime.spawn(async move {
+            tokio::time::sleep_until(at).await;
+            relay.update(RelayState::push_all);
+        });
+    }
+}
+
+impl std::fmt::Debug for MockRelay {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MockRelay")
+            .field("network", &self.inner.network)
+            .finish_non_exhaustive()
+    }
+}
+
+struct MockConnector {
+    relay: MockRelay,
+}
+
+impl Connector for MockConnector {
+    fn connect<'a>(
+        &'a self,
+        endpoint: &'a RelayEndpoint,
+    ) -> BoxFuture<'a, io::Result<Box<dyn RelayStream>>> {
+        Box::pin(async move {
+            let (client, server) = tokio::io::duplex(PIPE_CAPACITY);
+            {
+                let mut state = self.relay.lock();
+                if state.refusing || state.domains_down.contains(endpoint.domain().as_str()) {
+                    return Err(io::Error::from(io::ErrorKind::ConnectionRefused));
+                }
+                if state.stalling {
+                    state.stalled.push(server);
+                    return Ok(Box::new(client) as Box<dyn RelayStream>);
+                }
+            }
+            self.relay
+                .accept(server, Some(endpoint.domain().as_str().to_owned()));
+            Ok(Box::new(client) as Box<dyn RelayStream>)
+        })
+    }
+}
+
+fn text_field<'a>(message: &'a Value, name: &str) -> &'a str {
+    message.get(name).and_then(Value::as_str).unwrap_or("")
+}
+
+/// Whether a `ClientDetails` offers extension `name`.
+fn asks_for(message: &Value, name: &str) -> bool {
+    message
+        .get("ext")
+        .and_then(Value::as_array)
+        .is_some_and(|ext| ext.iter().any(|token| token.as_str() == Some(name)))
+}
+
+fn ok() -> String {
+    json!({"type": "Ok"}).to_string()
+}
+
+fn error(kind: &str, description: &str) -> String {
+    json!({"type": "Error", "kind": kind, "description": description}).to_string()
+}
+
+impl RelayState {
+    fn send(&self, id: u64, text: String) {
+        if let Some(socket) = self.sockets.get(&id) {
+            let _ = socket.outgoing.send(Outgoing::Text(text));
+        }
+    }
+
+    /// Counts `frames` read from socket `id`. Once its reads are used up it stops reading and
+    /// queues pings ahead of anything it answers next, so the client's next write waits.
+    fn count_read(&mut self, id: u64, frames: usize) {
+        let Some(socket) = self.sockets.get_mut(&id) else {
+            return;
+        };
+        let Some(left) = socket.reads_left else {
+            return;
+        };
+        let left = left.saturating_sub(frames);
+        if left > 0 {
+            socket.reads_left = Some(left);
+            return;
+        }
+        socket.reads_left = None;
+        let _ = socket.outgoing.send(Outgoing::StopReading);
+        for _ in 0..FILL_PINGS {
+            let _ = socket.outgoing.send(Outgoing::Ping);
+        }
+    }
+
+    fn challenge(&mut self, id: u64) {
+        self.next_challenge = self.next_challenge.wrapping_add(1);
+        let challenge = format!("mock-challenge-{}", self.next_challenge);
+        if let Some(socket) = self.sockets.get_mut(&id) {
+            socket.challenge.clone_from(&challenge);
+            if socket.cycle_stopped {
+                return;
+            }
+        }
+        if self.unanswered.contains(&Unanswered::Challenge) {
+            return;
+        }
+        self.send(
+            id,
+            json!({"type": "Challenge", "str": challenge}).to_string(),
+        );
+    }
+
+    fn drop_socket(&mut self, id: u64) {
+        self.release_socket(id);
+        if let Some(socket) = self.sockets.remove(&id)
+            && let Some(queue) = socket.queue
+            && self.listeners.get(&queue) == Some(&id)
+        {
+            self.listeners.remove(&queue);
+        }
+    }
+
+    /// The queue of messages for `key` posted to `domain`: one per key, or one per key and
+    /// domain when relays are apart.
+    fn queue_name(&self, key: &str, domain: Option<&str>) -> String {
+        match domain {
+            Some(domain) if self.apart => format!("{key}@{domain}"),
+            _ => key.to_owned(),
+        }
+    }
+
+    /// The relay `domain` stands for in the cancel records: itself when relays are apart, none
+    /// when every domain is one relay.
+    fn relay_of(&self, domain: Option<&str>) -> Option<String> {
+        domain.filter(|_| self.apart).map(str::to_owned)
+    }
+
+    fn handle(&mut self, id: u64, network: Network, text: &str) {
+        let Ok(message) = serde_json::from_str::<Value>(text) else {
+            if let Some(socket) = self.sockets.get(&id) {
+                let _ = socket.outgoing.send(Outgoing::Close(CLOSE_NOT_JSON));
+            }
+            return;
+        };
+        let Some(type_name) = message.get("type").and_then(Value::as_str) else {
+            if let Some(socket) = self.sockets.get(&id) {
+                let _ = socket.outgoing.send(Outgoing::Close(CLOSE_NOT_JSON));
+            }
+            return;
+        };
+        let type_name = type_name.to_ascii_lowercase();
+        let count = self.received.entry(type_name.clone()).or_default();
+        *count = count.saturating_add(1);
+        if let Some(domain) = self.sockets.get(&id).and_then(|s| s.domain.clone()) {
+            let count = self
+                .received_on
+                .entry((domain, type_name.clone()))
+                .or_default();
+            *count = count.saturating_add(1);
+        }
+        let withheld = match type_name.as_str() {
+            "clientdetails" => Some(Unanswered::ClientDetails),
+            "subscribe" => Some(Unanswered::Subscribe),
+            "postslate" => Some(Unanswered::PostSlate),
+            "made" => Some(Unanswered::Made),
+            "canceltx" => Some(Unanswered::CancelTx),
+            _ => None,
+        };
+        if withheld.is_some_and(|frame| self.unanswered.contains(&frame)) {
+            return;
+        }
+        if self.is_mux(id) && self.handle_mux(id, network, &type_name, &message, text) {
+            return;
+        }
+        if self.busy && matches!(type_name.as_str(), "subscribe" | "postslate" | "made") {
+            self.send(id, json!({"type": "Error", "kind": "Busy"}).to_string());
+            return;
+        }
+        match type_name.as_str() {
+            "ping" => self.send(id, "pong".to_owned()),
+            "clientdetails" => {
+                if let Some(socket) = self.sockets.get_mut(&id) {
+                    socket.listener_mode = text_field(&message, "wallet_mode") == "listener";
+                }
+                if self.offer_mux && asks_for(&message, MUX_EXTENSION) {
+                    self.negotiate_mux(id);
+                    return;
+                }
+                let offered = message
+                    .get("ext")
+                    .and_then(Value::as_array)
+                    .is_some_and(|ext| {
+                        ext.iter()
+                            .any(|token| token.as_str() == Some(CANCEL_FORM_EXTENSION))
+                    });
+                if offered && self.cancel_form {
+                    self.send(
+                        id,
+                        json!({"type": "Ok", "ext": [CANCEL_FORM_EXTENSION]}).to_string(),
+                    );
+                } else {
+                    self.send(id, ok());
+                }
+            }
+            "getversion" => {
+                if let Some(version) = self.version.clone() {
+                    self.send(
+                        id,
+                        json!({"type": "GetVersion", "str": version}).to_string(),
+                    );
+                }
+            }
+            "subscribe" => self.subscribe(id, network, &message),
+            "postslate" => self.post_slate(id, network, &message, None),
+            "made" => self.made(id, network, &message),
+            "canceltx" => self.cancel_tx(id, network, &message),
+            "unsubscribe" => {
+                if let Some(socket) = self.sockets.get(&id) {
+                    let _ = socket.outgoing.send(Outgoing::Close(1000));
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn subscribe(&mut self, id: u64, network: Network, message: &Value) {
+        let address = text_field(message, "address").to_owned();
+        let domain = self
+            .sockets
+            .get(&id)
+            .and_then(|socket| socket.domain.clone());
+        let queue = self.queue_name(&address, domain.as_deref());
+        let relay_cancel = self.supports_cancel();
+        let Some(socket) = self.sockets.get_mut(&id) else {
+            return;
+        };
+        if message.get("ver").is_some() {
+            socket.versioned = true;
+        }
+        let asked_cancel = ProtocolVersion::parse(text_field(message, "ver"))
+            .is_some_and(ProtocolVersion::supports_cancel);
+        if !signed_by(
+            &address,
+            network,
+            &socket.challenge,
+            text_field(message, "signature"),
+        ) {
+            if socket.queue.as_deref() == Some(queue.as_str())
+                && self.listeners.get(&queue) == Some(&id)
+            {
+                self.listeners.remove(&queue);
+            }
+            socket.address = None;
+            socket.queue = None;
+            self.send(id, error("InvalidSignature", "Invalid signature."));
+            return;
+        }
+        socket.address = Some(address);
+        socket.queue = Some(queue.clone());
+        socket.cancel = relay_cancel && asked_cancel;
+        // The next accepted Subscribe acknowledges the cancel the socket was last sent.
+        let acked = if socket.cancel {
+            socket.pending_cancel_ack.take()
+        } else {
+            None
+        };
+        let first_subscribe = !socket.ever_subscribed;
+        socket.ever_subscribed = true;
+        if first_subscribe {
+            self.sockets_subscribed = self.sockets_subscribed.saturating_add(1);
+        }
+        // The public relay retries an unacknowledged message on the same socket after a few
+        // subscribes, and gives up on the address's unacknowledged messages after a few rounds.
+        if socket.resend_attempts >= RESEND_AFTER && socket.resend_rounds <= RESEND_AFTER {
+            socket.resend_attempts = 0;
+            socket.resend_rounds = socket.resend_rounds.saturating_add(1);
+            socket.in_flight = None;
+        }
+        let discard = socket.resend_rounds >= RESEND_AFTER;
+        if discard {
+            socket.resend_attempts = 0;
+            socket.resend_rounds = 0;
+            socket.in_flight = None;
+        }
+        let listener_mode = socket.listener_mode;
+        let in_flight = socket.in_flight.is_some();
+        if in_flight {
+            socket.resend_attempts = socket.resend_attempts.saturating_add(1);
+        }
+        if listener_mode {
+            self.listeners.entry(queue.clone()).or_insert(id);
+        }
+        if discard {
+            self.messages.retain(|m| m.queue != queue || m.made);
+        }
+        if let Some((txid, cancel_queue)) = acked {
+            for tombstone in &mut self.tombstones {
+                if tombstone.txid == txid && tombstone.queue == cancel_queue {
+                    tombstone.acked = true;
+                }
+            }
+        }
+        if self.deliver_cancel(id, &queue) {
+            return;
+        }
+        if in_flight {
+            self.send(id, ok());
+            return;
+        }
+        let now = Instant::now();
+        let oldest = self
+            .messages
+            .iter()
+            .find(|m| m.queue == queue && m.offerable(now))
+            .cloned();
+        match oldest {
+            Some(stored) => self.deliver(id, &stored),
+            None => self.send(id, ok()),
+        }
+    }
+
+    fn deliver(&mut self, id: u64, stored: &Stored) {
+        let Some(socket) = self.sockets.get_mut(&id) else {
+            return;
+        };
+        socket.in_flight = Some(stored.id.clone());
+        let count = self.deliveries.entry(stored.id.clone()).or_default();
+        *count = count.saturating_add(1);
+        let mut slate = json!({
+            "type": "Slate",
+            "from": stored.from,
+            "str": stored.str,
+            "signature": stored.signature,
+            "challenge": "",
+        });
+        let cancel = socket.cancel;
+        let request_ids = self.relay_request_ids;
+        if socket.versioned
+            && let Some(fields) = slate.as_object_mut()
+        {
+            fields.insert("epicboxmsgid".to_owned(), Value::from(stored.id.clone()));
+            let ver = if cancel {
+                CANCEL_PROTOCOL_VERSION
+            } else {
+                PROTOCOL_VERSION
+            };
+            fields.insert("ver".to_owned(), Value::from(ver));
+            if cancel && let Some(txid) = &stored.txid {
+                fields.insert("epicboxtxid".to_owned(), Value::from(txid.clone()));
+                if request_ids {
+                    fields.insert("cancelrequestid".to_owned(), Value::from("relay-request-1"));
+                }
+            }
+        }
+        self.send(id, slate.to_string());
+    }
+
+    /// Whether the relay reports 3.1.0 or later within major 3, and so takes the cancel protocol.
+    fn supports_cancel(&self) -> bool {
+        ProtocolVersion::relay_supports_cancel(
+            self.version.as_deref().and_then(ProtocolVersion::parse),
+        )
+    }
+
+    /// Sends socket `id` the oldest cancel kept for `queue` that nobody acknowledged, if the
+    /// socket negotiated cancel. The socket's next accepted `Subscribe` acknowledges it.
+    fn deliver_cancel(&mut self, id: u64, queue: &str) -> bool {
+        if !self.sockets.get(&id).is_some_and(|socket| socket.cancel) {
+            return false;
+        }
+        let Some(txid) = self
+            .tombstones
+            .iter()
+            .find(|t| t.queue == queue && !t.acked)
+            .map(|t| t.txid.clone())
+        else {
+            return false;
+        };
+        if let Some(socket) = self.sockets.get_mut(&id) {
+            socket.pending_cancel_ack = Some((txid.clone(), queue.to_owned()));
+        }
+        let count = self.cancel_deliveries.entry(txid.clone()).or_default();
+        *count = count.saturating_add(1);
+        self.send(id, self.cancelled_text(&txid));
+        true
+    }
+
+    fn cancelled_text(&self, txid: &str) -> String {
+        let mut frame = json!({"type": "TransactionCancelled", "epicboxtxid": txid});
+        if self.relay_request_ids
+            && let Some(fields) = frame.as_object_mut()
+        {
+            fields.insert("cancelrequestid".to_owned(), Value::from("relay-request-1"));
+        }
+        frame.to_string()
+    }
+
+    /// Records a cancel of `txid` by the participant whose key is `canceller`: the other
+    /// participant's queue keeps it until acknowledged and, if that queue has an idle
+    /// listener that negotiated cancel, the listener is sent it now. Returns whether `canceller`
+    /// takes part in the transaction. `relay` is the relay the cancel was made on, when relays
+    /// are apart.
+    fn record_cancel(&mut self, txid: &str, canceller: &str, relay: Option<String>) -> bool {
+        let Some(record) = self.txids.get(&(txid.to_owned(), relay.clone())).cloned() else {
+            return false;
+        };
+        let other = if record.from_key == canceller {
+            record.to_queue
+        } else if record.to_key == canceller {
+            record.from_queue
+        } else {
+            return false;
+        };
+        if !self
+            .tombstones
+            .iter()
+            .any(|t| t.txid == txid && t.queue == other)
+        {
+            self.tombstones.push(Tombstone {
+                txid: txid.to_owned(),
+                relay,
+                queue: other.clone(),
+                acked: false,
+            });
+        }
+        if let Some(&listener) = self.listeners.get(&other) {
+            let idle = self.sockets.get(&listener).is_some_and(|socket| {
+                socket.in_flight.is_none()
+                    && socket.pending_cancel_ack.is_none()
+                    && !socket.cycle_stopped
+            });
+            if idle {
+                self.deliver_cancel(listener, &other);
+            }
+        }
+        true
+    }
+
+    fn cancel_tx(&mut self, id: u64, network: Network, message: &Value) {
+        let Some(socket) = self.sockets.get(&id) else {
+            return;
+        };
+        if !socket.cancel {
+            // A relay without cancel does not know the frame.
+            return;
+        }
+        let subscribed = socket.address.clone();
+        if let Some(kind) = self.cancel_error.clone() {
+            self.send(id, error(&kind, "Cancel refused."));
+            return;
+        }
+        let address = text_field(message, "address");
+        let txid = text_field(message, "epicboxtxid");
+        if !valid_txid(txid) || address.is_empty() {
+            self.send(id, error("InvalidRequest", "Invalid transaction id."));
+            return;
+        }
+        if subscribed.as_deref() != Some(address) {
+            self.send(
+                id,
+                error("InvalidRequest", "Not subscribed as that address."),
+            );
+            return;
+        }
+        let signature = text_field(message, "signature");
+        let form = if self.cancel_form
+            && signed_by(
+                address,
+                network,
+                &format!("{CANCEL_SIGNATURE_PREFIX}{txid}"),
+                signature,
+            ) {
+            CancelForm::Separated
+        } else if signed_by(address, network, txid, signature) {
+            CancelForm::Bare
+        } else {
+            self.send(id, error("InvalidSignature", "Invalid signature."));
+            return;
+        };
+        self.cancel_forms.push(form);
+        let relay = self.relay_of(
+            self.sockets
+                .get(&id)
+                .and_then(|socket| socket.domain.as_deref()),
+        );
+        if self.record_cancel(txid, address, relay) {
+            self.send(id, self.cancelled_text(txid));
+        } else {
+            self.send(id, ok());
+        }
+    }
+
+    fn store(&mut self, queue: String, from: String, str: String, signature: String) -> String {
+        self.next_message = self.next_message.wrapping_add(1);
+        let id = format!("mockmsg{}", self.next_message);
+        self.messages.push(Stored {
+            id: id.clone(),
+            queue,
+            from,
+            str,
+            signature,
+            made: false,
+            txid: None,
+            pushed_to: None,
+            held_until: None,
+        });
+        id
+    }
+
+    /// Remembers the participants of the transaction `txid` posted as message `msg_id`.
+    fn record_txid(
+        &mut self,
+        msg_id: &str,
+        txid: &str,
+        sender: &EpicboxAddress,
+        recipient: &EpicboxAddress,
+        to_queue: &str,
+    ) {
+        for stored in &mut self.messages {
+            if stored.id == msg_id {
+                stored.txid = Some(txid.to_owned());
+            }
+        }
+        if !self.txids.keys().any(|(id, _)| id == txid) {
+            self.posted_txids.push(txid.to_owned());
+        }
+        let from_queue = self.queue_name(&sender.key_text(), Some(sender.domain().as_str()));
+        let relay = self.relay_of(Some(recipient.domain().as_str()));
+        self.txids.insert(
+            (txid.to_owned(), relay),
+            TxRecord {
+                from_key: sender.key_text(),
+                from_queue,
+                to_key: recipient.key_text(),
+                to_queue: to_queue.to_owned(),
+            },
+        );
+    }
+
+    /// Hands the message just stored to the address's live listener, if it is idle, as the
+    /// public relay does.
+    fn pass_through(&mut self, queue: &str, msg_id: &str) {
+        // A mux/1 socket that attached the mailbox takes its mail before any 3.0.0 listener.
+        if self.push_queue(queue) {
+            return;
+        }
+        let Some(&listener) = self.listeners.get(queue) else {
+            return;
+        };
+        let idle = self.sockets.get(&listener).is_some_and(|socket| {
+            socket.in_flight.is_none()
+                && socket.pending_cancel_ack.is_none()
+                && !socket.cycle_stopped
+        });
+        if !idle {
+            return;
+        }
+        if let Some(stored) = self.messages.iter().find(|m| m.id == msg_id).cloned() {
+            self.deliver(listener, &stored);
+        }
+    }
+
+    /// Stores a posted message. `reference` is the `ref` of a mux/1 post, which its answer
+    /// carries.
+    #[allow(clippy::too_many_lines)] // One branch per refusal the mailbox can give.
+    fn post_slate(&mut self, id: u64, network: Network, message: &Value, reference: Option<&str>) {
+        let from = text_field(message, "from");
+        let to = text_field(message, "to");
+        let (Ok(sender), Ok(recipient)) = (
+            EpicboxAddress::parse(from, network),
+            EpicboxAddress::parse(to, network),
+        ) else {
+            self.reply(
+                id,
+                reference,
+                error("InvalidRequest", "Wrong address format."),
+            );
+            return;
+        };
+        if self.unroutable.contains(&recipient.key_text())
+            || self
+                .domains_unanswered
+                .contains(recipient.domain().as_str())
+        {
+            return;
+        }
+        if let Some((kind, description)) = &self.post_refusal {
+            let frame = error(kind, description);
+            self.reply(id, reference, frame);
+            return;
+        }
+        if self.post_refused.contains(&recipient.key_text())
+            || self.domains_refused.contains(recipient.domain().as_str())
+        {
+            self.reply(
+                id,
+                reference,
+                error("InvalidRequest", "Error forward slate to foreign epicbox."),
+            );
+            return;
+        }
+        let str = text_field(message, "str");
+        let signature = text_field(message, "signature");
+        if !signed_by(&sender.key_text(), network, str, signature) {
+            self.reply(
+                id,
+                reference,
+                error("InvalidRequest", "Error postslate signature."),
+            );
+            return;
+        }
+        let Ok(encrypted) = EncryptedMessage::from_json(str) else {
+            self.reply(
+                id,
+                reference,
+                error("InvalidRequest", "Error parsing message string."),
+            );
+            return;
+        };
+        let txid = if self.supports_cancel() {
+            match post_txid(message, &sender, network) {
+                Ok(txid) => txid,
+                Err(description) => {
+                    self.reply(id, reference, error("InvalidRequest", description));
+                    return;
+                }
+            }
+        } else {
+            None
+        };
+        let relay = self.relay_of(Some(recipient.domain().as_str()));
+        if let Some(txid) = &txid
+            && self
+                .tombstones
+                .iter()
+                .any(|t| &t.txid == txid && t.relay == relay)
+        {
+            self.reply(id, reference, self.cancelled_text(txid));
+            return;
+        }
+        let queue = self.queue_name(
+            encrypted.destination().public_key(),
+            Some(recipient.domain().as_str()),
+        );
+        let msg_id = self.store(
+            queue.clone(),
+            from.to_owned(),
+            str.to_owned(),
+            signature.to_owned(),
+        );
+        if let Some(txid) = &txid {
+            self.record_txid(&msg_id, txid, &sender, &recipient, &queue);
+        }
+        let mut reply = json!({"type": "Ok"});
+        if let Some(txid) = &txid
+            && let Some(fields) = reply.as_object_mut()
+        {
+            fields.insert("epicboxtxid".to_owned(), Value::from(txid.clone()));
+            fields.insert("epicboxmsgid".to_owned(), Value::from(msg_id.clone()));
+            if self.relay_request_ids {
+                fields.insert("cancelrequestid".to_owned(), Value::from("relay-request-1"));
+            }
+        }
+        if self.post_garbled.contains(&recipient.key_text()) {
+            self.reply(id, reference, "not a frame".to_owned());
+        } else if !self.unanswered.contains(&Unanswered::PostAnswer) {
+            self.reply(id, reference, reply.to_string());
+        }
+        self.pass_through(&queue, &msg_id);
+    }
+
+    fn made(&mut self, id: u64, network: Network, message: &Value) {
+        let Some((address, queue)) = self
+            .sockets
+            .get(&id)
+            .and_then(|s| s.address.clone().zip(s.queue.clone()))
+        else {
+            return;
+        };
+        let msg_id = text_field(message, "epicboxmsgid");
+        let ver = if self.sockets.get(&id).is_some_and(|socket| socket.cancel) {
+            CANCEL_PROTOCOL_VERSION
+        } else {
+            PROTOCOL_VERSION
+        };
+        if message.get("epicboxmsgid").is_none() || text_field(message, "ver") != ver {
+            return;
+        }
+        if !signed_by(&address, network, msg_id, text_field(message, "signature")) {
+            self.send(id, error("InvalidSignature", "Invalid signature."));
+            return;
+        }
+        for stored in &mut self.messages {
+            if stored.queue == queue && stored.id == msg_id {
+                stored.made = true;
+            }
+        }
+        if let Some(socket) = self.sockets.get_mut(&id) {
+            socket.in_flight = None;
+            socket.resend_attempts = 0;
+        }
+        self.send(id, ok());
+        self.challenge(id);
+    }
+}
+
+/// The shape the public relay accepts for a transaction id.
+fn valid_txid(txid: &str) -> bool {
+    txid.len() == 32
+        && txid
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+}
+
+/// The `epicboxtxid` of a `PostSlate` on a relay with cancel: both fields or neither, the
+/// signature by the `from` key over the bare txid.
+fn post_txid(
+    message: &Value,
+    sender: &EpicboxAddress,
+    network: Network,
+) -> Result<Option<String>, &'static str> {
+    let txid = message.get("epicboxtxid");
+    let signature = message.get("epicboxtxidsig");
+    match (txid, signature) {
+        (None, None) => Ok(None),
+        (Some(txid), Some(signature)) => {
+            let (Some(txid), Some(signature)) = (txid.as_str(), signature.as_str()) else {
+                return Err("Error parsing transaction id.");
+            };
+            if !valid_txid(txid) {
+                return Err("Invalid transaction id.");
+            }
+            if !signed_by(&sender.key_text(), network, txid, signature) {
+                return Err("Error transaction id signature.");
+            }
+            Ok(Some(txid.to_owned()))
+        }
+        _ => Err("Transaction id and its signature go together."),
+    }
+}
+
+fn signed_by(key_text: &str, network: Network, text: &str, signature_hex: &str) -> bool {
+    let Ok(key) = decode_key(key_text, network) else {
+        return false;
+    };
+    let Ok(signature) = lepic_crypto::EcdsaSignature::from_der_hex(signature_hex) else {
+        return false;
+    };
+    verify_text(text, &signature, &key).is_ok()
+}

@@ -1,0 +1,95 @@
+{
+  "meta": {
+    "generator": "epic-pairing-kit",
+    "kit_version": "0.5.0",
+    "git_commit": "49b0512d57cdaea08e4dfa0386edd7d0720d4c15",
+    "rfc": "0003-epictx",
+    "file": "epictx_reply_route.json"
+  },
+  "vectors": [
+    {
+      "name": "reply_route_one_epicbox_entry",
+      "value": "0101210279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798",
+      "valid": true,
+      "epicbox_key": "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798"
+    },
+    {
+      "name": "reply_route_three_entries_one_unknown_skipped",
+      "value": "0307056c6174657201210379be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f8179801210279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798",
+      "valid": true,
+      "epicbox_key": "0379be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798"
+    },
+    {
+      "name": "reply_route_unknown_only",
+      "value": "0107056c61746572",
+      "valid": true,
+      "epicbox_key": null
+    },
+    {
+      "name": "reply_route_unknown_255_bytes",
+      "value": "02ffff00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001210279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798",
+      "valid": true,
+      "epicbox_key": "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798"
+    },
+    {
+      "name": "reply_route_unknown_empty",
+      "value": "02020001210279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798",
+      "valid": true,
+      "epicbox_key": "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798"
+    },
+    {
+      "name": "reply_route_count_zero_refused",
+      "value": "00",
+      "valid": false,
+      "epicbox_key": null
+    },
+    {
+      "name": "reply_route_empty_refused",
+      "value": "",
+      "valid": false,
+      "epicbox_key": null
+    },
+    {
+      "name": "reply_route_short_value_refused",
+      "value": "0101200279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f817",
+      "valid": false,
+      "epicbox_key": null
+    },
+    {
+      "name": "reply_route_long_value_refused",
+      "value": "0101220279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f8179800",
+      "valid": false,
+      "epicbox_key": null
+    },
+    {
+      "name": "reply_route_prefix_04_refused",
+      "value": "0101210479be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798",
+      "valid": false,
+      "epicbox_key": null
+    },
+    {
+      "name": "reply_route_runs_past_field_refused",
+      "value": "0101210279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f817",
+      "valid": false,
+      "epicbox_key": null
+    },
+    {
+      "name": "reply_route_count_past_entries_refused",
+      "value": "0201210279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798",
+      "valid": false,
+      "epicbox_key": null
+    },
+    {
+      "name": "reply_route_header_cut_refused",
+      "value": "0201210279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f8179801",
+      "valid": false,
+      "epicbox_key": null
+    },
+    {
+      "name": "reply_route_trailing_bytes_refused",
+      "value": "0101210279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f8179800",
+      "valid": false,
+      "epicbox_key": null
+    }
+  ]
+}

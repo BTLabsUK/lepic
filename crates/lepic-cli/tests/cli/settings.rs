@@ -1,0 +1,384 @@
+// SPDX-License-Identifier: Apache-2.0
+//! Settings precedence: flag, then `LEPIC_*` variable, then config file, then default.
+
+// Tests may unwrap (docs/rules.md).
+#![allow(clippy::unwrap_used)]
+
+use std::path::{Path, PathBuf};
+
+use lepic_cli::cli::{GlobalArgs, NetworkArg, OutputArg};
+use lepic_cli::settings::{Env, Origin, OutputFormat, Settings, SettingsError};
+use lepic_primitives::params::Network;
+
+fn env(home: &Path, vars: &[(&str, &str)]) -> Env {
+    let mut all = vec![("HOME".to_owned(), home.display().to_string())];
+    all.extend(vars.iter().map(|(k, v)| ((*k).to_owned(), (*v).to_owned())));
+    Env::new(all)
+}
+
+fn write_config(dir: &Path, text: &str) -> PathBuf {
+    let path = dir.join("config.toml");
+    std::fs::write(&path, text).unwrap();
+    path
+}
+
+#[test]
+fn defaults_apply_when_nothing_is_set() {
+    let home = tempfile::tempdir().unwrap();
+    let settings = Settings::resolve(&GlobalArgs::default(), &env(home.path(), &[])).unwrap();
+    assert_eq!(settings.network, Network::Mainnet);
+    assert_eq!(settings.data_dir, home.path().join(".lepic/mainnet"));
+    assert_eq!(settings.output, OutputFormat::Human);
+    assert_eq!(settings.log_filter, "warn");
+    assert_eq!(settings.node.as_str(), "http://127.0.0.1:3413");
+    assert_eq!(settings.relay.url(), "wss://epicbox.btlabs.uk:443");
+}
+
+#[test]
+fn mainnet_and_floonet_are_the_networks_a_setting_names() {
+    let home = tempfile::tempdir().unwrap();
+    let args = GlobalArgs {
+        network: Some(NetworkArg::Mainnet),
+        ..GlobalArgs::default()
+    };
+    let settings = Settings::resolve(&args, &env(home.path(), &[])).unwrap();
+    assert_eq!(settings.network, Network::Mainnet);
+    assert_eq!(settings.data_dir, home.path().join(".lepic/mainnet"));
+    let named = env(home.path(), &[("LEPIC_NETWORK", "floonet")]);
+    let settings = Settings::resolve(&GlobalArgs::default(), &named).unwrap();
+    assert_eq!(settings.network, Network::Floonet);
+    assert_eq!(settings.data_dir, home.path().join(".lepic/floonet"));
+    let args = GlobalArgs {
+        network: Some(NetworkArg::Mainnet),
+        ..GlobalArgs::default()
+    };
+    let settings = Settings::resolve(&args, &named).unwrap();
+    assert_eq!(settings.network, Network::Mainnet);
+    let named = env(home.path(), &[("LEPIC_NETWORK", "testnet")]);
+    assert!(matches!(
+        Settings::resolve(&GlobalArgs::default(), &named),
+        Err(SettingsError::InvalidValue { key: "network", .. })
+    ));
+}
+
+#[test]
+fn a_flag_beats_its_variable_which_beats_the_config_file() {
+    let home = tempfile::tempdir().unwrap();
+    let config = write_config(home.path(), "output = \"json\"\nlog_level = debug\n");
+    let config_text = config.display().to_string();
+
+    let only_config = env(home.path(), &[("LEPIC_CONFIG", &config_text)]);
+    let settings = Settings::resolve(&GlobalArgs::default(), &only_config).unwrap();
+    assert_eq!(
+        (settings.output, settings.log_filter.as_str()),
+        (OutputFormat::Json, "debug")
+    );
+
+    let with_env = env(
+        home.path(),
+        &[
+            ("LEPIC_CONFIG", &config_text),
+            ("LEPIC_LOG_LEVEL", "info"),
+            ("LEPIC_OUTPUT", "human"),
+        ],
+    );
+    let settings = Settings::resolve(&GlobalArgs::default(), &with_env).unwrap();
+    assert_eq!(
+        (settings.output, settings.log_filter.as_str()),
+        (OutputFormat::Human, "info")
+    );
+
+    let flags = GlobalArgs {
+        log_level: Some("trace".to_owned()),
+        output: Some(OutputArg::Json),
+        ..GlobalArgs::default()
+    };
+    let settings = Settings::resolve(&flags, &with_env).unwrap();
+    assert_eq!(
+        (settings.output, settings.log_filter.as_str()),
+        (OutputFormat::Json, "trace")
+    );
+}
+
+#[test]
+fn the_default_config_file_is_read_when_it_exists() {
+    let home = tempfile::tempdir().unwrap();
+    std::fs::create_dir(home.path().join(".lepic")).unwrap();
+    write_config(
+        &home.path().join(".lepic"),
+        "node_url = \"https://node.example.org\"\n",
+    );
+    let settings = Settings::resolve(&GlobalArgs::default(), &env(home.path(), &[])).unwrap();
+    assert_eq!(settings.node.host(), "node.example.org");
+}
+
+#[test]
+fn config_paths_are_relative_to_the_config_file() {
+    let home = tempfile::tempdir().unwrap();
+    let config = write_config(home.path(), "data_dir = wallets/main\n");
+    let args = GlobalArgs {
+        config: Some(config),
+        ..GlobalArgs::default()
+    };
+    let settings = Settings::resolve(&args, &env(home.path(), &[])).unwrap();
+    assert_eq!(settings.data_dir, home.path().join("wallets/main"));
+}
+
+#[test]
+fn an_explicit_config_file_must_exist() {
+    let home = tempfile::tempdir().unwrap();
+    let args = GlobalArgs {
+        config: Some(home.path().join("absent.toml")),
+        ..GlobalArgs::default()
+    };
+    assert!(matches!(
+        Settings::resolve(&args, &env(home.path(), &[])),
+        Err(SettingsError::ConfigRead { .. })
+    ));
+}
+
+#[test]
+fn config_files_with_unknown_repeated_or_malformed_lines_are_refused() {
+    let home = tempfile::tempdir().unwrap();
+    let resolve = |text: &str| {
+        let args = GlobalArgs {
+            config: Some(write_config(home.path(), text)),
+            ..GlobalArgs::default()
+        };
+        Settings::resolve(&args, &env(home.path(), &[]))
+    };
+    assert!(matches!(
+        resolve("# comment\n\nnetwrok = mainnet\n"),
+        Err(SettingsError::UnknownKey { line: 3, .. })
+    ));
+    assert!(matches!(
+        resolve("network = mainnet\nnetwork = mainnet\n"),
+        Err(SettingsError::DuplicateKey { line: 2, .. })
+    ));
+    assert!(matches!(
+        resolve("network mainnet\n"),
+        Err(SettingsError::ConfigSyntax { line: 1, .. })
+    ));
+    assert!(matches!(
+        resolve(&"#".repeat(70_000)),
+        Err(SettingsError::ConfigTooLarge { .. })
+    ));
+}
+
+#[test]
+fn invalid_values_name_their_key_and_origin() {
+    let home = tempfile::tempdir().unwrap();
+    let config = write_config(home.path(), "epicbox_relay = \"ws://host:port\"\n");
+    let result = Settings::resolve(
+        &GlobalArgs {
+            config: Some(config.clone()),
+            ..GlobalArgs::default()
+        },
+        &env(home.path(), &[]),
+    );
+    assert!(matches!(
+        result,
+        Err(SettingsError::InvalidValue { key: "epicbox_relay", origin: Origin::Config(ref path) })
+            if *path == config
+    ));
+    let result = Settings::resolve(
+        &GlobalArgs::default(),
+        &env(home.path(), &[("LEPIC_NODE_URL", "ftp://node")]),
+    );
+    assert!(matches!(
+        result,
+        Err(SettingsError::InvalidValue {
+            key: "node_url",
+            origin: Origin::Env("LEPIC_NODE_URL")
+        })
+    ));
+}
+
+#[test]
+fn a_relative_data_directory_is_resolved_once_to_an_absolute_path() {
+    let home = tempfile::tempdir().unwrap();
+    let args = GlobalArgs {
+        data_dir: Some(PathBuf::from("relative/dir")),
+        ..GlobalArgs::default()
+    };
+    let settings = Settings::resolve(&args, &env(home.path(), &[])).unwrap();
+    assert!(settings.data_dir.is_absolute());
+    assert!(settings.data_dir.ends_with("relative/dir"));
+}
+
+#[test]
+fn without_a_home_the_data_directory_must_be_given() {
+    assert!(matches!(
+        Settings::resolve(&GlobalArgs::default(), &Env::default()),
+        Err(SettingsError::NoHome)
+    ));
+}
+
+#[test]
+fn final_confirmations_default_to_six_and_take_1_to_1440() {
+    let home = tempfile::tempdir().unwrap();
+    let resolve =
+        |vars: &[(&str, &str)]| Settings::resolve(&GlobalArgs::default(), &env(home.path(), vars));
+    assert_eq!(resolve(&[]).unwrap().final_confirmations, 6);
+    let set = resolve(&[("LEPIC_FINAL_CONFIRMATIONS", "1440")]).unwrap();
+    assert_eq!(set.final_confirmations, 1440);
+    for bad in ["0", "1441", "six"] {
+        assert!(matches!(
+            resolve(&[("LEPIC_FINAL_CONFIRMATIONS", bad)]),
+            Err(SettingsError::InvalidValue {
+                key: "final_confirmations",
+                ..
+            })
+        ));
+    }
+}
+
+#[test]
+fn the_old_payment_confirmations_name_still_sets_final_confirmations() {
+    let home = tempfile::tempdir().unwrap();
+    let resolve =
+        |vars: &[(&str, &str)]| Settings::resolve(&GlobalArgs::default(), &env(home.path(), vars));
+    let old = resolve(&[("LEPIC_PAYMENT_CONFIRMATIONS", "12")]).unwrap();
+    assert_eq!(old.final_confirmations, 12);
+    let both = resolve(&[
+        ("LEPIC_PAYMENT_CONFIRMATIONS", "12"),
+        ("LEPIC_FINAL_CONFIRMATIONS", "3"),
+    ])
+    .unwrap();
+    assert_eq!(both.final_confirmations, 3);
+    assert!(matches!(
+        resolve(&[("LEPIC_PAYMENT_CONFIRMATIONS", "0")]),
+        Err(SettingsError::InvalidValue {
+            key: "payment_confirmations",
+            ..
+        })
+    ));
+}
+
+#[test]
+fn the_receipt_caps_default_to_core_and_take_1_to_100000() {
+    let home = tempfile::tempdir().unwrap();
+    let resolve =
+        |vars: &[(&str, &str)]| Settings::resolve(&GlobalArgs::default(), &env(home.path(), vars));
+    let default = resolve(&[]).unwrap();
+    assert_eq!(default.max_open_receipts, 100);
+    assert_eq!(default.max_open_receipts_per_sender, 10);
+    let set = resolve(&[
+        ("LEPIC_MAX_OPEN_RECEIPTS", "100000"),
+        ("LEPIC_MAX_OPEN_RECEIPTS_PER_SENDER", "1"),
+    ])
+    .unwrap();
+    assert_eq!(set.max_open_receipts, 100_000);
+    assert_eq!(set.max_open_receipts_per_sender, 1);
+    for (var, key) in [
+        ("LEPIC_MAX_OPEN_RECEIPTS", "max_open_receipts"),
+        (
+            "LEPIC_MAX_OPEN_RECEIPTS_PER_SENDER",
+            "max_open_receipts_per_sender",
+        ),
+    ] {
+        for bad in ["0", "100001", "many"] {
+            assert!(
+                matches!(
+                    resolve(&[(var, bad)]),
+                    Err(SettingsError::InvalidValue { key: k, .. }) if k == key
+                ),
+                "{var}={bad}"
+            );
+        }
+    }
+}
+
+#[test]
+fn send_ttl_blocks_defaults_to_ten_thousand_and_eighty_and_takes_1_to_525600() {
+    let home = tempfile::tempdir().unwrap();
+    let resolve =
+        |vars: &[(&str, &str)]| Settings::resolve(&GlobalArgs::default(), &env(home.path(), vars));
+    assert_eq!(resolve(&[]).unwrap().send_ttl_blocks, 10_080);
+    let set = resolve(&[("LEPIC_SEND_TTL_BLOCKS", "525600")]).unwrap();
+    assert_eq!(set.send_ttl_blocks, 525_600);
+    for bad in ["0", "525601", "week"] {
+        assert!(matches!(
+            resolve(&[("LEPIC_SEND_TTL_BLOCKS", bad)]),
+            Err(SettingsError::InvalidValue {
+                key: "send_ttl_blocks",
+                ..
+            })
+        ));
+    }
+}
+
+#[test]
+fn the_shell_idle_lock_defaults_to_fifteen_minutes_and_zero_turns_it_off() {
+    let home = tempfile::tempdir().unwrap();
+    let resolve =
+        |vars: &[(&str, &str)]| Settings::resolve(&GlobalArgs::default(), &env(home.path(), vars));
+    assert_eq!(resolve(&[]).unwrap().shell_idle_lock_minutes, 15);
+    let off = resolve(&[("LEPIC_SHELL_IDLE_LOCK_MINUTES", "0")]).unwrap();
+    assert_eq!(off.shell_idle_lock_minutes, 0);
+    assert!(matches!(
+        resolve(&[("LEPIC_SHELL_IDLE_LOCK_MINUTES", "soon")]),
+        Err(SettingsError::InvalidValue {
+            key: "shell_idle_lock_minutes",
+            origin: Origin::Env("LEPIC_SHELL_IDLE_LOCK_MINUTES")
+        })
+    ));
+}
+
+#[test]
+fn the_webhook_needs_a_url_a_secret_file_and_https_unless_private_is_allowed() {
+    let home = tempfile::tempdir().unwrap();
+    let resolve =
+        |vars: &[(&str, &str)]| Settings::resolve(&GlobalArgs::default(), &env(home.path(), vars));
+    let invalid = |vars: &[(&str, &str)], key: &str| {
+        assert!(
+            matches!(resolve(vars), Err(SettingsError::InvalidValue { key: found, .. }) if found == key),
+            "{vars:?}"
+        );
+    };
+    assert!(resolve(&[]).unwrap().webhook.is_none());
+    let good = [
+        ("LEPIC_WEBHOOK_URL", "https://hooks.example/in"),
+        ("LEPIC_WEBHOOK_SECRET_FILE", "/run/secrets/hook"),
+    ];
+    let webhook = resolve(&good).unwrap().webhook.unwrap();
+    assert_eq!(webhook.url, "https://hooks.example/in");
+    assert_eq!(webhook.secret_file, PathBuf::from("/run/secrets/hook"));
+    assert!(webhook.types.is_empty() && !webhook.allow_private);
+    let typed = [
+        good[0],
+        good[1],
+        ("LEPIC_WEBHOOK_TYPES", "payment.*,contact.created"),
+    ];
+    assert_eq!(
+        resolve(&typed).unwrap().webhook.unwrap().types,
+        ["payment.*", "contact.created"]
+    );
+    // The secret file is required, and the other keys mean nothing without a URL.
+    invalid(&[good[0]], "webhook_secret_file");
+    invalid(&[good[1]], "webhook_secret_file");
+    invalid(&[("LEPIC_WEBHOOK_TYPES", "payment.*")], "webhook_types");
+    invalid(
+        &[("LEPIC_WEBHOOK_ALLOW_PRIVATE", "true")],
+        "webhook_allow_private",
+    );
+    // Only https, unless private targets are allowed.
+    let http = [("LEPIC_WEBHOOK_URL", "http://127.0.0.1:9/in"), good[1]];
+    invalid(&http, "webhook_url");
+    let allowed = [http[0], http[1], ("LEPIC_WEBHOOK_ALLOW_PRIVATE", "true")];
+    assert!(resolve(&allowed).unwrap().webhook.unwrap().allow_private);
+    for url in [
+        "ftp://hooks.example/",
+        "https://",
+        "hooks.example/in",
+        "https://user:pw@hooks.example/",
+    ] {
+        invalid(&[("LEPIC_WEBHOOK_URL", url), good[1]], "webhook_url");
+    }
+    for types in ["Payment", "payment.*.x", "a b", ",", "payment.*,"] {
+        invalid(
+            &[good[0], good[1], ("LEPIC_WEBHOOK_TYPES", types)],
+            "webhook_types",
+        );
+    }
+}

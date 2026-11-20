@@ -1,0 +1,176 @@
+{
+  "description": "Read calls of the node client against a public floonet node, over the last three blocks.",
+  "exchanges": [
+    {
+      "endpoint": "/v2/foreign",
+      "method": "get_version",
+      "params": null,
+      "response": {
+        "id": 1,
+        "jsonrpc": "2.0",
+        "result": {
+          "Ok": {
+            "block_header_version": 6,
+            "node_version": "4.0.4"
+          }
+        }
+      }
+    },
+    {
+      "endpoint": "/v2/foreign",
+      "method": "get_tip",
+      "params": null,
+      "response": {
+        "id": 1,
+        "jsonrpc": "2.0",
+        "result": {
+          "Ok": {
+            "height": 1052,
+            "last_block_pushed": "cb68c9daf1289d121b49e5e9d32e1a00b4c38763ec813f0384460a895575e11a",
+            "prev_block_to_last": "2c703e1e1dda4af5b709e69a2cf0fdddf21c4a01e180341fe23e5bec9266bcfd",
+            "total_difficulty": {
+              "cuckaroo": 1056,
+              "cuckatoo": 17436,
+              "progpow": 67109916,
+              "randomx": 10130312
+            }
+          }
+        }
+      }
+    },
+    {
+      "endpoint": "/v2/foreign",
+      "method": "get_pmmr_indices",
+      "params": [
+        1050,
+        1052
+      ],
+      "response": {
+        "id": 1,
+        "jsonrpc": "2.0",
+        "result": {
+          "Ok": {
+            "highest_index": 2184,
+            "last_retrieved_index": 2179,
+            "outputs": []
+          }
+        }
+      }
+    },
+    {
+      "endpoint": "/v2/foreign",
+      "method": "get_unspent_outputs",
+      "params": [
+        2179,
+        2184,
+        100,
+        true
+      ],
+      "response": {
+        "id": 1,
+        "jsonrpc": "2.0",
+        "result": {
+          "Ok": {
+            "highest_index": 2184,
+            "last_retrieved_index": 2184,
+            "outputs": [
+              {
+                "block_height": 1050,
+                "commit": "0854a4608c7c3c7106575c977909cb63b55c435b58303e49bece020089441ab564",
+                "merkle_proof": null,
+                "mmr_index": 2179,
+                "output_type": "Coinbase",
+                "proof": "71086c06edac1517d518a0a5d41caa99fd392bdfb2f1951587cb506bdc91fff56376a7655fdb2669ab3c1622c326cd36e5253611b5862eafa4fdfc7a6e69596d09ab1d6c90c240f89366e93bf43cfc7478826395525a970792954e057a4969970dfcb41ede81b089a79f3a9af41500842d2826bc3e2de2ba9e478ef9e187a68bb41a1319ecddde6b616f5f59e60335b82820b37311ce6244569b3e9383f98493210905711483d96fde3c9aecb045c0712cf8bb7c3023965151a7b929cd58fee9c4c24ca633112b68c158f8c52f65fe30af6b1fc31c17b45737baf9543c4497321c4916d18c984a3d0b7802e40bdc8aa9728791b15d2d265e8d0a9e445d857e2de7fa62957e1beea124c164185d50194b71179e2c815193e45d495697ff0186d3b2bc929dba3c05aefc14d45ba8effc5344a8276080690bce24f0562fd5c1d51d3bfbc764fc27a3b21d96b7d03bfba5f1b48d7c165505fd16402d6db121ad0ea4e2ac01b5564d852de704ca357088da7cebe99686000b466c6e4d7247a4892f661c5df1f14cb0f9e6b78f8fc4028dc22a8a6d362e98ae0b6cb644e7d131d94a9ea1e80c6971983165e6b23ee87966c6d12d32b09cc4791bd6de871d3c19208ec202b48b12288914cfafccb2c18876f6313809072b6c706feb3e3df4e7ba0833d5d1f14aa99af1e79b9c6a4071beb04d6ed331c6fc36db674762f11ec7e286009811f4bfa025427b4f9f9c24a959605b06859af68205340c2bbd7e55039a9b24a222a34b3034c4777f436895b71898472b6e235f619b58cc2688e3daa6f07ec934f828014f93b3a0e7738512f20f45acbeace5ccb1ae7cab4aa876542d1d4d34c050231805b29fc55cfab325cbea34f90f4161a32c843fc5d1051674ae7fdfaaa14c60f267b616e05f0a014236139fa79576aa0ace94be528f29e1119dc47782433f3eae",
+                "proof_hash": "0b0a2d11c6bdd91fe75b2d189a7a5446907bb921aa2172092b7faad517865a23",
+                "spent": false
+              },
+              {
+                "block_height": 1051,
+                "commit": "08cc8d830263c9e29681929994298eb30c50b19eb6f61dd75bcfaab22d136d0dd3",
+                "merkle_proof": null,
+                "mmr_index": 2182,
+                "output_type": "Coinbase",
+                "proof": "aeef36d111d594321c847f7b58518f9ded179129526896418062264d29229ac07fa6b5e00795e9c4f0af333dd8c4cd24870c0775a310dbac21a14af6922793f209d641cdc30cbf83c05a226fbcd21256ddf0259ad95a5c334ef7e38e6da712f290d3d139c589fe9d49236956d59277c87d1c485b7db293466eef9d9043a841acada7131eafdbe5d4197eb728eb3830ff0cdb84fb4b2535399bd75ddc783b0eb2bfbb53e0a07906587a2ea47bb2847374bdb9a824fe7fc4124b8de4ee428c31f80257aa2f9ab503928321f31a14930a68a9333ae322257b34e4046af608ef6c01730d1a1d70e8911f77407afaa757bb141feb405d3aa0ecfaf52379d1312563c90f5c61dd1864a4da266ab2c292b4894738e45016aa7aed87e1a66789f6daa5364c11f839460a3d23f3ffe375826d6f14ee6b6586861083660f44fc6b8154ba7bc05da4ada2a115269e5677e28c6799b2c0e6cd4044d1b590e850dfb2aaa063c458f8025303d1461c1fbb98263f63e64a11ed5cccba3d09af947903333b7ee49c78023964546cc10ea93da2a16354d54e42d9d7dbf43ffd226e34857671d1aa5c1121584fa74b34a1754d3cea5903b594f8f12bade910034ea6c7fa1775eb6e2396dff58233ae0f286ee5199d3a349c0013f8401bd3be8a98948588cc84fb77a0dc80d5ce2b9f24060059199c1cb2b21863169225c67da63fe818ca33c153ce325b1889f05aee42618a511b4410434c7da8eecde55f3082b6840781535548a4e403fd3d6acb1b527e32e0704569251d7d0dbb8cedc282abe9820e7558a9785ab065dbd9244799db54be81374dd65358a17138f67c3e35d7bdae29036d8c5202eba43a094b656e4caee1a41cfc26d0d1008507b0455f6c20a55010b43dc4a63f71da22dffb16ae010d0a4b86fcf5bf4fa681218acec880a50b3e0805ca7c7221f7f0d56e",
+                "proof_hash": "76dd8fe09d92f30417a94a3f4ee8fe7882bcf3e24e15df1e75e93e59b98934e0",
+                "spent": false
+              },
+              {
+                "block_height": 1052,
+                "commit": "08ee1bac77a9438e827455833a42321b5fc4465814bb9829905423b8091dd67bcd",
+                "merkle_proof": null,
+                "mmr_index": 2183,
+                "output_type": "Coinbase",
+                "proof": "dad4a998bffbb8390ec4d1a7a34ebbf27b42b2c54ac0f5c11b17cfa498a064b2c038ba0fa49b82625120fc914676a10cd1ef3edae61cc6e6e2eec0c04133ebe803de2257bd6e1a82796b48ece08093e045c9f1b33593bc949d97960e9d18635090890e9d4dc1eefbb32ffab1ef227d441de725e5b9bd278609a614a75ad6b5300dc0a7fd763f9f371cff61dd3bf1b449a0f0262feb4995c20429e7c022606658423addb9179beb4f483df798225bfebcf8691443ccad53583566b3d62a66917c80d7fafcd5f1ae14fc764aa3be4e7c0894535ef8ec3c6a17c611b1c2e495480611be952e3e2789b10f526425fd9890595fce505bacffff193bf5dec662337878fec89d8939c6ae4122b14dc9e89e5c3b95231d518c4b5f336a7b839900efb9ef680624ec4af40de7e7579ecc6dbc98010524121ec3a6051cdbb4bb2d20ea3ca8ebd5692e0cddcd0c3e6d44b1b809660909f9dbc9f2fa06cf1f0273ae7c08e844c80b031dcc1ae703776ccd88f86e05568c264b17775b6f9d7172a20224492cb32b8e41092aac97a3eb6c12a70e5e0d72afaaba96f90749f5d1a7d87d6a73f825582285e50bb5b81dc6bdc15b0d03bca491415b11ecec49b5a7e9ff5d5e864392f01f48fc69f19b3613c326923789c472b26e638b6f7ea3d46422623f2baa1cda17d95f50d23332323c483574bbf1fd5e255452434f9496a19000da760087f8329393864121455d0200e494e60ff4ea3db07acf270c6f782db9d5ae7a9c553004bebfe2caaa1412e1b548eb926ac71b9a36a51edeaa34753af307a84fc9f834d152e7301c7d49bdb2539789705f92211bfd84c78350217c05bdabb72948b243339202e8c64e5984d67635e30fadb573b4e1db06997b346d1189d4d81afe1724423e9aa167a54435739265417d753c6bed7ad132c31fca0e9bc68d5ae43c1a27cc348128",
+                "proof_hash": "28c0603d185af32f5032303caeffd4c24e7edc0d7797f5f03330a19117be10b8",
+                "spent": false
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "endpoint": "/v2/foreign",
+      "method": "get_outputs",
+      "params": [
+        [
+          "08350e1dbea1f80ae554c5ea39dcf3ad3c51c4489b00ce64a8f30a2c37b2c52e54",
+          "0854a4608c7c3c7106575c977909cb63b55c435b58303e49bece020089441ab564",
+          "08cc8d830263c9e29681929994298eb30c50b19eb6f61dd75bcfaab22d136d0dd3"
+        ],
+        null,
+        null,
+        false,
+        false
+      ],
+      "response": {
+        "id": 1,
+        "jsonrpc": "2.0",
+        "result": {
+          "Ok": [
+            {
+              "block_height": 1050,
+              "commit": "0854a4608c7c3c7106575c977909cb63b55c435b58303e49bece020089441ab564",
+              "merkle_proof": null,
+              "mmr_index": 2179,
+              "output_type": "Coinbase",
+              "proof": null,
+              "proof_hash": "0b0a2d11c6bdd91fe75b2d189a7a5446907bb921aa2172092b7faad517865a23",
+              "spent": false
+            },
+            {
+              "block_height": 1051,
+              "commit": "08cc8d830263c9e29681929994298eb30c50b19eb6f61dd75bcfaab22d136d0dd3",
+              "merkle_proof": null,
+              "mmr_index": 2182,
+              "output_type": "Coinbase",
+              "proof": null,
+              "proof_hash": "76dd8fe09d92f30417a94a3f4ee8fe7882bcf3e24e15df1e75e93e59b98934e0",
+              "spent": false
+            }
+          ]
+        }
+      }
+    },
+    {
+      "endpoint": "/v2/foreign",
+      "method": "get_kernel",
+      "params": [
+        "08350e1dbea1f80ae554c5ea39dcf3ad3c51c4489b00ce64a8f30a2c37b2c52e54",
+        1050,
+        1052
+      ],
+      "response": {
+        "id": 1,
+        "jsonrpc": "2.0",
+        "result": {
+          "Err": "NotFound"
+        }
+      }
+    }
+  ],
+  "network": "floonet",
+  "node_version": "4.0.4",
+  "recorded_by": "crates/lepic-node/tests/live.rs",
+  "schema": 1
+}

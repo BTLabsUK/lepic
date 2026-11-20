@@ -1,0 +1,116 @@
+// SPDX-License-Identifier: Apache-2.0
+//! SQLite wallet storage behind repository traits.
+//!
+//! The engine sees only [`WalletStore`] and the repository traits. [`SqliteStore`] is the product
+//! implementation; [`MemoryStore`] behaves the same without a file, for tests of the layers above.
+
+mod account;
+mod api_log;
+mod at_rest;
+mod contact;
+#[cfg(feature = "sqlite")]
+mod contact_backup;
+mod context;
+mod delivery;
+#[cfg(feature = "sqlite")]
+mod dir_lock;
+mod encoding;
+mod error;
+pub mod file;
+#[cfg(feature = "sqlite")]
+#[doc(hidden)]
+pub mod fuzz;
+mod imported;
+mod invoice;
+#[cfg(feature = "sqlite")]
+pub mod legacy;
+mod memory;
+mod node_post;
+mod output;
+mod peer;
+mod recovery;
+mod relay;
+#[cfg(feature = "seed")]
+pub mod seed;
+mod settings;
+mod slate;
+#[cfg(feature = "sqlite")]
+mod sqlite;
+mod store;
+mod transaction;
+mod tx_record;
+
+pub use account::{AccountIndex, AccountRecord, AccountRepository};
+pub use api_log::{
+    API_DIGEST_LEN, ApiEvent, ApiLogRepository, ApiRequest, MAX_API_EVENT_DATA_LEN,
+    MAX_API_EVENTS_PER_READ, MAX_API_KIND_LEN, MAX_API_KIND_PATTERNS, MAX_API_REQUEST_ID_LEN,
+    MAX_API_SCOPE_LEN,
+};
+pub use at_rest::{
+    AtRest, AtRestReport, AtRestState, MIGRATED_FROM_SETTING, MigrationObserver, MigrationProgress,
+    MigrationStage, ROLLBACK_SCAN_SETTING, STORE_KEY_LEN, StoreKey,
+};
+pub use contact::{
+    BOX_SALT_LEN, CARD_KEY_LEN, CONTACT_EXTRA_PREFIX, CONTACT_ID_LEN, CONTACT_SLOT_COUNT,
+    ContactCap, ContactId, ContactKind, ContactMailbox, ContactOutboxId, ContactOutboxState,
+    ContactRecord, ContactRepository, ContactState, DomainClaimBytes, INVITE_ID_LEN,
+    MAX_CANCELLED_PAIRINGS, MAX_CONTACTS, MAX_PENDING_PAIRINGS, PAYMENTS_KEY_LEN, PRIVATE_SLOT_END,
+    PairingEndReason, PairingFacts, PairingId, PairingRole, PairingSecrets, PairingState, PeerCard,
+    PendingPairing, PreviousHome, RelayBackoff, SAS_LEN, SealMode, VERDICT_LEN, contact_extra_key,
+    contact_extras_prefix,
+};
+#[cfg(feature = "sqlite")]
+pub use contact_backup::{
+    CONTACT_BACKUP_VERSION, CardReader, ImportSummary, export_contacts, export_contacts_where,
+    import_contacts,
+};
+pub use context::{
+    CONTEXT_KEY_LEN, ContextKey, ContextRepository, ParticipantId, PrivateContext, StoreKeys,
+};
+pub use delivery::{
+    CopyState, MAX_ALIAS_LEN, MAX_ENVELOPE_LEN, MAX_KEY_REF_LEN, MAX_RELAY_LEN,
+    MAX_ROUTE_METHOD_LEN, MAX_ROUTE_VALUE_LEN, MAX_STATE_REASON_LEN, MailClass, NativeOutboxEntry,
+    NativeOutboxId, NativeOutboxRepository, OutboxCopy, OutboxState, PaymentDelivery,
+    PaymentDeliveryRepository, StoredNativeOutbox, StoredOutboxCopy, WatchRow, WatchSetRepository,
+};
+#[cfg(feature = "sqlite")]
+pub use dir_lock::{DataDirLock, DataDirLockError, LOCK_FILE, lock_data_dir, try_lock_data_dir};
+pub use error::{DatabaseError, Record, StoreError};
+pub use imported::{
+    ChainCheck, ImportedKind, ImportedMessage, ImportedOutput, ImportedOutputStatus,
+    ImportedRepository, ImportedTransaction, MAX_IMPORTED_MESSAGE_BYTES, MAX_IMPORTED_MESSAGES,
+};
+pub use invoice::{
+    InvoiceCap, InvoiceRepository, MAX_PARKED_INVOICES, MAX_PARKED_INVOICES_PER_SENDER,
+    PendingInvoice, PendingInvoiceStatus,
+};
+pub use memory::MemoryStore;
+pub use node_post::{MAX_NODE_ERROR_LEN, NodeOutcome, NodePost, NodePostRepository};
+pub use output::{
+    COMMITMENT_LEN, CommitmentBytes, KEY_ID_LEN, KeyId, OutputRecord, OutputRepository,
+    OutputStatus,
+};
+#[doc(hidden)]
+pub use peer::vectors as peer_vectors;
+pub use peer::{PEER_TAG_KEY_LEN, PEER_TAG_LEN, PeerCompat, PeerTag, PeerTagKey};
+pub use recovery::{MAX_RECOVERY_ERROR_LEN, Recovery, RecoveryRepository, RecoveryState};
+pub use relay::{
+    InboxEntry, InboxStatus, OutboxEntry, OutboxId, OutboxStatus, RelayRepository, StoredOutbox,
+};
+pub use settings::SettingsRepository;
+pub use slate::{SlateRepository, SlateStage, StoredSlate};
+#[cfg(feature = "sqlite")]
+pub use sqlite::{
+    DATABASE_FILE, ENCRYPTED_DATABASE_FILE, RetireSummary, SCHEMA_VERSION, SqliteStore,
+    backup_database, migration_in_progress, open_existing_wallet_dir, open_wallet_dir,
+    remove_database_leftovers, retire_plain_store, start_over_wallet_dir,
+};
+pub use store::{Repositories, WalletStore};
+pub use transaction::{
+    OpenReceipt, ReceiveListing, StateTally, StoredTransaction, TransactionEntry,
+    TransactionRepository, TxDirection, TxId, TxState,
+};
+pub use tx_record::{
+    FoundDuring, OtherWalletSpend, ScanFoundRecord, TxMarks, TxRecordRepository, TxWatch,
+    WatchPhase, WatchedOutput,
+};

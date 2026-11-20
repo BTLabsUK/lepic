@@ -1,0 +1,494 @@
+// SPDX-License-Identifier: Apache-2.0
+//! Pairing v3 between two wallets on the mock relay: the address an answer must prove, crossed
+//! invites, the standing invite, what an inviter waits for, how a pairing ends, and an older
+//! wallet's pair request.
+
+// Tests may unwrap, index and panic (docs/rules.md), including in helpers that clippy does not
+// treat as test code.
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::indexing_slicing,
+    clippy::panic
+)]
+
+use crate::epicbox_world as world;
+use crate::pairing_helpers as helpers;
+
+use std::time::Duration;
+
+use helpers::{accept, events, invite_request, relays};
+use lepic_store::{AccountIndex, ContactState};
+use lepic_wallet::Event;
+use lepic_wallet::event::{ContactChange, ContactUpdate};
+use lepic_wallet_contacts::{
+    AcceptRequest, ContactError, ContactRelays, PairingEndReason, PairingStatus, RelayMode,
+    SasDecision, WalletContacts,
+};
+use world::{Party, World};
+
+const DAY: Duration = Duration::from_secs(24 * 60 * 60);
+const HOUR: Duration = Duration::from_secs(60 * 60);
+
+fn drain(world: &World, party: &Party) {
+    world.block_on(party.epicbox.drain(&party.wallet)).unwrap();
+}
+
+fn status(world: &World, party: &Party, id: lepic_store::ContactId) -> PairingStatus {
+    world
+        .block_on(party.wallet.contact_book().contact(id))
+        .unwrap()
+        .status
+}
+
+fn accept_request(
+    world: &World,
+    party: &Party,
+    link: &str,
+    from: &Party,
+) -> Result<lepic_store::ContactId, ContactError> {
+    world
+        .block_on(party.wallet.contact_book().pairing_accept(
+            &relays(party),
+            AcceptRequest {
+                expect_address: Some(from.address.to_string()),
+                ..accept(link, "Ben", false)
+            },
+        ))
+        .map(|outcome| outcome.contact_id)
+}
+
+#[test]
+fn an_answer_from_another_wallet_than_expected_stores_nothing_and_the_invite_waits() {
+    let world = World::new();
+    let (anna, ben) = (&world.issuer, &world.payer);
+    let stranger = world.stranger();
+    let mut anna_events = anna.wallet.subscribe();
+    let offer = world
+        .block_on(anna.wallet.contact_book().pairing_invite(
+            &relays(anna),
+            lepic_wallet_contacts::InviteRequest {
+                expect_address: Some(stranger.address.to_string()),
+                ..invite_request("Anna")
+            },
+        ))
+        .unwrap();
+
+    world
+        .block_on(
+            ben.wallet
+                .contact_book()
+                .pairing_accept(&relays(ben), accept(&offer.link, "Ben", false)),
+        )
+        .unwrap();
+    world.collect(anna);
+
+    // The answer is refused, and the pairing keeps waiting for the wallet it expects.
+    assert!(
+        !events(&mut anna_events)
+            .iter()
+            .any(|event| matches!(event, Event::PairingFailed(_)))
+    );
+    assert!(
+        world
+            .block_on(anna.wallet.contact_book().contacts())
+            .unwrap()
+            .iter()
+            .all(|contact| contact.claimed_name.is_none())
+    );
+    let pending = world
+        .block_on(anna.wallet.contact_book().pairings_pending())
+        .unwrap();
+    assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0].contact_id, offer.contact_id);
+
+    // The expected wallet's answer still pairs.
+    world
+        .block_on(
+            stranger
+                .wallet
+                .contact_book()
+                .pairing_accept(&relays(&stranger), accept(&offer.link, "Sam", false)),
+        )
+        .unwrap();
+    world.collect(anna);
+    let contact = world
+        .block_on(anna.wallet.contact_book().contact(offer.contact_id))
+        .unwrap();
+    assert_eq!(
+        contact.payments_address.as_deref(),
+        Some(stranger.address.to_string().as_str())
+    );
+}
+
+#[test]
+fn crossed_invites_keep_the_invite_of_the_lower_key() {
+    let world = World::new();
+    let (anna, ben) = (&world.issuer, &world.payer);
+    let invite_to = |from: &Party, to: &Party| {
+        world
+            .block_on(from.wallet.contact_book().pairing_invite(
+                &relays(from),
+                lepic_wallet_contacts::InviteRequest {
+                    expect_address: Some(to.address.to_string()),
+                    ..invite_request("Anna")
+                },
+            ))
+            .unwrap()
+            .link
+    };
+    let from_anna = invite_to(anna, ben);
+    let from_ben = invite_to(ben, anna);
+    let anna_lower = anna.address.public_key().to_bytes() < ben.address.public_key().to_bytes();
+    let (low, high, to_low, to_high) = if anna_lower {
+        (anna, ben, &from_ben, &from_anna)
+    } else {
+        (ben, anna, &from_anna, &from_ben)
+    };
+
+    // The lower key's own invite wins: it waits for that answer.
+    assert!(matches!(
+        accept_request(&world, low, to_low, high),
+        Err(ContactError::Crossed)
+    ));
+    // The higher key answers the lower key's invite and withdraws its own.
+    accept_request(&world, high, to_high, low).unwrap();
+    assert!(
+        world
+            .block_on(high.wallet.contact_book().pairings_pending())
+            .unwrap()
+            .iter()
+            .all(|pending| pending.role == lepic_store::PairingRole::Invitee)
+    );
+    world.collect(low);
+    world.collect(high);
+    world.collect(low);
+    let paired = |party: &Party| {
+        world
+            .block_on(party.wallet.contact_book().contacts())
+            .unwrap()
+    };
+    assert_eq!(paired(low).len(), 1);
+    assert_eq!(paired(high).len(), 1);
+    assert_eq!(paired(low)[0].status, PairingStatus::Verified);
+}
+
+#[test]
+fn the_standing_invite_stays_until_answered_or_renamed() {
+    let world = World::new();
+    let anna = &world.issuer;
+    let standing = |name: &str| {
+        world
+            .block_on(anna.wallet.contact_book().pairing_standing_invite(
+                &relays(anna),
+                AccountIndex(0),
+                name,
+            ))
+            .unwrap()
+    };
+    let first = standing("Anna");
+    assert_eq!(standing("Anna"), first, "the same invite while it stands");
+    assert!(
+        world
+            .block_on(anna.wallet.contact_book().pairings_pending())
+            .unwrap()
+            .is_empty(),
+        "the standing invite is not a pending row"
+    );
+    let renamed = standing("Anna B");
+    assert_ne!(renamed.contact_id, first.contact_id);
+    // Less than a day left: a new one.
+    anna.clock.advance(6 * DAY + Duration::from_secs(60));
+    assert_ne!(standing("Anna B").contact_id, renamed.contact_id);
+}
+
+#[test]
+fn an_inviter_waits_until_it_hears_the_invitee_finished() {
+    let world = World::new();
+    let (anna, ben) = (&world.issuer, &world.payer);
+    let mut anna_events = anna.wallet.subscribe();
+    let link = world.invite(anna, "Anna");
+    world
+        .block_on(
+            ben.wallet
+                .contact_book()
+                .pairing_accept(&relays(ben), accept(&link, "Ben", false)),
+        )
+        .unwrap();
+    world.collect(anna);
+    let anna_side = world.only_contact(anna);
+    assert_eq!(status(&world, anna, anna_side), PairingStatus::Waiting);
+    assert!(matches!(
+        world.block_on(
+            anna.wallet
+                .contact_book()
+                .contact_set_allow_invoices(anna_side, true)
+        ),
+        Err(ContactError::Waiting)
+    ));
+
+    world.collect(ben);
+    world.collect(anna);
+
+    assert_eq!(status(&world, anna, anna_side), PairingStatus::Paired);
+    assert!(
+        events(&mut anna_events).contains(&Event::ContactUpdated(ContactUpdate::of(
+            anna_side,
+            ContactChange::Heard
+        )))
+    );
+}
+
+#[test]
+fn an_inviter_never_heard_ends_after_seven_days_of_collecting() {
+    let world = World::new();
+    let (anna, ben) = (&world.issuer, &world.payer);
+    let link = world.invite(anna, "Anna");
+    world
+        .block_on(
+            ben.wallet
+                .contact_book()
+                .pairing_accept(&relays(ben), accept(&link, "Ben", false)),
+        )
+        .unwrap();
+    world.collect(anna);
+    let anna_side = world.only_contact(anna);
+
+    // Ten days without collecting count for nothing.
+    anna.clock.advance(10 * DAY);
+    world.collect(anna);
+    assert_eq!(status(&world, anna, anna_side), PairingStatus::Waiting);
+    // Seven days of collecting at least hourly end it.
+    for _ in 0..7 * 24 {
+        anna.clock.advance(HOUR);
+        world.collect(anna);
+    }
+    let view = world
+        .block_on(anna.wallet.contact_book().contact(anna_side))
+        .unwrap();
+    assert_eq!(view.status, PairingStatus::Ended);
+    assert_eq!(view.ended_reason, Some(PairingEndReason::NeverFinished));
+}
+
+#[test]
+fn days_the_app_was_closed_do_not_count_as_collecting() {
+    let world = World::new();
+    let (anna, ben) = (&world.issuer, &world.payer);
+    let link = world.invite(anna, "Anna");
+    world
+        .block_on(
+            ben.wallet
+                .contact_book()
+                .pairing_accept(&relays(ben), accept(&link, "Ben", false)),
+        )
+        .unwrap();
+    world.collect(anna);
+    let anna_side = world.only_contact(anna);
+    // The first collect after the reply sets the mark; the gap after it is the app closed.
+    world.collect(anna);
+    anna.clock.advance(8 * DAY);
+    world.collect(anna);
+    assert_eq!(status(&world, anna, anna_side), PairingStatus::Waiting);
+}
+
+#[test]
+fn a_mismatch_ends_both_sides_and_finalizes_nothing() {
+    let world = World::new();
+    let (anna, ben) = (&world.issuer, &world.payer);
+    let (anna_side, ben_side) = world.pair(anna, ben);
+    world
+        .block_on(anna.wallet.contact_book().pairing_sas(
+            &relays(anna),
+            anna_side,
+            SasDecision::Mismatch,
+        ))
+        .unwrap();
+    world.collect(ben);
+
+    let anna_view = world
+        .block_on(anna.wallet.contact_book().contact(anna_side))
+        .unwrap();
+    let ben_view = world
+        .block_on(ben.wallet.contact_book().contact(ben_side))
+        .unwrap();
+    assert_eq!(anna_view.ended_reason, Some(PairingEndReason::Mismatch));
+    assert_eq!(ben_view.ended_reason, Some(PairingEndReason::PeerMismatch));
+    assert!(matches!(
+        world.block_on(anna.wallet.contact_book().pairing_sas(
+            &relays(anna),
+            anna_side,
+            SasDecision::Match
+        )),
+        Err(ContactError::Ended)
+    ));
+}
+
+#[test]
+fn a_pairing_by_hand_offline_ends_paired_on_both_sides() {
+    let world = World::new();
+    let (anna, ben) = (&world.issuer, &world.payer);
+    let off = |party: &Party| ContactRelays {
+        mode: RelayMode::Offline,
+        ..relays(party)
+    };
+    let offer = world
+        .block_on(
+            anna.wallet
+                .contact_book()
+                .pairing_invite(&off(anna), invite_request("Anna")),
+        )
+        .unwrap();
+    let answer = world
+        .block_on(
+            ben.wallet
+                .contact_book()
+                .pairing_accept(&off(ben), accept(&offer.link, "Ben", true)),
+        )
+        .unwrap();
+    let confirm = match world
+        .block_on(
+            anna.wallet
+                .contact_book()
+                .pairing_enter_link(&off(anna), &answer.reply_link),
+        )
+        .unwrap()
+    {
+        lepic_wallet_contacts::LinkOutcome::Confirm { link, .. } => link,
+        other => panic!("{other:?}"),
+    };
+    world
+        .block_on(
+            ben.wallet
+                .contact_book()
+                .pairing_enter_link(&off(ben), &confirm),
+        )
+        .unwrap();
+
+    let anna_view = world
+        .block_on(anna.wallet.contact_book().contact(offer.contact_id))
+        .unwrap();
+    let ben_view = world
+        .block_on(ben.wallet.contact_book().contact(answer.contact_id))
+        .unwrap();
+    // No status notice can travel: the reply taken by hand counts as hearing the invitee.
+    assert_eq!(anna_view.status, PairingStatus::Paired);
+    assert_eq!(ben_view.status, PairingStatus::Paired);
+    assert_eq!(ben_view.state, ContactState::Paired);
+}
+
+#[test]
+fn a_mismatch_while_a_sealed_answer_waits_finalizes_nothing_and_the_send_cancels() {
+    use lepic_primitives::amount::Amount;
+    use lepic_wallet::selection::SelectionStrategy;
+    use lepic_wallet::send::{Delivery, SendRequest};
+    let world = World::new();
+    let (payer, issuer) = (&world.payer, &world.issuer);
+    let (payer_side, _) = world.pair(payer, issuer);
+    let sent = world
+        .block_on(payer.wallet.send(
+            &crate::support::file(),
+            SendRequest {
+                minimum_confirmations: 1,
+                strategy: SelectionStrategy::Smallest,
+                ..SendRequest::new(world::ACCOUNT, Amount::new(world::AMOUNT))
+            },
+            Delivery::Export {
+                to: lepic_transport::transport::Location::File(
+                    tempfile::tempdir().unwrap().keep().join("s1.tx"),
+                ),
+            },
+        ))
+        .unwrap();
+    world
+        .block_on(payer.wallet.contact_book().contact_post_slate(
+            &relays(payer),
+            payer_side,
+            sent.tx_id,
+            None,
+        ))
+        .unwrap();
+    // The receiver answers; its S2 waits in the payer's mailbox.
+    world.collect(issuer);
+    let slate_id = uuid::Uuid::from_bytes(*sent.slate_id.as_bytes());
+    assert!(
+        issuer
+            .read(|repos| repos.transaction_by_slate(slate_id, lepic_store::TxDirection::Incoming))
+            .is_some()
+    );
+    let receiver_side = world.only_contact(issuer);
+    let outbox = helpers::contact_rows(issuer, receiver_side);
+    assert!(
+        outbox
+            .iter()
+            .any(|stored| stored.entry.state == lepic_store::OutboxState::Posted),
+        "the answer reached the relay"
+    );
+
+    world
+        .block_on(payer.wallet.contact_book().pairing_sas(
+            &relays(payer),
+            payer_side,
+            SasDecision::Mismatch,
+        ))
+        .unwrap();
+    world.collect(payer);
+
+    let state = |party: &Party| {
+        party
+            .read(|repos| repos.transaction(sent.tx_id))
+            .unwrap()
+            .state
+    };
+    assert_eq!(
+        state(payer),
+        lepic_store::TxState::Sent,
+        "nothing finalized"
+    );
+    assert!(world.node.pushed_transactions().is_empty());
+    world.block_on(payer.wallet.cancel(sent.tx_id)).unwrap();
+    assert_eq!(state(payer), lepic_store::TxState::Cancelled);
+}
+
+/// An older wallet's pair request on the payments address: acknowledged and dropped, with
+/// nothing stored and no event.
+#[test]
+fn a_pair_request_frame_is_acknowledged_and_dropped() {
+    let world = World::new();
+    let (anna, ben) = (&world.issuer, &world.payer);
+    let offer = world
+        .block_on(anna.wallet.contact_book().pairing_invite(
+            &relays(anna),
+            lepic_wallet_contacts::InviteRequest {
+                expect_address: Some(ben.address.to_string()),
+                ..invite_request("Anna")
+            },
+        ))
+        .unwrap();
+    let frame = format!(r#"{{"lepic":1,"type":"pair","invite":"{}"}}"#, offer.link);
+    world
+        .block_on(anna.client().post(&ben.address, &frame))
+        .unwrap();
+    let mut ben_events = ben.wallet.subscribe();
+
+    drain(&world, ben);
+
+    assert_eq!(world.relay.pending(&ben.address), 0, "acknowledged");
+    // The drain's own connection states are the only events: none for the frame.
+    let raised: Vec<Event> = events(&mut ben_events)
+        .into_iter()
+        .filter(|event| !matches!(event, Event::Transport(_)))
+        .collect();
+    assert!(raised.is_empty(), "{raised:?}");
+    assert!(
+        world
+            .block_on(ben.wallet.contact_book().contacts())
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        world
+            .block_on(ben.wallet.contact_book().pairings_pending())
+            .unwrap()
+            .is_empty()
+    );
+}

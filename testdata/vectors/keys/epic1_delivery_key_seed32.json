@@ -1,0 +1,202 @@
+{
+  "schema": 1,
+  "area": "keys",
+  "name": "epic1_delivery_key_seed32",
+  "generator": "conformance/vectors/keys",
+  "upstream": {
+    "repo": "https://github.com/EpicCash/epic-wallet",
+    "commit": "845b3fcf4df12ed0139929c62157015447a9d063"
+  },
+  "inputs": {
+    "seed": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+    "label": "lepic-wallet epic1 delivery key v1",
+    "accounts": [
+      0,
+      7
+    ]
+  },
+  "expected": {
+    "cases": [
+      {
+        "account": 0,
+        "network": "mainnet",
+        "net": 0,
+        "index": 0,
+        "counter": 0,
+        "secret_key": "5b069b518ec41b97f7ed6b1d0abbe846938a7856281c92044d956a0c905fcbec",
+        "public_key": "0334a27d5f29637032a928110828933e12a857eeaa5536763fd92c4f84cce21042",
+        "epicbox": {
+          "network": "mainnet",
+          "version_bytes": "0100",
+          "public_key": "esYenKyrz9GaSFBNi39XZEJ25G4gpUw4tcLq9FurbFAEHRkv2VaA",
+          "address": "esYenKyrz9GaSFBNi39XZEJ25G4gpUw4tcLq9FurbFAEHRkv2VaA@epicbox.epiccash.com"
+        }
+      },
+      {
+        "account": 0,
+        "network": "mainnet",
+        "net": 0,
+        "index": 1,
+        "counter": 0,
+        "secret_key": "5dd6b62dff32a3340738c495eefa5922fa4f1b26812c98e1bfd9a06eaa6f8fc4",
+        "public_key": "03ff2286d60d3c136bea39f3afbc695390dc735907681ee348f8ec133be345e946",
+        "epicbox": {
+          "network": "mainnet",
+          "version_bytes": "0100",
+          "public_key": "esaBxvTSZhm8PUbRxnM7c3daPGiVnG8W9PqsicNRtrUdDPVZ1N6C",
+          "address": "esaBxvTSZhm8PUbRxnM7c3daPGiVnG8W9PqsicNRtrUdDPVZ1N6C@epicbox.epiccash.com"
+        }
+      },
+      {
+        "account": 0,
+        "network": "mainnet",
+        "net": 0,
+        "index": 2147483648,
+        "counter": 0,
+        "secret_key": "3cd529ea978fbaada6d8527bbaa2363ba6c64e3067710622df5042ec9ffc9d65",
+        "public_key": "02a3738232f28b9429b64015edaa197b2e5305a274e2648b3a5903af9da525e609",
+        "epicbox": {
+          "network": "mainnet",
+          "version_bytes": "0100",
+          "public_key": "esXYqovm16Bq96DBnTBkwWT8UPCjTStFUrLFBa5eqzAJfrkYodLa",
+          "address": "esXYqovm16Bq96DBnTBkwWT8UPCjTStFUrLFBa5eqzAJfrkYodLa@epicbox.epiccash.com"
+        }
+      },
+      {
+        "account": 0,
+        "network": "floonet",
+        "net": 1,
+        "index": 0,
+        "counter": 0,
+        "secret_key": "475c3424f9f28da55f8c4da5ad0555b523d6cebcd6cd4c5b2aa5af2e7f981c84",
+        "public_key": "020879c789349f4ac4e5dcb19b9c669d28e1c74038b22ebada63e475d59d3a9187",
+        "epicbox": {
+          "network": "floonet",
+          "version_bytes": "0188",
+          "public_key": "zzN8M7jtdVup8mTa6zpzD7f6ALQjDwEFecYy8vJ7A1ZQczertY6n",
+          "address": "zzN8M7jtdVup8mTa6zpzD7f6ALQjDwEFecYy8vJ7A1ZQczertY6n@epicbox.epiccash.com"
+        }
+      },
+      {
+        "account": 0,
+        "network": "floonet",
+        "net": 1,
+        "index": 1,
+        "counter": 0,
+        "secret_key": "a0319bbc4ed111db070ee7917dda311db71e83f659a8e73969074ebccaf74674",
+        "public_key": "02fb9d48a0d8a8ffab826ef4221139e572caef269bc3e7db038f6fb7f7ecd195cf",
+        "epicbox": {
+          "network": "floonet",
+          "version_bytes": "0188",
+          "public_key": "zzPyRmXSfysNstqmN3x9iMd4z3XVK35mWxG5MyedWr1jqHbmcV66",
+          "address": "zzPyRmXSfysNstqmN3x9iMd4z3XVK35mWxG5MyedWr1jqHbmcV66@epicbox.epiccash.com"
+        }
+      },
+      {
+        "account": 0,
+        "network": "floonet",
+        "net": 1,
+        "index": 2147483648,
+        "counter": 0,
+        "secret_key": "a94430f40dcb2b660efe656a794246e0b1b9b890f39613eda8e178a4c7a62f3a",
+        "public_key": "0292129a066276776a58dcb92f24bee02db239e5139318d10d9d68fc2278c5d0b1",
+        "epicbox": {
+          "network": "floonet",
+          "version_bytes": "0188",
+          "public_key": "zzPAwr4ej2bEXZehwvV9ZjPZErjrZSDoQGNz9xWuMjQh46UkVPB1",
+          "address": "zzPAwr4ej2bEXZehwvV9ZjPZErjrZSDoQGNz9xWuMjQh46UkVPB1@epicbox.epiccash.com"
+        }
+      },
+      {
+        "account": 7,
+        "network": "mainnet",
+        "net": 0,
+        "index": 0,
+        "counter": 0,
+        "secret_key": "e619c469c3151bc235ebbbc4946581d3c9f927523dc607a48a44e7f59f73bbf6",
+        "public_key": "03b0c23550bbffa5d3b7df27ba442eb7353d03c4ac4b22a6bcb040c81e44cf1a69",
+        "epicbox": {
+          "network": "mainnet",
+          "version_bytes": "0100",
+          "public_key": "esZbSuXkrNNggyut1BW5JLxYp1CKivZKwVAgdCer36eRyVqf1myf",
+          "address": "esZbSuXkrNNggyut1BW5JLxYp1CKivZKwVAgdCer36eRyVqf1myf@epicbox.epiccash.com"
+        }
+      },
+      {
+        "account": 7,
+        "network": "mainnet",
+        "net": 0,
+        "index": 1,
+        "counter": 0,
+        "secret_key": "9b7f2a05070687302d55f98707317454741f2ecb6ad68304d0d7f8ec39cfe851",
+        "public_key": "02d1e616f294e28645d469b06f14d2f13360c861f017c7f4a415500f869fa6bad6",
+        "epicbox": {
+          "network": "mainnet",
+          "version_bytes": "0100",
+          "public_key": "esXuJFWnPuVfHqWBSMPULiwEHjWRCRamLgsDHf5LnfDxwSK9sNTC",
+          "address": "esXuJFWnPuVfHqWBSMPULiwEHjWRCRamLgsDHf5LnfDxwSK9sNTC@epicbox.epiccash.com"
+        }
+      },
+      {
+        "account": 7,
+        "network": "mainnet",
+        "net": 0,
+        "index": 2147483648,
+        "counter": 0,
+        "secret_key": "601d244ffac0e273422f93fe7844fb68b9a0428de03f6632ede0777585618612",
+        "public_key": "03073be47ee92e2e8be916eeb5bb4284212c4d3cfaf074fff91c5db3bd43d76de3",
+        "epicbox": {
+          "network": "mainnet",
+          "version_bytes": "0100",
+          "public_key": "esYJndHCz8Lo6XtKBhLJkRjcu1d1mnHAspQXeqLWFRcgnAHdWTBa",
+          "address": "esYJndHCz8Lo6XtKBhLJkRjcu1d1mnHAspQXeqLWFRcgnAHdWTBa@epicbox.epiccash.com"
+        }
+      },
+      {
+        "account": 7,
+        "network": "floonet",
+        "net": 1,
+        "index": 0,
+        "counter": 0,
+        "secret_key": "0d7030d8955ec5f51e26fd44759663e21ce13cd18101986d9ebf5fbc0011a289",
+        "public_key": "03fa0eb0bbf6d7f6a3b0807c875c83cef5a7f35f49e8c0aff6049716a65c8b0cfb",
+        "epicbox": {
+          "network": "floonet",
+          "version_bytes": "0188",
+          "public_key": "zzRuVB1Cc4PXhHW1jo1L15kuHSUHrVoTqPfre6KZCjURD26yHzTq",
+          "address": "zzRuVB1Cc4PXhHW1jo1L15kuHSUHrVoTqPfre6KZCjURD26yHzTq@epicbox.epiccash.com"
+        }
+      },
+      {
+        "account": 7,
+        "network": "floonet",
+        "net": 1,
+        "index": 1,
+        "counter": 0,
+        "secret_key": "2028f64dc22515329244d21b1b028e11a2f3ce247e6ed89b6d2455bd36d4e8b6",
+        "public_key": "027bcc0878f4d5112afc9ced7dbf9344eee701083fe215ad7fa924a3e92faf38b8",
+        "epicbox": {
+          "network": "floonet",
+          "version_bytes": "0188",
+          "public_key": "zzP18qxbteXCjhVawHAsj84dT3JskzhZtsSHNpWeoTXqkBZ8bbXh",
+          "address": "zzP18qxbteXCjhVawHAsj84dT3JskzhZtsSHNpWeoTXqkBZ8bbXh@epicbox.epiccash.com"
+        }
+      },
+      {
+        "account": 7,
+        "network": "floonet",
+        "net": 1,
+        "index": 2147483648,
+        "counter": 0,
+        "secret_key": "969a1205e63b18a850f92d44e48c5dd84fb532c94cfa44cbb6f73cfebc7b2d0f",
+        "public_key": "0291eb51b102a0c9a916007d928193b89a23f555addf505f2bf9922db71d33e737",
+        "epicbox": {
+          "network": "floonet",
+          "version_bytes": "0188",
+          "public_key": "zzPAsvj5qQPuHgh8VA5oU19Lp2BTUNS9cdDq5RfwBffLJNyZLcTz",
+          "address": "zzPAsvj5qQPuHgh8VA5oU19Lp2BTUNS9cdDq5RfwBffLJNyZLcTz@epicbox.epiccash.com"
+        }
+      }
+    ]
+  }
+}

@@ -1,0 +1,21 @@
+[package]
+name = "lepic-primitives"
+description = "Epic transaction types, binary serialization, hashing, weights, fees and chain parameters."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+blake2.workspace = true
+lepic-crypto.workspace = true
+thiserror.workspace = true
+zeroize.workspace = true
+
+[dev-dependencies]
+proptest = { workspace = true, features = ["std"] }
+serde_json = { workspace = true, features = ["std"] }
+
+[lints]
+workspace = true

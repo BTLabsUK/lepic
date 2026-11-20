@@ -1,0 +1,94 @@
+// SPDX-License-Identifier: Apache-2.0
+//! The operations of the wallet API, one per `operationId` in `docs/api/openapi.json`. The router
+//! names each request's operation, and serve answers it with the handler of that name.
+
+macro_rules! ops {
+    ($($op:ident = $id:literal,)*) => {
+        /// One operation of the document.
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+        pub(crate) enum Op {
+            $($op,)*
+        }
+
+        impl Op {
+            /// Every operation, in the order the document lists them.
+            pub(crate) const ALL: &[Self] = &[$(Self::$op,)*];
+
+            /// The operation's `operationId`.
+            pub(crate) const fn id(self) -> &'static str {
+                match self {
+                    $(Self::$op => $id,)*
+                }
+            }
+        }
+    };
+}
+
+ops! {
+    GetStatus = "getStatus",
+    GetOpenApi = "getOpenApi",
+    GetMetrics = "getMetrics",
+    GetWallet = "getWallet",
+    ChangeWalletPassword = "changeWalletPassword",
+    ScanWallet = "scanWallet",
+    SyncNow = "syncNow",
+    BoostSync = "boostSync",
+    EndBoost = "endBoost",
+    ListAccounts = "listAccounts",
+    CreateAccount = "createAccount",
+    ListPayments = "listPayments",
+    CreatePayment = "createPayment",
+    EstimatePayment = "estimatePayment",
+    GetPayment = "getPayment",
+    UpdatePayment = "updatePayment",
+    ApprovePayment = "approvePayment",
+    DeclinePayment = "declinePayment",
+    DeliverPayment = "deliverPayment",
+    PostPayment = "postPayment",
+    CancelPayment = "cancelPayment",
+    RecoverPayment = "recoverPayment",
+    GetPaymentHandoff = "getPaymentHandoff",
+    Inspect = "inspect",
+    Open = "open",
+    ListOutputs = "listOutputs",
+    ConsolidateOutputs = "consolidateOutputs",
+    ListAddresses = "listAddresses",
+    CreateLink = "createLink",
+    ListContacts = "listContacts",
+    CreateContact = "createContact",
+    GetContact = "getContact",
+    UpdateContact = "updateContact",
+    DeleteContact = "deleteContact",
+    VerifyContact = "verifyContact",
+    CheckContact = "checkContact",
+    ResolveContactKeys = "resolveContactKeys",
+    MoveContact = "moveContact",
+    SendPayload = "sendPayload",
+    ExportContacts = "exportContacts",
+    ImportContacts = "importContacts",
+    ListPayloads = "listPayloads",
+    DeletePayload = "deletePayload",
+    ListQuarantine = "listQuarantine",
+    RetryQuarantined = "retryQuarantined",
+    DeleteQuarantined = "deleteQuarantined",
+    GetRelay = "getRelay",
+    MoveRelay = "moveRelay",
+    ListMailboxes = "listMailboxes",
+    AddMailbox = "addMailbox",
+    ProbeMailbox = "probeMailbox",
+    RemoveMailbox = "removeMailbox",
+    GetNode = "getNode",
+    GetProfile = "getProfile",
+    UpdateProfile = "updateProfile",
+    GetProfileDomainFile = "getProfileDomainFile",
+    ListEvents = "listEvents",
+    GetWebhook = "getWebhook",
+    ResumeWebhook = "resumeWebhook",
+}
+
+impl Op {
+    /// The operation with `operationId` `id`.
+    pub(crate) fn from_id(id: &str) -> Option<Self> {
+        Self::ALL.iter().copied().find(|op| op.id() == id)
+    }
+}

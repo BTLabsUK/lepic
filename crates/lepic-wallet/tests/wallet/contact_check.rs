@@ -1,0 +1,891 @@
+// SPDX-License-Identifier: Apache-2.0
+//! The contact check and the move of a wallet's own home relay (ADR 0040, RFC 0002 8.5) between
+//! two LEPIC wallets on the mock relay.
+
+// Tests may unwrap, index and panic (docs/rules.md), including in helpers that clippy does not
+// treat as test code.
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::indexing_slicing,
+    clippy::panic,
+    clippy::arithmetic_side_effects
+)]
+
+use crate::epicbox_world as world;
+use crate::pairing_helpers as helpers;
+
+use std::time::Duration;
+
+use helpers::{HOUR, MINUTE, accept, events, invite_request, only_relay2, relays, row, watched};
+use lepic_contact::{ContactCard, Network as ContactNetwork};
+use lepic_epicbox::{
+    Domain, EpicboxAddress, Identity, MailboxClient, Network as RelayNetwork, RelayEndpoint,
+    Security,
+};
+use lepic_store::{ContactId, MailClass, PreviousHome, SlateStage};
+use lepic_wallet::{Clock as _, Event};
+use lepic_wallet_contacts::{
+    AcceptRequest, ContactError, ContactRelays, InviteRequest, PairingClass, WalletContacts,
+};
+use world::{Party, World};
+
+/// The seq of the card the party shows its contact `contact`.
+fn own_seq(party: &Party, contact: ContactId) -> u32 {
+    let record = party.read(|repos| repos.contact(contact)).unwrap();
+    ContactCard::decode(&record.own_card, ContactNetwork::Floonet)
+        .unwrap()
+        .fields()
+        .seq
+}
+
+/// The seq of the contact's card the party holds.
+fn peer_seq(party: &Party, contact: ContactId) -> u32 {
+    party
+        .read(|repos| repos.contact(contact))
+        .unwrap()
+        .peer
+        .unwrap()
+        .seq
+}
+
+fn check(world: &World, party: &Party, contact: ContactId) -> Result<(), ContactError> {
+    world.block_on(
+        party
+            .wallet
+            .contact_book()
+            .contact_check(&relays(party), contact),
+    )
+}
+
+fn advance(world: &World, by: Duration) {
+    world.issuer.clock.advance(by);
+    world.payer.clock.advance(by);
+}
+
+/// The party's relays with `relay2.test:80` built in, as a host that offers it would pass them.
+fn with_relay2(party: &Party) -> ContactRelays {
+    helpers::adding(
+        relays(party),
+        vec![RelayEndpoint::new(
+            Domain::parse("relay2.test").unwrap(),
+            Some(80),
+            Security::Plain,
+        )],
+    )
+}
+
+fn move_requests(events: Vec<Event>) -> Vec<String> {
+    events
+        .into_iter()
+        .filter_map(|event| match event {
+            Event::ContactRelayMoveRequested(request) => Some(request.host),
+            _ => None,
+        })
+        .collect()
+}
+
+/// A check is answered with the current card, seq raised by one, which the asking wallet takes
+/// as an update; answers are paced at one an hour and three a day per contact.
+#[test]
+fn a_contact_check_is_answered_with_the_current_card_within_the_pace() {
+    let world = World::new();
+    let (issuer_side, payer_side) = world.pair_by_link();
+    let first = own_seq(&world.issuer, issuer_side);
+    advance(&world, 10 * MINUTE);
+    let heard = world
+        .payer
+        .read(|repos| repos.contact(payer_side))
+        .unwrap()
+        .last_sealed_in;
+
+    check(&world, &world.payer, payer_side).unwrap();
+    world.collect(&world.issuer);
+    assert_eq!(own_seq(&world.issuer, issuer_side), first + 1);
+    world.collect(&world.payer);
+    assert_eq!(peer_seq(&world.payer, payer_side), first + 1);
+    let heard_now = world
+        .payer
+        .read(|repos| repos.contact(payer_side))
+        .unwrap()
+        .last_sealed_in;
+    assert!(heard_now > heard, "{heard:?} then {heard_now:?}");
+
+    // A second check within the hour is taken and dropped.
+    advance(&world, 10 * MINUTE);
+    check(&world, &world.payer, payer_side).unwrap();
+    world.collect(&world.issuer);
+    assert_eq!(own_seq(&world.issuer, issuer_side), first + 1);
+
+    // An hour later each is answered, up to three in the day.
+    for answered in 2..=3 {
+        advance(&world, HOUR);
+        check(&world, &world.payer, payer_side).unwrap();
+        world.collect(&world.issuer);
+        assert_eq!(own_seq(&world.issuer, issuer_side), first + answered);
+    }
+    advance(&world, HOUR);
+    check(&world, &world.payer, payer_side).unwrap();
+    world.collect(&world.issuer);
+    assert_eq!(own_seq(&world.issuer, issuer_side), first + 3);
+
+    // A day after the first answer, checks are answered again.
+    advance(&world, 22 * HOUR);
+    check(&world, &world.payer, payer_side).unwrap();
+    world.collect(&world.issuer);
+    assert_eq!(own_seq(&world.issuer, issuer_side), first + 4);
+}
+
+/// An ended pairing and a missing contact take no check and do not move; the side that ended
+/// it has no record left to check.
+#[test]
+fn an_ended_pairing_takes_no_check_and_does_not_move() {
+    let world = World::new();
+    let (issuer_side, payer_side) = world.pair_by_link();
+    assert!(
+        world
+            .block_on(
+                world
+                    .issuer
+                    .wallet
+                    .contact_book()
+                    .contact_unpair(&relays(&world.issuer), issuer_side)
+            )
+            .unwrap()
+    );
+    world.collect(&world.payer);
+    world.collect(&world.payer);
+
+    assert!(matches!(
+        check(&world, &world.payer, payer_side),
+        Err(ContactError::Ended)
+    ));
+    assert!(matches!(
+        check(&world, &world.issuer, issuer_side),
+        Err(ContactError::UnknownContact)
+    ));
+    assert!(matches!(
+        check(&world, &world.payer, ContactId([7; 16])),
+        Err(ContactError::UnknownContact)
+    ));
+    let moved = world
+        .block_on(world.payer.wallet.contact_book().contacts_move_home(
+            &with_relay2(&world.payer),
+            "relay2.test:80",
+            Duration::ZERO,
+        ))
+        .unwrap();
+    assert_eq!(moved, 0);
+    let mailbox = world
+        .payer
+        .read(|repos| repos.contact_mailbox(payer_side))
+        .unwrap();
+    assert_eq!(mailbox.home_relay, "relay.test:80");
+}
+
+/// A private pairing carries no check and keeps its relay when the wallet moves.
+#[test]
+fn a_private_pairing_carries_no_check_and_keeps_its_relay() {
+    let world = World::new();
+    let invite = world
+        .block_on(world.issuer.wallet.contact_book().pairing_invite(
+            &relays(&world.issuer),
+            InviteRequest {
+                class: PairingClass::Private,
+                ..invite_request("Phone")
+            },
+        ))
+        .unwrap();
+    world
+        .block_on(world.payer.wallet.contact_book().pairing_accept(
+            &relays(&world.payer),
+            AcceptRequest {
+                class: PairingClass::Private,
+                ..accept(&invite.link, "Desk", false)
+            },
+        ))
+        .unwrap();
+    assert_eq!(world.collect(&world.issuer).paired, 1);
+    assert_eq!(world.collect(&world.payer).paired, 1);
+
+    assert!(matches!(
+        check(&world, &world.issuer, invite.contact_id),
+        Err(ContactError::WrongClass)
+    ));
+    let moved = world
+        .block_on(world.issuer.wallet.contact_book().contacts_move_home(
+            &with_relay2(&world.issuer),
+            "relay2.test:80",
+            Duration::ZERO,
+        ))
+        .unwrap();
+    assert_eq!(moved, 0);
+    let mailbox = world
+        .issuer
+        .read(|repos| repos.contact_mailbox(invite.contact_id))
+        .unwrap();
+    assert_eq!(mailbox.home_relay, "relay.test:80");
+}
+
+/// The rows in `party`'s watch set that are not its contact `contact`'s: the open link's and
+/// the public address's.
+fn other_rows(party: &Party, contact: ContactId) -> usize {
+    let all = party.read(|repos| repos.watch_set()).len();
+    all - watched(party, contact).len()
+}
+
+/// Posts the contact check `party` queued last for its contact `contact` once more, the same
+/// sealed message, to `to` on relay2.test: a copy of it on a second relay.
+fn post_check_copy(world: &World, party: &Party, contact: ContactId, to: &EpicboxAddress) {
+    let envelope = helpers::contact_rows(party, contact)
+        .into_iter()
+        .rev()
+        .find(|row| row.entry.stage == Some(SlateStage::Standard1))
+        .expect("a queued check")
+        .entry
+        .envelope;
+    let record = party.read(|repos| repos.contact(contact)).unwrap();
+    let keys = lepic_wallet_contacts::contact_root(
+        &party.keychain(),
+        &lepic_keychain::Identifier::new(2, [0, 0, 0, 0]).unwrap(),
+        lepic_primitives::params::Network::Floonet,
+    )
+    .unwrap()
+    .contact_keys(record.slot, record.box_salt)
+    .unwrap();
+    let mailbox = party.read(|repos| repos.contact_mailbox(contact)).unwrap();
+    let from = Identity::new(
+        keys.expose_box_secret().clone(),
+        EpicboxAddress::parse(&mailbox.our_mailbox, RelayNetwork::Floonet).unwrap(),
+    )
+    .unwrap();
+    let mut settings = world::settings();
+    settings.endpoint = RelayEndpoint::new(
+        Domain::parse("relay2.test").unwrap(),
+        Some(80),
+        Security::Plain,
+    );
+    world
+        .block_on(MailboxClient::new(settings, world.relay.connector()).post(&from, to, &envelope))
+        .unwrap();
+}
+
+/// A move whose old relay stays in the wallet's list, without a drain. The mover tells each
+/// contact once and keeps reading the old relay, as it reads every relay of its list: a check
+/// sent to the old mailbox before the contact follows, with a copy of it on the new relay, is
+/// answered once. A contact that follows reaches the mover on the new relay, and the mover takes
+/// the follower's card without being asked to move.
+#[test]
+#[allow(clippy::too_many_lines)] // A test reads best as one sequence of steps.
+fn a_wallet_moving_its_home_relay_tells_each_contact_once_and_does_not_drain() {
+    let world = World::new();
+    // relay.test and relay2.test are separate relays, so the old mailbox is a queue of its own.
+    world.relay.set_relays_apart(true);
+    let (issuer_side, payer_side) = world.pair_by_link();
+    let mut issuer_events = world.issuer.wallet.subscribe();
+    let mut payer_events = world.payer.wallet.subscribe();
+    let moving = with_relay2(&world.issuer);
+    let before = world
+        .issuer
+        .read(|repos| repos.contact_mailbox(issuer_side))
+        .unwrap();
+    let seq = own_seq(&world.issuer, issuer_side);
+    let collect_issuer = || {
+        world
+            .block_on(
+                world
+                    .issuer
+                    .wallet
+                    .contact_book()
+                    .contacts_collect(&moving, lepic_wallet_contacts::CollectTrigger::Open),
+            )
+            .unwrap()
+    };
+    let read = collect_issuer().mailboxes;
+    let both = vec![
+        row("relay.test:80", MailClass::Contact),
+        row("relay2.test:80", MailClass::Contact),
+    ];
+    assert_eq!(watched(&world.issuer, issuer_side), both);
+
+    assert!(matches!(
+        world.block_on(world.issuer.wallet.contact_book().contacts_move_home(
+            &moving,
+            "relay2.test:0",
+            Duration::ZERO
+        )),
+        Err(ContactError::RelayAddress)
+    ));
+    let moved = world
+        .block_on(world.issuer.wallet.contact_book().contacts_move_home(
+            &moving,
+            " Relay2.test:80 ",
+            Duration::ZERO,
+        ))
+        .unwrap();
+    assert_eq!(moved, 1);
+    let after = world
+        .issuer
+        .read(|repos| repos.contact_mailbox(issuer_side))
+        .unwrap();
+    assert_eq!(after.home_relay, "relay2.test:80");
+    assert!(after.our_mailbox.ends_with("@relay2.test:80"), "{after:?}");
+    assert_eq!(after.peer_mailbox, before.peer_mailbox);
+    assert_eq!(after.previous, None);
+    assert_eq!(own_seq(&world.issuer, issuer_side), seq + 1);
+    // Moved once, a second move to the same relay tells nobody.
+    assert_eq!(
+        world
+            .block_on(world.issuer.wallet.contact_book().contacts_move_home(
+                &moving,
+                "relay2.test:80",
+                Duration::ZERO
+            ))
+            .unwrap(),
+        0
+    );
+
+    // A check sent before the contact follows goes to the old mailbox; a copy of it waits on
+    // the new relay.
+    let old = EpicboxAddress::parse(&before.our_mailbox, RelayNetwork::Floonet).unwrap();
+    let new = EpicboxAddress::parse(&after.our_mailbox, RelayNetwork::Floonet).unwrap();
+    let left = world.relay.pending(&old);
+    check(&world, &world.payer, payer_side).unwrap();
+    assert_eq!(world.relay.pending(&old), left + 1);
+    post_check_copy(&world, &world.payer, payer_side, &new);
+    assert_eq!(world.relay.pending(&new), 1);
+    // The old relay is in the list: the mover reads its mailbox there and on the new relay, as
+    // many mailboxes as before, and answers the check once.
+    assert_eq!(collect_issuer().mailboxes, read);
+    assert_eq!(watched(&world.issuer, issuer_side), both);
+    assert_eq!(world.relay.pending(&old), left);
+    assert_eq!(world.relay.pending(&new), 0);
+    assert_eq!(own_seq(&world.issuer, issuer_side), seq + 2);
+    collect_issuer();
+    assert_eq!(own_seq(&world.issuer, issuer_side), seq + 2);
+
+    // The contact takes the updates and is asked to follow; once its host applies it, its card
+    // reaches the mover's new mailbox.
+    let follower = with_relay2(&world.payer);
+    let collect_payer = || {
+        world
+            .block_on(
+                world
+                    .payer
+                    .wallet
+                    .contact_book()
+                    .contacts_collect(&follower, lepic_wallet_contacts::CollectTrigger::Open),
+            )
+            .unwrap()
+    };
+    collect_payer();
+    assert_eq!(peer_seq(&world.payer, payer_side), seq + 2);
+    // Each update names the new relay while the contact has not applied the move: the move's
+    // own and the check's answer.
+    assert_eq!(
+        move_requests(events(&mut payer_events)),
+        vec!["relay2.test:80".to_owned(); 2]
+    );
+    world
+        .block_on(
+            world
+                .payer
+                .wallet
+                .contact_book()
+                .apply_relay_move(payer_side, "relay2.test:80"),
+        )
+        .unwrap();
+    let followed = world
+        .payer
+        .read(|repos| repos.contact_mailbox(payer_side))
+        .unwrap();
+    assert_eq!(followed.peer_mailbox, after.our_mailbox);
+    assert!(followed.our_mailbox.ends_with("@relay2.test:80"));
+    collect_payer();
+
+    collect_issuer();
+    let met = world
+        .issuer
+        .read(|repos| repos.contact_mailbox(issuer_side))
+        .unwrap();
+    assert_eq!(met.peer_mailbox, followed.our_mailbox);
+    assert_eq!(met.home_relay, "relay2.test:80");
+    assert_eq!(met.previous, None);
+    assert!(move_requests(events(&mut issuer_events)).is_empty());
+    assert_eq!(world.relay.pending(&old), left);
+}
+
+/// A move off the wallet's list, without a drain: the mover reads only its new mailbox from then
+/// on, one mailbox fewer, and a check sent to the old one stays there unread. A contact that
+/// follows reaches the mover on the new relay.
+#[test]
+#[allow(clippy::too_many_lines)] // A test reads best as one sequence of steps.
+fn a_wallet_moving_its_home_relay_off_its_list_stops_reading_the_old_relay() {
+    let world = World::new();
+    // relay.test and relay2.test are separate relays, so the old mailbox is a queue of its own.
+    world.relay.set_relays_apart(true);
+    let (issuer_side, payer_side) = world.pair_by_link();
+    let mut payer_events = world.payer.wallet.subscribe();
+    let moving = only_relay2(&world, &world.issuer);
+    let before = world
+        .issuer
+        .read(|repos| repos.contact_mailbox(issuer_side))
+        .unwrap();
+    let collect_issuer = || {
+        world
+            .block_on(
+                world
+                    .issuer
+                    .wallet
+                    .contact_book()
+                    .contacts_collect(&moving, lepic_wallet_contacts::CollectTrigger::Open),
+            )
+            .unwrap()
+    };
+    // Before the move the card's relay, outside the list, is read besides the list's.
+    let read = collect_issuer().mailboxes;
+    // The list gives the public address another relay, which the first collect tells the
+    // contact in an update: count from there.
+    let seq = own_seq(&world.issuer, issuer_side);
+    assert_eq!(
+        watched(&world.issuer, issuer_side),
+        vec![
+            row("relay.test:80", MailClass::Contact),
+            row("relay2.test:80", MailClass::Contact),
+        ]
+    );
+
+    let moved = world
+        .block_on(world.issuer.wallet.contact_book().contacts_move_home(
+            &moving,
+            "relay2.test:80",
+            Duration::ZERO,
+        ))
+        .unwrap();
+    assert_eq!(moved, 1);
+    let after = world
+        .issuer
+        .read(|repos| repos.contact_mailbox(issuer_side))
+        .unwrap();
+    assert_eq!(after.previous, None);
+    assert_eq!(own_seq(&world.issuer, issuer_side), seq + 1);
+
+    // A check sent before the contact follows goes to the old mailbox, which nobody reads now.
+    let old = EpicboxAddress::parse(&before.our_mailbox, RelayNetwork::Floonet).unwrap();
+    let left = world.relay.pending(&old);
+    check(&world, &world.payer, payer_side).unwrap();
+    assert_eq!(world.relay.pending(&old), left + 1);
+    assert_eq!(collect_issuer().mailboxes, read - 1);
+    assert_eq!(
+        watched(&world.issuer, issuer_side),
+        vec![row("relay2.test:80", MailClass::Contact)]
+    );
+    assert_eq!(world.relay.pending(&old), left + 1);
+    assert_eq!(own_seq(&world.issuer, issuer_side), seq + 1);
+
+    // The contact follows and its card reaches the mover's new mailbox.
+    let follower = with_relay2(&world.payer);
+    let collect_payer = || {
+        world
+            .block_on(
+                world
+                    .payer
+                    .wallet
+                    .contact_book()
+                    .contacts_collect(&follower, lepic_wallet_contacts::CollectTrigger::Open),
+            )
+            .unwrap()
+    };
+    collect_payer();
+    assert_eq!(
+        move_requests(events(&mut payer_events)),
+        vec!["relay2.test:80".to_owned()]
+    );
+    world
+        .block_on(
+            world
+                .payer
+                .wallet
+                .contact_book()
+                .apply_relay_move(payer_side, "relay2.test:80"),
+        )
+        .unwrap();
+    let followed = world
+        .payer
+        .read(|repos| repos.contact_mailbox(payer_side))
+        .unwrap();
+    collect_payer();
+    collect_issuer();
+    let met = world
+        .issuer
+        .read(|repos| repos.contact_mailbox(issuer_side))
+        .unwrap();
+    assert_eq!(met.peer_mailbox, followed.our_mailbox);
+    // The old mailbox still holds the check nobody read, and the follower's card besides: the
+    // follower posts to every relay of its list, relay.test among them.
+    assert_eq!(world.relay.pending(&old), left + 2);
+}
+
+/// A move with a drain whose old relay stays in the wallet's list: the old relay is read as any
+/// relay of the list, during the drain and after it, so no row of the drain is added. A contact
+/// that missed the move's update and checks at the old mailbox is answered there with the card
+/// naming the new one, once for a copy read on both relays, and is asked to follow.
+#[test]
+#[allow(clippy::too_many_lines)] // A test reads best as one sequence of steps.
+fn a_wallet_moving_its_home_relay_with_a_drain_answers_a_check_at_the_old_mailbox() {
+    const DAY: Duration = Duration::from_secs(24 * 60 * 60);
+    let world = World::new();
+    // relay.test and relay2.test are separate relays, so the old mailbox is a queue of its own.
+    world.relay.set_relays_apart(true);
+    let (issuer_side, payer_side) = world.pair_by_link();
+    let mut payer_events = world.payer.wallet.subscribe();
+    let moving = with_relay2(&world.issuer);
+    let before = world
+        .issuer
+        .read(|repos| repos.contact_mailbox(issuer_side))
+        .unwrap();
+    let seq = own_seq(&world.issuer, issuer_side);
+    // The link stays open until it expires, inside the days below, and the public address has
+    // its own rows: count only the contact's.
+    let contact_read = || {
+        let read = world
+            .block_on(
+                world
+                    .issuer
+                    .wallet
+                    .contact_book()
+                    .contacts_collect(&moving, lepic_wallet_contacts::CollectTrigger::Open),
+            )
+            .unwrap()
+            .mailboxes;
+        read - other_rows(&world.issuer, issuer_side)
+    };
+    let both = vec![
+        row("relay.test:80", MailClass::Contact),
+        row("relay2.test:80", MailClass::Contact),
+    ];
+    assert_eq!(contact_read(), 2);
+    assert_eq!(watched(&world.issuer, issuer_side), both);
+
+    let moved_at = world.issuer.clock.now();
+    let moved = world
+        .block_on(world.issuer.wallet.contact_book().contacts_move_home(
+            &moving,
+            "relay2.test:80",
+            30 * DAY,
+        ))
+        .unwrap();
+    assert_eq!(moved, 1);
+    let after = world
+        .issuer
+        .read(|repos| repos.contact_mailbox(issuer_side))
+        .unwrap();
+    assert_eq!(after.home_relay, "relay2.test:80");
+    assert_eq!(
+        after.previous,
+        Some(PreviousHome {
+            relay: before.home_relay.clone(),
+            peer_mailbox: before.peer_mailbox.clone(),
+            our_mailbox: before.our_mailbox.clone(),
+            until: moved_at.checked_add(30 * DAY).unwrap(),
+        })
+    );
+    assert_eq!(own_seq(&world.issuer, issuer_side), seq + 1);
+
+    // The contact is away past the relay's keep: the move's update expires unread.
+    world.relay.expire_all();
+    advance(&world, 10 * DAY);
+
+    // Its check goes to the old mailbox, read on the old relay as before; a copy of it on the
+    // new relay is read too, and the check is answered once.
+    let old = EpicboxAddress::parse(&before.our_mailbox, RelayNetwork::Floonet).unwrap();
+    let new = EpicboxAddress::parse(&after.our_mailbox, RelayNetwork::Floonet).unwrap();
+    let left = world.relay.pending(&old);
+    check(&world, &world.payer, payer_side).unwrap();
+    assert_eq!(world.relay.pending(&old), left + 1);
+    post_check_copy(&world, &world.payer, payer_side, &new);
+    assert_eq!(contact_read(), 2);
+    assert_eq!(watched(&world.issuer, issuer_side), both);
+    assert_eq!(world.relay.pending(&old), left);
+    assert_eq!(world.relay.pending(&new), 0);
+    assert_eq!(own_seq(&world.issuer, issuer_side), seq + 2);
+    contact_read();
+    assert_eq!(own_seq(&world.issuer, issuer_side), seq + 2);
+
+    // The answer reaches the contact's unchanged mailbox and names the new one.
+    world.collect(&world.payer);
+    assert_eq!(peer_seq(&world.payer, payer_side), seq + 2);
+    let view = world
+        .block_on(world.payer.wallet.contact_book().contact(payer_side))
+        .unwrap();
+    assert_eq!(view.requested_relay.as_deref(), Some("relay2.test:80"));
+    assert_eq!(
+        move_requests(events(&mut payer_events)),
+        vec!["relay2.test:80".to_owned()]
+    );
+
+    // After the drain the old relay, still in the list, is read: a check there is answered.
+    advance(&world, 21 * DAY);
+    check(&world, &world.payer, payer_side).unwrap();
+    assert_eq!(world.relay.pending(&old), left + 1);
+    assert_eq!(contact_read(), 2);
+    assert_eq!(watched(&world.issuer, issuer_side), both);
+    assert_eq!(world.relay.pending(&old), left);
+    assert_eq!(own_seq(&world.issuer, issuer_side), seq + 3);
+}
+
+/// A move with a drain off the wallet's list: the old relay is read on every collect until the
+/// drain ends, by its previous-home row, then the row is gone and one mailbox fewer is read. A
+/// contact that missed the move's update and checks at the old mailbox is answered there during
+/// the drain; after it a check there stays unanswered.
+#[test]
+#[allow(clippy::too_many_lines)] // A test reads best as one sequence of steps.
+fn a_wallet_moving_its_home_relay_off_its_list_drains_the_old_relay_until_the_drain_ends() {
+    const DAY: Duration = Duration::from_secs(24 * 60 * 60);
+    let world = World::new();
+    // relay.test and relay2.test are separate relays, so the old mailbox is a queue of its own.
+    world.relay.set_relays_apart(true);
+    let (issuer_side, payer_side) = world.pair_by_link();
+    let mut payer_events = world.payer.wallet.subscribe();
+    let moving = only_relay2(&world, &world.issuer);
+    let before = world
+        .issuer
+        .read(|repos| repos.contact_mailbox(issuer_side))
+        .unwrap();
+    // The link stays open until it expires, inside the days below, and the public address has
+    // its own rows: count only the contact's.
+    let contact_read = || {
+        let read = world
+            .block_on(
+                world
+                    .issuer
+                    .wallet
+                    .contact_book()
+                    .contacts_collect(&moving, lepic_wallet_contacts::CollectTrigger::Open),
+            )
+            .unwrap()
+            .mailboxes;
+        read - other_rows(&world.issuer, issuer_side)
+    };
+    // Before the move the card's relay, outside the list, is read besides the list's.
+    assert_eq!(contact_read(), 2);
+    // The list gives the public address another relay, which the first collect tells the
+    // contact in an update: count from there.
+    let seq = own_seq(&world.issuer, issuer_side);
+
+    let moved = world
+        .block_on(world.issuer.wallet.contact_book().contacts_move_home(
+            &moving,
+            "relay2.test:80",
+            30 * DAY,
+        ))
+        .unwrap();
+    assert_eq!(moved, 1);
+    assert_eq!(own_seq(&world.issuer, issuer_side), seq + 1);
+
+    // The contact is away past the relay's keep: the move's update expires unread.
+    world.relay.expire_all();
+    advance(&world, 10 * DAY);
+
+    // Its check goes to the old mailbox, which the drain still reads.
+    let old = EpicboxAddress::parse(&before.our_mailbox, RelayNetwork::Floonet).unwrap();
+    let left = world.relay.pending(&old);
+    check(&world, &world.payer, payer_side).unwrap();
+    assert_eq!(world.relay.pending(&old), left + 1);
+    assert_eq!(contact_read(), 2);
+    assert_eq!(
+        watched(&world.issuer, issuer_side),
+        vec![
+            row("relay.test:80", MailClass::PreviousHome),
+            row("relay2.test:80", MailClass::Contact),
+        ]
+    );
+    assert_eq!(world.relay.pending(&old), left);
+    assert_eq!(own_seq(&world.issuer, issuer_side), seq + 2);
+
+    world.collect(&world.payer);
+    assert_eq!(peer_seq(&world.payer, payer_side), seq + 2);
+    assert_eq!(
+        move_requests(events(&mut payer_events)),
+        vec!["relay2.test:80".to_owned()]
+    );
+
+    // After the drain the row is gone and the old mailbox is not read again: a check there
+    // stays unanswered.
+    advance(&world, 21 * DAY);
+    check(&world, &world.payer, payer_side).unwrap();
+    assert_eq!(world.relay.pending(&old), left + 1);
+    assert_eq!(contact_read(), 1);
+    assert_eq!(
+        watched(&world.issuer, issuer_side),
+        vec![row("relay2.test:80", MailClass::Contact)]
+    );
+    assert_eq!(world.relay.pending(&old), left + 1);
+    assert_eq!(own_seq(&world.issuer, issuer_side), seq + 2);
+}
+
+/// The view shows the encryption key of the contact's stored card on both sides of a pairing.
+#[test]
+fn a_contact_view_shows_the_peer_cards_enc_key() {
+    let world = World::new();
+    let (issuer_side, payer_side) = world.pair_by_link();
+    for (party, contact, other, other_side) in [
+        (&world.issuer, issuer_side, &world.payer, payer_side),
+        (&world.payer, payer_side, &world.issuer, issuer_side),
+    ] {
+        let stored = party
+            .read(|repos| repos.contact(contact))
+            .unwrap()
+            .peer
+            .unwrap()
+            .enc_key;
+        let view = world
+            .block_on(party.wallet.contact_book().contact(contact))
+            .unwrap();
+        assert_eq!(view.peer_enc_key, Some(stored));
+        let shown = other
+            .read(|repos| repos.contact(other_side))
+            .unwrap()
+            .own_card;
+        let shown = ContactCard::decode(&shown, ContactNetwork::Floonet).unwrap();
+        assert_eq!(
+            view.peer_enc_key.as_ref(),
+            Some(shown.fields().enc_key.as_bytes())
+        );
+    }
+}
+
+fn peer_profile(world: &World, party: &Party, contact: ContactId) -> u32 {
+    world
+        .block_on(party.wallet.contact_book().contact(contact))
+        .unwrap()
+        .peer_profile
+}
+
+fn set_profile(world: &World, party: &Party, profile: u16) -> u32 {
+    world
+        .block_on(
+            party
+                .wallet
+                .contact_book()
+                .contacts_set_own_profile(&relays(party), profile),
+        )
+        .unwrap()
+}
+
+/// Each side's configured profile reaches the other in the invite and the reply, and the view
+/// shows the peer's half of the features word; a wallet without one shows 0.
+#[test]
+fn a_pairing_shows_the_peers_profile_and_no_profile_is_zero() {
+    let world = World::with_profiles(3, 5);
+    let (issuer_side, payer_side) = world.pair_by_link();
+    assert_eq!(peer_profile(&world, &world.issuer, issuer_side), 5);
+    assert_eq!(peer_profile(&world, &world.payer, payer_side), 3);
+
+    let plain = World::new();
+    let (issuer_side, payer_side) = plain.pair_by_link();
+    assert_eq!(peer_profile(&plain, &plain.issuer, issuer_side), 0);
+    assert_eq!(peer_profile(&plain, &plain.payer, payer_side), 0);
+}
+
+/// A features word stored by an older build, with bits the profile half now uses, still loads
+/// and shows those bits as the profile; the low half is untouched.
+#[test]
+fn a_stored_features_word_with_high_bits_still_loads() {
+    let world = World::new();
+    let (issuer_side, payer_side) = world.pair_by_link();
+    world.payer.write(|repos| {
+        let mut record = repos.contact(payer_side)?.unwrap();
+        record.facts.peer_features = 0x8001_004f;
+        repos.put_contact(&record)
+    });
+    let view = world
+        .block_on(world.payer.wallet.contact_book().contact(payer_side))
+        .unwrap();
+    assert_eq!(view.peer_features, 0x8001_004f);
+    assert_eq!(view.peer_profile, 0x8001);
+    assert_eq!(peer_profile(&world, &world.issuer, issuer_side), 0);
+}
+
+/// `contacts_set_own_profile` queues one update per paired contact, raises the card's seq,
+/// and the contact shows the new profile once it collects.
+#[test]
+fn setting_the_own_profile_updates_each_paired_contact() {
+    let world = World::with_profiles(3, 0);
+    let (issuer_side, payer_side) = world.pair_by_link();
+    assert_eq!(peer_profile(&world, &world.payer, payer_side), 3);
+    let seq = own_seq(&world.issuer, issuer_side);
+
+    assert_eq!(set_profile(&world, &world.issuer, 1), 1);
+    assert_eq!(own_seq(&world.issuer, issuer_side), seq + 1);
+    world.collect(&world.issuer);
+    world.collect(&world.payer);
+    assert_eq!(peer_profile(&world, &world.payer, payer_side), 1);
+    assert_eq!(peer_seq(&world.payer, payer_side), seq + 1);
+
+    // Nothing stored says what the contact was told, so the same value is sent again.
+    assert_eq!(set_profile(&world, &world.issuer, 1), 1);
+    // The session's configured profile is not changed by it.
+    assert_eq!(world.issuer.wallet.config().profile, 3);
+}
+
+/// An ended pairing gets no update; a wallet with no contact queues none.
+#[test]
+fn setting_the_own_profile_skips_ended_pairings() {
+    let world = World::new();
+    assert_eq!(set_profile(&world, &world.issuer, 1), 0);
+    let (issuer_side, payer_side) = world.pair_by_link();
+    world.issuer.write(|repos| {
+        let mut record = repos.contact(issuer_side)?.unwrap();
+        record.facts.ended_reason = Some(lepic_store::PairingEndReason::Unpaired);
+        repos.put_contact(&record)
+    });
+    assert_eq!(set_profile(&world, &world.issuer, 1), 0);
+    assert_eq!(peer_profile(&world, &world.payer, payer_side), 0);
+}
+
+/// A contact check is answered with the configured profile in the card update's features, and
+/// the profile survives the re-sign that a card update is.
+#[test]
+fn a_contact_check_answer_carries_the_configured_profile() {
+    let world = World::with_profiles(3, 0);
+    let (issuer_side, payer_side) = world.pair_by_link();
+    set_profile(&world, &world.issuer, 7);
+    world.collect(&world.issuer);
+    world.collect(&world.payer);
+    assert_eq!(peer_profile(&world, &world.payer, payer_side), 7);
+
+    advance(&world, 10 * MINUTE);
+    check(&world, &world.payer, payer_side).unwrap();
+    world.collect(&world.issuer);
+    world.collect(&world.payer);
+    assert_eq!(peer_profile(&world, &world.payer, payer_side), 3);
+    assert_eq!(
+        peer_seq(&world.payer, payer_side),
+        own_seq(&world.issuer, issuer_side)
+    );
+}
+
+/// A pairing restored from a contact backup knows no features word: the backup keeps none. The
+/// check the app sends right after a restore brings the peer's profile back.
+#[test]
+fn a_restored_pairing_learns_the_peers_profile_from_a_contact_check() {
+    let world = World::with_profiles(3, 0);
+    let (_, payer_side) = world.pair_by_link();
+    assert_eq!(peer_profile(&world, &world.payer, payer_side), 3);
+    let document = world
+        .block_on(world.payer.wallet.contact_book().contacts_export())
+        .unwrap();
+    let restored = world.payer_twin();
+    world
+        .block_on(restored.wallet.contact_book().contacts_import(document))
+        .unwrap();
+    let contact = world.only_contact(&restored);
+    assert_eq!(peer_profile(&world, &restored, contact), 0);
+
+    check(&world, &restored, contact).unwrap();
+    world.collect(&world.issuer);
+    world.collect(&restored);
+
+    assert_eq!(peer_profile(&world, &restored, contact), 3);
+}

@@ -1,0 +1,786 @@
+// SPDX-License-Identifier: Apache-2.0
+// Portions Copyright 2019 The Grin Developers
+// Portions Copyright 2026 The Epic Cash Developers
+// Ported from EpicCash/epic-wallet impls/src/adapters/epicbox.rs (Apache-2.0); see NOTICE and
+// upstream.toml.
+
+//! One websocket connection to a relay: connecting, framing, keepalive, and the greeting every
+//! session starts with.
+
+use std::fmt;
+use std::io;
+use std::net::{IpAddr, SocketAddr};
+use std::sync::Arc;
+use std::time::Duration;
+
+use futures_util::{SinkExt, StreamExt};
+use lepic_transport::host_rule;
+use lepic_transport::transport::BoxFuture;
+use tokio::io::{AsyncRead, AsyncWrite};
+use tokio::net::{TcpStream, lookup_host};
+use tokio::time::{Instant, timeout, timeout_at};
+use tokio_rustls::TlsConnector;
+use tokio_rustls::rustls::ClientConfig;
+use tokio_rustls::rustls::pki_types::ServerName;
+use tokio_tungstenite::WebSocketStream;
+use tokio_tungstenite::tungstenite::protocol::WebSocketConfig;
+use tokio_tungstenite::tungstenite::{Bytes, Message};
+use tracing::{debug, info, warn};
+
+use crate::address::{DEFAULT_PORT, Domain};
+use crate::client::{Awaiting, ClientError, ClientSettings};
+use crate::frame::{
+    CANCEL_FORM_EXTENSION, ClientFrame, EpicboxTxId, MAX_FRAME_LEN, RelayFrame, RelayMessageId,
+    WalletMode, bounded_description,
+};
+use crate::tunnel::DialTarget;
+
+/// The port of a relay reached without TLS when the address names none, as `epic-wallet` does.
+pub const DEFAULT_PLAIN_PORT: u16 = 80;
+
+/// How long closing a connection may take before it is dropped.
+const CLOSE_GRACE: Duration = Duration::from_millis(250);
+
+/// Whether the websocket runs over TLS. `Plain` is `epic-wallet`'s insecure flag, for local
+/// relays.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Security {
+    /// `wss://`: TLS, checked against the endpoint's domain.
+    Tls,
+    /// `ws://`: no encryption, for loopback relays only.
+    Plain,
+}
+
+/// The relay a client connects to. The port is always explicit on the wire.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct RelayEndpoint {
+    domain: Domain,
+    port: u16,
+    security: Security,
+}
+
+impl RelayEndpoint {
+    /// Without a port, TLS uses 443 and plain websockets use 80.
+    pub fn new(domain: Domain, port: Option<u16>, security: Security) -> Self {
+        let port = port.unwrap_or(match security {
+            Security::Tls => DEFAULT_PORT,
+            Security::Plain => DEFAULT_PLAIN_PORT,
+        });
+        Self {
+            domain,
+            port,
+            security,
+        }
+    }
+
+    /// The relay's host name.
+    pub fn domain(&self) -> &Domain {
+        &self.domain
+    }
+
+    /// The port, filled in from the security when the address named none.
+    pub fn port(&self) -> u16 {
+        self.port
+    }
+
+    /// Whether the websocket runs over TLS.
+    pub fn security(&self) -> Security {
+        self.security
+    }
+
+    /// Refuses a plain websocket to a host that is not loopback; TLS may reach any host.
+    pub fn check_security(&self) -> Result<(), EndpointError> {
+        if self.security == Security::Plain && !self.domain.is_loopback() {
+            return Err(EndpointError::PlainToRemoteHost);
+        }
+        Ok(())
+    }
+
+    /// `wss://domain:port` or `ws://domain:port`.
+    pub fn url(&self) -> String {
+        let scheme = match self.security {
+            Security::Tls => "wss",
+            Security::Plain => "ws",
+        };
+        format!("{scheme}://{}:{}", self.domain, self.port)
+    }
+}
+
+/// A byte stream to a relay, before the websocket handshake.
+pub trait RelayStream: AsyncRead + AsyncWrite + Unpin + Send {}
+
+impl<T: AsyncRead + AsyncWrite + Unpin + Send> RelayStream for T {}
+
+/// Opens byte streams to relays. [`TcpConnector`] reaches real relays; the mock relay provides
+/// an in-memory one.
+pub trait Connector: Send + Sync {
+    /// Opens a byte stream to `endpoint`.
+    fn connect<'a>(
+        &'a self,
+        endpoint: &'a RelayEndpoint,
+    ) -> BoxFuture<'a, io::Result<Box<dyn RelayStream>>>;
+
+    /// A byte stream to `endpoint` that goes to `onion` when this connector reaches the relay
+    /// through a tunnel and knows no onion of its own for it. A connector without a tunnel
+    /// connects as [`Connector::connect`] does.
+    fn connect_to_onion<'a>(
+        &'a self,
+        endpoint: &'a RelayEndpoint,
+        onion: &'a DialTarget,
+    ) -> BoxFuture<'a, io::Result<Box<dyn RelayStream>>> {
+        let _ = onion;
+        self.connect(endpoint)
+    }
+
+    /// The limit for the handshakes of a connection to `endpoint`, given the configured one.
+    fn connect_timeout(&self, endpoint: &RelayEndpoint, configured: Duration) -> Duration {
+        let _ = endpoint;
+        configured
+    }
+
+    /// Which way a connection to `endpoint` made now would take, as a number that changes when
+    /// the way does.
+    fn route(&self, endpoint: &RelayEndpoint) -> u64 {
+        let _ = endpoint;
+        0
+    }
+
+    /// Resolves once [`Connector::route`] of `endpoint` is no longer `route`, so a connection
+    /// held open can be replaced by one that takes the new way. Cancel-safe.
+    fn route_changed<'a>(&'a self, endpoint: &'a RelayEndpoint, route: u64) -> BoxFuture<'a, ()> {
+        let _ = (endpoint, route);
+        Box::pin(std::future::pending())
+    }
+
+    /// As [`Connector::connect`], for a relay that untrusted input named (RFC 0003 §5.14): a
+    /// loopback or unspecified host is refused. This default checks the name only. A
+    /// connector that resolves names checks every address it resolved and connects to those
+    /// addresses, so a second lookup cannot reach another one.
+    fn connect_untrusted<'a>(
+        &'a self,
+        endpoint: &'a RelayEndpoint,
+    ) -> BoxFuture<'a, io::Result<Box<dyn RelayStream>>> {
+        Box::pin(async move {
+            refuse_loopback_name(endpoint)?;
+            self.connect(endpoint).await
+        })
+    }
+}
+
+/// `inner` with every connection made as [`Connector::connect_untrusted`] makes it, for
+/// clients that reach relays untrusted input named. An onion route is not taken: the relay is
+/// reached as its name says.
+pub struct UntrustedHosts(pub Arc<dyn Connector>);
+
+impl Connector for UntrustedHosts {
+    fn connect<'a>(
+        &'a self,
+        endpoint: &'a RelayEndpoint,
+    ) -> BoxFuture<'a, io::Result<Box<dyn RelayStream>>> {
+        self.0.connect_untrusted(endpoint)
+    }
+
+    fn connect_to_onion<'a>(
+        &'a self,
+        endpoint: &'a RelayEndpoint,
+        onion: &'a DialTarget,
+    ) -> BoxFuture<'a, io::Result<Box<dyn RelayStream>>> {
+        let _ = onion;
+        self.0.connect_untrusted(endpoint)
+    }
+
+    fn connect_timeout(&self, endpoint: &RelayEndpoint, configured: Duration) -> Duration {
+        self.0.connect_timeout(endpoint, configured)
+    }
+
+    fn route(&self, endpoint: &RelayEndpoint) -> u64 {
+        self.0.route(endpoint)
+    }
+
+    fn route_changed<'a>(&'a self, endpoint: &'a RelayEndpoint, route: u64) -> BoxFuture<'a, ()> {
+        self.0.route_changed(endpoint, route)
+    }
+
+    fn connect_untrusted<'a>(
+        &'a self,
+        endpoint: &'a RelayEndpoint,
+    ) -> BoxFuture<'a, io::Result<Box<dyn RelayStream>>> {
+        self.0.connect_untrusted(endpoint)
+    }
+}
+
+impl fmt::Debug for UntrustedHosts {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("UntrustedHosts").finish_non_exhaustive()
+    }
+}
+
+fn loopback_error() -> io::Error {
+    io::Error::new(io::ErrorKind::InvalidInput, EndpointError::LoopbackHost)
+}
+
+/// Refuses an endpoint whose host name is loopback or unspecified, before any lookup.
+pub(crate) fn refuse_loopback_name(endpoint: &RelayEndpoint) -> io::Result<()> {
+    host_rule::classify_name(endpoint.domain().as_str())
+        .map(|_| ())
+        .map_err(|_| loopback_error())
+}
+
+fn refuse_onion(endpoint: &RelayEndpoint) -> io::Result<()> {
+    if endpoint
+        .domain()
+        .as_str()
+        .to_ascii_lowercase()
+        .trim_end_matches('.')
+        .ends_with(".onion")
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "an onion relay needs Tor",
+        ));
+    }
+    Ok(())
+}
+
+/// Why [`TcpConnector`] refused an endpoint without connecting. Carried inside the
+/// [`io::Error`] it returns, with kind [`io::ErrorKind::InvalidInput`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[non_exhaustive]
+pub enum EndpointError {
+    /// A plain websocket was asked for a host that is not loopback.
+    #[error("plain websocket relay is not a loopback host")]
+    PlainToRemoteHost,
+    /// A relay named by untrusted input is a loopback or unspecified address.
+    #[error("the relay host is a loopback or unspecified address")]
+    LoopbackHost,
+}
+
+/// TCP, with TLS from the given rustls configuration when the endpoint asks for it (ADR 0006).
+/// A plain endpoint is refused unless its host is loopback.
+pub struct TcpConnector {
+    tls: Arc<ClientConfig>,
+}
+
+impl TcpConnector {
+    /// A connector that uses `tls` for TLS endpoints.
+    pub fn new(tls: Arc<ClientConfig>) -> Self {
+        Self { tls }
+    }
+
+    /// `stream` as the endpoint asks for it: with TLS for the endpoint's domain, whatever
+    /// host the stream reaches, or as it is for a plain endpoint.
+    pub async fn secure<S: RelayStream + 'static>(
+        &self,
+        endpoint: &RelayEndpoint,
+        stream: S,
+    ) -> io::Result<Box<dyn RelayStream>> {
+        match endpoint.security() {
+            Security::Plain => Ok(Box::new(stream)),
+            Security::Tls => {
+                let name = ServerName::try_from(endpoint.domain().as_str().to_owned())
+                    .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
+                let tls = TlsConnector::from(Arc::clone(&self.tls))
+                    .connect(name, stream)
+                    .await?;
+                Ok(Box::new(tls))
+            }
+        }
+    }
+}
+
+impl fmt::Debug for TcpConnector {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("TcpConnector").finish_non_exhaustive()
+    }
+}
+
+impl Connector for TcpConnector {
+    fn connect<'a>(
+        &'a self,
+        endpoint: &'a RelayEndpoint,
+    ) -> BoxFuture<'a, io::Result<Box<dyn RelayStream>>> {
+        Box::pin(async move {
+            refuse_onion(endpoint)?;
+            endpoint
+                .check_security()
+                .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
+            let tcp = TcpStream::connect((endpoint.domain().as_str(), endpoint.port())).await?;
+            tcp.set_nodelay(true)?;
+            self.secure(endpoint, tcp).await
+        })
+    }
+
+    /// Resolves the name once, refuses it when any address is loopback or unspecified, and
+    /// connects to the addresses it checked. TLS still verifies the endpoint's domain.
+    fn connect_untrusted<'a>(
+        &'a self,
+        endpoint: &'a RelayEndpoint,
+    ) -> BoxFuture<'a, io::Result<Box<dyn RelayStream>>> {
+        Box::pin(async move {
+            refuse_onion(endpoint)?;
+            refuse_loopback_name(endpoint)?;
+            endpoint
+                .check_security()
+                .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
+            let name = endpoint.domain().as_str();
+            let addrs: Vec<SocketAddr> = lookup_host((name, endpoint.port())).await?.collect();
+            let ips: Vec<IpAddr> = addrs.iter().map(SocketAddr::ip).collect();
+            host_rule::classify_resolved(name, &ips).map_err(|_| loopback_error())?;
+            if addrs.is_empty() {
+                return Err(io::Error::from(io::ErrorKind::NotFound));
+            }
+            let tcp = TcpStream::connect(addrs.as_slice()).await?;
+            tcp.set_nodelay(true)?;
+            self.secure(endpoint, tcp).await
+        })
+    }
+}
+
+/// The protocol version a relay reports through `GetVersion`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct ProtocolVersion {
+    /// The major version.
+    pub major: u16,
+    /// The minor version.
+    pub minor: u16,
+    /// The patch version.
+    pub patch: u16,
+}
+
+impl ProtocolVersion {
+    /// The version LEPIC speaks without extensions, which the public relay supports.
+    pub const BASELINE: Self = Self {
+        major: 3,
+        minor: 0,
+        patch: 0,
+    };
+
+    /// The first version with transaction cancel and the transaction id fields.
+    pub const CANCEL: Self = Self {
+        major: 3,
+        minor: 1,
+        patch: 0,
+    };
+
+    /// Whether a relay of this version has transaction cancel: 3.1.0 or later within major 3.
+    pub fn supports_cancel(self) -> bool {
+        self.major == Self::CANCEL.major && self >= Self::CANCEL
+    }
+
+    /// Whether a relay that reported `reported` has transaction cancel. A relay that did not
+    /// answer `GetVersion` has none.
+    pub fn relay_supports_cancel(reported: Option<Self>) -> bool {
+        reported.is_some_and(Self::supports_cancel)
+    }
+
+    /// The version `Subscribe` and `Made` name towards a relay that reported `reported`: 3.1.0
+    /// when it has cancel, otherwise 3.0.0.
+    pub fn wire_version(reported: Option<Self>) -> &'static str {
+        if Self::relay_supports_cancel(reported) {
+            crate::frame::CANCEL_PROTOCOL_VERSION
+        } else {
+            crate::frame::PROTOCOL_VERSION
+        }
+    }
+
+    /// `major.minor.patch` in decimal; anything else is `None`.
+    pub fn parse(text: &str) -> Option<Self> {
+        let mut parts = text.split('.').map(|part| {
+            if part.is_empty() || !part.bytes().all(|b| b.is_ascii_digit()) {
+                None
+            } else {
+                part.parse::<u16>().ok()
+            }
+        });
+        let version = Self {
+            major: parts.next()??,
+            minor: parts.next()??,
+            patch: parts.next()??,
+        };
+        parts.next().is_none().then_some(version)
+    }
+}
+
+impl fmt::Display for ProtocolVersion {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}.{}.{}", self.major, self.minor, self.patch)
+    }
+}
+
+/// What a relay said while a session was set up.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Greeting {
+    /// The most recent challenge, which the next `Subscribe` signs.
+    pub(crate) challenge: String,
+    /// `None` when the relay did not answer `GetVersion`; only the baseline is used then.
+    pub(crate) version: Option<ProtocolVersion>,
+    /// The relay echoed the cancel-form extension that was offered: it checks cancels signed
+    /// over the domain-separated text. False when it was not offered or not echoed.
+    pub(crate) cancel_form: bool,
+}
+
+pub(crate) struct Connection {
+    ws: WebSocketStream<Box<dyn RelayStream>>,
+    last_heard: Instant,
+    /// The connector's route when the connection was opened.
+    pub(crate) route: u64,
+}
+
+fn websocket_config() -> WebSocketConfig {
+    WebSocketConfig::default()
+        .max_message_size(Some(MAX_FRAME_LEN))
+        .max_frame_size(Some(MAX_FRAME_LEN))
+}
+
+fn websocket_error(error: tokio_tungstenite::tungstenite::Error) -> ClientError {
+    ClientError::Websocket(Box::new(error))
+}
+
+impl Connection {
+    pub(crate) async fn open(
+        connector: &dyn Connector,
+        endpoint: &RelayEndpoint,
+        connect_timeout: Duration,
+    ) -> Result<Self, ClientError> {
+        let route = connector.route(endpoint);
+        let attempt = async {
+            let stream = connector
+                .connect(endpoint)
+                .await
+                .map_err(ClientError::Connect)?;
+            let (ws, _response) = tokio_tungstenite::client_async_with_config(
+                endpoint.url(),
+                stream,
+                Some(websocket_config()),
+            )
+            .await
+            .map_err(websocket_error)?;
+            Ok::<_, ClientError>(ws)
+        };
+        let ws = timeout(
+            connector.connect_timeout(endpoint, connect_timeout),
+            attempt,
+        )
+        .await
+        .map_err(|_| ClientError::Timeout {
+            awaiting: Awaiting::Connection,
+        })??;
+        Ok(Self {
+            ws,
+            last_heard: Instant::now(),
+            route,
+        })
+    }
+
+    pub(crate) async fn send(&mut self, frame: &ClientFrame) -> Result<(), ClientError> {
+        let text = frame.to_json().map_err(ClientError::Frame)?;
+        self.ws
+            .send(Message::text(text))
+            .await
+            .map_err(websocket_error)
+    }
+
+    /// Sends `frame`, or times out at `deadline` awaiting the answer that the frame requests.
+    pub(crate) async fn send_before(
+        &mut self,
+        frame: &ClientFrame,
+        deadline: Instant,
+    ) -> Result<(), ClientError> {
+        timeout_at(deadline, self.send(frame))
+            .await
+            .map_err(|_| ClientError::Timeout {
+                awaiting: Awaiting::Answer,
+            })?
+    }
+
+    /// A websocket ping frame, which keeps proxies from closing an idle connection. Never the
+    /// JSON `ping`, whose answer is not JSON.
+    pub(crate) async fn ping(&mut self) -> Result<(), ClientError> {
+        self.ws
+            .send(Message::Ping(Bytes::new()))
+            .await
+            .map_err(websocket_error)
+    }
+
+    /// Time since the relay last sent anything, control frames included.
+    pub(crate) fn idle_for(&self) -> Duration {
+        self.last_heard.elapsed()
+    }
+
+    /// The next text frame. Control frames and binary frames are skipped. Cancel-safe.
+    pub(crate) async fn receive_text(&mut self) -> Result<String, ClientError> {
+        loop {
+            let message = self
+                .ws
+                .next()
+                .await
+                .ok_or_else(|| {
+                    info!("epicbox relay ended the stream without a close frame");
+                    ClientError::Closed
+                })?
+                .map_err(|error| {
+                    let error = websocket_error(error);
+                    warn!(error = %lepic_primitives::error_chain::ErrorChain(&error), "epicbox websocket failed");
+                    error
+                })?;
+            self.last_heard = Instant::now();
+            match message {
+                Message::Text(text) => return Ok(text.as_str().to_owned()),
+                Message::Close(frame) => {
+                    match frame {
+                        Some(frame) => info!(
+                            code = u16::from(frame.code),
+                            "epicbox relay sent a close frame"
+                        ),
+                        None => info!("epicbox relay sent a close frame without a code"),
+                    }
+                    return Err(ClientError::Closed);
+                }
+                Message::Binary(_) => debug!("epicbox binary frame ignored"),
+                Message::Ping(_) | Message::Pong(_) | Message::Frame(_) => {}
+            }
+        }
+    }
+
+    /// Sends `text` as one text frame.
+    pub(crate) async fn send_text(&mut self, text: String) -> Result<(), ClientError> {
+        self.ws
+            .send(Message::text(text))
+            .await
+            .map_err(websocket_error)
+    }
+
+    /// The next protocol frame. Control frames, keepalive text, unknown types and frames that do
+    /// not parse are skipped, so none of them ends the session. Cancel-safe.
+    pub(crate) async fn receive(&mut self) -> Result<RelayFrame, ClientError> {
+        self.receive_passing(false).await
+    }
+
+    /// As [`Self::receive`], except that a `TransactionCancelled` without a valid transaction
+    /// id comes back as [`RelayFrame::Unknown`]: it answers a `Subscribe`, so an inbox session
+    /// must see it. Cancel-safe.
+    pub(crate) async fn receive_in_inbox(&mut self) -> Result<RelayFrame, ClientError> {
+        self.receive_passing(true).await
+    }
+
+    async fn receive_passing(&mut self, bad_cancels: bool) -> Result<RelayFrame, ClientError> {
+        loop {
+            let text = self.receive_text().await?;
+            match RelayFrame::from_json(&text) {
+                Ok(RelayFrame::Keepalive) => debug!("epicbox keepalive ignored"),
+                Ok(frame @ RelayFrame::Unknown { .. })
+                    if bad_cancels && frame.is_cancel_without_txid() =>
+                {
+                    return Ok(frame);
+                }
+                Ok(RelayFrame::Unknown { .. }) => debug!("epicbox frame of unknown type ignored"),
+                Ok(frame) => return Ok(frame),
+                Err(error) => {
+                    debug!(error = %lepic_primitives::error_chain::ErrorChain(&error), "epicbox frame ignored");
+                }
+            }
+        }
+    }
+
+    /// The next frame, or a timeout naming what was awaited.
+    pub(crate) async fn receive_before(
+        &mut self,
+        deadline: Instant,
+        awaiting: Awaiting,
+    ) -> Result<RelayFrame, ClientError> {
+        timeout_at(deadline, self.receive())
+            .await
+            .map_err(|_| ClientError::Timeout { awaiting })?
+    }
+
+    /// Sends a close frame and waits briefly for the relay to acknowledge it.
+    pub(crate) async fn close(mut self) {
+        let _ = timeout(CLOSE_GRACE, self.ws.close(None)).await;
+    }
+
+    /// Waits for the relay's challenge, then sends `ClientDetails` and asks the relay's version.
+    /// Requests go one at a time because the relay's `Ok` does not say what it answers.
+    pub(crate) async fn greet(
+        &mut self,
+        mode: WalletMode,
+        settings: &ClientSettings,
+    ) -> Result<Greeting, ClientError> {
+        self.greet_offering(mode, settings, false).await
+    }
+
+    /// As [`Self::greet`]. With `offer_cancel_form` the greeting offers the cancel-form
+    /// extension, and the greeting's `cancel_form` says whether the relay echoed it.
+    pub(crate) async fn greet_offering(
+        &mut self,
+        mode: WalletMode,
+        settings: &ClientSettings,
+        offer_cancel_form: bool,
+    ) -> Result<Greeting, ClientError> {
+        let mut challenge = self.first_challenge(settings.response_timeout).await?;
+
+        let deadline = deadline_after(settings.response_timeout);
+        let details = if offer_cancel_form {
+            ClientFrame::client_details_with_cancel_form(&settings.wallet_version, mode)
+        } else {
+            ClientFrame::client_details(&settings.wallet_version, mode)
+        };
+        self.send_before(&details, deadline).await?;
+        let cancel_form = loop {
+            match self.receive_before(deadline, Awaiting::Answer).await? {
+                RelayFrame::Ok { ext, .. } => {
+                    break offer_cancel_form
+                        && ext.iter().any(|token| token == CANCEL_FORM_EXTENSION);
+                }
+                RelayFrame::Challenge { str } => challenge = str,
+                RelayFrame::Error { kind, .. } => return Err(ClientError::Relay { kind }),
+                _ => debug!("epicbox frame ignored before client details were accepted"),
+            }
+        };
+
+        let deadline = deadline_after(settings.response_timeout);
+        // A version request that cannot be written fails the session, unlike an unanswered one.
+        self.send_before(&ClientFrame::GetVersion, deadline).await?;
+        let version = loop {
+            match self.receive_before(deadline, Awaiting::Answer).await {
+                Ok(RelayFrame::GetVersion { str }) => break ProtocolVersion::parse(&str),
+                Ok(RelayFrame::Challenge { str }) => challenge = str,
+                Ok(RelayFrame::Error { .. }) | Err(ClientError::Timeout { .. }) => break None,
+                Ok(_) => debug!("epicbox frame ignored while the version was asked"),
+                Err(error) => return Err(error),
+            }
+        };
+        if let Some(version) = version
+            && version.major < ProtocolVersion::BASELINE.major
+        {
+            return Err(ClientError::UnsupportedRelayVersion { version });
+        }
+        debug!("epicbox relay greeted");
+        Ok(Greeting {
+            challenge,
+            version,
+            cancel_form,
+        })
+    }
+
+    async fn first_challenge(&mut self, wait: Duration) -> Result<String, ClientError> {
+        let deadline = deadline_after(wait);
+        loop {
+            match self.receive_before(deadline, Awaiting::Challenge).await? {
+                RelayFrame::Challenge { str } => return Ok(str),
+                _ => debug!("epicbox frame ignored before the first challenge"),
+            }
+        }
+    }
+
+    /// Waits until `deadline` for the answer to a request that the relay answers with `Ok` or
+    /// `Error`: what the relay's `Ok` carried, or the cancel notice that answers a `PostSlate`
+    /// of a cancelled transaction.
+    pub(crate) async fn answer_detailed(
+        &mut self,
+        deadline: Instant,
+    ) -> Result<Answered, ClientError> {
+        loop {
+            match self.receive_before(deadline, Awaiting::Answer).await? {
+                RelayFrame::Ok {
+                    epicboxtxid,
+                    epicboxmsgid,
+                    ..
+                } => {
+                    return Ok(Answered::Ok {
+                        epicboxtxid,
+                        epicboxmsgid,
+                    });
+                }
+                RelayFrame::TransactionCancelled { epicboxtxid } => {
+                    return Ok(Answered::Cancelled { epicboxtxid });
+                }
+                RelayFrame::Error { kind, description } => {
+                    return Err(ClientError::PostRefused {
+                        kind,
+                        retry_after: crate::client::retry_in(&description),
+                        description: bounded_description(&description),
+                        mailbox: None,
+                    });
+                }
+                _ => debug!("epicbox frame ignored while an answer was awaited"),
+            }
+        }
+    }
+}
+
+/// What the relay answered to a request.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Answered {
+    Ok {
+        epicboxtxid: Option<EpicboxTxId>,
+        epicboxmsgid: Option<RelayMessageId>,
+    },
+    Cancelled {
+        epicboxtxid: EpicboxTxId,
+    },
+}
+
+/// `now + wait`, or the furthest representable instant when that overflows.
+pub(crate) fn deadline_after(wait: Duration) -> Instant {
+    let now = Instant::now();
+    now.checked_add(wait).unwrap_or_else(|| {
+        now.checked_add(Duration::from_secs(86_400 * 365))
+            .unwrap_or(now)
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_dotted_decimal_versions_only() {
+        assert_eq!(
+            ProtocolVersion::parse("3.0.0"),
+            Some(ProtocolVersion::BASELINE)
+        );
+        assert_eq!(
+            ProtocolVersion::parse("3.10.2"),
+            Some(ProtocolVersion {
+                major: 3,
+                minor: 10,
+                patch: 2
+            })
+        );
+        for text in [
+            "",
+            "3",
+            "3.0",
+            "3.0.0.1000",
+            "3.0.x",
+            "3..0",
+            "+3.0.0",
+            "3.0.0 ",
+            "70000.0.0",
+        ] {
+            assert_eq!(ProtocolVersion::parse(text), None, "{text:?}");
+        }
+    }
+
+    #[test]
+    fn versions_order_numerically() {
+        let parse = |text| ProtocolVersion::parse(text).unwrap();
+        assert!(parse("3.10.0") > parse("3.9.9"));
+        assert!(parse("2.0.0") < ProtocolVersion::BASELINE);
+    }
+
+    #[test]
+    fn endpoint_defaults_port_by_security() {
+        let relay = Domain::parse("relay.example.org").unwrap();
+        let tls = RelayEndpoint::new(relay.clone(), None, Security::Tls);
+        let plain = RelayEndpoint::new(relay, None, Security::Plain);
+        assert_eq!(tls.url(), "wss://relay.example.org:443");
+        assert_eq!(plain.url(), "ws://relay.example.org:80");
+        let custom = RelayEndpoint::new(
+            Domain::parse("relay.local").unwrap(),
+            Some(3423),
+            Security::Plain,
+        );
+        assert_eq!(custom.url(), "ws://relay.local:3423");
+    }
+}

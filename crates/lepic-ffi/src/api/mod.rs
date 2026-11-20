@@ -1,0 +1,20 @@
+//! The API the Dart package is generated from. Names follow the earlier binding of the app
+//! where the operation is the same; the binding's README maps old calls to new ones.
+
+pub mod app_data;
+pub mod at_rest;
+pub mod contact;
+pub mod diagnostics;
+pub mod epic1;
+pub mod epicbox_sessions;
+pub mod error;
+pub mod http;
+pub mod in_person;
+pub mod invoice;
+pub mod policy;
+pub mod runtime;
+pub mod secret_store;
+pub mod testing;
+pub mod tor;
+pub mod types;
+pub mod wallet;

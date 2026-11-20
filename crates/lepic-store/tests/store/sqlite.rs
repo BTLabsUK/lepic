@@ -1,0 +1,493 @@
+// SPDX-License-Identifier: Apache-2.0
+//! Behaviour only the SQLite store has: the file, its schema version and its journal.
+
+// Test code may unwrap, index and use plain arithmetic (docs/rules.md); clippy's test
+// exemptions do not reach helpers outside `#[test]` functions.
+#![allow(
+    clippy::unwrap_used,
+    clippy::indexing_slicing,
+    clippy::arithmetic_side_effects
+)]
+
+use crate::support;
+
+use std::fs;
+
+use lepic_store::{
+    AccountIndex, AtRest, OutputRecord, OutputStatus, ParticipantId, PrivateContext, Record,
+    SCHEMA_VERSION, SlateStage, SqliteStore, StoreError, WalletStore,
+};
+use rusqlite::Connection;
+use uuid::Uuid;
+
+use support::{
+    Backend, SqliteBackend, account, context_key, database_path, invoice, output, peer_key, slate,
+    transaction,
+};
+
+const SLATE: Uuid = Uuid::from_bytes([0x5a; 16]);
+
+fn stored_version(conn: &Connection) -> i64 {
+    conn.query_row("SELECT version FROM schema_version", [], |row| row.get(0))
+        .unwrap()
+}
+
+#[test]
+fn new_database_is_created_at_the_current_schema_version() {
+    let backend = SqliteBackend::create(context_key(1));
+    let conn = Connection::open(backend.path()).unwrap();
+    assert_eq!(stored_version(&conn), i64::from(SCHEMA_VERSION));
+}
+
+#[test]
+fn database_uses_write_ahead_logging() {
+    let backend = SqliteBackend::create(context_key(1));
+    let conn = Connection::open(backend.path()).unwrap();
+    let mode: String = conn
+        .query_row("PRAGMA journal_mode", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(mode, "wal");
+}
+
+#[test]
+fn refuses_newer_schema_version_and_leaves_it_unchanged() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = database_path(dir.path());
+    drop(SqliteStore::open(&path, context_key(1), AtRest::Plain).unwrap());
+    let newer = SCHEMA_VERSION + 1;
+    Connection::open(&path)
+        .unwrap()
+        .execute("UPDATE schema_version SET version = ?1", [newer])
+        .unwrap();
+
+    let result = SqliteStore::open(&path, context_key(1), AtRest::Plain);
+    assert!(matches!(
+        result,
+        Err(StoreError::SchemaTooNew { found, supported })
+            if found == newer && supported == SCHEMA_VERSION
+    ));
+    assert_eq!(
+        stored_version(&Connection::open(&path).unwrap()),
+        i64::from(newer)
+    );
+}
+
+#[test]
+fn reopened_database_keeps_its_records() {
+    let backend = SqliteBackend::create(context_key(1));
+    backend
+        .store()
+        .write(|repos| repos.put_account(&account(0, "default")))
+        .unwrap();
+    let reopened = backend.reopen(context_key(1));
+    let accounts = reopened.read(|repos| repos.accounts()).unwrap();
+    assert_eq!(accounts, vec![account(0, "default")]);
+}
+
+#[test]
+fn database_files_do_not_contain_private_context_plaintext() {
+    let plaintext = b"blinding factor 0123456789abcdef".to_vec();
+    let backend = SqliteBackend::create(context_key(1));
+    backend
+        .store()
+        .write(|repos| {
+            repos.put_context(
+                SLATE,
+                ParticipantId(0),
+                &PrivateContext::new(plaintext.clone()),
+            )
+        })
+        .unwrap();
+
+    let mut scanned = 0;
+    for entry in fs::read_dir(backend.dir()).unwrap() {
+        let bytes = fs::read(entry.unwrap().path()).unwrap();
+        scanned += bytes.len();
+        assert!(
+            !bytes
+                .windows(plaintext.len())
+                .any(|window| window == plaintext)
+        );
+    }
+    assert!(scanned > 0);
+}
+
+#[test]
+fn database_files_do_not_contain_pending_invoice_bytes() {
+    let parked = invoice(SLATE, 1, 1);
+    let backend = SqliteBackend::create(context_key(1));
+    backend
+        .store()
+        .write(|repos| repos.park_invoice(&parked))
+        .unwrap();
+
+    let mut scanned = 0;
+    for entry in fs::read_dir(backend.dir()).unwrap() {
+        let bytes = fs::read(entry.unwrap().path()).unwrap();
+        scanned += bytes.len();
+        assert!(
+            !bytes
+                .windows(parked.bytes.len())
+                .any(|window| window == parked.bytes)
+        );
+    }
+    assert!(scanned > 0);
+}
+
+#[test]
+fn pending_invoice_moved_to_another_sender_does_not_open() {
+    let backend = SqliteBackend::create(context_key(1));
+    backend
+        .store()
+        .write(|repos| repos.park_invoice(&invoice(SLATE, 1, 1)))
+        .unwrap();
+    Connection::open(backend.path())
+        .unwrap()
+        .execute("UPDATE pending_invoices SET sender_key = ?1", [peer_key(2)])
+        .unwrap();
+    assert!(matches!(
+        backend.store().read(|repos| repos.pending_invoice(SLATE)),
+        Err(StoreError::Undecryptable {
+            record: Record::PendingInvoice
+        })
+    ));
+}
+
+#[test]
+fn malformed_stored_value_is_a_typed_error() {
+    let backend = SqliteBackend::create(context_key(1));
+    backend
+        .store()
+        .write(|repos| {
+            repos.put_account(&account(0, "default"))?;
+            repos.put_output(&output(
+                0,
+                account(0, "default").index,
+                OutputStatus::Unspent,
+            ))
+        })
+        .unwrap();
+    Connection::open(backend.path())
+        .unwrap()
+        .execute("UPDATE outputs SET status = 'misplaced'", [])
+        .unwrap();
+    let result = backend
+        .store()
+        .read(|repos| repos.outputs(account(0, "default").index, None));
+    assert!(matches!(
+        result,
+        Err(StoreError::Corrupt {
+            record: Record::Output,
+            field: "status"
+        })
+    ));
+}
+
+#[test]
+fn second_handle_sees_committed_writes() {
+    let backend = SqliteBackend::create(context_key(1));
+    let other = backend.reopen(context_key(1));
+    backend
+        .store()
+        .write(|repos| repos.put_setting("tip", "100"))
+        .unwrap();
+    assert_eq!(
+        other.read(|repos| repos.setting("tip")).unwrap().as_deref(),
+        Some("100")
+    );
+}
+
+/// A constraint the database itself enforces fails late in a write that already locked an
+/// output, in the order the S1 write takes: entry, input lock, then slate. The whole write rolls
+/// back: the output is unspent and free of the entry, and no entry or slate is left, for this
+/// handle and a second one. Without the constraint the same write commits the lock.
+#[test]
+fn a_constraint_failure_late_in_a_write_rolls_back_the_output_lock() {
+    let backend = SqliteBackend::create(context_key(1));
+    let coin = output(0, AccountIndex(0), OutputStatus::Unspent);
+    backend
+        .store()
+        .write(|repos| {
+            repos.put_account(&account(0, "default"))?;
+            repos.put_output(&coin)
+        })
+        .unwrap();
+    let side = Connection::open(backend.path()).unwrap();
+    side.execute_batch(
+        "CREATE TRIGGER refuse_slates BEFORE INSERT ON slates
+         BEGIN SELECT RAISE(ABORT, 'refused'); END;",
+    )
+    .unwrap();
+
+    let lock_then_store_slate = |repos: &mut dyn lepic_store::Repositories| {
+        let tx = repos.insert_transaction(&transaction(AccountIndex(0), Some(SLATE)))?;
+        repos.put_output(&OutputRecord {
+            status: OutputStatus::Locked,
+            tx: Some(tx),
+            ..coin.clone()
+        })?;
+        assert_eq!(
+            repos.output(coin.commitment())?.unwrap().status,
+            OutputStatus::Locked,
+            "the write sees its own lock"
+        );
+        repos.insert_slate(&slate(SLATE, SlateStage::Standard1, b"s1"))
+    };
+    let result = backend.store().write(lock_then_store_slate);
+    let Err(StoreError::Database(error)) = result else {
+        panic!("expected a database error, got {result:?}");
+    };
+    let mut chain: Option<&(dyn std::error::Error + 'static)> = Some(&error);
+    let mut code = None;
+    while let Some(link) = chain {
+        code = code
+            .or_else(|| link.downcast_ref::<rusqlite::Error>()?.sqlite_error_code())
+            .or_else(|| Some(link.downcast_ref::<rusqlite::ffi::Error>()?.code));
+        chain = link.source();
+    }
+    assert_eq!(
+        code,
+        Some(rusqlite::ErrorCode::ConstraintViolation),
+        "{error:?}"
+    );
+
+    let other = backend.reopen(context_key(1));
+    for (handle, store) in [("same", backend.store()), ("second", &other)] {
+        let (stored, transactions, slate) = store
+            .read(|repos| {
+                Ok::<_, StoreError>((
+                    repos.output(coin.commitment())?.unwrap(),
+                    repos.transactions(AccountIndex(0))?,
+                    repos.slate(SLATE, SlateStage::Standard1)?,
+                ))
+            })
+            .unwrap();
+        assert_eq!(stored.status, OutputStatus::Unspent, "{handle} handle");
+        assert_eq!(stored.tx, None, "{handle} handle");
+        assert!(transactions.is_empty(), "{handle} handle");
+        assert!(slate.is_none(), "{handle} handle");
+    }
+
+    side.execute_batch("DROP TRIGGER refuse_slates").unwrap();
+    backend.store().write(lock_then_store_slate).unwrap();
+    let stored = other
+        .read(|repos| repos.output(coin.commitment()))
+        .unwrap()
+        .unwrap();
+    assert_eq!(stored.status, OutputStatus::Locked);
+}
+
+/// The files in `dir` whose names start with the database's, sorted.
+fn database_files(dir: &std::path::Path) -> Vec<String> {
+    let mut names: Vec<String> = fs::read_dir(dir)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .filter(|name| name.starts_with("wallet.sqlite"))
+        .collect();
+    names.sort();
+    names
+}
+
+fn set_aside(dir: &std::path::Path, suffix: &str) -> std::path::PathBuf {
+    let names = database_files(dir);
+    let name = names
+        .iter()
+        .find(|name| name.starts_with("wallet.sqlite.damaged-") && name.ends_with(suffix))
+        .unwrap();
+    dir.join(name)
+}
+
+#[test]
+fn a_file_that_is_no_database_is_moved_aside_with_its_logs_and_reported() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = database_path(dir.path());
+    let with_suffix = |suffix: &str| {
+        let mut name = path.as_os_str().to_owned();
+        name.push(suffix);
+        std::path::PathBuf::from(name)
+    };
+    fs::write(&path, [0x5a; 8192]).unwrap();
+    fs::write(with_suffix("-wal"), b"log").unwrap();
+    fs::write(with_suffix("-shm"), b"index").unwrap();
+
+    let result = SqliteStore::open(&path, context_key(1), AtRest::Plain);
+    let Err(StoreError::DamagedSetAside { set_aside: named }) = result else {
+        panic!("{result:?}");
+    };
+
+    let database = set_aside(dir.path(), "");
+    assert_eq!(named, database);
+    assert!(!database.to_string_lossy().ends_with("-wal"));
+    assert_eq!(fs::read(&database).unwrap(), [0x5a; 8192]);
+    let mut wal = database.as_os_str().to_owned();
+    wal.push("-wal");
+    assert_eq!(fs::read(wal).unwrap(), b"log");
+    let mut shm = database.as_os_str().to_owned();
+    shm.push("-shm");
+    // SQLite rebuilds this index of the log whenever it opens one, so only its place matters.
+    assert!(std::path::Path::new(&shm).is_file());
+    assert!(!path.exists());
+
+    let reopened = SqliteStore::start_over(&path, context_key(1), AtRest::Plain).unwrap();
+    assert!(reopened.read(|repos| repos.accounts()).unwrap().is_empty());
+}
+
+#[test]
+fn a_database_that_fails_its_integrity_check_is_moved_aside() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = database_path(dir.path());
+    let store = SqliteStore::open(&path, context_key(1), AtRest::Plain).unwrap();
+    store
+        .write(|repos| repos.put_account(&account(0, "default")))
+        .unwrap();
+    drop(store);
+    let mut bytes = fs::read(&path).unwrap();
+    let page_size = 4096;
+    assert!(bytes.len() > 2 * page_size);
+    for byte in &mut bytes[page_size..page_size + 64] {
+        *byte = 0xff;
+    }
+    fs::write(&path, &bytes).unwrap();
+
+    let result = SqliteStore::open(&path, context_key(1), AtRest::Plain);
+    assert!(
+        matches!(result, Err(StoreError::DamagedSetAside { .. })),
+        "{result:?}"
+    );
+    assert_eq!(fs::read(set_aside(dir.path(), "")).unwrap(), bytes);
+    assert!(SqliteStore::start_over(&path, context_key(1), AtRest::Plain).is_ok());
+}
+
+/// After a damaged database is set aside, an open makes no empty one in its place: it names
+/// the file kept, until the caller starts over. The database it then makes opens as usual.
+#[test]
+fn an_open_after_a_set_aside_refuses_until_asked_to_start_over() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = database_path(dir.path());
+    fs::write(&path, [0x5a; 8192]).unwrap();
+    let result = SqliteStore::open(&path, context_key(1), AtRest::Plain);
+    let Err(StoreError::DamagedSetAside { set_aside: first }) = result else {
+        panic!("{result:?}");
+    };
+
+    for _ in 0..2 {
+        let again = SqliteStore::open(&path, context_key(1), AtRest::Plain);
+        let Err(StoreError::DamagedKept { set_aside }) = again else {
+            panic!("{again:?}");
+        };
+        assert_eq!(set_aside, first);
+        assert!(!path.exists());
+    }
+    assert!(
+        StoreError::DamagedKept {
+            set_aside: first.clone()
+        }
+        .to_string()
+        .contains(&first.display().to_string())
+    );
+
+    let started = SqliteStore::start_over(&path, context_key(1), AtRest::Plain).unwrap();
+    started
+        .write(|repos| repos.put_account(&account(0, "default")))
+        .unwrap();
+    drop(started);
+    let reopened = SqliteStore::open(&path, context_key(1), AtRest::Plain).unwrap();
+    assert_eq!(reopened.read(|repos| repos.accounts()).unwrap().len(), 1);
+    assert_eq!(fs::read(&first).unwrap(), [0x5a; 8192]);
+}
+
+#[test]
+fn open_existing_leaves_a_damaged_database_in_place_and_creates_none() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = database_path(dir.path());
+    assert!(
+        SqliteStore::open_existing(&path, context_key(1), AtRest::Plain)
+            .unwrap()
+            .is_none()
+    );
+    assert!(database_files(dir.path()).is_empty());
+
+    fs::write(&path, [0x5a; 8192]).unwrap();
+    let result = SqliteStore::open_existing(&path, context_key(1), AtRest::Plain);
+    assert!(matches!(result, Err(StoreError::Damaged)), "{result:?}");
+    assert_eq!(fs::read(&path).unwrap(), [0x5a; 8192]);
+    assert!(
+        !database_files(dir.path())
+            .iter()
+            .any(|name| name.contains("damaged"))
+    );
+
+    fs::remove_file(&path).unwrap();
+    let store = SqliteStore::open(&path, context_key(1), AtRest::Plain).unwrap();
+    store
+        .write(|repos| repos.put_account(&account(0, "default")))
+        .unwrap();
+    drop(store);
+    let existing = SqliteStore::open_existing(&path, context_key(1), AtRest::Plain)
+        .unwrap()
+        .unwrap();
+    assert_eq!(existing.read(|repos| repos.accounts()).unwrap().len(), 1);
+}
+
+/// Logs left without their database, as when setting a damaged one aside was cut short, would
+/// be read into a new database; they are set aside before it is made.
+#[test]
+fn logs_without_their_database_are_moved_aside_before_a_new_one_is_made() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = database_path(dir.path());
+    let mut wal = path.as_os_str().to_owned();
+    wal.push("-wal");
+    fs::write(&wal, b"log").unwrap();
+
+    let store = SqliteStore::open(&path, context_key(1), AtRest::Plain).unwrap();
+    assert!(store.read(|repos| repos.accounts()).unwrap().is_empty());
+    assert_eq!(fs::read(set_aside(dir.path(), "-wal")).unwrap(), b"log");
+}
+
+#[test]
+fn a_healthy_database_is_opened_in_place() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = database_path(dir.path());
+    drop(SqliteStore::open(&path, context_key(1), AtRest::Plain).unwrap());
+    drop(SqliteStore::open(&path, context_key(1), AtRest::Plain).unwrap());
+    assert!(
+        database_files(dir.path())
+            .iter()
+            .all(|name| !name.contains("damaged")),
+        "{:?}",
+        database_files(dir.path())
+    );
+}
+
+#[test]
+fn pairing_secrets_are_not_in_the_database_file() {
+    use lepic_store::{PairingId, PairingSecrets};
+    let backend = SqliteBackend::create(context_key(1));
+    let mut pairing = support::pairing(1, 10);
+    pairing.secrets = PairingSecrets {
+        code: Some([0xa1; 16]),
+        na: Some([0xb2; 16]),
+        nb: Some([0xc3; 16]),
+        rc: Some([0xd4; 16]),
+    };
+    backend
+        .store()
+        .write(|repos| repos.put_pending_pairing(&pairing))
+        .unwrap();
+    let opened = backend
+        .store()
+        .read(|repos| repos.pending_pairing(PairingId([1; 16])))
+        .unwrap();
+    assert_eq!(opened, Some(pairing));
+    // The log holds the commit until a checkpoint, so look at the file and the log both.
+    let mut raw = fs::read(backend.path()).unwrap();
+    let mut wal = backend.path().into_os_string();
+    wal.push("-wal");
+    raw.extend(fs::read(wal).unwrap_or_default());
+    for byte in [0xa1_u8, 0xb2, 0xc3, 0xd4] {
+        assert!(
+            !raw.windows(16).any(|window| window == [byte; 16]),
+            "{byte:x}"
+        );
+    }
+}

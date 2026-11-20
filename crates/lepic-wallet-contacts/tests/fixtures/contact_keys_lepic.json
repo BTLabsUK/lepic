@@ -1,0 +1,386 @@
+{
+  "comment": "LEPIC's own output, not independent vectors. The independent Python kit cross-checks it as golden vectors under testdata/vectors/pairing. RFC 0002 2.1-2.3 and 8.1.",
+  "from_raw": [
+    {
+      "networks": {
+        "floonet": {
+          "contacts": [
+            {
+              "box_public": "03bc3fe7a6c3dd2d8b89c68a91591004a86d5b75d7387ddcfef94b465b95465f71",
+              "box_salt": "00000000000000000000000000000000",
+              "box_secret": "1679b72adb1bfdcaeca840b6824671f3efcfab598e07910f8e9ef2cd00a5b6d7",
+              "enc_public": "0653a6abd049b1026cf714f19eb82dfa3cd0c9ed86190fbf47a2e02869de3604",
+              "enc_secret": "6b58aa1bfd83c6938ba79c9a6e0e83caf4064fe71eb70d42c2996a30c372df36",
+              "hint_key": "38e8096412b4f15a719392bfdae3d340dec473bd7cf553d2471e8556be7d0d53",
+              "sig_public": "da7f5c2ef1db75f79952e9bb1947a6f150b718410459343558df493fb087dc63",
+              "slot": 0
+            },
+            {
+              "box_public": "02d1f885a31229c995c43d231a9d1f40738c4906ff3d9f4cf2cd4b0f39c91c218d",
+              "box_salt": "5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a",
+              "box_secret": "92b18a058d224d44f1385ccfc6a3b7f33779ac77b6d78a5371979a4d2c922d12",
+              "enc_public": "14648199c97a5fb8861a75d077ddaff3aa4958408387064bfcb923ca57db3b5f",
+              "enc_secret": "96293ef9c2ad4b602c20f4da2f7db7b804c0803c130c8a6d2b3ff7a2d8e5cb82",
+              "hint_key": "5b711ee03a42fbeb1ae38a86fe1822acd71b2aee46504c78aba48e2d2dbf8d24",
+              "sig_public": "3656546c9d38b8f0303e034b8b71aae87ff2c7b104023a751a0652a81985ae2d",
+              "slot": 1
+            },
+            {
+              "box_public": "02465ca8f3d2349bc224102a91d2c5bb2ad468f8fcdbf32aa93e4c4773e4cbf229",
+              "box_salt": "000102030405060708090a0b0c0d0e0f",
+              "box_secret": "e6be8c71558acee2854b9c297aea1e3ed5fdda40b42a03d81f765257c70eaae4",
+              "enc_public": "a38a4fe93fe71592603b19d4645d5f5ca51fcc84bc415d638764d71a727f593b",
+              "enc_secret": "d664aa40facccc832e94538b33969c37a75a0a5d1baa377df08d4f60d13b9b64",
+              "hint_key": "6541e3c8f812c42341204172d6acf0b8a236f50c560249eb13231f115dd243ce",
+              "sig_public": "01145434121e352a1ce5cd89716645b3ead1379f29ccdc6cc40219c87adf5cbe",
+              "slot": 65535
+            }
+          ],
+          "mailboxes": [
+            {
+              "box_public": "03f3930586188714fdedaaef20b626c30977d1492c11bf9e95a4a24b3f3eba238e",
+              "box_secret": "303eae496ff593fc7b74a9c5ccca524f2e6c1a323aea9d6fa11a0e1ec7c51ba1",
+              "from_public": "03a01655e88743395f91f9f34d3ed2236554b5d93c52fe91c5ea8cc0232bc25be0",
+              "from_secret": "f778ef66de3385ddb8e17fa739e03bfeb274041aa410faaa584613a7c975deb3",
+              "seed": "00000000000000000000000000000000"
+            },
+            {
+              "box_public": "024b7b959459d17a37577f4a311272d5a493dc9b7cbb5854275879affc28a605d4",
+              "box_secret": "aeeba4ae3014a4ec213ffa44d01ce2a80c154bc6292e9efd504798f217b7f692",
+              "from_public": "03fb84530424b6d4e05b66e7f613c0877b48b03e9fca1a844139639bcfd8811f7d",
+              "from_secret": "4214d376a2cf84fa6698e950569bb19c1fc65760ea9f08e8fd81fd11547274c7",
+              "seed": "a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5"
+            }
+          ],
+          "replies": [
+            {
+              "reply_secret": "816df39a6cbef7d8695882a4737a1b4e66f3bd96e73fedf9bcfd2b7f7e572f1f",
+              "slate_id": "00000000000000000000000000000000"
+            },
+            {
+              "reply_secret": "30c0f7e42e3b05cc950af2a82d5572958ecd29e3d2e3a544ead9e479f175926c",
+              "slate_id": "0123456789abcdef0123456789abcdef"
+            }
+          ],
+          "root": "b05885fd87f40e04b7f9e77a83965971ef1f38097707a2d0dacb0f4c7bb8a5c0"
+        },
+        "mainnet": {
+          "contacts": [
+            {
+              "box_public": "030aa80bc13cbe63b92f3ff261893e1a07d2f845db2c00386f74db31d79fc01534",
+              "box_salt": "00000000000000000000000000000000",
+              "box_secret": "8e5a8e5d41442b1690cd5b12e2801386928928185e7602a88d4f31ac2972e3ef",
+              "enc_public": "89c4b89700d7fcb367e092eea0abd6af5b6aec437f39226ebdb549978deb0925",
+              "enc_secret": "37cc1bc4775c61121c13faefb05c4e3dc164ed5ff24dee45f994bf0daf28b44d",
+              "hint_key": "43a6e52f15f67b4f8212208473179a5d50b19c53e9a45266863bd8d7ad7b8c0e",
+              "sig_public": "92f6260798349f05b3a815d8211a32c03ae666d4d5ad573babbfa6ae02d29ff3",
+              "slot": 0
+            },
+            {
+              "box_public": "025a1989d0296d85910383b2fb86e9fc8e97e9b97bbb58abbaee25ced823e76f6a",
+              "box_salt": "5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a",
+              "box_secret": "96ca44ad8f370b5804b21f436154b1926b93a34dc0d4c30589d7223e0a5b469d",
+              "enc_public": "eebdd10885748611af48faa5ddc31a3bfe49255beb90b1926e8ec50896730613",
+              "enc_secret": "c12eb946612faf04d8d4c42500c8f548dabd170bc6801ff9cce7968948086a21",
+              "hint_key": "8388f05458788c8be102427268ea1339faed1b9a2f5a8d67f322a1ebcd01c2fe",
+              "sig_public": "c76171e961eafc3a20b3a2c6295ec9b3924ba4ec8b55b041875ab42bc2e3abbe",
+              "slot": 1
+            },
+            {
+              "box_public": "03213b77c68e41a1135b320743cbffec0ffc8484da11dad806d7bd08a4b3c0adfd",
+              "box_salt": "000102030405060708090a0b0c0d0e0f",
+              "box_secret": "cd4873966c8653cc3f8345205456b1cca4d87b7155356e940e35ad5a070c086e",
+              "enc_public": "2099d1574afb80ce54e56187e9554ddcbee4468fbe689b029f3dcfa466c6b106",
+              "enc_secret": "bdb91021b2d9fe0234e8187fcbc204ba0d1b4b2badb66b1394969a727f61bba8",
+              "hint_key": "15672206d188ae64ea1b835ff7e7f1936f79d325cecf13d99fd5439fbe1958f9",
+              "sig_public": "fe5108ee40add7f742fefa42be9fb8d411f35b8c092238a8e647d846afed73a8",
+              "slot": 65535
+            }
+          ],
+          "mailboxes": [
+            {
+              "box_public": "0397e6ab930689a304b395ae8d36b3b526f55e76675885c9d56b83d6ba5b6effbe",
+              "box_secret": "12fc6ac28d19402bc1ec722b215f1d327bb4b97490dee1880775b6a0571d07b3",
+              "from_public": "0269d6e65c6ce8ab4a9ecdc3e809c7204a2aecc8d7d639ae1e4044dee29caf4f5b",
+              "from_secret": "8b461260d653883f5de41743bc334774d6350db934e0ef0f9f47d29493e09823",
+              "seed": "00000000000000000000000000000000"
+            },
+            {
+              "box_public": "02349a1fc6cc4a47ff4e33acfc85a93a2e4335f4b70ce23d927f518cf02f0fe9d7",
+              "box_secret": "5c14b312f8e2a5d824cb93f6a103271a9e05c4bbde42624dde67746323018b25",
+              "from_public": "02dc637abb4116e6d1017d19cb725ae6a756e0bd4e5d9ceb51b28b147b49f2c3fa",
+              "from_secret": "4f41cde255571e054d988d744f994e139d86e4ead73f44846892b99b89722a8b",
+              "seed": "a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5"
+            }
+          ],
+          "replies": [
+            {
+              "reply_secret": "322eed8aca329204d4874161e54230f1f533166fa3e9f74ffc56836021727b44",
+              "slate_id": "00000000000000000000000000000000"
+            },
+            {
+              "reply_secret": "0508e7b8591e514df48987a858cb9bbaad66e370002dd5ef4f52ac305d6da40d",
+              "slate_id": "0123456789abcdef0123456789abcdef"
+            }
+          ],
+          "root": "8749d5517f6f34e7508e802e555ccd44f56582518aacbff6013695caf7fbf005"
+        }
+      },
+      "raw": "1111111111111111111111111111111111111111111111111111111111111111"
+    },
+    {
+      "networks": {
+        "floonet": {
+          "contacts": [
+            {
+              "box_public": "02f8b23483019dcd2d79307d65f2488585ed2d9a8a0a089559c1d84244102a2940",
+              "box_salt": "00000000000000000000000000000000",
+              "box_secret": "1eb3d4159f872d7262f170b8712cb856a5dcb2cfedb4ca85d1e2c9f06efcfc8b",
+              "enc_public": "674d323e89a48bba677c027252463ae433232184efb60f4c2f0e1872af243021",
+              "enc_secret": "95a450cf10bd8490b2a4dc87c3f538b1473989430312f56fc6ed58183f3834d6",
+              "hint_key": "edef13f52c7e300b44f2c2b57dcade5ce795bbc5e9284ff40098c8a72a01889a",
+              "sig_public": "242bf3d33e8690ea0c8e8707f0c870f3dbc8b24fe0128f9263d431bb429c94b9",
+              "slot": 0
+            },
+            {
+              "box_public": "03ee7c3104d30359c01252676213f379bc036d43216549de4236d501a239f95b00",
+              "box_salt": "5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a",
+              "box_secret": "e3175fed4ceeb425ba13087ef17768964be8bdb61e7cd8fbc8399d584ed18720",
+              "enc_public": "440505734f7ba4f9d29b6ee6fa79576327919dee49dfb7a15648d509fb027438",
+              "enc_secret": "f15b1394eefcfd9950a8e7424f516bb383651edfbdc9bf6ec7323778b1466a1f",
+              "hint_key": "c6d9aa4fd7f48d1f8c821b96c141b05d6c8425fea5c2b56653cbb8c0e6f6f19e",
+              "sig_public": "398daabd278881c2c006c2076026ad0a19d54c73ab272c1421e591fcdbc7ccf1",
+              "slot": 1
+            },
+            {
+              "box_public": "038e2182631be529a964149e88ac3527f94e7ba83279d792f67ed2b8b0d181a009",
+              "box_salt": "000102030405060708090a0b0c0d0e0f",
+              "box_secret": "85e2e03b283d895a2cb7a49f76537bdf2a7b996c2c028c0f710b0b01d873ccdd",
+              "enc_public": "6633f1123b44783665d852d9990b34daf679ba7480399e1235a6f6a07cf07439",
+              "enc_secret": "69e55730443bb8ef64d129a587477c2d218ce3486856c30f5bbe2e76b84fbdfd",
+              "hint_key": "a746f1d554b5ea7e619ca96f556dc845a865ad26c1afc478f13aada10f1d0782",
+              "sig_public": "6efadec326e58b37a826f4381419f25368bbb28dfdb94e1e4187196192e5a553",
+              "slot": 65535
+            }
+          ],
+          "mailboxes": [
+            {
+              "box_public": "03f3930586188714fdedaaef20b626c30977d1492c11bf9e95a4a24b3f3eba238e",
+              "box_secret": "303eae496ff593fc7b74a9c5ccca524f2e6c1a323aea9d6fa11a0e1ec7c51ba1",
+              "from_public": "03a01655e88743395f91f9f34d3ed2236554b5d93c52fe91c5ea8cc0232bc25be0",
+              "from_secret": "f778ef66de3385ddb8e17fa739e03bfeb274041aa410faaa584613a7c975deb3",
+              "seed": "00000000000000000000000000000000"
+            },
+            {
+              "box_public": "024b7b959459d17a37577f4a311272d5a493dc9b7cbb5854275879affc28a605d4",
+              "box_secret": "aeeba4ae3014a4ec213ffa44d01ce2a80c154bc6292e9efd504798f217b7f692",
+              "from_public": "03fb84530424b6d4e05b66e7f613c0877b48b03e9fca1a844139639bcfd8811f7d",
+              "from_secret": "4214d376a2cf84fa6698e950569bb19c1fc65760ea9f08e8fd81fd11547274c7",
+              "seed": "a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5"
+            }
+          ],
+          "replies": [
+            {
+              "reply_secret": "ee98584d52901ba1d3ba12f2209b0239f773585d989a5299e11a390af22e1125",
+              "slate_id": "00000000000000000000000000000000"
+            },
+            {
+              "reply_secret": "afa9ba5643227e25f46a0118ac32ce8fa4031eb271a6ab4e8553e885fa30c6b9",
+              "slate_id": "0123456789abcdef0123456789abcdef"
+            }
+          ],
+          "root": "97d2e07bf8248db84efff0c0d7ef8b8df2fff32dd0e1b70f15ef1a09fb967b8c"
+        },
+        "mainnet": {
+          "contacts": [
+            {
+              "box_public": "0215b0322494b33f9a2fdcaa719c3152f4a650962e96c5fe6408c7f33f2422a0f8",
+              "box_salt": "00000000000000000000000000000000",
+              "box_secret": "f53c68286d1ac11da550a29470977bffbb7f49cdd40a4e2ff87fa93a1ca51708",
+              "enc_public": "443c6590960bc57bea0bc1e46f50d7f79055dc66947f6e6e6008d9544b600a64",
+              "enc_secret": "4e26b713a1c3eaaa52df9953f1a0bff1527422d97c5ec4ba5d553cab6f75736d",
+              "hint_key": "a1f023801452d70f30025df71b71c34f66129e604987fcc995d48fc690484ae3",
+              "sig_public": "49abf33650cbf3cec474c8ea3319673a6b8800aa81cdbd04a1e9eb49a8faeb9d",
+              "slot": 0
+            },
+            {
+              "box_public": "027822647695af81b604371e39f2e8bf96895bf33e53b993aef65c5295e7ade5de",
+              "box_salt": "5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a",
+              "box_secret": "fe60edcc8b8ace404f4a07171488d18f7ae5a58c24d52d119803f6a65c069b85",
+              "enc_public": "04dba632ea3a3ccc0d9c702a02e82465c933464cf89400ca7d6d681605c06f76",
+              "enc_secret": "3f8edba9e72d2858ea086eae042d7f35cc67b0cf723476d8f2bf511e1d34d035",
+              "hint_key": "eef4d5ec2cfd4e5dbedf07a623e2d86a3cc8ae17e0df9765e9f3c219832dd4a1",
+              "sig_public": "71178568359f6d88ee0b5df6279b2dc4af83f5b049081d9fa9659010dca4df91",
+              "slot": 1
+            },
+            {
+              "box_public": "03d98b32394f0388a7150ee4bda4cc8c760f9b11f76ce69a3349a077d26360a85e",
+              "box_salt": "000102030405060708090a0b0c0d0e0f",
+              "box_secret": "89818cc77828618937ab0defd234b8292d496690b747f25da5d8da27033a12c8",
+              "enc_public": "9926a6f3a474677dafb3dccd507a7e484021b76d310a315668b1c15344b2221a",
+              "enc_secret": "5ffe18bb29fba869e645cb3104e14f5a10d39a30535488fb3249df1f87d9c7d7",
+              "hint_key": "a588b6431c062c6a6679554cb5ff86ebb4c401900902cfe1db83d54c18902fab",
+              "sig_public": "1ad816c2f772e6e82f11290148874160412e450305c3c296681589ec06d1665c",
+              "slot": 65535
+            }
+          ],
+          "mailboxes": [
+            {
+              "box_public": "0397e6ab930689a304b395ae8d36b3b526f55e76675885c9d56b83d6ba5b6effbe",
+              "box_secret": "12fc6ac28d19402bc1ec722b215f1d327bb4b97490dee1880775b6a0571d07b3",
+              "from_public": "0269d6e65c6ce8ab4a9ecdc3e809c7204a2aecc8d7d639ae1e4044dee29caf4f5b",
+              "from_secret": "8b461260d653883f5de41743bc334774d6350db934e0ef0f9f47d29493e09823",
+              "seed": "00000000000000000000000000000000"
+            },
+            {
+              "box_public": "02349a1fc6cc4a47ff4e33acfc85a93a2e4335f4b70ce23d927f518cf02f0fe9d7",
+              "box_secret": "5c14b312f8e2a5d824cb93f6a103271a9e05c4bbde42624dde67746323018b25",
+              "from_public": "02dc637abb4116e6d1017d19cb725ae6a756e0bd4e5d9ceb51b28b147b49f2c3fa",
+              "from_secret": "4f41cde255571e054d988d744f994e139d86e4ead73f44846892b99b89722a8b",
+              "seed": "a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5"
+            }
+          ],
+          "replies": [
+            {
+              "reply_secret": "32b4de706ba291ef0e5df6151adb2724e50cf44f0026952577641be2ca7a0cad",
+              "slate_id": "00000000000000000000000000000000"
+            },
+            {
+              "reply_secret": "81586d4fee65045d573d3bfd31ba501079f8a65c5abde3079946a70e9711e08c",
+              "slate_id": "0123456789abcdef0123456789abcdef"
+            }
+          ],
+          "root": "9175c42fa358d7e15dc5da09490cbcf63e8a451294c0d1e4df4f52c7ddc99a4a"
+        }
+      },
+      "raw": "2222222222222222222222222222222222222222222222222222222222222222"
+    }
+  ],
+  "mnemonic": "pipe stock song coast pair always emotion member joy sting dash theory",
+  "mnemonic_networks": {
+    "floonet": {
+      "contacts": [
+        {
+          "box_public": "02beb3ee8e1abf71ed351e365e2be19b8b08bb6b869e469e4434552b5d6edf9dbb",
+          "box_salt": "00000000000000000000000000000000",
+          "box_secret": "299eea012c6b1cf8572553d835a20eac302b9c26e381247ffe2b5e47756365ac",
+          "enc_public": "08af977f92d1ac1793393dfd878f639b14e515c591018a2c8a5314eb251da552",
+          "enc_secret": "a1969277c08a4aa57cd80cad3b761101cca4906f005d037581eb2d4ea108828a",
+          "hint_key": "c21bf45f37c3a546e14396e451bd3b45e19be27d065663acfd73f147873c6dcf",
+          "sig_public": "c9435953949e44245b558de8bbaa550726735e2e51ce49e65a242864d2ccba8a",
+          "slot": 0
+        },
+        {
+          "box_public": "03243c0bd0b796606caf22e8ca6c2fe1640bb8b5985b07412c78dcea03aadb73a4",
+          "box_salt": "5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a",
+          "box_secret": "7a545623b2369683ae8e44d58575893fb03f85e09c873fb812bc07e0a162a2fc",
+          "enc_public": "5439d87a841f4d5f96373e29ea321632af84e1aadd08030ce662bf91b7ea736a",
+          "enc_secret": "96030fcc620c0b8a3f0adf1aba0767ff47971bb0159887f51c8581f29c470c85",
+          "hint_key": "0de50dbb089cc9b2867257a604a6efe31e500274530b0eb6195937cfb5e66fb6",
+          "sig_public": "6848588630489a43516aca868f17e53ad8e3f4751431a155835b17ea234c6c10",
+          "slot": 1
+        },
+        {
+          "box_public": "02dadb5a7f4d414a5c07466ff0a7490f86cd8812cd985e1ae98501bdb19936c198",
+          "box_salt": "000102030405060708090a0b0c0d0e0f",
+          "box_secret": "67df2dcc1048f7417855fd4d51daf58588d2a447e61ac0dcca6f2872e6770d61",
+          "enc_public": "9a44e58ff48eae400605283f3e32a97bcb01526e2f4fce747f3ca71a69bc2d3a",
+          "enc_secret": "72339413c7cd61702d80061586487214e5da622c702c4f32cbe4be5aaa25de72",
+          "hint_key": "3dcb8a31a949dc83a629033631f67ed558b8c4578554db112ef7f2e7919f7f31",
+          "sig_public": "18de6b7001b2a906562617e1275348ca77e45926b6aa4f05f45d52976d715927",
+          "slot": 65535
+        }
+      ],
+      "mailboxes": [
+        {
+          "box_public": "03f3930586188714fdedaaef20b626c30977d1492c11bf9e95a4a24b3f3eba238e",
+          "box_secret": "303eae496ff593fc7b74a9c5ccca524f2e6c1a323aea9d6fa11a0e1ec7c51ba1",
+          "from_public": "03a01655e88743395f91f9f34d3ed2236554b5d93c52fe91c5ea8cc0232bc25be0",
+          "from_secret": "f778ef66de3385ddb8e17fa739e03bfeb274041aa410faaa584613a7c975deb3",
+          "seed": "00000000000000000000000000000000"
+        },
+        {
+          "box_public": "024b7b959459d17a37577f4a311272d5a493dc9b7cbb5854275879affc28a605d4",
+          "box_secret": "aeeba4ae3014a4ec213ffa44d01ce2a80c154bc6292e9efd504798f217b7f692",
+          "from_public": "03fb84530424b6d4e05b66e7f613c0877b48b03e9fca1a844139639bcfd8811f7d",
+          "from_secret": "4214d376a2cf84fa6698e950569bb19c1fc65760ea9f08e8fd81fd11547274c7",
+          "seed": "a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5"
+        }
+      ],
+      "replies": [
+        {
+          "reply_secret": "1e61b93164e5d85537fe812f11cc79f71cd99b3f1741db11b8f07297ea915fa9",
+          "slate_id": "00000000000000000000000000000000"
+        },
+        {
+          "reply_secret": "213b22cd78794050447ceec7cadf586a1507131d79015b6cea5b32c4cdd53972",
+          "slate_id": "0123456789abcdef0123456789abcdef"
+        }
+      ],
+      "root": "3fb7e26618631be44899929325ec9e087691249729b7e6116983dd55f7cbb7bb"
+    },
+    "mainnet": {
+      "contacts": [
+        {
+          "box_public": "02ae08fe68df3edc8963830fb0b7de5d0f1f3315fc992ce9c4684be85e75134aba",
+          "box_salt": "00000000000000000000000000000000",
+          "box_secret": "ca6be00828f4c8a07336c61c5d97a3899137290cc67ae953084045d3125c2216",
+          "enc_public": "c73cda633f8318a6b0b92a9760e7aa09bcf847cd90833d089359a8a57c05d14e",
+          "enc_secret": "99536a2845a34900833429ef430caca7e38ef3e52db4019b40f714a5a8094aaa",
+          "hint_key": "7881e36b53c48082637a11c15c1a5366643b2fcfba16b9fd0e1684bf6234cf18",
+          "sig_public": "b8b017ab9d93d4545952ad41fffbf651d742bc57b168d12550d4fec46f60e53b",
+          "slot": 0
+        },
+        {
+          "box_public": "02b8c715944ea4b0498e5741405021fb7b4401c572821180e5bc8145c2a05ea17c",
+          "box_salt": "5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a",
+          "box_secret": "2636c12a5f13bdcc9e26cbaceed98385750647ff31a7ccfc0d4d835b253ddb2b",
+          "enc_public": "52de4cce72e64f84de7e8e5f1de2b58666e23aa804017db9a3388c580889d85e",
+          "enc_secret": "84b7b32e27c4bffc1f6b74a85e476986ed944b512b44df22249512904636fe7b",
+          "hint_key": "7ea4449d01457d44fc39d2fd7fce3cc56de2c4a08b20931620a1b40d48320527",
+          "sig_public": "bcff3df027b3a8c5ceed56a2bfb8c9a1aa1c02cfd79426f20ef94f7eec4715cc",
+          "slot": 1
+        },
+        {
+          "box_public": "0322e2e4cf7d4a3ba84bd687ced084cc86882fc774a353085d83ef21ab4ae3c613",
+          "box_salt": "000102030405060708090a0b0c0d0e0f",
+          "box_secret": "2d07650cd15f584432f89d0ff6d17b36be938d72b5e7ba9326e7683262c51a1e",
+          "enc_public": "c277c1020c31cd01edf189c65428139749550f860ed84ff8fea39716915be323",
+          "enc_secret": "76bee6f043946d9c580c9c047cd3c8d9d1faf1c771148b5bd0dc6c03d8002576",
+          "hint_key": "694193bda852084d276b1d7b0ea44ac778e0b1fe0798f993aadbfbf6373da136",
+          "sig_public": "8b6e2e0ab954fe155fc50b6539a2f310d3a68bda46061f0da2bda70d875579b9",
+          "slot": 65535
+        }
+      ],
+      "mailboxes": [
+        {
+          "box_public": "0397e6ab930689a304b395ae8d36b3b526f55e76675885c9d56b83d6ba5b6effbe",
+          "box_secret": "12fc6ac28d19402bc1ec722b215f1d327bb4b97490dee1880775b6a0571d07b3",
+          "from_public": "0269d6e65c6ce8ab4a9ecdc3e809c7204a2aecc8d7d639ae1e4044dee29caf4f5b",
+          "from_secret": "8b461260d653883f5de41743bc334774d6350db934e0ef0f9f47d29493e09823",
+          "seed": "00000000000000000000000000000000"
+        },
+        {
+          "box_public": "02349a1fc6cc4a47ff4e33acfc85a93a2e4335f4b70ce23d927f518cf02f0fe9d7",
+          "box_secret": "5c14b312f8e2a5d824cb93f6a103271a9e05c4bbde42624dde67746323018b25",
+          "from_public": "02dc637abb4116e6d1017d19cb725ae6a756e0bd4e5d9ceb51b28b147b49f2c3fa",
+          "from_secret": "4f41cde255571e054d988d744f994e139d86e4ead73f44846892b99b89722a8b",
+          "seed": "a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5"
+        }
+      ],
+      "replies": [
+        {
+          "reply_secret": "cc74d42c7abe2ec48e45baaf33b1689f5aecc574e8babaf91f2c027f928fe49c",
+          "slate_id": "00000000000000000000000000000000"
+        },
+        {
+          "reply_secret": "4d5818b3c6bc6e6202a83557ad375a21c3e437272097d82f94c790637c450c8b",
+          "slate_id": "0123456789abcdef0123456789abcdef"
+        }
+      ],
+      "root": "f33cc2b2f49662b5031db6a94f1a3ac85ef3ec01b59d43b1d55a5d43318cac96"
+    }
+  },
+  "path": "m/0/2/0",
+  "raw_key": "571491b3e67bb667c68f8ecf2093c74f97c642895994764d59eba77b8456cde9"
+}

@@ -1,0 +1,5629 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "LEPIC wallet API",
+    "version": "2.0.0",
+    "description": "HTTP API of `lepic serve` for one LEPIC wallet.\n**One wallet per serve.** Every path is relative to `/api/v1` and names no wallet. To serve several wallets, run one `lepic serve` per wallet, each with its own socket and port.\n\n**Transports.** Two ways in. The Unix socket `lepic.sock` is created with owner-only permissions (mode 0600); there are no tokens, and OpenAPI cannot express it, so it has no security scheme here. Optional mutual TLS 1.3 (`--owner-tls`) admits clients listed in `api-clients` by key (`ownerTls`), each with one role: `read`, `receive` (also create invoices and links; a `receive` client is refused calls that spend, with 403 `role_required`) or `full`. A call above a client role answers 403 with code `role_required`. The socket is always `full`. Operations marked `x-socket-only: true` (`PUT /wallet/password`, `POST /contacts/export`, `POST /contacts/import`) answer 403 with code `socket_only` over TLS. Over TLS, `POST /payments` needs a caller-chosen `id`.\n\n**Wire protocols outside this API.** `/v2/foreign` (stock wallets, JSON-RPC) and `/api/v1/inbox` (LEPIC native) are the endpoints other wallets call. They are wire protocols and are not described here.\n\n**Conventions.** Field names are snake_case; amounts are decimal strings in EPIC with up to 8 decimals; times are RFC 3339 UTC; optional fields are left out when empty, never null; enum values are lower snake_case and clients must accept values they do not know. Lists return `{items, next_cursor}`. Errors are RFC 9457 problem documents. Besides the statuses each operation lists, a request body is a JSON object sent with `Content-Type: application/json` (parameters such as `charset=utf-8` are fine); any other type answers 415 `unsupported_media_type` and a body that is not an object answers 400 `invalid_body`. Any call may answer 408 `body_too_slow` or 413 `body_too_large` while serve reads its body, and 500 `internal` on a bug. When the socket or the owner TLS listener already holds `api.max_connections` connections, a new connection is answered 503 `busy` with `Retry-After` to every request and closed, up to as many again; past those it is closed unanswered. On the socket, a request that carries the `x-lepic-*` headers of a forwarded CLI command answers 409 `serve_version_differs` or `serve_settings_differ` when they name another version or other settings than serve runs with; other clients do not send them. Every response carries `x-lepic-version`."
+  },
+  "servers": [
+    {
+      "url": "/api/v1"
+    }
+  ],
+  "tags": [
+    {
+      "name": "Service",
+      "description": "Service operations."
+    },
+    {
+      "name": "Wallet",
+      "description": "Wallet operations."
+    },
+    {
+      "name": "Payments",
+      "description": "Payments operations."
+    },
+    {
+      "name": "Inspect and open",
+      "description": "Inspect and open operations."
+    },
+    {
+      "name": "Coins",
+      "description": "Coins operations."
+    },
+    {
+      "name": "Addresses and links",
+      "description": "Addresses and links operations."
+    },
+    {
+      "name": "Contacts",
+      "description": "Contacts operations."
+    },
+    {
+      "name": "Payloads",
+      "description": "Payloads operations."
+    },
+    {
+      "name": "Quarantine",
+      "description": "Quarantine operations."
+    },
+    {
+      "name": "Network",
+      "description": "Network operations."
+    },
+    {
+      "name": "Profile",
+      "description": "Profile operations."
+    },
+    {
+      "name": "Events",
+      "description": "Events operations."
+    },
+    {
+      "name": "Webhooks",
+      "description": "Webhooks operations."
+    }
+  ],
+  "security": [
+    {
+      "ownerTls": []
+    },
+    {}
+  ],
+  "paths": {
+    "/status": {
+      "get": {
+        "operationId": "getStatus",
+        "x-role": "read",
+        "summary": "The running serve: uptime, listeners, last refresh and collect, owner TLS.",
+        "tags": [
+          "Service"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Status"
+                }
+              }
+            }
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          }
+        }
+      }
+    },
+    "/openapi.json": {
+      "get": {
+        "operationId": "getOpenApi",
+        "x-role": "read",
+        "summary": "This API as OpenAPI 3.1.",
+        "tags": [
+          "Service"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "description": "An OpenAPI 3.1 document."
+                }
+              }
+            }
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          }
+        }
+      }
+    },
+    "/metrics": {
+      "get": {
+        "operationId": "getMetrics",
+        "x-role": "read",
+        "summary": "Counts, heights and mailbox health in the Prometheus text format, when serve runs with `--metrics`.",
+        "description": "Prometheus text exposition format 0.0.4, `Content-Type: text/plain; version=0.0.4; charset=utf-8`. Amounts are in the wallet's base unit (1e-8 EPIC). Counters count since serve started and are not stored. Read from the store and from what serve already noted: no node or mailbox is asked. Answers 404 `not_found` when serve runs without `--metrics`.",
+        "tags": [
+          "Service"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
+    "/wallet": {
+      "get": {
+        "operationId": "getWallet",
+        "x-role": "read",
+        "summary": "Network, chain height, node behind, scan progress.",
+        "tags": [
+          "Wallet"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Wallet"
+                }
+              }
+            }
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          }
+        }
+      }
+    },
+    "/wallet/password": {
+      "put": {
+        "operationId": "changeWalletPassword",
+        "x-role": "full",
+        "summary": "Change the password. Socket only.",
+        "tags": [
+          "Wallet"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChangePassword"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "No content"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          }
+        },
+        "x-socket-only": true,
+        "security": [
+          {}
+        ],
+        "description": "Answers 204, or 403 `wrong_password`."
+      }
+    },
+    "/wallet/scan": {
+      "post": {
+        "operationId": "scanWallet",
+        "x-role": "full",
+        "summary": "Rescan the chain, optionally reading the delivery mailboxes of epic1 addresses. Runs in the background; progress comes as events.",
+        "tags": [
+          "Wallet"
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ScanRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Accepted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Wallet"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        },
+        "description": "Answers 202. The scan runs in the background and reports as `wallet.progress` events; `GET /wallet` shows it under `scan`. `links` then reads the delivery mailboxes of the wallet's epic1 addresses, as a restore does."
+      }
+    },
+    "/sync": {
+      "post": {
+        "operationId": "syncNow",
+        "x-role": "receive",
+        "summary": "Refresh against the node and collect from the mailboxes now.",
+        "tags": [
+          "Wallet"
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SyncRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Wallet"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "502": {
+            "$ref": "#/components/responses/BadGateway"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          },
+          "504": {
+            "$ref": "#/components/responses/GatewayTimeout"
+          }
+        },
+        "description": "Serve refreshes from the node every 60 s by itself. Where a mailbox offers mux/1, it holds push sessions for the payments address and every live contact, pairing, epic1 and reply slot, and reads mail as the mailbox pushes it, at most once a second; on a relay without mux/1 that mail is not read. Every 30 s it collects: it asks each push session how much waits, which ends drained pairings, counts the wait of contacts not heard from and reports relays that do not answer, ends what expired and posts the outbox rows and replies that fell due. This call refreshes and collects now. Events, SSE and webhooks are the same for both paths."
+      }
+    },
+    "/sync/boost": {
+      "post": {
+        "operationId": "boostSync",
+        "x-role": "receive",
+        "summary": "Collect from the mailboxes, or refresh against the node, more often for a while.",
+        "description": "Runs the poller at most every `interval_seconds` for `duration_seconds` from now, then goes back to its base interval (30 s for `relays`, 60 s for `node`). Each call starts its own boost: a poller with several runs at the shortest interval among them until the last ends, and `DELETE /sync/boost/{id}` ends one before its window does. The interval is at least 5 s and the duration at most 600 s: values outside are clamped. The answer is the boost's `id` and the poller's window with it. Serve boosts `relays` for 120 s at 5 s by itself after `POST /payments` and `POST /contacts`.",
+        "tags": [
+          "Wallet"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BoostRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Boost"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          }
+        }
+      }
+    },
+    "/sync/boost/{id}": {
+      "delete": {
+        "operationId": "endBoost",
+        "x-role": "receive",
+        "summary": "End a boost before its window does.",
+        "description": "The poller's window is then that of the boosts left, or its base interval.",
+        "tags": [
+          "Wallet"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "description": "The `id` `POST /sync/boost` answered."
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No content"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
+    "/accounts": {
+      "get": {
+        "operationId": "listAccounts",
+        "x-role": "read",
+        "summary": "The accounts with their balances.",
+        "tags": [
+          "Wallet"
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/limit"
+          },
+          {
+            "$ref": "#/components/parameters/cursor"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccountList"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          }
+        }
+      },
+      "post": {
+        "operationId": "createAccount",
+        "x-role": "full",
+        "summary": "Create an account.",
+        "tags": [
+          "Wallet"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateAccount"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Account"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          }
+        }
+      }
+    },
+    "/payments": {
+      "get": {
+        "operationId": "listPayments",
+        "x-role": "read",
+        "summary": "List payments, newest first.",
+        "tags": [
+          "Payments"
+        ],
+        "parameters": [
+          {
+            "name": "account",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Account label."
+          },
+          {
+            "name": "state",
+            "in": "query",
+            "schema": {
+              "$ref": "#/components/schemas/Payment/properties/state"
+            }
+          },
+          {
+            "name": "kind",
+            "in": "query",
+            "schema": {
+              "$ref": "#/components/schemas/Payment/properties/kind"
+            }
+          },
+          {
+            "name": "direction",
+            "in": "query",
+            "schema": {
+              "$ref": "#/components/schemas/Payment/properties/direction"
+            }
+          },
+          {
+            "name": "via",
+            "in": "query",
+            "schema": {
+              "$ref": "#/components/schemas/Payment/properties/via"
+            }
+          },
+          {
+            "name": "contact_id",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "delivery",
+            "in": "query",
+            "schema": {
+              "$ref": "#/components/schemas/Delivery/properties/state"
+            },
+            "description": "Delivery state."
+          },
+          {
+            "name": "updated_after",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/limit"
+          },
+          {
+            "$ref": "#/components/parameters/cursor"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PaymentList"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          }
+        },
+        "description": "Newest first. `state`, `kind`, `direction`, `via`, `account`, `contact_id`, `delivery` and `updated_after` filter the list."
+      },
+      "post": {
+        "operationId": "createPayment",
+        "x-role": "receive",
+        "x-role-note": "Issuing an invoice needs `receive`; a send needs `full`.",
+        "summary": "Start a payment: a send or an invoice.",
+        "tags": [
+          "Payments"
+        ],
+        "description": "Starts a send (`kind: send`, default) or an invoice (`kind: invoice`). Returns 201, or 200 with the stored payment on an idempotent repeat (same `id`, same body). A different body with the same `id` is 409 `idempotency_mismatch`; a repeat while the first call runs is 409 `in_progress` with `Retry-After`. A payment with an `id` goes on being made when the caller leaves, and a repeat after it ends answers 200 with its `handoff`. A create that serve's stop cuts short answers 503 `interrupted`, its record is kept, and a repeat makes the payment. Such payments count against `api.max_connections` while they are made; over it a new create answers 503 `busy` with `Retry-After` and makes and keeps nothing. A repeat of a payment that exists is answered at any count. Over owner TLS `id` is required. A send needs the `full` role; an invoice needs `receive`.\n\n`to` forms: `key@host` (Epicbox address), `http://` or `https://` URL, `.onion` address, `epic:` link, a bare epic1 address (as `GET /addresses` returns it, paid as its epic1 link), `contact:ID`, `account:LABEL`. An `epic:` link carries its amount and message: a classic one (`epic:ADDRESS?amount=&message=`) is paid to its address, and an epic1 link as `lepic epic1 pay` pays it; for both, the body's `amount` and `message` win when given and the link's are used otherwise. An invoice goes to `contact:ID` or is handed back (`via: file` or `deliver: false`); to an address or a classic `epic:` link it is 400 `invoice_to_address` and nothing is stored, to an epic1 link 400 `invalid_field`.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreatePayment"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Idempotent repeat: the stored payment; no money moved.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Payment"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Payment"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "422": {
+            "$ref": "#/components/responses/Unprocessable"
+          },
+          "500": {
+            "$ref": "#/components/responses/ServerError"
+          },
+          "502": {
+            "$ref": "#/components/responses/BadGateway"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          },
+          "504": {
+            "$ref": "#/components/responses/GatewayTimeout"
+          }
+        }
+      }
+    },
+    "/payments/estimate": {
+      "post": {
+        "operationId": "estimatePayment",
+        "x-role": "read",
+        "summary": "Same body as create, changes nothing: the fee, the most you can send, the coins it would use.",
+        "tags": [
+          "Payments"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreatePayment"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Estimate"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "422": {
+            "$ref": "#/components/responses/Unprocessable"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      }
+    },
+    "/payments/{id}": {
+      "get": {
+        "operationId": "getPayment",
+        "x-role": "read",
+        "summary": "One payment.",
+        "tags": [
+          "Payments"
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/PaymentId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Payment"
+                }
+              }
+            }
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      },
+      "patch": {
+        "operationId": "updatePayment",
+        "x-role": "full",
+        "summary": "Set the payment's metadata: local notes, never sent.",
+        "tags": [
+          "Payments"
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/PaymentId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PatchPayment"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Payment"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
+    "/payments/{id}/approve": {
+      "post": {
+        "operationId": "approvePayment",
+        "x-role": "full",
+        "summary": "Pay an invoice that waits for your approval. You retype the amount.",
+        "tags": [
+          "Payments"
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/PaymentId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ApprovePayment"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Payment"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "422": {
+            "$ref": "#/components/responses/Unprocessable"
+          },
+          "502": {
+            "$ref": "#/components/responses/BadGateway"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          },
+          "504": {
+            "$ref": "#/components/responses/GatewayTimeout"
+          }
+        },
+        "description": "Needs the `full` role. `amount` must equal the invoice's amount: another amount answers 400 `invalid_field` at `/amount` and the payment stays held. `deliver: false` answers 400 `invalid_field` at `/deliver`. The answer is the payment, with a `handoff` for an issuer that is not online. After `approve` or `decline`, the other answers 409 `action_not_available`."
+      }
+    },
+    "/payments/{id}/decline": {
+      "post": {
+        "operationId": "declinePayment",
+        "x-role": "full",
+        "summary": "Refuse an invoice that waits for your approval, and tell the issuer.",
+        "description": "Takes no body. The issuer's notice carries a fixed reason, not text of yours (no extra data is sent).",
+        "tags": [
+          "Payments"
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/PaymentId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Payment"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          }
+        }
+      }
+    },
+    "/payments/{id}/deliver": {
+      "post": {
+        "operationId": "deliverPayment",
+        "x-role": "full",
+        "summary": "Send the current slate to the payment's own address again.",
+        "description": "On an epic1 payment whose post is `uncertain` or `failed`, posts it on the link's next `http` or `tor` entry, and on the entries after it while each is refused or out of reach. A next route exists only for a link with `http` or `tor` entries. Each entry waits at most the relay's connect and response limits, 15 s each by default, and a link holds at most three entries, the first already tried, so the call can take up to 60 s; its outcome also arrives as `payment.delivery_changed`. 409 `no_more_routes` when every entry was tried, and the payment is unchanged. A payment that went to the payee's mailbox was posted to every usable relay of the list on its first post, so the call answers 409 `no_more_routes` for it, though its `actions` can list `deliver`. A payment past its cutoff height has expired and offers no `deliver`. The call takes no body.",
+        "tags": [
+          "Payments"
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/PaymentId"
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeliverPayment"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Payment"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "502": {
+            "$ref": "#/components/responses/BadGateway"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          },
+          "504": {
+            "$ref": "#/components/responses/GatewayTimeout"
+          }
+        }
+      }
+    },
+    "/payments/{id}/post": {
+      "post": {
+        "operationId": "postPayment",
+        "x-role": "receive",
+        "x-role-note": "Posting an invoice this wallet issued needs `receive`; posting a send needs `full`.",
+        "summary": "Post a finished payment to the node again.",
+        "tags": [
+          "Payments"
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/PaymentId"
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PostPayment"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Payment"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "502": {
+            "$ref": "#/components/responses/BadGateway"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          },
+          "504": {
+            "$ref": "#/components/responses/GatewayTimeout"
+          }
+        }
+      }
+    },
+    "/payments/{id}/cancel": {
+      "post": {
+        "operationId": "cancelPayment",
+        "x-role": "receive",
+        "x-role-note": "Cancelling an invoice this wallet issued while it awaits its answer needs `receive`; every other cancel needs `full`.",
+        "summary": "End a payment that is not on the chain and free its coins.",
+        "tags": [
+          "Payments"
+        ],
+        "description": "In `awaiting_answer` or `finalized` it cancels the payment in this wallet. A `posted` send (`direction` `out`) is not cancelled: the answer is 409 `use_recover` and nothing changes, since only a recovery spends its inputs again. Any other `posted` payment answers 409 `action_not_available`. Cancelling a cancelled payment returns it unchanged. The `receive` role may cancel an invoice this wallet issued.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/PaymentId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Payment"
+                }
+              }
+            }
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "502": {
+            "$ref": "#/components/responses/BadGateway"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          },
+          "504": {
+            "$ref": "#/components/responses/GatewayTimeout"
+          }
+        }
+      }
+    },
+    "/payments/{id}/recover": {
+      "post": {
+        "operationId": "recoverPayment",
+        "x-role": "full",
+        "summary": "Spend a send's inputs back to this wallet, as a last resort.",
+        "tags": [
+          "Payments"
+        ],
+        "description": "For a send that is `finalized`, `posted`, `cancelled` or `expired` and whose inputs are still held for it (`recover` in `actions`). Serve asks the node first and refuses while the node's pool or chain holds the send. The recovery is a send to this wallet that spends all of the send's inputs into one output, so the send can never be mined once the recovery is. It is two ordinary transactions, a self payment (`direction: self`, `via: chain`) whose id is `recovery.tx_id`.\n\nThe answer is the payment with its `recovery`: `posted` when the node took it, `confirming` when the node already held it, `uncertain` when the node could not be reached (each refresh posts it again), `failed` with `error` when the node refused it; nothing else changed then. Once the recovery has `needed` confirmations it is `done`, and a payment still open ends `cancelled` with `state_reason` `recovered`. Pay again only after `recovered`: until then the send may still be mined. While a recovery is open, the payment and the recovery's self payment offer no `post` and no `cancel`, and another recover answers 409 `recovery_open`.\n\nThe recovery's fee is 0.004 EPIC for one input, 0.001 EPIC less for each further input, and at least 0.001 EPIC. A send whose inputs total less cannot be recovered. The node must accept the recovery.\n\n409 codes: `in_pool` and `on_chain` when the node holds the send, `recovery_open`, `not_recoverable` for any other payment.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/PaymentId"
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "The recovery is stored; the payment shows how its push went.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Payment"
+                }
+              }
+            }
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "502": {
+            "$ref": "#/components/responses/BadGateway"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          },
+          "504": {
+            "$ref": "#/components/responses/GatewayTimeout"
+          }
+        }
+      }
+    },
+    "/payments/{id}/handoff": {
+      "get": {
+        "operationId": "getPaymentHandoff",
+        "x-role": "read",
+        "summary": "The text, file or QR frames to give the other person by hand.",
+        "description": "Returns the handoff the create or the open returned. A plain slate of a payment handed over by hand is rebuilt from the stored slate when serve no longer keeps the text, byte for byte the same, while the payment waits for the other side.",
+        "tags": [
+          "Payments"
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/PaymentId"
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "schema": {
+              "$ref": "#/components/schemas/Handoff/properties/format"
+            },
+            "description": "slate JSON, `.epictx`, sealed to the contact, plain."
+          },
+          {
+            "name": "contact_id",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Contact to seal for; for `format=sealed`."
+          },
+          {
+            "name": "qr",
+            "in": "query",
+            "schema": {
+              "type": "boolean",
+              "default": false
+            },
+            "description": "true adds `qr_frames`."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Handoff"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          }
+        },
+        "description": "`format` picks the form, `contact_id` names the contact for `format=sealed`, and `qr=true` adds `qr_frames`. A sealed answer has no QR frames: `qr=true` on it answers 409 `format_not_available`."
+      }
+    },
+    "/inspect": {
+      "post": {
+        "operationId": "inspect",
+        "x-role": "read",
+        "summary": "Say what a text, file or scanned code is and what it asks, without changing anything.",
+        "description": "A pairing link (`epiccash://pair/1/...`) is a `pairing_invite`: `summary.from` is the name the inviter claims, `summary.relays` its home mailbox, and `next` is `accept_invite` (answer it with `POST /contacts`, method `accept`), or `none` for an invite this wallet made or one past its expiry. `pair-reply` and `pair-confirm` links are `pairing_reply` and `pairing_confirm`, named only, with `next` `none`: the API takes neither. A pairing link that does not decode on this wallet's network is `unknown`.",
+        "tags": [
+          "Inspect and open"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InspectRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Inspection"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "502": {
+            "$ref": "#/components/responses/BadGateway"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          },
+          "504": {
+            "$ref": "#/components/responses/GatewayTimeout"
+          }
+        },
+        "description": "A sealed file answers `type: sealed` with the amount, the `contact_id` when the contact signed it, the message and the next step. Nothing is stored."
+      }
+    },
+    "/open": {
+      "post": {
+        "operationId": "open",
+        "x-role": "receive",
+        "x-role-note": "Receiving a payment, parking an invoice or finishing an invoice this wallet issued needs `receive`; finishing your own send or advancing a pairing needs `full`.",
+        "summary": "Act on it: receive, finish, park an invoice, or advance a pairing. Never spends.",
+        "tags": [
+          "Inspect and open"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OpenRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpenResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "422": {
+            "$ref": "#/components/responses/Unprocessable"
+          },
+          "502": {
+            "$ref": "#/components/responses/BadGateway"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          },
+          "504": {
+            "$ref": "#/components/responses/GatewayTimeout"
+          }
+        },
+        "description": "A pairing invite, reply or confirm is not opened: it answers 409 `nothing_to_open`; answer an invite with `POST /contacts` (method `accept`), so `pairing_advanced` is not produced yet.\n\nOutcomes: `received` (a payment was handed to you; `handoff` is the answer to give back), `finished` (the answer to your payment arrived and it was posted), `answer_added`, `invoice_parked` (an invoice is held in `needs_approval`), `pairing_advanced`, and `already_done` (opened before; the answer stored the first time is handed back). An item given as `qr_frames` is answered with `qr_frames`, on a repeat too.\n\nA sealed file from a contact (`BEGINEPICSEALED.` text) is opened with this wallet's keys: a send is received and answered sealed (`receive`), an invoice is held (`receive`), the answer to an invoice this wallet issued is finished (`receive`), and the answer to your own send is finished (`full`). A sealed file that does not open with this wallet's keys answers 409 `nothing_to_open`.\n\nAn invoice past its expiry height answers 422 `payment_expired` and nothing is stored. With 100 invoices held, a new one answers 409 `too_many_held`; opening one already held does not count. A held invoice whose `expires_at_height` is below the wallet's last known height drops out of the list."
+      }
+    },
+    "/outputs": {
+      "get": {
+        "operationId": "listOutputs",
+        "x-role": "read",
+        "summary": "The wallet's outputs.",
+        "tags": [
+          "Coins"
+        ],
+        "parameters": [
+          {
+            "name": "account",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "state",
+            "in": "query",
+            "schema": {
+              "$ref": "#/components/schemas/Output/properties/state"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/limit"
+          },
+          {
+            "$ref": "#/components/parameters/cursor"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OutputList"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          }
+        }
+      }
+    },
+    "/outputs/consolidate": {
+      "post": {
+        "operationId": "consolidateOutputs",
+        "x-role": "full",
+        "summary": "Spend the wallet's outputs to itself as fewer outputs.",
+        "tags": [
+          "Coins"
+        ],
+        "description": "Spends the wallet's outputs to itself as fewer outputs, for the usual fee. Without `inputs` it spends the smallest spendable outputs, at most `max_inputs` (default 500); `inputs` names the outputs to spend instead, and the call fails with 422 and stores nothing when one of them cannot be spent. Locked, under-confirmed and immature coinbase outputs are left alone. `outputs` (1 to 10, default 1) is how many outputs of nearly equal value it makes. A consolidation links its inputs to each other on chain.\n\n`dry_run: true` answers 200 with an estimate and stores and locks nothing; it ignores `id`. Otherwise it answers 201 with the payment (`direction: self`). With an `id` the consolidation takes the job path of a payment create: the id becomes the payment's id, a repeat with the same body answers 200 with the stored payment and spends nothing again, a different body with the same id is 409 `idempotency_mismatch`, and over `api.max_connections` running creates it answers 503 `busy`. Over owner TLS `id` is required.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConsolidateOutputs"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "A dry run: the estimate. Or an idempotent repeat: the stored payment; no money moved.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/Estimate"
+                    },
+                    {
+                      "$ref": "#/components/schemas/Payment"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Payment"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "422": {
+            "$ref": "#/components/responses/Unprocessable"
+          },
+          "502": {
+            "$ref": "#/components/responses/BadGateway"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          },
+          "504": {
+            "$ref": "#/components/responses/GatewayTimeout"
+          }
+        }
+      }
+    },
+    "/addresses": {
+      "get": {
+        "operationId": "listAddresses",
+        "x-role": "read",
+        "summary": "Your addresses.",
+        "tags": [
+          "Addresses and links"
+        ],
+        "parameters": [
+          {
+            "name": "account",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "type",
+            "in": "query",
+            "schema": {
+              "$ref": "#/components/schemas/Address/properties/type"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/limit"
+          },
+          {
+            "$ref": "#/components/parameters/cursor"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AddressList"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          }
+        },
+        "description": "The epic1 address of each account, and the legacy Epicbox address, which belongs to the default account. `used` is always `false`."
+      }
+    },
+    "/links": {
+      "post": {
+        "operationId": "createLink",
+        "x-role": "receive",
+        "summary": "Make a request link: the epic1 address of an account with an amount and a message.",
+        "tags": [
+          "Addresses and links"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateLink"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The link.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Link"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "422": {
+            "$ref": "#/components/responses/Unprocessable"
+          }
+        },
+        "description": "Stores nothing: the same body gives the same link. A payment to the link arrives at the account's epic1 address with the payer's amount and message; the wallet does not match it to the link."
+      }
+    },
+    "/contacts": {
+      "get": {
+        "operationId": "listContacts",
+        "x-role": "read",
+        "summary": "Contacts, including pairings in progress.",
+        "tags": [
+          "Contacts"
+        ],
+        "parameters": [
+          {
+            "name": "state",
+            "in": "query",
+            "schema": {
+              "$ref": "#/components/schemas/Contact/properties/state"
+            }
+          },
+          {
+            "name": "class",
+            "in": "query",
+            "schema": {
+              "$ref": "#/components/schemas/Contact/properties/class"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/limit"
+          },
+          {
+            "$ref": "#/components/parameters/cursor"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ContactList"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          }
+        }
+      },
+      "post": {
+        "operationId": "createContact",
+        "x-role": "full",
+        "summary": "Start a pairing: make an invite or answer an invite.",
+        "tags": [
+          "Contacts"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateContact"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Idempotent repeat: the stored contact.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Contact"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Contact"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "422": {
+            "$ref": "#/components/responses/Unprocessable"
+          },
+          "502": {
+            "$ref": "#/components/responses/BadGateway"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          },
+          "504": {
+            "$ref": "#/components/responses/GatewayTimeout"
+          }
+        }
+      }
+    },
+    "/contacts/{id}": {
+      "get": {
+        "operationId": "getContact",
+        "x-role": "read",
+        "summary": "One contact.",
+        "tags": [
+          "Contacts"
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ContactId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Contact"
+                }
+              }
+            }
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      },
+      "patch": {
+        "operationId": "updateContact",
+        "x-role": "full",
+        "summary": "Change its label, invoice switch, or sealing.",
+        "tags": [
+          "Contacts"
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ContactId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PatchContact"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Contact"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          }
+        }
+      },
+      "delete": {
+        "operationId": "deleteContact",
+        "x-role": "full",
+        "summary": "End the pairing and tell the contact, unless notify=false. Also cancels a pairing that waits.",
+        "tags": [
+          "Contacts"
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ContactId"
+          },
+          {
+            "name": "notify",
+            "in": "query",
+            "schema": {
+              "type": "boolean",
+              "default": true
+            },
+            "description": "Tell the contact."
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No content"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "502": {
+            "$ref": "#/components/responses/BadGateway"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          },
+          "504": {
+            "$ref": "#/components/responses/GatewayTimeout"
+          }
+        },
+        "description": "On a pairing that waits, it cancels it: an invite of yours is cancelled, a late answer is refused, and the same wallet can be invited again at once. On a paired contact it ends the pairing and tells the contact; `notify=false` does not tell it. The contact's `invite_link`, the label given while it waited and its `refused_relay` go when the contact is removed, by this API, `lepic contact remove`, the app or a new pairing."
+      }
+    },
+    "/contacts/{id}/verify": {
+      "post": {
+        "operationId": "verifyContact",
+        "x-role": "full",
+        "summary": "Record whether the four words matched.",
+        "tags": [
+          "Contacts"
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ContactId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VerifyContact"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Contact"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          }
+        }
+      }
+    },
+    "/contacts/{id}/check": {
+      "post": {
+        "operationId": "checkContact",
+        "x-role": "full",
+        "summary": "Ask the contact to answer with its current keys and profile, or whether it holds an older pairing's keys.",
+        "tags": [
+          "Contacts"
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ContactId"
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CheckContact"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Contact"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "502": {
+            "$ref": "#/components/responses/BadGateway"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          },
+          "504": {
+            "$ref": "#/components/responses/GatewayTimeout"
+          }
+        }
+      }
+    },
+    "/contacts/{id}/keys": {
+      "post": {
+        "operationId": "resolveContactKeys",
+        "x-role": "full",
+        "summary": "After keys changed: keep the old keys or use the new ones.",
+        "tags": [
+          "Contacts"
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ContactId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ContactKeys"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Contact"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          }
+        }
+      }
+    },
+    "/contacts/{id}/move": {
+      "post": {
+        "operationId": "moveContact",
+        "x-role": "full",
+        "summary": "Answer the contact's request to move mailboxes: accept moves there, refuse records the answer.",
+        "description": "`host` is the mailbox the user was shown. If `requested_relay` has changed since, the call fails with 409 `relay_changed` and nothing moves. With `accept: false` the wallet clears `requested_relay`, sets `refused_relay` and tells nobody. The wallet does not move on its own.",
+        "tags": [
+          "Contacts"
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ContactId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MoveContact"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Contact"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "502": {
+            "$ref": "#/components/responses/BadGateway"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          },
+          "504": {
+            "$ref": "#/components/responses/GatewayTimeout"
+          }
+        }
+      }
+    },
+    "/contacts/{id}/payloads": {
+      "post": {
+        "operationId": "sendPayload",
+        "x-role": "full",
+        "summary": "Send host-app bytes to the contact's mailbox.",
+        "tags": [
+          "Contacts"
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ContactId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SendPayload"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "No content"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "502": {
+            "$ref": "#/components/responses/BadGateway"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          },
+          "504": {
+            "$ref": "#/components/responses/GatewayTimeout"
+          }
+        },
+        "description": "Answers 204."
+      }
+    },
+    "/contacts/export": {
+      "post": {
+        "operationId": "exportContacts",
+        "x-role": "full",
+        "summary": "The pairing records as a backup document. Socket only.",
+        "tags": [
+          "Contacts"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ContactsBackup"
+                }
+              }
+            }
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          }
+        },
+        "x-socket-only": true,
+        "security": [
+          {}
+        ]
+      }
+    },
+    "/contacts/import": {
+      "post": {
+        "operationId": "importContacts",
+        "x-role": "full",
+        "summary": "Restore pairing records from a backup document. Socket only.",
+        "tags": [
+          "Contacts"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ContactsBackup"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImportResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          }
+        },
+        "x-socket-only": true,
+        "security": [
+          {}
+        ],
+        "description": "Answers `{\"imported\": n}`. An import past the contact limit answers 409 `contact_cap_reached`."
+      }
+    },
+    "/payloads": {
+      "get": {
+        "operationId": "listPayloads",
+        "x-role": "read",
+        "summary": "Payloads that arrived and are not acknowledged, oldest first.",
+        "tags": [
+          "Payloads"
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/limit"
+          },
+          {
+            "$ref": "#/components/parameters/cursor"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PayloadList"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          }
+        }
+      }
+    },
+    "/payloads/{id}": {
+      "delete": {
+        "operationId": "deletePayload",
+        "x-role": "full",
+        "summary": "Acknowledge a payload: the wallet forgets it.",
+        "tags": [
+          "Payloads"
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/PayloadId"
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No content"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
+    "/quarantine": {
+      "get": {
+        "operationId": "listQuarantine",
+        "x-role": "read",
+        "summary": "Contact messages kept because they could not be opened.",
+        "tags": [
+          "Quarantine"
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/limit"
+          },
+          {
+            "$ref": "#/components/parameters/cursor"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QuarantinedList"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          }
+        }
+      }
+    },
+    "/quarantine/{id}/retry": {
+      "post": {
+        "operationId": "retryQuarantined",
+        "x-role": "full",
+        "summary": "Retry opening a quarantined item.",
+        "tags": [
+          "Quarantine"
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/QuarantineId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Quarantined"
+                }
+              }
+            }
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "422": {
+            "$ref": "#/components/responses/Unprocessable"
+          }
+        },
+        "description": "Answers 200, or 422 when the item still does not open."
+      }
+    },
+    "/quarantine/{id}": {
+      "delete": {
+        "operationId": "deleteQuarantined",
+        "x-role": "full",
+        "summary": "Throw one away.",
+        "tags": [
+          "Quarantine"
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/QuarantineId"
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No content"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
+    "/relay": {
+      "get": {
+        "operationId": "getRelay",
+        "x-role": "read",
+        "summary": "This wallet's Epicbox server, its connection, waiting deliveries, old relays still read.",
+        "tags": [
+          "Network"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Relay"
+                }
+              }
+            }
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          }
+        }
+      }
+    },
+    "/relay/move": {
+      "post": {
+        "operationId": "moveRelay",
+        "x-role": "full",
+        "summary": "Move this wallet's home mailbox and tell every contact; keep reading the old one for drain_days.",
+        "tags": [
+          "Network"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MoveRelay"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Relay"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "422": {
+            "$ref": "#/components/responses/Unprocessable"
+          },
+          "502": {
+            "$ref": "#/components/responses/BadGateway"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          },
+          "504": {
+            "$ref": "#/components/responses/GatewayTimeout"
+          }
+        }
+      }
+    },
+    "/mailboxes": {
+      "get": {
+        "operationId": "listMailboxes",
+        "x-role": "read",
+        "summary": "The mailbox list native mail goes to, each with its origin and health.",
+        "tags": [
+          "Network"
+        ],
+        "description": "The shipped mailboxes left after the user's removals, then the ones the user added, in the order sessions use them. The health is what serve's sessions saw since serve started: a mailbox not tried yet has no `last_success_at` and `failures` 0.",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Mailboxes"
+                }
+              }
+            }
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          }
+        }
+      },
+      "post": {
+        "operationId": "addMailbox",
+        "x-role": "full",
+        "summary": "Test a mailbox and add it to the list; `anyway` adds it when the test fails.",
+        "tags": [
+          "Network"
+        ],
+        "description": "Tests the mailbox first: a TLS connection, its greeting, and push. A failed test is 502 `mailbox_test_failed` and nothing changes, unless `anyway` is true. Adding a shipped mailbox the user removed puts it back. The change is written to the settings file (`[mailboxes] added` and `removed`) and serve's sessions follow it without a restart. 201 when the mailbox was added, 200 when it was in the list already. 400 `mailbox_invalid` at `/host` when the host is not a domain name with an optional port, 400 `mailbox_not_public` at `/host` for this device, an address or a private network's name, 409 `mailbox_list_full` when the list holds 16. 409 `config` when serve runs without a settings file.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AddMailbox"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "In the list already",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MailboxAdded"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "Added",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MailboxAdded"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "502": {
+            "$ref": "#/components/responses/BadGateway"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          },
+          "504": {
+            "$ref": "#/components/responses/GatewayTimeout"
+          }
+        }
+      }
+    },
+    "/mailboxes/probe": {
+      "post": {
+        "operationId": "probeMailbox",
+        "x-role": "full",
+        "summary": "Test one mailbox: TLS, greeting and push. Changes nothing.",
+        "tags": [
+          "Network"
+        ],
+        "description": "One connection over the wallet's mailbox route (Tor when the wallet uses it), greeted and closed. It needs the `full` role: it makes serve connect to a host and port the caller names. A step after a failed one is `not_reached`. The answer is 200 whether the test passed or not; read `passed`.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProbeMailbox"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MailboxProbe"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      }
+    },
+    "/mailboxes/{host}": {
+      "delete": {
+        "operationId": "removeMailbox",
+        "x-role": "full",
+        "summary": "Take a mailbox off the list.",
+        "tags": [
+          "Network"
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/MailboxHost"
+          }
+        ],
+        "description": "A shipped mailbox is marked removed; an added one leaves the list. Written to the settings file and followed by serve's sessions without a restart. Answers the list after the change. 404 `not_found` when the mailbox is not in the list, 409 `last_mailbox` when it is the last one.",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Mailboxes"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          }
+        }
+      }
+    },
+    "/node": {
+      "get": {
+        "operationId": "getNode",
+        "x-role": "read",
+        "summary": "The node's version, tip and whether it is in sync.",
+        "tags": [
+          "Network"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Node"
+                }
+              }
+            }
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "502": {
+            "$ref": "#/components/responses/BadGateway"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          },
+          "504": {
+            "$ref": "#/components/responses/GatewayTimeout"
+          }
+        }
+      }
+    },
+    "/profile": {
+      "get": {
+        "operationId": "getProfile",
+        "x-role": "read",
+        "summary": "Name, flags and domain shown to contacts, with the domain proof.",
+        "tags": [
+          "Profile"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Profile"
+                }
+              }
+            }
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          }
+        }
+      },
+      "patch": {
+        "operationId": "updateProfile",
+        "x-role": "full",
+        "summary": "Change them; every paired contact is told.",
+        "tags": [
+          "Profile"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PatchProfile"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Profile"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      }
+    },
+    "/profile/domain-file": {
+      "get": {
+        "operationId": "getProfileDomainFile",
+        "x-role": "read",
+        "summary": "The .well-known file that proves the domain, for the caller to publish.",
+        "tags": [
+          "Profile"
+        ],
+        "parameters": [
+          {
+            "name": "relay",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Mailbox host."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The file contents.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
+    "/events": {
+      "get": {
+        "operationId": "listEvents",
+        "x-role": "read",
+        "summary": "The event log: a JSON page after `after`, or a live stream.",
+        "tags": [
+          "Events"
+        ],
+        "description": "As JSON, a page oldest first after `after`, with `next_cursor` as for any list. With `Accept: text/event-stream`, a live stream that resumes from `Last-Event-ID` or `?after=`. Events are kept 30 days by default; a client that asks for older ids first gets `events.skipped` with the count.\n\nThe stream sends a `: keepalive` comment every 15 s. Without `Last-Event-ID` or `after` it starts at the next event. `events.skipped` carries a `reason` of `lagged` or `pruned`: read the objects again, then go on from the new id. `contact.state_changed` for a failed pairing carries a `reason`: `changed_on_the_way`, `kind_differs`, `expired`, `not_confirmed`, `refused`, `other_address`, `address_proof_missing` or `crossed`. After a restart, `from_state` is present when the log holds the object; otherwise the entry has `to_state` only, and a `contact.updated` that does not know the fields has no `changed`. `payment.confirmations_reached` comes once per payment, when the tip reaches its `final_confirmations`-th confirmation (6 unless the setting says 1 to 1440; `payment_confirmations` is the old name of that setting); after a restart serve logs those reached meanwhile, none twice. `payment.recovery_changed` comes each time the state of a payment's `recovery` changes; `data.object` is the payment, and its own state change follows as `payment.state_changed`. `payment.post_failed` comes when a push of a payment's transaction to the node fails for the first time, and again each time the outcome or the node's text changes; `data.error` carries the text and `data.object` the payment. It changes no state: a state change it brings is logged before it as `payment.state_changed`. `payment.delivery_changed` comes when the post of an epic1 payment turns `uncertain`, when it fails with no route tried next, and with `sent` when the payment goes out after an earlier post was uncertain or failed; a payment that goes out on its first post raises none; `data.object` is the payment, `data.state` the new `delivery.state` and `data.route` the route it was posted on. `payment.declined` comes once when the receiver of a send this wallet made declined it unanswered. The wallet erased that send and freed its inputs, so no payment object is left: `data.payment_id` names it and `data.declined_at` says when. `GET /payments/{id}` answers 404 `payment_declined` with the same `declined_at`. There is nothing to cancel.",
+        "parameters": [
+          {
+            "name": "after",
+            "in": "query",
+            "schema": {
+              "type": "integer"
+            },
+            "description": "Return events with an id greater than this."
+          },
+          {
+            "name": "types",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Comma list of event types; `payment.*` style wildcards allowed. `events.skipped` is always delivered, whatever this names, so a reader that lost events learns so; the list takes at most 31 types unless it names `events.skipped` or `events.*`."
+          },
+          {
+            "$ref": "#/components/parameters/cursor"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 500,
+              "default": 50
+            },
+            "description": "Page size."
+          },
+          {
+            "name": "Last-Event-ID",
+            "in": "header",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Stream resume point: the sequence number of the last event received."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A page of events, or a live stream.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EventList"
+                }
+              },
+              "text/event-stream": {
+                "schema": {
+                  "type": "string",
+                  "description": "Server-sent events (WHATWG). Each frame has `id:` the event's sequence number, `event:` its type, and `data:` the Event as JSON, then a blank line. A comment line (`: keepalive`) is sent every 15 seconds to keep idle connections open."
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      }
+    },
+    "/webhook": {
+      "get": {
+        "operationId": "getWebhook",
+        "x-role": "full",
+        "summary": "The webhook: its URL, types, state, cursor and the next attempt.",
+        "tags": [
+          "Webhooks"
+        ],
+        "description": "The webhook is set in the settings (`webhook_url`), not here. 404 `not_found` when none is set.\n\nSettings: `webhook_url` (`https://` only), `webhook_secret_file` (owner-only, one `whsec_` secret per line, read before each delivery), `webhook_types` (as `GET /events` takes them; all when unset) and `webhook_allow_private` (allows `http://` and private addresses). Each request is one event with Standard Webhooks headers: `webhook-id` (`evt_` 16 hex digits `_` event id, the same on a retry), `webhook-timestamp` (Unix seconds) and `webhook-signature` (`v1,` base64 HMAC-SHA256 of `id.timestamp.body` per secret, space-separated). For a `payment.*` event `data.object` holds only `id`, `kind`, `direction`, `state`, `state_reason`, `account`, `amount`, `fee`, `message`, `their_message`, `purpose`, `metadata`, `confirmations`, `confirmed_height`, `expires_at_height`, `created_at` and `updated_at`. For any other event it is the object `GET /events` gives (`Contact`, `Payload`, `Quarantined`, `Account`, `Relay` or `Wallet`); a `contact.*` object leaves out `verify_words` and `pairing`.\n\nA 2xx within 10 s (5 s to connect) is delivered; a redirect, another status, a timeout or a dropped connection fails. One request at a time, in id order, at most 10 a second. A failed event is retried after 5 s, 5 min, 30 min, 2 h, 5 h, 10 h and 10 h, each plus or minus 20 %, then the state is `disabled`. The cursor and schedule survive a restart.\n\nServe resolves the host before each attempt and refuses an address that is not public: loopback, private, link-local, shared (100.64.0.0/10), benchmarking (198.18.0.0/15), IETF protocol (192.0.0.0/24), reserved (240.0.0.0/4), NAT64 (64:ff9b::/32), 6to4 (2002::/16), Teredo (2001::/32), IPv4-compatible (::/96), site-local (fec0::/10), discard (100::/64), multicast, unspecified, documentation or broadcast. It follows no redirect and uses no proxy. In `config_error` serve reads the secret file again each minute and on each new event.",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Webhook"
+                }
+              }
+            }
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
+    "/webhook/resume": {
+      "post": {
+        "operationId": "resumeWebhook",
+        "x-role": "full",
+        "summary": "Send again from the cursor, or from `after`, now.",
+        "tags": [
+          "Webhooks"
+        ],
+        "description": "Clears the attempt count and the error and starts sending at once. `after` sets the cursor: the next event sent is the first one with a greater id. A webhook that is `disabled` sends again.",
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WebhookResume"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Webhook"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "ownerTls": {
+        "type": "mutualTLS",
+        "description": "Mutual TLS 1.3 with a client key listed in `api-clients` (`--owner-tls`). Each client has one role (`read`, `receive` or `full`); every operation names its minimum in `x-role`. The Unix socket needs no credentials, has the `full` role, and is described in `info.description`. The empty security requirement `{}` means the socket."
+      }
+    },
+    "parameters": {
+      "limit": {
+        "name": "limit",
+        "in": "query",
+        "schema": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 500,
+          "default": 50
+        },
+        "description": "Page size."
+      },
+      "cursor": {
+        "name": "cursor",
+        "in": "query",
+        "schema": {
+          "type": "string"
+        },
+        "description": "Opaque cursor from `next_cursor`. Other query parameters must stay the same across pages."
+      },
+      "PaymentId": {
+        "name": "id",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "description": "Payment id (UUID)."
+      },
+      "ContactId": {
+        "name": "id",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "string"
+        },
+        "description": "Contact id."
+      },
+      "MailboxHost": {
+        "name": "host",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "string"
+        },
+        "description": "The mailbox: `domain` or `domain:port`; the port is left out when it is the default one."
+      },
+      "PayloadId": {
+        "name": "id",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "string"
+        },
+        "description": "Payload id."
+      },
+      "QuarantineId": {
+        "name": "id",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "string"
+        },
+        "description": "Quarantine item id."
+      }
+    },
+    "responses": {
+      "BadRequest": {
+        "description": "Bad input (400).",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "Forbidden": {
+        "description": "Not allowed (403): code `socket_only` over TLS, or `role_required` when the TLS client role is too low.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "NotFound": {
+        "description": "Not found (404).",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "Conflict": {
+        "description": "Conflict with the object's state or an idempotency key (409).",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "Unprocessable": {
+        "description": "Valid but impossible, e.g. insufficient funds or invoice changed (422).",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "ServerError": {
+        "description": "The server is set up wrongly, e.g. the named tor binary is missing (500).",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "BadGateway": {
+        "description": "The node or a mailbox failed (502).",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "Unavailable": {
+        "description": "Not ready: scan running or serve stopping (503). May set Retry-After.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "GatewayTimeout": {
+        "description": "The node or a mailbox timed out (504).",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      }
+    },
+    "schemas": {
+      "Decimal": {
+        "type": "string",
+        "pattern": "^-?[0-9]+(\\.[0-9]{1,8})?$",
+        "description": "EPIC amount as a decimal string",
+        "example": "1.5"
+      },
+      "Delivery": {
+        "type": "object",
+        "properties": {
+          "state": {
+            "type": "string",
+            "enum": [
+              "queued",
+              "sent",
+              "uncertain",
+              "held",
+              "failed",
+              "refused",
+              "by_hand"
+            ],
+            "description": "Serve sets five of these: `by_hand` for a payment handed over as a file or text, `queued` while an epic1 post waits for its turn, `uncertain` when the slate went out and is not known to have arrived, or when a send over stock Epicbox has had no answer for a day, `failed` when an epic1 post failed on its last route, and `sent` otherwise. A send the receiver refused reads `sent`."
+          },
+          "to": {
+            "type": "string",
+            "description": "Address, URL, onion, contact id, or the mailbox used."
+          },
+          "relays_left": {
+            "type": "integer"
+          },
+          "attempts": {
+            "type": "integer",
+            "description": "Posts of the slate so far, over every route: the first and each later one, whether a mailbox refused it or not. A repost by serve or by `POST /payments/{id}/deliver` counts as one more."
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "error": {
+            "type": "string"
+          },
+          "undelivered": {
+            "type": "boolean",
+            "description": "No route took the slate yet: no mailbox or endpoint holds it. The outbox keeps posting it until the payment's cutoff. `false` for a payment handed over by hand."
+          },
+          "stuck": {
+            "type": "boolean",
+            "description": "Undelivered for longer than the outbox allows before it marks a payment, or, for a send over stock Epicbox, unanswered for a day: its receiver may be offline or at its open receipt cap, which that route cannot report, and `error` says so. A mark only: the outbox keeps trying, an answer that comes later still completes the payment, and `POST /payments/{id}/cancel` ends the payment."
+          },
+          "stuck_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the payment is, or will be, marked stuck; for a send over stock Epicbox, when it was marked."
+          },
+          "next_attempt_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the outbox posts the slate next."
+          }
+        },
+        "required": [
+          "state",
+          "attempts",
+          "updated_at",
+          "undelivered",
+          "stuck"
+        ]
+      },
+      "Handoff": {
+        "type": "object",
+        "properties": {
+          "format": {
+            "type": "string",
+            "enum": [
+              "slate",
+              "epictx",
+              "sealed",
+              "plain",
+              "in_person_code"
+            ]
+          },
+          "text": {
+            "type": "string",
+            "description": "Paste, show as QR, or save as a file."
+          },
+          "file_name": {
+            "type": "string",
+            "example": "1a2b3c4d.tx"
+          },
+          "qr_frames": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "description": "Animated QR frame."
+            }
+          }
+        },
+        "required": [
+          "format",
+          "text"
+        ]
+      },
+      "Payment": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The slate id; the other wallet sees the same."
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "send",
+              "invoice",
+              "coinbase",
+              "unknown"
+            ],
+            "description": "Who started it; unknown = found by a scan."
+          },
+          "direction": {
+            "type": "string",
+            "enum": [
+              "in",
+              "out",
+              "self"
+            ],
+            "description": "self = between own accounts, or splitting own coins."
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "needs_approval",
+              "awaiting_answer",
+              "awaiting_post",
+              "finalized",
+              "posted",
+              "confirmed",
+              "cancelled",
+              "declined",
+              "expired"
+            ],
+            "description": "Where the payment is. `needs_approval`: an invoice held until `approve` or `decline`. `awaiting_answer`: the slate went out and the other side has not answered. `finalized`: the answer arrived and the transaction is built, not yet with the node. `posted`: the node took it. `confirmed`: it is on the chain. `cancelled`, `declined`, `expired`: it ended without a transaction; `state_reason` says who ended it. A payer of an invoice and a receiver of a send go from `awaiting_answer` to `confirmed` when the other side posts. A `cancelled` or `expired` payment that the chain mines after all becomes `confirmed`. Serve sets no payment to `awaiting_post`."
+          },
+          "state_reason": {
+            "type": "string",
+            "description": "Why it reached an end state: by_us, by_them, superseded, ... `expired_no_answer`: an `expired` payment or invoice this wallet started whose answer never came; it can never be mined. `expired_not_mined`: an `expired` payment that was answered but not mined by its expiry height; it may still be mined. `expired_rejected_by_node`: an `expired` send whose every push the node's pool refused until its expiry height; its inputs are spendable again. `recovered`: a `cancelled` send whose inputs a recovery spent back to this wallet; it can never be mined. An `expired` payment with no stored slate and no known kernel has no reason. A payment the chain mines later becomes `confirmed` with no reason."
+          },
+          "account": {
+            "type": "string",
+            "description": "Label; for self, the account it left."
+          },
+          "to_account": {
+            "type": "string",
+            "description": "self only."
+          },
+          "amount": {
+            "$ref": "#/components/schemas/Decimal",
+            "description": "What the payee gets. For `direction: self` (a consolidation or a recovery) it is the total of the outputs the payment makes: what it spent, less the fee."
+          },
+          "fee": {
+            "$ref": "#/components/schemas/Decimal"
+          },
+          "balance_change": {
+            "$ref": "#/components/schemas/Decimal",
+            "description": "Signed change to this wallet's balance, fee included."
+          },
+          "via": {
+            "type": "string",
+            "enum": [
+              "epicbox",
+              "http",
+              "tor",
+              "contact",
+              "link",
+              "in_person",
+              "file",
+              "peer",
+              "chain"
+            ]
+          },
+          "counterparty": {
+            "type": "object",
+            "properties": {
+              "contact_id": {
+                "type": "string"
+              },
+              "address": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              }
+            }
+          },
+          "our_address": {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "epicbox",
+                  "epic1",
+                  "listing"
+                ]
+              },
+              "index": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "description": "Which of our addresses it reached."
+          },
+          "purpose": {
+            "type": "string",
+            "enum": [
+              "payment",
+              "deposit",
+              "withdrawal",
+              "refund",
+              "request"
+            ],
+            "description": "Set by the sender, between contacts."
+          },
+          "message": {
+            "type": "string",
+            "description": "Ours."
+          },
+          "their_message": {
+            "type": "string"
+          },
+          "delivery": {
+            "$ref": "#/components/schemas/Delivery"
+          },
+          "answers": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "check_code": {
+                  "type": "string"
+                },
+                "received_at": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "same_code_as": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id",
+                "check_code",
+                "received_at"
+              ]
+            }
+          },
+          "check_code": {
+            "type": "string",
+            "description": "Payer side of an in-person code, once delivered."
+          },
+          "their_notices": {
+            "type": "object",
+            "properties": {
+              "posted_at": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "cancelled_at": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "declined_at": {
+                "type": "string",
+                "format": "date-time"
+              }
+            },
+            "description": "What the other side reported."
+          },
+          "recovery": {
+            "$ref": "#/components/schemas/PaymentRecovery"
+          },
+          "post": {
+            "$ref": "#/components/schemas/PaymentPost"
+          },
+          "actions": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "approve",
+                "decline",
+                "deliver",
+                "post",
+                "cancel",
+                "recover"
+              ]
+            },
+            "description": "The calls that work on this payment now, as the wallet computes them. A call not listed fails with 409 `action_not_available`. `post` is not listed once the wallet's last known height reaches the height from which it no longer posts the payment. `recover` is listed for a send the wallet would recover by what it holds; the node may still refuse it. Clients must accept values they do not know."
+          },
+          "expires_at_height": {
+            "type": "integer"
+          },
+          "confirmations": {
+            "type": "integer"
+          },
+          "final": {
+            "type": "boolean",
+            "description": "Present with `confirmations`: true once they reach the `final_confirmations` setting (6 unless set, 1 to 1440). The same count raises `payment.confirmations_reached`."
+          },
+          "confirmed_height": {
+            "type": "integer"
+          },
+          "kernel_excess": {
+            "type": "string",
+            "pattern": "^[0-9a-f]+$",
+            "description": "Hex."
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "wallet",
+              "imported",
+              "scan"
+            ]
+          },
+          "metadata": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string",
+              "maxLength": 500
+            },
+            "maxProperties": 50,
+            "description": "Local only, never sent. Up to 50 keys; keys up to 40 and values up to 500 characters."
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "handoff": {
+            "$ref": "#/components/schemas/Handoff",
+            "description": "In create and open responses, when you deliver by hand."
+          },
+          "slate_bytes": {
+            "type": "integer",
+            "description": "In a send's create response: the bytes the longest post of the payment takes on the mailbox, the first slate or the answer the receiver sends back. Only when the slate goes over Epicbox."
+          },
+          "slate_limit": {
+            "type": "integer",
+            "description": "The most bytes the mailbox takes in one post: 131071. Beside `slate_bytes`."
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "direction",
+          "state",
+          "account",
+          "amount",
+          "balance_change",
+          "via",
+          "actions",
+          "source",
+          "created_at",
+          "updated_at"
+        ],
+        "example": {
+          "id": "3f2b8c1e-5d7a-4e0b-9a61-2c4d8e7f1a90",
+          "kind": "send",
+          "direction": "out",
+          "state": "awaiting_answer",
+          "account": "default",
+          "amount": "1.5",
+          "fee": "0.007",
+          "balance_change": "-1.507",
+          "via": "epicbox",
+          "counterparty": {
+            "address": "k3y9fexample@relay.example",
+            "name": "Alice"
+          },
+          "message": "Invoice 1042",
+          "delivery": {
+            "state": "sent",
+            "to": "relay.example",
+            "attempts": 1,
+            "updated_at": "2026-11-10T09:30:05Z"
+          },
+          "actions": [
+            "cancel"
+          ],
+          "expires_at_height": 3012450,
+          "confirmations": 0,
+          "source": "wallet",
+          "metadata": {
+            "order": "1042"
+          },
+          "created_at": "2026-11-10T09:30:04Z",
+          "updated_at": "2026-11-10T09:30:05Z"
+        }
+      },
+      "PaymentRecovery": {
+        "type": "object",
+        "description": "The latest recovery of a send (`POST /payments/{id}/recover`), in any state.",
+        "properties": {
+          "tx_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The id of the recovery's self payment, as `GET /payments/{id}` takes it."
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "uncertain",
+              "posted",
+              "confirming",
+              "done",
+              "failed"
+            ],
+            "description": "`uncertain`: stored, the node could not be reached; each refresh posts it again. `posted`: the node took it. `confirming`: the chain holds it, below `needed` confirmations. `done`: it reached `needed`; the send can never be mined. `failed`: the node refused it, or the chain took the send first; the recovery's self payment is `cancelled`. After a refusal the send keeps its state and its inputs, and `recover` may be listed again."
+          },
+          "confirmations": {
+            "type": "integer",
+            "description": "0 until the chain holds the recovery."
+          },
+          "needed": {
+            "type": "integer",
+            "description": "The confirmations at which the recovery is done: the account's minimum confirmations."
+          },
+          "fee": {
+            "$ref": "#/components/schemas/Decimal"
+          },
+          "error": {
+            "type": "string",
+            "description": "The node's answer to the last failed push, or why the recovery failed."
+          }
+        },
+        "required": [
+          "tx_id",
+          "state",
+          "confirmations",
+          "needed"
+        ]
+      },
+      "PaymentPost": {
+        "type": "object",
+        "description": "The pushes of the payment's transaction to the node, by this wallet or a refresh. Absent until the first push, and on a payment that waits for its answer. The node's text is plain text: control characters and characters that reorder or hide text (bidirectional overrides, zero-width characters, line separators) escaped, at most 256 characters, the last one `…` when it was cut.",
+        "properties": {
+          "attempts": {
+            "type": "integer",
+            "description": "Pushes so far."
+          },
+          "last_outcome": {
+            "type": "string",
+            "enum": [
+              "accepted",
+              "refused",
+              "unreachable"
+            ],
+            "description": "`accepted`: the node's pool took it. `refused`: the node answered with an error. `unreachable`: no answer from the node."
+          },
+          "last_attempt_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "last_error": {
+            "type": "string",
+            "description": "The node's text for the last push that failed. Kept after a later push is accepted: read it with `accepted_once` and `last_outcome`."
+          },
+          "next_attempt_height": {
+            "type": "integer",
+            "description": "The height from which a refresh pushes it again. Only while the payment is `finalized` or `posted`."
+          },
+          "accepted_once": {
+            "type": "boolean",
+            "description": "Whether the node's pool took any push of it."
+          }
+        },
+        "required": [
+          "attempts",
+          "last_outcome",
+          "last_attempt_at",
+          "accepted_once"
+        ]
+      },
+      "Balance": {
+        "type": "object",
+        "properties": {
+          "spendable": {
+            "$ref": "#/components/schemas/Decimal"
+          },
+          "confirming": {
+            "$ref": "#/components/schemas/Decimal"
+          },
+          "pending": {
+            "$ref": "#/components/schemas/Decimal"
+          },
+          "maturing": {
+            "$ref": "#/components/schemas/Decimal"
+          },
+          "locked": {
+            "$ref": "#/components/schemas/Decimal"
+          },
+          "total": {
+            "$ref": "#/components/schemas/Decimal"
+          }
+        },
+        "required": [
+          "spendable",
+          "confirming",
+          "pending",
+          "maturing",
+          "locked",
+          "total"
+        ]
+      },
+      "Account": {
+        "type": "object",
+        "properties": {
+          "label": {
+            "type": "string"
+          },
+          "index": {
+            "type": "integer"
+          },
+          "balance": {
+            "$ref": "#/components/schemas/Balance"
+          }
+        },
+        "required": [
+          "label",
+          "index",
+          "balance"
+        ]
+      },
+      "Output": {
+        "type": "object",
+        "properties": {
+          "commitment": {
+            "type": "string"
+          },
+          "account": {
+            "type": "string"
+          },
+          "amount": {
+            "$ref": "#/components/schemas/Decimal"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "unspent",
+              "unconfirmed",
+              "locked",
+              "spent"
+            ]
+          },
+          "confirmations": {
+            "type": "integer"
+          },
+          "height": {
+            "type": "integer"
+          },
+          "lock_height": {
+            "type": "integer"
+          },
+          "coinbase": {
+            "type": "boolean"
+          },
+          "payment_id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        "required": [
+          "commitment",
+          "account",
+          "amount",
+          "state",
+          "confirmations",
+          "coinbase"
+        ]
+      },
+      "Address": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "epicbox",
+              "epic1",
+              "onion",
+              "http"
+            ]
+          },
+          "text": {
+            "type": "string"
+          },
+          "account": {
+            "type": "string"
+          },
+          "used": {
+            "type": "boolean",
+            "description": "Always `false`."
+          }
+        },
+        "required": [
+          "type",
+          "text",
+          "account",
+          "used"
+        ]
+      },
+      "Link": {
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string",
+            "description": "The `epic:` link."
+          },
+          "account": {
+            "type": "string"
+          },
+          "amount": {
+            "$ref": "#/components/schemas/Decimal"
+          },
+          "message": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "text",
+          "account"
+        ]
+      },
+      "Contact": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "class": {
+            "type": "string",
+            "enum": [
+              "standard",
+              "private"
+            ],
+            "description": "private = a linked device."
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "waiting",
+              "paired",
+              "verified",
+              "keys_changed",
+              "ended"
+            ],
+            "description": "`waiting`: the pairing has not finished (`pairing.method` is `invite` or `accept`). `paired`: it finished. `verified`: the four words matched. `keys_changed`: the contact's keys differ from the pinned ones; `POST /contacts/{id}/keys` decides. `ended`: the pairing is over; `ended_reason` says why."
+          },
+          "ended_reason": {
+            "type": "string",
+            "enum": [
+              "mismatch",
+              "their_mismatch",
+              "unpaired",
+              "never_finished"
+            ],
+            "description": "`mismatch`: you said the words differed. `their_mismatch`: the contact said so. `unpaired`: the contact removed the pairing. `never_finished`: the contact's wallet was never heard while this one collected."
+          },
+          "label": {
+            "type": "string",
+            "description": "Your name for them."
+          },
+          "claimed_name": {
+            "type": "string",
+            "description": "The name they gave, unverified."
+          },
+          "verify_words": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "allow_invoices": {
+            "type": "boolean",
+            "description": "Only for verified contacts."
+          },
+          "seal": {
+            "type": "boolean",
+            "description": "Files to this contact are sealed."
+          },
+          "home_relay": {
+            "type": "string",
+            "description": "Mailbox host."
+          },
+          "requested_relay": {
+            "type": "string",
+            "description": "They asked you to move there. Answer with `POST /contacts/{id}/move`."
+          },
+          "refused_relay": {
+            "type": "string",
+            "description": "A move you refused. The contact was not told."
+          },
+          "profile": {
+            "type": "object",
+            "properties": {
+              "flags": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "domain": {
+                "type": "string"
+              },
+              "domain_proven": {
+                "type": "boolean",
+                "description": "Always `false` for now: `domain` is what the contact claims, and serve does not fetch the domain's file to prove it."
+              }
+            },
+            "required": [
+              "flags",
+              "domain_proven"
+            ]
+          },
+          "pairing": {
+            "type": "object",
+            "properties": {
+              "method": {
+                "type": "string",
+                "enum": [
+                  "invite",
+                  "accept"
+                ]
+              },
+              "invite_link": {
+                "type": "string"
+              },
+              "expires_at": {
+                "type": "string",
+                "format": "date-time"
+              }
+            },
+            "required": [
+              "method"
+            ]
+          },
+          "last_heard_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "verified_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "ended_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "class",
+          "state",
+          "label",
+          "allow_invoices",
+          "seal",
+          "home_relay",
+          "created_at"
+        ],
+        "example": {
+          "id": "c_7",
+          "class": "standard",
+          "state": "verified",
+          "label": "Alice",
+          "claimed_name": "Alice",
+          "allow_invoices": true,
+          "seal": false,
+          "home_relay": "relay.example",
+          "profile": {
+            "flags": [
+              "accepts_invoices"
+            ],
+            "domain": "shop.example",
+            "domain_proven": false
+          },
+          "last_heard_at": "2026-11-10T09:12:00Z",
+          "verified_at": "2026-11-09T18:00:00Z",
+          "created_at": "2026-11-09T17:40:00Z"
+        }
+      },
+      "Payload": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "contact_id": {
+            "type": "string"
+          },
+          "size": {
+            "type": "integer"
+          },
+          "received_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "data_base64": {
+            "type": "string",
+            "format": "byte"
+          }
+        },
+        "required": [
+          "id",
+          "contact_id",
+          "size",
+          "received_at",
+          "data_base64"
+        ]
+      },
+      "Quarantined": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "contact_id": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "size": {
+            "type": "integer"
+          },
+          "attempts": {
+            "type": "integer"
+          },
+          "first_seen_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "reason",
+          "size",
+          "attempts",
+          "first_seen_at"
+        ]
+      },
+      "Profile": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "flags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "domain": {
+            "type": "string"
+          },
+          "domain_proof": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "flags"
+        ]
+      },
+      "Relay": {
+        "type": "object",
+        "properties": {
+          "host": {
+            "type": "string"
+          },
+          "connection": {
+            "type": "string",
+            "enum": [
+              "connecting",
+              "connected",
+              "disconnected",
+              "stopped"
+            ]
+          },
+          "address": {
+            "type": "string"
+          },
+          "waiting_deliveries": {
+            "type": "integer"
+          },
+          "draining": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "host": {
+                  "type": "string"
+                },
+                "until_at": {
+                  "type": "string",
+                  "format": "date-time"
+                }
+              },
+              "required": [
+                "host",
+                "until_at"
+              ]
+            }
+          }
+        },
+        "required": [
+          "host",
+          "connection",
+          "address",
+          "waiting_deliveries",
+          "draining"
+        ]
+      },
+      "Node": {
+        "type": "object",
+        "properties": {
+          "version": {
+            "type": "string"
+          },
+          "tip_height": {
+            "type": "integer"
+          },
+          "syncing": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "version",
+          "tip_height",
+          "syncing"
+        ]
+      },
+      "Wallet": {
+        "type": "object",
+        "properties": {
+          "network": {
+            "type": "string"
+          },
+          "height": {
+            "type": "integer"
+          },
+          "node_behind": {
+            "type": "boolean"
+          },
+          "scan": {
+            "type": "object",
+            "properties": {
+              "state": {
+                "type": "string",
+                "enum": [
+                  "running",
+                  "done",
+                  "failed"
+                ]
+              },
+              "height": {
+                "type": "integer"
+              },
+              "target_height": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "state",
+              "height",
+              "target_height"
+            ]
+          }
+        },
+        "required": [
+          "network",
+          "height",
+          "node_behind"
+        ]
+      },
+      "Status": {
+        "type": "object",
+        "properties": {
+          "version": {
+            "type": "string"
+          },
+          "uptime_s": {
+            "type": "integer"
+          },
+          "listeners": {
+            "type": "object",
+            "properties": {
+              "epicbox": {
+                "type": "object",
+                "properties": {
+                  "state": {
+                    "type": "string",
+                    "enum": [
+                      "connecting",
+                      "connected",
+                      "disconnected",
+                      "stopped"
+                    ],
+                    "description": "Absent until the listener reports one."
+                  },
+                  "relays": {
+                    "type": "array",
+                    "description": "The push sessions serve holds, one for each mailbox and group; empty when it holds none. `connected_since` and `last_mail_at` are what this serve saw: absent until it saw them, and gone after a restart.",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "host": {
+                          "type": "string",
+                          "description": "The mailbox as `domain:port`."
+                        },
+                        "group": {
+                          "type": "string",
+                          "description": "`wallet`; `payments` or `contacts` when `relay_sockets` is `split`."
+                        },
+                        "state": {
+                          "type": "string",
+                          "enum": [
+                            "connecting",
+                            "attached",
+                            "waiting",
+                            "not_offered",
+                            "stopped"
+                          ],
+                          "description": "`waiting` is the pause before the next attempt; `not_offered` is a mailbox without mux/1: serve reads the payments address on a plain socket and reads no contact, pairing or epic1 mail there."
+                        },
+                        "push": {
+                          "type": "boolean",
+                          "description": "Whether the mailbox offers mux/1; absent before it answered the first greeting."
+                        },
+                        "last_error": {
+                          "type": "string",
+                          "description": "Why the session last lost its socket, as plain text cut to 256 characters; absent once it attached again."
+                        },
+                        "connected_since": {
+                          "type": "string",
+                          "format": "date-time",
+                          "description": "Since when the session is attached; absent while it is not."
+                        },
+                        "last_mail_at": {
+                          "type": "string",
+                          "format": "date-time",
+                          "description": "When the mailbox last pushed mail to the session."
+                        }
+                      },
+                      "required": [
+                        "host",
+                        "group",
+                        "state"
+                      ]
+                    }
+                  }
+                },
+                "required": [
+                  "relays"
+                ]
+              },
+              "http": {
+                "type": "object",
+                "description": "Present when serve runs with `--http`.",
+                "properties": {
+                  "port": {
+                    "type": "integer"
+                  },
+                  "exposure": {
+                    "type": "string"
+                  },
+                  "received": {
+                    "type": "integer"
+                  },
+                  "repeated": {
+                    "type": "integer"
+                  },
+                  "refused": {
+                    "type": "integer"
+                  },
+                  "coinbase": {
+                    "type": "string",
+                    "enum": [
+                      "off",
+                      "local",
+                      "remote"
+                    ]
+                  }
+                }
+              }
+            },
+            "required": [
+              "epicbox"
+            ]
+          },
+          "node": {
+            "type": "object",
+            "description": "The node as the last refresh of this serve saw it; both fields are absent until the first refresh that reaches the node, and again after a restart.",
+            "properties": {
+              "tip_height": {
+                "type": "integer",
+                "description": "The node's tip height."
+              },
+              "tip_changed_at": {
+                "type": "string",
+                "format": "date-time",
+                "description": "When a refresh first saw the tip at `tip_height`. A monitor that sees it grow old while `refresh.last_success_at` stays recent has a node that stopped following the chain."
+              }
+            }
+          },
+          "payments": {
+            "type": "object",
+            "description": "The payments that are not over, over every account, read from the store alone. Ended states are not counted.",
+            "properties": {
+              "open": {
+                "type": "object",
+                "properties": {
+                  "needs_approval": {
+                    "type": "integer",
+                    "description": "How many invoices wait for approval. It counts every parked invoice, so it can exceed what `GET /payments?state=needs_approval` lists by one whose slate does not decode or one from a contact without its note."
+                  },
+                  "awaiting_answer": {
+                    "type": "integer",
+                    "description": "How many payments `GET /payments?state=awaiting_answer` lists."
+                  },
+                  "finalized": {
+                    "type": "integer",
+                    "description": "How many payments `GET /payments?state=finalized` lists."
+                  },
+                  "posted": {
+                    "type": "integer",
+                    "description": "How many payments `GET /payments?state=posted` lists."
+                  }
+                },
+                "required": [
+                  "needs_approval",
+                  "awaiting_answer",
+                  "finalized",
+                  "posted"
+                ]
+              },
+              "oldest_awaiting_answer": {
+                "type": "object",
+                "description": "The `awaiting_answer` payment created first; absent when there is none.",
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "description": "The payment's `id`."
+                  },
+                  "since": {
+                    "type": "string",
+                    "format": "date-time",
+                    "description": "The payment's `created_at`."
+                  }
+                },
+                "required": [
+                  "id",
+                  "since"
+                ]
+              },
+              "oldest_finalized": {
+                "type": "object",
+                "description": "The `finalized` payment created first; absent when there is none.",
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "description": "The payment's `id`."
+                  },
+                  "since": {
+                    "type": "string",
+                    "format": "date-time",
+                    "description": "The payment's `created_at`."
+                  }
+                },
+                "required": [
+                  "id",
+                  "since"
+                ]
+              }
+            },
+            "required": [
+              "open"
+            ]
+          },
+          "owner_tls": {
+            "type": "object",
+            "description": "Present when serve runs with `--owner-tls`.",
+            "properties": {
+              "address": {
+                "type": "string"
+              },
+              "fingerprint": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "address",
+              "fingerprint"
+            ]
+          },
+          "refresh": {
+            "type": "object",
+            "properties": {
+              "last_success_at": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "failures": {
+                "type": "integer",
+                "description": "Failures in a row; 0 after a success."
+              },
+              "last_error": {
+                "type": "string",
+                "description": "The last failure's error."
+              },
+              "boost": {
+                "$ref": "#/components/schemas/Boost",
+                "description": "Present while a boost runs."
+              }
+            },
+            "required": [
+              "failures"
+            ]
+          },
+          "collect": {
+            "type": "object",
+            "properties": {
+              "last_success_at": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "failures": {
+                "type": "integer",
+                "description": "Failures in a row; 0 after a success."
+              },
+              "last_error": {
+                "type": "string",
+                "description": "The last failure's error."
+              },
+              "boost": {
+                "$ref": "#/components/schemas/Boost",
+                "description": "Present while a boost runs."
+              }
+            },
+            "required": [
+              "failures"
+            ]
+          },
+          "requests": {
+            "type": "object",
+            "description": "Requests this serve answered since it started.",
+            "properties": {
+              "served": {
+                "type": "integer"
+              },
+              "in_flight": {
+                "type": "integer",
+                "description": "Requests and event streams being answered."
+              },
+              "refused": {
+                "type": "integer",
+                "description": "Connections closed unanswered, and payment creates answered 503 `busy`."
+              }
+            },
+            "required": [
+              "served",
+              "in_flight",
+              "refused"
+            ]
+          }
+        },
+        "required": [
+          "version",
+          "uptime_s",
+          "listeners",
+          "node",
+          "payments",
+          "refresh",
+          "collect",
+          "requests"
+        ]
+      },
+      "InspectRequest": {
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string",
+            "description": "Pasted text."
+          },
+          "file_base64": {
+            "type": "string",
+            "format": "byte",
+            "description": "File contents."
+          },
+          "qr_frames": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "description": "Scanned QR frames."
+            }
+          }
+        },
+        "description": "Exactly one of `text`, `file_base64`, `qr_frames`.",
+        "oneOf": [
+          {
+            "required": [
+              "text"
+            ]
+          },
+          {
+            "required": [
+              "file_base64"
+            ]
+          },
+          {
+            "required": [
+              "qr_frames"
+            ]
+          }
+        ]
+      },
+      "Inspection": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "epicbox_address",
+              "http_address",
+              "onion_address",
+              "epic1_address",
+              "link",
+              "slate_send",
+              "slate_invoice",
+              "slate_answer",
+              "sealed",
+              "pairing_invite",
+              "pairing_reply",
+              "pairing_confirm",
+              "unknown"
+            ]
+          },
+          "network_ok": {
+            "type": "boolean"
+          },
+          "summary": {
+            "type": "object",
+            "properties": {
+              "amount": {
+                "$ref": "#/components/schemas/Decimal"
+              },
+              "fee": {
+                "$ref": "#/components/schemas/Decimal"
+              },
+              "message": {
+                "type": "string"
+              },
+              "from": {
+                "type": "string"
+              },
+              "to": {
+                "type": "string"
+              },
+              "relays": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "expires_at_height": {
+                "type": "integer"
+              },
+              "contact_id": {
+                "type": "string"
+              }
+            }
+          },
+          "payment_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "When it belongs to a payment this wallet knows."
+          },
+          "next": {
+            "type": "string",
+            "enum": [
+              "pay",
+              "open",
+              "accept_invite",
+              "none"
+            ]
+          }
+        },
+        "required": [
+          "type",
+          "network_ok",
+          "next"
+        ]
+      },
+      "OpenRequest": {
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string",
+            "description": "Pasted text."
+          },
+          "file_base64": {
+            "type": "string",
+            "format": "byte",
+            "description": "File contents."
+          },
+          "qr_frames": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "description": "Scanned QR frames."
+            }
+          },
+          "expect": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "epicbox_address",
+                "http_address",
+                "onion_address",
+                "epic1_address",
+                "link",
+                "slate_send",
+                "slate_invoice",
+                "slate_answer",
+                "sealed",
+                "pairing_invite",
+                "pairing_reply",
+                "pairing_confirm",
+                "unknown"
+              ]
+            },
+            "description": "Optional guard. Anything whose inspection `type` is not listed is refused with 422 `unexpected_input` and nothing changes."
+          },
+          "message": {
+            "type": "string",
+            "description": "Signed into the slate. At most 256 bytes, with no control, line-break or invisible formatting character; a longer or marked text is 400 `invalid_field` at `/message`, not cut."
+          },
+          "deliver": {
+            "type": "boolean"
+          }
+        },
+        "description": "InspectRequest plus `expect`, `message`, `deliver`.",
+        "oneOf": [
+          {
+            "required": [
+              "text"
+            ]
+          },
+          {
+            "required": [
+              "file_base64"
+            ]
+          },
+          {
+            "required": [
+              "qr_frames"
+            ]
+          }
+        ]
+      },
+      "OpenResult": {
+        "type": "object",
+        "properties": {
+          "outcome": {
+            "type": "string",
+            "enum": [
+              "received",
+              "finished",
+              "answer_added",
+              "invoice_parked",
+              "pairing_advanced",
+              "already_done"
+            ]
+          },
+          "payment": {
+            "$ref": "#/components/schemas/Payment"
+          },
+          "contact": {
+            "$ref": "#/components/schemas/Contact"
+          },
+          "handoff": {
+            "$ref": "#/components/schemas/Handoff",
+            "description": "The answer to give back by hand, in the format that came in."
+          }
+        },
+        "required": [
+          "outcome"
+        ]
+      },
+      "Event": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer",
+            "description": "Sequence number, rising, never reused."
+          },
+          "type": {
+            "type": "string",
+            "description": "`resource.what_happened`. An open set: new types may be added, and clients must skip types they do not know. Known types: payment.created, payment.state_changed, payment.updated, payment.confirmations_reached, payment.recovery_changed, payment.post_failed, payment.delivery_changed, payment.declined, contact.created, contact.state_changed, contact.updated, contact.removed, payload.received, quarantine.added, account.balance_changed, wallet.progress, relay.updated, slate.unmatched, slate.refused, events.skipped.",
+            "examples": [
+              "payment.state_changed"
+            ]
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "data": {
+            "type": "object",
+            "properties": {
+              "object": {
+                "description": "Snapshot after the change.",
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/Payment"
+                  },
+                  {
+                    "$ref": "#/components/schemas/Contact"
+                  },
+                  {
+                    "$ref": "#/components/schemas/Payload"
+                  },
+                  {
+                    "$ref": "#/components/schemas/Quarantined"
+                  },
+                  {
+                    "$ref": "#/components/schemas/Account"
+                  },
+                  {
+                    "$ref": "#/components/schemas/Relay"
+                  },
+                  {
+                    "$ref": "#/components/schemas/Wallet"
+                  }
+                ]
+              },
+              "from_state": {
+                "type": "string"
+              },
+              "to_state": {
+                "type": "string"
+              },
+              "reason": {
+                "type": "string",
+                "description": "Why: for `*.state_changed` the end-state reason; for `slate.unmatched` `unknown_slate`; for `slate.refused` `receipts_full` (a payment refused at an open receipt cap: not signed, not stored, nothing cancelled); for `events.skipped` `lagged` or `pruned`; for `relay.updated` `home_unreachable` or the transport's reason."
+              },
+              "error": {
+                "type": "string",
+                "description": "`payment.post_failed`: the node's text for the failed push, as `post.last_error` shows it, or the wallet's reason when the node gave none."
+              },
+              "state": {
+                "type": "string",
+                "enum": [
+                  "queued",
+                  "sent",
+                  "uncertain",
+                  "failed"
+                ],
+                "description": "`payment.delivery_changed`: the outcome of that post. The carried payment shows its delivery as it stood then; `GET /payments/{id}` reads the current one."
+              },
+              "route": {
+                "type": "string",
+                "description": "`payment.delivery_changed`: the route the payment was posted on, such as an Epicbox address `key@host`."
+              },
+              "changed": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "description": "Field name."
+                },
+                "description": "The top-level fields of `object` that changed (`*.updated`, `relay.updated`)."
+              },
+              "payment_id": {
+                "type": "string",
+                "description": "`payment.state_changed` for a payment the wallet no longer holds, such as a parked invoice that expired; `payment.declined`."
+              },
+              "declined_at": {
+                "type": "string",
+                "format": "date-time",
+                "description": "`payment.declined`: when the receiver declined the send."
+              },
+              "contact_id": {
+                "type": "string",
+                "description": "`quarantine.added`, `payload.received`, and `contact.state_changed` for a contact the wallet no longer holds."
+              },
+              "slate_id": {
+                "type": "string",
+                "format": "uuid",
+                "description": "`slate.unmatched`, `slate.refused`."
+              },
+              "stage": {
+                "type": "string",
+                "description": "`slate.unmatched`: the slate's stage, such as `S2` or `I2`. `slate.refused`: `S1`."
+              },
+              "sender": {
+                "type": "string",
+                "description": "`slate.unmatched`: where it came from, as the mailbox reported it. `slate.refused`: the sender key the per-sender cap counts, when the route gave one."
+              },
+              "cap": {
+                "type": "string",
+                "enum": [
+                  "per_sender",
+                  "total"
+                ],
+                "description": "`slate.refused`: the cap that was full, `max_open_receipts_per_sender` or `max_open_receipts`."
+              },
+              "host": {
+                "type": "string",
+                "description": "`relay.updated` with reason `home_unreachable`: the mailbox."
+              },
+              "height": {
+                "type": "integer",
+                "description": "`wallet.progress`: the height scanned to."
+              },
+              "target_height": {
+                "type": "integer",
+                "description": "`wallet.progress`: the height the scan runs to."
+              },
+              "count": {
+                "type": "integer",
+                "description": "`events.skipped`: how many events the reader missed."
+              }
+            }
+          }
+        },
+        "required": [
+          "id",
+          "type",
+          "created_at",
+          "data"
+        ],
+        "example": {
+          "id": 4712,
+          "type": "payment.state_changed",
+          "created_at": "2026-11-10T09:41:10Z",
+          "data": {
+            "object": {
+              "id": "3f2b8c1e-5d7a-4e0b-9a61-2c4d8e7f1a90",
+              "kind": "send",
+              "direction": "out",
+              "state": "posted",
+              "account": "default",
+              "amount": "1.5",
+              "fee": "0.007",
+              "balance_change": "-1.507",
+              "via": "epicbox",
+              "actions": [],
+              "source": "wallet",
+              "created_at": "2026-11-10T09:30:04Z",
+              "updated_at": "2026-11-10T09:41:10Z"
+            },
+            "from_state": "awaiting_answer",
+            "to_state": "posted",
+            "reason": "answered"
+          }
+        }
+      },
+      "Problem": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "default": "about:blank"
+          },
+          "title": {
+            "type": "string"
+          },
+          "status": {
+            "type": "integer"
+          },
+          "detail": {
+            "type": "string"
+          },
+          "code": {
+            "type": "string",
+            "description": "Stable, fine-grained error name, e.g. `insufficient_funds`. Clients must accept codes they do not know and fall back on `category`. Any call: `no_route` 404, `method_not_allowed` 405 (with `Allow`), `body_too_slow` 408, `body_too_large` 413, `unsupported_media_type` 415, `role_required` 403, `socket_only` 403, `client_not_listed` 403, `serve_version_differs` and `serve_settings_differ` 409, `invalid_request`, `invalid_body`, `invalid_field`, `invalid_cursor`, `cursor_filters_changed` 400, `not_found` 404, `payment_declined` 404 (with `declined_at`), `internal` 500, `interrupted` and `cancelled` 503. `busy` 503 when the listener holds as many connections as it takes, and on payment creates when as many creates run. Creates: `idempotency_mismatch`, `in_progress`, `account_exists` 409. Payments: `action_not_available`, `format_not_available`, `no_handoff`, `nothing_to_open`, `too_many_held`, `no_more_routes` 409; `unexpected_input`, `insufficient_funds` 422; `invoice_already_paid`, `invoice_locked_above_tip`, `inputs_spent_elsewhere`, `inputs_spent_by_own_transaction`, `peer_inputs_spent`, `on_chain`, `in_pool`, `recovery_open`, `not_recoverable`, `use_recover`, `changed_during_cancel` 409; `plain_http_not_allowed`, `http_url_invalid`, `onion_address_invalid`, `slate_too_large`, `invoice_to_address`, `via_mismatch` 400; `change_too_small`, `too_heavy`, `nothing_to_consolidate`, `invalid_slate`, `payment_expired`, `invoice_changed`, `amount_mismatch`, `not_posted`, `not_delivered` by category. Wallet and node: `wrong_password` 403, `wallet_not_found` 404, `wallet_already_exists`, `wallet_busy`, `receipts_full` (a payment nobody asked for refused because the open-receipt cap is full), `locked`, `foreign_wallet`, `offline`, `tor_expected`, `damaged_database_kept`, `wallet_too_new`, `wrong_key` 409, `restore_scan_required` 503, `scan_running` 409 or 503, `node_unreachable` 502 (504 on a timeout), `tor_not_running` 503, `onion_unreachable` 502, `transport_failed` 502, `damaged_database` 500. Contacts: `contact_not_found`, `pairing_not_found` 404; `invite_expired`, `already_paired`, `pairing_in_progress`, `pairing_crossed`, `pairing_ended`, `pairing_waiting`, `contact_not_verified`, `key_check_refused`, `relay_changed`, `keys_not_changed`, `domain_fixed`, `contact_cap_reached`, `contacts_offline` 409; `wrong_pairing_class`, `earlier_epic1_address` 400; `other_address`, `address_proof_missing`, `no_free_slot` 422. A code not listed here has its category's status: `usage` 400, `wrong_password` 403, `not_found` 404, `wallet_state` and `conflict` 409, `rejected` and `funds` 422, `node` and `transport` 502, `interrupted` 503, `internal` and `config` 500. 409 `in_progress`, 502, 503 and 504 carry `Retry-After` when waiting is worth it."
+          },
+          "category": {
+            "type": "string",
+            "enum": [
+              "usage",
+              "config",
+              "wrong_password",
+              "wallet_state",
+              "not_found",
+              "rejected",
+              "funds",
+              "node",
+              "transport",
+              "internal",
+              "interrupted",
+              "conflict"
+            ]
+          },
+          "param": {
+            "type": "string",
+            "description": "JSON pointer to the bad field, when one field is to blame. `payment_id` and `contact_id` name the object an error is about; `errors` lists several faults."
+          },
+          "payment_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "declined_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "`payment_declined`: when the receiver declined the send."
+          },
+          "contact_id": {
+            "type": "string"
+          },
+          "errors": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "code": {
+                  "type": "string"
+                },
+                "detail": {
+                  "type": "string"
+                },
+                "param": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "code"
+              ]
+            }
+          },
+          "bytes": {
+            "type": "integer",
+            "description": "With `slate_too_large`: the bytes the payment's longest post would take on the mailbox."
+          },
+          "limit": {
+            "type": "integer",
+            "description": "With `slate_too_large`: the most bytes the mailbox takes in one post."
+          },
+          "inputs": {
+            "type": "integer",
+            "description": "With `slate_too_large`: the outputs the payment would spend."
+          },
+          "mailbox": {
+            "type": "string",
+            "description": "The mailbox, `host[:port]`, that refused a post, or that an epic1 link of a 0.5.x wallet names (`earlier_epic1_address`). Left out when the error does not say which."
+          },
+          "retry_after_secs": {
+            "type": "integer",
+            "description": "Seconds to wait before trying again; present whenever `Retry-After` is, with the same value. For a send, resend or delivery a mailbox or peer refused with a wait (a rate limit, a full slot), it is the wait the mailbox named, so `Retry-After` carries it instead of the fixed 5 seconds. Otherwise it is that fixed wait on 502, 503 and 504, and on 409 `in_progress`."
+          }
+        },
+        "required": [
+          "type",
+          "title",
+          "status",
+          "code",
+          "category"
+        ],
+        "example": {
+          "type": "about:blank",
+          "title": "Unprocessable Content",
+          "status": 422,
+          "detail": "The account has 1.2 EPIC spendable; the payment needs 1.507 with the fee.",
+          "code": "insufficient_funds",
+          "category": "funds",
+          "param": "/amount"
+        }
+      },
+      "PaymentList": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Payment"
+            }
+          },
+          "next_cursor": {
+            "type": "string",
+            "description": "Absent on the last page."
+          }
+        },
+        "required": [
+          "items"
+        ]
+      },
+      "OutputList": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Output"
+            }
+          },
+          "next_cursor": {
+            "type": "string",
+            "description": "Absent on the last page."
+          }
+        },
+        "required": [
+          "items"
+        ]
+      },
+      "AddressList": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Address"
+            }
+          },
+          "next_cursor": {
+            "type": "string",
+            "description": "Absent on the last page."
+          }
+        },
+        "required": [
+          "items"
+        ]
+      },
+      "ContactList": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Contact"
+            }
+          },
+          "next_cursor": {
+            "type": "string",
+            "description": "Absent on the last page."
+          }
+        },
+        "required": [
+          "items"
+        ]
+      },
+      "PayloadList": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Payload"
+            }
+          },
+          "next_cursor": {
+            "type": "string",
+            "description": "Absent on the last page."
+          }
+        },
+        "required": [
+          "items"
+        ]
+      },
+      "QuarantinedList": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Quarantined"
+            }
+          },
+          "next_cursor": {
+            "type": "string",
+            "description": "Absent on the last page."
+          }
+        },
+        "required": [
+          "items"
+        ]
+      },
+      "AccountList": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Account"
+            }
+          },
+          "next_cursor": {
+            "type": "string",
+            "description": "Absent on the last page."
+          }
+        },
+        "required": [
+          "items"
+        ]
+      },
+      "EventList": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Event"
+            }
+          },
+          "next_cursor": {
+            "type": "string",
+            "description": "Absent on the last page."
+          }
+        },
+        "required": [
+          "items"
+        ]
+      },
+      "CreatePayment": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Optional caller-chosen id. A send uses it as its slate id, and so does an invoice given a version-4 UUID; an invoice given another UUID takes a slate id of the wallet's own and keeps this one as an alias that `GET /payments/{id}` also answers. Read `id` from the answer. Idempotency key: a repeat with the same id and body returns the stored payment with 200; a different body is 409 `idempotency_mismatch`. Required over owner TLS."
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "send",
+              "invoice"
+            ],
+            "default": "send"
+          },
+          "to": {
+            "type": "string",
+            "description": "Destination. Forms: `key@host` (Epicbox address); `http://` or `https://` URL; `.onion` address; `epic:` link (classic or epic1); bare epic1 address; `contact:ID`; `account:LABEL` (own account), which serve refuses with 400 `invalid_field` at `/to`. Without `to`, `via` must be `file`, or `deliver` must be `false`."
+          },
+          "via": {
+            "type": "string",
+            "enum": [
+              "epicbox",
+              "http",
+              "tor",
+              "contact",
+              "link",
+              "in_person",
+              "file",
+              "peer",
+              "chain"
+            ],
+            "description": "Route. Same values as Payment.via; `file` produces a handoff. When given for a delivered payment it must name the route `to` takes (`epicbox`, `http` or `tor` for an address, `link` for an epic1 link or address, `contact` for a contact): another route answers 400 `via_mismatch` at `/via`. `contact` with a bare contact id routes to that contact. A value outside the list answers 400 `invalid_field` at `/via`, and so do `in_person`, `peer` and `chain`, which serve does not support."
+          },
+          "account": {
+            "type": "string",
+            "description": "Account label; default account when absent."
+          },
+          "amount": {
+            "description": "Amount, or the string `max` (estimate only). May be left out when `to` is an `epic:` link that names one. When both name one, the amount given is paid, for a classic link and an epic1 link alike.",
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Decimal"
+              },
+              {
+                "type": "string",
+                "enum": [
+                  "max"
+                ]
+              }
+            ]
+          },
+          "message": {
+            "type": "string",
+            "description": "Signed into the slate. At most 256 bytes, with no control, line-break or invisible formatting character; a longer or marked text is 400 `invalid_field` at `/message`, not cut. Shows as `message` on this payment and as `their_message` on the other party's, an invoice to a contact included. For an epic1 link, left out means the link's message, and an empty string or only spaces means no message."
+          },
+          "mailboxes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 16,
+            "description": "For an epic1 payment to the payee's mailbox: the mailboxes it is posted through in place of the wallet's list, each `domain` or `domain:port`. 400 `invalid_field` at `/mailboxes` for any other payment or a host that is not a public name. 422 `no_shared_mailbox` when the payee's address names none of the wallet's shipped mailboxes and no `mailboxes` is given."
+          },
+          "min_confirmations": {
+            "type": "integer"
+          },
+          "selection": {
+            "type": "string",
+            "enum": [
+              "all",
+              "smallest"
+            ]
+          },
+          "change_outputs": {
+            "type": "integer",
+            "description": "Number of change outputs; `account:default` with 3 splits coins."
+          },
+          "ttl_blocks": {
+            "type": "integer",
+            "description": "Blocks after which the other party must refuse the slate. For a send, a V2 slate (Epicbox, HTTP) has no TTL field: the wallet keeps the height and expires the send at refresh if it is still unanswered. A send that names none waits the service's `send_ttl_blocks`, 10080 blocks (7 days) unless set, kept by the wallet and not in the slate; an epic1 payment carries it in the slate. For an invoice, the I1 carries it, the payment shows it as `expires_at_height`, and a refresh past it expires the invoice."
+          },
+          "fluff": {
+            "type": "boolean"
+          },
+          "purpose": {
+            "type": "string",
+            "enum": [
+              "payment",
+              "deposit",
+              "withdrawal",
+              "refund",
+              "request"
+            ]
+          },
+          "allow_plain_http": {
+            "type": "boolean"
+          },
+          "deliver": {
+            "type": "boolean",
+            "default": true,
+            "description": "false: create the payment and return the handoff only."
+          },
+          "metadata": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string",
+              "maxLength": 500
+            },
+            "maxProperties": 50,
+            "description": "Local notes, never sent. The bounds are input validation, not policy."
+          }
+        },
+        "description": "Body of `POST /payments` and `POST /payments/estimate`. `amount` is required unless `to` is an `epic:` link that names one."
+      },
+      "Estimate": {
+        "type": "object",
+        "properties": {
+          "fee": {
+            "$ref": "#/components/schemas/Decimal"
+          },
+          "max_amount": {
+            "$ref": "#/components/schemas/Decimal",
+            "description": "The most you can send."
+          },
+          "outputs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Output"
+            },
+            "description": "The coins it would use."
+          },
+          "slate_bytes": {
+            "type": "integer",
+            "description": "The bytes the longest post of the payment would take on the mailbox: the first slate, or the answer the receiver sends back. Only when `to` is an Epicbox address. Over `slate_limit` the estimate fails with `slate_too_large`, as the payment would."
+          },
+          "slate_limit": {
+            "type": "integer",
+            "description": "The most bytes the mailbox takes in one post: 131071. Beside `slate_bytes`."
+          }
+        },
+        "required": [
+          "fee",
+          "max_amount",
+          "outputs"
+        ]
+      },
+      "ConsolidateOutputs": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "max_inputs": {
+            "type": "integer",
+            "description": "The most outputs to spend, at least 1; default 500. Leave it out with `inputs`."
+          },
+          "inputs": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Commitments (hex) of the outputs to spend, instead of the smallest ones."
+          },
+          "outputs": {
+            "type": "integer",
+            "description": "How many outputs to make, 1 to 10; default 1."
+          },
+          "dry_run": {
+            "type": "boolean",
+            "description": "Answer the estimate; store and lock nothing."
+          },
+          "account": {
+            "type": "string",
+            "description": "Account label; default account when absent."
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Idempotency key, a v4 UUID; becomes the payment id. Required over owner TLS."
+          },
+          "min_confirmations": {
+            "type": "integer",
+            "description": "Confirmations an output needs to be spent; default 6."
+          }
+        }
+      },
+      "CreateAccount": {
+        "type": "object",
+        "properties": {
+          "label": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "label"
+        ]
+      },
+      "SyncRequest": {
+        "type": "object",
+        "properties": {
+          "node": {
+            "type": "boolean",
+            "default": true
+          },
+          "relays": {
+            "type": "boolean",
+            "default": true
+          }
+        }
+      },
+      "ChangePassword": {
+        "type": "object",
+        "properties": {
+          "current": {
+            "type": "string",
+            "format": "password"
+          },
+          "new": {
+            "type": "string",
+            "format": "password"
+          }
+        },
+        "required": [
+          "current",
+          "new"
+        ]
+      },
+      "ScanRequest": {
+        "type": "object",
+        "properties": {
+          "from_height": {
+            "type": "integer"
+          },
+          "delete_unconfirmed": {
+            "type": "boolean"
+          },
+          "reset_chain": {
+            "type": "boolean"
+          },
+          "links": {
+            "type": "boolean",
+            "description": "Read the delivery mailboxes of the wallet's epic1 addresses after the scan, as a restore does."
+          }
+        }
+      },
+      "PatchPayment": {
+        "type": "object",
+        "properties": {
+          "metadata": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string",
+              "maxLength": 500
+            },
+            "maxProperties": 50,
+            "description": "A key set to the empty string is removed."
+          }
+        }
+      },
+      "ApprovePayment": {
+        "type": "object",
+        "properties": {
+          "amount": {
+            "$ref": "#/components/schemas/Decimal",
+            "description": "The invoice amount, retyped; must match."
+          },
+          "account": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string",
+            "description": "Signed into the slate. At most 256 bytes, with no control, line-break or invisible formatting character; a longer or marked text is 400 `invalid_field` at `/message`, not cut."
+          },
+          "deliver": {
+            "type": "boolean",
+            "default": true
+          }
+        },
+        "required": [
+          "amount"
+        ]
+      },
+      "PostPayment": {
+        "type": "object",
+        "properties": {
+          "fluff": {
+            "type": "boolean"
+          }
+        }
+      },
+      "DeliverPayment": {
+        "type": "object",
+        "properties": {
+          "relay": {
+            "type": "string",
+            "description": "Not supported: 400 `invalid_field`. A delivery goes to the payment's own address."
+          },
+          "to": {
+            "type": "string",
+            "description": "Not supported: 400 `invalid_field`. A delivery goes to the payment's own address."
+          }
+        }
+      },
+      "CreateLink": {
+        "type": "object",
+        "properties": {
+          "account": {
+            "type": "string"
+          },
+          "amount": {
+            "$ref": "#/components/schemas/Decimal"
+          },
+          "message": {
+            "type": "string"
+          }
+        }
+      },
+      "CreateContact": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Optional caller-chosen id, 1 to 128 bytes. A repeat with the same body answers 200 with the stored contact."
+          },
+          "method": {
+            "type": "string",
+            "enum": [
+              "invite",
+              "accept"
+            ]
+          },
+          "label": {
+            "type": "string",
+            "description": "Your name for them, at most 48 bytes."
+          },
+          "class": {
+            "type": "string",
+            "enum": [
+              "standard",
+              "private"
+            ],
+            "default": "standard"
+          },
+          "invite": {
+            "type": "string",
+            "description": "Invite link or text; for `accept`."
+          },
+          "expires_in": {
+            "type": "string",
+            "enum": [
+              "1h",
+              "24h",
+              "7d"
+            ],
+            "description": "Invite lifetime; for `invite`."
+          },
+          "deliver": {
+            "type": "boolean",
+            "description": "false: return the reply to send by hand."
+          }
+        },
+        "required": [
+          "method"
+        ]
+      },
+      "PatchContact": {
+        "type": "object",
+        "properties": {
+          "label": {
+            "type": "string",
+            "description": "At most 48 bytes."
+          },
+          "allow_invoices": {
+            "type": "boolean"
+          },
+          "seal": {
+            "type": "boolean"
+          }
+        }
+      },
+      "VerifyContact": {
+        "type": "object",
+        "properties": {
+          "result": {
+            "type": "string",
+            "enum": [
+              "match",
+              "mismatch",
+              "skip"
+            ]
+          }
+        },
+        "required": [
+          "result"
+        ]
+      },
+      "CheckContact": {
+        "type": "object",
+        "properties": {
+          "previous_contact_id": {
+            "type": "string"
+          }
+        }
+      },
+      "ContactKeys": {
+        "type": "object",
+        "properties": {
+          "use": {
+            "type": "string",
+            "enum": [
+              "old",
+              "new"
+            ]
+          }
+        },
+        "required": [
+          "use"
+        ]
+      },
+      "SendPayload": {
+        "type": "object",
+        "properties": {
+          "data_base64": {
+            "type": "string",
+            "format": "byte",
+            "maxLength": 87380,
+            "description": "Up to 65,535 bytes (the most one message carries), base64-encoded. More answers 400 `invalid_field` at `/data_base64`."
+          }
+        },
+        "required": [
+          "data_base64"
+        ]
+      },
+      "ContactsBackup": {
+        "type": "object",
+        "properties": {
+          "document": {
+            "type": "string",
+            "description": "The pairing records as a backup document (opaque)."
+          }
+        },
+        "required": [
+          "document"
+        ]
+      },
+      "ImportResult": {
+        "type": "object",
+        "properties": {
+          "imported": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "imported"
+        ]
+      },
+      "MoveContact": {
+        "type": "object",
+        "properties": {
+          "host": {
+            "type": "string",
+            "description": "The mailbox the user was shown; must equal the contact's `requested_relay`."
+          },
+          "accept": {
+            "type": "boolean",
+            "default": true
+          }
+        },
+        "required": [
+          "host"
+        ]
+      },
+      "Mailbox": {
+        "type": "object",
+        "properties": {
+          "host": {
+            "type": "string",
+            "description": "`domain` or `domain:port`; the port is left out when it is the default one."
+          },
+          "origin": {
+            "type": "string",
+            "enum": [
+              "shipped",
+              "added"
+            ],
+            "description": "`shipped`: in the list the wallet came with; `added`: added by the user."
+          },
+          "push": {
+            "type": "boolean",
+            "description": "Whether the mailbox offered push at its last greeting; left out before any answer."
+          },
+          "no_mux": {
+            "type": "boolean",
+            "description": "The mailbox is known to lack mux/1: it answered without it, so the wallet neither reads it nor posts to it. Not the same as unreachable, which shows as `failures` and `last_error`. Asked again from time to time; `false` once it offers mux/1."
+          },
+          "last_success_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When a session last attached to it; left out when none has since serve started."
+          },
+          "failures": {
+            "type": "integer",
+            "description": "Sessions lost since the last success."
+          },
+          "last_error": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "host",
+          "origin",
+          "no_mux",
+          "failures"
+        ]
+      },
+      "Mailboxes": {
+        "type": "object",
+        "properties": {
+          "mailboxes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Mailbox"
+            }
+          },
+          "left_out": {
+            "type": "array",
+            "description": "Hosts the settings name that the wallet does not use, because the list holds at most 16. Absent when there are none.",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "mailboxes"
+        ]
+      },
+      "ProbeStep": {
+        "type": "object",
+        "properties": {
+          "result": {
+            "type": "string",
+            "enum": [
+              "passed",
+              "failed",
+              "not_reached"
+            ]
+          },
+          "error": {
+            "type": "string",
+            "description": "Why the step failed."
+          }
+        },
+        "required": [
+          "result"
+        ]
+      },
+      "MailboxProbe": {
+        "type": "object",
+        "properties": {
+          "host": {
+            "type": "string",
+            "description": "`domain` or `domain:port`; the port is left out when it is the default one."
+          },
+          "tls": {
+            "$ref": "#/components/schemas/ProbeStep"
+          },
+          "greeting": {
+            "$ref": "#/components/schemas/ProbeStep"
+          },
+          "push": {
+            "$ref": "#/components/schemas/ProbeStep"
+          },
+          "passed": {
+            "type": "boolean",
+            "description": "Every step passed."
+          }
+        },
+        "required": [
+          "host",
+          "tls",
+          "greeting",
+          "push",
+          "passed"
+        ],
+        "description": "`tls`: the connection, its TLS handshake and the websocket upgrade; `greeting`: the mailbox answered the greeting; `push`: it offers push, which the wallet reads by."
+      },
+      "MailboxAdded": {
+        "type": "object",
+        "properties": {
+          "added": {
+            "type": "boolean",
+            "description": "False when the mailbox was in the list already; nothing was written."
+          },
+          "probe": {
+            "$ref": "#/components/schemas/MailboxProbe"
+          },
+          "mailboxes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Mailbox"
+            },
+            "description": "The list after the change."
+          }
+        },
+        "required": [
+          "added",
+          "probe",
+          "mailboxes"
+        ]
+      },
+      "AddMailbox": {
+        "type": "object",
+        "properties": {
+          "host": {
+            "type": "string",
+            "description": "`domain` or `domain:port`; the port is left out when it is the default one."
+          },
+          "anyway": {
+            "type": "boolean",
+            "default": false,
+            "description": "Add the mailbox when its test fails."
+          }
+        },
+        "required": [
+          "host"
+        ]
+      },
+      "ProbeMailbox": {
+        "type": "object",
+        "properties": {
+          "host": {
+            "type": "string",
+            "description": "`domain` or `domain:port`; the port is left out when it is the default one."
+          }
+        },
+        "required": [
+          "host"
+        ]
+      },
+      "MoveRelay": {
+        "type": "object",
+        "properties": {
+          "host": {
+            "type": "string"
+          },
+          "drain_days": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "host"
+        ]
+      },
+      "PatchProfile": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "flags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "domain": {
+            "type": "string",
+            "description": "Empty string removes it."
+          }
+        }
+      },
+      "BoostRequest": {
+        "type": "object",
+        "properties": {
+          "poller": {
+            "type": "string",
+            "enum": [
+              "relays",
+              "node"
+            ],
+            "description": "`relays`: the 30 s collect, which asks the push sessions what waits and posts what fell due. `node`: the wallet refresh."
+          },
+          "duration_seconds": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "How long the boost lasts from now; at most 600, a longer one is cut to 600."
+          },
+          "interval_seconds": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "How often the poller runs meanwhile; at least 5, a shorter one is raised to 5."
+          }
+        },
+        "required": [
+          "poller",
+          "duration_seconds",
+          "interval_seconds"
+        ]
+      },
+      "Boost": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer",
+            "description": "Only in the answer to `POST /sync/boost`: the boost it started, for `DELETE /sync/boost/{id}`. Random, from 1 to 2^53 - 1."
+          },
+          "poller": {
+            "type": "string",
+            "enum": [
+              "relays",
+              "node"
+            ],
+            "description": "`relays`: the 30 s collect, which asks the push sessions what waits and posts what fell due. `node`: the wallet refresh."
+          },
+          "until": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the last boost of the poller ends, unless one is ended first."
+          },
+          "interval_seconds": {
+            "type": "integer",
+            "description": "The shortest interval the poller's boosts ask. The poller never runs slower than its base: 30 s for `relays`, 60 s for `node`."
+          }
+        },
+        "required": [
+          "poller",
+          "until",
+          "interval_seconds"
+        ]
+      },
+      "Webhook": {
+        "type": "object",
+        "properties": {
+          "url": {
+            "type": "string",
+            "description": "`webhook_url`."
+          },
+          "types": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "`webhook_types`; empty for all."
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "active",
+              "retrying",
+              "config_error",
+              "disabled"
+            ],
+            "description": "`retrying` after a failed attempt; `config_error` while serve cannot use the secret file (no attempt counts, `last_error` says why); `disabled` after the last retry failed, until `POST /webhook/resume`."
+          },
+          "cursor": {
+            "type": "integer",
+            "description": "The id of the last event delivered, or passed over because `webhook_types` leaves it out. A new `webhook_url` starts at the newest event in the log."
+          },
+          "attempts": {
+            "type": "integer",
+            "description": "Failed attempts at the next event."
+          },
+          "next_attempt_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the next attempt is due, while `retrying`."
+          },
+          "last_error": {
+            "type": "string",
+            "description": "Why the last attempt failed, in a sentence: the receiver's status, a timeout, a refused address or a secret file it could not use. Never the receiver's body or the URL."
+          }
+        },
+        "required": [
+          "url",
+          "types",
+          "state",
+          "cursor",
+          "attempts"
+        ],
+        "additionalProperties": false
+      },
+      "WebhookResume": {
+        "type": "object",
+        "properties": {
+          "after": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Event id to set the cursor to."
+          }
+        },
+        "additionalProperties": false
+      }
+    }
+  }
+}

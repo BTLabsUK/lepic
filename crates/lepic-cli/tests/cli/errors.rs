@@ -1,0 +1,942 @@
+// SPDX-License-Identifier: Apache-2.0
+//! Failures reach the user as typed exit codes and, with `--output json`, as one JSON document.
+
+// Tests may unwrap and index (docs/rules.md).
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::indexing_slicing)]
+
+use crate::support;
+
+use std::sync::Arc;
+
+use support::{
+    FUNDING, Instance, SENDER_MNEMONIC, SilentInput, TestHost, run_in, run_reading, text,
+};
+
+fn error_message(outcome: &support::Outcome) -> String {
+    outcome.json()["error"]["message"]
+        .as_str()
+        .unwrap_or_default()
+        .to_owned()
+}
+
+fn error_kind(outcome: &support::Outcome) -> String {
+    let document = outcome.json();
+    assert_eq!(
+        document["error"]["exit_code"],
+        u64::from(outcome.code),
+        "{document}"
+    );
+    text(&document["error"], "kind").to_owned()
+}
+
+#[test]
+fn engine_failures_map_to_exit_codes_and_json_errors() {
+    let host = TestHost::new();
+    host.fund(SENDER_MNEMONIC, 0, FUNDING, 1);
+    let wallet = Instance::new("right password");
+    wallet.restore(&host, SENDER_MNEMONIC);
+
+    let mut wrong = wallet.env();
+    wrong.retain(|(key, _)| key != "LEPIC_PASSWORD");
+    wrong.push(("LEPIC_PASSWORD".to_owned(), "wrong".to_owned()));
+    let outcome = wallet.run_with(&host, &["wallet", "info"], wrong, "");
+    assert_eq!(
+        (outcome.code, error_kind(&outcome).as_str()),
+        (4, "wrong_password")
+    );
+
+    let outcome = wallet.run(
+        &host,
+        &[
+            "tx",
+            "send",
+            "500",
+            "--to-file",
+            wallet.path("x").to_str().unwrap(),
+        ],
+    );
+    assert_eq!(
+        (outcome.code, error_kind(&outcome).as_str()),
+        (8, "insufficient_funds")
+    );
+    assert!(!wallet.path("x").exists());
+
+    let outcome = wallet.run(&host, &["tx", "show", "99"]);
+    assert_eq!(
+        (outcome.code, error_kind(&outcome).as_str()),
+        (6, "not_found")
+    );
+
+    let outcome = wallet.run(&host, &["tx", "list", "--account", "savings"]);
+    assert_eq!(
+        (outcome.code, error_kind(&outcome).as_str()),
+        (6, "not_found")
+    );
+
+    let outcome = wallet.run(&host, &["wallet", "init"]);
+    assert_eq!(
+        (outcome.code, error_kind(&outcome).as_str()),
+        (5, "wallet_state")
+    );
+
+    let outcome = wallet.run(&host, &["tx", "send", "1.000000001", "--to-file", "y"]);
+    assert_eq!((outcome.code, error_kind(&outcome).as_str()), (2, "usage"));
+
+    let outcome = wallet.run(
+        &host,
+        &["tx", "receive", wallet.path("missing").to_str().unwrap()],
+    );
+    assert_eq!(
+        (outcome.code, error_kind(&outcome).as_str()),
+        (10, "transport")
+    );
+}
+
+#[test]
+fn an_http_address_is_refused_before_the_wallet_stores_anything() {
+    let host = TestHost::new();
+    host.fund(SENDER_MNEMONIC, 0, FUNDING, 1);
+    let wallet = Instance::new("right password");
+    wallet.restore(&host, SENDER_MNEMONIC);
+
+    for args in [
+        ["tx", "send", "1", "--to", "http://203.0.113.7:3415"],
+        ["tx", "send", "1", "--to", "ftp://host.example"],
+        ["invoice", "issue", "1", "--to", "http://127.0.0.1:3415"],
+    ] {
+        let outcome = wallet.run(&host, &args);
+        assert_eq!(
+            (outcome.code, error_kind(&outcome).as_str()),
+            (2, "usage"),
+            "{args:?}"
+        );
+    }
+    let listed = wallet.run(&host, &["tx", "list"]).json();
+    assert_eq!(listed["transactions"].as_array().unwrap().len(), 1);
+}
+
+#[test]
+fn a_send_to_a_contact_this_wallet_does_not_hold_stores_nothing() {
+    let host = TestHost::new();
+    host.fund(SENDER_MNEMONIC, 0, FUNDING, 1);
+    let wallet = Instance::new("right password");
+    wallet.restore(&host, SENDER_MNEMONIC);
+
+    let unknown = "0".repeat(32);
+    let outcome = wallet.run(
+        &host,
+        &["tx", "send", "1", "--to-contact", unknown.as_str()],
+    );
+    assert_eq!(error_kind(&outcome), "not_found");
+    let outcome = wallet.run(
+        &host,
+        &["tx", "send", "1", "--to-contact", "not-a-contact-id"],
+    );
+    assert_eq!((outcome.code, error_kind(&outcome).as_str()), (2, "usage"));
+    let slate_file = wallet.path("x.slate");
+    let outcome = wallet.run(
+        &host,
+        &[
+            "tx",
+            "send",
+            "1",
+            "--to-file",
+            slate_file.to_str().unwrap(),
+            "--purpose",
+            "withdrawal",
+        ],
+    );
+    assert_eq!(outcome.code, 2);
+    assert!(error_message(&outcome).contains("--purpose"), "{outcome:?}");
+    let listed = wallet.run(&host, &["tx", "list"]).json();
+    assert_eq!(listed["transactions"].as_array().unwrap().len(), 1);
+    let leftovers: Vec<_> = std::fs::read_dir(wallet.data_dir())
+        .unwrap()
+        .filter_map(Result::ok)
+        .filter(|entry| entry.file_name().to_string_lossy().ends_with(".slate"))
+        .collect();
+    assert!(leftovers.is_empty(), "{leftovers:?}");
+}
+
+/// The onion of the payment-proof key of account `m/0/0`, as `epic-wallet address` derives it.
+fn onion_of(mnemonic: &str) -> String {
+    let keychain = lepic_keychain::Keychain::from_mnemonic(
+        mnemonic,
+        lepic_primitives::params::Network::Floonet,
+    )
+    .unwrap();
+    let parent = lepic_keychain::Identifier::new(2, [0, 0, 0, 0]).unwrap();
+    let key = keychain.payment_proof_key(&parent, 0).unwrap();
+    lepic_methods::tor::onion_address(&key.public_key())
+}
+
+#[test]
+fn tor_address_prints_an_onion_of_its_own_and_previous_prints_the_payment_proof_one() {
+    let host = TestHost::new();
+    let wallet = Instance::new("right password");
+    wallet.restore(&host, SENDER_MNEMONIC);
+    let again = Instance::new("other password");
+    again.restore(&host, SENDER_MNEMONIC);
+
+    let onion = wallet.run(&host, &["tor", "address"]);
+    let previous = wallet.run(&host, &["tor", "address", "--previous"]);
+    let restored = again.run(&host, &["tor", "address"]);
+
+    assert_eq!(onion.code, 0);
+    assert_eq!(previous.code, 0);
+    let onion = text(&onion.json(), "onion").to_owned();
+    assert_eq!(text(&previous.json(), "onion"), onion_of(SENDER_MNEMONIC));
+    assert_ne!(onion, onion_of(SENDER_MNEMONIC));
+    assert_eq!(onion.len(), 62, "{onion}");
+    assert!(onion.ends_with(".onion"), "{onion}");
+    assert_eq!(
+        text(&restored.json(), "onion"),
+        onion,
+        "a restore gives the same onion"
+    );
+}
+
+#[test]
+fn a_send_to_an_onion_needs_a_tor_binary_and_stores_nothing_without_one() {
+    let host = TestHost::new();
+    host.fund(SENDER_MNEMONIC, 0, FUNDING, 1);
+    let wallet = Instance::new("right password");
+    wallet.restore(&host, SENDER_MNEMONIC);
+    let onion = onion_of(SENDER_MNEMONIC);
+    let mut typo = onion.clone();
+    typo.replace_range(..1, if typo.starts_with('a') { "b" } else { "a" });
+    let missing = wallet.path("no-tor-here");
+    let missing = missing.to_str().unwrap();
+
+    for (args, expected) in [
+        (
+            vec!["tx", "send", "1", "--to", onion.as_str()],
+            (2, "usage"),
+        ),
+        (
+            vec!["tx", "send", "1", "--to", &format!("http://{onion}/")],
+            (2, "usage"),
+        ),
+        (
+            vec![
+                "tx",
+                "send",
+                "1",
+                "--to",
+                typo.as_str(),
+                "--tor-binary",
+                missing,
+            ],
+            (2, "usage"),
+        ),
+        (
+            vec![
+                "tx",
+                "send",
+                "1",
+                "--to",
+                "wallet.onion",
+                "--tor-binary",
+                missing,
+            ],
+            (2, "usage"),
+        ),
+        (
+            vec![
+                "tx",
+                "send",
+                "1",
+                "--to",
+                onion.as_str(),
+                "--tor-binary",
+                missing,
+            ],
+            (3, "config"),
+        ),
+        // Funds are checked before tor is started.
+        (
+            vec![
+                "tx",
+                "send",
+                "1000",
+                "--to",
+                onion.as_str(),
+                "--tor-binary",
+                missing,
+            ],
+            (8, "insufficient_funds"),
+        ),
+        (vec!["tor", "listen"], (2, "usage")),
+        (
+            vec!["tor", "listen", "--tor-binary", missing],
+            (3, "config"),
+        ),
+    ] {
+        let outcome = wallet.run(&host, &args);
+        assert_eq!(
+            (outcome.code, error_kind(&outcome).as_str()),
+            expected,
+            "{args:?}"
+        );
+    }
+    let listed = wallet.run(&host, &["tx", "list"]).json();
+    assert_eq!(listed["transactions"].as_array().unwrap().len(), 1);
+}
+
+#[test]
+fn an_invoice_to_any_address_is_refused_and_nothing_is_stored() {
+    let host = TestHost::new();
+    let wallet = Instance::new("right password");
+    wallet.restore(&host, SENDER_MNEMONIC);
+    let before = wallet.run(&host, &["tx", "list"]).ok().json();
+
+    for to in [
+        "http://127.0.0.1:3415",
+        "https://host.example/path?query",
+        "ftp://host.example",
+        "esWr5yVhZ5WvR4Qb2MyXH2wqRK8FpjKpz9tJKhCwh1HHtGDF7eF4@epicbox.example",
+        "kvhbtumy6qbqikzkopp2tzkvgsxwuarkq5t5hfdu7uvfeyfbkgbsytid.onion",
+    ] {
+        let outcome = wallet.run(&host, &["invoice", "issue", "1", "--to", to]);
+        assert_eq!(
+            (outcome.code, error_kind(&outcome).as_str()),
+            (2, "usage"),
+            "{to}"
+        );
+        let document = outcome.json();
+        assert_eq!(
+            text(&document["error"], "message"),
+            "an invoice is not sent to an address: write it to a file with --to-file, or send it \
+             to a paired contact with lepic contact invoice",
+            "{to}"
+        );
+    }
+    let after = wallet.run(&host, &["tx", "list"]).ok().json();
+    assert_eq!(after["transactions"], before["transactions"]);
+}
+
+#[test]
+fn a_data_directory_without_a_wallet_is_reported_as_such() {
+    let host = TestHost::new();
+    let empty = Instance::new("test password");
+    let outcome = empty.run(&host, &["wallet", "info"]);
+    assert_eq!(
+        (outcome.code, error_kind(&outcome).as_str()),
+        (5, "wallet_state")
+    );
+}
+
+#[test]
+fn a_data_directory_another_process_holds_is_refused_until_released() {
+    let host = TestHost::new();
+    host.fund(SENDER_MNEMONIC, 0, FUNDING, 1);
+    let wallet = Instance::new("right password");
+    wallet.restore(&host, SENDER_MNEMONIC);
+
+    let holder = std::fs::File::options()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(wallet.data_dir().join(".lepic.lock"))
+        .unwrap();
+    holder.try_lock().unwrap();
+    for args in [
+        &["wallet", "info"][..],
+        &["tx", "list"],
+        &["wallet", "address"],
+    ] {
+        let outcome = wallet.run(&host, args);
+        assert_eq!(
+            (outcome.code, error_kind(&outcome).as_str()),
+            (5, "wallet_state"),
+            "{args:?}"
+        );
+    }
+    drop(holder);
+    wallet.run(&host, &["wallet", "info"]).ok();
+}
+
+#[cfg(unix)]
+#[test]
+fn a_symbolic_link_in_place_of_the_lock_file_is_not_followed() {
+    let host = TestHost::new();
+    host.fund(SENDER_MNEMONIC, 0, FUNDING, 1);
+    let wallet = Instance::new("right password");
+    wallet.restore(&host, SENDER_MNEMONIC);
+
+    let elsewhere = tempfile::tempdir().unwrap();
+    let target = elsewhere.path().join("created-through-the-link");
+    let lock = wallet.data_dir().join(".lepic.lock");
+    std::fs::remove_file(&lock).unwrap();
+    std::os::unix::fs::symlink(&target, &lock).unwrap();
+
+    let outcome = wallet.run(&host, &["wallet", "info"]);
+    assert_eq!(
+        (outcome.code, error_kind(&outcome).as_str()),
+        (1, "internal")
+    );
+    assert!(!target.exists(), "the lock followed the link");
+}
+
+#[test]
+fn init_on_a_locked_data_directory_creates_nothing() {
+    let host = TestHost::new();
+    let wallet = Instance::new("test password");
+    let dir = wallet.data_dir();
+    std::fs::create_dir(&dir).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+    }
+    let holder = std::fs::File::create(dir.join(".lepic.lock")).unwrap();
+    holder.try_lock().unwrap();
+    let outcome = wallet.run(&host, &["wallet", "init"]);
+    assert_eq!(
+        (outcome.code, error_kind(&outcome).as_str()),
+        (5, "wallet_state")
+    );
+    let entries: Vec<_> = std::fs::read_dir(&dir)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name())
+        .collect();
+    assert_eq!(entries, [".lepic.lock"]);
+}
+
+#[test]
+fn the_first_tip_of_a_command_is_bounded_by_the_tip_the_wallet_confirmed() {
+    let host = TestHost::new();
+    host.fund(SENDER_MNEMONIC, 0, FUNDING, 1);
+    let wallet = Instance::new("right password");
+    wallet.restore(&host, SENDER_MNEMONIC);
+    wallet.run(&host, &["wallet", "info"]).ok();
+
+    // More than a day of blocks above the confirmed tip, moments after it was seen.
+    host.node.update_chain(|chain| {
+        chain.tip.height = lepic_primitives::amount::Height::new(support::TIP + 10_000);
+    });
+    let outcome = wallet.run(&host, &["wallet", "info"]);
+    assert_eq!((outcome.code, error_kind(&outcome).as_str()), (9, "node"));
+    // The engine refuses such a tip with the same exit code, so the cause shows that the node
+    // client refused it first, from the tip the wallet stored.
+    let refused_by_client = lepic_node::NodeError::ImplausibleTip {
+        previous: lepic_primitives::amount::Height::new(support::TIP),
+        reported: lepic_primitives::amount::Height::new(support::TIP + 10_000),
+    }
+    .to_string();
+    let document = outcome.json();
+    let causes = document["error"]["causes"].as_array().unwrap();
+    assert!(
+        causes
+            .iter()
+            .any(|cause| cause == refused_by_client.as_str()),
+        "{document}"
+    );
+}
+
+/// `native_direct` is retired: set by its variable, by the config file or by both, it changes
+/// nothing a command answers, and one note on stderr says so.
+#[test]
+fn a_retired_key_has_no_effect_and_is_named_once() {
+    let host = TestHost::new();
+    let wallet = Instance::new("test password");
+    wallet.run(&host, &["wallet", "init"]).ok();
+    let plain = wallet.run(&host, &["wallet", "info"]).ok();
+    assert!(plain.stderr.is_empty(), "{}", plain.stderr);
+
+    let config = wallet.path("config.toml");
+    std::fs::write(&config, "native_direct = true\n").unwrap();
+    let variable = ("LEPIC_NATIVE_DIRECT".to_owned(), "1".to_owned());
+    let file = ("LEPIC_CONFIG".to_owned(), config.display().to_string());
+    for set in [
+        vec![variable.clone()],
+        vec![file.clone()],
+        vec![variable, file],
+    ] {
+        let mut env = wallet.env();
+        env.extend(set.clone());
+        let outcome = wallet.run_with(&host, &["wallet", "info"], env, "").ok();
+        assert_eq!(outcome.stdout, plain.stdout, "{set:?}");
+        assert_eq!(
+            outcome.stderr, "note: native_direct is retired and has no effect\n",
+            "{set:?}"
+        );
+    }
+}
+
+#[test]
+fn human_errors_go_to_stderr_and_json_errors_to_stdout() {
+    let host = TestHost::new();
+    let empty = Instance::new("test password");
+    let mut human = empty.env();
+    human.retain(|(key, _)| key != "LEPIC_OUTPUT");
+    let outcome = run_in(&host, &["wallet", "info"], human, "");
+    assert_eq!(outcome.code, 5);
+    assert!(outcome.stdout.is_empty());
+    assert!(outcome.stderr.starts_with("error: "), "{}", outcome.stderr);
+
+    let outcome = empty.run(&host, &["wallet", "info"]);
+    assert!(outcome.stderr.is_empty(), "{}", outcome.stderr);
+    assert_eq!(outcome.stdout.lines().count(), 1);
+}
+
+#[test]
+fn a_missing_password_on_standard_input_is_a_usage_error() {
+    let host = TestHost::new();
+    let wallet = Instance::new("test password");
+    let mut env = wallet.env();
+    env.retain(|(key, _)| key != "LEPIC_PASSWORD");
+    let outcome = wallet.run_with(&host, &["wallet", "init"], env.clone(), "");
+    assert_eq!((outcome.code, error_kind(&outcome).as_str()), (2, "usage"));
+
+    let created = wallet.run_with(&host, &["wallet", "init"], env.clone(), "from stdin\n");
+    created.ok();
+    let opened = wallet.run_with(&host, &["wallet", "address"], env, "from stdin\n");
+    opened.ok();
+}
+
+#[test]
+fn usage_errors_exit_with_code_two_and_help_with_zero() {
+    let host = TestHost::new();
+    let wallet = Instance::new("test password");
+    let outcome = wallet.run(&host, &["tx", "send", "1"]);
+    assert_eq!(outcome.code, 2);
+    assert!(error_message(&outcome).contains("--to"), "{outcome:?}");
+    let outcome = wallet.run(&host, &["--network", "testnet", "node", "status"]);
+    assert_eq!(outcome.code, 2);
+    let outcome = wallet.run(&host, &["--help"]);
+    assert_eq!(outcome.code, 0);
+    assert!(outcome.stdout.contains("Exit codes:"));
+}
+
+#[test]
+fn without_a_terminal_no_command_prints_the_usage_and_the_shell_is_refused() {
+    let host = TestHost::new();
+    let wallet = Instance::new("test password");
+    let mut env = wallet.env();
+    env.retain(|(key, _)| key != "LEPIC_OUTPUT");
+    let bare = run_in(&host, &[], env.clone(), "");
+    assert_eq!(bare.code, 2, "{bare:?}");
+    assert!(bare.stderr.contains("Usage: lepic"), "{bare:?}");
+    assert!(bare.stdout.is_empty(), "{bare:?}");
+    let shell = run_in(&host, &["shell"], env, "");
+    assert_eq!(shell.code, 2, "{shell:?}");
+    assert!(
+        shell.stderr.contains("the shell needs a terminal"),
+        "{shell:?}"
+    );
+}
+
+#[test]
+fn node_status_reports_the_tip() {
+    let host = TestHost::new();
+    let outcome = Instance::new("test password")
+        .run(&host, &["node", "status"])
+        .ok()
+        .json();
+    assert_eq!(outcome["height"], support::TIP);
+    assert_eq!(outcome["node_version"], "4.0.4");
+    assert_eq!(outcome["node"], "127.0.0.1");
+}
+
+#[test]
+fn an_interrupt_at_a_password_prompt_ends_the_command() {
+    let mut host = TestHost::new();
+    host.interrupt_when = Some(Arc::new(|| true));
+    let wallet = Instance::new("test password");
+    let mut env = wallet.env();
+    env.retain(|(key, _)| key != "LEPIC_PASSWORD");
+    let (done, finished) = std::sync::mpsc::channel();
+    // On its own thread, so a prompt the interrupt cannot end fails the test instead of
+    // hanging it.
+    std::thread::spawn(move || {
+        let (_keep_open, never) = std::sync::mpsc::channel();
+        let outcome = run_reading(
+            &host,
+            &["wallet", "init"],
+            env,
+            Box::new(std::io::BufReader::new(SilentInput(never))),
+        );
+        let _ = done.send(outcome);
+    });
+    let outcome = finished
+        .recv_timeout(support::PATIENCE)
+        .expect("the interrupt did not end the prompt");
+    assert_eq!(
+        (outcome.code, error_kind(&outcome).as_str()),
+        (12, "interrupted")
+    );
+}
+
+#[test]
+fn an_invoice_for_another_amount_is_refused_and_writes_no_reply() {
+    let host = TestHost::new();
+    host.fund(SENDER_MNEMONIC, 0, FUNDING, 1);
+    let payer = Instance::new("payer password");
+    payer.restore(&host, SENDER_MNEMONIC);
+    let issuer = Instance::new("issuer password");
+    issuer.run(&host, &["wallet", "init"]).ok();
+    let invoice = issuer.path("invoice.slate");
+    issuer
+        .run(
+            &host,
+            &[
+                "invoice",
+                "issue",
+                "3",
+                "--to-file",
+                invoice.to_str().unwrap(),
+            ],
+        )
+        .ok();
+    let outcome = payer.run(
+        &host,
+        &["invoice", "pay", invoice.to_str().unwrap(), "2.5", "--yes"],
+    );
+    assert_eq!(
+        (outcome.code, error_kind(&outcome).as_str()),
+        (7, "rejected")
+    );
+    assert!(!issuer.path("invoice.slate.response").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn a_data_directory_other_users_can_access_is_refused() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let host = TestHost::new();
+    let wallet = Instance::new("right password");
+    wallet.restore(&host, SENDER_MNEMONIC);
+    let set_mode = |mode| {
+        std::fs::set_permissions(wallet.data_dir(), std::fs::Permissions::from_mode(mode)).unwrap();
+    };
+
+    set_mode(0o755);
+    let outcome = wallet.run(&host, &["wallet", "info"]);
+    assert_eq!((outcome.code, error_kind(&outcome).as_str()), (3, "config"));
+
+    set_mode(0o700);
+    wallet.run(&host, &["wallet", "info"]).ok();
+}
+
+/// The instance's environment with human output.
+fn human_env(instance: &Instance) -> Vec<(String, String)> {
+    let mut env = instance.env();
+    env.retain(|(key, _)| key != "LEPIC_OUTPUT");
+    env
+}
+
+#[test]
+fn a_missing_wallet_is_reported_before_the_password_is_asked_for() {
+    let host = TestHost::new();
+    let empty = Instance::new("test password");
+    let mut env = human_env(&empty);
+    env.retain(|(key, _)| key != "LEPIC_PASSWORD");
+    let outcome = empty.run_with(&host, &["wallet", "info"], env, "");
+    assert_eq!(outcome.code, 5, "{outcome:?}");
+    let hint = format!("hint: no wallet in {}", empty.data_dir().display());
+    assert!(outcome.stderr.contains(&hint), "{}", outcome.stderr);
+    assert!(
+        outcome.stderr.contains("lepic wallet init"),
+        "{}",
+        outcome.stderr
+    );
+}
+
+#[test]
+fn human_errors_end_with_a_hint_and_json_errors_carry_none() {
+    let host = TestHost::new();
+    host.fund(SENDER_MNEMONIC, 0, FUNDING, 1);
+    let wallet = Instance::new("test password");
+    wallet.restore(&host, SENDER_MNEMONIC);
+
+    let send = ["tx", "send", "500", "--to-file", "unused.slate"];
+    let outcome = wallet.run_with(&host, &send, human_env(&wallet), "");
+    assert_eq!(outcome.code, 8);
+    assert!(
+        outcome
+            .stderr
+            .contains("hint: 10.00000000 EPIC is spendable and 500."),
+        "{}",
+        outcome.stderr
+    );
+    let json = wallet.run(&host, &send);
+    assert!(!json.stdout.contains("hint"), "{}", json.stdout);
+
+    // A slate file in a directory that does not exist cannot be written: the transaction is
+    // stored and the hint says how to deliver it again or give it up.
+    let unwritable = wallet.path("missing/payment.slate");
+    let outcome = wallet.run_with(
+        &host,
+        &["tx", "send", "1", "--to-file", unwritable.to_str().unwrap()],
+        human_env(&wallet),
+        "",
+    );
+    assert_eq!(outcome.code, 11, "{outcome:?}");
+    for expected in [
+        "hint: the inputs stay locked",
+        "lepic tx resend ",
+        "lepic tx cancel ",
+    ] {
+        assert!(outcome.stderr.contains(expected), "{}", outcome.stderr);
+    }
+    assert!(
+        !outcome.stderr.contains("must name its port"),
+        "{}",
+        outcome.stderr
+    );
+    // Over the relay the hint adds that a non-default relay port belongs in the address.
+    let receiver = Instance::new("receiver password");
+    receiver.run(&host, &["wallet", "init"]).ok();
+    let address = receiver.run(&host, &["wallet", "address"]).ok().json();
+    let tx_id = wallet.run(&host, &["tx", "list"]).ok().json()["transactions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|tx| tx["state"] == "sent")
+        .unwrap()["tx_id"]
+        .to_string();
+    host.relay.set_refusing(true);
+    let outcome = wallet.run_with(
+        &host,
+        &["tx", "resend", &tx_id, "--to", text(&address, "address")],
+        human_env(&wallet),
+        "",
+    );
+    assert_eq!(outcome.code, 11, "{outcome:?}");
+    for expected in ["hint: the inputs stay locked", "<key>@127.0.0.1:80"] {
+        assert!(outcome.stderr.contains(expected), "{}", outcome.stderr);
+    }
+}
+
+/// A classic send a mailbox refuses with a wait fails with that wait as `retry_after_secs`; a
+/// refusal that names none leaves the field out.
+#[test]
+fn a_classic_send_a_mailbox_refuses_with_a_wait_reports_retry_after_secs() {
+    let host = TestHost::new();
+    host.fund(SENDER_MNEMONIC, 0, FUNDING, 1);
+    let wallet = Instance::new("test password");
+    wallet.restore(&host, SENDER_MNEMONIC);
+    let receiver = Instance::new("receiver password");
+    receiver.run(&host, &["wallet", "init"]).ok();
+    let address = receiver.run(&host, &["wallet", "address"]).ok().json();
+    let address = text(&address, "address").to_owned();
+
+    host.relay.set_post_refusal(Some((
+        "InvalidRequest",
+        "Rate limit exceeded; retry in 12 s.",
+    )));
+    let waiting = wallet.run(&host, &["tx", "send", "1", "--to", &address]);
+    assert_eq!(waiting.code, 11, "{waiting:?}");
+    let error = waiting.json();
+    assert_eq!(error["error"]["retry_after_secs"], 12, "{error}");
+
+    // The send stored its transaction; resending it meets the same wait, or a refusal without one.
+    let tx_id = wallet.run(&host, &["tx", "list"]).ok().json()["transactions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|tx| tx["state"] == "sent")
+        .unwrap()["tx_id"]
+        .to_string();
+    let resent = wallet.run(&host, &["tx", "resend", &tx_id, "--to", &address]);
+    assert_eq!(resent.code, 11, "{resent:?}");
+    assert_eq!(resent.json()["error"]["retry_after_secs"], 12, "{resent:?}");
+
+    host.relay
+        .set_post_refusal(Some(("InvalidRequest", "Invalid request.")));
+    let final_refusal = wallet.run(&host, &["tx", "resend", &tx_id, "--to", &address]);
+    assert_eq!(final_refusal.code, 11, "{final_refusal:?}");
+    assert!(
+        final_refusal.json()["error"]
+            .get("retry_after_secs")
+            .is_none(),
+        "{final_refusal:?}"
+    );
+}
+
+#[test]
+fn a_slate_file_error_names_the_file() {
+    let host = TestHost::new();
+    host.fund(SENDER_MNEMONIC, 0, FUNDING, 1);
+    let wallet = Instance::new("test password");
+    wallet.restore(&host, SENDER_MNEMONIC);
+    let missing = wallet.path("missing.slate");
+    for args in [
+        vec!["tx", "receive", missing.to_str().unwrap()],
+        vec!["tx", "finalize", missing.to_str().unwrap()],
+        vec!["invoice", "pay", missing.to_str().unwrap(), "1", "--yes"],
+    ] {
+        let outcome = wallet.run(&host, &args);
+        assert_eq!(
+            (outcome.code, error_kind(&outcome).as_str()),
+            (10, "transport"),
+            "{args:?}"
+        );
+        let message = format!("slate file {}", missing.display());
+        assert_eq!(outcome.json()["error"]["message"], message, "{args:?}");
+    }
+}
+
+#[test]
+fn a_usage_error_under_json_output_is_a_json_error() {
+    let host = TestHost::new();
+    let wallet = Instance::new("test password");
+    let mut plain = wallet.env();
+    plain.retain(|(key, _)| key != "LEPIC_OUTPUT");
+    for (args, env) in [
+        (&["--output", "json", "tx", "nope"][..], plain.clone()),
+        (&["--output=json", "tx", "send"][..], plain),
+        (&["tx", "send", "--bogus"][..], wallet.env()),
+    ] {
+        let outcome = wallet.run_with(&host, args, env, "");
+        assert_eq!((outcome.code, error_kind(&outcome).as_str()), (2, "usage"));
+        assert!(outcome.stderr.is_empty(), "{outcome:?}");
+    }
+    // Help is not an error and stays text.
+    let outcome = wallet.run(&host, &["tx", "--help"]);
+    assert_eq!(outcome.code, 0);
+    assert!(outcome.stdout.contains("Usage"), "{outcome:?}");
+}
+
+#[test]
+fn a_command_group_without_a_subcommand_under_json_output_is_a_json_error() {
+    let host = TestHost::new();
+    let wallet = Instance::new("test password");
+    let mut plain = wallet.env();
+    plain.retain(|(key, _)| key != "LEPIC_OUTPUT");
+    for (args, group) in [
+        (&["--output", "json", "tx"][..], "lepic tx"),
+        (&["--output=json", "contact"][..], "lepic contact"),
+        (&["--output", "json", "wallet"][..], "lepic wallet"),
+    ] {
+        let outcome = wallet.run_with(&host, args, plain.clone(), "");
+        assert_eq!((outcome.code, error_kind(&outcome).as_str()), (2, "usage"));
+        let message = outcome.json()["error"]["message"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        assert!(
+            message.starts_with(&format!("`{group}` needs a subcommand: ")),
+            "{message}"
+        );
+        assert!(outcome.stderr.is_empty(), "{outcome:?}");
+    }
+    let outcome = wallet.run_with(&host, &["--output", "json", "tx"], plain.clone(), "");
+    let message = outcome.json()["error"]["message"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert!(
+        message.contains("list") && message.contains("send"),
+        "{message}"
+    );
+    // The environment selects JSON too.
+    let outcome = wallet.run(&host, &["tx"]);
+    assert_eq!((outcome.code, error_kind(&outcome).as_str()), (2, "usage"));
+    // Text mode keeps the help text on standard error.
+    let outcome = wallet.run_with(&host, &["--output", "human", "tx"], plain, "");
+    assert_eq!(outcome.code, 2);
+    assert!(outcome.stderr.contains("Usage"), "{outcome:?}");
+    assert!(outcome.stdout.is_empty(), "{outcome:?}");
+}
+
+#[test]
+fn a_wallet_of_the_other_chain_is_refused_in_both_directions_with_the_flag_that_opens_it() {
+    // The hint is for people: the output is the human one, the code and kind are checked by the
+    // JSON run of the same command.
+    let human = |wallet: &Instance| {
+        let mut env = wallet.env();
+        env.retain(|(key, _)| key != "LEPIC_OUTPUT");
+        env.push(("LEPIC_OUTPUT".to_owned(), "human".to_owned()));
+        env
+    };
+
+    // A floonet wallet, opened by a process that runs on mainnet: nothing names a network.
+    let floonet_host = TestHost::new();
+    let wallet = Instance::new("chain password");
+    wallet.restore(&floonet_host, SENDER_MNEMONIC);
+    let by_settings = TestHost::new().network_from_settings();
+    let outcome = wallet.run(&by_settings, &["wallet", "info"]);
+    assert_eq!(
+        (outcome.code, error_kind(&outcome).as_str()),
+        (5, "wallet_state"),
+        "{outcome:?}"
+    );
+    let outcome = wallet.run_with(&by_settings, &["wallet", "info"], human(&wallet), "");
+    assert_eq!(outcome.code, 5, "{outcome:?}");
+    let hint = format!(
+        "hint: {} holds a floonet wallet; this command runs on mainnet. Add --network floonet",
+        wallet.data_dir().display()
+    );
+    assert!(outcome.stderr.contains(&hint), "{}", outcome.stderr);
+
+    // The flag the hint names opens it.
+    wallet
+        .run(&by_settings, &["--network", "floonet", "wallet", "info"])
+        .ok();
+
+    // A mainnet wallet, opened with --network floonet.
+    let mainnet = Instance::new("chain password");
+    mainnet.restore(&by_settings, SENDER_MNEMONIC);
+    let args = ["--network", "floonet", "wallet", "info"];
+    let outcome = mainnet.run(&by_settings, &args);
+    assert_eq!(
+        (outcome.code, error_kind(&outcome).as_str()),
+        (5, "wallet_state"),
+        "{outcome:?}"
+    );
+    let outcome = mainnet.run_with(&by_settings, &args, human(&mainnet), "");
+    assert_eq!(outcome.code, 5, "{outcome:?}");
+    let hint = format!(
+        "hint: {} holds a mainnet wallet; this command runs on floonet. Add --network mainnet",
+        mainnet.data_dir().display()
+    );
+    assert!(outcome.stderr.contains(&hint), "{}", outcome.stderr);
+    mainnet.run(&by_settings, &["wallet", "info"]).ok();
+}
+
+const DECLINED_SLATE: &str = "6d1b5cf4-9a3c-4c39-8a43-07a0a1b9f2c1";
+
+#[test]
+fn a_declined_send_answers_payment_declined_for_show_and_for_a_reused_slate_id() {
+    let (host, wallet) = support::funded();
+    // The mark the wallet keeps once it has erased a send its payee declined.
+    support::with_settings(&wallet, SENDER_MNEMONIC, |repos| {
+        repos.put_setting(
+            &format!("notice.send_declined.{DECLINED_SLATE}"),
+            "2026-11-18T00:00:00Z",
+        )
+    });
+    for args in [
+        vec!["tx", "show", "--slate-id", DECLINED_SLATE],
+        vec![
+            "tx",
+            "send",
+            "1",
+            "--to",
+            "https://payee.example.test",
+            "--slate-id",
+            DECLINED_SLATE,
+        ],
+    ] {
+        let outcome = wallet.run(&host, &args);
+        assert_eq!(outcome.code, 6, "{args:?} {outcome:?}");
+        let error = &outcome.json()["error"];
+        assert_eq!(error["kind"], "not_found", "{error}");
+        assert_eq!(error["code"], "payment_declined", "{error}");
+        assert_eq!(error["declined_at"], "2026-11-18T00:00:00Z", "{error}");
+    }
+    // An id nobody used is plain not found, with no code.
+    let unknown = wallet.run(
+        &host,
+        &[
+            "tx",
+            "show",
+            "--slate-id",
+            "0b7f2d57-5d0e-4f0b-9c0e-2f1c7a4d9e11",
+        ],
+    );
+    assert_eq!(unknown.code, 6, "{unknown:?}");
+    assert!(unknown.json()["error"].get("code").is_none());
+}

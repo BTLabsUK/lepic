@@ -1,0 +1,57 @@
+[package]
+name = "lepic-wallet"
+description = "The LEPIC wallet engine."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+blake2 = { workspace = true, features = ["zeroize"] }
+ed25519-dalek.workspace = true
+futures-util = { workspace = true, features = ["alloc"] }
+jiff.workspace = true
+lepic-contact.workspace = true
+lepic-crypto.workspace = true
+lepic-keychain.workspace = true
+lepic-legacy-slate.workspace = true
+lepic-node.workspace = true
+lepic-primitives.workspace = true
+lepic-slate.workspace = true
+lepic-store = { workspace = true, default-features = false }
+lepic-transport.workspace = true
+rand_core.workspace = true
+serde = { workspace = true, features = ["derive", "std"] }
+serde_json = { workspace = true, features = ["std"] }
+sha2.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["macros", "rt", "sync", "time"] }
+tracing = { workspace = true, features = ["std", "attributes"] }
+uuid.workspace = true
+zeroize.workspace = true
+
+[features]
+default = ["sqlite"]
+sqlite = ["lepic-store/sqlite"]
+
+[dev-dependencies]
+lepic-wallet-contacts = { workspace = true, features = ["test-support"] }
+insta.workspace = true
+proptest = { workspace = true, features = ["std"] }
+lepic-epicbox = { workspace = true, features = ["mock-relay"] }
+lepic-crypto.workspace = true
+lepic-keychain = { workspace = true, features = ["test-kdf"] }
+lepic-methods = { workspace = true, features = ["epicbox-wallet", "mock-relay", "loopback", "http"] }
+lepic-node = { workspace = true, features = ["mock"] }
+lepic-primitives.workspace = true
+lepic-telemetry.workspace = true
+lepic-transport = { workspace = true, features = ["loopback"] }
+rand = { workspace = true, features = ["std_rng"] }
+rusqlite.workspace = true
+serde_json = { workspace = true, features = ["std"] }
+tempfile.workspace = true
+tokio = { workspace = true, features = ["rt", "sync", "macros", "test-util"] }
+
+[lints]
+workspace = true

@@ -1,0 +1,408 @@
+// SPDX-License-Identifier: Apache-2.0
+// Portions Copyright 2019 The Epic Developers
+// Ported from EpicCash/epic-wallet libwallet/src/api_impl/foreign.rs,
+// libwallet/src/internal/tx.rs, libwallet/src/internal/selection.rs, libwallet/src/slate.rs
+// (Apache-2.0); see NOTICE and upstream.toml.
+
+//! A repeated S1: the relay hands a message out again when the app was suspended after storing
+//! S2 and before acknowledging, and a user receives the same file again when the reply file was
+//! lost. The receiver answers it with the S2 it stored, never a new one, so each inbound slate
+//! stays idempotent on `(slate_id, stage)`.
+//!
+//! The stored S2 goes back only where the S1 first came: the same transport and the same key
+//! signing its payment proof. Two listeners of one wallet (the web listener and the onion, or
+//! an epic1 address) never hand out the same bytes, so a repeat cannot show that they are one
+//! wallet; elsewhere the repeat is refused as received before.
+
+use lepic_primitives::params::Network;
+use lepic_slate::codec::{MediaType, WireSlate};
+use lepic_slate::error::DecodeError;
+use lepic_slate::model::{Slate, SlateId};
+use lepic_slate::role::Role;
+use lepic_slate::stage::Stage;
+use lepic_store::{
+    Repositories, SlateStage, StoreError, StoredTransaction, TxDirection, TxId, TxState,
+};
+use lepic_transport::transport::TransportId;
+use uuid::Uuid;
+
+use super::{ProofKey, ReceiveError, Received, legacy_codecs};
+
+/// The setting that keeps, per received transaction, the key that signed its payment proof.
+const PROOF_KEY_PREFIX: &str = "receive.proof_key.";
+
+/// Transports whose listeners answer under more than one key. A transaction stored before the
+/// proof key was recorded is not answered again on them, since the key that took it is not
+/// known.
+const LISTENER_TRANSPORTS: [&str; 2] = ["http", "tor"];
+
+/// Where an S1 arrived: the transport, and the key that signs a payment proof there.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Arrival {
+    pub(crate) transport: TransportId,
+    pub(crate) proof_key: ProofKey,
+}
+
+/// Records that `proof_key` signs the payment proof of the received transaction `tx_id`.
+pub(crate) fn record_proof_key(
+    repos: &mut dyn Repositories,
+    tx_id: TxId,
+    proof_key: ProofKey,
+) -> Result<(), StoreError> {
+    repos.put_setting(&proof_key_setting(tx_id), &proof_key_text(proof_key))
+}
+
+fn proof_key_setting(tx_id: TxId) -> String {
+    format!("{PROOF_KEY_PREFIX}{}", tx_id.0)
+}
+
+fn proof_key_text(proof_key: ProofKey) -> String {
+    match proof_key {
+        ProofKey::Payments => "payments".to_owned(),
+        ProofKey::Onion => "onion".to_owned(),
+        ProofKey::Epic1 { index } => format!("epic1.{index}"),
+    }
+}
+
+/// Whether the S1 of `transaction` came the way `arrival` did. A transaction stored before the
+/// key was recorded took the epic1 key when it has an epic1 index, and otherwise the payments
+/// key, except on a listener transport, where the key is not known and the answer is no.
+fn arrived_alike(
+    repos: &dyn Repositories,
+    transaction: &StoredTransaction,
+    arrival: Arrival,
+) -> Result<bool, StoreError> {
+    if transaction.entry.transport.as_deref() != Some(arrival.transport.as_str()) {
+        return Ok(false);
+    }
+    let wanted = proof_key_text(arrival.proof_key);
+    if let Some(recorded) = repos.setting(&proof_key_setting(transaction.id))? {
+        return Ok(recorded == wanted);
+    }
+    if let Some(index) = crate::epic1_index::index_of(repos, transaction.id)? {
+        return Ok(arrival.proof_key == ProofKey::Epic1 { index });
+    }
+    Ok(arrival.proof_key == ProofKey::Payments
+        && !LISTENER_TRANSPORTS.contains(&arrival.transport.as_str()))
+}
+
+/// The S2 this wallet stored when it received a slate, and the state its transaction is in now.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct StoredReply {
+    pub(crate) tx_id: TxId,
+    pub(crate) state: TxState,
+    pub(crate) codec: String,
+    pub(crate) bytes: Vec<u8>,
+}
+
+/// The stored S2 of the incoming transaction for `slate_id`, or `None` when this wallet has not
+/// received that slate.
+pub(crate) fn stored_reply(
+    repos: &dyn Repositories,
+    slate_id: SlateId,
+) -> Result<Option<StoredReply>, StoreError> {
+    let uuid = Uuid::from_bytes(*slate_id.as_bytes());
+    let Some(transaction) = repos.transaction_by_slate(uuid, TxDirection::Incoming)? else {
+        return Ok(None);
+    };
+    Ok(repos
+        .slate(uuid, SlateStage::Standard2)?
+        .map(|slate| StoredReply {
+            tx_id: transaction.id,
+            state: transaction.entry.state,
+            codec: slate.codec,
+            bytes: slate.bytes,
+        }))
+}
+
+/// The stored S2 as a slate, decoded with the codec that wrote it.
+pub(crate) fn decode_reply(network: Network, reply: &StoredReply) -> Result<Slate, ReceiveError> {
+    let codecs = legacy_codecs(network)?;
+    let codec = codecs
+        .ids()
+        .find(|id| id.as_str() == reply.codec)
+        .and_then(|id| codecs.get(id))
+        .ok_or(ReceiveError::Decode(DecodeError::UnknownFormat))?;
+    codec
+        .decode(&WireSlate::binary(MediaType::JSON, reply.bytes.clone()))
+        .map_err(ReceiveError::Decode)
+}
+
+/// The stored S2 again, when this wallet received `proposal` before over the transport and
+/// under the proof key of `arrival`, or `None` when it has not received its slate id. A
+/// different S1 under that id is refused, and so is one whose transaction was cancelled or
+/// expired, since cancelling released the output the reply pays to, and one that arrives
+/// another way than the first.
+pub(crate) fn answer_again(
+    repos: &dyn Repositories,
+    network: Network,
+    proposal: &Slate,
+    arrival: Arrival,
+) -> Result<Option<Received>, ReceiveError> {
+    let slate_id = proposal.id();
+    let uuid = Uuid::from_bytes(*slate_id.as_bytes());
+    let Some(transaction) = repos.transaction_by_slate(uuid, TxDirection::Incoming)? else {
+        return not_sent_here(repos, network, proposal).map(|()| None);
+    };
+    let refused = ReceiveError::AlreadyReceived {
+        slate_id,
+        tx_id: transaction.id,
+    };
+    let Some(stored) = stored_reply(repos, slate_id)? else {
+        return Err(refused);
+    };
+    if matches!(stored.state, TxState::Cancelled | TxState::Expired)
+        || !arrived_alike(repos, &transaction, arrival)?
+    {
+        return Err(refused);
+    }
+    let slate = decode_reply(network, &stored)?;
+    if !answers(&slate, proposal) {
+        return Err(refused);
+    }
+    let reply = match String::from_utf8(stored.bytes) {
+        Ok(text) => WireSlate::text(MediaType::JSON, text),
+        Err(error) => WireSlate::binary(MediaType::JSON, error.into_bytes()),
+    };
+    Ok(Some(Received {
+        tx_id: stored.tx_id,
+        slate,
+        reply,
+        repeated: true,
+    }))
+}
+
+/// Refuses `proposal` when its slate id names a payment this wallet made, a send or an invoice
+/// it paid, unless it is the S1 of that very send, delivered to an address and still open, as
+/// when the wallet pays its own address. An exported send went to no address, so its file opened
+/// in the same wallet is refused, and so is the S1 of a send that was cancelled or expired, whose
+/// inputs were released. Stored
+/// slates key by slate id and stage alone, so a stranger's S1 under the id of a payment this
+/// wallet once made to it would otherwise sit beside that payment and read its stages.
+fn not_sent_here(
+    repos: &dyn Repositories,
+    network: Network,
+    proposal: &Slate,
+) -> Result<(), ReceiveError> {
+    let slate_id = proposal.id();
+    let uuid = Uuid::from_bytes(*slate_id.as_bytes());
+    let Some(sent) = repos.transaction_by_slate(uuid, TxDirection::Outgoing)? else {
+        return Ok(());
+    };
+    let refused = ReceiveError::AlreadyReceived {
+        slate_id,
+        tx_id: sent.id,
+    };
+    if matches!(sent.entry.state, TxState::Cancelled | TxState::Expired)
+        || repos.counterparty(sent.id)?.is_none()
+    {
+        return Err(refused);
+    }
+    let own = match repos.slate(uuid, SlateStage::Standard1)? {
+        Some(stored) => decode_reply(
+            network,
+            &StoredReply {
+                tx_id: sent.id,
+                state: sent.entry.state,
+                codec: stored.codec,
+                bytes: stored.bytes,
+            },
+        )
+        .is_ok_and(|s1| same_proposal(&s1, proposal)),
+        None => false,
+    };
+    if own {
+        return Ok(());
+    }
+    Err(refused)
+}
+
+/// Whether `proposal` is the S1 this wallet stored as `own`: the same payment, signed toward
+/// with the same sender keys. Inputs and messages are not compared, since a compact S1 leaves
+/// them out.
+fn same_proposal(own: &Slate, proposal: &Slate) -> bool {
+    let same_keys = match (
+        own.participant(Role::Sender),
+        proposal.participant(Role::Sender),
+    ) {
+        (Some(own), Some(proposal)) => {
+            own.public_blind_excess == proposal.public_blind_excess
+                && own.public_nonce == proposal.public_nonce
+        }
+        _ => false,
+    };
+    own.stage() == Stage::S1
+        && own.id() == proposal.id()
+        && own.amount() == proposal.amount()
+        && own.fee() == proposal.fee()
+        && same_keys
+}
+
+/// Whether `reply` is the S2 this wallet built from `proposal`: everything the sender proposed is
+/// in it unchanged, plus exactly one output. Another S1 that reuses the slate id fails this and
+/// stays refused. A proposal without an offset gets one drawn on receipt, so its offset is not
+/// compared.
+pub(crate) fn answers(reply: &Slate, proposal: &Slate) -> bool {
+    let offset_kept = proposal.offset().is_zero() || reply.offset() == proposal.offset();
+    let outputs_kept = reply.outputs().len() == proposal.outputs().len().saturating_add(1)
+        && proposal
+            .outputs()
+            .iter()
+            .all(|output| reply.outputs().contains(output));
+    let proof_kept = match (reply.payment_proof(), proposal.payment_proof()) {
+        (None, None) => true,
+        (Some(reply), Some(proposal)) => {
+            reply.sender_address == proposal.sender_address
+                && reply.receiver_address == proposal.receiver_address
+        }
+        _ => false,
+    };
+    reply.stage() == Stage::S2
+        && proposal.stage() == Stage::S1
+        && reply.id() == proposal.id()
+        && reply.amount() == proposal.amount()
+        && reply.fee() == proposal.fee()
+        && reply.height() == proposal.height()
+        && reply.lock() == proposal.lock()
+        && reply.ttl_cutoff_height() == proposal.ttl_cutoff_height()
+        && reply.inputs() == proposal.inputs()
+        && reply.participant(Role::Sender) == proposal.participant(Role::Sender)
+        && offset_kept
+        && outputs_kept
+        && proof_kept
+}
+
+#[cfg(test)]
+mod tests {
+    // Tests may unwrap and index (docs/rules.md).
+    #![allow(clippy::unwrap_used, clippy::indexing_slicing)]
+
+    use jiff::Timestamp;
+    use lepic_legacy_slate::v3_json::{LEGACY_V3_JSON, V3JsonCodec};
+    use lepic_primitives::amount::{Amount, Fee};
+    use lepic_slate::codec::Codec;
+    use lepic_store::{
+        AccountIndex, CONTEXT_KEY_LEN, MemoryStore, StoreKeys, StoredSlate, TransactionEntry,
+        TxState, WalletStore,
+    };
+    use serde_json::Value;
+
+    use super::*;
+    use crate::account::ensure_default_account;
+
+    const S1: &str = include_str!(
+        "../../../../testdata/vectors/slates/send_file_ttl_payment_proof_messages_s1_v3.json"
+    );
+    const S2: &str = include_str!(
+        "../../../../testdata/vectors/slates/send_file_ttl_payment_proof_messages_s2_v3.json"
+    );
+    const OTHER_S1: &str =
+        include_str!("../../../../testdata/vectors/slates/send_file_plain_s1_v3.json");
+
+    fn vector_json(vector: &str) -> String {
+        let vector: Value = serde_json::from_str(vector).unwrap();
+        vector["expected"]["json"].as_str().unwrap().to_owned()
+    }
+
+    fn decode(json: &str) -> Slate {
+        V3JsonCodec::new(Network::Floonet.params().default_base_fee())
+            .decode(&WireSlate::text(MediaType::JSON, json.to_owned()))
+            .unwrap()
+    }
+
+    fn with_field(json: &str, key: &str, value: &str) -> String {
+        let mut slate: Value = serde_json::from_str(json).unwrap();
+        slate[key] = Value::String(value.to_owned());
+        slate.to_string()
+    }
+
+    #[test]
+    fn the_g03_s2_answers_its_own_s1() {
+        assert!(answers(
+            &decode(&vector_json(S2)),
+            &decode(&vector_json(S1))
+        ));
+    }
+
+    #[test]
+    fn a_different_s1_under_the_same_id_is_not_answered() {
+        let reply = decode(&vector_json(S2));
+        let proposal = vector_json(S1);
+        for (key, value) in [
+            ("amount", "1"),
+            ("height", "3"),
+            ("ttl_cutoff_height", "99"),
+        ] {
+            let changed = decode(&with_field(&proposal, key, value));
+            assert!(!answers(&reply, &changed), "{key}");
+        }
+        let mut other = vector_json(OTHER_S1);
+        other = with_field(&other, "id", &reply.id().to_string());
+        assert!(!answers(&reply, &decode(&other)));
+        assert!(!answers(&reply, &reply));
+    }
+
+    #[test]
+    fn stored_reply_is_found_by_slate_id_and_decodes() {
+        let store = MemoryStore::new(StoreKeys::from_bytes(
+            [3; CONTEXT_KEY_LEN],
+            [3; CONTEXT_KEY_LEN],
+        ));
+        let reply_json = vector_json(S2);
+        let slate = decode(&reply_json);
+        let uuid = Uuid::from_bytes(*slate.id().as_bytes());
+        let at = Timestamp::from_second(1_790_000_000).unwrap();
+        let tx_id = store
+            .write(|repos| {
+                ensure_default_account(repos)?;
+                let tx_id = repos.insert_transaction(&TransactionEntry {
+                    account: AccountIndex(0),
+                    direction: TxDirection::Incoming,
+                    state: TxState::Received,
+                    slate_id: Some(uuid),
+                    transport: None,
+                    amount_credited: slate.amount(),
+                    amount_debited: Amount::ZERO,
+                    fee: None::<Fee>,
+                    created_at: at,
+                    updated_at: at,
+                })?;
+                repos.insert_slate(&StoredSlate {
+                    slate_id: uuid,
+                    stage: SlateStage::Standard2,
+                    codec: LEGACY_V3_JSON.as_str().to_owned(),
+                    bytes: reply_json.clone().into_bytes(),
+                })?;
+                Ok::<_, crate::WalletError>(tx_id)
+            })
+            .unwrap();
+
+        let stored = store
+            .read(|repos| stored_reply(repos, slate.id()))
+            .unwrap()
+            .unwrap();
+        assert_eq!(stored.tx_id, tx_id);
+        assert_eq!(stored.bytes, reply_json.as_bytes());
+        assert_eq!(decode_reply(Network::Floonet, &stored).unwrap(), slate);
+
+        let unknown = SlateId::from_bytes([9; 16]);
+        assert_eq!(
+            store.read(|repos| stored_reply(repos, unknown)).unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn a_reply_under_an_unknown_codec_is_a_typed_error() {
+        let reply = StoredReply {
+            tx_id: TxId(1),
+            state: TxState::Received,
+            codec: "unknown".to_owned(),
+            bytes: Vec::new(),
+        };
+        assert!(matches!(
+            decode_reply(Network::Floonet, &reply),
+            Err(ReceiveError::Decode(DecodeError::UnknownFormat))
+        ));
+    }
+}

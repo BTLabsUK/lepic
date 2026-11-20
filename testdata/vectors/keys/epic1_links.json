@@ -1,0 +1,499 @@
+{
+  "schema": 1,
+  "area": "keys",
+  "name": "epic1_links",
+  "generator": "conformance/vectors/keys",
+  "upstream": {
+    "repo": "https://github.com/EpicCash/epic-wallet",
+    "commit": "845b3fcf4df12ed0139929c62157015447a9d063"
+  },
+  "inputs": {
+    "note": "address from the first seal key and the first delivery key; the epicbox entries name mailboxes from the secp256k1 secrets 0x11.., 0x22.."
+  },
+  "expected": {
+    "cases": [
+      {
+        "name": "one_route_mainnet",
+        "text": "epic:epic1qxzjpuqf3yc2w4r53d7aedp77adqm0e6p5nrsxh5awj2nr42nd8x5qnehen8a7wuhwk9tgrzjh8gwzc8q2dlekedec5djk0js9d3d7qhnq2l4z8f?http=pay.example.org&amount=1.5&message=Rent%20for%20May%20%26%20June",
+        "network": "mainnet",
+        "outcome": "link",
+        "reason": null,
+        "address": "epic1qxzjpuqf3yc2w4r53d7aedp77adqm0e6p5nrsxh5awj2nr42nd8x5qnehen8a7wuhwk9tgrzjh8gwzc8q2dlekedec5djk0js9d3d7qhnq2l4z8f",
+        "routes": [
+          {
+            "method": "http",
+            "value": "pay.example.org"
+          }
+        ],
+        "skipped": [],
+        "amount_units": "150000000",
+        "message": "Rent for May & June"
+      },
+      {
+        "name": "three_routes_mainnet",
+        "text": "epic:epic1qxzjpuqf3yc2w4r53d7aedp77adqm0e6p5nrsxh5awj2nr42nd8x5qnehen8a7wuhwk9tgrzjh8gwzc8q2dlekedec5djk0js9d3d7qhnq2l4z8f?http=pay.example.org&tor=pg6mmjiyjmcrsslvykfwnntlaru7p5svn6y2ymmju6nubxndf4pscryd.onion:8080&http=203.0.113.7:443",
+        "network": "mainnet",
+        "outcome": "link",
+        "reason": null,
+        "address": "epic1qxzjpuqf3yc2w4r53d7aedp77adqm0e6p5nrsxh5awj2nr42nd8x5qnehen8a7wuhwk9tgrzjh8gwzc8q2dlekedec5djk0js9d3d7qhnq2l4z8f",
+        "routes": [
+          {
+            "method": "http",
+            "value": "pay.example.org"
+          },
+          {
+            "method": "tor",
+            "value": "pg6mmjiyjmcrsslvykfwnntlaru7p5svn6y2ymmju6nubxndf4pscryd.onion:8080"
+          },
+          {
+            "method": "http",
+            "value": "203.0.113.7:443"
+          }
+        ],
+        "skipped": [],
+        "amount_units": null,
+        "message": null
+      },
+      {
+        "name": "fourth_entry_refused_mainnet",
+        "text": "epic:epic1qxzjpuqf3yc2w4r53d7aedp77adqm0e6p5nrsxh5awj2nr42nd8x5qnehen8a7wuhwk9tgrzjh8gwzc8q2dlekedec5djk0js9d3d7qhnq2l4z8f?http=pay.example.org&tor=pg6mmjiyjmcrsslvykfwnntlaru7p5svn6y2ymmju6nubxndf4pscryd.onion&http=pay.example.net&tor=pg6mmjiyjmcrsslvykfwnntlaru7p5svn6y2ymmju6nubxndf4pscryd.onion:8080",
+        "network": "mainnet",
+        "outcome": "refused",
+        "reason": "too_many_entries",
+        "address": null,
+        "routes": [],
+        "skipped": [],
+        "amount_units": null,
+        "message": null
+      },
+      {
+        "name": "fourth_entry_out_of_form_refused_mainnet",
+        "text": "epic:epic1qxzjpuqf3yc2w4r53d7aedp77adqm0e6p5nrsxh5awj2nr42nd8x5qnehen8a7wuhwk9tgrzjh8gwzc8q2dlekedec5djk0js9d3d7qhnq2l4z8f?http=pay.example.org&tor=pg6mmjiyjmcrsslvykfwnntlaru7p5svn6y2ymmju6nubxndf4pscryd.onion&http=pay.example.net&tor=pay.example.com",
+        "network": "mainnet",
+        "outcome": "refused",
+        "reason": "too_many_entries",
+        "address": null,
+        "routes": [],
+        "skipped": [],
+        "amount_units": null,
+        "message": null
+      },
+      {
+        "name": "epicbox_entries_left_out_mainnet",
+        "text": "epic:epic1qxzjpuqf3yc2w4r53d7aedp77adqm0e6p5nrsxh5awj2nr42nd8x5qnehen8a7wuhwk9tgrzjh8gwzc8q2dlekedec5djk0js9d3d7qhnq2l4z8f?epicbox=esYrV7nP8DHCHcHcRnook2vAUZRp5DUDiAhVA9GEyi9NaDtQCiLn@relay.example.org&epicbox=esWqsefCT41rAPXEq1YZdrisX5ZVB6UvYWuPYKZP6SWuWSoBDdq7@relay.example.net:8443&amount=1.5",
+        "network": "mainnet",
+        "outcome": "link",
+        "reason": null,
+        "address": "epic1qxzjpuqf3yc2w4r53d7aedp77adqm0e6p5nrsxh5awj2nr42nd8x5qnehen8a7wuhwk9tgrzjh8gwzc8q2dlekedec5djk0js9d3d7qhnq2l4z8f",
+        "routes": [],
+        "skipped": [
+          "epicbox",
+          "epicbox"
+        ],
+        "amount_units": "150000000",
+        "message": null
+      },
+      {
+        "name": "http_beside_epicbox_mainnet",
+        "text": "epic:epic1qxzjpuqf3yc2w4r53d7aedp77adqm0e6p5nrsxh5awj2nr42nd8x5qnehen8a7wuhwk9tgrzjh8gwzc8q2dlekedec5djk0js9d3d7qhnq2l4z8f?http=Pay.Example.org&epicbox=esYrV7nP8DHCHcHcRnook2vAUZRp5DUDiAhVA9GEyi9NaDtQCiLn@relay.example.org&amount=1.5",
+        "network": "mainnet",
+        "outcome": "link",
+        "reason": null,
+        "address": "epic1qxzjpuqf3yc2w4r53d7aedp77adqm0e6p5nrsxh5awj2nr42nd8x5qnehen8a7wuhwk9tgrzjh8gwzc8q2dlekedec5djk0js9d3d7qhnq2l4z8f",
+        "routes": [
+          {
+            "method": "http",
+            "value": "pay.example.org"
+          }
+        ],
+        "skipped": [
+          "epicbox"
+        ],
+        "amount_units": "150000000",
+        "message": null
+      },
+      {
+        "name": "tor_beside_epicbox_mainnet",
+        "text": "epic:epic1qxzjpuqf3yc2w4r53d7aedp77adqm0e6p5nrsxh5awj2nr42nd8x5qnehen8a7wuhwk9tgrzjh8gwzc8q2dlekedec5djk0js9d3d7qhnq2l4z8f?epicbox=esWqsefCT41rAPXEq1YZdrisX5ZVB6UvYWuPYKZP6SWuWSoBDdq7@relay.example.net:8443&tor=pg6mmjiyjmcrsslvykfwnntlaru7p5svn6y2ymmju6nubxndf4pscryd.onion:8080",
+        "network": "mainnet",
+        "outcome": "link",
+        "reason": null,
+        "address": "epic1qxzjpuqf3yc2w4r53d7aedp77adqm0e6p5nrsxh5awj2nr42nd8x5qnehen8a7wuhwk9tgrzjh8gwzc8q2dlekedec5djk0js9d3d7qhnq2l4z8f",
+        "routes": [
+          {
+            "method": "tor",
+            "value": "pg6mmjiyjmcrsslvykfwnntlaru7p5svn6y2ymmju6nubxndf4pscryd.onion:8080"
+          }
+        ],
+        "skipped": [
+          "epicbox"
+        ],
+        "amount_units": null,
+        "message": null
+      },
+      {
+        "name": "http_alone_mainnet",
+        "text": "epic:epic1qxzjpuqf3yc2w4r53d7aedp77adqm0e6p5nrsxh5awj2nr42nd8x5qnehen8a7wuhwk9tgrzjh8gwzc8q2dlekedec5djk0js9d3d7qhnq2l4z8f?http=pay.example.org:8443&amount=.25",
+        "network": "mainnet",
+        "outcome": "link",
+        "reason": null,
+        "address": "epic1qxzjpuqf3yc2w4r53d7aedp77adqm0e6p5nrsxh5awj2nr42nd8x5qnehen8a7wuhwk9tgrzjh8gwzc8q2dlekedec5djk0js9d3d7qhnq2l4z8f",
+        "routes": [
+          {
+            "method": "http",
+            "value": "pay.example.org:8443"
+          }
+        ],
+        "skipped": [],
+        "amount_units": "25000000",
+        "message": null
+      },
+      {
+        "name": "tor_alone_mainnet",
+        "text": "epic:epic1qxzjpuqf3yc2w4r53d7aedp77adqm0e6p5nrsxh5awj2nr42nd8x5qnehen8a7wuhwk9tgrzjh8gwzc8q2dlekedec5djk0js9d3d7qhnq2l4z8f?tor=pg6mmjiyjmcrsslvykfwnntlaru7p5svn6y2ymmju6nubxndf4pscryd.onion",
+        "network": "mainnet",
+        "outcome": "link",
+        "reason": null,
+        "address": "epic1qxzjpuqf3yc2w4r53d7aedp77adqm0e6p5nrsxh5awj2nr42nd8x5qnehen8a7wuhwk9tgrzjh8gwzc8q2dlekedec5djk0js9d3d7qhnq2l4z8f",
+        "routes": [
+          {
+            "method": "tor",
+            "value": "pg6mmjiyjmcrsslvykfwnntlaru7p5svn6y2ymmju6nubxndf4pscryd.onion"
+          }
+        ],
+        "skipped": [],
+        "amount_units": null,
+        "message": null
+      },
+      {
+        "name": "tor_wrong_checksum_read_as_the_checksum_is_the_posters_check_mainnet",
+        "text": "epic:epic1qxzjpuqf3yc2w4r53d7aedp77adqm0e6p5nrsxh5awj2nr42nd8x5qnehen8a7wuhwk9tgrzjh8gwzc8q2dlekedec5djk0js9d3d7qhnq2l4z8f?tor=pg6mmjiyjmcrsslvykfwnntlaru7p5svn6y2ymmju6nubxndf4psaryd.onion",
+        "network": "mainnet",
+        "outcome": "link",
+        "reason": null,
+        "address": "epic1qxzjpuqf3yc2w4r53d7aedp77adqm0e6p5nrsxh5awj2nr42nd8x5qnehen8a7wuhwk9tgrzjh8gwzc8q2dlekedec5djk0js9d3d7qhnq2l4z8f",
+        "routes": [
+          {
+            "method": "tor",
+            "value": "pg6mmjiyjmcrsslvykfwnntlaru7p5svn6y2ymmju6nubxndf4psaryd.onion"
+          }
+        ],
+        "skipped": [],
+        "amount_units": null,
+        "message": null
+      },
+      {
+        "name": "http_and_tor_values_out_of_form_mainnet",
+        "text": "epic:epic1qxzjpuqf3yc2w4r53d7aedp77adqm0e6p5nrsxh5awj2nr42nd8x5qnehen8a7wuhwk9tgrzjh8gwzc8q2dlekedec5djk0js9d3d7qhnq2l4z8f?http=https%3a%2f%2fpay.example.org&tor=PG6MMJIYJMCRSSLVYKFWNNTLARU7P5SVN6Y2YMMJU6NUBXNDF4PSCRYD.ONION&epicbox=esYrV7nP8DHCHcHcRnook2vAUZRp5DUDiAhVA9GEyi9NaDtQCiLn@relay.example.org",
+        "network": "mainnet",
+        "outcome": "link",
+        "reason": null,
+        "address": "epic1qxzjpuqf3yc2w4r53d7aedp77adqm0e6p5nrsxh5awj2nr42nd8x5qnehen8a7wuhwk9tgrzjh8gwzc8q2dlekedec5djk0js9d3d7qhnq2l4z8f",
+        "routes": [],
+        "skipped": [
+          "transport_http",
+          "transport_onion",
+          "epicbox"
+        ],
+        "amount_units": null,
+        "message": null
+      },
+      {
+        "name": "tor_and_http_values_out_of_form_only_mainnet",
+        "text": "epic:epic1qxzjpuqf3yc2w4r53d7aedp77adqm0e6p5nrsxh5awj2nr42nd8x5qnehen8a7wuhwk9tgrzjh8gwzc8q2dlekedec5djk0js9d3d7qhnq2l4z8f?tor=pg6mmjiyjmcrsslvykfwnntlaru7p5svn6y2ymmju6nubxndf4pscryd.onion/inbox&http=pay.example.org%3a0",
+        "network": "mainnet",
+        "outcome": "link",
+        "reason": null,
+        "address": "epic1qxzjpuqf3yc2w4r53d7aedp77adqm0e6p5nrsxh5awj2nr42nd8x5qnehen8a7wuhwk9tgrzjh8gwzc8q2dlekedec5djk0js9d3d7qhnq2l4z8f",
+        "routes": [],
+        "skipped": [
+          "transport_onion",
+          "transport_http"
+        ],
+        "amount_units": null,
+        "message": null
+      },
+      {
+        "name": "route_bound_leaves_out_epicbox_mainnet",
+        "text": "epic:epic1qxzjpuqf3yc2w4r53d7aedp77adqm0e6p5nrsxh5awj2nr42nd8x5qnehen8a7wuhwk9tgrzjh8gwzc8q2dlekedec5djk0js9d3d7qhnq2l4z8f?http=pay.example.org&epicbox=esYrV7nP8DHCHcHcRnook2vAUZRp5DUDiAhVA9GEyi9NaDtQCiLn@relay.example.org&tor=pg6mmjiyjmcrsslvykfwnntlaru7p5svn6y2ymmju6nubxndf4pscryd.onion&epicbox=esWqsefCT41rAPXEq1YZdrisX5ZVB6UvYWuPYKZP6SWuWSoBDdq7@relay.example.net&http=pay.example.net",
+        "network": "mainnet",
+        "outcome": "link",
+        "reason": null,
+        "address": "epic1qxzjpuqf3yc2w4r53d7aedp77adqm0e6p5nrsxh5awj2nr42nd8x5qnehen8a7wuhwk9tgrzjh8gwzc8q2dlekedec5djk0js9d3d7qhnq2l4z8f",
+        "routes": [
+          {
+            "method": "http",
+            "value": "pay.example.org"
+          },
+          {
+            "method": "tor",
+            "value": "pg6mmjiyjmcrsslvykfwnntlaru7p5svn6y2ymmju6nubxndf4pscryd.onion"
+          },
+          {
+            "method": "http",
+            "value": "pay.example.net"
+          }
+        ],
+        "skipped": [
+          "epicbox",
+          "epicbox"
+        ],
+        "amount_units": null,
+        "message": null
+      },
+      {
+        "name": "epicbox_link_with_epic1_mainnet",
+        "text": "epic:esYrV7nP8DHCHcHcRnook2vAUZRp5DUDiAhVA9GEyi9NaDtQCiLn@relay.example.org?epic1=epic1qxzjpuqf3yc2w4r53d7aedp77adqm0e6p5nrsxh5awj2nr42nd8x5qnehen8a7wuhwk9tgrzjh8gwzc8q2dlekedec5djk0js9d3d7qhnq2l4z8f&amount=1",
+        "network": "mainnet",
+        "outcome": "refused",
+        "reason": "not_an_epic1_link",
+        "address": null,
+        "routes": [],
+        "skipped": [],
+        "amount_units": null,
+        "message": null
+      },
+      {
+        "name": "one_route_floonet",
+        "text": "epic:tepic1qxzjpuqf3yc2w4r53d7aedp77adqm0e6p5nrsxh5awj2nr42nd8x5qnehen8a7wuhwk9tgrzjh8gwzc8q2dlekedec5djk0js9d3d7qhnq69vqnf?http=pay.example.org&amount=1.5&message=Rent%20for%20May%20%26%20June",
+        "network": "floonet",
+        "outcome": "link",
+        "reason": null,
+        "address": "tepic1qxzjpuqf3yc2w4r53d7aedp77adqm0e6p5nrsxh5awj2nr42nd8x5qnehen8a7wuhwk9tgrzjh8gwzc8q2dlekedec5djk0js9d3d7qhnq69vqnf",
+        "routes": [
+          {
+            "method": "http",
+            "value": "pay.example.org"
+          }
+        ],
+        "skipped": [],
+        "amount_units": "150000000",
+        "message": "Rent for May & June"
+      },
+      {
+        "name": "three_routes_floonet",
+        "text": "epic:tepic1qxzjpuqf3yc2w4r53d7aedp77adqm0e6p5nrsxh5awj2nr42nd8x5qnehen8a7wuhwk9tgrzjh8gwzc8q2dlekedec5djk0js9d3d7qhnq69vqnf?http=pay.example.org&tor=pg6mmjiyjmcrsslvykfwnntlaru7p5svn6y2ymmju6nubxndf4pscryd.onion:8080&http=203.0.113.7:443",
+        "network": "floonet",
+        "outcome": "link",
+        "reason": null,
+        "address": "tepic1qxzjpuqf3yc2w4r53d7aedp77adqm0e6p5nrsxh5awj2nr42nd8x5qnehen8a7wuhwk9tgrzjh8gwzc8q2dlekedec5djk0js9d3d7qhnq69vqnf",
+        "routes": [
+          {
+            "method": "http",
+            "value": "pay.example.org"
+          },
+          {
+            "method": "tor",
+            "value": "pg6mmjiyjmcrsslvykfwnntlaru7p5svn6y2ymmju6nubxndf4pscryd.onion:8080"
+          },
+          {
+            "method": "http",
+            "value": "203.0.113.7:443"
+          }
+        ],
+        "skipped": [],
+        "amount_units": null,
+        "message": null
+      },
+      {
+        "name": "fourth_entry_refused_floonet",
+        "text": "epic:tepic1qxzjpuqf3yc2w4r53d7aedp77adqm0e6p5nrsxh5awj2nr42nd8x5qnehen8a7wuhwk9tgrzjh8gwzc8q2dlekedec5djk0js9d3d7qhnq69vqnf?http=pay.example.org&tor=pg6mmjiyjmcrsslvykfwnntlaru7p5svn6y2ymmju6nubxndf4pscryd.onion&http=pay.example.net&tor=pg6mmjiyjmcrsslvykfwnntlaru7p5svn6y2ymmju6nubxndf4pscryd.onion:8080",
+        "network": "floonet",
+        "outcome": "refused",
+        "reason": "too_many_entries",
+        "address": null,
+        "routes": [],
+        "skipped": [],
+        "amount_units": null,
+        "message": null
+      },
+      {
+        "name": "fourth_entry_out_of_form_refused_floonet",
+        "text": "epic:tepic1qxzjpuqf3yc2w4r53d7aedp77adqm0e6p5nrsxh5awj2nr42nd8x5qnehen8a7wuhwk9tgrzjh8gwzc8q2dlekedec5djk0js9d3d7qhnq69vqnf?http=pay.example.org&tor=pg6mmjiyjmcrsslvykfwnntlaru7p5svn6y2ymmju6nubxndf4pscryd.onion&http=pay.example.net&tor=pay.example.com",
+        "network": "floonet",
+        "outcome": "refused",
+        "reason": "too_many_entries",
+        "address": null,
+        "routes": [],
+        "skipped": [],
+        "amount_units": null,
+        "message": null
+      },
+      {
+        "name": "epicbox_entries_left_out_floonet",
+        "text": "epic:tepic1qxzjpuqf3yc2w4r53d7aedp77adqm0e6p5nrsxh5awj2nr42nd8x5qnehen8a7wuhwk9tgrzjh8gwzc8q2dlekedec5djk0js9d3d7qhnq69vqnf?epicbox=zzQcF4niw7stoz65e6VG1hnQKekXc8M5rFRDFvP7kneAsEvSEPTa@relay.example.org&epicbox=zzNbdbfYFxcYgmKi3KE1uXb7NAtCi1Mngbd7e6gFsX1hoTuPWAB1@relay.example.net:8443&amount=1.5",
+        "network": "floonet",
+        "outcome": "link",
+        "reason": null,
+        "address": "tepic1qxzjpuqf3yc2w4r53d7aedp77adqm0e6p5nrsxh5awj2nr42nd8x5qnehen8a7wuhwk9tgrzjh8gwzc8q2dlekedec5djk0js9d3d7qhnq69vqnf",
+        "routes": [],
+        "skipped": [
+          "epicbox",
+          "epicbox"
+        ],
+        "amount_units": "150000000",
+        "message": null
+      },
+      {
+        "name": "http_beside_epicbox_floonet",
+        "text": "epic:tepic1qxzjpuqf3yc2w4r53d7aedp77adqm0e6p5nrsxh5awj2nr42nd8x5qnehen8a7wuhwk9tgrzjh8gwzc8q2dlekedec5djk0js9d3d7qhnq69vqnf?http=Pay.Example.org&epicbox=zzQcF4niw7stoz65e6VG1hnQKekXc8M5rFRDFvP7kneAsEvSEPTa@relay.example.org&amount=1.5",
+        "network": "floonet",
+        "outcome": "link",
+        "reason": null,
+        "address": "tepic1qxzjpuqf3yc2w4r53d7aedp77adqm0e6p5nrsxh5awj2nr42nd8x5qnehen8a7wuhwk9tgrzjh8gwzc8q2dlekedec5djk0js9d3d7qhnq69vqnf",
+        "routes": [
+          {
+            "method": "http",
+            "value": "pay.example.org"
+          }
+        ],
+        "skipped": [
+          "epicbox"
+        ],
+        "amount_units": "150000000",
+        "message": null
+      },
+      {
+        "name": "tor_beside_epicbox_floonet",
+        "text": "epic:tepic1qxzjpuqf3yc2w4r53d7aedp77adqm0e6p5nrsxh5awj2nr42nd8x5qnehen8a7wuhwk9tgrzjh8gwzc8q2dlekedec5djk0js9d3d7qhnq69vqnf?epicbox=zzNbdbfYFxcYgmKi3KE1uXb7NAtCi1Mngbd7e6gFsX1hoTuPWAB1@relay.example.net:8443&tor=pg6mmjiyjmcrsslvykfwnntlaru7p5svn6y2ymmju6nubxndf4pscryd.onion:8080",
+        "network": "floonet",
+        "outcome": "link",
+        "reason": null,
+        "address": "tepic1qxzjpuqf3yc2w4r53d7aedp77adqm0e6p5nrsxh5awj2nr42nd8x5qnehen8a7wuhwk9tgrzjh8gwzc8q2dlekedec5djk0js9d3d7qhnq69vqnf",
+        "routes": [
+          {
+            "method": "tor",
+            "value": "pg6mmjiyjmcrsslvykfwnntlaru7p5svn6y2ymmju6nubxndf4pscryd.onion:8080"
+          }
+        ],
+        "skipped": [
+          "epicbox"
+        ],
+        "amount_units": null,
+        "message": null
+      },
+      {
+        "name": "http_alone_floonet",
+        "text": "epic:tepic1qxzjpuqf3yc2w4r53d7aedp77adqm0e6p5nrsxh5awj2nr42nd8x5qnehen8a7wuhwk9tgrzjh8gwzc8q2dlekedec5djk0js9d3d7qhnq69vqnf?http=pay.example.org:8443&amount=.25",
+        "network": "floonet",
+        "outcome": "link",
+        "reason": null,
+        "address": "tepic1qxzjpuqf3yc2w4r53d7aedp77adqm0e6p5nrsxh5awj2nr42nd8x5qnehen8a7wuhwk9tgrzjh8gwzc8q2dlekedec5djk0js9d3d7qhnq69vqnf",
+        "routes": [
+          {
+            "method": "http",
+            "value": "pay.example.org:8443"
+          }
+        ],
+        "skipped": [],
+        "amount_units": "25000000",
+        "message": null
+      },
+      {
+        "name": "tor_alone_floonet",
+        "text": "epic:tepic1qxzjpuqf3yc2w4r53d7aedp77adqm0e6p5nrsxh5awj2nr42nd8x5qnehen8a7wuhwk9tgrzjh8gwzc8q2dlekedec5djk0js9d3d7qhnq69vqnf?tor=pg6mmjiyjmcrsslvykfwnntlaru7p5svn6y2ymmju6nubxndf4pscryd.onion",
+        "network": "floonet",
+        "outcome": "link",
+        "reason": null,
+        "address": "tepic1qxzjpuqf3yc2w4r53d7aedp77adqm0e6p5nrsxh5awj2nr42nd8x5qnehen8a7wuhwk9tgrzjh8gwzc8q2dlekedec5djk0js9d3d7qhnq69vqnf",
+        "routes": [
+          {
+            "method": "tor",
+            "value": "pg6mmjiyjmcrsslvykfwnntlaru7p5svn6y2ymmju6nubxndf4pscryd.onion"
+          }
+        ],
+        "skipped": [],
+        "amount_units": null,
+        "message": null
+      },
+      {
+        "name": "tor_wrong_checksum_read_as_the_checksum_is_the_posters_check_floonet",
+        "text": "epic:tepic1qxzjpuqf3yc2w4r53d7aedp77adqm0e6p5nrsxh5awj2nr42nd8x5qnehen8a7wuhwk9tgrzjh8gwzc8q2dlekedec5djk0js9d3d7qhnq69vqnf?tor=pg6mmjiyjmcrsslvykfwnntlaru7p5svn6y2ymmju6nubxndf4psaryd.onion",
+        "network": "floonet",
+        "outcome": "link",
+        "reason": null,
+        "address": "tepic1qxzjpuqf3yc2w4r53d7aedp77adqm0e6p5nrsxh5awj2nr42nd8x5qnehen8a7wuhwk9tgrzjh8gwzc8q2dlekedec5djk0js9d3d7qhnq69vqnf",
+        "routes": [
+          {
+            "method": "tor",
+            "value": "pg6mmjiyjmcrsslvykfwnntlaru7p5svn6y2ymmju6nubxndf4psaryd.onion"
+          }
+        ],
+        "skipped": [],
+        "amount_units": null,
+        "message": null
+      },
+      {
+        "name": "http_and_tor_values_out_of_form_floonet",
+        "text": "epic:tepic1qxzjpuqf3yc2w4r53d7aedp77adqm0e6p5nrsxh5awj2nr42nd8x5qnehen8a7wuhwk9tgrzjh8gwzc8q2dlekedec5djk0js9d3d7qhnq69vqnf?http=https%3a%2f%2fpay.example.org&tor=PG6MMJIYJMCRSSLVYKFWNNTLARU7P5SVN6Y2YMMJU6NUBXNDF4PSCRYD.ONION&epicbox=zzQcF4niw7stoz65e6VG1hnQKekXc8M5rFRDFvP7kneAsEvSEPTa@relay.example.org",
+        "network": "floonet",
+        "outcome": "link",
+        "reason": null,
+        "address": "tepic1qxzjpuqf3yc2w4r53d7aedp77adqm0e6p5nrsxh5awj2nr42nd8x5qnehen8a7wuhwk9tgrzjh8gwzc8q2dlekedec5djk0js9d3d7qhnq69vqnf",
+        "routes": [],
+        "skipped": [
+          "transport_http",
+          "transport_onion",
+          "epicbox"
+        ],
+        "amount_units": null,
+        "message": null
+      },
+      {
+        "name": "tor_and_http_values_out_of_form_only_floonet",
+        "text": "epic:tepic1qxzjpuqf3yc2w4r53d7aedp77adqm0e6p5nrsxh5awj2nr42nd8x5qnehen8a7wuhwk9tgrzjh8gwzc8q2dlekedec5djk0js9d3d7qhnq69vqnf?tor=pg6mmjiyjmcrsslvykfwnntlaru7p5svn6y2ymmju6nubxndf4pscryd.onion/inbox&http=pay.example.org%3a0",
+        "network": "floonet",
+        "outcome": "link",
+        "reason": null,
+        "address": "tepic1qxzjpuqf3yc2w4r53d7aedp77adqm0e6p5nrsxh5awj2nr42nd8x5qnehen8a7wuhwk9tgrzjh8gwzc8q2dlekedec5djk0js9d3d7qhnq69vqnf",
+        "routes": [],
+        "skipped": [
+          "transport_onion",
+          "transport_http"
+        ],
+        "amount_units": null,
+        "message": null
+      },
+      {
+        "name": "route_bound_leaves_out_epicbox_floonet",
+        "text": "epic:tepic1qxzjpuqf3yc2w4r53d7aedp77adqm0e6p5nrsxh5awj2nr42nd8x5qnehen8a7wuhwk9tgrzjh8gwzc8q2dlekedec5djk0js9d3d7qhnq69vqnf?http=pay.example.org&epicbox=zzQcF4niw7stoz65e6VG1hnQKekXc8M5rFRDFvP7kneAsEvSEPTa@relay.example.org&tor=pg6mmjiyjmcrsslvykfwnntlaru7p5svn6y2ymmju6nubxndf4pscryd.onion&epicbox=zzNbdbfYFxcYgmKi3KE1uXb7NAtCi1Mngbd7e6gFsX1hoTuPWAB1@relay.example.net&http=pay.example.net",
+        "network": "floonet",
+        "outcome": "link",
+        "reason": null,
+        "address": "tepic1qxzjpuqf3yc2w4r53d7aedp77adqm0e6p5nrsxh5awj2nr42nd8x5qnehen8a7wuhwk9tgrzjh8gwzc8q2dlekedec5djk0js9d3d7qhnq69vqnf",
+        "routes": [
+          {
+            "method": "http",
+            "value": "pay.example.org"
+          },
+          {
+            "method": "tor",
+            "value": "pg6mmjiyjmcrsslvykfwnntlaru7p5svn6y2ymmju6nubxndf4pscryd.onion"
+          },
+          {
+            "method": "http",
+            "value": "pay.example.net"
+          }
+        ],
+        "skipped": [
+          "epicbox",
+          "epicbox"
+        ],
+        "amount_units": null,
+        "message": null
+      },
+      {
+        "name": "epicbox_link_with_epic1_floonet",
+        "text": "epic:zzQcF4niw7stoz65e6VG1hnQKekXc8M5rFRDFvP7kneAsEvSEPTa@relay.example.org?epic1=tepic1qxzjpuqf3yc2w4r53d7aedp77adqm0e6p5nrsxh5awj2nr42nd8x5qnehen8a7wuhwk9tgrzjh8gwzc8q2dlekedec5djk0js9d3d7qhnq69vqnf&amount=1",
+        "network": "floonet",
+        "outcome": "refused",
+        "reason": "not_an_epic1_link",
+        "address": null,
+        "routes": [],
+        "skipped": [],
+        "amount_units": null,
+        "message": null
+      }
+    ]
+  }
+}

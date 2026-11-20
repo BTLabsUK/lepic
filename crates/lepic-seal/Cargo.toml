@@ -1,0 +1,28 @@
+[package]
+name = "lepic-seal"
+description = "The sealed envelope format: header, HPKE, inner fields, padding, armors and contact cards."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+base64 = { workspace = true, features = ["alloc"] }
+ed25519-dalek = { workspace = true, features = ["zeroize"] }
+hmac.workspace = true
+hpke = { workspace = true, features = ["alloc", "x25519", "chacha"] }
+rand_core.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+x25519-dalek.workspace = true
+zeroize = { workspace = true, features = ["alloc", "derive"] }
+
+[dev-dependencies]
+insta.workspace = true
+proptest = { workspace = true, features = ["std"] }
+serde = { workspace = true, features = ["derive", "std"] }
+serde_json = { workspace = true, features = ["std"] }
+
+[lints]
+workspace = true

@@ -1,0 +1,113 @@
+{
+  "schema": 1,
+  "area": "keys",
+  "name": "check_codes",
+  "generator": "conformance/vectors/keys",
+  "upstream": {
+    "repo": "https://github.com/EpicCash/epic-wallet",
+    "commit": "845b3fcf4df12ed0139929c62157015447a9d063"
+  },
+  "inputs": {
+    "tag": "epic-check/1"
+  },
+  "expected": {
+    "cases": [
+      {
+        "excess_secret": "0101010101010101010101010101010101010101010101010101010101010101",
+        "excess": "031b84c5567b126440995d3ed5aaba0565d71e1834604819ff9c17f5e9d5dd078f",
+        "digest": "28fdc98d147a9f46e7529b45af7fa10d9f4ab2f9ef0ed4357002dc7597469761",
+        "code": "0845"
+      },
+      {
+        "excess_secret": "0202020202020202020202020202020202020202020202020202020202020202",
+        "excess": "024d4b6cd1361032ca9bd2aeb9d900aa4d45d9ead80ac9423374c451a7254d0766",
+        "digest": "6941073ecebf2cacea3d6205ccc84ad27bfd02198eca48be1843a6a181122e98",
+        "code": "9374"
+      },
+      {
+        "excess_secret": "0303030303030303030303030303030303030303030303030303030303030303",
+        "excess": "02531fe6068134503d2723133227c867ac8fa6c83c537e9a44c3c5bdbdcb1fe337",
+        "digest": "614b49db466453a1891cfc5ccb69df68e0e7c877c7aed3ee5ef27e7160fa6c93",
+        "code": "4059"
+      },
+      {
+        "excess_secret": "0404040404040404040404040404040404040404040404040404040404040404",
+        "excess": "03462779ad4aad39514614751a71085f2f10e1c7a593e4e030efb5b8721ce55b0b",
+        "digest": "640788c775cc2f708e86b22e87db9e0cf5f81d272702e6d65a450ae37f7709e9",
+        "code": "5367"
+      },
+      {
+        "excess_secret": "0505050505050505050505050505050505050505050505050505050505050505",
+        "excess": "0362c0a046dacce86ddd0343c6d3c7c79c2208ba0d9c9cf24a6d046d21d21f90f7",
+        "digest": "b0588cc17677771c7154e0097012f39e896b0f115824aa9bf851614c4ad95459",
+        "code": "3217"
+      },
+      {
+        "excess_secret": "0606060606060606060606060606060606060606060606060606060606060606",
+        "excess": "03f006a18d5653c4edf5391ff23a61f03ff83d237e880ee61187fa9f379a028e0a",
+        "digest": "bfa6d60a381f6b3df765476db9e360229909e7fb8a64ebd68572d1f8fd5afaaa",
+        "code": "2026"
+      },
+      {
+        "excess_secret": "0707070707070707070707070707070707070707070707070707070707070707",
+        "excess": "02989c0b76cb563971fdc9bef31ec06c3560f3249d6ee9e5d83c57625596e05f6f",
+        "digest": "ac7c8858197c7bb0cf1021762fa7202d0c78a1476c5432e99888e562754c3ba6",
+        "code": "2520"
+      },
+      {
+        "excess_secret": "0808080808080808080808080808080808080808080808080808080808080808",
+        "excess": "03f991f944d1e1954a7fc8b9bf62e0d78f015f4c07762d505e20e6c45260a3661b",
+        "digest": "c9578bf48004cc05aac6643eb6158d46fb0aa0ee026c06e5d1a2cbbfd8d9f642",
+        "code": "7876"
+      },
+      {
+        "excess_secret": "0909090909090909090909090909090909090909090909090909090909090909",
+        "excess": "0256b328b30c8bf5839e24058747879408bdb36241dc9c2e7c619faa12b2920967",
+        "digest": "418557f4f57d0e512cc68070b20132cdbf980a0f21865b2ef0ce4eb111ec7389",
+        "code": "7844"
+      },
+      {
+        "excess_secret": "0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a",
+        "excess": "03f76a39d05686e34a4420897e359371836145dd3973e3982568b60f8433adde6e",
+        "digest": "aafbc608f3bf68a3882ed98f9a4a379bf717c647d53dda3a17d2d6ad648912af",
+        "code": "6952"
+      },
+      {
+        "excess_secret": "0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b",
+        "excess": "02552c630b64b54bf50210c9e253d38bd4949c72e22873500f6285c2bede312a84",
+        "digest": "025d417ca686aff0363d1b1b9de84ecb7ca36f0eb4bd8d50b669c47353ff09f4",
+        "code": "6044"
+      },
+      {
+        "excess_secret": "0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c",
+        "excess": "030f0fb9a244ad31a369ee02b7abfbbb0bfa3812b9a39ed93346d03d67d412d177",
+        "digest": "fb6c918784fc3d6ba3645ae156908315e9bce8b0267629769bf2c5143e36ebad",
+        "code": "6359"
+      },
+      {
+        "excess_secret": "0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d",
+        "excess": "022f1b310f4c065331bc0d79ba4661bb9822d67d7c4a1b0a1892e1fd0cd23aa68d",
+        "digest": "5c96b746f74e1e25b5e12230d970296ac6f550024dd2b9b94b821969fc8ac142",
+        "code": "1190"
+      },
+      {
+        "excess_secret": "0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e",
+        "excess": "0299c2aa85d2b21a62f396907a802a58e521dafd5bddaccbd72786eea189bc4dc9",
+        "digest": "7875cd77f581052c576609d8b551816817487e87449200bd15f4c4f13412c116",
+        "code": "6231"
+      },
+      {
+        "excess_secret": "0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f",
+        "excess": "021a7a569e91dbf60581509c7fc946d1003b60c7dee85299538db6353538d59574",
+        "digest": "058de51b8ebe4960616405dc823be6fb2b7f2404e4908554df8cbecd836bf4fe",
+        "code": "5307"
+      },
+      {
+        "excess_secret": "1010101010101010101010101010101010101010101010101010101010101010",
+        "excess": "03a92c9b7cac68758de5783ed8e5123598e4ad137091e42987d3bad8a08e35bf3d",
+        "digest": "99b2ae4a5d8c84ce943a8b3c2886922479dbaa0ee044f18271e6d715a55bff4e",
+        "code": "4074"
+      }
+    ]
+  }
+}

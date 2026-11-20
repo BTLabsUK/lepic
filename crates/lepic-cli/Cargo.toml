@@ -1,0 +1,79 @@
+[package]
+name = "lepic-cli"
+description = "The lepic command-line wallet."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[lib]
+name = "lepic_cli"
+path = "src/lib.rs"
+
+[[bin]]
+name = "lepic"
+path = "src/main.rs"
+
+[dependencies]
+base64 = { workspace = true, features = ["alloc"] }
+clap = { workspace = true, features = ["std", "derive", "help", "usage", "error-context"] }
+clap_complete = { workspace = true, features = ["unstable-dynamic"] }
+crossterm = { workspace = true, features = ["events", "windows", "bracketed-paste"] }
+futures-util = { workspace = true, features = ["alloc"] }
+hmac.workspace = true
+http-body-util.workspace = true
+hyper = { workspace = true, features = ["server", "client", "http1"] }
+hyper-util = { workspace = true, features = ["server", "http1", "tokio"] }
+jiff = { workspace = true, features = ["std"] }
+lepic-epicbox.workspace = true
+lepic-keychain.workspace = true
+lepic-methods = { workspace = true, features = ["epicbox-wallet", "http", "tor"] }
+lepic-node.workspace = true
+lepic-primitives.workspace = true
+lepic-store.workspace = true
+lepic-telemetry.workspace = true
+lepic-transport.workspace = true
+lepic-wallet.workspace = true
+lepic-wallet-contacts.workspace = true
+rand = { workspace = true, features = ["std", "std_rng", "sys_rng"] }
+reedline = { workspace = true, features = ["external_printer"] }
+qrcode = { workspace = true }
+# Moves to [workspace.dependencies] at merge.
+rcgen = { version = "0.14.10", default-features = false, features = ["ring", "pem", "zeroize"] }
+rustls = { workspace = true, features = ["std"] }
+secrecy.workspace = true
+serde = { workspace = true, features = ["derive", "std"] }
+serde_json = { workspace = true, features = ["std"] }
+sha2.workspace = true
+thiserror = { workspace = true, features = ["std"] }
+# Moves to [workspace.dependencies] at merge.
+time = { version = "0.3.55", default-features = false }
+tokio = { workspace = true, features = ["rt", "time", "net", "signal", "macros", "sync"] }
+tokio-rustls.workspace = true
+toml = { workspace = true, features = ["std", "parse", "serde"] }
+tracing = { workspace = true, features = ["std"] }
+unicode-width.workspace = true
+# Moves to [workspace.dependencies] at merge.
+zeroize = { workspace = true, features = ["std"] }
+
+[target.'cfg(unix)'.dependencies]
+# Moves to [workspace.dependencies] at merge.
+rustix = { version = "1.1.6", default-features = false, features = ["std", "process", "termios"] }
+
+[features]
+# Test builds only: the default network is floonet when no flag, variable or config key names
+# one, for the interop suites that run on that chain. The shipped binary is built without it
+# and defaults to mainnet; either build takes --network.
+floonet-harness = []
+
+[dev-dependencies]
+lepic-wallet-contacts = { workspace = true, features = ["test-support"] }
+lepic-keychain = { workspace = true, features = ["test-kdf"] }
+lepic-epicbox = { workspace = true, features = ["mock-relay"] }
+lepic-node = { workspace = true, features = ["mock"] }
+lepic-store = { workspace = true, features = ["seed"] }
+tempfile.workspace = true
+
+[lints]
+workspace = true

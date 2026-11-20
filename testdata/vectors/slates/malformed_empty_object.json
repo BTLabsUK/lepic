@@ -1,0 +1,34 @@
+{
+  "schema": 1,
+  "area": "slates",
+  "name": "malformed_empty_object",
+  "generator": "conformance/vectors/slates",
+  "upstream": {
+    "repo": "https://github.com/EpicCash/epic-wallet",
+    "commit": "845b3fcf4df12ed0139929c62157015447a9d063"
+  },
+  "inputs": {
+    "base": "send_file_plain_s1_file",
+    "flow": "standard",
+    "stage": "S1",
+    "producer": "sender",
+    "mutation": "an empty JSON object",
+    "shape": "V2",
+    "header": null,
+    "json": "{}"
+  },
+  "expected": {
+    "file_method": {
+      "accepted": false,
+      "parsed_as": null,
+      "error": "Unknown Slate Version: 0",
+      "reencoded_v3": null
+    },
+    "epicbox_method": {
+      "accepted": false,
+      "parsed_as": null,
+      "error": "data did not match any variant of untagged enum VersionedSlate",
+      "reencoded_v3": null
+    }
+  }
+}

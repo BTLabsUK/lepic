@@ -1,0 +1,34 @@
+# Build output
+/target/
+/conformance/target/
+/console/target/
+/fuzz/target/
+/fuzz/corpus/
+/fuzz/artifacts/
+/dist/
+
+# Mobile build output
+*.xcframework/
+*.aar
+
+# Coverage and profiling
+*.profraw
+*.profdata
+/lcov.info
+
+
+# Local-only material
+/local/
+.env
+*.seed
+*.seed.bak*
+
+# Editors and OS
+.idea/
+.vscode/
+*.swp
+.DS_Store
+
+# Local tool settings and notes: not tracked
+HANDOFF*
+RESUME*

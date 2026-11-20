@@ -1,0 +1,9 @@
+# A test that hangs is reported as slow every two minutes and killed after ten, so a lost wake-up
+# in a mock (MuxMockRelay::wait_until has no deadline of its own) fails the run instead of
+# stalling it. The large-store benchmark (ignored, run by hand) gets an hour.
+[profile.default]
+slow-timeout = { period = "120s", terminate-after = 5 }
+
+[[profile.default.overrides]]
+filter = 'test(/^large_store::/)'
+slow-timeout = { period = "300s", terminate-after = 12 }

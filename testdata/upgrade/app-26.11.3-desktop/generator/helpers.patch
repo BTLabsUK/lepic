@@ -1,0 +1,30 @@
+diff --git a/crates/lepic-ffi/src/mock.rs b/crates/lepic-ffi/src/mock.rs
+index ffb424bc..25eab8bd 100644
+--- a/crates/lepic-ffi/src/mock.rs
++++ b/crates/lepic-ffi/src/mock.rs
+@@ -220,6 +220,13 @@ impl MockBackend {
+ 
+     /// Mines every transaction pushed so far into the tip block: spends their inputs and adds
+     /// their outputs and kernels.
++    /// The chain and the transactions pushed so far, for the upgrade fixture generator.
++    pub(crate) fn snapshot(&self) -> (ChainState, Vec<lepic_primitives::tx::Transaction>) {
++        let mut chain = None;
++        self.node.update_chain(|state| chain = Some(state.clone()));
++        (chain.unwrap(), self.node.pushed_transactions())
++    }
++
+     pub(crate) fn mine_pushed(&self) {
+         let pushed = self.node.pushed_transactions();
+         self.node.update_chain(|chain| {
+diff --git a/crates/lepic-ffi/src/tests.rs b/crates/lepic-ffi/src/tests.rs
+index a6a19e80..c7856872 100644
+--- a/crates/lepic-ffi/src/tests.rs
++++ b/crates/lepic-ffi/src/tests.rs
+@@ -36,6 +36,7 @@ mod soak;
+ #[cfg(unix)]
+ #[cfg(feature = "tor")]
+ mod tor;
++mod upgrade_fixture;
+ 
+ const PIN: &str = "471100";
+ 

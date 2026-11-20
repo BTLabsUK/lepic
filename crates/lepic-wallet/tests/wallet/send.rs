@@ -1,0 +1,958 @@
+// SPDX-License-Identifier: Apache-2.0
+//! Sending: the S1 is stored with its inputs locked before it is delivered, a slate the
+//! transport cannot carry is refused with nothing stored, and a failed delivery can be retried.
+
+// Tests may unwrap, index, panic and use plain arithmetic (docs/rules.md), including in helpers
+// that clippy does not treat as test code.
+#![allow(
+    clippy::unwrap_used,
+    clippy::indexing_slicing,
+    clippy::panic,
+    clippy::arithmetic_side_effects
+)]
+
+use crate::send_support;
+use crate::support;
+
+use std::sync::{Arc, Mutex};
+
+use lepic_legacy_slate::v3_json::LEGACY_V3_JSON;
+use lepic_primitives::amount::{Amount, Fee, Height};
+use lepic_primitives::output::OutputFeatures;
+use lepic_slate::codec::WireSlate;
+use lepic_slate::error::{EncodeError, Unrepresentable};
+use lepic_slate::model::{ProofAddress, SlateId};
+use lepic_slate::stage::Stage;
+use lepic_store::{OutboxStatus, OutputStatus, SlateStage, TxDirection, TxState, WalletStore};
+use lepic_transport::error::TransportError;
+use lepic_transport::file::FILE;
+use lepic_transport::method::Method;
+use lepic_transport::policy::FormatPolicy;
+use lepic_transport::transport::{
+    BoxFuture, Destination, Location, Outbound, PostedSize, Transport, TransportId,
+};
+use lepic_wallet::WalletError;
+use lepic_wallet::selection::{SelectionError, SelectionStrategy};
+use lepic_wallet::send::{CLASSIC_REPLY_GROWTH, Delivery, SendError, SendRequest, SentSlate};
+use send_support::{
+    ACCOUNT, FUNDING, NEXT_CHILD, PEER, SEND_FILE_PLAIN_S1, Sender, TIP, V2Only, uuid,
+};
+use support::both_stores;
+use support::{LOOPBACK, TestStore};
+
+/// `send_file_plain`: 1 EPIC from the funding output, with one change output.
+const AMOUNT: u64 = 100_000_000;
+const FEE: u64 = 800_000;
+
+fn request(amount: u64) -> SendRequest {
+    SendRequest {
+        minimum_confirmations: 1,
+        strategy: SelectionStrategy::Smallest,
+        ..SendRequest::new(ACCOUNT, Amount::new(amount))
+    }
+}
+
+fn to(destination: &str) -> Delivery {
+    Delivery::Deliver {
+        to: Destination::new(destination.to_owned()),
+    }
+}
+
+/// A valid ed25519 point of large order (the base point) to stand for a receiver's payment proof
+/// address.
+fn receiver_address() -> ProofAddress {
+    let mut bytes = [0x66u8; 32];
+    bytes[0] = 0x58;
+    ProofAddress::from_bytes(bytes).unwrap()
+}
+
+both_stores!(send_stores_the_s1_with_its_inputs_locked_and_delivers_it);
+fn send_stores_the_s1_with_its_inputs_locked_and_delivers_it() {
+    let sender = Sender::new();
+    let sent = sender
+        .harness
+        .block_on(
+            sender
+                .wallet
+                .send(&sender.harness.method(), request(AMOUNT), to(PEER)),
+        )
+        .unwrap();
+    assert_eq!(sent.amount, Amount::new(AMOUNT));
+    assert_eq!(sent.fee.value(), FEE);
+
+    let (_, delivered) = sender.received().unwrap();
+    assert_eq!(delivered.id(), sent.slate_id);
+    assert_eq!(delivered.stage(), Stage::S1);
+    assert_eq!(delivered.height(), Height::new(TIP));
+    // Inputs, change and its proof derive from keys alone, so they equal upstream's S1 for the
+    // same wallet and amount; only the id, offset, excess and nonce are random.
+    let upstream: serde_json::Value = serde_json::from_str(
+        serde_json::from_str::<serde_json::Value>(SEND_FILE_PLAIN_S1).unwrap()["expected"]["json"]
+            .as_str()
+            .unwrap(),
+    )
+    .unwrap();
+    let body = &upstream["tx"]["body"];
+    assert_eq!(delivered.inputs().len(), 1);
+    assert_eq!(
+        delivered.inputs()[0].commitment.to_hex(),
+        body["inputs"][0]["commit"].as_str().unwrap()
+    );
+    assert_eq!(delivered.outputs().len(), 1);
+    assert_eq!(
+        delivered.outputs()[0].commitment.to_hex(),
+        body["outputs"][0]["commit"].as_str().unwrap()
+    );
+    assert_eq!(
+        delivered.outputs()[0].proof.to_hex(),
+        body["outputs"][0]["proof"].as_str().unwrap()
+    );
+
+    let transactions = sender.transactions();
+    assert_eq!(transactions.len(), 1);
+    let tx = &transactions[0];
+    assert_eq!(tx.id, sent.tx_id);
+    assert_eq!(tx.entry.direction, TxDirection::Outgoing);
+    assert_eq!(tx.entry.state, TxState::Sent);
+    assert_eq!(tx.entry.slate_id, Some(uuid(sent.slate_id)));
+    assert_eq!(tx.entry.transport.as_deref(), Some(LOOPBACK.as_str()));
+    assert_eq!(tx.entry.amount_debited, Amount::new(FUNDING));
+    assert_eq!(
+        tx.entry.amount_credited,
+        Amount::new(FUNDING - AMOUNT - FEE)
+    );
+
+    let outputs = sender.outputs();
+    let input = outputs
+        .iter()
+        .find(|output| output.id.features == OutputFeatures::Coinbase)
+        .unwrap();
+    assert_eq!(input.status, OutputStatus::Locked);
+    assert_eq!(input.tx, Some(sent.tx_id));
+    let change = outputs
+        .iter()
+        .find(|output| output.status == OutputStatus::Unconfirmed)
+        .unwrap();
+    assert_eq!(change.amount, Amount::new(FUNDING - AMOUNT - FEE));
+    assert_eq!(change.tx, Some(sent.tx_id));
+    assert_eq!(change.id.commitment, delivered.outputs()[0].commitment);
+    assert_eq!(sender.next_child(), NEXT_CHILD + 1);
+
+    assert!(sender.has_sender_context(uuid(sent.slate_id)));
+    let stored = sender
+        .read(|repos| repos.slate(uuid(sent.slate_id), SlateStage::Standard1))
+        .unwrap();
+    assert_eq!(stored.codec, LEGACY_V3_JSON.as_str());
+    let delivered_outbox = sender.outbox(OutboxStatus::Delivered);
+    assert_eq!(delivered_outbox.len(), 1);
+    assert_eq!(delivered_outbox[0].entry.attempts, 1);
+    assert_eq!(delivered_outbox[0].entry.destination, PEER);
+    assert!(sender.outbox(OutboxStatus::Pending).is_empty());
+}
+
+both_stores!(send_writes_a_v3_file_with_header_three_with_or_without_ttl);
+fn send_writes_a_v3_file_with_header_three_with_or_without_ttl() {
+    let sender = Sender::new();
+    sender.fund(1, FUNDING);
+    let plain = sender
+        .harness
+        .block_on(
+            sender
+                .wallet
+                .send(&sender.harness.method(), request(AMOUNT), to(PEER)),
+        )
+        .unwrap();
+    let (wire, slate) = sender.received().unwrap();
+    assert_eq!(slate.id(), plain.slate_id);
+    let text = wire.as_text().unwrap();
+    assert!(text.starts_with(
+        r#"{"version_info":{"version":3,"orig_version":3,"block_header_version":6},"#
+    ));
+    assert!(text.contains(r#""ttl_cutoff_height":null"#));
+    assert!(text.contains(r#""payment_proof":null"#));
+
+    let with_ttl = SendRequest {
+        ttl_blocks: Some(30),
+        message: Some("x".repeat(300)),
+        ..request(AMOUNT)
+    };
+    let sent = sender
+        .harness
+        .block_on(
+            sender
+                .wallet
+                .send(&sender.harness.method(), with_ttl, to(PEER)),
+        )
+        .unwrap();
+    let (wire, slate) = sender.received().unwrap();
+    assert_eq!(slate.id(), sent.slate_id);
+    assert_eq!(slate.ttl_cutoff_height(), Some(Height::new(TIP + 30)));
+    let message = slate
+        .participant(lepic_slate::role::Role::Sender)
+        .unwrap()
+        .message
+        .as_ref()
+        .unwrap();
+    assert_eq!(message.text(), "x".repeat(256));
+    assert!(wire.as_text().unwrap().starts_with(
+        r#"{"version_info":{"version":3,"orig_version":3,"block_header_version":6},"#
+    ));
+}
+
+both_stores!(send_exports_the_s1_to_a_file);
+fn send_exports_the_s1_to_a_file() {
+    let sender = Sender::new();
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("send.slate");
+    let sent = sender
+        .harness
+        .block_on(sender.wallet.send(
+            &crate::support::file(),
+            request(AMOUNT),
+            Delivery::Export {
+                to: Location::File(path.clone()),
+            },
+        ))
+        .unwrap();
+    let text = std::fs::read_to_string(&path).unwrap();
+    assert!(text.contains(&sent.slate_id.to_string()));
+    assert_eq!(
+        sender.transactions()[0].entry.transport.as_deref(),
+        Some("file")
+    );
+    assert!(sender.outbox(OutboxStatus::Pending).is_empty());
+    assert!(sender.outbox(OutboxStatus::Delivered).is_empty());
+}
+
+both_stores!(the_sent_slate_is_the_exported_s1_until_the_send_ends);
+fn the_sent_slate_is_the_exported_s1_until_the_send_ends() {
+    let sender = Sender::new();
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("send.slate");
+    let file = crate::support::file();
+    let sent = sender
+        .harness
+        .block_on(sender.wallet.send(
+            &file,
+            request(AMOUNT),
+            Delivery::Export {
+                to: Location::File(path.clone()),
+            },
+        ))
+        .unwrap();
+
+    let again = sender
+        .harness
+        .block_on(sender.wallet.sent_slate(&file, sent.tx_id))
+        .unwrap();
+    assert_eq!(again.as_bytes(), std::fs::read(&path).unwrap());
+
+    sender
+        .harness
+        .block_on(sender.wallet.cancel(sent.tx_id))
+        .unwrap();
+    let ended = sender
+        .harness
+        .block_on(sender.wallet.sent_slate(&file, sent.tx_id));
+    assert!(
+        matches!(ended, Err(SendError::NotResendable { tx_id }) if tx_id == sent.tx_id),
+        "{ended:?}"
+    );
+}
+
+both_stores!(refuses_a_payment_proof_the_transport_cannot_carry_before_storing_anything);
+fn refuses_a_payment_proof_the_transport_cannot_carry_before_storing_anything() {
+    let sender = Sender::with_policy(Arc::new(V2Only));
+    let outputs_before = sender.outputs();
+    // With a TTL as well: the TTL alone would become a local cutoff, the proof cannot.
+    for ttl_blocks in [None, Some(30)] {
+        let request = SendRequest {
+            payment_proof_recipient: Some(receiver_address()),
+            ttl_blocks,
+            ..request(AMOUNT)
+        };
+        let error = sender
+            .harness
+            .block_on(
+                sender
+                    .wallet
+                    .send(&sender.harness.method(), request, to(PEER)),
+            )
+            .unwrap_err();
+        assert!(
+            matches!(
+                error,
+                SendError::Unrepresentable(EncodeError::Unrepresentable {
+                    what: Unrepresentable::PaymentProof,
+                    ..
+                })
+            ),
+            "{error:?}"
+        );
+    }
+    assert!(sender.transactions().is_empty());
+    assert_eq!(sender.outputs(), outputs_before);
+    assert_eq!(sender.next_child(), NEXT_CHILD);
+    assert!(sender.outbox(OutboxStatus::Pending).is_empty());
+    assert!(sender.received().is_none());
+
+    // Without TTL or payment proof the V2 shape carries the slate.
+    sender
+        .harness
+        .block_on(
+            sender
+                .wallet
+                .send(&sender.harness.method(), request(AMOUNT), to(PEER)),
+        )
+        .unwrap();
+    let (wire, _) = sender.received().unwrap();
+    assert!(wire.as_text().unwrap().starts_with(
+        r#"{"version_info":{"version":2,"orig_version":3,"block_header_version":6},"#
+    ));
+}
+
+both_stores!(a_send_with_change_waits_for_the_restore_scan_of_a_rebuilt_database);
+fn a_send_with_change_waits_for_the_restore_scan_of_a_rebuilt_database() {
+    let sender = Sender::new();
+    // As after a restore whose scan from genesis stopped part way: the funding output is
+    // stored, the change key counter may still be behind keys in use on chain.
+    sender
+        .store
+        .write(|repos| repos.put_setting("wallet.restore_scan_required", "true"))
+        .unwrap();
+
+    let error = sender
+        .harness
+        .block_on(
+            sender
+                .wallet
+                .send(&sender.harness.method(), request(AMOUNT), to(PEER)),
+        )
+        .unwrap_err();
+
+    assert!(
+        matches!(error, SendError::Wallet(WalletError::RestoreScanRequired)),
+        "{error:?}"
+    );
+    assert!(sender.transactions().is_empty());
+    assert_eq!(sender.next_child(), NEXT_CHILD);
+    assert!(sender.received().is_none());
+}
+
+both_stores!(a_send_with_a_given_slate_id_is_made_once);
+fn a_send_with_a_given_slate_id_is_made_once() {
+    let sender = Sender::new();
+    let slate_id = SlateId::from_random_bytes([7; 16]);
+    let once = SendRequest {
+        slate_id: Some(slate_id),
+        ..request(AMOUNT)
+    };
+    let sent = sender
+        .harness
+        .block_on(
+            sender
+                .wallet
+                .send(&sender.harness.method(), once.clone(), to(PEER)),
+        )
+        .unwrap();
+    assert_eq!(sent.slate_id, slate_id);
+    assert_eq!(sender.received().unwrap().1.id(), slate_id);
+
+    // The funding output is locked by now, so only a check made before selection names the
+    // first send instead of failing for funds.
+    let error = sender
+        .harness
+        .block_on(sender.wallet.send(&sender.harness.method(), once, to(PEER)))
+        .unwrap_err();
+    assert!(
+        matches!(
+            error,
+            SendError::SlateIdTaken { slate_id: taken, sent: Some(tx_id) }
+                if taken == slate_id && tx_id == sent.tx_id
+        ),
+        "{error:?}"
+    );
+    assert_eq!(sender.transactions().len(), 1);
+    assert_eq!(sender.next_child(), NEXT_CHILD + 1);
+    assert_eq!(sender.outbox(OutboxStatus::Delivered).len(), 1);
+}
+
+both_stores!(a_send_never_pays_more_than_its_maximum_fee);
+fn a_send_never_pays_more_than_its_maximum_fee() {
+    let sender = Sender::new();
+    let estimate = sender
+        .harness
+        .block_on(
+            sender
+                .wallet
+                .estimate_fee(Amount::new(AMOUNT), request(AMOUNT).selection_options()),
+        )
+        .unwrap();
+    let below = Fee::new(estimate.fee.value() - 1);
+    let error = sender
+        .harness
+        .block_on(sender.wallet.send(
+            &sender.harness.method(),
+            SendRequest {
+                max_fee: Some(below),
+                ..request(AMOUNT)
+            },
+            to(PEER),
+        ))
+        .unwrap_err();
+    assert!(
+        matches!(
+            error,
+            SendError::FeeAboveMaximum { fee, max_fee }
+                if fee == estimate.fee && max_fee == below
+        ),
+        "{error:?}"
+    );
+    assert!(sender.transactions().is_empty());
+    assert_eq!(sender.next_child(), NEXT_CHILD);
+    assert!(sender.received().is_none());
+
+    let sent = sender
+        .harness
+        .block_on(sender.wallet.send(
+            &sender.harness.method(),
+            SendRequest {
+                max_fee: Some(estimate.fee),
+                ..request(AMOUNT)
+            },
+            to(PEER),
+        ))
+        .unwrap();
+    assert_eq!(sent.fee, estimate.fee);
+}
+
+both_stores!(refuses_a_send_the_outputs_cannot_cover_before_storing_anything);
+fn refuses_a_send_the_outputs_cannot_cover_before_storing_anything() {
+    let sender = Sender::new();
+    let error = sender
+        .harness
+        .block_on(
+            sender
+                .wallet
+                .send(&sender.harness.method(), request(FUNDING), to(PEER)),
+        )
+        .unwrap_err();
+    assert!(
+        matches!(
+            error,
+            SendError::Selection(SelectionError::NotEnoughFunds { .. })
+        ),
+        "{error:?}"
+    );
+    assert!(sender.transactions().is_empty());
+    assert_eq!(sender.next_child(), NEXT_CHILD);
+}
+
+both_stores!(refuses_a_method_that_cannot_deliver_or_cannot_export);
+fn refuses_a_method_that_cannot_deliver_or_cannot_export() {
+    let sender = Sender::new();
+    let cannot_deliver = sender
+        .harness
+        .block_on(sender.wallet.send(
+            &crate::support::file(),
+            request(AMOUNT),
+            Delivery::Deliver {
+                to: Destination::new(PEER.to_owned()),
+            },
+        ))
+        .unwrap_err();
+    assert!(
+        matches!(
+            cannot_deliver,
+            SendError::CannotDeliver { transport } if transport == FILE
+        ),
+        "{cannot_deliver:?}"
+    );
+    let cannot_export = sender
+        .harness
+        .block_on(sender.wallet.send(
+            &sender.harness.method(),
+            request(AMOUNT),
+            Delivery::Export {
+                to: Location::File("unused".into()),
+            },
+        ))
+        .unwrap_err();
+    assert!(
+        matches!(cannot_export, SendError::CannotExport { .. }),
+        "{cannot_export:?}"
+    );
+    assert!(sender.transactions().is_empty());
+}
+
+both_stores!(a_failed_delivery_leaves_the_transaction_waiting_and_resend_delivers_it);
+fn a_failed_delivery_leaves_the_transaction_waiting_and_resend_delivers_it() {
+    let sender = Sender::new();
+    let error = sender
+        .harness
+        .block_on(
+            sender
+                .wallet
+                .send(&sender.harness.method(), request(AMOUNT), to("nobody")),
+        )
+        .unwrap_err();
+    let SendError::Undelivered {
+        tx_id,
+        slate_id,
+        source: TransportError::UnknownDestination { .. },
+    } = error
+    else {
+        panic!("{error:?}");
+    };
+    let tx = &sender.transactions()[0];
+    assert_eq!((tx.id, tx.entry.state), (tx_id, TxState::Sent));
+    assert!(
+        sender
+            .outputs()
+            .iter()
+            .any(|output| output.status == OutputStatus::Locked && output.tx == Some(tx_id))
+    );
+    assert!(sender.has_sender_context(uuid(slate_id)));
+    let pending = sender.outbox(OutboxStatus::Pending);
+    assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0].entry.attempts, 1);
+    assert!(sender.received().is_none());
+
+    // The same destination again counts another attempt on the same outbox entry.
+    let again = sender
+        .harness
+        .block_on(
+            sender
+                .wallet
+                .resend(&sender.harness.method(), tx_id, to("nobody")),
+        )
+        .unwrap_err();
+    assert!(matches!(again, SendError::Undelivered { .. }));
+    let pending = sender.outbox(OutboxStatus::Pending);
+    assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0].entry.attempts, 2);
+
+    sender
+        .harness
+        .block_on(
+            sender
+                .wallet
+                .resend(&sender.harness.method(), tx_id, to(PEER)),
+        )
+        .unwrap();
+    let (_, delivered) = sender.received().unwrap();
+    assert_eq!(delivered.id(), slate_id);
+    assert_eq!(delivered.stage(), Stage::S1);
+    assert_eq!(delivered.amount(), Amount::new(AMOUNT));
+    assert_eq!(sender.outbox(OutboxStatus::Delivered).len(), 1);
+    assert!(sender.outbox(OutboxStatus::Pending).is_empty());
+    assert_eq!(sender.transactions().len(), 1);
+}
+
+both_stores!(a_send_is_undelivered_while_every_attempt_failed);
+fn a_send_is_undelivered_while_every_attempt_failed() {
+    let sender = Sender::new();
+    let undelivered = |tx_id| {
+        sender
+            .harness
+            .block_on(sender.wallet.transaction_details(tx_id))
+            .unwrap()
+            .undelivered
+    };
+    let error = sender
+        .harness
+        .block_on(
+            sender
+                .wallet
+                .send(&sender.harness.method(), request(AMOUNT), to("nobody")),
+        )
+        .unwrap_err();
+    let SendError::Undelivered { tx_id, .. } = error else {
+        panic!("{error:?}");
+    };
+    assert!(undelivered(tx_id));
+
+    sender
+        .harness
+        .block_on(
+            sender
+                .wallet
+                .resend(&sender.harness.method(), tx_id, to(PEER)),
+        )
+        .unwrap();
+    assert!(!undelivered(tx_id));
+
+    let other = Sender::new();
+    let delivered = other
+        .harness
+        .block_on(
+            other
+                .wallet
+                .send(&other.harness.method(), request(AMOUNT), to(PEER)),
+        )
+        .unwrap();
+    let details = other
+        .harness
+        .block_on(other.wallet.transaction_details(delivered.tx_id))
+        .unwrap();
+    assert!(!details.undelivered);
+}
+
+both_stores!(resend_refuses_a_transaction_that_is_not_waiting_for_delivery);
+fn resend_refuses_a_transaction_that_is_not_waiting_for_delivery() {
+    let sender = Sender::new();
+    let unknown = sender
+        .harness
+        .block_on(
+            sender
+                .wallet
+                .resend(&sender.harness.method(), lepic_store::TxId(9), to(PEER)),
+        )
+        .unwrap_err();
+    assert!(
+        matches!(
+            unknown,
+            SendError::Wallet(WalletError::UnknownTransaction(lepic_store::TxId(9)))
+        ),
+        "{unknown:?}"
+    );
+
+    let sent = sender
+        .harness
+        .block_on(
+            sender
+                .wallet
+                .send(&sender.harness.method(), request(AMOUNT), to(PEER)),
+        )
+        .unwrap();
+    sender
+        .harness
+        .block_on(sender.wallet.cancel(sent.tx_id))
+        .unwrap();
+    let cancelled = sender
+        .harness
+        .block_on(
+            sender
+                .wallet
+                .resend(&sender.harness.method(), sent.tx_id, to(PEER)),
+        )
+        .unwrap_err();
+    assert!(
+        matches!(
+            cancelled,
+            SendError::NotResendable { tx_id } if tx_id == sent.tx_id
+        ),
+        "{cancelled:?}"
+    );
+}
+
+both_stores!(send_needs_an_unlocked_wallet);
+fn send_needs_an_unlocked_wallet() {
+    let sender = Sender::new();
+    sender.wallet.lock();
+    let error = sender
+        .harness
+        .block_on(
+            sender
+                .wallet
+                .send(&sender.harness.method(), request(AMOUNT), to(PEER)),
+        )
+        .unwrap_err();
+    assert!(
+        matches!(error, SendError::Wallet(WalletError::Locked)),
+        "{error:?}"
+    );
+}
+
+/// What a delivering transport saw in the sender's store while it delivered.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SeenAtDelivery {
+    input: OutputStatus,
+    state: TxState,
+    s1_stored: bool,
+    outbox_pending: usize,
+}
+
+/// A transport that, when asked to deliver, reads the sender's store instead of sending.
+struct Observer {
+    store: Arc<Mutex<Option<TestStore>>>,
+    seen: Arc<Mutex<Option<SeenAtDelivery>>>,
+}
+
+const OBSERVER: TransportId = TransportId::new("observer");
+
+impl Transport for Observer {
+    fn id(&self) -> TransportId {
+        OBSERVER
+    }
+
+    fn policy(&self) -> &dyn FormatPolicy {
+        &lepic_transport::file::FilePolicy
+    }
+
+    fn outbound(&self) -> Option<&dyn Outbound> {
+        Some(self)
+    }
+}
+
+impl Method for Observer {}
+
+impl Outbound for Observer {
+    fn deliver<'a>(
+        &'a self,
+        _: &'a Destination,
+        _: &'a WireSlate,
+    ) -> BoxFuture<'a, Result<(), TransportError>> {
+        Box::pin(async move {
+            let seen = self
+                .store
+                .lock()
+                .unwrap()
+                .as_ref()
+                .unwrap()
+                .read(|repos| {
+                    let tx = repos.transactions(ACCOUNT)?.remove(0);
+                    let input = repos
+                        .outputs(ACCOUNT, None)?
+                        .into_iter()
+                        .find(|output| output.id.features == OutputFeatures::Coinbase)
+                        .unwrap();
+                    Ok::<_, lepic_store::StoreError>(SeenAtDelivery {
+                        input: input.status,
+                        state: tx.entry.state,
+                        s1_stored: repos
+                            .slate(tx.entry.slate_id.unwrap(), SlateStage::Standard1)?
+                            .is_some(),
+                        outbox_pending: repos.outbox(OutboxStatus::Pending)?.len(),
+                    })
+                })
+                .unwrap();
+            *self.seen.lock().unwrap() = Some(seen);
+            Ok(())
+        })
+    }
+}
+
+both_stores!(inputs_are_locked_and_the_s1_stored_before_the_transport_is_called);
+fn inputs_are_locked_and_the_s1_stored_before_the_transport_is_called() {
+    let store = Arc::new(Mutex::new(None));
+    let seen = Arc::new(Mutex::new(None));
+    let sender = Sender::new();
+    let observer: Arc<dyn Method> = Arc::new(Observer {
+        store: Arc::clone(&store),
+        seen: Arc::clone(&seen),
+    });
+    *store.lock().unwrap() = Some(
+        lepic_wallet::StoreOpener::open(
+            &sender.harness.stores,
+            &sender.harness.data_dir,
+            lepic_store::StoreKeys::from_bytes([0; 32], [0; 32]),
+            &lepic_store::StoreKey::from_bytes([0; 32]),
+        )
+        .unwrap(),
+    );
+    sender
+        .harness
+        .block_on(sender.wallet.send(
+            &observer,
+            request(AMOUNT),
+            Delivery::Deliver {
+                to: Destination::new(PEER.to_owned()),
+            },
+        ))
+        .unwrap();
+    assert_eq!(
+        seen.lock().unwrap().clone(),
+        Some(SeenAtDelivery {
+            input: OutputStatus::Locked,
+            state: TxState::Sent,
+            s1_stored: true,
+            outbox_pending: 1,
+        })
+    );
+}
+
+/// A method that delivers everything and measures a post as its text, with `limit` the most
+/// it takes: the S1 to its destination, or the answer that comes back when `answers` is set.
+struct Measured {
+    limit: usize,
+    answers: bool,
+}
+
+const MEASURED: TransportId = TransportId::new("measured");
+
+impl Transport for Measured {
+    fn id(&self) -> TransportId {
+        MEASURED
+    }
+
+    fn policy(&self) -> &dyn FormatPolicy {
+        &lepic_transport::file::FilePolicy
+    }
+
+    fn outbound(&self) -> Option<&dyn Outbound> {
+        Some(self)
+    }
+}
+
+impl Method for Measured {}
+
+impl Outbound for Measured {
+    fn deliver<'a>(
+        &'a self,
+        _: &'a Destination,
+        _: &'a WireSlate,
+    ) -> BoxFuture<'a, Result<(), TransportError>> {
+        Box::pin(async { Ok(()) })
+    }
+
+    fn posted_size(&self, _: &Destination, len: usize) -> Option<PostedSize> {
+        (!self.answers).then_some(PostedSize {
+            bytes: len,
+            limit: self.limit,
+        })
+    }
+
+    fn reply_size(&self, len: usize) -> Option<PostedSize> {
+        self.answers.then_some(PostedSize {
+            bytes: len,
+            limit: self.limit,
+        })
+    }
+}
+
+/// Sends from a fresh wallet over a [`Measured`] method.
+fn send_measured(limit: usize, answers: bool) -> (Sender, Result<SentSlate, SendError>) {
+    let sender = Sender::new();
+    let method: Arc<dyn Method> = Arc::new(Measured { limit, answers });
+    let sent = sender
+        .harness
+        .block_on(sender.wallet.send(&method, request(AMOUNT), to(PEER)));
+    (sender, sent)
+}
+
+/// Nothing of a refused send is stored: no transaction, no locked output, no outbox row, no
+/// change key taken.
+fn assert_nothing_stored(sender: &Sender) {
+    assert!(sender.transactions().is_empty());
+    assert!(
+        sender
+            .outputs()
+            .iter()
+            .all(|output| output.status != OutputStatus::Locked)
+    );
+    assert!(sender.outbox(OutboxStatus::Pending).is_empty());
+    assert!(sender.outbox(OutboxStatus::Delivered).is_empty());
+    assert_eq!(sender.next_child(), NEXT_CHILD);
+}
+
+both_stores!(a_send_at_the_relay_limit_goes_and_one_byte_over_is_refused_with_nothing_stored);
+fn a_send_at_the_relay_limit_goes_and_one_byte_over_is_refused_with_nothing_stored() {
+    let (_, measured) = send_measured(usize::MAX, false);
+    let bytes = measured.unwrap().slate_bytes.unwrap();
+
+    let (_, fits) = send_measured(bytes, false);
+    let fits = fits.unwrap();
+    assert_eq!(fits.slate_bytes, Some(bytes));
+    assert_eq!(fits.slate_limit, Some(bytes));
+
+    let (sender, over) = send_measured(bytes - 1, false);
+    let error = over.unwrap_err();
+    assert!(
+        matches!(
+            error,
+            SendError::SlateTooLarge { bytes: got, limit, inputs: 1 }
+                if got == bytes && limit == bytes - 1
+        ),
+        "{error:?}"
+    );
+    assert_nothing_stored(&sender);
+}
+
+both_stores!(a_classic_send_is_refused_when_the_stock_answer_would_be_over_the_limit);
+fn a_classic_send_is_refused_when_the_stock_answer_would_be_over_the_limit() {
+    let (_, measured) = send_measured(usize::MAX, false);
+    let s1 = measured.unwrap().slate_bytes.unwrap();
+    let answer = s1 + CLASSIC_REPLY_GROWTH;
+
+    let (_, fits) = send_measured(answer, true);
+    assert_eq!(fits.unwrap().slate_bytes, Some(answer));
+
+    let (sender, over) = send_measured(answer - 1, true);
+    let error = over.unwrap_err();
+    assert!(
+        matches!(
+            error,
+            SendError::SlateTooLarge { bytes, limit, inputs: 1 }
+                if bytes == answer && limit == answer - 1
+        ),
+        "{error:?}"
+    );
+    assert_nothing_stored(&sender);
+}
+
+/// Estimates the slate of a send from a fresh wallet over a [`Measured`] method.
+fn estimate_measured(
+    limit: usize,
+    answers: bool,
+    to: Option<&str>,
+) -> (Sender, Result<Option<PostedSize>, SendError>) {
+    let sender = Sender::new();
+    let method: Arc<dyn Method> = Arc::new(Measured { limit, answers });
+    let estimate = sender.harness.block_on(sender.wallet.estimate_slate_size(
+        &method,
+        request(AMOUNT),
+        to.map(|to| Destination::new(to.to_owned())),
+    ));
+    (sender, estimate)
+}
+
+both_stores!(an_estimate_gives_the_size_the_send_measures_and_stores_nothing);
+fn an_estimate_gives_the_size_the_send_measures_and_stores_nothing() {
+    let (_, sent) = send_measured(usize::MAX, false);
+    let bytes = sent.unwrap().slate_bytes.unwrap();
+
+    let (sender, fits) = estimate_measured(bytes, false, Some(PEER));
+    assert_eq!(
+        fits.unwrap(),
+        Some(PostedSize {
+            bytes,
+            limit: bytes
+        })
+    );
+    assert_nothing_stored(&sender);
+
+    let (sender, over) = estimate_measured(bytes - 1, false, Some(PEER));
+    let error = over.unwrap_err();
+    assert!(
+        matches!(
+            error,
+            SendError::SlateTooLarge { bytes: got, limit, inputs: 1 }
+                if got == bytes && limit == bytes - 1
+        ),
+        "{error:?}"
+    );
+    assert_nothing_stored(&sender);
+}
+
+both_stores!(an_estimate_with_no_address_measures_the_answer_only);
+fn an_estimate_with_no_address_measures_the_answer_only() {
+    let (sender, posted_only) = estimate_measured(usize::MAX, false, None);
+    assert_eq!(posted_only.unwrap(), None);
+    assert_nothing_stored(&sender);
+
+    let (_, answer) = estimate_measured(usize::MAX, true, None);
+    let answer = answer.unwrap().unwrap().bytes;
+    let (_, sent) = send_measured(usize::MAX, false);
+    assert_eq!(
+        answer,
+        sent.unwrap().slate_bytes.unwrap() + CLASSIC_REPLY_GROWTH
+    );
+
+    let (sender, over) = estimate_measured(answer - 1, true, None);
+    assert!(matches!(
+        over,
+        Err(SendError::SlateTooLarge { bytes, .. }) if bytes == answer
+    ));
+    assert_nothing_stored(&sender);
+}

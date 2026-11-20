@@ -1,0 +1,19 @@
+{
+  "schema": 1,
+  "area": "slates_native",
+  "name": "malformed_truncated_header",
+  "generator": "conformance/vectors/slates/native",
+  "upstream": {
+    "repo": "https://github.com/EpicCash/epic-wallet",
+    "commit": "845b3fcf4df12ed0139929c62157015447a9d063"
+  },
+  "inputs": {
+    "base": "slates/send_file_plain_s1_v3",
+    "mutation": "the first 40 bytes",
+    "decode_network": "mainnet",
+    "lepic_v1": "8945534c010001000000060436430c2b02624c2032570501212b000000000005f5e1000000000000"
+  },
+  "expected": {
+    "error": "Truncated"
+  }
+}

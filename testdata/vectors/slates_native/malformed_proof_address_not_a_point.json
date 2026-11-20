@@ -1,0 +1,19 @@
+{
+  "schema": 1,
+  "area": "slates_native",
+  "name": "malformed_proof_address_not_a_point",
+  "generator": "conformance/vectors/slates/native",
+  "upstream": {
+    "repo": "https://github.com/EpicCash/epic-wallet",
+    "commit": "845b3fcf4df12ed0139929c62157015447a9d063"
+  },
+  "inputs": {
+    "base": "slates/send_file_payment_proof_s1_v3",
+    "mutation": "sender proof address y = 2, not on the curve",
+    "decode_network": "mainnet",
+    "lepic_v1": "8945534c010001040000060436430c2b02624c2032570501212b040000000008583b0000000000000c35000000000000000004d202964900000000d302964900000000d402964900000000d50296490000000002ea1e922465b0c35420c71a905efbb1406a8fe4be3ed57b3f339ec7acd723a092031b84c5567b126440995d3ed5aaba0565d71e1834604819ff9c17f5e9d5dd078f0200000000000000000000000000000000000000000000000000000000000000b03c84d7f781b536c96668d93b37768c7812b76449c17aaf0a9d11a003c3c73700000000"
+  },
+  "expected": {
+    "error": "ProofAddress"
+  }
+}

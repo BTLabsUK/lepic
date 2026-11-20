@@ -1,0 +1,195 @@
+# Local interop stack: the public Epicbox relay with its database, the reference node on a
+# test-mode chain, a stratum miner, two epic-wallet wallets (the pinned release; the peer can be the legacy release) and lepic. Nothing here
+# reaches a public relay or node: the node's network is internal, and every other service shares
+# the node's network namespace, so all of them talk over 127.0.0.1 and listen on it alone.
+# Pulled images are pinned by digest, and no container runs as root. lepic sends the node secret
+# and Epicbox frames over plain HTTP and WebSocket only to loopback, which is why the relay's
+# domain is `localhost` and every address the wallets use names it.
+#
+# Run `./build.sh` first; it compiles the binaries the images copy. `./run.sh` does both and
+# then runs the scenarios.
+name: lepic-interop
+
+# The node service builds the shared runtime image; the others only run it.
+x-runtime: &runtime
+  image: lepic-interop-runtime:local
+  pull_policy: never
+  init: true
+
+services:
+  mongodb:
+    # mongo:6.0, pinned by digest.
+    image: mongo@sha256:8b6d8f5bbedb25cb73517b65cf99f13aeb75ad5b157a56c479287a840bbad3ac
+    # The image's own mongodb user, which owns /data/db.
+    user: "999:999"
+    init: true
+    # A test relay holds a handful of messages; keep the cache small and skip diagnostics files.
+    command: ["--bind_ip", "127.0.0.1", "--wiredTigerCacheSizeGB", "0.25", "--setParameter", "diagnosticDataCollectionEnabled=false"]
+    network_mode: service:node
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: root
+      MONGO_INITDB_ROOT_PASSWORD: rootpass
+      MONGO_INITDB_DATABASE: epicbox
+    volumes:
+      - mongo-data:/data/db
+      - ./.work/src/epic-epicbox-docker/mongo-init.js:/docker-entrypoint-initdb.d/mongo-init.js:ro
+    healthcheck:
+      # Healthy only on the final server: the image first runs the init script on a temporary
+      # server without access control, and a relay that connects then fails to authenticate.
+      test: ["CMD-SHELL", "mongosh --quiet --eval 'try { db.adminCommand({listDatabases: 1}); quit(1) } catch (e) { quit(0) }' && mongosh --quiet -u epicbox -p epicboxpass --authenticationDatabase epicbox epicbox --eval 'db.runCommand({ping: 1}).ok'"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+
+  epicbox:
+    image: lepic-interop-relay:local
+    build:
+      context: ./.work/src/epic-epicbox-docker
+      dockerfile: ../../../docker/relay.Dockerfile
+      additional_contexts:
+        bin: ./.work/bin
+    init: true
+    network_mode: service:node
+    environment:
+      MONGO_URL: mongodb://epicbox:epicboxpass@127.0.0.1:27017/epicbox?authSource=epicbox
+      EPICBOX_INSTANCE_ID: "1"
+      EPICBOX_DOMAIN: localhost
+      EPICBOX_PORT: "3423"
+      DEBUG: "true"
+    depends_on:
+      mongodb:
+        condition: service_healthy
+    healthcheck:
+      # A bare TCP connect: an HTTP request would make the relay's status page query public relays.
+      test: ["CMD", "node", "-e", "require('net').connect(3423, '127.0.0.1').on('connect', () => process.exit(0)).on('error', () => process.exit(1))"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+
+  node:
+    <<: *runtime
+    networks: [interop]
+    build:
+      context: ./.work/bin
+      dockerfile: ../../docker/runtime.Dockerfile
+      additional_contexts:
+        scripts: ./docker
+    pull_policy: build
+    command: ["node.sh"]
+    environment:
+      FUNDER_URL: http://127.0.0.1:23415
+    volumes:
+      - node-data:/data/node
+    healthcheck:
+      # Healthy once the API answers and the node reports itself synced.
+      test: ["CMD", "sh", "-c", "curl -sf -u epic:$$(cat /data/node/.api_secret) -d '{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"get_status\",\"params\":[]}' http://127.0.0.1:23413/v2/owner | grep -q '\"no_sync\"'"]
+      interval: 2s
+      timeout: 5s
+      retries: 60
+
+  funder:
+    <<: *runtime
+    network_mode: service:node
+    command: ["wallet.sh", "listen-http"]
+    environment:
+      WALLET_PASSWORD: funder-password
+    volumes:
+      - funder-data:/data
+      - node-data:/node:ro
+      - exchange:/exchange
+    depends_on:
+      node:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "sh", "-c", "curl -s -o /dev/null http://127.0.0.1:23415/v2/foreign"]
+      interval: 2s
+      timeout: 5s
+      retries: 60
+
+  miner:
+    <<: *runtime
+    network_mode: service:node
+    command: ["miner", "127.0.0.1:23416", "2"]
+    depends_on:
+      funder:
+        condition: service_healthy
+
+  peer:
+    <<: *runtime
+    network_mode: service:node
+    command: ["wallet.sh", "idle"]
+    environment:
+      WALLET_PASSWORD: peer-password
+      # epic-wallet, or epic-wallet-legacy when run.sh is started with PEER_WALLET=legacy.
+      EW_BIN: ${PEER_WALLET_BIN:-epic-wallet}
+    volumes:
+      - peer-data:/data
+      - node-data:/node:ro
+      - exchange:/exchange
+    depends_on:
+      node:
+        condition: service_healthy
+      epicbox:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "test", "-f", "/data/ready"]
+      interval: 2s
+      timeout: 5s
+      retries: 60
+
+  lepic:
+    <<: *runtime
+    network_mode: service:node
+    command: ["sleep", "infinity"]
+    environment:
+      LEPIC_NETWORK: mainnet
+      LEPIC_DATA_DIR: /data/lepic
+      LEPIC_NODE_URL: http://127.0.0.1:23413
+      LEPIC_NODE_API_SECRET_FILE: /node/.foreign_api_secret
+      LEPIC_EPICBOX_RELAY: ws://localhost:3423
+      LEPIC_OUTPUT: json
+      LEPIC_LOG_LEVEL: info
+      LEPIC_PASSWORD: lepic-password
+    volumes:
+      - lepic-data:/data
+      - node-data:/node:ro
+      - exchange:/exchange
+    depends_on:
+      node:
+        condition: service_healthy
+      epicbox:
+        condition: service_healthy
+
+  # Only with the capture profile (gate.sh): records loopback on the relay port and both HTTP
+  # listener ports, so the gate can read every frame lepic wrote. It joins the node's namespace
+  # like the others and opens nothing.
+  capture:
+    image: lepic-interop-capture:local
+    build:
+      context: ./docker
+      dockerfile: capture.Dockerfile
+    pull_policy: build
+    profiles: [capture]
+    init: true
+    network_mode: service:node
+    command: ["tcpdump", "-i", "lo", "-p", "-n", "-U", "-s", "0", "-w", "/capture/lo.pcap", "tcp port 3423 or tcp port 23500 or tcp port 23510"]
+    volumes:
+      - capture:/capture
+    depends_on:
+      node:
+        condition: service_healthy
+
+networks:
+  # No route out: nothing in the stack can reach a public relay, node or any other host.
+  # Only the node joins it; the other services use the node's namespace.
+  interop:
+    internal: true
+
+volumes:
+  mongo-data: {}
+  node-data: {}
+  funder-data: {}
+  peer-data: {}
+  lepic-data: {}
+  exchange: {}
+  capture: {}

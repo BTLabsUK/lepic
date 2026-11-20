@@ -1,0 +1,83 @@
+{
+  "schema": 1,
+  "area": "keys",
+  "name": "epic1_addresses_refused",
+  "generator": "conformance/vectors/keys",
+  "upstream": {
+    "repo": "https://github.com/EpicCash/epic-wallet",
+    "commit": "845b3fcf4df12ed0139929c62157015447a9d063"
+  },
+  "inputs": {
+    "note": "built from the first seal key and the first delivery key"
+  },
+  "expected": {
+    "cases": [
+      {
+        "name": "mixed_case",
+        "text": "epic1qxzjpUqf3yc2w4r53d7aedp77adqm0e6p5nrsxh5awj2nr42nd8x5qnehen8a7wuhwk9tgrzjh8gwzc8q2dlekedec5djk0js9d3d7qhnq2l4z8f",
+        "network": "mainnet",
+        "refusal": "mixed_case"
+      },
+      {
+        "name": "bad_checksum",
+        "text": "epic1qxzjpuqf3yc2w4r53d7aedp77adqm0e6p5nrsxh5awj2nr42nd8x5qnehen8a7wuhwk9tgrzjh8gwzc8q2dlekedec5djk0js9d3d7qhnq2l4z8q",
+        "network": "mainnet",
+        "refusal": "checksum"
+      },
+      {
+        "name": "version_00",
+        "text": "epic1qzzjpuqf3yc2w4r53d7aedp77adqm0e6p5nrsxh5awj2nr42nd8x5qnehen8a7wuhwk9tgrzjh8gwzc8q2dlekedec5djk0js9d3d7qhnqzv4j2h",
+        "network": "mainnet",
+        "refusal": "version"
+      },
+      {
+        "name": "version_02",
+        "text": "epic1q2zjpuqf3yc2w4r53d7aedp77adqm0e6p5nrsxh5awj2nr42nd8x5qnehen8a7wuhwk9tgrzjh8gwzc8q2dlekedec5djk0js9d3d7qhnqjr4msz",
+        "network": "mainnet",
+        "refusal": "version"
+      },
+      {
+        "name": "floonet_read_as_mainnet",
+        "text": "tepic1qxzjpuqf3yc2w4r53d7aedp77adqm0e6p5nrsxh5awj2nr42nd8x5qnehen8a7wuhwk9tgrzjh8gwzc8q2dlekedec5djk0js9d3d7qhnq69vqnf",
+        "network": "mainnet",
+        "refusal": "network"
+      },
+      {
+        "name": "mainnet_read_as_floonet",
+        "text": "epic1qxzjpuqf3yc2w4r53d7aedp77adqm0e6p5nrsxh5awj2nr42nd8x5qnehen8a7wuhwk9tgrzjh8gwzc8q2dlekedec5djk0js9d3d7qhnq2l4z8f",
+        "network": "floonet",
+        "refusal": "network"
+      },
+      {
+        "name": "small_order_seal_key",
+        "text": "epic1qyqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqnehen8a7wuhwk9tgrzjh8gwzc8q2dlekedec5djk0js9d3d7qhnq2lmakz",
+        "network": "mainnet",
+        "refusal": "seal_key"
+      },
+      {
+        "name": "delivery_key_prefix_04",
+        "text": "epic1qxzjpuqf3yc2w4r53d7aedp77adqm0e6p5nrsxh5awj2nr42nd8x5prehen8a7wuhwk9tgrzjh8gwzc8q2dlekedec5djk0js9d3d7qhnqxnrqke",
+        "network": "mainnet",
+        "refusal": "delivery_key"
+      },
+      {
+        "name": "delivery_key_off_curve",
+        "text": "epic1qxzjpuqf3yc2w4r53d7aedp77adqm0e6p5nrsxh5awj2nr42nd8x5qsqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq5mha6n5",
+        "network": "mainnet",
+        "refusal": "delivery_key"
+      },
+      {
+        "name": "earlier_length",
+        "text": "epic1qxzjpuqf3yc2w4r53d7aedp77adqm0e6p5nrsxh5awj2nr42nd8x5qnehen8a7wuhwk9tgrzjh8gwzc8q2dlekedec5djk0js9d3d7qhxjd58y",
+        "network": "mainnet",
+        "refusal": "length"
+      },
+      {
+        "name": "one_byte_long",
+        "text": "epic1qxzjpuqf3yc2w4r53d7aedp77adqm0e6p5nrsxh5awj2nr42nd8x5qnehen8a7wuhwk9tgrzjh8gwzc8q2dlekedec5djk0js9d3d7qhnqqqltx4dv",
+        "network": "mainnet",
+        "refusal": "length"
+      }
+    ]
+  }
+}

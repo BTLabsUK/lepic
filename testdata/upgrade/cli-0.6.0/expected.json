@@ -1,0 +1,1079 @@
+{
+  "contact_list": {
+    "contacts": [
+      {
+        "allow_invoices": false,
+        "claimed_name": "Fixture owner",
+        "contact_id": "e795fe5708fe43de0a85b8184a944f98",
+        "ended_at": null,
+        "ended_reason": null,
+        "home_relay": "127.0.0.1:80",
+        "kind": "person",
+        "label": "",
+        "lapsed": false,
+        "last_heard": null,
+        "native_slates": false,
+        "peer_features": 79,
+        "peer_heard_at": null,
+        "peer_profile": 0,
+        "peer_verified_at": null,
+        "requested_relay": null,
+        "sas": [
+          "🦌 buck",
+          "💿 disc",
+          "🍑 peach",
+          "🌈 rainbow"
+        ],
+        "sas_indexes": [
+          41,
+          201,
+          79,
+          70
+        ],
+        "seal": "on",
+        "state": "paired",
+        "status": "waiting"
+      }
+    ],
+    "sent_requests": [
+      {
+        "contact_id": "0ebe0db0d0b60282babfe837898a807b",
+        "created_at": "2026-11-17T19:46:35.80736795Z",
+        "expires_at": "2026-11-24T19:46:35.80736795Z",
+        "to_address": "zzNUSZvFxhcDsm56YV9KqgmTaBynjfdXNEpyHeF7MQnXCGDvivCS@127.0.0.1:80"
+      }
+    ]
+  },
+  "contact_requests": {
+    "requests": []
+  },
+  "epic1_address": {
+    "code": 0,
+    "stderr": "",
+    "stdout": "{\"account\":\"default\",\"index\":0,\"address\":\"tepic1qxqewde0gx7uxjletm40g5x9se70z5h6numfg9kjrwtkdqfywk39lknrdepdw0una7zjdgwtuv75u5rv6lc0c6s3ty7rm2v44zvmnsr0dcwg4t\"}\n"
+  },
+  "epic1_links": {
+    "links": [
+      {
+        "account": 0,
+        "index": 0,
+        "issued_at": "2026-11-17T19:46:36Z",
+        "kind": "printed",
+        "n": 0,
+        "relays": [
+          "relay.example.org"
+        ],
+        "used_at": null
+      }
+    ]
+  },
+  "ids": {
+    "cancelled": 16,
+    "contact": "e795fe5708fe43de0a85b8184a944f98",
+    "epicbox": 11,
+    "incoming_invoice_slate": "e7b6e7e5-5ea3-4aa8-8366-48d08a779cd9",
+    "marked": 19,
+    "marked_slate": "3b5ae875-7196-425b-b31b-4e9e49300cf6",
+    "mined": 10,
+    "mined_slate": "d01feb1b-2359-4ac2-a7a2-77c4b8f74e3d",
+    "native": 13,
+    "native_slate": "e0fccfe1-2188-4f88-8af7-14841eba8d8d",
+    "open_invoice_slate": "957524d6-ed65-4be1-895b-ce8851c08797",
+    "peer_address": "zzNUSZvFxhcDsm56YV9KqgmTaBynjfdXNEpyHeF7MQnXCGDvivCS@127.0.0.1:80",
+    "pending": 17,
+    "pending_contact": "7e2b361e36ce5ac0bb530d04f30f314f",
+    "pending_slate": "6dfaabe6-e60e-4e00-abc7-78033a5ddf6a",
+    "request_contact": "0ebe0db0d0b60282babfe837898a807b"
+  },
+  "invoice_list": {
+    "invoices": []
+  },
+  "made": {
+    "answered": {
+      "bounced": 0,
+      "buffered": 0,
+      "dropped": 0,
+      "expired": {
+        "cancellable": [],
+        "cancelled": [],
+        "deleted": []
+      },
+      "finalized": 0,
+      "held": 0,
+      "notices": 0,
+      "parked": 0,
+      "received": 1,
+      "rejected": 1,
+      "repeated": 0
+    },
+    "epic1_pay": {
+      "code": 0,
+      "stderr": "",
+      "stdout": "{\"tx_id\":14,\"slate_id\":\"4ddc7630-978f-4003-b85b-55d6c89b81bb\",\"address\":\"tepic1q9efxv2hyxkgvqqplgnl5px6njt20wk5csqfrruvxwpm7l036e9fnar4ydwcqqmtgkay7g7e452zqkxzatqhjhtuvysn0a4sczjyrnsetjle7h\",\"attempts\":[{\"host\":\"relay.example.org\",\"error\":null,\"uncertain\":false}],\"posted\":0,\"posted_ok\":true,\"repeated\":false,\"uncertain\":null}\n"
+    },
+    "in_person": {
+      "code": 0,
+      "stderr": "",
+      "stdout": "{\"tx_id\":15,\"slate_id\":\"b6fd8436-9bd3-473f-8895-bcd9b2b92326\",\"code\":\"8945534c01010402000006b6fd84369bd3473f8895bcd9b2b923260000000005f5e10000000000000000000000000000000020000000000000003ebff4697c488ccf2866d1d14632171157af73ca9afa20b54c27cf71caa8087c9d02983a2ca117e96c93592e817c49436afd7913b3321cc2b9e232bdcb7ed4a7998c027e16e3e1b0bc76959c6175db5b303e63291a68cd99bd0137dc8fe3a2e142df0a00000000010020e16866ef419e729754cd115c0b847532783f5b2793f59e9b812ff43ec587c42e0200320224f71c0788878aec282d7b26dbcda93caf6f6eb86fd0bb64def9cd5d1ed89d5c72656c61792e6578616d706c652e6f7267\",\"ttl_cutoff\":62,\"mailbox\":\"relay.example.org\"}\n"
+    },
+    "incoming_invoice": {
+      "amount": "1.50000000",
+      "destination": "zzPxGkfouiob9P6T9BT3j8m6CxRo3sKfT4kKmjMzv11vPf7Cn66T@127.0.0.1:80",
+      "slate_id": "e7b6e7e5-5ea3-4aa8-8366-48d08a779cd9",
+      "transport": "epicbox",
+      "tx_id": 3
+    },
+    "marked": {
+      "amount": "1.25000000",
+      "delivered": true,
+      "destination": "zzNUSZvFxhcDsm56YV9KqgmTaBynjfdXNEpyHeF7MQnXCGDvivCS@127.0.0.1:80",
+      "fee": "0.00800000",
+      "format": "legacy",
+      "repeated": false,
+      "slate_id": "3b5ae875-7196-425b-b31b-4e9e49300cf6",
+      "state": "sent",
+      "transport": "epicbox",
+      "tx_id": 19
+    },
+    "native": {
+      "amount": "1.00000000",
+      "delivered": true,
+      "destination": "zzNUSZvFxhcDsm56YV9KqgmTaBynjfdXNEpyHeF7MQnXCGDvivCS@127.0.0.1:80",
+      "fee": "0.00800000",
+      "format": "legacy",
+      "repeated": false,
+      "slate_id": "e0fccfe1-2188-4f88-8af7-14841eba8d8d",
+      "state": "sent",
+      "transport": "epicbox",
+      "tx_id": 13
+    },
+    "open_invoice": {
+      "amount": "1.00000000",
+      "destination": "zzNUSZvFxhcDsm56YV9KqgmTaBynjfdXNEpyHeF7MQnXCGDvivCS@127.0.0.1:80",
+      "slate_id": "957524d6-ed65-4be1-895b-ce8851c08797",
+      "transport": "epicbox",
+      "tx_id": 18
+    },
+    "peer_drained": {
+      "bounced": 0,
+      "buffered": 0,
+      "dropped": 0,
+      "expired": {
+        "cancellable": [],
+        "cancelled": [],
+        "deleted": []
+      },
+      "finalized": 0,
+      "held": 0,
+      "notices": 2,
+      "parked": 0,
+      "received": 1,
+      "rejected": 0,
+      "repeated": 0
+    },
+    "peer_link": {
+      "code": 0,
+      "stderr": "",
+      "stdout": "{\"link\":\"epic:tepic1q9efxv2hyxkgvqqplgnl5px6njt20wk5csqfrruvxwpm7l036e9fnar4ydwcqqmtgkay7g7e452zqkxzatqhjhtuvysn0a4sczjyrnsetjle7h?epicbox=zzQvY6t3ENAgQUaqi2JQUU1vQf86vWnpMgoxpfsFV4VNeJ98b8Ho%40relay.example.org&amount=1\",\"address\":\"tepic1q9efxv2hyxkgvqqplgnl5px6njt20wk5csqfrruvxwpm7l036e9fnar4ydwcqqmtgkay7g7e452zqkxzatqhjhtuvysn0a4sczjyrnsetjle7h\",\"index\":0,\"kind\":\"printed\",\"n\":0}\n"
+    },
+    "pending_invite": {
+      "contact_id": "7e2b361e36ce5ac0bb530d04f30f314f",
+      "expires_at": "2026-11-18T19:46:34.389196042Z",
+      "link": "epiccash://pair/1/AQABAQIAAQEDAAEBBAAOUGVuZGluZyBmcmllbmQFAAgAAAAAav4AmgYAEP1gZXTpy5FxR4ZO5Dz3VPkHACCnGTLu0ePFU6KSaFBn2KW2Nm215KuQS3NrRmN8xwYnyQgAIIdJMMZA2qUwD-1kheXGUryikJAiDDJKhM66u_po66dgCQAMMTI3LjAuMC4xOjgwgQAhAlxOLuY6ubqpSWIMlASJni8Or4-xV7MT3-I8hVisL2TpHAOOow"
+    },
+    "request": {
+      "contact_id": "0ebe0db0d0b60282babfe837898a807b",
+      "expires_at": "2026-11-24T19:46:35.80736795Z",
+      "link": "epiccash://pair/1/AQABAQIAAQEDAAEBBAAMRml4dHVyZSBwZWVyBQAIAAAAAGsF6ZsGABDZihhhSQS8dTrWnjDIh5MOBwAg9BtceSvXYifToBgCmCG022EoCIMTswQ6ydE1W1c6yzQIACAfPIKC_-06QA6nFFvl2lryqkr6SzcgiYbFxCpVmnzsbgkADDEyNy4wLjAuMTo4MIEAIQJ1Q7wWR5yxdss3EMrN2wVasOlBHXLj3-onTa8iO-aYm8I00vs"
+    },
+    "sender_link": {
+      "code": 0,
+      "stderr": "",
+      "stdout": "{\"link\":\"epic:tepic1qxqewde0gx7uxjletm40g5x9se70z5h6numfg9kjrwtkdqfywk39lknrdepdw0una7zjdgwtuv75u5rv6lc0c6s3ty7rm2v44zvmnsr0dcwg4t?epicbox=zzP4Jbcfk7wac9o7wV9e6FjcN622E2N2DZVyKqjMk9ATxCKa6Ey9%40relay.example.org&amount=2&message=fixture%20link\",\"address\":\"tepic1qxqewde0gx7uxjletm40g5x9se70z5h6numfg9kjrwtkdqfywk39lknrdepdw0una7zjdgwtuv75u5rv6lc0c6s3ty7rm2v44zvmnsr0dcwg4t\",\"index\":0,\"kind\":\"printed\",\"n\":0}\n"
+    },
+    "stranger_request": {
+      "contact_id": "0ad9f6817786279bac75b92b4ed61a99",
+      "expires_at": "2026-11-24T19:46:36.353684548Z",
+      "link": "epiccash://pair/1/AQABAQIAAQEDAAEBBAAORml4dHVyZSBzZW5kZXIFAAgAAAAAawXpnAYAEKPddlZIM9Objkft56y576AHACBJyBbYcb8RK9DwZP7Kz4d_zQk55BGj7y5T8GwLHPrnpggAIMIo5ZrG7HnNGcJqi1PBtStqr-NEKOVc__xUJ_DPk6duCQAMMTI3LjAuMC4xOjgwgQAhA42Le8FX1YqOI_ClYdoELSk04pWBURfw3-AmqWHerhLF9_kNLw"
+    }
+  },
+  "payer": {
+    "contact_requests": {
+      "requests": [
+        {
+          "claimed_name": "Fixture peer",
+          "expires_at": "2026-11-24T19:46:35Z",
+          "from_address": "zzPxGkfouiob9P6T9BT3j8m6CxRo3sKfT4kKmjMzv11vPf7Cn66T@127.0.0.1:80",
+          "invite_link": "epiccash://pair/1/AQABAQIAAQEDAAEBBAAMRml4dHVyZSBwZWVyBQAIAAAAAGsF6ZsGABDZihhhSQS8dTrWnjDIh5MOBwAg9BtceSvXYifToBgCmCG022EoCIMTswQ6ydE1W1c6yzQIACAfPIKC_-06QA6nFFvl2lryqkr6SzcgiYbFxCpVmnzsbgkADDEyNy4wLjAuMTo4MIEAIQJ1Q7wWR5yxdss3EMrN2wVasOlBHXLj3-onTa8iO-aYm8I00vs",
+          "received_at": "2026-11-17T19:46:36.130101487Z",
+          "request_id": "a3a7d8f2d5b90547"
+        }
+      ]
+    },
+    "invoice_list": {
+      "invoices": []
+    },
+    "tx_list": {
+      "account": "default",
+      "transactions": [
+        {
+          "amount_credited": "1.00000000",
+          "amount_debited": "0.00000000",
+          "created_at": "2026-11-17T19:46:35.065070581Z",
+          "direction": "incoming",
+          "fee": null,
+          "slate_id": "60f41b73-ded1-449a-8cc6-212077a2103a",
+          "state": "received",
+          "transport": "epicbox",
+          "tx_id": 1,
+          "updated_at": "2026-11-17T19:46:35.065070581Z"
+        },
+        {
+          "amount_credited": "1.00000000",
+          "amount_debited": "0.00000000",
+          "created_at": "2026-11-17T19:46:36.163177372Z",
+          "direction": "incoming",
+          "fee": null,
+          "slate_id": "e0fccfe1-2188-4f88-8af7-14841eba8d8d",
+          "state": "received",
+          "transport": "epicbox",
+          "tx_id": 2,
+          "updated_at": "2026-11-17T19:46:36.163177372Z"
+        },
+        {
+          "amount_credited": "1.50000000",
+          "amount_debited": "0.00000000",
+          "created_at": "2026-11-17T19:46:36.436094224Z",
+          "direction": "incoming",
+          "fee": null,
+          "slate_id": "e7b6e7e5-5ea3-4aa8-8366-48d08a779cd9",
+          "state": "received",
+          "transport": "epicbox",
+          "tx_id": 3,
+          "updated_at": "2026-11-17T19:46:36.436094224Z"
+        }
+      ]
+    }
+  },
+  "tx_list": {
+    "account": "default",
+    "transactions": [
+      {
+        "amount_credited": "10.00000000",
+        "amount_debited": "0.00000000",
+        "created_at": "2019-03-01T00:01:00Z",
+        "direction": "incoming",
+        "fee": null,
+        "slate_id": null,
+        "state": "confirmed",
+        "transport": null,
+        "tx_id": 1,
+        "updated_at": "2019-03-01T00:01:00Z"
+      },
+      {
+        "amount_credited": "10.00000000",
+        "amount_debited": "0.00000000",
+        "created_at": "2019-03-01T00:01:00Z",
+        "direction": "incoming",
+        "fee": null,
+        "slate_id": null,
+        "state": "confirmed",
+        "transport": null,
+        "tx_id": 2,
+        "updated_at": "2019-03-01T00:01:00Z"
+      },
+      {
+        "amount_credited": "10.00000000",
+        "amount_debited": "0.00000000",
+        "created_at": "2019-03-01T00:01:00Z",
+        "direction": "incoming",
+        "fee": null,
+        "slate_id": null,
+        "state": "confirmed",
+        "transport": null,
+        "tx_id": 3,
+        "updated_at": "2019-03-01T00:01:00Z"
+      },
+      {
+        "amount_credited": "10.00000000",
+        "amount_debited": "0.00000000",
+        "created_at": "2019-03-01T00:01:00Z",
+        "direction": "incoming",
+        "fee": null,
+        "slate_id": null,
+        "state": "confirmed",
+        "transport": null,
+        "tx_id": 4,
+        "updated_at": "2019-03-01T00:01:00Z"
+      },
+      {
+        "amount_credited": "10.00000000",
+        "amount_debited": "0.00000000",
+        "created_at": "2019-03-01T00:01:00Z",
+        "direction": "incoming",
+        "fee": null,
+        "slate_id": null,
+        "state": "confirmed",
+        "transport": null,
+        "tx_id": 5,
+        "updated_at": "2019-03-01T00:01:00Z"
+      },
+      {
+        "amount_credited": "10.00000000",
+        "amount_debited": "0.00000000",
+        "created_at": "2019-03-01T00:01:00Z",
+        "direction": "incoming",
+        "fee": null,
+        "slate_id": null,
+        "state": "confirmed",
+        "transport": null,
+        "tx_id": 6,
+        "updated_at": "2019-03-01T00:01:00Z"
+      },
+      {
+        "amount_credited": "10.00000000",
+        "amount_debited": "0.00000000",
+        "created_at": "2019-03-01T00:01:00Z",
+        "direction": "incoming",
+        "fee": null,
+        "slate_id": null,
+        "state": "confirmed",
+        "transport": null,
+        "tx_id": 7,
+        "updated_at": "2019-03-01T00:01:00Z"
+      },
+      {
+        "amount_credited": "10.00000000",
+        "amount_debited": "0.00000000",
+        "created_at": "2019-03-01T00:01:00Z",
+        "direction": "incoming",
+        "fee": null,
+        "slate_id": null,
+        "state": "confirmed",
+        "transport": null,
+        "tx_id": 8,
+        "updated_at": "2019-03-01T00:01:00Z"
+      },
+      {
+        "amount_credited": "10.00000000",
+        "amount_debited": "0.00000000",
+        "created_at": "2019-03-01T00:01:00Z",
+        "direction": "incoming",
+        "fee": null,
+        "slate_id": null,
+        "state": "confirmed",
+        "transport": null,
+        "tx_id": 9,
+        "updated_at": "2019-03-01T00:01:00Z"
+      },
+      {
+        "amount_credited": "8.49200000",
+        "amount_debited": "10.00000000",
+        "created_at": "2026-11-17T19:46:34.470416082Z",
+        "direction": "outgoing",
+        "fee": "0.00800000",
+        "slate_id": "d01feb1b-2359-4ac2-a7a2-77c4b8f74e3d",
+        "state": "confirmed",
+        "transport": "file",
+        "tx_id": 10,
+        "updated_at": "2026-11-17T19:46:34.816494074Z"
+      },
+      {
+        "amount_credited": "8.99200000",
+        "amount_debited": "10.00000000",
+        "created_at": "2026-11-17T19:46:34.873866581Z",
+        "direction": "outgoing",
+        "fee": "0.00800000",
+        "slate_id": "60f41b73-ded1-449a-8cc6-212077a2103a",
+        "state": "confirmed",
+        "transport": "epicbox",
+        "tx_id": 11,
+        "updated_at": "2026-11-17T19:46:38.023721659Z"
+      },
+      {
+        "amount_credited": "9.49200000",
+        "amount_debited": "10.00000000",
+        "created_at": "2026-11-17T19:46:35.352879561Z",
+        "direction": "outgoing",
+        "fee": "0.00800000",
+        "slate_id": "5dbdb128-cb31-4619-80f1-21fb7b69267d",
+        "state": "confirmed",
+        "transport": "epicbox",
+        "tx_id": 12,
+        "updated_at": "2026-11-17T19:46:38.023721659Z"
+      },
+      {
+        "amount_credited": "8.99200000",
+        "amount_debited": "10.00000000",
+        "created_at": "2026-11-17T19:46:35.878014323Z",
+        "direction": "outgoing",
+        "fee": "0.00800000",
+        "slate_id": "e0fccfe1-2188-4f88-8af7-14841eba8d8d",
+        "state": "sent",
+        "transport": "epicbox",
+        "tx_id": 13,
+        "updated_at": "2026-11-17T19:46:35.878014323Z"
+      },
+      {
+        "amount_credited": "8.99200000",
+        "amount_debited": "10.00000000",
+        "created_at": "2026-11-17T19:46:36.606713894Z",
+        "direction": "outgoing",
+        "fee": "0.00800000",
+        "slate_id": "4ddc7630-978f-4003-b85b-55d6c89b81bb",
+        "state": "sent",
+        "transport": "file",
+        "tx_id": 14,
+        "updated_at": "2026-11-17T19:46:36.606713894Z"
+      },
+      {
+        "amount_credited": "1.00000000",
+        "amount_debited": "0.00000000",
+        "created_at": "2026-11-17T19:46:36.823830264Z",
+        "direction": "incoming",
+        "fee": null,
+        "slate_id": "b6fd8436-9bd3-473f-8895-bcd9b2b92326",
+        "state": "received",
+        "transport": "file",
+        "tx_id": 15,
+        "updated_at": "2026-11-17T19:46:36.823830264Z"
+      },
+      {
+        "amount_credited": "8.99200000",
+        "amount_debited": "10.00000000",
+        "created_at": "2026-11-17T19:46:36.93417601Z",
+        "direction": "outgoing",
+        "fee": "0.00800000",
+        "slate_id": "8200325e-cfe2-4cf6-8fac-dc02d8644c88",
+        "state": "cancelled",
+        "transport": "file",
+        "tx_id": 16,
+        "updated_at": "2026-11-17T19:46:37.074018538Z"
+      },
+      {
+        "amount_credited": "7.99200000",
+        "amount_debited": "10.00000000",
+        "created_at": "2026-11-17T19:46:37.107209104Z",
+        "direction": "outgoing",
+        "fee": "0.00800000",
+        "slate_id": "6dfaabe6-e60e-4e00-abc7-78033a5ddf6a",
+        "state": "posted",
+        "transport": "file",
+        "tx_id": 17,
+        "updated_at": "2026-11-17T19:46:37.444275257Z"
+      },
+      {
+        "amount_credited": "1.00000000",
+        "amount_debited": "0.00000000",
+        "created_at": "2026-11-17T19:46:37.460911853Z",
+        "direction": "incoming",
+        "fee": null,
+        "slate_id": "957524d6-ed65-4be1-895b-ce8851c08797",
+        "state": "received",
+        "transport": "epicbox",
+        "tx_id": 18,
+        "updated_at": "2026-11-17T19:46:37.460911853Z"
+      },
+      {
+        "amount_credited": "8.74200000",
+        "amount_debited": "10.00000000",
+        "created_at": "2026-11-17T19:46:37.643570984Z",
+        "direction": "outgoing",
+        "fee": "0.00800000",
+        "slate_id": "3b5ae875-7196-425b-b31b-4e9e49300cf6",
+        "state": "sent",
+        "transport": "epicbox",
+        "tx_id": 19,
+        "updated_at": "2026-11-17T19:46:37.643570984Z"
+      }
+    ]
+  },
+  "tx_show": {
+    "1": {
+      "amount_credited": "10.00000000",
+      "amount_debited": "0.00000000",
+      "confirmed_height": 1,
+      "created_at": "2019-03-01T00:01:00Z",
+      "direction": "incoming",
+      "fee": null,
+      "messages": [],
+      "origin": "found-by-scan",
+      "slate_id": null,
+      "stages": [],
+      "state": "confirmed",
+      "transport": null,
+      "tx_id": 1,
+      "updated_at": "2019-03-01T00:01:00Z"
+    },
+    "10": {
+      "amount_credited": "8.49200000",
+      "amount_debited": "10.00000000",
+      "confirmed_height": 31,
+      "created_at": "2026-11-17T19:46:34.470416082Z",
+      "direction": "outgoing",
+      "fee": "0.00800000",
+      "kernel_excess": "096a99cb82ca90a2a9434d2a0c4480517cb12103c27ddd4a865d9de521255f191e",
+      "messages": [
+        {
+          "role": "sender",
+          "text": "mined payment"
+        }
+      ],
+      "origin": "wallet",
+      "slate_id": "d01feb1b-2359-4ac2-a7a2-77c4b8f74e3d",
+      "stages": [
+        "S1",
+        "S3"
+      ],
+      "state": "confirmed",
+      "transport": "file",
+      "tx_id": 10,
+      "updated_at": "2026-11-17T19:46:34.816494074Z"
+    },
+    "11": {
+      "amount_credited": "8.99200000",
+      "amount_debited": "10.00000000",
+      "confirmed_height": 32,
+      "created_at": "2026-11-17T19:46:34.873866581Z",
+      "direction": "outgoing",
+      "fee": "0.00800000",
+      "kernel_excess": "09667730d1f80735097a55da0e76b0131fac8791c96b52ebe8b5e037c49afa3471",
+      "messages": [
+        {
+          "role": "sender",
+          "text": "epicbox payment"
+        }
+      ],
+      "origin": "wallet",
+      "slate_id": "60f41b73-ded1-449a-8cc6-212077a2103a",
+      "stages": [
+        "S1",
+        "S3"
+      ],
+      "state": "confirmed",
+      "transport": "epicbox",
+      "tx_id": 11,
+      "updated_at": "2026-11-17T19:46:38.023721659Z"
+    },
+    "12": {
+      "amount_credited": "9.49200000",
+      "amount_debited": "10.00000000",
+      "confirmed_height": 32,
+      "created_at": "2026-11-17T19:46:35.352879561Z",
+      "direction": "outgoing",
+      "fee": "0.00800000",
+      "kernel_excess": "088bbfc489867a4c408b7a76e8baccaa5e8a361b9167d210a7cb4ea16305cadb56",
+      "messages": [
+        {
+          "role": "sender",
+          "text": "stranger payment"
+        }
+      ],
+      "origin": "wallet",
+      "slate_id": "5dbdb128-cb31-4619-80f1-21fb7b69267d",
+      "stages": [
+        "S1",
+        "S3"
+      ],
+      "state": "confirmed",
+      "transport": "epicbox",
+      "tx_id": 12,
+      "updated_at": "2026-11-17T19:46:38.023721659Z"
+    },
+    "13": {
+      "amount_credited": "8.99200000",
+      "amount_debited": "10.00000000",
+      "created_at": "2026-11-17T19:46:35.878014323Z",
+      "direction": "outgoing",
+      "fee": "0.00800000",
+      "messages": [
+        {
+          "role": "sender",
+          "text": "native payment"
+        }
+      ],
+      "origin": "wallet",
+      "slate_id": "e0fccfe1-2188-4f88-8af7-14841eba8d8d",
+      "stages": [
+        "S1"
+      ],
+      "state": "sent",
+      "transport": "epicbox",
+      "tx_id": 13,
+      "updated_at": "2026-11-17T19:46:35.878014323Z"
+    },
+    "14": {
+      "amount_credited": "8.99200000",
+      "amount_debited": "10.00000000",
+      "created_at": "2026-11-17T19:46:36.606713894Z",
+      "direction": "outgoing",
+      "fee": "0.00800000",
+      "messages": [],
+      "origin": "wallet",
+      "slate_id": "4ddc7630-978f-4003-b85b-55d6c89b81bb",
+      "stages": [
+        "S1"
+      ],
+      "state": "sent",
+      "transport": "file",
+      "tx_id": 14,
+      "updated_at": "2026-11-17T19:46:36.606713894Z"
+    },
+    "15": {
+      "amount_credited": "1.00000000",
+      "amount_debited": "0.00000000",
+      "created_at": "2026-11-17T19:46:36.823830264Z",
+      "direction": "incoming",
+      "fee": null,
+      "messages": [],
+      "origin": "wallet",
+      "slate_id": "b6fd8436-9bd3-473f-8895-bcd9b2b92326",
+      "stages": [
+        "I1"
+      ],
+      "state": "received",
+      "transport": "file",
+      "tx_id": 15,
+      "updated_at": "2026-11-17T19:46:36.823830264Z"
+    },
+    "16": {
+      "amount_credited": "8.99200000",
+      "amount_debited": "10.00000000",
+      "created_at": "2026-11-17T19:46:36.93417601Z",
+      "direction": "outgoing",
+      "fee": "0.00800000",
+      "messages": [
+        {
+          "role": "sender",
+          "text": "cancelled payment"
+        }
+      ],
+      "origin": "wallet",
+      "slate_id": "8200325e-cfe2-4cf6-8fac-dc02d8644c88",
+      "stages": [
+        "S1"
+      ],
+      "state": "cancelled",
+      "transport": "file",
+      "tx_id": 16,
+      "updated_at": "2026-11-17T19:46:37.074018538Z"
+    },
+    "17": {
+      "amount_credited": "7.99200000",
+      "amount_debited": "10.00000000",
+      "created_at": "2026-11-17T19:46:37.107209104Z",
+      "direction": "outgoing",
+      "fee": "0.00800000",
+      "kernel_excess": "08ee27e81c75badbb99862f090a31e8d5e37a277e92f47dbcc273f14dbcbf74d75",
+      "messages": [
+        {
+          "role": "sender",
+          "text": "pending payment"
+        }
+      ],
+      "origin": "wallet",
+      "releasable": false,
+      "releasable_from": 1472,
+      "slate_id": "6dfaabe6-e60e-4e00-abc7-78033a5ddf6a",
+      "stages": [
+        "S1",
+        "S3"
+      ],
+      "state": "posted",
+      "transport": "file",
+      "tx_id": 17,
+      "updated_at": "2026-11-17T19:46:37.444275257Z"
+    },
+    "18": {
+      "amount_credited": "1.00000000",
+      "amount_debited": "0.00000000",
+      "created_at": "2026-11-17T19:46:37.460911853Z",
+      "direction": "incoming",
+      "fee": null,
+      "messages": [],
+      "origin": "wallet",
+      "slate_id": "957524d6-ed65-4be1-895b-ce8851c08797",
+      "stages": [
+        "I1"
+      ],
+      "state": "received",
+      "transport": "epicbox",
+      "tx_id": 18,
+      "updated_at": "2026-11-17T19:46:37.460911853Z"
+    },
+    "19": {
+      "amount_credited": "8.74200000",
+      "amount_debited": "10.00000000",
+      "created_at": "2026-11-17T19:46:37.643570984Z",
+      "direction": "outgoing",
+      "fee": "0.00800000",
+      "messages": [
+        {
+          "role": "sender",
+          "text": "marked payment"
+        }
+      ],
+      "origin": "wallet",
+      "slate_id": "3b5ae875-7196-425b-b31b-4e9e49300cf6",
+      "stages": [
+        "S1"
+      ],
+      "state": "sent",
+      "transport": "epicbox",
+      "tx_id": 19,
+      "updated_at": "2026-11-17T19:46:37.643570984Z"
+    },
+    "2": {
+      "amount_credited": "10.00000000",
+      "amount_debited": "0.00000000",
+      "confirmed_height": 1,
+      "created_at": "2019-03-01T00:01:00Z",
+      "direction": "incoming",
+      "fee": null,
+      "messages": [],
+      "origin": "found-by-scan",
+      "slate_id": null,
+      "stages": [],
+      "state": "confirmed",
+      "transport": null,
+      "tx_id": 2,
+      "updated_at": "2019-03-01T00:01:00Z"
+    },
+    "3": {
+      "amount_credited": "10.00000000",
+      "amount_debited": "0.00000000",
+      "confirmed_height": 1,
+      "created_at": "2019-03-01T00:01:00Z",
+      "direction": "incoming",
+      "fee": null,
+      "messages": [],
+      "origin": "found-by-scan",
+      "slate_id": null,
+      "stages": [],
+      "state": "confirmed",
+      "transport": null,
+      "tx_id": 3,
+      "updated_at": "2019-03-01T00:01:00Z"
+    },
+    "4": {
+      "amount_credited": "10.00000000",
+      "amount_debited": "0.00000000",
+      "confirmed_height": 1,
+      "created_at": "2019-03-01T00:01:00Z",
+      "direction": "incoming",
+      "fee": null,
+      "messages": [],
+      "origin": "found-by-scan",
+      "slate_id": null,
+      "stages": [],
+      "state": "confirmed",
+      "transport": null,
+      "tx_id": 4,
+      "updated_at": "2019-03-01T00:01:00Z"
+    },
+    "5": {
+      "amount_credited": "10.00000000",
+      "amount_debited": "0.00000000",
+      "confirmed_height": 1,
+      "created_at": "2019-03-01T00:01:00Z",
+      "direction": "incoming",
+      "fee": null,
+      "messages": [],
+      "origin": "found-by-scan",
+      "slate_id": null,
+      "stages": [],
+      "state": "confirmed",
+      "transport": null,
+      "tx_id": 5,
+      "updated_at": "2019-03-01T00:01:00Z"
+    },
+    "6": {
+      "amount_credited": "10.00000000",
+      "amount_debited": "0.00000000",
+      "confirmed_height": 1,
+      "created_at": "2019-03-01T00:01:00Z",
+      "direction": "incoming",
+      "fee": null,
+      "messages": [],
+      "origin": "found-by-scan",
+      "slate_id": null,
+      "stages": [],
+      "state": "confirmed",
+      "transport": null,
+      "tx_id": 6,
+      "updated_at": "2019-03-01T00:01:00Z"
+    },
+    "7": {
+      "amount_credited": "10.00000000",
+      "amount_debited": "0.00000000",
+      "confirmed_height": 1,
+      "created_at": "2019-03-01T00:01:00Z",
+      "direction": "incoming",
+      "fee": null,
+      "messages": [],
+      "origin": "found-by-scan",
+      "slate_id": null,
+      "stages": [],
+      "state": "confirmed",
+      "transport": null,
+      "tx_id": 7,
+      "updated_at": "2019-03-01T00:01:00Z"
+    },
+    "8": {
+      "amount_credited": "10.00000000",
+      "amount_debited": "0.00000000",
+      "confirmed_height": 1,
+      "created_at": "2019-03-01T00:01:00Z",
+      "direction": "incoming",
+      "fee": null,
+      "messages": [],
+      "origin": "found-by-scan",
+      "slate_id": null,
+      "stages": [],
+      "state": "confirmed",
+      "transport": null,
+      "tx_id": 8,
+      "updated_at": "2019-03-01T00:01:00Z"
+    },
+    "9": {
+      "amount_credited": "10.00000000",
+      "amount_debited": "0.00000000",
+      "confirmed_height": 1,
+      "created_at": "2019-03-01T00:01:00Z",
+      "direction": "incoming",
+      "fee": null,
+      "messages": [],
+      "origin": "found-by-scan",
+      "slate_id": null,
+      "stages": [],
+      "state": "confirmed",
+      "transport": null,
+      "tx_id": 9,
+      "updated_at": "2019-03-01T00:01:00Z"
+    }
+  },
+  "wallet_address": {
+    "address": "zzPxGkfouiob9P6T9BT3j8m6CxRo3sKfT4kKmjMzv11vPf7Cn66T@127.0.0.1:80"
+  },
+  "wallet_info": {
+    "accounts": [
+      {
+        "awaiting_confirmation": "26.97600000",
+        "awaiting_finalization": "34.71800000",
+        "immature": "0.00000000",
+        "index": 0,
+        "label": "default",
+        "locked": "40.00000000",
+        "spendable": "20.00000000",
+        "total": "86.97600000"
+      }
+    ],
+    "catching_up": false,
+    "height": 32,
+    "network": "floonet",
+    "node_behind": false
+  },
+  "wallet_outputs": {
+    "account": "default",
+    "outputs": [
+      {
+        "category": "unpaid_invoice",
+        "commitment": "0802baf5d8e3e19890be0c075e5c9922ecf4ac8b536ed479437eb6b63f1b6f7d38",
+        "confirmations": 0,
+        "height": 32,
+        "is_coinbase": false,
+        "lock_height": null,
+        "status": "unconfirmed",
+        "tx_id": 15,
+        "value": "1.00000000"
+      },
+      {
+        "category": "awaiting_finalization",
+        "commitment": "082f5332f8cfe61cb8d940915273fcfdd696fd8de88a89a9ba9b65f27b549738aa",
+        "confirmations": 0,
+        "height": 32,
+        "is_coinbase": false,
+        "lock_height": null,
+        "status": "unconfirmed",
+        "tx_id": 13,
+        "value": "8.99200000"
+      },
+      {
+        "category": "awaiting_finalization",
+        "commitment": "084c1f373103e767a2ca8bd85217f71aed4d9cad5df829b82b409844169139a33b",
+        "confirmations": 0,
+        "height": 32,
+        "is_coinbase": false,
+        "lock_height": null,
+        "status": "unconfirmed",
+        "tx_id": 17,
+        "value": "7.99200000"
+      },
+      {
+        "category": null,
+        "commitment": "0875a7a7b73557e9d3833a6629d39dd26c7483e5d1646815cafa2abecc306caf21",
+        "confirmations": 32,
+        "height": 1,
+        "is_coinbase": false,
+        "lock_height": 1,
+        "status": "spent",
+        "tx_id": 10,
+        "value": "10.00000000"
+      },
+      {
+        "category": "awaiting_finalization",
+        "commitment": "0883880d187d3f24a1d594252dadae4ffccc4bb5ff7f5117bfd5bdafdb0dc3bb1e",
+        "confirmations": 0,
+        "height": 32,
+        "is_coinbase": false,
+        "lock_height": null,
+        "status": "unconfirmed",
+        "tx_id": 19,
+        "value": "8.74200000"
+      },
+      {
+        "category": null,
+        "commitment": "08adfda91e920a813c5557df2f275b90c039b0af1fc252fd85dcb9dd0d74e26c58",
+        "confirmations": 32,
+        "height": 1,
+        "is_coinbase": false,
+        "lock_height": 1,
+        "status": "spent",
+        "tx_id": 11,
+        "value": "10.00000000"
+      },
+      {
+        "category": null,
+        "commitment": "08e30c42a4a21ad75882a9629afe1d65597b924b069b289b7ee722ae2b92cc8b0e",
+        "confirmations": 32,
+        "height": 1,
+        "is_coinbase": false,
+        "lock_height": 1,
+        "status": "spent",
+        "tx_id": 12,
+        "value": "10.00000000"
+      },
+      {
+        "category": "awaiting_confirmation",
+        "commitment": "08e9fe85d6b563cdf2b590374a086bd49d56b7a28a563a10571581a1e089f7e51e",
+        "confirmations": 1,
+        "height": 32,
+        "is_coinbase": false,
+        "lock_height": null,
+        "status": "unspent",
+        "tx_id": 11,
+        "value": "8.99200000"
+      },
+      {
+        "category": "locked",
+        "commitment": "0905f79bd38c31f110b6f25f63446a3cc9abc2e07e33ac2c8a5741cc7927c36831",
+        "confirmations": 32,
+        "height": 1,
+        "is_coinbase": false,
+        "lock_height": 1,
+        "status": "locked",
+        "tx_id": 13,
+        "value": "10.00000000"
+      },
+      {
+        "category": "locked",
+        "commitment": "0927cbda129de57485c9bfa820a7dfa193e74ab133d435cdc340dc48b34ae60364",
+        "confirmations": 32,
+        "height": 1,
+        "is_coinbase": false,
+        "lock_height": 1,
+        "status": "locked",
+        "tx_id": 14,
+        "value": "10.00000000"
+      },
+      {
+        "category": "awaiting_confirmation",
+        "commitment": "092a5b52a1a77186a855c69066fdc3e5d400f859a47ca3947045464ae79855a1a8",
+        "confirmations": 2,
+        "height": 31,
+        "is_coinbase": false,
+        "lock_height": null,
+        "status": "unspent",
+        "tx_id": 10,
+        "value": "8.49200000"
+      },
+      {
+        "category": "locked",
+        "commitment": "093b247cc13246ee122d7c2fea0ad538d6439c184c38f8fcceb5397cae1491cf9c",
+        "confirmations": 32,
+        "height": 1,
+        "is_coinbase": false,
+        "lock_height": 1,
+        "status": "locked",
+        "tx_id": 17,
+        "value": "10.00000000"
+      },
+      {
+        "category": "locked",
+        "commitment": "094ddacda80f7fa46ebe8bb1a23ebcbe7e7e7a761fe540cac9f2d4f51d49178eea",
+        "confirmations": 32,
+        "height": 1,
+        "is_coinbase": false,
+        "lock_height": 1,
+        "status": "locked",
+        "tx_id": 19,
+        "value": "10.00000000"
+      },
+      {
+        "category": "spendable",
+        "commitment": "094ed15e2d1b14c3d24b22a5ed432f64ef63e9a6d9a9a8c686bbd356eec96bf4ba",
+        "confirmations": 32,
+        "height": 1,
+        "is_coinbase": false,
+        "lock_height": 1,
+        "status": "unspent",
+        "tx_id": 3,
+        "value": "10.00000000"
+      },
+      {
+        "category": "spendable",
+        "commitment": "0965e35aa1dbd87f068b0d6d8bd46352840b3cc89ce7db51cddba3cae09d956086",
+        "confirmations": 32,
+        "height": 1,
+        "is_coinbase": false,
+        "lock_height": 1,
+        "status": "unspent",
+        "tx_id": 5,
+        "value": "10.00000000"
+      },
+      {
+        "category": "awaiting_confirmation",
+        "commitment": "099530bd3926b14b22650523ad8dc8210d56ceca5824de968fe2b384f5108e89d5",
+        "confirmations": 1,
+        "height": 32,
+        "is_coinbase": false,
+        "lock_height": null,
+        "status": "unspent",
+        "tx_id": 12,
+        "value": "9.49200000"
+      },
+      {
+        "category": "awaiting_finalization",
+        "commitment": "09c46582d6938e1b040ff66780559933b45249893cc115796c91fbca64bb6fae10",
+        "confirmations": 0,
+        "height": 32,
+        "is_coinbase": false,
+        "lock_height": null,
+        "status": "unconfirmed",
+        "tx_id": 14,
+        "value": "8.99200000"
+      },
+      {
+        "category": "unpaid_invoice",
+        "commitment": "09e6d50ad906ce24a6e688169d94763ad5f6943e7545c215d3a43024f23f71593f",
+        "confirmations": 0,
+        "height": 32,
+        "is_coinbase": false,
+        "lock_height": null,
+        "status": "unconfirmed",
+        "tx_id": 18,
+        "value": "1.00000000"
+      }
+    ]
+  }
+}

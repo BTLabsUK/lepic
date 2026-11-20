@@ -1,0 +1,40 @@
+// SPDX-License-Identifier: Apache-2.0
+//! The codec registry legacy slates are read and written with: a V3 codec and a V2 codec.
+
+use lepic_legacy_slate::v2_json::V2JsonCodec;
+use lepic_legacy_slate::v3_json::V3JsonCodec;
+use lepic_primitives::amount::Fee;
+use lepic_slate::codec::Codec;
+use lepic_slate::registry::CodecRegistry;
+
+/// The plain legacy codecs.
+pub fn legacy(base_fee: Fee) -> CodecRegistry {
+    legacy_with(
+        Box::new(V3JsonCodec::new(base_fee)),
+        Box::new(V2JsonCodec::new(base_fee)),
+    )
+}
+
+/// The legacy codecs as `v3` and `v2`, a codec of each shape.
+pub fn legacy_with(v3: Box<dyn Codec>, v2: Box<dyn Codec>) -> CodecRegistry {
+    let mut codecs = CodecRegistry::new();
+    // Registering fails only for an id already registered, and a codec of either shape keeps
+    // the id of its shape, so the two never collide.
+    let _ = codecs.register(v3);
+    let _ = codecs.register(v2);
+    codecs
+}
+
+#[cfg(test)]
+mod tests {
+    use lepic_legacy_slate::v2_json::LEGACY_V2_JSON;
+    use lepic_legacy_slate::v3_json::LEGACY_V3_JSON;
+
+    use super::*;
+
+    #[test]
+    fn plain_registry_holds_both_shapes() {
+        let ids: Vec<_> = legacy(Fee::new(1_000_000)).ids().collect();
+        assert_eq!(ids, [LEGACY_V3_JSON, LEGACY_V2_JSON]);
+    }
+}

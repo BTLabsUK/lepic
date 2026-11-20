@@ -1,0 +1,28 @@
+# Merged over compose.yaml by run.sh for the default relay, the Epicmail mailbox: the `epicbox`
+# service runs that image (built by ../mux-relay-image.sh, with bash for the health check and the
+# metrics read, and sqlite3 for the store read) and the stock relay's MongoDB does not start. The
+# relay still shares the node's network namespace and serves ws on 127.0.0.1:3423, which the
+# forwarders carry out as before. run.sh --stock-relay leaves this file out.
+services:
+  mongodb:
+    profiles: [stock]
+  epicbox:
+    # run.sh tags a given ACCEPTANCE_MUX_RELAY_IMAGE with this local name.
+    image: lepic-acceptance-mux-relay:local
+    pull_policy: never
+    build: !reset null
+    command: ["serve", "--config", "/relay-config.toml"]
+    environment: !reset {}
+    depends_on: !reset {}
+    healthcheck:
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/3423"]
+    volumes:
+      - ${ACCEPTANCE_MUX_RELAY_CONFIG}:/relay-config.toml:ro
+  # The forwarders use the stock relay's image, a Node.js one: build it here, from the same
+  # source, because epicbox no longer does.
+  node-port:
+    build:
+      context: ../.work/src/epic-epicbox-docker
+      dockerfile: ../../../docker/relay.Dockerfile
+      additional_contexts:
+        bin: ../.work/bin

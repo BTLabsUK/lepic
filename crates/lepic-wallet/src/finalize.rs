@@ -1,0 +1,1870 @@
+// SPDX-License-Identifier: Apache-2.0
+// Portions Copyright 2019 The Epic Developers
+// Ported from EpicCash/epic-wallet libwallet/src/api_impl/owner.rs, libwallet/src/internal/tx.rs,
+// libwallet/src/slate.rs (Apache-2.0); see NOTICE and upstream.toml.
+
+//! Finalize and post, the sender's last step of the standard flow: the receiver's S2 becomes S3
+//! and its transaction goes to the node, as `epic-wallet`'s `finalize_tx` and `post_tx` do it
+//! (`docs/compat/legacy-slates.md`, "Lifecycle").
+//!
+//! [`build_s3`] is the construction on its own: it checks the S2 against the S1 this wallet
+//! built, verifies the receiver's partial signature, message and payment proof, adds the
+//! sender's partial signature, aggregates, builds the kernel and validates the transaction.
+//!
+//! [`crate::Wallet::finalize`] runs it against the stored S1 and private context, stores the S3
+//! and drops the context in one store transaction, then posts. A post that fails leaves the
+//! transaction `finalized`, from where each refresh pushes it again until it is mined or its
+//! cutoff passes, and [`crate::Wallet::post`] pushes it at once. Finalizing the same
+//! S2 again, or posting again, changes nothing that is stored.
+
+use std::sync::Arc;
+
+use ed25519_dalek::VerifyingKey;
+use jiff::Timestamp;
+use lepic_crypto::aggsig::{
+    add_signatures, calculate_partial_sig, verify_completed_sig, verify_partial_sig,
+};
+use lepic_crypto::{Commitment, CryptoError, Message, PublicKey};
+use lepic_keychain::{Keychain, KeychainError};
+use lepic_legacy_slate::v3_json::{LEGACY_V3_JSON, V3JsonCodec};
+use lepic_node::{NodeApi, NodeError, NodeRejection, Propagation, RejectionKind};
+use lepic_primitives::amount::{Fee, Height};
+use lepic_primitives::committed::{KernelSumError, sum_commitments};
+use lepic_primitives::crypto_ser::BlindingFactor;
+use lepic_primitives::fee::BodyCounts;
+use lepic_primitives::hash::blake2b_256;
+use lepic_primitives::params::Network;
+use lepic_primitives::tx::{Transaction, TransactionBody};
+use lepic_primitives::validate::ValidationError;
+use lepic_slate::codec::{Codec, EncodeContext, MediaType, WireSlate};
+use lepic_slate::error::{DecodeError, EncodeError, RegistryError, SlateError};
+use lepic_slate::model::{FinalKernel, ParticipantMessage, PaymentProof, Slate, SlateId};
+use lepic_slate::origin::WireOrigin;
+use lepic_slate::registry::CodecRegistry;
+use lepic_slate::role::Role;
+use lepic_slate::stage::Stage;
+use lepic_store::{
+    NodeOutcome, NodePost, Repositories, SlateStage, StoreError, StoredSlate, TxDirection, TxId,
+    TxState, WalletStore,
+};
+use lepic_transport::method::Method;
+use lepic_transport::transport::{Destination, TransportId};
+use thiserror::Error;
+use tracing::field::Empty;
+use tracing::{Span, debug, info, instrument, warn};
+use uuid::Uuid;
+
+use crate::account;
+use crate::codecs;
+use crate::error::WalletError;
+use crate::invoice::{complete_answer, earliest_cutoff};
+use crate::lifecycle::Session;
+use crate::ports::{SecretVault, StoreOpener};
+use crate::post_retry::{PushRecord, record_push, stored_error, tells_something_new};
+use crate::recover::open_recovery;
+use crate::refresh::{KernelAt, RefreshError, final_kernel, stored_slate};
+use crate::release::record_finalized;
+use crate::send::{BuiltS1, SENDER_CONTEXT, SenderContext, block_header_version};
+use crate::send_limit::effective_cutoff;
+use crate::state::{StateChange, apply_transition, check_transition, state_name};
+use crate::wallet::Wallet;
+
+/// A slate field the receiver may not change between S1 and S2.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum SlateField {
+    Id,
+    Amount,
+    Fee,
+    Height,
+    Lock,
+    TimeToLive,
+    Offset,
+    Inputs,
+    Outputs,
+    Sender,
+    PaymentProof,
+}
+
+impl std::fmt::Display for SlateField {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Id => "slate id",
+            Self::Amount => "amount",
+            Self::Fee => "fee",
+            Self::Height => "height",
+            Self::Lock => "lock height",
+            Self::TimeToLive => "ttl cutoff height",
+            Self::Offset => "offset",
+            Self::Inputs => "inputs",
+            Self::Outputs => "outputs",
+            Self::Sender => "sender data",
+            Self::PaymentProof => "payment proof addresses",
+        })
+    }
+}
+
+/// Why a slate was not finalized or a transaction not posted.
+#[derive(Debug, Error)]
+#[non_exhaustive]
+pub enum FinalizeError {
+    #[error("wallet operation failed")]
+    Wallet(#[from] WalletError),
+    #[error("transport {transport} is not registered")]
+    UnknownTransport { transport: TransportId },
+    #[error("slate could not be decoded")]
+    Decode(#[source] DecodeError),
+    #[error("slate at stage {stage} is not a reply to finalize")]
+    WrongStage { stage: Stage },
+    #[error("slate {slate_id} answers no transaction this wallet sent")]
+    UnknownSlate { slate_id: SlateId },
+    /// The transaction was finalized with another S2 under the same slate id.
+    #[error("slate {slate_id} was already finalized as transaction {tx_id}")]
+    AlreadyFinalized { slate_id: SlateId, tx_id: TxId },
+    #[error("transaction {tx_id} is {} and cannot be finalized", state_name(*state))]
+    NotFinalizable { tx_id: TxId, state: TxState },
+    #[error("slate expired at height {cutoff}, the chain tip is at {tip}")]
+    Expired { cutoff: Height, tip: Height },
+    /// The S2 differs from the S1 this wallet sent in a field only the sender sets.
+    #[error("reply changed the {field} of the slate")]
+    Mismatch { field: SlateField },
+    /// This wallet asked for a payment proof and the reply carries none.
+    #[error("reply carries no payment proof")]
+    MissingPaymentProof,
+    #[error("payment proof sender address is not this wallet's")]
+    ForeignSenderAddress,
+    #[error("payment proof signature does not verify")]
+    PaymentProofSignature,
+    #[error("receiver message signature does not verify")]
+    MessageSignature(#[source] CryptoError),
+    #[error("receiver partial signature does not verify")]
+    ReceiverSignature(#[source] CryptoError),
+    #[error("fee is below the minimum for the transaction")]
+    FeeBelowMinimum { fee: Fee, minimum: Fee },
+    #[error("minimum fee could not be computed")]
+    FeeOverflow,
+    #[error("sender signature could not be created")]
+    Signing(#[source] CryptoError),
+    #[error("kernel excess could not be computed")]
+    Excess(#[source] KernelSumError),
+    #[error("final transaction is invalid")]
+    InvalidTransaction(#[source] ValidationError),
+    #[error("final slate could not be built")]
+    Slate(#[source] SlateError),
+    #[error("codec registration failed")]
+    Codecs(#[source] RegistryError),
+    #[error("final slate could not be stored")]
+    Encode(#[source] EncodeError),
+    #[error("stored slate is unreadable")]
+    StoredSlate(#[source] DecodeError),
+    #[error("private context of slate {slate_id} is missing")]
+    MissingContext { slate_id: SlateId },
+    #[error("stored private context is malformed")]
+    MalformedContext,
+    #[error("node request failed")]
+    Node(#[source] NodeError),
+    /// A relay delivered the reply from an address the transaction's S1 was not delivered to.
+    /// A slate carried out by file, QR or paste is answered only through an explicit import.
+    #[error("reply to transaction {tx_id} came from an address its slate was not sent to")]
+    UnexpectedAnswerer { tx_id: TxId },
+    #[error("transaction {tx_id} is {} and has nothing to post", state_name(*state))]
+    NotPostable { tx_id: TxId, state: TxState },
+    /// The transaction is finalized and stored. A refresh pushes it again until it is mined or
+    /// its cutoff passes; [`crate::Wallet::post`] pushes it at once.
+    #[error("transaction {tx_id} is finalized but the node did not accept it")]
+    NotPosted {
+        tx_id: TxId,
+        #[source]
+        source: NodeError,
+    },
+    /// The node refused the transaction and no longer holds inputs of it that this wallet
+    /// held: another wallet on the same recovery phrase spent them. The transaction was
+    /// cancelled, its other inputs released, and a refresh ran.
+    #[error("inputs of transaction {tx_id} were spent by another wallet")]
+    InputsSpentElsewhere {
+        tx_id: TxId,
+        #[source]
+        source: NodeError,
+    },
+    /// The node refused the transaction and no longer holds inputs of it that this wallet
+    /// held: `by`, another transaction of this wallet whose kernel the chain holds, spent them,
+    /// as when a cancelled payment was mined before the move of its coins back to the wallet.
+    /// The transaction was cancelled and stays watched, and a refresh ran, which confirms `by`
+    /// if it was cancelled too.
+    #[error("inputs of transaction {tx_id} were spent by transaction {by} of this wallet")]
+    InputsSpentByOwnTransaction {
+        tx_id: TxId,
+        by: TxId,
+        #[source]
+        source: NodeError,
+    },
+    /// The node refused the transaction and no longer holds inputs of it that the other party
+    /// added: the other party spent them elsewhere, as a payer does who cancelled the payment
+    /// and moved its coins, so the transaction can never be mined. It was cancelled and stays
+    /// watched, and a refresh ran.
+    #[error("inputs the other party added to transaction {tx_id} were spent")]
+    PeerInputsSpent {
+        tx_id: TxId,
+        #[source]
+        source: NodeError,
+    },
+}
+
+impl From<StoreError> for FinalizeError {
+    fn from(error: StoreError) -> Self {
+        Self::Wallet(WalletError::Store(error))
+    }
+}
+
+impl From<KeychainError> for FinalizeError {
+    fn from(error: KeychainError) -> Self {
+        Self::Wallet(WalletError::Keychain(error))
+    }
+}
+
+/// How a post ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Posted {
+    /// The node accepted the transaction, or its pool already held it.
+    Accepted,
+    /// The node refused the push, and its chain already holds the kernel, in the block at
+    /// `height`.
+    AlreadyOnChain { height: Height },
+}
+
+/// A finalized slate and the transaction it completes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FinalizedSlate {
+    pub slate: Slate,
+    pub transaction: Transaction,
+}
+
+/// A transaction this wallet finalized.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Finalized {
+    pub tx_id: TxId,
+    pub slate: Slate,
+    pub transaction: Transaction,
+    /// This call pushed the transaction to the node; `false` when it was posted before, and in
+    /// an offline session ([`crate::WalletConfig::offline`]), which leaves it `finalized`.
+    pub pushed: bool,
+}
+
+/// S2 to S3 for the sender of `s1`, on a network whose base fee is `base_fee`, as `complete_tx`
+/// and `verify_slate_payment_proof` do it.
+///
+/// Fails with [`FinalizeError::Mismatch`] when the reply changed what the sender proposed, with
+/// [`FinalizeError::MissingPaymentProof`] or [`FinalizeError::PaymentProofSignature`] when a
+/// requested payment proof is absent or not signed by the receiver, with
+/// [`FinalizeError::ReceiverSignature`] or [`FinalizeError::MessageSignature`] for a receiver
+/// signature that does not verify, and with [`FinalizeError::InvalidTransaction`] when the
+/// result fails the node's transaction validation.
+pub fn build_s3(
+    keychain: &Keychain,
+    base_fee: Fee,
+    s1: &BuiltS1,
+    s2: &Slate,
+) -> Result<FinalizedSlate, FinalizeError> {
+    if s2.stage() != Stage::S2 {
+        return Err(FinalizeError::WrongStage { stage: s2.stage() });
+    }
+    check_reply(&s1.slate, s2)?;
+    let receiver = s2.participant(Role::Receiver).ok_or(FinalizeError::Slate(
+        SlateError::MissingParticipant {
+            stage: s2.stage(),
+            role: Role::Receiver,
+        },
+    ))?;
+    if let Some(message) = &receiver.message {
+        verify_message(message, &receiver.public_blind_excess)
+            .map_err(FinalizeError::MessageSignature)?;
+    }
+    check_fee(s2, base_fee)?;
+
+    let context = &s1.context;
+    let sender_excess = PublicKey::from_secret_key(&context.secret_key).map_err(signing)?;
+    let sender_nonce = PublicKey::from_secret_key(&context.secret_nonce).map_err(signing)?;
+    let nonce_sum = PublicKey::sum(&[sender_nonce, receiver.public_nonce]).map_err(signing)?;
+    let excess_sum =
+        PublicKey::sum(&[sender_excess, receiver.public_blind_excess]).map_err(signing)?;
+    let message = s2.kernel_features().signature_message();
+    let receiver_signature = receiver.partial_signature.ok_or(FinalizeError::Slate(
+        SlateError::MissingPartialSignature {
+            stage: s2.stage(),
+            role: Role::Receiver,
+        },
+    ))?;
+    verify_partial_sig(
+        &receiver_signature,
+        &nonce_sum,
+        &receiver.public_blind_excess,
+        Some(&excess_sum),
+        &message,
+    )
+    .map_err(FinalizeError::ReceiverSignature)?;
+    let sender_signature = calculate_partial_sig(
+        &context.secret_key,
+        &context.secret_nonce,
+        &nonce_sum,
+        Some(&excess_sum),
+        &message,
+    )
+    .map_err(signing)?;
+    let excess_sig =
+        add_signatures(&[sender_signature, receiver_signature], &nonce_sum).map_err(signing)?;
+    verify_completed_sig(&excess_sig, &excess_sum, Some(&excess_sum), &message).map_err(signing)?;
+
+    let excess = kernel_excess(s2)?;
+    if let Some(proof) = s2.payment_proof() {
+        verify_payment_proof(keychain, context, proof, s2, &excess)?;
+    }
+    let slate = s2
+        .finalize(sender_signature, FinalKernel { excess, excess_sig })
+        .map_err(FinalizeError::Slate)?;
+    let transaction = final_transaction(&slate)?;
+    transaction
+        .validate()
+        .map_err(FinalizeError::InvalidTransaction)?;
+    Ok(FinalizedSlate { slate, transaction })
+}
+
+fn signing(error: CryptoError) -> FinalizeError {
+    FinalizeError::Signing(error)
+}
+
+/// The receiver adds its participant data, one output and, when asked, the payment proof
+/// signature. Everything else is what the sender proposed.
+fn check_reply(s1: &Slate, s2: &Slate) -> Result<(), FinalizeError> {
+    let mismatch = |field| Err(FinalizeError::Mismatch { field });
+    if s2.id() != s1.id() {
+        return mismatch(SlateField::Id);
+    }
+    if s2.amount() != s1.amount() {
+        return mismatch(SlateField::Amount);
+    }
+    if s2.fee() != s1.fee() {
+        return mismatch(SlateField::Fee);
+    }
+    if s2.height() != s1.height() {
+        return mismatch(SlateField::Height);
+    }
+    if s2.lock() != s1.lock() {
+        return mismatch(SlateField::Lock);
+    }
+    if s2.ttl_cutoff_height() != s1.ttl_cutoff_height() {
+        return mismatch(SlateField::TimeToLive);
+    }
+    if s2.offset() != s1.offset() {
+        return mismatch(SlateField::Offset);
+    }
+    if s2.inputs() != s1.inputs() {
+        return mismatch(SlateField::Inputs);
+    }
+    let outputs_kept = s2.outputs().len() == s1.outputs().len().saturating_add(1)
+        && s1
+            .outputs()
+            .iter()
+            .all(|output| s2.outputs().contains(output));
+    if !outputs_kept {
+        return mismatch(SlateField::Outputs);
+    }
+    if s2.participant(Role::Sender) != s1.participant(Role::Sender) {
+        return mismatch(SlateField::Sender);
+    }
+    match (s1.payment_proof(), s2.payment_proof()) {
+        (None, None) => Ok(()),
+        (Some(_), None) => Err(FinalizeError::MissingPaymentProof),
+        (Some(asked), Some(answered))
+            if asked.sender_address == answered.sender_address
+                && asked.receiver_address == answered.receiver_address =>
+        {
+            Ok(())
+        }
+        (None | Some(_), Some(_)) => mismatch(SlateField::PaymentProof),
+    }
+}
+
+/// Participant messages are signed over their BLAKE2b-256 hash, with the signer's public excess
+/// as both the key and the challenge key.
+fn verify_message(message: &ParticipantMessage, signer: &PublicKey) -> Result<(), CryptoError> {
+    let digest = Message::from(*blake2b_256(message.text().as_bytes()).as_bytes());
+    verify_completed_sig(message.signature(), signer, Some(signer), &digest)
+}
+
+/// Upstream checks the fee against the complete body before signing; the receiver's output is
+/// in it now.
+fn check_fee(slate: &Slate, base_fee: Fee) -> Result<(), FinalizeError> {
+    let minimum = BodyCounts::new(count(slate.inputs().len()), count(slate.outputs().len()), 1)
+        .tx_fee(base_fee)
+        .map_err(|_| FinalizeError::FeeOverflow)?;
+    if slate.fee() < minimum {
+        return Err(FinalizeError::FeeBelowMinimum {
+            fee: slate.fee(),
+            minimum,
+        });
+    }
+    Ok(())
+}
+
+/// The kernel excess of an answered or final slate, from the participants' public excesses (the
+/// body of a native proposal is not carried, so a stored answer may lack the other party's
+/// inputs and outputs). For an honest slate this is [`kernel_excess`]; a slate with fewer than
+/// two participants falls back to it.
+pub(crate) fn answered_excess(slate: &Slate) -> Result<Commitment, FinalizeError> {
+    match participant_excess(slate) {
+        Some(excess) => Ok(excess),
+        None => kernel_excess(slate),
+    }
+}
+
+/// The sum of the participants' public blind excesses as a commitment to zero, when both
+/// parties are on the slate.
+pub(crate) fn participant_excess(slate: &Slate) -> Option<Commitment> {
+    let keys: Vec<PublicKey> = slate
+        .participants()
+        .map(|(_, participant)| participant.public_blind_excess)
+        .collect();
+    if keys.len() < 2 {
+        return None;
+    }
+    PublicKey::sum(&keys)
+        .and_then(|sum| Commitment::from_public_key(&sum))
+        .ok()
+}
+
+/// `calc_excess`: the outputs plus the fee, less the inputs and the offset.
+pub(crate) fn kernel_excess(slate: &Slate) -> Result<Commitment, FinalizeError> {
+    let body = TransactionBody::from_parts(
+        slate.inputs().to_vec(),
+        slate.outputs().to_vec(),
+        Vec::new(),
+    );
+    let total = sum_commitments(&body, slate.fee().value()).map_err(FinalizeError::Excess)?;
+    let offset: &BlindingFactor = slate.offset();
+    if offset.is_zero() {
+        return Ok(total);
+    }
+    let offset = offset
+        .to_secret_key()
+        .map_err(|error| FinalizeError::Excess(KernelSumError::InvalidOffset(error)))?;
+    let offset = Commitment::commit(0, &offset)
+        .map_err(|error| FinalizeError::Excess(KernelSumError::Excesses(error)))?;
+    Commitment::sum(&[total], &[offset])
+        .map_err(|error| FinalizeError::Excess(KernelSumError::Excesses(error)))
+}
+
+/// The sender address must be the one this wallet derived for the proof, and the receiver must
+/// have signed the amount, the kernel excess and that address.
+fn verify_payment_proof(
+    keychain: &Keychain,
+    context: &SenderContext,
+    proof: &PaymentProof,
+    slate: &Slate,
+    excess: &Commitment,
+) -> Result<(), FinalizeError> {
+    let index = context.payment_proof_index.ok_or(FinalizeError::Mismatch {
+        field: SlateField::PaymentProof,
+    })?;
+    let key = keychain.payment_proof_key(&account::parent_key_id(context.account)?, index)?;
+    if &key.public_key() != proof.sender_address.as_bytes() {
+        return Err(FinalizeError::ForeignSenderAddress);
+    }
+    let signature = proof.receiver_signature.ok_or(FinalizeError::Slate(
+        SlateError::MissingProofSignature {
+            stage: slate.stage(),
+        },
+    ))?;
+    let mut signed = Vec::with_capacity(8 + Commitment::LEN + 32);
+    signed.extend_from_slice(&slate.amount().value().to_be_bytes());
+    signed.extend_from_slice(excess.as_bytes());
+    signed.extend_from_slice(proof.sender_address.as_bytes());
+    let receiver = VerifyingKey::from_bytes(proof.receiver_address.as_bytes())
+        .map_err(|_| FinalizeError::PaymentProofSignature)?;
+    // Strict, so a weak receiver key cannot carry a signature made without its secret.
+    receiver
+        .verify_strict(
+            &signed,
+            &ed25519_dalek::Signature::from_bytes(signature.as_bytes()),
+        )
+        .map_err(|_| FinalizeError::PaymentProofSignature)
+}
+
+/// The transaction of a final slate, its body in the order the node requires.
+fn final_transaction(slate: &Slate) -> Result<Transaction, FinalizeError> {
+    let kernel = slate
+        .kernel()
+        .ok_or(FinalizeError::Slate(SlateError::MissingKernelExcess {
+            stage: slate.stage(),
+        }))?;
+    let body = TransactionBody::new(
+        slate.inputs().to_vec(),
+        slate.outputs().to_vec(),
+        vec![kernel],
+    );
+    Ok(Transaction::new(slate.offset().clone(), body))
+}
+
+/// Lengths of in-memory collections always fit `u64`.
+fn count(len: usize) -> u64 {
+    u64::try_from(len).unwrap_or(u64::MAX)
+}
+
+/// What the store transaction of a finalize runs with, so it needs no `Ports`.
+struct FinalizeEnvironment<'a> {
+    /// The method the S2 came over, which tells its peers apart; `None` for an S2 this wallet
+    /// gave itself.
+    method: Option<&'a dyn Method>,
+    network: Network,
+    tip: Height,
+    now: Timestamp,
+}
+
+/// Who handed the wallet an S2.
+#[derive(Debug, Clone)]
+pub(crate) enum Answerer {
+    /// The user brought it in, by file, paste or QR, or a channel that already checked its
+    /// sender handed it over.
+    Imported,
+    /// The method delivered it from this address, whose key the method authenticated.
+    From(Destination),
+}
+
+/// Refuses an S2 a method delivered unless it came from the peer key the transaction's S1 was
+/// delivered to. Every holder of a slate carried out by file, QR or paste could answer it, so
+/// such a send records no counterparty and only an import finalizes it. Only the keys the
+/// method names are compared, so a part of an address the method does not authenticate is
+/// ignored.
+fn check_answerer(
+    repos: &dyn Repositories,
+    method: Option<&dyn Method>,
+    network: Network,
+    tx_id: TxId,
+    answerer: &Answerer,
+) -> Result<(), FinalizeError> {
+    let Answerer::From(from) = answerer else {
+        return Ok(());
+    };
+    let Some(method) = method else {
+        return Err(FinalizeError::UnexpectedAnswerer { tx_id });
+    };
+    let expected = repos
+        .counterparty(tx_id)?
+        .and_then(|address| method.peer_key(network, &address).ok());
+    match (expected, method.peer_key(network, from.as_str()).ok()) {
+        (Some(expected), Some(from)) if expected == from => Ok(()),
+        _ => Err(FinalizeError::UnexpectedAnswerer { tx_id }),
+    }
+}
+
+impl FinalizeEnvironment<'_> {
+    fn base_fee(&self) -> Fee {
+        self.network.params().default_base_fee()
+    }
+}
+
+/// What a finalize stored, or found stored by an earlier one.
+struct StoredS3 {
+    tx_id: TxId,
+    finalized: FinalizedSlate,
+    change: Option<StateChange>,
+    state: TxState,
+}
+
+fn uuid(slate_id: SlateId) -> Uuid {
+    Uuid::from_bytes(*slate_id.as_bytes())
+}
+
+fn decode_stored(base_fee: Fee, stored: StoredSlate) -> Result<Slate, FinalizeError> {
+    V3JsonCodec::new(base_fee)
+        .decode(&WireSlate::binary(MediaType::JSON, stored.bytes))
+        .map_err(FinalizeError::StoredSlate)
+}
+
+/// The stored S3 of a sent transaction, and its transaction.
+fn stored_s3(
+    repos: &dyn Repositories,
+    base_fee: Fee,
+    slate_id: Uuid,
+) -> Result<Option<FinalizedSlate>, FinalizeError> {
+    stored_final(repos, base_fee, slate_id, SlateStage::Standard3)
+}
+
+/// The stored final slate at `stage`, S3 or I3, and its transaction.
+fn stored_final(
+    repos: &dyn Repositories,
+    base_fee: Fee,
+    slate_id: Uuid,
+    stage: SlateStage,
+) -> Result<Option<FinalizedSlate>, FinalizeError> {
+    let Some(stored) = repos
+        .slate(slate_id, stage)?
+        .filter(|stored| stored.codec == LEGACY_V3_JSON.as_str())
+    else {
+        return Ok(None);
+    };
+    let slate = decode_stored(base_fee, stored)?;
+    let transaction = final_transaction(&slate)?;
+    Ok(Some(FinalizedSlate { slate, transaction }))
+}
+
+/// Whether `s3` was finalized from `s2`: the two agree on everything but what finalizing adds.
+fn finalized_from(s3: &Slate, s2: &Slate) -> bool {
+    let mut finalized = s3.clone().with_origin(None).into_parts();
+    finalized.stage = Stage::S2;
+    finalized.kernel = None;
+    if let Some(sender) = &mut finalized.sender {
+        sender.partial_signature = None;
+    }
+    finalized == s2.clone().with_origin(None).into_parts()
+}
+
+/// Finalizes `s2` against the stored S1 and context in the caller's store transaction: stores
+/// S3, drops the context and moves the transaction to `finalized`. A transaction already
+/// finalized from the same S2 is returned as stored. A `compact` S2 has what it leaves out
+/// put back from the stored S1 first.
+fn finalize_stored(
+    repos: &mut dyn Repositories,
+    keychain: &Keychain,
+    env: &FinalizeEnvironment<'_>,
+    s2: &Slate,
+    answerer: &Answerer,
+    compact: bool,
+) -> Result<StoredS3, FinalizeError> {
+    let slate_id = s2.id();
+    let slate_uuid = uuid(slate_id);
+    let base_fee = env.base_fee();
+    let entry = repos
+        .transaction_by_slate(slate_uuid, TxDirection::Outgoing)?
+        .ok_or(FinalizeError::UnknownSlate { slate_id })?;
+    let tx_id = entry.id;
+    check_answerer(repos, env.method, env.network, tx_id, answerer)?;
+    let completed;
+    let s2 = if compact {
+        completed = completed_answer(repos, base_fee, s2)?;
+        &completed
+    } else {
+        s2
+    };
+    match entry.entry.state {
+        TxState::Sent => {}
+        state @ (TxState::Finalized | TxState::Posted | TxState::Confirmed) => {
+            return match stored_s3(repos, base_fee, slate_uuid)? {
+                // Returned as the first finalize returned it: with the wire origin of the S2,
+                // which a reply policy echoes, not that of the stored copy.
+                Some(finalized) if finalized_from(&finalized.slate, s2) => {
+                    // A finalized transaction is pushed again, which its cutoff forbids.
+                    if state == TxState::Finalized {
+                        check_cutoff(repos, tx_id, &finalized.slate, env.tip)?;
+                    }
+                    Ok(StoredS3 {
+                        tx_id,
+                        finalized: FinalizedSlate {
+                            slate: finalized.slate.with_origin(s2.origin().copied()),
+                            transaction: finalized.transaction,
+                        },
+                        change: None,
+                        state,
+                    })
+                }
+                _ => Err(FinalizeError::AlreadyFinalized { slate_id, tx_id }),
+            };
+        }
+        state @ (TxState::Received | TxState::Cancelled | TxState::Expired) => {
+            return Err(FinalizeError::NotFinalizable { tx_id, state });
+        }
+    }
+
+    let finalized = build_from_stored(&*repos, keychain, env, tx_id, s2)?;
+
+    let block_header_version = s2.origin().and_then(WireOrigin::legacy_header).map_or_else(
+        || block_header_version(env.network, s2.height()),
+        |header| header.block_header_version,
+    );
+    let encoded = V3JsonCodec::new(base_fee)
+        .encode(
+            &finalized.slate,
+            &EncodeContext {
+                block_header_version,
+            },
+        )
+        .map_err(FinalizeError::Encode)?;
+    repos.insert_slate(&StoredSlate {
+        slate_id: slate_uuid,
+        stage: SlateStage::Standard3,
+        codec: LEGACY_V3_JSON.as_str().to_owned(),
+        bytes: encoded.as_bytes().to_vec(),
+    })?;
+    // Upstream drops the context once the slate is final; nothing signs with it again.
+    repos.delete_context(slate_uuid, SENDER_CONTEXT)?;
+    let change = apply_transition(repos, tx_id, TxState::Finalized, env.now)?;
+    record_finalized(repos, tx_id, env.tip)?;
+    Ok(StoredS3 {
+        tx_id,
+        finalized,
+        change,
+        state: TxState::Finalized,
+    })
+}
+
+/// The stored S1 of `slate_id`.
+fn stored_s1(
+    repos: &dyn Repositories,
+    base_fee: Fee,
+    slate_id: SlateId,
+) -> Result<Slate, FinalizeError> {
+    let s1 = repos
+        .slate(uuid(slate_id), SlateStage::Standard1)?
+        .filter(|stored| stored.codec == LEGACY_V3_JSON.as_str())
+        .ok_or(FinalizeError::UnknownSlate { slate_id })?;
+    Ok(decode_stored(base_fee, s1)?.with_origin(None))
+}
+
+/// `s2` with what a compact answer leaves out put back from the stored S1.
+fn completed_answer(
+    repos: &dyn Repositories,
+    base_fee: Fee,
+    s2: &Slate,
+) -> Result<Slate, FinalizeError> {
+    let s1 = stored_s1(repos, base_fee, s2.id())?;
+    complete_answer(s2.clone(), &s1).map_err(FinalizeError::Slate)
+}
+
+/// Builds the S3 of `s2` for `tx_id` against the stored S1 and sender context, without storing
+/// anything.
+fn build_from_stored(
+    repos: &dyn Repositories,
+    keychain: &Keychain,
+    env: &FinalizeEnvironment<'_>,
+    tx_id: TxId,
+    s2: &Slate,
+) -> Result<FinalizedSlate, FinalizeError> {
+    let slate_id = s2.id();
+    let base_fee = env.base_fee();
+    let s1 = stored_s1(repos, base_fee, slate_id)?;
+    check_cutoff(repos, tx_id, &s1, env.tip)?;
+    let context = repos
+        .context(uuid(slate_id), SENDER_CONTEXT)?
+        .ok_or(FinalizeError::MissingContext { slate_id })?;
+    let built = BuiltS1 {
+        slate: s1,
+        context: SenderContext::from_private(&context)
+            .map_err(|_| FinalizeError::MalformedContext)?,
+    };
+    build_s3(keychain, base_fee, &built, s2)
+}
+
+/// Checks that the compact `s2` would finalize against the stored S1 of a transaction still
+/// `sent`, as [`finalize_stored`] would, and stores nothing.
+fn check_stored(
+    repos: &dyn Repositories,
+    keychain: &Keychain,
+    env: &FinalizeEnvironment<'_>,
+    s2: &Slate,
+) -> Result<(), FinalizeError> {
+    let slate_id = s2.id();
+    let entry = repos
+        .transaction_by_slate(uuid(slate_id), TxDirection::Outgoing)?
+        .ok_or(FinalizeError::UnknownSlate { slate_id })?;
+    let tx_id = entry.id;
+    match entry.entry.state {
+        TxState::Sent => {}
+        TxState::Finalized | TxState::Posted | TxState::Confirmed => {
+            return Err(FinalizeError::AlreadyFinalized { slate_id, tx_id });
+        }
+        state @ (TxState::Received | TxState::Cancelled | TxState::Expired) => {
+            return Err(FinalizeError::NotFinalizable { tx_id, state });
+        }
+    }
+    let s2 = completed_answer(repos, env.base_fee(), s2)?;
+    build_from_stored(repos, keychain, env, tx_id, &s2).map(|_| ())
+}
+
+/// Refuses with [`FinalizeError::Expired`] once `tip` reaches the transaction's cutoff: the
+/// earlier of the TTL `slate` carries and the send's local cutoff.
+fn check_cutoff(
+    repos: &dyn Repositories,
+    tx_id: TxId,
+    slate: &Slate,
+    tip: Height,
+) -> Result<(), FinalizeError> {
+    match effective_cutoff(repos, tx_id, slate.ttl_cutoff_height())? {
+        Some(cutoff) if tip >= cutoff => Err(FinalizeError::Expired { cutoff, tip }),
+        _ => Ok(()),
+    }
+}
+
+/// A slate this wallet finalized from its own S2, by [`finalize_own`].
+pub(crate) struct FinalizedOwn {
+    pub(crate) tx_id: TxId,
+    pub(crate) finalized: FinalizedSlate,
+    pub(crate) change: Option<StateChange>,
+}
+
+/// Finalizes `s2`, the answer this wallet gave its own S1, in the caller's store transaction,
+/// as [`Wallet::finalize`] stores it.
+pub(crate) fn finalize_own(
+    repos: &mut dyn Repositories,
+    keychain: &Keychain,
+    network: Network,
+    tip: Height,
+    now: Timestamp,
+    s2: &Slate,
+) -> Result<FinalizedOwn, FinalizeError> {
+    let stored = finalize_stored(
+        repos,
+        keychain,
+        &FinalizeEnvironment {
+            method: None,
+            network,
+            tip,
+            now,
+        },
+        s2,
+        &Answerer::Imported,
+        false,
+    )?;
+    Ok(FinalizedOwn {
+        tx_id: stored.tx_id,
+        finalized: stored.finalized,
+        change: stored.change,
+    })
+}
+
+/// Why a push did not record the transaction as posted.
+pub(crate) enum PushFailure {
+    /// The node refused or could not be reached, and does not hold the kernel.
+    NotPosted(NodeError),
+    /// The node's pool refused it and inputs of it are gone from the chain, so it can never be
+    /// mined.
+    Unminable {
+        source: NodeError,
+        spent: SpentInputs,
+    },
+    Wallet(WalletError),
+}
+
+/// Whose inputs of a refused transaction are gone from the chain, and who spent them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SpentInputs {
+    /// Inputs this wallet held, and no transaction of its own whose kernel the chain holds
+    /// spent them: another wallet on the same recovery phrase did.
+    OtherWallet,
+    /// Inputs this wallet held, spent by this other transaction of its own, whose kernel the
+    /// chain holds.
+    OwnTransaction(TxId),
+    /// Inputs the other party added.
+    Peer,
+}
+
+impl SpentInputs {
+    /// The error of a push to `tx_id` the node refused with `source` for this reason.
+    pub(crate) fn finalize_error(self, tx_id: TxId, source: NodeError) -> FinalizeError {
+        match self {
+            Self::OtherWallet => FinalizeError::InputsSpentElsewhere { tx_id, source },
+            Self::OwnTransaction(by) => {
+                FinalizeError::InputsSpentByOwnTransaction { tx_id, by, source }
+            }
+            Self::Peer => FinalizeError::PeerInputsSpent { tx_id, source },
+        }
+    }
+}
+
+/// What the node's pool API answers, as `Error::Internal("Failed to update pool: ...")`, for
+/// any transaction its pool refuses, among them one whose inputs are not in the UTXO set.
+const POOL_REFUSED: &str = "Failed to update pool:";
+
+/// Whether the node's pool refused a push, for whatever reason its text gives.
+fn pool_refused(error: &NodeError) -> bool {
+    matches!(
+        error,
+        NodeError::Rejected {
+            rejection: NodeRejection {
+                kind: RejectionKind::Internal,
+                message: Some(message),
+            },
+            ..
+        } if message.starts_with(POOL_REFUSED)
+    )
+}
+
+/// What the node's pool API answers, as `Error::Internal("Failed to update pool: {PoolError}")`,
+/// when its pool already holds the transaction: a repeated push of a transaction it accepted
+/// before, for example after the first answer was lost.
+const POOL_HOLDS_TRANSACTION: &str = "Failed to update pool: Duplicate tx";
+
+/// Whether the node refused a push only because it already has the transaction. The text is the
+/// node's own, but trusting it gives a node no power it lacks: it could as well answer `Ok`.
+fn pool_holds_transaction(error: &NodeError) -> bool {
+    matches!(
+        error,
+        NodeError::Rejected {
+            rejection: NodeRejection {
+                kind: RejectionKind::Internal,
+                message: Some(message),
+            },
+            ..
+        } if message == POOL_HOLDS_TRANSACTION
+    )
+}
+
+/// Logs who spent the inputs of a send the node refused.
+fn log_spent(spent: &SpentInputs) {
+    match spent {
+        SpentInputs::OtherWallet => info!("inputs spent by another wallet"),
+        SpentInputs::OwnTransaction(_) => {
+            info!("inputs spent by another transaction of this wallet");
+        }
+        SpentInputs::Peer => info!("inputs of the other party spent"),
+    }
+}
+
+/// How the record of a push classes the node's failed answer `error`. Only a pool refusal of
+/// a transaction the pool does not hold is [`NodeOutcome::Refused`]; any other answer, such as
+/// a proxy's error status, a timeout or a text this wallet does not know, is
+/// [`NodeOutcome::Unreachable`], so it never counts as the node's own no.
+pub(crate) fn push_outcome(error: &NodeError) -> NodeOutcome {
+    if pool_refused(error) && !pool_holds_transaction(error) {
+        NodeOutcome::Refused
+    } else {
+        NodeOutcome::Unreachable
+    }
+}
+
+/// The stored final slate and transaction of a transaction that may be posted, and the height
+/// from which it may not, if any.
+pub(crate) fn postable(
+    repos: &dyn Repositories,
+    base_fee: Fee,
+    tx_id: TxId,
+) -> Result<(FinalizedSlate, Option<Height>), FinalizeError> {
+    let entry = repos
+        .transaction(tx_id)?
+        .ok_or(WalletError::UnknownTransaction(tx_id))?;
+    let not_postable = FinalizeError::NotPostable {
+        tx_id,
+        state: entry.state,
+    };
+    let (TxState::Finalized | TxState::Posted, Some(slate_id)) = (entry.state, entry.slate_id)
+    else {
+        return Err(not_postable);
+    };
+    // The sender of a standard flow and the issuer of an invoice finalize; each stores its own
+    // final stage.
+    let stage = match entry.direction {
+        TxDirection::Outgoing => SlateStage::Standard3,
+        TxDirection::Incoming => SlateStage::Invoice3,
+    };
+    let finalized = stored_final(repos, base_fee, slate_id, stage)?.ok_or(not_postable)?;
+    // An invoice's cutoff is the earlier of its I3's and the one it was issued with; the payer
+    // of one without a TTL may expect its issuer to post late.
+    let cutoff = match entry.direction {
+        TxDirection::Outgoing => {
+            effective_cutoff(repos, tx_id, finalized.slate.ttl_cutoff_height())?
+        }
+        TxDirection::Incoming => {
+            let issued = repos
+                .slate(slate_id, SlateStage::Invoice1)?
+                .filter(|stored| stored.codec == LEGACY_V3_JSON.as_str())
+                .map(|stored| decode_stored(base_fee, stored))
+                .transpose()?;
+            earliest_cutoff(
+                finalized.slate.ttl_cutoff_height(),
+                issued.and_then(|slate| slate.ttl_cutoff_height()),
+            )
+        }
+    };
+    Ok((finalized, cutoff))
+}
+
+/// Every send of this wallet but `tx_id` whose final slate spends one of `gone`, with the
+/// kernel it completes to: a send finalized here from its S3, an invoice payment from its I2.
+/// Any state counts, since a cancelled one may still have been mined.
+fn own_spenders(
+    repos: &dyn Repositories,
+    codecs: &CodecRegistry,
+    tx_id: TxId,
+    gone: &[Commitment],
+) -> Result<Vec<(TxId, KernelAt)>, StoreError> {
+    let mut spenders = Vec::new();
+    for account in repos.accounts()? {
+        for stored in repos.transactions(account.index)? {
+            let Some(slate_id) = stored
+                .entry
+                .slate_id
+                .filter(|_| stored.id != tx_id && stored.entry.direction == TxDirection::Outgoing)
+            else {
+                continue;
+            };
+            let spends = [SlateStage::Standard3, SlateStage::Invoice2]
+                .into_iter()
+                .find_map(|stage| {
+                    stored_slate(repos, codecs, stored.id, slate_id, stage).transpose()
+                })
+                .transpose()?
+                .is_some_and(|slate| {
+                    slate
+                        .inputs()
+                        .iter()
+                        .any(|input| gone.contains(&input.commitment))
+                });
+            if spends && let Some(kernel) = final_kernel(repos, codecs, stored.id, slate_id)? {
+                spenders.push((stored.id, kernel));
+            }
+        }
+    }
+    Ok(spenders)
+}
+
+impl<N, S, V> Wallet<N, S, V>
+where
+    N: NodeApi + 'static,
+    S: StoreOpener + 'static,
+    V: SecretVault + 'static,
+{
+    /// Finalizes the receiver's S2, which arrived over `transport`, and posts the transaction:
+    /// checks the reply against the S1 this wallet sent, verifies the receiver's signatures and
+    /// payment proof, builds and validates the final transaction, stores S3 and drops the
+    /// private context in one store transaction, then pushes the transaction to the node with
+    /// `propagation`.
+    ///
+    /// Asks the node for its tip, and refuses with [`FinalizeError::Expired`] once it reaches the
+    /// transaction's cutoff: the earlier of the slate's TTL cutoff and the local cutoff of
+    /// [`crate::send::SendRequest::local_ttl_blocks`]. Finalizing an S2 a second time, also once
+    /// its transaction is confirmed, returns the stored result and posts only if the first post
+    /// did not succeed, which the cutoff refuses as well; another S2 under the same slate id
+    /// fails with [`FinalizeError::AlreadyFinalized`]. Fails with
+    /// [`FinalizeError::NotPosted`] when the slate was finalized and stored but the node refused or
+    /// could not be reached; the transaction then waits in state `finalized` for [`Wallet::post`].
+    /// A node whose pool or chain already holds the transaction counts as having accepted it. Every other
+    /// failure stores nothing.
+    #[instrument(skip_all, fields(
+        wallet = %self.config().name,
+        transport = %method.id(),
+        slate_id = Empty,
+        stage = Empty,
+        tx_id = Empty,
+    ))]
+    pub async fn finalize(
+        &self,
+        method: &Arc<dyn Method>,
+        wire: &WireSlate,
+        propagation: Propagation,
+    ) -> Result<Finalized, FinalizeError> {
+        self.finalize_from(method, wire, propagation, Answerer::Imported)
+            .await
+    }
+
+    /// [`Self::finalize`] for an S2 from `answerer`, which [`check_answerer`] checks against the
+    /// transaction before anything else.
+    pub(crate) async fn finalize_from(
+        &self,
+        method: &Arc<dyn Method>,
+        wire: &WireSlate,
+        propagation: Propagation,
+        answerer: Answerer,
+    ) -> Result<Finalized, FinalizeError> {
+        self.session()?;
+        let s2 = method
+            .decode(self.config().network, wire)
+            .map_err(FinalizeError::Decode)?;
+        self.finalize_slate(Some(Arc::clone(method)), s2, propagation, answerer, false)
+            .await
+    }
+
+    /// As [`Wallet::finalize`], for an S2 the caller decoded from a compact format such as
+    /// `lepic.v1`, which leaves out this wallet's own inputs, change and message: they are
+    /// taken from the stored S1.
+    #[instrument(skip_all, fields(
+        wallet = %self.config().name,
+        slate_id = Empty,
+        stage = Empty,
+        tx_id = Empty,
+    ))]
+    pub async fn finalize_decoded(
+        &self,
+        s2: Slate,
+        propagation: Propagation,
+    ) -> Result<Finalized, FinalizeError> {
+        self.finalize_slate(None, s2, propagation, Answerer::Imported, true)
+            .await
+    }
+
+    /// Checks that the S2 `s2` answers a send of this wallet and would finalize, as
+    /// [`Wallet::finalize_decoded`] checks it, without storing or posting anything. Several
+    /// answers to one send can each be checked; one of them is finalized later.
+    ///
+    /// Fails as [`Wallet::finalize_decoded`] fails before it stores.
+    pub async fn check_send_answer(&self, s2: Slate) -> Result<(), FinalizeError> {
+        let session = self.session()?;
+        let network = self.config().network;
+        if s2.stage() != Stage::S2 {
+            return Err(FinalizeError::WrongStage { stage: s2.stage() });
+        }
+        let (tip, _) = self.stage_tip(&session, FinalizeError::Node).await?;
+        self.blocking(move |ports, _| {
+            let env = FinalizeEnvironment {
+                method: None,
+                network,
+                tip,
+                now: ports.clock.now(),
+            };
+            Ok(session
+                .store
+                .read(|repos| check_stored(repos, &session.keychain, &env, &s2)))
+        })
+        .await?
+    }
+
+    async fn finalize_slate(
+        &self,
+        method: Option<Arc<dyn Method>>,
+        s2: Slate,
+        propagation: Propagation,
+        answerer: Answerer,
+        compact: bool,
+    ) -> Result<Finalized, FinalizeError> {
+        let session = self.session()?;
+        let network = self.config().network;
+        let span = Span::current();
+        span.record("slate_id", tracing::field::display(s2.id()));
+        span.record("stage", s2.stage().as_str());
+        if s2.stage() != Stage::S2 {
+            return Err(FinalizeError::WrongStage { stage: s2.stage() });
+        }
+        let (tip, _) = self.stage_tip(&session, FinalizeError::Node).await?;
+        let _finalizing = self.finalizing(s2.id());
+        let stored = self
+            .blocking(move |ports, _| {
+                let env = FinalizeEnvironment {
+                    method: method.as_deref(),
+                    network,
+                    tip,
+                    now: ports.clock.now(),
+                };
+                Ok(session.store.write(|repos| {
+                    finalize_stored(repos, &session.keychain, &env, &s2, &answerer, compact)
+                }))
+            })
+            .await??;
+        span.record("tx_id", stored.tx_id.0);
+        match stored.change {
+            Some(change) => {
+                info!("slate finalized");
+                self.emit(change.into());
+            }
+            None => debug!("slate already finalized"),
+        }
+        // An offline session keeps the transaction `finalized`, for the app to post.
+        let pushed = stored.state == TxState::Finalized && !self.config().offline;
+        if pushed {
+            self.push_at(stored.tx_id, &stored.finalized, propagation, Some(tip))
+                .await?;
+        }
+        Ok(Finalized {
+            tx_id: stored.tx_id,
+            slate: stored.finalized.slate,
+            transaction: stored.finalized.transaction,
+            pushed,
+        })
+    }
+
+    /// Pushes the stored final transaction of `tx_id` to the node with `propagation` and
+    /// records it as posted. Posting a posted transaction again sends it again and changes
+    /// nothing that is stored.
+    ///
+    /// Fails with [`FinalizeError::Wallet`] carrying [`WalletError::UnknownTransaction`], or
+    /// [`WalletError::RecoveryOpen`] with the payment while the transaction is a payment with
+    /// an open recovery or an entry of that recovery, with
+    /// [`FinalizeError::NotPostable`] when the transaction is not `finalized` or `posted`,
+    /// with [`FinalizeError::NotPosted`] when the node refuses or cannot be reached, and with
+    /// [`FinalizeError::InputsSpentElsewhere`] when the node's pool refuses it and two answers
+    /// of the node agree that inputs this wallet held are no longer unspent: another wallet on
+    /// the phrase spent them. When the chain holds the kernel of another send of this wallet
+    /// that spends one of them, it fails with [`FinalizeError::InputsSpentByOwnTransaction`]
+    /// instead, and when only inputs the other party added are gone, once the node's tip is
+    /// above the slate's height, with [`FinalizeError::PeerInputsSpent`]. In all three the
+    /// transaction is cancelled, its kernel stays watched, and a refresh runs. A send
+    /// with a cutoff, the earlier of its slate's TTL cutoff and the local cutoff of
+    /// [`crate::send::SendRequest::local_ttl_blocks`], has the node's tip asked for, and is
+    /// refused with [`FinalizeError::Expired`] once the tip reaches it, also when it was posted
+    /// before. So is an invoice this wallet issued, at the earlier of its I3's TTL cutoff and
+    /// the one it was issued with. A node whose pool already holds the transaction counts as
+    /// having accepted it. When the node refuses the push, the kernel is looked up; one already on chain gives
+    /// [`Posted::AlreadyOnChain`], and the next refresh confirms the transaction.
+    #[instrument(skip_all, fields(wallet = %self.config().name, tx_id = %tx_id))]
+    pub async fn post(
+        &self,
+        tx_id: TxId,
+        propagation: Propagation,
+    ) -> Result<Posted, FinalizeError> {
+        let session = self.session()?;
+        let (finalized, cutoff) = {
+            let session = Arc::clone(&session);
+            self.blocking(move |_, config| {
+                let base_fee = config.network.params().default_base_fee();
+                Ok(session.store.read(|repos| {
+                    // Only the recovery's own pushes may send the payment or its pair.
+                    if let Some(recovery) = open_recovery(repos, tx_id)? {
+                        return Err(WalletError::RecoveryOpen(recovery.tx_id).into());
+                    }
+                    postable(repos, base_fee, tx_id)
+                }))
+            })
+            .await??
+        };
+        let mut height = None;
+        if let Some(cutoff) = cutoff {
+            let tip = self
+                .ports()
+                .node
+                .get_tip()
+                .await
+                .map_err(FinalizeError::Node)?
+                .height;
+            self.check_plausible_tip(&session, tip).await?;
+            if tip >= cutoff {
+                return Err(FinalizeError::Expired { cutoff, tip });
+            }
+            height = Some(tip);
+        }
+        self.push_at(tx_id, &finalized, propagation, height).await
+    }
+
+    /// [`Self::push_final_in_turn`] at the tip `height` the caller read, for a caller that holds
+    /// the posting turn `posting`, with its failures as [`FinalizeError`].
+    pub(crate) async fn push_in_turn(
+        &self,
+        posting: tokio::sync::MutexGuard<'_, ()>,
+        tx_id: TxId,
+        finalized: &FinalizedSlate,
+        propagation: Propagation,
+        height: Height,
+    ) -> Result<Posted, FinalizeError> {
+        self.push_turn_at(posting, tx_id, finalized, propagation, Some(height))
+            .await
+    }
+
+    /// [`Self::push_final_at`] at the tip `height`, when the caller read one, with its failures
+    /// as [`FinalizeError`].
+    async fn push_at(
+        &self,
+        tx_id: TxId,
+        finalized: &FinalizedSlate,
+        propagation: Propagation,
+        height: Option<Height>,
+    ) -> Result<Posted, FinalizeError> {
+        let posting = self.posting_turn().await;
+        self.push_turn_at(posting, tx_id, finalized, propagation, height)
+            .await
+    }
+
+    async fn push_turn_at(
+        &self,
+        posting: tokio::sync::MutexGuard<'_, ()>,
+        tx_id: TxId,
+        finalized: &FinalizedSlate,
+        propagation: Propagation,
+        height: Option<Height>,
+    ) -> Result<Posted, FinalizeError> {
+        match self
+            .push_final_in_turn(posting, finalized, tx_id, propagation, height)
+            .await
+        {
+            Ok(posted) => Ok(posted),
+            Err(PushFailure::NotPosted(source)) => Err(FinalizeError::NotPosted { tx_id, source }),
+            Err(PushFailure::Unminable { source, spent }) => {
+                self.end_unminable(tx_id, spent).await;
+                Err(spent.finalize_error(tx_id, source))
+            }
+            Err(PushFailure::Wallet(error)) => Err(FinalizeError::Wallet(error)),
+        }
+    }
+
+    /// Ends a transaction the node refused because inputs of it were `spent`, as
+    /// [`Self::end_spent`] does, and refreshes, which marks the spent ones spent. The refresh is
+    /// best effort; a failure is logged and left to the next refresh.
+    pub(crate) async fn end_unminable(&self, tx_id: TxId, spent: SpentInputs) {
+        self.end_spent(tx_id, spent).await;
+        if let Err(error) = self.refresh().await {
+            warn!(error = %lepic_primitives::error_chain::ErrorChain(&error), "refresh after a refused transaction failed");
+        }
+    }
+
+    /// Ends a transaction the node refused because inputs of it were `spent`: cancels it as a
+    /// user's cancel does, releasing the inputs still unspent and keeping its kernel watched.
+    /// Only inputs another wallet spent are recorded as that wallet's spend; a transaction of
+    /// this wallet that spent them debits them itself, and a refresh confirms it if it was
+    /// cancelled. Both are best effort; what fails is logged and left to the next refresh.
+    pub(crate) async fn end_spent(&self, tx_id: TxId, spent: SpentInputs) {
+        match self.cancel(tx_id).await {
+            Ok(()) if spent != SpentInputs::OtherWallet => {}
+            Ok(()) => {
+                let marked = match self.session() {
+                    Ok(session) => {
+                        self.blocking(move |_, _| {
+                            Ok(session.store.write(|repos| {
+                                crate::other_wallet::mark_inputs_lost(repos, tx_id)
+                            })?)
+                        })
+                        .await
+                    }
+                    Err(error) => Err(error),
+                };
+                if let Err(error) = marked {
+                    warn!(error = %lepic_primitives::error_chain::ErrorChain(&error), "send spent elsewhere not marked");
+                }
+            }
+            Err(error) => {
+                warn!(error = %lepic_primitives::error_chain::ErrorChain(&error), "refused transaction not cancelled");
+            }
+        }
+    }
+
+    /// Whose inputs of `finalized`, which `tx_id` posts, are missing from the node's UTXO set
+    /// in two answers, as a refresh decides an output was spent: first the inputs this wallet
+    /// holds, then the others, once the node's tip is above the height the slate was made at,
+    /// as a refresh requires before it ends a transaction for them. `None` when none are, when
+    /// the node's tip is below the height the wallet last refreshed at, or when the node or the
+    /// store cannot tell; the refusal then stays a failed post.
+    async fn spent_inputs(&self, tx_id: TxId, finalized: &FinalizedSlate) -> Option<SpentInputs> {
+        let session = self.session().ok()?;
+        let inputs: Vec<Commitment> = finalized
+            .transaction
+            .body()
+            .inputs()
+            .iter()
+            .map(|input| input.commitment)
+            .collect();
+        let (ours, theirs, refreshed) = {
+            let session = Arc::clone(&session);
+            self.blocking(move |_, _| {
+                Ok(session.store.read(|repos| {
+                    let mut held = (Vec::new(), Vec::new());
+                    for commitment in inputs {
+                        if repos.output(commitment.as_bytes())?.is_some() {
+                            held.0.push(commitment);
+                        } else {
+                            held.1.push(commitment);
+                        }
+                    }
+                    let refreshed = crate::refresh::balance_height(repos)?;
+                    Ok::<_, StoreError>((held.0, held.1, refreshed))
+                }))
+            })
+            .await
+            .ok()?
+            .ok()?
+        };
+        let gone = self.gone_twice(ours).await?;
+        let tip = self.ports().node.get_tip().await.ok()?.height;
+        // A node behind the chain this wallet last saw may lack outputs that are unspent there.
+        if tip < refreshed {
+            return None;
+        }
+        if !gone.is_empty() {
+            return Some(
+                match self.own_spender(&session, tx_id, gone, tip).await.ok()? {
+                    Some(by) => SpentInputs::OwnTransaction(by),
+                    None => SpentInputs::OtherWallet,
+                },
+            );
+        }
+        // The other party's inputs may be younger than any this wallet saw, so a node that is
+        // still syncing may simply not have them.
+        if theirs.is_empty() || tip <= finalized.slate.height() {
+            return None;
+        }
+        let gone = self.gone_twice(theirs).await?;
+        (!gone.is_empty()).then_some(SpentInputs::Peer)
+    }
+
+    /// Of `commitments`, those the node's UTXO set misses in two answers; `None` when the node
+    /// cannot be asked.
+    async fn gone_twice(&self, mut missing: Vec<Commitment>) -> Option<Vec<Commitment>> {
+        for _ in 0..2 {
+            if missing.is_empty() {
+                break;
+            }
+            let held = self.ports().node.get_outputs(&missing).await.ok()?;
+            missing.retain(|commitment| !held.iter().any(|found| found.commitment == *commitment));
+        }
+        Some(missing)
+    }
+
+    /// Another send of this wallet than `tx_id`, of any state, that spends one of `gone` and
+    /// whose kernel the chain holds up to `tip`. Fails when the store or the node cannot tell.
+    pub(crate) async fn own_spender(
+        &self,
+        session: &Arc<Session<S::Store>>,
+        tx_id: TxId,
+        gone: Vec<Commitment>,
+        tip: Height,
+    ) -> Result<Option<TxId>, RefreshError> {
+        let candidates = {
+            let session = Arc::clone(session);
+            self.blocking(move |_, config| {
+                let codecs = codecs::legacy(config.network.params().default_base_fee());
+                Ok(session
+                    .store
+                    .read(|repos| own_spenders(repos, &codecs, tx_id, &gone)))
+            })
+            .await??
+        };
+        for (by, (excess, min_height)) in candidates {
+            let floor = crate::chain::kernel_floor(min_height, tip);
+            let kernel = self
+                .ports()
+                .node
+                .get_kernel(&excess, Some(floor), None)
+                .await?;
+            if let Some(kernel) = kernel {
+                debug!(height = %kernel.height, "spending transaction found on chain");
+                return Ok(Some(by));
+            }
+        }
+        Ok(None)
+    }
+
+    /// Tells the host that the node did not take `tx_id`. A refresh pushes it again while it may
+    /// still be mined; the host may push it sooner.
+    fn raise_not_posted(&self, tx_id: TxId, finalized: &FinalizedSlate, source: &NodeError) {
+        self.emit(crate::Event::NotPosted(crate::event::NotPosted {
+            tx_id,
+            slate_id: finalized.slate.id(),
+            reason: lepic_primitives::error_chain::ErrorChain(source).to_string(),
+        }));
+    }
+
+    /// [`Self::push_final_at`] at the height the wallet last refreshed at.
+    pub(crate) async fn push_final(
+        &self,
+        finalized: &FinalizedSlate,
+        tx_id: TxId,
+        propagation: Propagation,
+    ) -> Result<Posted, PushFailure> {
+        self.push_final_at(finalized, tx_id, propagation, None)
+            .await
+    }
+
+    /// Hands the transaction to the node, adds the push to the transaction's record of pushes
+    /// at the tip `height`, or the height the wallet last refreshed at, then records the
+    /// transaction as posted. A node whose pool already holds it counts as having accepted it;
+    /// when the node refuses the push, the kernel is looked up, and one already on chain counts
+    /// as posted too. [`crate::Event::NotPosted`] is raised for the first failed push of a
+    /// transaction, and again only when the class of the failure or its text changes.
+    pub(crate) async fn push_final_at(
+        &self,
+        finalized: &FinalizedSlate,
+        tx_id: TxId,
+        propagation: Propagation,
+        height: Option<Height>,
+    ) -> Result<Posted, PushFailure> {
+        let posting = self.posting_turn().await;
+        self.push_final_in_turn(posting, finalized, tx_id, propagation, height)
+            .await
+    }
+
+    /// [`Self::push_final_at`] for a caller that already holds the posting turn `posting`.
+    pub(crate) async fn push_final_in_turn(
+        &self,
+        posting: tokio::sync::MutexGuard<'_, ()>,
+        finalized: &FinalizedSlate,
+        tx_id: TxId,
+        propagation: Propagation,
+        height: Option<Height>,
+    ) -> Result<Posted, PushFailure> {
+        let session = self.session().map_err(PushFailure::Wallet)?;
+        // A cancel or release that ended the transaction since it was finalized wins: its
+        // inputs may already be spendable again, so the node must not get it now.
+        let (state, height, recovering) = {
+            let session = Arc::clone(&session);
+            self.blocking(move |_, _| {
+                Ok(session.store.read(|repos| {
+                    let state = repos.transaction(tx_id)?.map(|entry| entry.state);
+                    let height = match height {
+                        Some(height) => height,
+                        None => crate::refresh::balance_height(repos)?,
+                    };
+                    let recovering = repos
+                        .recovery(tx_id)?
+                        .is_some_and(|recovery| recovery.state.is_open());
+                    Ok::<_, StoreError>((state, height, recovering))
+                })?)
+            })
+            .await
+            .map_err(PushFailure::Wallet)?
+        };
+        // A recovery spends the same inputs; the node must not get both.
+        if recovering {
+            return Err(PushFailure::Wallet(WalletError::RecoveryOpen(tx_id)));
+        }
+        if let Some(state) = state {
+            check_transition(tx_id, state, TxState::Posted)
+                .map_err(|invalid| PushFailure::Wallet(invalid.into()))?;
+        }
+        let answer = self
+            .ports()
+            .node
+            .push_transaction(&finalized.transaction, propagation)
+            .await;
+        let answer = match answer {
+            Ok(()) => Ok(Posted::Accepted),
+            Err(error) if pool_holds_transaction(&error) => {
+                debug!("transaction already in the node pool");
+                Ok(Posted::Accepted)
+            }
+            Err(source) => match self.kernel_height(&finalized.slate).await {
+                Some(height) => {
+                    debug!(height = %height, "kernel found on chain");
+                    Ok(Posted::AlreadyOnChain { height })
+                }
+                None => Err(source),
+            },
+        };
+        let (outcome, text) = match &answer {
+            Ok(_) => (NodeOutcome::Accepted, None),
+            Err(source) => (push_outcome(source), Some(stored_error(source))),
+        };
+        let previous = self
+            .record_push(
+                &session,
+                PushRecord {
+                    tx_id,
+                    outcome,
+                    error: text.clone(),
+                    height,
+                },
+            )
+            .await;
+        let posted = match answer {
+            Ok(posted) => posted,
+            Err(source) => {
+                if outcome == NodeOutcome::Refused
+                    && let Some(spent) = self.spent_inputs(tx_id, finalized).await
+                {
+                    log_spent(&spent);
+                    return Err(PushFailure::Unminable { source, spent });
+                }
+                // A push the store did not record may be news; only a record can say it is not.
+                if previous.is_none_or(|previous| {
+                    tells_something_new(previous.as_ref(), outcome, text.as_deref())
+                }) {
+                    self.raise_not_posted(tx_id, finalized, &source);
+                }
+                return Err(PushFailure::NotPosted(source));
+            }
+        };
+        let change = self
+            .blocking(move |ports, _| {
+                let now = ports.clock.now();
+                session
+                    .store
+                    .write(|repos| apply_transition(repos, tx_id, TxState::Posted, now))
+            })
+            .await
+            .map_err(PushFailure::Wallet)?;
+        drop(posting);
+        match change {
+            Some(change) => {
+                info!("transaction posted");
+                self.emit(change.into());
+                self.notify_posted(tx_id, finalized).await;
+            }
+            None => debug!("transaction posted again"),
+        }
+        Ok(posted)
+    }
+
+    /// Adds `push` to the record of its transaction, at the clock's time, and returns the record
+    /// as it was before. `None` when the store failed; that is logged, and the push's own
+    /// result stands.
+    async fn record_push(
+        &self,
+        session: &Arc<Session<S::Store>>,
+        push: PushRecord,
+    ) -> Option<Option<NodePost>> {
+        let session = Arc::clone(session);
+        let recorded = self
+            .blocking(move |ports, _| {
+                let at = ports.clock.now();
+                Ok(session.store.write(|repos| record_push(repos, push, at))?)
+            })
+            .await;
+        match recorded {
+            Ok(previous) => Some(previous),
+            Err(error) => {
+                warn!(error = %lepic_primitives::error_chain::ErrorChain(&error), "push not recorded");
+                None
+            }
+        }
+    }
+
+    /// The height of the block holding the slate's kernel, when the node has one. A failed
+    /// lookup counts as not found, so the refused push is what gets reported.
+    async fn kernel_height(&self, slate: &Slate) -> Option<Height> {
+        let excess = slate.kernel()?.excess;
+        self.ports()
+            .node
+            .get_kernel(&excess, Some(slate.height()), None)
+            .await
+            .ok()
+            .flatten()
+            .map(|located| located.height)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    // Tests may unwrap and index (docs/rules.md).
+    #![allow(clippy::unwrap_used, clippy::indexing_slicing)]
+
+    use serde_json::Value;
+
+    use super::*;
+
+    const S1: &str = include_str!(
+        "../../../testdata/vectors/slates/send_file_ttl_payment_proof_messages_s1_v3.json"
+    );
+    const S2: &str = include_str!(
+        "../../../testdata/vectors/slates/send_file_ttl_payment_proof_messages_s2_v3.json"
+    );
+    const S3: &str = include_str!(
+        "../../../testdata/vectors/slates/send_file_ttl_payment_proof_messages_s3_v3.json"
+    );
+
+    fn slate_json(vector: &str) -> Value {
+        let vector: Value = serde_json::from_str(vector).unwrap();
+        serde_json::from_str(vector["expected"]["json"].as_str().unwrap()).unwrap()
+    }
+
+    fn decode(json: &Value) -> Slate {
+        V3JsonCodec::new(Network::Floonet.params().default_base_fee())
+            .decode(&WireSlate::text(MediaType::JSON, json.to_string()))
+            .unwrap()
+    }
+
+    type Change = Box<dyn FnOnce(&mut Value)>;
+
+    fn changed(json: &Value, change: impl FnOnce(&mut Value)) -> Slate {
+        let mut json = json.clone();
+        change(&mut json);
+        decode(&json)
+    }
+
+    /// An answer that names the address the sender asked for, but one this wallet did not
+    /// derive for the proof, is refused before its signature is read.
+    #[test]
+    fn a_proof_address_this_wallet_did_not_derive_is_foreign() {
+        let keychain = Keychain::from_mnemonic(
+            "legal winner thank year wave sausage worth useful legal winner thank year \
+             wave sausage worth useful legal winner thank year wave sausage worth title",
+            Network::Floonet,
+        )
+        .unwrap();
+        let s2 = decode(&slate_json(S2));
+        let proof = s2.payment_proof().unwrap();
+        let excess = kernel_excess(&s2).unwrap();
+        for index in [Some(0), Some(7)] {
+            let context = SenderContext {
+                account: lepic_store::AccountIndex(0),
+                secret_key: lepic_crypto::SecretKey::from_array([3; 32]).unwrap(),
+                secret_nonce: lepic_crypto::SecretKey::from_array([4; 32]).unwrap(),
+                payment_proof_index: index,
+            };
+            let error = verify_payment_proof(&keychain, &context, proof, &s2, &excess).unwrap_err();
+            assert!(
+                matches!(error, FinalizeError::ForeignSenderAddress),
+                "{error:?}"
+            );
+        }
+        // A context that asked for no proof cannot answer one.
+        let context = SenderContext {
+            account: lepic_store::AccountIndex(0),
+            secret_key: lepic_crypto::SecretKey::from_array([3; 32]).unwrap(),
+            secret_nonce: lepic_crypto::SecretKey::from_array([4; 32]).unwrap(),
+            payment_proof_index: None,
+        };
+        let error = verify_payment_proof(&keychain, &context, proof, &s2, &excess).unwrap_err();
+        assert!(
+            matches!(
+                error,
+                FinalizeError::Mismatch {
+                    field: SlateField::PaymentProof
+                }
+            ),
+            "{error:?}"
+        );
+    }
+
+    /// Every answered or final V2/V3 slate the vectors hold: the participants' public excesses
+    /// sum to the excess the body gives, so a reader may take either.
+    #[test]
+    fn the_participants_sum_to_the_body_excess_in_every_answered_vector() {
+        let dir =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../testdata/vectors/slates");
+        let codecs = codecs::legacy(Network::Floonet.params().default_base_fee());
+        let mut checked = 0;
+        for entry in std::fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            let vector: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap())
+                .unwrap_or(Value::Null);
+            let inputs = &vector["inputs"];
+            let answered =
+                ["S2", "S3", "I2", "I3"].contains(&inputs["stage"].as_str().unwrap_or(""));
+            let legacy = ["v2", "v3"].contains(&inputs["encoding"].as_str().unwrap_or(""));
+            let Some(json) = vector["expected"]["json"].as_str() else {
+                continue;
+            };
+            if !answered || !legacy {
+                continue;
+            }
+            let slate = codecs
+                .decode(&WireSlate::text(MediaType::JSON, json.to_owned()))
+                .unwrap();
+            assert_eq!(
+                participant_excess(&slate),
+                Some(kernel_excess(&slate).unwrap()),
+                "{}",
+                path.display()
+            );
+            assert_eq!(answered_excess(&slate).ok(), kernel_excess(&slate).ok());
+            if let Some(kernel) = slate.kernel() {
+                assert_eq!(kernel.excess, kernel_excess(&slate).unwrap());
+            }
+            checked += 1;
+        }
+        assert_eq!(checked, 72);
+    }
+
+    #[test]
+    fn a_slate_with_one_participant_takes_the_body_excess() {
+        let s1 = decode(&slate_json(S1));
+        assert_eq!(participant_excess(&s1), None);
+        assert_eq!(answered_excess(&s1).ok(), kernel_excess(&s1).ok());
+    }
+
+    /// A zero-input S2 decodes at one base fee (a native answer carries no inputs), but the
+    /// sender's finalize keeps the real minimum for the body it holds.
+    #[test]
+    fn finalize_checks_the_fee_against_the_real_counts() {
+        let base_fee = Network::Floonet.params().default_base_fee();
+        let s2 = changed(&slate_json(S2), |json| {
+            json["fee"] = Value::from("100000");
+            json["tx"]["body"]["kernels"][0]["fee"] = Value::from("100000");
+            json["tx"]["body"]["inputs"] = Value::Array(Vec::new());
+        });
+        assert_eq!(s2.inputs().len(), 0);
+        let counts = BodyCounts::new(0, count(s2.outputs().len()), 1);
+        let Err(FinalizeError::FeeBelowMinimum { fee, minimum }) = check_fee(&s2, base_fee) else {
+            panic!("a fee below the real minimum was taken");
+        };
+        assert_eq!(fee, Fee::new(100_000));
+        assert_eq!(minimum, counts.tx_fee(base_fee).unwrap());
+        assert!(check_fee(&decode(&slate_json(S2)), base_fee).is_ok());
+    }
+
+    #[test]
+    fn the_g03_s2_answers_its_s1() {
+        assert!(check_reply(&decode(&slate_json(S1)), &decode(&slate_json(S2))).is_ok());
+    }
+
+    #[test]
+    fn a_reply_that_changes_what_the_sender_proposed_names_the_field() {
+        let s1 = decode(&slate_json(S1));
+        let s2 = slate_json(S2);
+        let cases: [(SlateField, Change); 6] = [
+            (
+                SlateField::Amount,
+                Box::new(|json| json["amount"] = Value::from("1")),
+            ),
+            (
+                SlateField::Height,
+                Box::new(|json| json["height"] = Value::from("3")),
+            ),
+            (
+                SlateField::TimeToLive,
+                Box::new(|json| json["ttl_cutoff_height"] = Value::from("99")),
+            ),
+            (
+                SlateField::Offset,
+                Box::new(|json| json["tx"]["offset"] = Value::from("01".repeat(32))),
+            ),
+            (
+                SlateField::Sender,
+                Box::new(|json| {
+                    // Both parties used the same test nonce, so the excess tells them apart.
+                    let receiver = json["participant_data"][1]["public_blind_excess"].clone();
+                    json["participant_data"][0]["public_blind_excess"] = receiver;
+                }),
+            ),
+            (
+                SlateField::Outputs,
+                Box::new(|json| {
+                    json["tx"]["body"]["outputs"].as_array_mut().unwrap().pop();
+                }),
+            ),
+        ];
+        for (field, change) in cases {
+            let reply = changed(&s2, change);
+            let result = check_reply(&s1, &reply);
+            assert!(
+                matches!(result, Err(FinalizeError::Mismatch { field: got }) if got == field),
+                "{field}"
+            );
+        }
+        let without_proof = changed(&s2, |json| json["payment_proof"] = Value::Null);
+        assert!(matches!(
+            check_reply(&s1, &without_proof),
+            Err(FinalizeError::MissingPaymentProof)
+        ));
+    }
+
+    #[test]
+    fn the_g03_s3_is_recognised_as_finalized_from_its_s2_only() {
+        let s3 = decode(&slate_json(S3));
+        let s2 = slate_json(S2);
+        assert!(finalized_from(&s3, &decode(&s2)));
+        let other = changed(&s2, |json| {
+            json["participant_data"][1]["message"] = Value::from("another reply");
+        });
+        assert!(!finalized_from(&s3, &other));
+    }
+}
+
+#[cfg(test)]
+mod pool_answer_tests {
+    use super::*;
+
+    fn rejected(kind: RejectionKind, message: Option<&str>) -> NodeError {
+        NodeError::Rejected {
+            method: "push_transaction",
+            rejection: NodeRejection {
+                kind,
+                message: message.map(str::to_owned),
+            },
+        }
+    }
+
+    #[test]
+    fn only_the_pools_duplicate_answer_counts_as_posted() {
+        assert!(pool_holds_transaction(&rejected(
+            RejectionKind::Internal,
+            Some("Failed to update pool: Duplicate tx"),
+        )));
+        for other in [
+            rejected(
+                RejectionKind::Internal,
+                Some("Failed to update pool: Duplicate commitment"),
+            ),
+            rejected(RejectionKind::Internal, Some("Failed to get chain head")),
+            rejected(RejectionKind::Internal, None),
+            rejected(
+                RejectionKind::Argument,
+                Some("Failed to update pool: Duplicate tx"),
+            ),
+            NodeError::Timeout,
+        ] {
+            assert!(!pool_holds_transaction(&other), "{other:?}");
+        }
+    }
+}

@@ -1,0 +1,102 @@
+[package]
+name = "lepic-methods"
+description = "Transaction methods: the registry and one module per method"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[features]
+default = ["file", "legacy"]
+# The legacy wire formats every method speaks: V2/V3 JSON slates and
+# the JSON-RPC dialect of the foreign API (ADR 0052). Each method below needs it.
+legacy = ["lepic-transport/legacy", "dep:lepic-legacy-slate"]
+file = ["legacy"]
+epicbox = [
+    "legacy",
+    "dep:lepic-epicbox",
+    "dep:lepic-primitives",
+    "dep:lepic-slate",
+    "dep:tokio",
+    "dep:tracing",
+]
+epicbox-wallet = [
+    "epicbox",
+    "dep:jiff",
+    "dep:lepic-crypto",
+    "dep:lepic-node",
+    "dep:lepic-wallet",
+    "dep:tokio",
+    "dep:tracing",
+]
+http = [
+    "legacy",
+    "dep:lepic-keychain",
+    "dep:lepic-legacy-rpc",
+    "dep:lepic-primitives",
+    "dep:lepic-slate",
+    "dep:lepic-wallet",
+    "dep:serde",
+    "dep:serde_json",
+    "dep:tracing",
+]
+tor = [
+    "http",
+    "dep:http-body-util",
+    "dep:hyper",
+    "dep:hyper-util",
+    "dep:lepic-tor",
+    "dep:tokio",
+]
+loopback = ["lepic-transport/loopback"]
+mock-relay = ["epicbox", "lepic-epicbox/mock-relay"]
+
+[dependencies]
+http-body-util = { workspace = true, optional = true }
+hyper = { workspace = true, optional = true, features = ["client", "http1"] }
+hyper-util = { workspace = true, optional = true, features = ["tokio"] }
+jiff = { workspace = true, optional = true }
+lepic-crypto = { workspace = true, optional = true }
+lepic-epicbox = { workspace = true, optional = true }
+lepic-keychain = { workspace = true, optional = true }
+lepic-legacy-rpc = { workspace = true, optional = true }
+lepic-legacy-slate = { workspace = true, optional = true }
+lepic-node = { workspace = true, optional = true }
+lepic-primitives = { workspace = true, optional = true }
+lepic-slate = { workspace = true, optional = true }
+lepic-tor = { workspace = true, optional = true }
+lepic-transport = { workspace = true, default-features = false }
+lepic-wallet = { workspace = true, optional = true, default-features = false }
+serde = { workspace = true, optional = true, features = ["derive", "std"] }
+serde_json = { workspace = true, optional = true, features = ["std"] }
+thiserror.workspace = true
+tokio = { workspace = true, optional = true, features = ["macros", "rt", "sync", "time"] }
+tracing = { workspace = true, optional = true, features = ["std", "attributes"] }
+
+[[test]]
+name = "http_transport"
+required-features = ["http"]
+
+[[test]]
+name = "tor_transport"
+required-features = ["tor"]
+
+[[test]]
+name = "tor_live"
+required-features = ["tor"]
+
+[dev-dependencies]
+getrandom = { workspace = true, features = ["std"] }
+lepic-crypto.workspace = true
+lepic-epicbox = { workspace = true, features = ["mock-relay"] }
+lepic-legacy-rpc = { workspace = true, features = ["testing"] }
+lepic-primitives.workspace = true
+lepic-slate.workspace = true
+lepic-tor = { workspace = true, features = ["testing"] }
+serde_json = { workspace = true, features = ["std"] }
+tempfile.workspace = true
+tokio = { workspace = true, features = ["io-util", "macros", "net", "rt", "rt-multi-thread", "time"] }
+
+[lints]
+workspace = true

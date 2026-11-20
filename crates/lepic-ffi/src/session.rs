@@ -1,0 +1,3831 @@
+// SPDX-License-Identifier: Apache-2.0
+//! One open wallet: the engine over the binding's ports, and the glue between engine calls,
+//! the app's secret store and Dart streams.
+
+use std::path::{Path, PathBuf};
+use std::sync::atomic::AtomicU64;
+#[cfg(feature = "tor")]
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+
+use jiff::Timestamp;
+use lepic_epicbox::tunnel::OnionRoutes;
+use lepic_epicbox::{
+    ClientSettings, Domain, EpicboxAddress, Network as RelayNetwork, RelayEndpoint, Security,
+    TRANSPORT_ID,
+};
+use lepic_keychain::vault::SecretName;
+use lepic_keychain::{SecretStore as _, Seed, Vault};
+use lepic_methods::epicbox::Epicbox;
+use lepic_methods::registry::Methods;
+use lepic_node::{NodeApi as _, Propagation, webpki_tls_config};
+use lepic_primitives::amount::{Amount, Fee, Height};
+use lepic_primitives::params::Network;
+use lepic_store::{
+    AccountIndex, OutputStatus as EngineOutputStatus, TxId, TxState, WalletStore as _,
+};
+use lepic_transport::file::{FileTransport, response_path};
+use lepic_transport::transport::{
+    BoxFuture, Destination, Exchange as _, Location, PostedSize, TransportId,
+};
+use lepic_wallet::details::TransactionDetails as EngineTransactionDetails;
+use lepic_wallet::error_text::node_text;
+use lepic_wallet::event::{Balance, Connection, TransportState as EngineTransportState};
+use lepic_wallet::inbox::{InboxError, InboxSummary, ListenHandle};
+use lepic_wallet::legacy_history::{
+    ImportWorkDir, LegacyImportOutcome, LegacyImportStatus as EngineLegacyStatus,
+    TxOrigin as EngineTxOrigin,
+};
+use lepic_wallet::lifecycle::PhraseCheck;
+use lepic_wallet::method::{Method, MethodLookup};
+use lepic_wallet::refresh::{BalanceCategory, OutputDetails, RefreshOutcome};
+use lepic_wallet::relay_cancel::RelayCancelResult;
+use lepic_wallet::scan::{
+    FoundDuring as EngineFoundDuring, ScanCancel, ScanOptions, ScanStart, ScanSummary,
+};
+use lepic_wallet::selection::Commitment;
+use lepic_wallet::selection::{
+    Selection, SelectionOptions, SelfInputs as EngineSelfInputs, SelfOutputs as EngineSelfOutputs,
+    SelfSendRequest as EngineSelfSendRequest,
+};
+use lepic_wallet::self_send::SelfSent;
+use lepic_wallet::send::{Delivery, SendError, SendRequest, SentSlate};
+use lepic_wallet::slate::{MediaType, WireSlate};
+use lepic_wallet::{
+    Clock, DATABASE_FILE, ENCRYPTED_DATABASE_FILE, Event, NodeEndpoint, Password, Ports,
+    ReceiveRequest, Received, SessionState, SharedRng, Wallet, WalletName, WordCount,
+};
+use rand::SeedableRng;
+use rand::rngs::StdRng;
+use tokio::sync::broadcast;
+use tokio::sync::broadcast::error::RecvError;
+use tracing::{debug, info, warn};
+use zeroize::Zeroizing;
+
+use crate::api::at_rest::{RetiredPlainStore, StoreAtRest, StoreAtRestState};
+use crate::api::epic1::ListenerSocket;
+use crate::api::error::{WalletError, WalletErrorKind};
+use crate::api::policy::Policy;
+use crate::api::runtime::{ClaimHolder, ClaimedStores, RuntimeInner};
+use crate::api::secret_store::AppSecretStore;
+use crate::api::types::{
+    CancelledReason, DeliveryState, DeliveryView, ExpiredReason, FeeEstimate, FinalizedTx,
+    FoundDuring, ImportedTx, InboxReport, KernelLocation, LegacyImport, LegacyImportStatus,
+    ListenVia, ListenerEvent, ListenerEventKind, ListingDrain, ListingRef, NodePostOutcome,
+    NodePostView, NodeRoute, NodeTip, OutputCategory, OutputStatus, ReceiptCap, ReceivedSlate,
+    RecoveryState, RelayCancelOutcome, ScanFound, ScanProgress, ScanResult, SelfInputs,
+    SelfOutputs, SelfSendRequest, SelfSentTx, SendOptions, SentTx, Slate, SlateMessage, SlateStage,
+    SlateWire, TransactionDetails, TransactionRecovery, TransportConnection, TransportState,
+    TxOrigin, TxStatus, WalletConfig, WalletEvent, WalletEventKind, WalletOutput, WalletSummary,
+};
+use crate::boundary::InFlight;
+use crate::frb_generated::StreamSink;
+use crate::node::{
+    BackendCache, BackendKey, Node, NodeBackend, NodeSecret, RelayTor, TipMemo, node_error,
+};
+use crate::tuning::Tuning;
+use crate::vault_port::{
+    AppVault, SharedStorage, VAULT_KEY, VAULT_NEXT_KEY, VaultBytes, decode, vault_error,
+};
+use crate::{password as password_change, pin};
+
+mod app_data;
+mod contact;
+mod delivery;
+mod epic1;
+mod http;
+#[cfg(not(feature = "tor"))]
+mod no_tor;
+#[cfg(feature = "tor")]
+mod tor;
+
+#[cfg(test)]
+pub(crate) use http::HttpReport;
+#[cfg(all(test, unix))]
+#[cfg(feature = "tor")]
+pub(crate) use tor::TorReport;
+mod in_person;
+mod invoice;
+mod mailboxes;
+mod pushed;
+mod servers;
+
+use servers::EpicboxSlot;
+
+type EngineWallet = Wallet<Node, ClaimedStores, AppVault>;
+
+/// Matches the name `lepic-wallet` stores the seed under in the wallet's vault.
+const SEED_SECRET: &str = "wallet/seed";
+
+/// The name of the wallet in logs. The binding opens one wallet per data directory.
+const WALLET_NAME: &str = "default";
+
+pub(crate) const DEFAULT_ACCOUNT: AccountIndex = AccountIndex(0);
+
+/// The longest slate text the file method imports, checked before the text is written to a
+/// scratch file.
+const MAX_SLATE_TEXT_LEN: usize = lepic_transport::file::MAX_WIRE_SLATE_LEN;
+
+/// The running scan's cancel signal in the session's slot, cleared when the scan ends, also
+/// when its future is dropped.
+struct ScanSlot<'a> {
+    slot: &'a Mutex<Option<ScanCancel>>,
+    cancel: ScanCancel,
+}
+
+impl<'a> ScanSlot<'a> {
+    /// Fails with `WalletBusy` while another scan of the session runs, so `cancel_scan` always
+    /// reaches the one running.
+    fn claim(slot: &'a Mutex<Option<ScanCancel>>, cancel: ScanCancel) -> Result<Self, WalletError> {
+        let mut running = lock(slot);
+        if running.is_some() {
+            return Err(WalletError::new(
+                WalletErrorKind::WalletBusy,
+                "a scan of this wallet is running",
+            ));
+        }
+        *running = Some(cancel.clone());
+        Ok(Self { slot, cancel })
+    }
+}
+
+impl Drop for ScanSlot<'_> {
+    /// Clears the slot only while it holds this scan's signal, never a later scan's.
+    fn drop(&mut self) {
+        let mut running = lock(self.slot);
+        if running
+            .as_ref()
+            .is_some_and(|cancel| cancel.is_same(&self.cancel))
+        {
+            running.take();
+        }
+    }
+}
+
+struct SystemClock;
+
+impl Clock for SystemClock {
+    fn now(&self) -> Timestamp {
+        Timestamp::now()
+    }
+}
+
+/// Where a new wallet's seed comes from.
+pub(crate) enum SeedOrigin {
+    Generate,
+    /// A recovery phrase the user typed, and the height its restore scan starts from.
+    Phrase {
+        phrase: Zeroizing<String>,
+        scan_from: Height,
+    },
+    /// The text of an `epic-wallet` `wallet.seed` file and the password it was written with.
+    SeedFile {
+        text: String,
+        password: Zeroizing<String>,
+    },
+}
+
+impl SeedOrigin {
+    /// A restore of `mnemonic` from `restore_from_height`, `None` and 0 meaning genesis, or
+    /// without a mnemonic a fresh seed. Fails with `InvalidArgument` for a height without a
+    /// mnemonic.
+    pub(crate) fn phrase(
+        mnemonic: Option<Zeroizing<String>>,
+        restore_from_height: Option<u64>,
+    ) -> Result<Self, WalletError> {
+        match (mnemonic, restore_from_height) {
+            (Some(phrase), height) => Ok(Self::Phrase {
+                phrase,
+                scan_from: Height::new(height.unwrap_or(0)),
+            }),
+            (None, None) => Ok(Self::Generate),
+            (None, Some(_)) => Err(invalid("a restore height needs a recovery phrase")),
+        }
+    }
+}
+
+/// Whether an open makes a new database where a damaged one was set aside.
+#[derive(Debug, Clone, Copy)]
+enum Opening {
+    /// Opens the database there is, or refuses beside a set-aside one.
+    Existing,
+    /// Makes a new, empty database where a damaged one was set aside.
+    StartOver,
+}
+
+pub(crate) struct Session {
+    engine: EngineWallet,
+    network: Network,
+    data_dir: PathBuf,
+    /// `WalletConfig::offline` as the session was opened: its node and relay ports refuse.
+    offline: bool,
+    store: AppSecretStore,
+    vault: VaultBytes,
+    epicbox: Option<EpicboxSlot>,
+    /// The methods the engine sends, receives and finalizes through, by transport id.
+    methods: Arc<Methods>,
+    /// The file method, which every session has.
+    file: Arc<dyn Method>,
+    listener: Mutex<Option<ListenHandle>>,
+    /// The handle a listener that a server switch ended continues with.
+    relisten: Mutex<Option<ListenHandle>>,
+    /// What the app chose for push sessions, kept across a server switch.
+    pub(crate) pushed: pushed::Choices,
+    /// The delivery loop and the relay mode the app set for it.
+    delivery: delivery::DeliveryLoop,
+    /// Held by a listener while it is subscribed, so a server switch can wait for its end.
+    listen_run: tokio::sync::Mutex<()>,
+    /// Held for reading by every wallet call and for writing by a server switch.
+    pub(crate) servers: tokio::sync::RwLock<()>,
+    /// Holds the answers of HTTP sends until they are finalized.
+    http: lepic_methods::http::Http,
+    http_listener: Mutex<http::HttpListener>,
+    http_starts: AtomicU64,
+    /// Holds the answers of Tor sends until they are finalized.
+    #[cfg(feature = "tor")]
+    tor: lepic_methods::tor::Tor,
+    #[cfg(feature = "tor")]
+    tor_slot: Mutex<tor::TorSlot>,
+    #[cfg(feature = "tor")]
+    tor_starts: AtomicU64,
+    /// Takes the relay connection through the wallet's tor while it runs (ADR 0021); never
+    /// in a build without Tor.
+    relay_tor: Arc<RelayTor>,
+    /// The same for node requests; it follows the wallet's tor like `relay_tor`, with a
+    /// setting of its own.
+    node_tor: Arc<RelayTor>,
+    /// The same for HTTP sends to other wallets; it follows the wallet's tor like
+    /// `relay_tor`, with no setting: while tor runs or is expected they go through it.
+    #[cfg(feature = "tor")]
+    send_tor: Arc<RelayTor>,
+    /// `expect_tor` was called and no start followed yet: a stop keeps the relay waiting.
+    #[cfg(feature = "tor")]
+    tor_expected: AtomicBool,
+    /// Hosts reached at an onion through tor, with TLS for the host: the built-in table until
+    /// the app sets its own. Shared by every connection of the session that goes through tor.
+    pub(crate) onion_routes: Arc<OnionRoutes>,
+    /// The mailbox list: none, and the wallet's own relay alone, until the app sets one.
+    mailboxes: Mutex<Option<lepic_wallet_contacts::MailboxList>>,
+    /// The backends [`Session::node_tip_for`] asked last, with what their answers left.
+    node_tips: BackendCache<(NodeBackend, Arc<TipMemo>)>,
+    /// The tuning of the config the session was opened with.
+    pub(crate) tuning: Tuning,
+    /// The policy of the config the session was opened with, with its defaults filled in.
+    pub(crate) policy: Policy,
+    #[cfg(all(test, feature = "tor"))]
+    tor_timings: Mutex<Option<lepic_methods::tor::TorTimings>>,
+    /// Makes the next listen fail before it subscribes.
+    #[cfg(test)]
+    pub(crate) fail_next_listen: std::sync::atomic::AtomicBool,
+    /// Outputs per page of [`Session::scan`], in place of the engine's default.
+    #[cfg(test)]
+    pub(crate) scan_page_size: Mutex<Option<std::num::NonZeroU64>>,
+    scan: Mutex<Option<ScanCancel>>,
+    balance: Mutex<Option<Balance>>,
+    runtime: Arc<RuntimeInner>,
+    claim: Arc<ClaimHolder>,
+    /// The calls running on the handle, ended by [`Session::lock`].
+    pub(crate) in_flight: Arc<InFlight>,
+}
+
+impl Drop for Session {
+    fn drop(&mut self) {
+        self.lock();
+    }
+}
+
+fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+fn os_rng() -> Result<StdRng, WalletError> {
+    StdRng::try_from_rng(&mut getrandom::SysRng)
+        .map_err(|error| WalletError::new(WalletErrorKind::Other, error.to_string()))
+}
+
+fn invalid(message: impl Into<String>) -> WalletError {
+    WalletError::new(WalletErrorKind::InvalidArgument, message)
+}
+
+fn io(what: &str, error: &std::io::Error) -> WalletError {
+    WalletError::new(WalletErrorKind::Io, format!("{what}: {error}"))
+}
+
+pub(crate) const fn relay_network(network: Network) -> RelayNetwork {
+    match network {
+        Network::Mainnet => RelayNetwork::Mainnet,
+        Network::Floonet => RelayNetwork::Floonet,
+    }
+}
+
+/// `address` as an Epicbox address of `network` that names its relay. A bare key is refused:
+/// the engine would send it to a default relay the user never named.
+pub(crate) fn relay_address(address: &str, network: Network) -> Option<EpicboxAddress> {
+    if !address.contains('@') {
+        return None;
+    }
+    EpicboxAddress::parse(address, relay_network(network)).ok()
+}
+
+/// The most listings one `drain_epicbox_listings` call takes.
+pub(crate) const MAX_DRAIN_LISTINGS: usize = 16;
+
+/// Longest message [`crate::api::wallet::EpicWallet::sign_with_address_key_at`] or
+/// [`crate::api::wallet::EpicWallet::device_link_sign`] signs, or a verify checks.
+pub(crate) const MAX_ADDRESS_SIGNED_LEN: usize = 64 * 1024;
+
+/// Whether `signature` (DER hex) is the listing signature of `message` for `domain` by the key
+/// `public_key`, written as in an Epicbox address on either chain, with or without `@<relay>`.
+pub(crate) fn verify_address_signature_at(
+    public_key: &str,
+    domain: &str,
+    message: &[u8],
+    signature: &str,
+) -> bool {
+    if message.len() > MAX_ADDRESS_SIGNED_LEN {
+        return false;
+    }
+    let Ok(domain) = lepic_epicbox::ServiceDomain::parse(domain) else {
+        return false;
+    };
+    [RelayNetwork::Mainnet, RelayNetwork::Floonet]
+        .into_iter()
+        .filter_map(|network| EpicboxAddress::parse_key(public_key, network).ok())
+        .any(|key| lepic_epicbox::listing_message_verifies_hex(&key, &domain, message, signature))
+}
+
+/// The listing of the service key `service_key`, 66 hex digits, and `generation`.
+fn listing(
+    service_key: &str,
+    generation: u32,
+) -> Result<lepic_wallet::namespace::Listing, WalletError> {
+    lepic_wallet::namespace::Listing::from_hex(service_key, generation)
+        .map_err(|_| invalid("service key is not a compressed secp256k1 key in hex"))
+}
+
+fn service_domain(domain: &str) -> Result<lepic_epicbox::ServiceDomain, WalletError> {
+    lepic_epicbox::ServiceDomain::parse(domain).map_err(|error| invalid(error.to_string()))
+}
+
+/// One [`ListingDrain`] per result, in order: the report, or the error in its place.
+pub(crate) fn listing_drains(results: Vec<Result<InboxSummary, InboxError>>) -> Vec<ListingDrain> {
+    results
+        .into_iter()
+        .map(|result| match result {
+            Ok(summary) => ListingDrain {
+                report: Some(inbox_report(&summary)),
+                error: None,
+            },
+            Err(error) => ListingDrain {
+                report: None,
+                error: Some(error.into()),
+            },
+        })
+        .collect()
+}
+
+fn inbox_report(summary: &InboxSummary) -> InboxReport {
+    InboxReport {
+        received: summary.received,
+        finalized: summary.finalized,
+        repeated: summary.repeated,
+        rejected: summary.rejected,
+        held: summary.held,
+        notices: summary.notices,
+        dropped: summary.dropped,
+        buffered: summary.buffered,
+    }
+}
+
+/// Words separated by single spaces, lowercase, as the engine expects. Built in one buffer
+/// large enough that it never moves, so no copy of the phrase is left unwiped.
+pub(crate) fn normalize_phrase(phrase: &str) -> Zeroizing<String> {
+    // Lowercasing at most doubles the length of any character.
+    let mut normalized = Zeroizing::new(String::with_capacity(phrase.len().saturating_mul(2)));
+    for word in phrase.split_whitespace() {
+        if !normalized.is_empty() {
+            normalized.push(' ');
+        }
+        normalized.extend(word.chars().flat_map(char::to_lowercase));
+    }
+    normalized
+}
+
+/// The engine's password type, taking over the buffer of `text` without a copy.
+fn password(mut text: Zeroizing<String>) -> Password {
+    Password::new(std::mem::take(&mut *text))
+}
+
+fn relay_endpoint(config: &WalletConfig) -> Result<RelayEndpoint, WalletError> {
+    let domain = Domain::parse(&config.epicbox_domain)
+        .map_err(|_| invalid("epicbox domain is not a host name"))?;
+    let security = if domain.is_loopback() {
+        Security::Plain
+    } else {
+        Security::Tls
+    };
+    Ok(RelayEndpoint::new(
+        domain,
+        Some(config.epicbox_port),
+        security,
+    ))
+}
+
+fn epicbox_transport(
+    runtime: &RuntimeInner,
+    (config, tuning): (&WalletConfig, &Tuning),
+    network: Network,
+    relay_tor: &Arc<RelayTor>,
+    onion_routes: &Arc<OnionRoutes>,
+) -> Result<Option<Epicbox>, WalletError> {
+    if config.epicbox_domain.is_empty() {
+        return Ok(None);
+    }
+    let endpoint = relay_endpoint(config)?;
+    if config.offline {
+        return Ok(Some(Epicbox::new(
+            ClientSettings::new(endpoint, tuning.relay),
+            relay_network(network),
+            Arc::new(OfflineRelay),
+        )));
+    }
+    #[cfg(feature = "mock")]
+    if let Some(relay) = &runtime.relay {
+        return Ok(Some(Epicbox::new(
+            ClientSettings::new(endpoint, tuning.relay),
+            relay_network(network),
+            Arc::clone(relay),
+        )));
+    }
+    #[cfg(not(feature = "mock"))]
+    let _ = runtime;
+    let tls = webpki_tls_config().map_err(|error| node_error(&error))?;
+    #[cfg(feature = "tor")]
+    let connector = Arc::new(lepic_epicbox::tunnel::TunnelConnector::with_routes(
+        tls,
+        Arc::new(tor::RelayTunnel(Arc::clone(relay_tor))),
+        Arc::clone(onion_routes),
+        tuning.tunnel,
+    ));
+    // No tor to go through: the relay is always reached directly.
+    #[cfg(not(feature = "tor"))]
+    let connector = {
+        let _ = (relay_tor, onion_routes);
+        Arc::new(lepic_epicbox::TcpConnector::new(tls))
+    };
+    Ok(Some(Epicbox::new(
+        ClientSettings::new(endpoint, tuning.relay),
+        relay_network(network),
+        connector,
+    )))
+}
+
+/// The refusal of an offline session's relay connector, inside the [`std::io::Error`] it
+/// returns.
+#[derive(Debug)]
+pub(crate) struct RelayOffline;
+
+impl std::fmt::Display for RelayOffline {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("relay connections are off for this session")
+    }
+}
+
+impl std::error::Error for RelayOffline {}
+
+/// The relay connector of an offline session: every connection fails with [`RelayOffline`]
+/// before any name lookup.
+struct OfflineRelay;
+
+impl lepic_epicbox::Connector for OfflineRelay {
+    fn connect<'a>(
+        &'a self,
+        endpoint: &'a RelayEndpoint,
+    ) -> BoxFuture<'a, std::io::Result<Box<dyn lepic_epicbox::RelayStream>>> {
+        let _ = endpoint;
+        Box::pin(async { Err(std::io::Error::other(RelayOffline)) })
+    }
+}
+
+/// The transaction methods a session registers.
+struct SessionTransports {
+    methods: Arc<Methods>,
+    file: Arc<dyn Method>,
+    http: lepic_methods::http::Http,
+    #[cfg(feature = "tor")]
+    tor: lepic_methods::tor::Tor,
+}
+
+/// Registers the file transport, `epicbox` when the wallet has one, the HTTP transport and,
+/// with the `tor` feature, the Tor transport.
+fn session_transports(
+    epicbox: Option<&EpicboxSlot>,
+    tuning: &Tuning,
+    send_tor: &Arc<RelayTor>,
+) -> Result<SessionTransports, WalletError> {
+    let mut methods = Methods::new();
+    let file: Arc<dyn Method> = Arc::new(FileTransport::new());
+    methods
+        .register(Arc::clone(&file))
+        .map_err(|error| invalid(error.to_string()))?;
+    if let Some(epicbox) = epicbox {
+        methods
+            .register(Arc::new(epicbox.clone()))
+            .map_err(|error| invalid(error.to_string()))?;
+    }
+    let http = http::http_transport(tuning, send_tor)?;
+    methods
+        .register(Arc::new(http.clone()))
+        .map_err(|error| invalid(error.to_string()))?;
+    #[cfg(feature = "tor")]
+    let tor = tor::tor_transport(tuning);
+    #[cfg(feature = "tor")]
+    {
+        methods
+            .register(Arc::new(tor.clone()))
+            .map_err(|error| invalid(error.to_string()))?;
+    }
+    Ok(SessionTransports {
+        methods: Arc::new(methods),
+        file,
+        http,
+        #[cfg(feature = "tor")]
+        tor,
+    })
+}
+
+/// The locked engine of a session on `data_dir`, with the contact engine installed.
+#[allow(clippy::too_many_arguments)] // Each is one input of the session's engine.
+fn engine(
+    runtime: &Arc<RuntimeInner>,
+    config: &WalletConfig,
+    data_dir: &Path,
+    node: Node,
+    claim: &Arc<ClaimHolder>,
+    methods: Option<Arc<dyn MethodLookup>>,
+    policy: &Policy,
+    vault: &VaultBytes,
+) -> Result<EngineWallet, WalletError> {
+    let engine_config = lepic_wallet::WalletConfig {
+        name: WalletName::new(WALLET_NAME).map_err(|error| invalid(error.to_string()))?,
+        network: config.chain.network(),
+        data_dir: data_dir.to_owned(),
+        node: NodeEndpoint::parse(&config.node_url)
+            .map_err(|_| invalid("node url is not an http or https url with a host"))?,
+        offline: config.offline,
+        host_features: config.host_features,
+        profile: config.profile,
+        domain: config.domain.clone(),
+        policy: policy.wallet,
+    };
+    let ports = Ports {
+        node,
+        stores: ClaimedStores::new(Arc::clone(claim), runtime),
+        secrets: AppVault::new(vault.clone(), runtime.kdf),
+        clock: Arc::new(SystemClock),
+        rng: SharedRng::new(os_rng()?),
+        runtime: runtime.boundary.handle.clone(),
+        methods,
+    };
+    let engine = Wallet::new(engine_config, ports)?;
+    lepic_wallet_contacts::install(&engine);
+    Ok(engine)
+}
+
+#[cfg(test)]
+impl Session {
+    /// The engine wallet, for tests that check what it stored.
+    pub(crate) const fn engine_wallet(&self) -> &EngineWallet {
+        &self.engine
+    }
+}
+
+impl Session {
+    /// A locked wallet on `config.data_dir`, which must exist and not be open anywhere.
+    pub(crate) async fn new(
+        runtime: &Arc<RuntimeInner>,
+        config: &WalletConfig,
+        node_secret: &NodeSecret,
+        store: AppSecretStore,
+    ) -> Result<Self, WalletError> {
+        let network = config.chain.network();
+        let tuning = Tuning::check(&config.tuning)?;
+        let policy = Policy::resolve(&config.policy)?;
+        let claim = runtime.claim(&PathBuf::from(&config.data_dir)).await?;
+        let data_dir = claim.dir.clone();
+        let claim = ClaimHolder::new(claim);
+        #[cfg(feature = "tor")]
+        let (node_tor, relay_tor, send_tor) =
+            tor::session_routes(&data_dir, config.tor_wanted, tuning.tor_connect_timeout());
+        #[cfg(not(feature = "tor"))]
+        let (node_tor, relay_tor, send_tor) = (
+            RelayTor::new(true, tuning.tor_connect_timeout()),
+            RelayTor::new(true, tuning.tor_connect_timeout()),
+            RelayTor::new(true, tuning.tor_connect_timeout()),
+        );
+        let node_tor = Arc::new(node_tor);
+        let relay_tor = Arc::new(relay_tor);
+        let send_tor = Arc::new(send_tor);
+        #[cfg(feature = "tor")]
+        let onion_routes = Arc::new(OnionRoutes::new(tor::checked_onion_routes(
+            config.onion_routes.clone(),
+        )?));
+        // Without tor no connection goes to an onion.
+        #[cfg(not(feature = "tor"))]
+        let onion_routes = Arc::new(OnionRoutes::default());
+        let node =
+            runtime
+                .nodes
+                .client((config, &tuning), node_secret, &node_tor, &onion_routes)?;
+        let epicbox = epicbox_transport(
+            runtime,
+            (config, &tuning),
+            network,
+            &relay_tor,
+            &onion_routes,
+        )?
+        .map(EpicboxSlot::new);
+        let transports = session_transports(epicbox.as_ref(), &tuning, &send_tor)?;
+        let vault = VaultBytes::default();
+        let engine = engine(
+            runtime,
+            config,
+            &data_dir,
+            node,
+            &claim,
+            Some(Arc::clone(&transports.methods) as Arc<dyn MethodLookup>),
+            &policy,
+            &vault,
+        )?;
+        Ok(Self {
+            engine,
+            network,
+            data_dir,
+            offline: config.offline,
+            store,
+            vault,
+            epicbox,
+            methods: transports.methods,
+            file: transports.file,
+            listener: Mutex::default(),
+            relisten: Mutex::default(),
+            pushed: pushed::Choices::default(),
+            delivery: delivery::DeliveryLoop::default(),
+            listen_run: tokio::sync::Mutex::default(),
+            servers: tokio::sync::RwLock::default(),
+            http: transports.http,
+            http_listener: Mutex::default(),
+            http_starts: AtomicU64::new(0),
+            #[cfg(feature = "tor")]
+            tor: transports.tor,
+            #[cfg(feature = "tor")]
+            tor_slot: Mutex::default(),
+            #[cfg(feature = "tor")]
+            tor_starts: AtomicU64::new(0),
+            relay_tor,
+            node_tor,
+            #[cfg(feature = "tor")]
+            send_tor,
+            #[cfg(feature = "tor")]
+            tor_expected: AtomicBool::new(false),
+            onion_routes,
+            mailboxes: Mutex::default(),
+            node_tips: BackendCache::default(),
+            tuning,
+            policy,
+            #[cfg(all(test, feature = "tor"))]
+            tor_timings: Mutex::default(),
+            #[cfg(test)]
+            fail_next_listen: std::sync::atomic::AtomicBool::new(false),
+            #[cfg(test)]
+            scan_page_size: Mutex::default(),
+            scan: Mutex::default(),
+            balance: Mutex::default(),
+            runtime: Arc::clone(runtime),
+            claim,
+            in_flight: Arc::default(),
+        })
+    }
+
+    pub(crate) fn runtime(&self) -> &Arc<RuntimeInner> {
+        &self.runtime
+    }
+
+    #[cfg(test)]
+    pub(crate) fn holds_directory(&self) -> bool {
+        self.claim.is_held()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn directory_claim(&self) -> &Arc<ClaimHolder> {
+        &self.claim
+    }
+
+    pub(crate) fn store(&self) -> &AppSecretStore {
+        &self.store
+    }
+
+    /// Stops tor, the listeners, the delivery loop and any scan, forgets the cached balance and
+    /// the relay identity, drops the root key and ends the calls still running, which fail with
+    /// `Cancelled` at their next await; a store write under way runs to its end. The directory
+    /// is released as soon as the database closes: now, or when the last such call has ended.
+    pub(crate) fn lock(&self) {
+        #[cfg(feature = "tor")]
+        self.tor_expected.store(false, Ordering::Relaxed);
+        if let Some(listener) = lock(&self.listener).take() {
+            listener.stop();
+        }
+        if let Some(listener) = self.take_relisten() {
+            listener.stop();
+        }
+        if let Some(scan) = lock(&self.scan).take() {
+            scan.cancel();
+        }
+        lock(&self.balance).take();
+        // Before the engine locks, so a database that closes at the lock releases the
+        // directory.
+        self.claim.release_when_closed();
+        self.engine.lock();
+        // After the engine locks, so a start that saw it unlocked is in its slot, and before
+        // the sessions end, so the loop claims none after.
+        self.stop_delivery();
+        if let Some(epicbox) = &self.epicbox {
+            // The sessions hold the relay identity, so they end with the lock.
+            epicbox.current().pushed().clear();
+            epicbox.current().detach();
+        }
+        // Tor stops before the listeners it forwards to.
+        self.stop_tor_for_lock();
+        self.stop_http_listener();
+        self.in_flight.abort_all();
+    }
+
+    pub(crate) fn ensure_unlocked(&self) -> Result<(), WalletError> {
+        if self.engine.is_unlocked() {
+            Ok(())
+        } else {
+            Err(WalletError::from(lepic_wallet::WalletError::Locked))
+        }
+    }
+
+    /// Creates the wallet from `origin`'s seed. When it fails after making the database, the
+    /// database files are removed again, so a later create on the directory starts afresh; a
+    /// database that was there before is kept.
+    pub(crate) async fn create(
+        &self,
+        origin: SeedOrigin,
+        password: Zeroizing<String>,
+    ) -> Result<(), WalletError> {
+        let mut made_database = true;
+        for name in [DATABASE_FILE, ENCRYPTED_DATABASE_FILE] {
+            made_database &= !tokio::fs::try_exists(self.data_dir.join(name))
+                .await
+                .map_err(|error| io("checking the wallet database", &error))?;
+        }
+        if let Err(error) = self.create_with_vault(origin, password).await {
+            if made_database {
+                // Closes the database before its files are removed.
+                self.engine.lock();
+                if let Err(removal) = remove_database(&self.data_dir).await {
+                    warn!(error = %removal, "wallet database not removed");
+                }
+            }
+            return Err(error);
+        }
+        self.seed_node_tip()
+    }
+
+    /// Creates the wallet and stores its vault; the wallet is locked when that store fails.
+    async fn create_with_vault(
+        &self,
+        origin: SeedOrigin,
+        password: Zeroizing<String>,
+    ) -> Result<(), WalletError> {
+        self.vault.load(&self.store).await?;
+        let password = self::password(password);
+        match origin {
+            SeedOrigin::Phrase { phrase, scan_from } => {
+                let phrase = normalize_phrase(&phrase);
+                self.engine
+                    .restore_from_height(password, &phrase, scan_from)
+                    .await?;
+            }
+            SeedOrigin::SeedFile {
+                text,
+                password: file_password,
+            } => {
+                self.engine
+                    .import_wallet_seed(password, &text, self::password(file_password))
+                    .await?;
+            }
+            // The phrase is shown later through `recovery_phrase`, after the user set up a PIN.
+            SeedOrigin::Generate => {
+                drop(self.engine.create(password, WordCount::TwentyFour).await?);
+            }
+        }
+        if let Err(error) = self.vault.flush(&self.store).await {
+            self.engine.lock();
+            return Err(error);
+        }
+        Ok(())
+    }
+
+    pub(crate) async fn open(&self, password: Zeroizing<String>) -> Result<(), WalletError> {
+        self.open_as(password, Opening::Existing).await
+    }
+
+    /// [`Session::open`], making a new, empty database where a damaged one was set aside, as
+    /// `lepic_wallet::Wallet::start_over` does.
+    pub(crate) async fn start_over(&self, password: Zeroizing<String>) -> Result<(), WalletError> {
+        self.open_as(password, Opening::StartOver).await
+    }
+
+    async fn open_as(
+        &self,
+        password: Zeroizing<String>,
+        opening: Opening,
+    ) -> Result<(), WalletError> {
+        self.vault.load(&self.store).await?;
+        match self.store.read(VAULT_NEXT_KEY).await? {
+            None => self.open_engine(password, opening).await?,
+            Some(next) => self.open_settling_change(password, &next, opening).await?,
+        }
+        self.seed_node_tip()
+    }
+
+    async fn open_engine(
+        &self,
+        password: Zeroizing<String>,
+        opening: Opening,
+    ) -> Result<(), lepic_wallet::WalletError> {
+        match opening {
+            Opening::Existing => self.engine.open(self::password(password)).await,
+            Opening::StartOver => self.engine.start_over(self::password(password)).await,
+        }
+    }
+
+    /// Opens while `next` holds the vault of a password change that stopped before it ended. A
+    /// password that opens the stored vault drops the change; one that opens only `next`
+    /// finishes it, making `next` the stored vault.
+    async fn open_settling_change(
+        &self,
+        password: Zeroizing<String>,
+        next: &str,
+        opening: Opening,
+    ) -> Result<(), WalletError> {
+        let stored = self
+            .open_engine(password.clone(), opening)
+            .await
+            .map_err(WalletError::from);
+        let error = match stored {
+            Ok(()) => {
+                password_change::discard_next(&self.store).await;
+                info!("unfinished password change dropped");
+                return Ok(());
+            }
+            Err(error)
+                if matches!(
+                    error.kind,
+                    WalletErrorKind::WrongPassword
+                        | WalletErrorKind::SecretStore
+                        | WalletErrorKind::WalletNotFound
+                ) =>
+            {
+                error
+            }
+            Err(error) => return Err(error),
+        };
+        let Ok(bytes) = decode(next) else {
+            return Err(error);
+        };
+        self.vault.set(bytes);
+        if let Err(next_error) = self.open_engine(password, opening).await {
+            let next_error = WalletError::from(next_error);
+            return Err(if next_error.kind == WalletErrorKind::WrongPassword {
+                next_error
+            } else {
+                error
+            });
+        }
+        if let Err(error) = self.store.write(VAULT_KEY, next.to_owned()).await {
+            self.engine.lock();
+            return Err(error);
+        }
+        password_change::discard_next(&self.store).await;
+        info!("unfinished password change finished");
+        Ok(())
+    }
+
+    /// Re-encrypts the vault under `new` once `current` opened it, as [`password_change`]
+    /// describes. Refused with `Unsupported` for a PIN wallet, whose password the user never
+    /// sees, before any attempt is counted.
+    pub(crate) async fn change_password(
+        &self,
+        current: Zeroizing<String>,
+        new: Zeroizing<String>,
+    ) -> Result<(), WalletError> {
+        self.ensure_unlocked()?;
+        if pin::is_pin_wallet(&self.store).await? {
+            return Err(WalletError::new(
+                WalletErrorKind::Unsupported,
+                "a pin wallet changes its pin, not its password",
+            ));
+        }
+        let runtime = self.runtime();
+        pin::after_password_attempt(
+            &runtime.pin,
+            &self.store,
+            || password_change::open_stored(&self.store, current),
+            |vault| password_change::replace(&self.store, vault, new, runtime.kdf),
+        )
+        .await?;
+        info!("wallet password changed");
+        Ok(())
+    }
+
+    /// Starts the node client from the tip the wallet confirmed last, so the first tip a node
+    /// reports in this session is bounded by it rather than accepted as the new reference.
+    fn seed_node_tip(&self) -> Result<(), WalletError> {
+        let Some(confirmed) = self.engine.confirmed_tip()? else {
+            return Ok(());
+        };
+        // A device clock behind the stored time counts as no time passed.
+        let seen_ago =
+            std::time::Duration::try_from(Timestamp::now().duration_since(confirmed.seen_at))
+                .unwrap_or_default();
+        // Clones of the client share what it has seen, so this seeds the engine's client.
+        drop(
+            self.engine
+                .ports()
+                .node
+                .clone()
+                .with_known_tip(confirmed.height, seen_ago),
+        );
+        Ok(())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn node(&self) -> &Node {
+        &self.engine.ports().node
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn scan_to_tip(&self) {
+        self.engine
+            .scan(ScanOptions::update(self.network), &ScanCancel::new())
+            .await
+            .unwrap();
+    }
+
+    /// The recovery phrase, after checking `password` against the stored vault.
+    pub(crate) async fn recovery_phrase(
+        &self,
+        password: Zeroizing<String>,
+    ) -> Result<String, WalletError> {
+        self.ensure_unlocked()?;
+        let phrase = self
+            .with_stored_vault(password, |vault| {
+                let name =
+                    SecretName::new(SEED_SECRET).map_err(|error| invalid(error.to_string()))?;
+                let stored = vault
+                    .get(&name)
+                    .map_err(|error| WalletError::from(lepic_wallet::WalletError::from(error)))?
+                    .ok_or_else(|| {
+                        WalletError::new(WalletErrorKind::WalletNotFound, "no seed is stored")
+                    })?;
+                let seed = Seed::from_entropy(stored.expose_bytes()).map_err(|_| {
+                    WalletError::new(WalletErrorKind::SecretStore, "stored seed is malformed")
+                })?;
+                let phrase = seed.to_mnemonic().map_err(|_| {
+                    WalletError::new(WalletErrorKind::SecretStore, "stored seed is malformed")
+                })?;
+                Ok::<_, WalletError>(phrase)
+            })
+            .await?;
+        // The binding encodes the returned text for Dart and drops it without wiping it, so it
+        // gets this buffer rather than a second copy.
+        let mut phrase = phrase;
+        Ok(std::mem::take(&mut *phrase))
+    }
+
+    /// Checks `password` against the stored vault: `WrongPassword` when it does not open it.
+    pub(crate) async fn check_password(
+        &self,
+        password: Zeroizing<String>,
+    ) -> Result<(), WalletError> {
+        self.with_stored_vault(password, |_| Ok(())).await
+    }
+
+    /// Opens the vault in the app's store with `password` on the blocking pool and hands it to
+    /// `read`.
+    async fn with_stored_vault<T: Send + 'static>(
+        &self,
+        password: Zeroizing<String>,
+        read: impl FnOnce(&Vault<SharedStorage, StdRng>) -> Result<T, WalletError> + Send + 'static,
+    ) -> Result<T, WalletError> {
+        let bytes = VaultBytes::default();
+        bytes.load(&self.store).await?;
+        let password = self::password(password);
+        tokio::task::spawn_blocking(move || {
+            let vault = Vault::open(
+                SharedStorage::new(bytes),
+                os_rng()?,
+                password.expose_bytes(),
+            )
+            .map_err(|error| {
+                WalletError::from(lepic_wallet::WalletError::from(vault_error(error)))
+            })?;
+            read(&vault)
+        })
+        .await
+        .map_err(|_| WalletError::new(WalletErrorKind::Panic, "vault failed inside lepic"))?
+    }
+
+    /// Refreshes against the node and returns the default account's balance.
+    /// Refreshes, then runs the short update scan that finds what another wallet on the phrase
+    /// received and the change of its spends; a scan that fails is logged and the next refresh
+    /// tries again.
+    pub(crate) async fn refresh(&self) -> Result<WalletSummary, WalletError> {
+        let refreshed = self.engine.refresh().await?;
+        if matches!(refreshed, RefreshOutcome::Refreshed(_))
+            && let Err(error) = self.engine.refresh_scan().await
+        {
+            warn!(error = %error, "update scan after a refresh failed");
+        }
+        match refreshed {
+            RefreshOutcome::Refreshed(_) => {
+                // Read from the store after the update scan, which may have stored the change
+                // of a spend made elsewhere.
+                let balance = self.engine.balance(DEFAULT_ACCOUNT)?;
+                *lock(&self.balance) = Some(balance);
+                Ok(summary(&balance, true))
+            }
+            RefreshOutcome::NodeBehind { .. } => self.cached().ok_or_else(|| {
+                WalletError::new(
+                    WalletErrorKind::NodeUnreachable,
+                    "node is behind the wallet; try again once it has synced",
+                )
+            }),
+        }
+    }
+
+    /// The balance of the last refresh in this session.
+    pub(crate) fn cached(&self) -> Option<WalletSummary> {
+        if !self.engine.is_unlocked() {
+            return None;
+        }
+        lock(&self.balance)
+            .as_ref()
+            .map(|balance| summary(balance, false))
+    }
+
+    /// The default account's balance from the store, at the tip the wallet confirmed last,
+    /// without asking the node.
+    pub(crate) fn stored_summary(&self) -> Result<WalletSummary, WalletError> {
+        Ok(summary(&self.engine.balance(DEFAULT_ACCOUNT)?, false))
+    }
+
+    pub(crate) fn minimum_confirmations(&self) -> Result<u64, WalletError> {
+        Ok(self.engine.minimum_confirmations()?)
+    }
+
+    pub(crate) fn set_minimum_confirmations(&self, count: u64) -> Result<(), WalletError> {
+        Ok(self.engine.set_minimum_confirmations(count)?)
+    }
+
+    /// Whether the listener `socket` opens payments sealed to the wallet's epic1 addresses from
+    /// its next start, as last saved.
+    pub(crate) fn epic1_at_listener(&self, socket: ListenerSocket) -> bool {
+        self.data_dir.join(epic1_listener_file(socket)).exists()
+    }
+
+    /// Saves whether the listener `socket` opens payments sealed to the wallet's epic1
+    /// addresses, for its next start.
+    pub(crate) fn set_epic1_at_listener(
+        &self,
+        socket: ListenerSocket,
+        enabled: bool,
+    ) -> Result<(), WalletError> {
+        let path = self.data_dir.join(epic1_listener_file(socket));
+        if enabled {
+            std::fs::write(&path, []).map_err(|error| io("saving epic1_at_listener", &error))
+        } else {
+            remove_if_present(std::fs::remove_file(&path))
+                .map_err(|error| io("saving epic1_at_listener", &error))
+        }
+    }
+
+    pub(crate) fn outputs(&self) -> Result<Vec<WalletOutput>, WalletError> {
+        let outputs = self.engine.outputs(DEFAULT_ACCOUNT)?;
+        Ok(outputs.iter().map(wallet_output).collect())
+    }
+
+    pub(crate) async fn transactions(&self) -> Result<Vec<TransactionDetails>, WalletError> {
+        let stored = self.engine.transactions(DEFAULT_ACCOUNT).await?;
+        let records = self.post_records(&stored).await?;
+        Ok(stored
+            .iter()
+            .zip(records)
+            .map(|(details, (delivery, post))| transaction_details(details, delivery, post))
+            .collect())
+    }
+
+    pub(crate) async fn import_legacy_history(
+        &self,
+        source_dir: &str,
+    ) -> Result<LegacyImport, WalletError> {
+        let mut suffix = [0u8; 8];
+        getrandom::fill(&mut suffix)
+            .map_err(|error| WalletError::new(WalletErrorKind::Other, error.to_string()))?;
+        let suffix: String = suffix.iter().map(|byte| format!("{byte:02x}")).collect();
+        let work = ImportWorkDir::create(&self.data_dir, &suffix)
+            .map_err(|error| io("creating the import folder", &error))?;
+        let outcome = self
+            .engine
+            .import_legacy_history(Path::new(source_dir), work.path())
+            .await?;
+        Ok(legacy_import(&outcome))
+    }
+
+    pub(crate) async fn transaction(&self, tx_id: u32) -> Result<TransactionDetails, WalletError> {
+        let stored = self.engine.transaction_details(TxId(tx_id)).await?;
+        if stored.transaction.entry.account != DEFAULT_ACCOUNT {
+            return Err(WalletError::from(
+                lepic_wallet::WalletError::UnknownTransaction(TxId(tx_id)),
+            ));
+        }
+        let records = self.post_records(std::slice::from_ref(&stored)).await?;
+        let (delivery, post) = records.into_iter().next().unwrap_or_default();
+        Ok(transaction_details(&stored, delivery, post))
+    }
+
+    /// For each of `transactions`, in order, the post of its slate and its pushes to the node,
+    /// as the store keeps them. One read of the store.
+    async fn post_records(
+        &self,
+        transactions: &[EngineTransactionDetails],
+    ) -> Result<Vec<(Option<DeliveryView>, Option<NodePostView>)>, WalletError> {
+        let session = self.engine.session()?;
+        let wanted: Vec<_> = transactions
+            .iter()
+            .map(|details| {
+                let entry = &details.transaction.entry;
+                let pushing = matches!(entry.state, TxState::Finalized | TxState::Posted);
+                (details.transaction.id, entry.slate_id, pushing)
+            })
+            .collect();
+        tokio::task::spawn_blocking(move || {
+            session.store.read(|repos| {
+                wanted
+                    .into_iter()
+                    .map(|(tx_id, slate_id, pushing)| {
+                        let delivery = match slate_id {
+                            Some(payment_id) => repos.payment_delivery(payment_id)?,
+                            None => None,
+                        };
+                        let post = repos.node_post(tx_id)?;
+                        Ok::<_, lepic_wallet::WalletError>((
+                            delivery.as_ref().and_then(delivery_view),
+                            post.map(|record| node_post_view(&record, pushing)),
+                        ))
+                    })
+                    .collect()
+            })
+        })
+        .await
+        .map_err(|_| {
+            WalletError::new(WalletErrorKind::Panic, "the store read failed inside lepic")
+        })?
+        .map_err(WalletError::from)
+    }
+
+    pub(crate) async fn estimate_fee(
+        &self,
+        amount: u64,
+        minimum_confirmations: u64,
+        options: Option<SendOptions>,
+    ) -> Result<FeeEstimate, WalletError> {
+        let request =
+            self.policy
+                .send_request_with(amount, minimum_confirmations, None, options)?;
+        let selection = self
+            .engine
+            .estimate_fee(Amount::new(amount), request.selection_options())
+            .await?;
+        let size = self.slate_size(request).await;
+        fee_estimate(&selection, size)
+    }
+
+    /// The bytes a stock receiver's answer to a send of `request` would take on the relay's
+    /// classic lane and the relay's limit, measured on the S1 the send would build with nothing
+    /// stored and without a destination. None without an Epicbox method or an Epicbox identity,
+    /// or when the measure fails. Never fails: over the limit it gives the figure, so the app
+    /// can warn, and the send itself refuses.
+    async fn slate_size(&self, request: SendRequest) -> Option<PostedSize> {
+        let method = self.epicbox_method().ok()?;
+        measured_size(self.engine.estimate_slate_size(method, request, None).await)
+    }
+
+    pub(crate) async fn estimate_max(
+        &self,
+        minimum_confirmations: u64,
+        options: Option<SendOptions>,
+    ) -> Result<FeeEstimate, WalletError> {
+        let request = self
+            .policy
+            .send_request_with(0, minimum_confirmations, None, options)?;
+        let selection = self
+            .engine
+            .estimate_max(request.selection_options())
+            .await?;
+        let size = self
+            .slate_size(SendRequest {
+                amount: selection.amount,
+                ..request
+            })
+            .await;
+        fee_estimate(&selection, size)
+    }
+
+    fn self_send_options(&self, minimum_confirmations: u64) -> SelectionOptions {
+        self.policy
+            .send_request(0, minimum_confirmations, None)
+            .selection_options()
+    }
+
+    pub(crate) async fn estimate_send_to_self(
+        &self,
+        request: SelfSendRequest,
+        minimum_confirmations: u64,
+    ) -> Result<FeeEstimate, WalletError> {
+        let request = self.self_send_request(request)?;
+        let selection = self
+            .engine
+            .estimate_send_to_self(self.self_send_options(minimum_confirmations), request)
+            .await?;
+        // A send to self goes through no relay.
+        fee_estimate(&selection, None)
+    }
+
+    pub(crate) async fn send_to_self(
+        &self,
+        request: SelfSendRequest,
+        minimum_confirmations: u64,
+    ) -> Result<SelfSentTx, WalletError> {
+        let request = self.self_send_request(request)?;
+        let sent = self
+            .engine
+            .send_to_self(
+                self.self_send_options(minimum_confirmations),
+                request,
+                Propagation::Fluff,
+            )
+            .await?;
+        self_sent_tx(&sent)
+    }
+
+    /// `request` for the engine: `InvalidArgument` when a field is set that its kind does not
+    /// use, or a named commitment is not an output of this wallet. The engine checks the rest.
+    fn self_send_request(
+        &self,
+        request: SelfSendRequest,
+    ) -> Result<EngineSelfSendRequest, WalletError> {
+        let outputs = match request.outputs {
+            SelfOutputs::Count if request.amounts.is_empty() => EngineSelfOutputs::Count(
+                usize::try_from(request.count).map_err(|_| invalid("count out of range"))?,
+            ),
+            SelfOutputs::Amounts if request.count == 0 => {
+                EngineSelfOutputs::Amounts(request.amounts.into_iter().map(Amount::new).collect())
+            }
+            SelfOutputs::Count => return Err(invalid("amounts are only for Amounts")),
+            SelfOutputs::Amounts => return Err(invalid("count is only for Count")),
+        };
+        let inputs = match (request.inputs, request.named.is_empty()) {
+            (SelfInputs::Named, _) => {
+                EngineSelfInputs::Named(self.own_commitments(&request.named)?)
+            }
+            (SelfInputs::All, true) => EngineSelfInputs::All,
+            (SelfInputs::Smallest, true) => EngineSelfInputs::Smallest,
+            (SelfInputs::All | SelfInputs::Smallest, false) => {
+                return Err(invalid("named outputs are only for Named"));
+            }
+        };
+        Ok(EngineSelfSendRequest { inputs, outputs })
+    }
+
+    /// The outputs of this wallet `commitments` names by hex, in order.
+    fn own_commitments(&self, commitments: &[String]) -> Result<Vec<Commitment>, WalletError> {
+        // Matched against the stored outputs, so an unknown commitment is refused here and
+        // the engine checks that each one found may be spent.
+        let outputs = self.engine.outputs(DEFAULT_ACCOUNT)?;
+        commitments
+            .iter()
+            .enumerate()
+            .map(|(position, hex)| {
+                let hex = hex.trim().to_ascii_lowercase();
+                outputs
+                    .iter()
+                    .find(|details| details.output.id.commitment.to_hex() == hex)
+                    .map(|details| details.output.id.commitment)
+                    .ok_or_else(|| {
+                        invalid(format!(
+                            "commitment {position} is not an output of this wallet"
+                        ))
+                    })
+            })
+            .collect()
+    }
+
+    pub(crate) async fn scan(
+        &self,
+        start_height: Option<u64>,
+        delete_unconfirmed: bool,
+        progress: impl Fn(ScanProgress),
+    ) -> Result<(), WalletError> {
+        if delete_unconfirmed && start_height.is_some() {
+            return Err(invalid(
+                "a scan with delete_unconfirmed starts from the beginning of the chain",
+            ));
+        }
+        let cancel = ScanCancel::new();
+        let _running = ScanSlot::claim(&self.scan, cancel.clone())?;
+        // Only a scan from the restore's start or below completes a restore scan, so while one
+        // is pending a scan without a start begins there, where a stopped one resumes, as
+        // `lepic wallet scan` does.
+        let start = match (start_height, self.engine.restore_scan_start()?) {
+            (Some(0), _) => ScanStart::Genesis,
+            (Some(height), _) => ScanStart::Height(Height::new(height)),
+            (None, Some(Height::ZERO)) => ScanStart::Genesis,
+            (None, Some(from)) => ScanStart::Height(from),
+            (None, None) => ScanStart::LastScanned,
+        };
+        // Only a test build changes the options after this.
+        #[cfg_attr(not(test), allow(unused_mut))]
+        let mut options = ScanOptions {
+            start,
+            delete_unconfirmed,
+            ..ScanOptions::update(self.network)
+        };
+        #[cfg(test)]
+        if let Some(size) = *lock(&self.scan_page_size) {
+            options.page_size = size;
+        }
+        let mut events = self.engine.subscribe();
+        let scan = self.engine.scan(options, &cancel);
+        tokio::pin!(scan);
+        let result = loop {
+            tokio::select! {
+                result = &mut scan => break result,
+                event = events.recv() => match event {
+                    Ok(Event::Sync(sync)) => {
+                        progress(scan_progress(sync.height.value(), sync.target.value(), false));
+                    }
+                    Ok(_) | Err(RecvError::Lagged(_)) => {}
+                    Err(RecvError::Closed) => break (&mut scan).await,
+                },
+            }
+        };
+        let summary = result?;
+        info!(height = %summary.end_height, "scan reported");
+        let mut last = scan_progress(summary.end_height.value(), summary.end_height.value(), true);
+        // The engine skips a start above the tip without scanning or storing anything.
+        if summary.start_height > summary.end_height {
+            last.message = "scan skipped: the start height is above the chain tip".to_owned();
+        }
+        progress(ScanProgress {
+            result: Some(scan_result(&summary)),
+            ..last
+        });
+        Ok(())
+    }
+
+    pub(crate) fn restore_scan_required(&self) -> Result<bool, WalletError> {
+        Ok(self.engine.restore_scan_required()?)
+    }
+
+    pub(crate) fn fingerprint(&self) -> Result<String, WalletError> {
+        Ok(self.engine.fingerprint()?)
+    }
+
+    pub(crate) fn store_at_rest(&self) -> Result<StoreAtRest, WalletError> {
+        let report = self.engine.store_at_rest()?.ok_or_else(|| {
+            WalletError::new(WalletErrorKind::Other, "the store reports nothing at rest")
+        })?;
+        Ok(StoreAtRest::from(&report))
+    }
+
+    /// Under the session's claim, so nothing opens the directory meanwhile.
+    pub(crate) async fn retire_plain_store(
+        &self,
+        older_than_days: u32,
+    ) -> Result<RetiredPlainStore, WalletError> {
+        if self.store_at_rest()?.state == StoreAtRestState::FellBackToPlain {
+            return Ok(RetiredPlainStore {
+                deleted: Vec::new(),
+                kept: Vec::new(),
+            });
+        }
+        let migrated_from = self.engine.migrated_from()?;
+        let dir = self.data_dir.clone();
+        let older_than =
+            std::time::Duration::from_secs(u64::from(older_than_days).saturating_mul(86_400));
+        let summary = tokio::task::spawn_blocking(move || {
+            lepic_store::retire_plain_store(
+                &dir,
+                migrated_from.as_deref(),
+                older_than,
+                std::time::SystemTime::now(),
+            )
+        })
+        .await
+        .map_err(|_| WalletError::new(WalletErrorKind::Panic, "retirement failed inside lepic"))?
+        .map_err(|error| WalletError::new(WalletErrorKind::Io, error.to_string()))?;
+        if !summary.deleted.is_empty() {
+            info!(
+                files = summary.deleted.len(),
+                "plain database copies deleted"
+            );
+        }
+        if !summary.kept.is_empty() {
+            info!(
+                files = summary.kept.len(),
+                "plain database copies kept: the encrypted database does not record them"
+            );
+        }
+        Ok(RetiredPlainStore {
+            deleted: summary.deleted,
+            kept: summary.kept,
+        })
+    }
+
+    pub(crate) fn cancel_scan(&self) {
+        if let Some(scan) = lock(&self.scan).as_ref() {
+            scan.cancel();
+        }
+    }
+
+    pub(crate) async fn send_file(
+        &self,
+        amount: u64,
+        minimum_confirmations: u64,
+        path: PathBuf,
+        message: Option<String>,
+        options: Option<SendOptions>,
+    ) -> Result<SentTx, WalletError> {
+        let sent = self
+            .engine
+            .send(
+                &self.file,
+                self.policy
+                    .file_send_request(amount, minimum_confirmations, message, options)?,
+                Delivery::Export {
+                    to: Location::File(path),
+                },
+            )
+            .await?;
+        Ok(sent_tx(&sent))
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn create_send_slate(
+        &self,
+        amount: u64,
+        minimum_confirmations: u64,
+        message: Option<String>,
+    ) -> Result<Slate, WalletError> {
+        self.create_send_slate_with(amount, minimum_confirmations, message, None)
+            .await
+    }
+
+    pub(crate) async fn create_send_slate_with(
+        &self,
+        amount: u64,
+        minimum_confirmations: u64,
+        message: Option<String>,
+        options: Option<SendOptions>,
+    ) -> Result<Slate, WalletError> {
+        let scratch = ScratchFile::new(&self.data_dir)?;
+        let sent = match self
+            .engine
+            .send(
+                &self.file,
+                self.policy
+                    .file_send_request(amount, minimum_confirmations, message, options)?,
+                Delivery::Export {
+                    to: Location::File(scratch.path.clone()),
+                },
+            )
+            .await
+        {
+            Ok(sent) => sent,
+            // Stored and locked, but the slate was not written: the caller gets no slate to
+            // pass on, so the send is given up rather than left holding its inputs.
+            Err(error @ SendError::Undelivered { tx_id, .. }) => {
+                return Err(self.give_up_send(tx_id, error.into()).await);
+            }
+            Err(error) => return Err(error.into()),
+        };
+        let json = match scratch.read().await {
+            Ok(json) => json,
+            Err(error) => return Err(self.give_up_send(sent.tx_id, error).await),
+        };
+        Ok(Slate {
+            tx_id: sent.tx_id.0,
+            slate_id: sent.slate_id.to_string(),
+            json,
+        })
+    }
+
+    /// Cancels the stored send `tx_id` after `error` stopped it, so it holds no inputs, and
+    /// returns `error`. A cancel that fails is logged and named in the error, which then
+    /// carries `tx_id` for the caller to cancel.
+    pub(crate) async fn give_up_send(&self, tx_id: TxId, mut error: WalletError) -> WalletError {
+        match self.engine.cancel(tx_id).await {
+            Ok(()) => {
+                info!(tx_id = %tx_id, "send cancelled, its slate was not handed over");
+                error.tx_id = None;
+                error
+            }
+            Err(cancel) => {
+                warn!(tx_id = %tx_id, error = %cancel, "send not handed over nor cancelled");
+                WalletError::new(
+                    error.kind,
+                    format!(
+                        "{}; transaction {tx_id} is still stored and could not be cancelled: {cancel}",
+                        error.message
+                    ),
+                )
+                .with_tx(tx_id.0)
+            }
+        }
+    }
+
+    /// Signs the S1 in the file at `path`. Returns the reply, also written next to the file as
+    /// `epic-wallet` names it, when `write_response` is set. A repeated S1 gets the reply stored
+    /// the first time, written again.
+    pub(crate) async fn receive_file(
+        &self,
+        path: &Path,
+        write_response: bool,
+    ) -> Result<ReceivedSlate, WalletError> {
+        let file = FileTransport::new();
+        let wire = file
+            .import(&Location::File(path.to_owned()))
+            .await
+            .map_err(|error| transport_error(&error))?;
+        let received = self.receive_wire(&wire).await?;
+        if write_response {
+            file.export(&received.reply, &Location::File(response_path(path)))
+                .await
+                .map_err(|error| transport_error(&error))?;
+        }
+        received_slate(&received)
+    }
+
+    async fn receive_wire(&self, wire: &WireSlate) -> Result<Received, WalletError> {
+        Ok(self
+            .engine
+            .receive(&self.file, wire, ReceiveRequest::default())
+            .await?)
+    }
+
+    /// Signs the S1 in `json`, which is decoded in memory.
+    pub(crate) async fn receive_slate(&self, json: String) -> Result<ReceivedSlate, WalletError> {
+        let wire = slate_text_wire(json)?;
+        received_slate(&self.receive_wire(&wire).await?)
+    }
+
+    /// Finalizes the S2 of a send, or the I2 of an invoice this wallet issued, in the file at
+    /// `path`. The engine checks either against what this wallet stored for its slate id.
+    pub(crate) async fn finalize_file(&self, path: &Path) -> Result<FinalizedTx, WalletError> {
+        let wire = FileTransport::new()
+            .import(&Location::File(path.to_owned()))
+            .await
+            .map_err(|error| transport_error(&error))?;
+        self.finalize_wire(&wire).await
+    }
+
+    async fn finalize_wire(&self, wire: &WireSlate) -> Result<FinalizedTx, WalletError> {
+        let finalized = if self.is_invoice_payment(wire) {
+            self.engine
+                .finalize_invoice(&self.file, wire, Propagation::Fluff)
+                .await?
+        } else {
+            self.engine
+                .finalize(&self.file, wire, Propagation::Fluff)
+                .await?
+        };
+        Ok(FinalizedTx {
+            tx_id: finalized.tx_id.0,
+            slate_id: finalized.slate.id().to_string(),
+            posted: !self.offline,
+        })
+    }
+
+    /// The stored final slate of `tx_id` as slate text: see `EpicWallet::finished_payment`.
+    pub(crate) async fn finished_payment(&self, tx_id: u32) -> Result<String, WalletError> {
+        let wire = self.engine.finished_payment(TxId(tx_id)).await?;
+        String::from_utf8(wire.as_bytes().to_vec())
+            .map_err(|_| WalletError::new(WalletErrorKind::InvalidSlate, "slate is not text"))
+    }
+
+    /// Refuses `config` when it is not offline as the session is: the ports were built for
+    /// the session's value, and only opening the wallet again changes it.
+    pub(crate) fn ensure_same_offline(&self, config: &WalletConfig) -> Result<(), WalletError> {
+        if config.offline == self.offline {
+            Ok(())
+        } else {
+            Err(invalid("offline is changed by opening the wallet again"))
+        }
+    }
+
+    /// Whether `wire` reads as an I2. Anything else goes to the finalize of a send, which
+    /// names what is wrong with it.
+    fn is_invoice_payment(&self, wire: &WireSlate) -> bool {
+        std::str::from_utf8(wire.as_bytes())
+            .ok()
+            .and_then(|text| crate::inspect::inspect(text.to_owned(), self.network).ok())
+            .is_some_and(|info| info.stage == SlateStage::I2)
+    }
+
+    pub(crate) async fn finalize_slate(&self, json: String) -> Result<FinalizedTx, WalletError> {
+        let wire = slate_text_wire(json)?;
+        self.finalize_wire(&wire).await
+    }
+
+    pub(crate) async fn repost(&self, tx_id: u32) -> Result<(), WalletError> {
+        self.engine.post(TxId(tx_id), Propagation::Fluff).await?;
+        Ok(())
+    }
+
+    pub(crate) async fn kernel_on_chain(
+        &self,
+        excess: &str,
+        min_height: Option<u64>,
+    ) -> Result<Option<KernelLocation>, WalletError> {
+        let excess = Commitment::from_hex(excess)
+            .map_err(|_| invalid("the kernel excess is not a commitment"))?;
+        let located = self
+            .engine
+            .kernel_on_chain(&excess, min_height.map(Height::new))
+            .await?;
+        Ok(located.map(|location| KernelLocation {
+            height: location.height.value(),
+            mmr_index: location.mmr_index,
+        }))
+    }
+
+    pub(crate) async fn cancel(&self, tx_id: u32) -> Result<(), WalletError> {
+        self.attach_for_notices()?;
+        Ok(self.engine.cancel(TxId(tx_id)).await?)
+    }
+
+    pub(crate) async fn relay_cancel(&self, tx_id: u32) -> Result<RelayCancelOutcome, WalletError> {
+        let method = Arc::clone(self.epicbox_method()?);
+        self.attach_for_notices()?;
+        let result = self.engine.relay_cancel(&method, TxId(tx_id)).await?;
+        Ok(match result {
+            RelayCancelResult::Cancelled => RelayCancelOutcome::Cancelled,
+            RelayCancelResult::NotFoundOrNotParticipant => {
+                RelayCancelOutcome::NotFoundOrNotParticipant
+            }
+            RelayCancelResult::NoRelayId => RelayCancelOutcome::NoRelayId,
+            _ => RelayCancelOutcome::Unsupported,
+        })
+    }
+
+    /// Attaches the payments identity when a relay is configured, so the `withdrawn` notice
+    /// a cancel of an issued invoice sends leaves from the address the invoice came from.
+    fn attach_for_notices(&self) -> Result<(), WalletError> {
+        if let Some(epicbox) = &self.epicbox {
+            epicbox.current().attach_wallet(&self.engine)?;
+        }
+        Ok(())
+    }
+
+    /// Recovers the send `tx_id` and answers its details, with the recovery as its push left
+    /// it.
+    pub(crate) async fn recover(&self, tx_id: u32) -> Result<TransactionDetails, WalletError> {
+        // Only a transaction of the account the binding shows is recovered.
+        self.transaction(tx_id).await?;
+        self.engine.recover(TxId(tx_id)).await?;
+        self.transaction(tx_id).await
+    }
+
+    /// The transport of the relay in use.
+    pub(crate) fn epicbox(&self) -> Result<Epicbox, WalletError> {
+        self.epicbox
+            .as_ref()
+            .map(EpicboxSlot::current)
+            .ok_or_else(|| {
+                WalletError::new(
+                    WalletErrorKind::Unsupported,
+                    "epicbox is not configured for this wallet",
+                )
+            })
+    }
+
+    /// The Epicbox method registered for the relay in use.
+    fn epicbox_method(&self) -> Result<&Arc<dyn Method>, WalletError> {
+        self.methods.get(TRANSPORT_ID).ok_or_else(|| {
+            WalletError::new(
+                WalletErrorKind::Unsupported,
+                "epicbox is not configured for this wallet",
+            )
+        })
+    }
+
+    /// The method registered as `transport`; a send through one the session lacks fails as
+    /// the engine failed it before.
+    pub(crate) fn method(&self, transport: TransportId) -> Option<&Arc<dyn Method>> {
+        self.methods.get(transport)
+    }
+
+    pub(crate) fn epicbox_address(&self) -> Result<String, WalletError> {
+        Ok(self.epicbox()?.attach_wallet(&self.engine)?.to_string())
+    }
+
+    pub(crate) fn epicbox_address_at(
+        &self,
+        service_key: &str,
+        generation: u32,
+    ) -> Result<String, WalletError> {
+        let listing = listing(service_key, generation)?;
+        Ok(self
+            .epicbox()?
+            .address_at(&self.engine, &listing)?
+            .to_string())
+    }
+
+    pub(crate) async fn drain_epicbox_at(
+        &self,
+        service_key: &str,
+        generation: u32,
+    ) -> Result<InboxReport, WalletError> {
+        let listing = listing(service_key, generation)?;
+        let epicbox = self.epicbox()?;
+        let summary = epicbox.drain_at(&self.engine, &listing).await?;
+        Ok(inbox_report(&summary))
+    }
+
+    /// Drains the mailbox of each of `listings`, at most [`MAX_DRAIN_LISTINGS`], and reports
+    /// each in its place. Fails with `InvalidArgument` for too many or a listing that does not
+    /// parse, and with `Unsupported` when no relay is configured.
+    pub(crate) async fn drain_epicbox_listings(
+        &self,
+        listings: &[ListingRef],
+    ) -> Result<Vec<ListingDrain>, WalletError> {
+        if listings.len() > MAX_DRAIN_LISTINGS {
+            return Err(invalid(format!(
+                "at most {MAX_DRAIN_LISTINGS} listings to drain at once"
+            )));
+        }
+        let parsed = listings
+            .iter()
+            .map(|entry| listing(&entry.service_key, entry.generation))
+            .collect::<Result<Vec<_>, _>>()?;
+        let epicbox = self.epicbox()?;
+        Ok(listing_drains(
+            epicbox.drain_many_at(&self.engine, &parsed).await,
+        ))
+    }
+
+    /// Never logs the message or the signature.
+    pub(crate) fn sign_with_address_key_at(
+        &self,
+        service_key: &str,
+        generation: u32,
+        domain: &str,
+        message: &[u8],
+    ) -> Result<String, WalletError> {
+        if message.len() > MAX_ADDRESS_SIGNED_LEN {
+            return Err(invalid("message too long to sign"));
+        }
+        let listing = listing(service_key, generation)?;
+        let domain = service_domain(domain)?;
+        // Signing needs no relay, so a wallet opened without one signs too.
+        let key = self.engine.listing_secret(&listing)?;
+        let signature = lepic_epicbox::sign_listing_message(&domain, message, &key)
+            .map_err(|error| lepic_wallet::WalletError::Keychain(error.into()))?;
+        Ok(signature.to_der_hex())
+    }
+
+    /// Never logs the transcript or the signature.
+    pub(crate) fn device_link_sign(&self, transcript: &[u8]) -> Result<Vec<u8>, WalletError> {
+        if transcript.len() > MAX_ADDRESS_SIGNED_LEN {
+            return Err(invalid("transcript too long to sign"));
+        }
+        Ok(self.engine.device_link_sign(transcript)?.to_vec())
+    }
+
+    pub(crate) fn device_link_verify(
+        &self,
+        transcript: &[u8],
+        signature: &[u8],
+    ) -> Result<bool, WalletError> {
+        if transcript.len() > MAX_ADDRESS_SIGNED_LEN {
+            return Ok(false);
+        }
+        Ok(self.engine.device_link_verify(transcript, signature)?)
+    }
+
+    pub(crate) async fn send_epicbox(
+        &self,
+        amount: u64,
+        minimum_confirmations: u64,
+        address: String,
+        message: Option<String>,
+        options: Option<SendOptions>,
+    ) -> Result<SentTx, WalletError> {
+        let request =
+            self.policy
+                .send_request_with(amount, minimum_confirmations, message, options)?;
+        let epicbox = self.epicbox()?;
+        let method = self.epicbox_method()?;
+        relay_address(&address, self.network)
+            .ok_or_else(|| invalid("not an epicbox address with a relay on this network"))?;
+        epicbox.attach_wallet(&self.engine)?;
+        let sent = self
+            .engine
+            .send(
+                method,
+                request,
+                Delivery::Deliver {
+                    to: Destination::new(address),
+                },
+            )
+            .await?;
+        Ok(sent_tx(&sent))
+    }
+
+    pub(crate) async fn resend_epicbox(&self, tx_id: u32) -> Result<SlateWire, WalletError> {
+        let epicbox = self.epicbox()?;
+        let method = self.epicbox_method()?;
+        let details = self.engine.transaction_details(TxId(tx_id)).await?;
+        let to = details
+            .counterparty
+            .filter(|_| {
+                details.transaction.entry.transport.as_deref() == Some(TRANSPORT_ID.as_str())
+            })
+            .ok_or_else(|| invalid("transaction is not a send over epicbox"))?;
+        epicbox.attach_wallet(&self.engine)?;
+        let format = self
+            .engine
+            .resend(method, TxId(tx_id), Delivery::Deliver { to })
+            .await?;
+        Ok(http::slate_wire(format))
+    }
+
+    pub(crate) async fn drain_epicbox(&self) -> Result<InboxReport, WalletError> {
+        let epicbox = self.epicbox()?;
+        // The listener subscribes the same address and gets every stored message itself; a
+        // second connection beside it would only handle them twice.
+        if self.listener_running() {
+            return Ok(InboxReport::default());
+        }
+        let summary = epicbox.drain(&self.engine).await?;
+        Ok(inbox_report(&summary))
+    }
+
+    /// Starts listening unless a listener runs. Returns the handle to stop it with, or `None`
+    /// when one was running already.
+    pub(crate) fn claim_listener(&self) -> Result<Option<ListenHandle>, WalletError> {
+        self.claim_listener_with(None)
+    }
+
+    /// As [`Self::claim_listener`], with the listener reading the relay through a push session.
+    pub(crate) fn claim_listener_via(
+        &self,
+        via: ListenVia,
+    ) -> Result<Option<ListenHandle>, WalletError> {
+        self.claim_listener_with(Some(pushed::Via::new(via)?))
+    }
+
+    /// [`Self::claim_listener`] for a listener that reads the relay through `via` if given.
+    fn claim_listener_with(
+        &self,
+        via: Option<pushed::Via>,
+    ) -> Result<Option<ListenHandle>, WalletError> {
+        self.epicbox()?;
+        let mut slot = lock(&self.listener);
+        if slot.as_ref().is_some_and(|handle| !handle.is_stopped()) {
+            return Ok(None);
+        }
+        *lock(&self.pushed.listen_via) = via;
+        let handle = ListenHandle::new();
+        *slot = Some(handle.clone());
+        Ok(Some(handle))
+    }
+
+    /// Runs the listener until `handle` is stopped, handing what it does to `report`. A
+    /// server switch that moves it to a new relay hands it the handle to continue with.
+    pub(crate) async fn listen(
+        &self,
+        handle: &ListenHandle,
+        report: impl Fn(ListenerEvent),
+    ) -> Result<(), WalletError> {
+        let mut handle = handle.clone();
+        loop {
+            // A switch under way ends first, so the listener starts on the servers it set.
+            drop(self.servers.read().await);
+            let result = {
+                let _running = self.listen_run.lock().await;
+                if handle.is_stopped() {
+                    Ok(())
+                } else {
+                    self.listen_once(&handle, &report).await
+                }
+            };
+            let next = {
+                let _slot = lock(&self.listener);
+                let next = self.take_relisten().filter(|next| !next.is_stopped());
+                if next.is_none() {
+                    // A listener that ended on its own reads as stopped, so it can be started
+                    // again and no switch hands it on.
+                    handle.stop();
+                }
+                next
+            };
+            match next {
+                Some(next) => handle = next,
+                None => return result,
+            }
+        }
+    }
+
+    async fn listen_once(
+        &self,
+        handle: &ListenHandle,
+        report: &impl Fn(ListenerEvent),
+    ) -> Result<(), WalletError> {
+        #[cfg(test)]
+        if self
+            .fail_next_listen
+            .swap(false, std::sync::atomic::Ordering::SeqCst)
+        {
+            return Err(WalletError::new(WalletErrorKind::Other, "listen failed"));
+        }
+        let epicbox = self.epicbox()?;
+        let mut events = self.engine.subscribe();
+        let via = lock(&self.pushed.listen_via).clone();
+        // Boxed: the two futures nest the wallet's generics deeply enough to overflow the
+        // compiler's layout query when held in this loop.
+        let mut listen: BoxFuture<'_, Result<InboxSummary, InboxError>> = match &via {
+            Some(via) => {
+                Box::pin(epicbox.listen_via(&self.engine, handle, &via.group, via.options))
+            }
+            None => Box::pin(epicbox.listen(&self.engine, handle)),
+        };
+        let result = loop {
+            tokio::select! {
+                result = &mut listen => break result,
+                event = events.recv() => match event {
+                    Ok(event) => {
+                        if let Some(event) = listener_event(&event) {
+                            report(event);
+                        }
+                    }
+                    Err(RecvError::Lagged(_)) => {}
+                    Err(RecvError::Closed) => break (&mut listen).await,
+                },
+            }
+        };
+        let summary = result?;
+        debug!(
+            received = summary.received,
+            finalized = summary.finalized,
+            "listener ended"
+        );
+        Ok(())
+    }
+
+    pub(crate) fn stop_listener(&self) {
+        if let Some(handle) = lock(&self.listener).as_ref() {
+            handle.stop();
+        }
+    }
+
+    pub(crate) fn listener_running(&self) -> bool {
+        lock(&self.listener)
+            .as_ref()
+            .is_some_and(|handle| !handle.is_stopped())
+    }
+
+    /// Starts a boost that runs until its window ends or [`Self::boosts`] ends it by its id.
+    pub(crate) fn boost(
+        &self,
+        poller: lepic_wallet::boost::Poller,
+        duration: std::time::Duration,
+        interval: std::time::Duration,
+    ) -> u64 {
+        self.engine.boost(poller, duration, interval).keep()
+    }
+
+    pub(crate) fn boosts(&self) -> &lepic_wallet::boost::Boosts {
+        self.engine.boosts()
+    }
+
+    pub(crate) fn subscribe(&self) -> broadcast::Receiver<Event> {
+        self.engine.subscribe()
+    }
+}
+
+/// Forwards engine events to `sink` until the wallet closes or the app stops listening.
+pub(crate) async fn forward_events(
+    mut events: broadcast::Receiver<Event>,
+    sink: StreamSink<WalletEvent>,
+) {
+    loop {
+        let event = match events.recv().await {
+            Ok(event) => match wallet_event(&event) {
+                Some(event) => event,
+                None => continue,
+            },
+            Err(RecvError::Lagged(count)) => WalletEvent {
+                missed: Some(count),
+                ..WalletEvent::of(WalletEventKind::Missed)
+            },
+            Err(RecvError::Closed) => break,
+        };
+        if sink.add(event).is_err() {
+            break;
+        }
+    }
+}
+
+fn summary(balance: &Balance, validated_with_node: bool) -> WalletSummary {
+    WalletSummary {
+        last_confirmed_height: balance.height.value(),
+        minimum_confirmations: balance.minimum_confirmations,
+        total: balance.total.value(),
+        spendable: balance.spendable.value(),
+        awaiting_confirmation: balance.awaiting_confirmation.value(),
+        awaiting_finalization: balance.awaiting_finalization.value(),
+        immature: balance.immature.value(),
+        locked: balance.locked.value(),
+        validated_with_node,
+    }
+}
+
+fn scan_progress(height: u64, target_height: u64, finished: bool) -> ScanProgress {
+    let percent = height
+        .checked_mul(100)
+        .and_then(|scaled| scaled.checked_div(target_height))
+        .map(|percent| percent.min(100))
+        .and_then(|percent| u8::try_from(percent).ok());
+    ScanProgress {
+        percent: if finished { Some(100) } else { percent },
+        height,
+        target_height,
+        message: if finished {
+            "scan completed"
+        } else {
+            "scanning"
+        }
+        .to_owned(),
+        finished,
+        result: None,
+    }
+}
+
+const fn scan_result(summary: &ScanSummary) -> ScanResult {
+    ScanResult {
+        start_height: summary.start_height.value(),
+        end_height: summary.end_height.value(),
+        resumed: summary.resumed,
+        found: summary.found,
+        restored: summary.restored,
+        revived: summary.revived,
+        unlocked: summary.unlocked,
+        deleted: summary.deleted,
+    }
+}
+
+fn wallet_output(details: &OutputDetails) -> WalletOutput {
+    let output = &details.output;
+    WalletOutput {
+        commitment: output.id.commitment.to_hex(),
+        value: output.amount.value(),
+        status: match output.status {
+            EngineOutputStatus::Unconfirmed => OutputStatus::Unconfirmed,
+            EngineOutputStatus::Unspent => OutputStatus::Unspent,
+            EngineOutputStatus::Locked => OutputStatus::Locked,
+            EngineOutputStatus::Spent => OutputStatus::Spent,
+        },
+        category: details.category.map(|category| match category {
+            BalanceCategory::Spendable => OutputCategory::Spendable,
+            BalanceCategory::AwaitingConfirmation => OutputCategory::AwaitingConfirmation,
+            BalanceCategory::AwaitingFinalization => OutputCategory::AwaitingFinalization,
+            BalanceCategory::Immature => OutputCategory::Immature,
+            BalanceCategory::Locked => OutputCategory::Locked,
+            BalanceCategory::UnpaidInvoice => OutputCategory::UnpaidInvoice,
+        }),
+        is_coinbase: output.id.features.is_coinbase(),
+        height: output.height.value(),
+        lock_height: output.lock_height.value(),
+        mmr_index: output.mmr_index,
+        confirmations: details.confirmations,
+        tx_id: output.tx.map(|tx| tx.0),
+    }
+}
+
+fn self_sent_tx(sent: &SelfSent) -> Result<SelfSentTx, WalletError> {
+    let out_of_range = || WalletError::new(WalletErrorKind::Other, "self-send out of range");
+    let selection = &sent.selection;
+    Ok(SelfSentTx {
+        tx_id: sent.tx_id.0,
+        received_tx_id: sent.received_tx_id.0,
+        amount: selection.amount.value(),
+        fee: selection.fee.value(),
+        input_count: u32::try_from(selection.inputs.len()).map_err(|_| out_of_range())?,
+        output_count: u32::try_from(selection.change.len())
+            .ok()
+            .and_then(|change| change.checked_add(1))
+            .ok_or_else(out_of_range)?,
+    })
+}
+
+fn sent_tx(sent: &SentSlate) -> SentTx {
+    SentTx {
+        tx_id: sent.tx_id.0,
+        slate_id: sent.slate_id.to_string(),
+        amount: sent.amount.value(),
+        fee: sent.fee.value(),
+        format: http::slate_wire(sent.format),
+        slate_bytes: sent.slate_bytes.and_then(|bytes| u32::try_from(bytes).ok()),
+        slate_limit: sent.slate_limit.and_then(|limit| u32::try_from(limit).ok()),
+    }
+}
+
+fn transaction_details(
+    details: &EngineTransactionDetails,
+    delivery: Option<DeliveryView>,
+    post: Option<NodePostView>,
+) -> TransactionDetails {
+    let stored = &details.transaction;
+    let entry = &stored.entry;
+    TransactionDetails {
+        tx_id: stored.id.0,
+        direction: entry.direction.into(),
+        status: entry.state.into(),
+        slate_id: entry.slate_id.map(|id| id.to_string()),
+        transport: entry.transport.clone(),
+        amount_credited: entry.amount_credited.value(),
+        amount_debited: entry.amount_debited.value(),
+        fee: entry.fee.map(Fee::value),
+        created_at_ms: entry.created_at.as_millisecond(),
+        confirmed_at_ms: details.confirmed_at.map(Timestamp::as_millisecond),
+        confirmed_height: details.confirmed_height.map(Height::value),
+        kernel_excess: details.kernel_excess.map(|excess| excess.to_hex()),
+        counterparty: details
+            .counterparty
+            .as_ref()
+            .map(|address| address.as_str().to_owned()),
+        receive_listing: details.receive_listing.map(|listing| ListingRef {
+            service_key: listing.service_key().to_hex(),
+            generation: listing.generation(),
+        }),
+        ttl_cutoff_height: details.ttl_cutoff_height.map(Height::value),
+        undelivered: details.undelivered,
+        messages: details
+            .messages
+            .iter()
+            .map(|message| SlateMessage {
+                role: message.role.into(),
+                text: message.text.clone(),
+            })
+            .collect(),
+        flow: details.flow.into(),
+        origin: match details.origin {
+            EngineTxOrigin::Wallet => TxOrigin::Wallet,
+            EngineTxOrigin::Imported => TxOrigin::Imported,
+            EngineTxOrigin::FoundByScan => TxOrigin::FoundByScan,
+            EngineTxOrigin::OtherWallet => TxOrigin::OtherWallet,
+        },
+        imported: details.imported.as_ref().map(|imported| ImportedTx {
+            source_id: imported.source_id,
+            kind: imported.kind.into(),
+            input_count: imported.input_count,
+            output_count: imported.output_count,
+            check: imported.check.into(),
+        }),
+        found: details.found.map(|found| ScanFound {
+            during: match found.during {
+                EngineFoundDuring::Restore => FoundDuring::Restore,
+                EngineFoundDuring::Rescan => FoundDuring::Rescan,
+            },
+            dated_by_block: found.dated_by_block,
+        }),
+        output_commits: details
+            .output_commits
+            .iter()
+            .copied()
+            .map(|commitment| commitment.to_hex())
+            .collect(),
+        spent_commits: details
+            .spent_commits
+            .iter()
+            .map(Commitment::to_hex)
+            .collect(),
+        sender_reported_posted_at_ms: details
+            .sender_reported_posted_at
+            .map(Timestamp::as_millisecond),
+        sender_reported_cancelled_at_ms: details
+            .sender_reported_cancelled_at
+            .map(Timestamp::as_millisecond),
+        receiver_declined_at_ms: details.receiver_declined_at.map(Timestamp::as_millisecond),
+        unanswered_at_ms: details.unanswered_at.map(Timestamp::as_millisecond),
+        unverified: details.unverified,
+        coinbase: details.coinbase,
+        relay_cancellable: details.relay_cancellable,
+        expired_reason: details.expired_reason.and_then(expired_reason),
+        cancelled_reason: details.cancelled_reason.and_then(|reason| match reason {
+            lepic_wallet::details::CancelledReason::Recovered => Some(CancelledReason::Recovered),
+            _ => None,
+        }),
+        recovery: details
+            .recovery
+            .as_ref()
+            .map(|recovery| TransactionRecovery {
+                sent_tx_id: recovery.sent_tx.0,
+                received_tx_id: recovery.received_tx.0,
+                state: recovery_state(recovery.state),
+                confirmations: recovery.confirmations,
+                needed: recovery.needed,
+                fee: recovery.fee.map(Fee::value),
+                error: recovery.error.as_deref().map(node_text),
+            }),
+        recovery_of: details.recovery_of.map(|tx_id| tx_id.0),
+        recoverable: details.recoverable,
+        delivery: delivery.or_else(|| unanswered_delivery(details)),
+        post,
+        received_at_epic1: details.epic1_index.is_some(),
+    }
+}
+
+/// A send over stock Epicbox that a refresh marked unanswered keeps no delivery record, so its
+/// delivery reads `Uncertain` from the mark, as the refresh's `DeliveryChanged` said. The
+/// wallet gives no text for it.
+fn unanswered_delivery(details: &EngineTransactionDetails) -> Option<DeliveryView> {
+    details.unanswered_at.map(|at| DeliveryView {
+        state: DeliveryState::Uncertain,
+        updated_at_ms: at.as_millisecond(),
+        error: None,
+    })
+}
+
+/// Why the transaction expired; `None` for a reason a later core adds.
+fn expired_reason(reason: lepic_wallet::details::ExpiredReason) -> Option<ExpiredReason> {
+    use lepic_wallet::details::ExpiredReason as R;
+    match reason {
+        R::RejectedByNode => Some(ExpiredReason::RejectedByNode),
+        R::NoAnswer => Some(ExpiredReason::NoAnswer),
+        R::NotMined => Some(ExpiredReason::NotMined),
+        _ => None,
+    }
+}
+
+/// The open receipt cap that refused a payment; `None` for a cap a later core adds.
+fn receipt_cap(cap: lepic_wallet::event::ReceiptCap) -> Option<ReceiptCap> {
+    use lepic_wallet::event::ReceiptCap as C;
+    match cap {
+        C::PerSender => Some(ReceiptCap::PerSender),
+        C::Total => Some(ReceiptCap::Total),
+        _ => None,
+    }
+}
+
+/// The view of a payment's delivery; `None` while nothing was posted for it. The relay's text
+/// is passed on as [`node_text`] makes it plain.
+fn delivery_view(delivery: &lepic_store::PaymentDelivery) -> Option<DeliveryView> {
+    Some(DeliveryView {
+        state: delivery_state(delivery.state?),
+        updated_at_ms: delivery.updated_at.as_millisecond(),
+        error: delivery.state_reason.as_deref().map(node_text),
+    })
+}
+
+fn delivery_state(state: lepic_store::OutboxState) -> DeliveryState {
+    use lepic_store::OutboxState as S;
+    match state {
+        S::Queued => DeliveryState::Queued,
+        S::Posted => DeliveryState::Sent,
+        S::Uncertain => DeliveryState::Uncertain,
+        S::Failed => DeliveryState::Failed,
+    }
+}
+
+/// The view of a transaction's pushes to the node. The next push is given only while the
+/// wallet still pushes it, `pushing`. The node's text is passed on as [`node_text`] makes it
+/// plain.
+fn node_post_view(record: &lepic_store::NodePost, pushing: bool) -> NodePostView {
+    NodePostView {
+        attempts: record.attempts,
+        last_outcome: match record.last_outcome {
+            lepic_store::NodeOutcome::Accepted => NodePostOutcome::Accepted,
+            lepic_store::NodeOutcome::Refused => NodePostOutcome::Refused,
+            lepic_store::NodeOutcome::Unreachable => NodePostOutcome::Unreachable,
+        },
+        last_error: record.last_error.as_deref().map(node_text),
+        last_attempt_at_ms: record.last_at.as_millisecond(),
+        next_attempt_height: pushing.then(|| lepic_wallet::next_attempt_height(record).value()),
+        accepted_once: record.accepted_once,
+    }
+}
+
+fn recovery_state(state: lepic_store::RecoveryState) -> RecoveryState {
+    use lepic_store::RecoveryState as S;
+    match state {
+        S::Uncertain => RecoveryState::Uncertain,
+        S::Posted => RecoveryState::Posted,
+        S::Confirming => RecoveryState::Confirming,
+        S::Done => RecoveryState::Done,
+        S::Failed => RecoveryState::Failed,
+    }
+}
+
+fn legacy_import(outcome: &LegacyImportOutcome) -> LegacyImport {
+    LegacyImport {
+        status: match outcome.status {
+            EngineLegacyStatus::Imported => LegacyImportStatus::Imported,
+            EngineLegacyStatus::AlreadyImported => LegacyImportStatus::AlreadyImported,
+            EngineLegacyStatus::NoHistory => LegacyImportStatus::NoHistory,
+            EngineLegacyStatus::OldFormat => LegacyImportStatus::OldFormat,
+            EngineLegacyStatus::Unreadable => LegacyImportStatus::Unreadable,
+            EngineLegacyStatus::SourceBusy => LegacyImportStatus::SourceBusy,
+            EngineLegacyStatus::TooLarge => LegacyImportStatus::TooLarge,
+            EngineLegacyStatus::OtherWallet => LegacyImportStatus::OtherWallet,
+            EngineLegacyStatus::OtherHistory => LegacyImportStatus::OtherHistory,
+        },
+        transactions: outcome.transactions,
+        outputs: outcome.outputs,
+        accounts_named: outcome.accounts_named,
+        linked: outcome.linked,
+        skipped: outcome.skipped,
+        confirmed_by_kernel: outcome.confirmed_by_kernel,
+        dated: outcome.dated,
+    }
+}
+
+/// The size an estimate reports from its measure: over the limit the measured figure, which
+/// the send refuses but the estimate shows; on any other failure none, so an estimate never
+/// fails on its measure.
+fn measured_size(measure: Result<Option<PostedSize>, SendError>) -> Option<PostedSize> {
+    match measure {
+        Ok(size) => size,
+        Err(SendError::SlateTooLarge { bytes, limit, .. }) => Some(PostedSize { bytes, limit }),
+        Err(error) => {
+            debug!(%error, "slate size not measured");
+            None
+        }
+    }
+}
+
+fn fee_estimate(
+    selection: &Selection,
+    size: Option<PostedSize>,
+) -> Result<FeeEstimate, WalletError> {
+    let out_of_range = || WalletError::new(WalletErrorKind::Other, "fee estimate out of range");
+    let change = selection
+        .change
+        .iter()
+        .try_fold(0u64, |sum, change| sum.checked_add(change.value()))
+        .ok_or_else(out_of_range)?;
+    Ok(FeeEstimate {
+        amount: selection.amount.value(),
+        fee: selection.fee.value(),
+        input_count: u32::try_from(selection.inputs.len()).map_err(|_| out_of_range())?,
+        change,
+        locked: selection.total.value(),
+        change_outputs: u32::try_from(selection.change.len()).map_err(|_| out_of_range())?,
+        slate_bytes: size.and_then(|size| u32::try_from(size.bytes).ok()),
+        slate_limit: size.and_then(|size| u32::try_from(size.limit).ok()),
+    })
+}
+
+fn transport_error(error: &lepic_transport::error::TransportError) -> WalletError {
+    WalletError::chained(WalletErrorKind::TransportFailed, error)
+}
+
+const fn transport_state(state: EngineTransportState) -> TransportState {
+    match state {
+        EngineTransportState::Connecting => TransportState::Connecting,
+        EngineTransportState::Connected => TransportState::Connected,
+        EngineTransportState::Disconnected => TransportState::Disconnected,
+        _ => TransportState::Stopped,
+    }
+}
+
+const fn transport_connection(connection: Connection) -> TransportConnection {
+    match connection {
+        Connection::PaymentsDrain => TransportConnection::PaymentsDrain,
+        Connection::Listener => TransportConnection::Listener,
+    }
+}
+
+pub(crate) fn wallet_event(event: &Event) -> Option<WalletEvent> {
+    session_event(event)
+        .or_else(|| invoice_event(event))
+        .or_else(|| contact_wallet_event(event))
+}
+
+/// The wallet's own events: session, balance, transactions, sync and transports.
+fn session_event(event: &Event) -> Option<WalletEvent> {
+    Some(match event {
+        Event::Session(state) => WalletEvent {
+            session: Some(match state {
+                SessionState::Unlocked => crate::api::types::SessionState::Unlocked,
+                SessionState::Locked => crate::api::types::SessionState::Locked,
+                SessionState::Closed => crate::api::types::SessionState::Closed,
+            }),
+            ..WalletEvent::of(WalletEventKind::Session)
+        },
+        Event::Balance(balance) => WalletEvent {
+            account: Some(balance.account.0),
+            balance: Some(summary(balance, true)),
+            ..WalletEvent::of(WalletEventKind::Balance)
+        },
+        Event::Transaction(change) => WalletEvent {
+            tx_id: Some(change.tx_id.0),
+            from: Some(change.from.into()),
+            to: Some(change.to.into()),
+            ..WalletEvent::of(WalletEventKind::Transaction)
+        },
+        Event::Received(received) => WalletEvent {
+            tx_id: Some(received.tx_id.0),
+            slate_id: Some(received.slate_id.to_string()),
+            to: Some(TxStatus::Received),
+            ..WalletEvent::of(WalletEventKind::Transaction)
+        },
+        Event::SelfSent(stored) => WalletEvent {
+            tx_id: Some(stored.tx_id.0),
+            account: Some(stored.account.0),
+            amount: Some(stored.amount.value()),
+            ..WalletEvent::of(WalletEventKind::SelfSend)
+        },
+        Event::Sync(sync) => WalletEvent {
+            height: Some(sync.height.value()),
+            target_height: Some(sync.target.value()),
+            ..WalletEvent::of(WalletEventKind::Sync)
+        },
+        Event::Transport(status) => WalletEvent {
+            transport: Some(status.transport.as_str().to_owned()),
+            transport_state: Some(transport_state(status.state)),
+            transport_connection: Some(transport_connection(status.connection)),
+            ..WalletEvent::of(WalletEventKind::Transport)
+        },
+        _ => return None,
+    })
+}
+
+/// Events about invoices, notices and slates the wallet did not expect.
+fn invoice_event(event: &Event) -> Option<WalletEvent> {
+    Some(match event {
+        Event::InvoiceFinalized(finalized) => WalletEvent {
+            tx_id: Some(finalized.tx_id.0),
+            slate_id: Some(finalized.slate_id.to_string()),
+            ..WalletEvent::of(WalletEventKind::InvoiceFinalized)
+        },
+        Event::InvoiceExpired(expired) => WalletEvent {
+            tx_id: expired.tx_id.map(|tx_id| tx_id.0),
+            slate_id: Some(expired.slate_id.to_string()),
+            ..WalletEvent::of(WalletEventKind::InvoiceExpired)
+        },
+        Event::InvoicePosted(posted) => WalletEvent {
+            tx_id: Some(posted.tx_id.0),
+            slate_id: Some(posted.slate_id.to_string()),
+            kernel_excess: Some(posted.excess.to_hex()),
+            ..WalletEvent::of(WalletEventKind::InvoicePosted)
+        },
+        Event::InvoiceDeclined(declined) => WalletEvent {
+            tx_id: Some(declined.tx_id.0),
+            slate_id: Some(declined.slate_id.to_string()),
+            ..WalletEvent::of(WalletEventKind::InvoiceDeclined)
+        },
+        Event::InvoiceWithdrawn(withdrawn) => WalletEvent {
+            tx_id: withdrawn.tx_id.map(|tx_id| tx_id.0),
+            slate_id: Some(withdrawn.slate_id.to_string()),
+            ..WalletEvent::of(WalletEventKind::InvoiceWithdrawn)
+        },
+        Event::UnknownSlate(unknown) => WalletEvent {
+            slate_id: Some(unknown.slate_id.to_string()),
+            sender: Some(unknown.sender.clone()),
+            slate_stage: Some(unknown.stage.as_str().to_owned()),
+            ..WalletEvent::of(WalletEventKind::UnknownSlate)
+        },
+        Event::ReceiveSuperseded(superseded) => WalletEvent {
+            tx_id: Some(superseded.tx_id.0),
+            slate_id: Some(superseded.slate_id.to_string()),
+            ..WalletEvent::of(WalletEventKind::ReceiveSuperseded)
+        },
+        Event::PaymentPosted(posted) => WalletEvent {
+            tx_id: Some(posted.tx_id.0),
+            slate_id: Some(posted.slate_id.to_string()),
+            kernel_excess: Some(posted.excess.to_hex()),
+            ..WalletEvent::of(WalletEventKind::PaymentPosted)
+        },
+        Event::PaymentCancelled(cancelled) => WalletEvent {
+            tx_id: Some(cancelled.tx_id.0),
+            slate_id: Some(cancelled.slate_id.to_string()),
+            ..WalletEvent::of(WalletEventKind::PaymentCancelled)
+        },
+        Event::PaymentDeclined(declined) => WalletEvent {
+            tx_id: Some(declined.tx_id.0),
+            slate_id: Some(declined.slate_id.to_string()),
+            ..WalletEvent::of(WalletEventKind::PaymentDeclined)
+        },
+        Event::NotPosted(not_posted) => WalletEvent {
+            tx_id: Some(not_posted.tx_id.0),
+            slate_id: Some(not_posted.slate_id.to_string()),
+            message: Some(not_posted.reason.clone()),
+            ..WalletEvent::of(WalletEventKind::NotPosted)
+        },
+        Event::RecoveryChanged(news) => WalletEvent {
+            tx_id: Some(news.tx_id.0),
+            recovery_state: Some(recovery_state(news.state)),
+            ..WalletEvent::of(WalletEventKind::RecoveryChanged)
+        },
+        Event::DeliveryChanged(news) => WalletEvent {
+            slate_id: Some(news.slate_id.to_string()),
+            relay: Some(node_text(&news.route)),
+            delivery_state: Some(delivery_state(news.state)),
+            ..WalletEvent::of(WalletEventKind::DeliveryChanged)
+        },
+        Event::PaymentRefused(refused) => WalletEvent {
+            slate_id: Some(refused.slate_id.to_string()),
+            transport: Some(refused.transport.as_str().to_owned()),
+            sender: refused.sender.clone(),
+            receipt_cap: receipt_cap(refused.cap),
+            ..WalletEvent::of(WalletEventKind::PaymentRefused)
+        },
+        Event::InPersonAnswer(answer) => WalletEvent {
+            tx_id: Some(answer.tx_id.0),
+            slate_id: Some(answer.slate_id.to_string()),
+            slate_stage: Some(answer.stage.as_str().to_owned()),
+            answer: Some(answer.answer),
+            check_code: Some(answer.check_code.clone()),
+            same_code: Some(answer.same_code),
+            ..WalletEvent::of(WalletEventKind::InPersonAnswer)
+        },
+        _ => return None,
+    })
+}
+
+/// Events of the contact engine.
+fn contact_wallet_event(event: &Event) -> Option<WalletEvent> {
+    Some(match event {
+        Event::PairingReplied(news) => {
+            contact::contact_event(WalletEventKind::PairingReplied, news)
+        }
+        Event::PairingConfirmed(news) => {
+            contact::contact_event(WalletEventKind::PairingConfirmed, news)
+        }
+        Event::PairingFailed(failed) => WalletEvent {
+            contact_id: Some(failed.contact_id.to_string()),
+            pairing_failure: Some(contact::failure_reason(failed.reason)),
+            ..WalletEvent::of(WalletEventKind::PairingFailed)
+        },
+        Event::ContactUpdated(update) => contact::update_event(update),
+        Event::HomeRelayUnreachable(unreachable) => WalletEvent {
+            relay: Some(unreachable.relay.clone()),
+            ..WalletEvent::of(WalletEventKind::HomeRelayUnreachable)
+        },
+        Event::ContactKeysRestored(news) => {
+            contact::contact_event(WalletEventKind::ContactKeysRestored, news)
+        }
+        Event::ContactKeysChanged(news) => {
+            contact::contact_event(WalletEventKind::ContactKeysChanged, news)
+        }
+        Event::ContactUnpaired(news) => {
+            contact::contact_event(WalletEventKind::ContactUnpaired, news)
+        }
+        Event::InvoiceFromContact(invoice) => WalletEvent {
+            contact_id: Some(invoice.contact_id.to_string()),
+            slate_id: Some(invoice.slate_id.to_string()),
+            amount: Some(invoice.amount.value()),
+            purpose: invoice.purpose.map(contact::slate_purpose),
+            reference: invoice.reference.clone(),
+            expires: invoice.expires,
+            message: invoice.message.clone(),
+            ..WalletEvent::of(WalletEventKind::InvoiceFromContact)
+        },
+        Event::WithdrawalFromContact(slate) => {
+            contact::slate_event(WalletEventKind::WithdrawalFromContact, slate)
+        }
+        Event::SealedReceived(slate) => {
+            contact::slate_event(WalletEventKind::SealedReceived, slate)
+        }
+        Event::SealedUnopenable(news) => {
+            contact::contact_event(WalletEventKind::SealedUnopenable, news)
+        }
+        Event::OutboxDelivered(news) => {
+            contact::outbox_event(WalletEventKind::OutboxDelivered, news)
+        }
+        Event::OutboxStuck(news) => contact::outbox_event(WalletEventKind::OutboxStuck, news),
+        Event::ContactPaymentFinalized(slate) => {
+            contact::slate_event(WalletEventKind::ContactPaymentFinalized, slate)
+        }
+        Event::ContactPayload(news) => {
+            contact::contact_event(WalletEventKind::ContactPayload, news)
+        }
+        Event::ContactPayloadsParked(news) => {
+            contact::contact_event(WalletEventKind::ContactPayloadsParked, news)
+        }
+        Event::ContactRelayMoveRequested(request) => WalletEvent {
+            contact_id: Some(request.contact_id.to_string()),
+            relay: Some(request.host.clone()),
+            ..WalletEvent::of(WalletEventKind::ContactRelayMoveRequested)
+        },
+        _ => return None,
+    })
+}
+
+fn listener_event(event: &Event) -> Option<ListenerEvent> {
+    if let Event::TransportDisconnected(disconnect) = event
+        && disconnect.transport == TRANSPORT_ID
+        && disconnect.connection == Connection::Listener
+    {
+        return Some(ListenerEvent {
+            kind: ListenerEventKind::Disconnected,
+            tx_id: None,
+            message: String::new(),
+            reason: Some(disconnect.reason.clone()),
+            retry_in_ms: disconnect
+                .retry_in
+                .map(|wait| u64::try_from(wait.as_millis()).unwrap_or(u64::MAX)),
+        });
+    }
+    let (kind, tx_id) = match event {
+        Event::Transport(status)
+            if status.transport == TRANSPORT_ID && status.connection == Connection::Listener =>
+        {
+            match transport_state(status.state) {
+                TransportState::Connected => (ListenerEventKind::Connected, None),
+                TransportState::Connecting
+                | TransportState::Disconnected
+                | TransportState::Stopped => return None,
+            }
+        }
+        Event::Received(received) => (ListenerEventKind::Received, Some(received.tx_id.0)),
+        Event::AnsweredAgain(again) => (ListenerEventKind::Repeated, Some(again.tx_id.0)),
+        Event::Transaction(change) if change.to == TxState::Finalized => {
+            (ListenerEventKind::Finalized, Some(change.tx_id.0))
+        }
+        _ => return None,
+    };
+    Some(ListenerEvent {
+        kind,
+        tx_id,
+        message: String::new(),
+        reason: None,
+        retry_in_ms: None,
+    })
+}
+
+const SCRATCH_PREFIX: &str = ".lepic-";
+const SCRATCH_SUFFIX: &str = ".slate";
+
+/// The slate text as the wire slate the file transport reads: JSON, bounded like a file.
+fn slate_text_wire(json: String) -> Result<WireSlate, WalletError> {
+    if json.len() > MAX_SLATE_TEXT_LEN {
+        return Err(WalletError::new(
+            WalletErrorKind::InvalidSlate,
+            "slate text is longer than any slate",
+        ));
+    }
+    Ok(WireSlate::binary(MediaType::JSON, json.into_bytes()))
+}
+
+fn received_slate(received: &Received) -> Result<ReceivedSlate, WalletError> {
+    let json = String::from_utf8(received.reply.as_bytes().to_vec())
+        .map_err(|_| WalletError::new(WalletErrorKind::InvalidSlate, "reply is not text"))?;
+    Ok(ReceivedSlate {
+        tx_id: received.tx_id.0,
+        slate_id: received.slate.id().to_string(),
+        json,
+        repeated: received.repeated,
+        format: SlateWire::Legacy,
+    })
+}
+
+/// A slate file in the wallet's directory that exists only for one call, where the engine can
+/// only write a slate to a file (`Delivery::Export`). Removed when dropped.
+struct ScratchFile {
+    path: PathBuf,
+}
+
+impl ScratchFile {
+    fn new(data_dir: &Path) -> Result<Self, WalletError> {
+        let mut name = [0u8; 8];
+        getrandom::fill(&mut name)
+            .map_err(|error| WalletError::new(WalletErrorKind::Other, error.to_string()))?;
+        let name: String = name.iter().map(|byte| format!("{byte:02x}")).collect();
+        Ok(Self {
+            path: data_dir.join(format!("{SCRATCH_PREFIX}{name}{SCRATCH_SUFFIX}")),
+        })
+    }
+
+    async fn read(&self) -> Result<String, WalletError> {
+        tokio::fs::read_to_string(&self.path)
+            .await
+            .map_err(|error| io("reading a slate file", &error))
+    }
+}
+
+impl Drop for ScratchFile {
+    fn drop(&mut self) {
+        match std::fs::remove_file(&self.path) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => warn!(error = %error, "slate file not removed"),
+        }
+    }
+}
+
+/// The tip and version of the node `config` names, without opening a wallet, reached by
+/// `route`. No wallet is open, so no tor of its own is opened: the request goes directly or
+/// through the host's SOCKS proxy, and then never directly.
+pub(crate) async fn node_tip(
+    runtime: &Arc<RuntimeInner>,
+    config: &WalletConfig,
+    node_secret: &NodeSecret,
+    route: &NodeRoute,
+) -> Result<NodeTip, WalletError> {
+    let tuning = Tuning::check(&config.tuning)?;
+    let tor = RelayTor::direct(true, tuning.tor_connect_timeout());
+    if let Some(address) = &route.socks {
+        through_socks(&tor, address)?;
+    }
+    let node = runtime.nodes.client(
+        (config, &tuning),
+        node_secret,
+        &Arc::new(tor),
+        &Arc::new(OnionRoutes::default()),
+    )?;
+    ask_node_tip(&node, &TipMemo::default()).await
+}
+
+/// Sends the connections of `tor` through the SOCKS5 proxy at `address`, a loopback `ip:port`:
+/// `InvalidArgument` for any other address.
+#[cfg(feature = "tor")]
+fn through_socks(tor: &RelayTor, address: &str) -> Result<(), WalletError> {
+    let socks: std::net::SocketAddr = address
+        .trim()
+        .parse()
+        .map_err(|_| invalid("the SOCKS address is not an ip:port"))?;
+    if !socks.ip().is_loopback() {
+        return Err(invalid("the SOCKS address is not a loopback address"));
+    }
+    tor.attach_socks(lepic_methods::tor::FixedSocks(socks));
+    Ok(())
+}
+
+/// A build without Tor has no way through a SOCKS proxy: `Unsupported`.
+#[cfg(not(feature = "tor"))]
+fn through_socks(_tor: &RelayTor, _address: &str) -> Result<(), WalletError> {
+    Err(WalletError::new(
+        WalletErrorKind::Unsupported,
+        "this build of LEPIC has no Tor",
+    ))
+}
+
+impl Session {
+    /// Makes the next request to the wallet's node, and to each node [`Session::node_tip_for`]
+    /// keeps a backend for, open a new connection. Fails with `Locked` on a locked wallet.
+    pub(crate) fn drop_node_connections(&self) -> Result<(), WalletError> {
+        self.ensure_unlocked()?;
+        self.engine.ports().node.transport().drop_connections();
+        self.node_tips
+            .for_each(|(backend, _)| backend.drop_connections());
+        Ok(())
+    }
+
+    /// The tip and version of the node `config` names, asked as the session asks its own
+    /// node: through the wallet's tor and onion routes while node requests go over tor, and
+    /// directly otherwise or for a loopback node. The session's node stays as it is. Fails with
+    /// `Locked` on a locked wallet, whose tor is stopped.
+    pub(crate) async fn node_tip_for(
+        &self,
+        config: &WalletConfig,
+        node_secret: &NodeSecret,
+    ) -> Result<NodeTip, WalletError> {
+        self.ensure_unlocked()?;
+        self.ensure_same_offline(config)?;
+        let over_tor = *self.node_tor.active().borrow();
+        let (backend, memo) =
+            self.node_tips
+                .get_or_build(BackendKey::new(config, node_secret, over_tor), || {
+                    let backend = self.runtime.nodes.backend(
+                        (config, &self.tuning),
+                        node_secret,
+                        &self.node_tor,
+                        &self.onion_routes,
+                    )?;
+                    Ok((backend, Arc::default()))
+                })?;
+        ask_node_tip(
+            &self.runtime.nodes.client_over(backend, &self.tuning),
+            &memo,
+        )
+        .await
+    }
+}
+
+/// The node's tip with its version, readiness and tip time. The version, and the tip time of a
+/// block it told before, come from `memo` when it has them, so a poll of an unchanged node
+/// costs two requests instead of four.
+async fn ask_node_tip(node: &Node, memo: &TipMemo) -> Result<NodeTip, WalletError> {
+    let tip = match node.get_tip().await {
+        Ok(tip) => tip,
+        Err(error) => {
+            memo.forget();
+            return Err(node_error(&error));
+        }
+    };
+    memo.saw(&tip);
+    let node_version = match memo.version() {
+        Some(version) => version,
+        None => {
+            let version = node
+                .get_version()
+                .await
+                .map_err(|error| node_error(&error))?
+                .node_version;
+            memo.keep_version(&version);
+            version
+        }
+    };
+    // Both are extras of the answer, asked one after the other on the same connection: a node
+    // that fails them still gives its tip.
+    let ready_for_txs = node.ready_for_txs().await.unwrap_or_else(|error| {
+        debug!(error = %lepic_telemetry::ErrorChain(&error), "ready_for_txs unanswered");
+        None
+    });
+    let tip_time_ms = match memo.tip_time_ms(&tip) {
+        Some(time) => Some(time),
+        None => match node.get_header(tip.height).await {
+            Ok(header) => {
+                let time = header.map(|header| header.timestamp.as_millisecond());
+                if let Some(time) = time {
+                    memo.keep_tip_time_ms(tip, time);
+                }
+                time
+            }
+            Err(error) => {
+                debug!(error = %lepic_telemetry::ErrorChain(&error), "tip header unanswered");
+                None
+            }
+        },
+    };
+    Ok(NodeTip {
+        height: tip.height.value(),
+        node_version,
+        ready_for_txs,
+        tip_time_ms,
+    })
+}
+
+/// Whether the app's store holds a wallet vault, also one of an unfinished password change.
+pub(crate) async fn wallet_exists(store: &AppSecretStore) -> Result<bool, WalletError> {
+    Ok(store.read(VAULT_KEY).await?.is_some() || store.read(VAULT_NEXT_KEY).await?.is_some())
+}
+
+/// Removes the wallet database in `data_dir`, plain or encrypted, with its journal files and
+/// key check, if there are any.
+async fn remove_database(data_dir: &Path) -> Result<(), WalletError> {
+    for (name, suffix) in [DATABASE_FILE, ENCRYPTED_DATABASE_FILE]
+        .into_iter()
+        .flat_map(|name| ["", "-wal", "-shm", "-journal", ".check"].map(|suffix| (name, suffix)))
+    {
+        let path = data_dir.join(format!("{name}{suffix}"));
+        match tokio::fs::remove_file(&path).await {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(io("deleting the wallet database", &error)),
+        }
+    }
+    Ok(())
+}
+
+/// The directory inside the wallet's data directory that holds its tor's files.
+pub(crate) const TOR_DIR: &str = "tor";
+
+/// The file inside the wallet's data directory that says tor was expected and not stopped
+/// since: the next session waits for tor from its first connection.
+pub(crate) const TOR_EXPECTED_FILE: &str = "tor-expected";
+
+/// The file older versions wrote inside the wallet's data directory to turn native slates on.
+/// Nothing reads it; a deleted wallet removes it.
+const NATIVE_DIRECT_FILE: &str = "native-direct";
+
+/// The files inside the wallet's data directory that make the HTTP or the onion listener open
+/// payments sealed to the wallet's epic1 addresses. Without one the listener does not.
+const EPIC1_WEB_LISTENER_FILE: &str = "epic1-web-listener";
+const EPIC1_ONION_LISTENER_FILE: &str = "epic1-onion-listener";
+
+const fn epic1_listener_file(socket: ListenerSocket) -> &'static str {
+    match socket {
+        ListenerSocket::Web => EPIC1_WEB_LISTENER_FILE,
+        ListenerSocket::Onion => EPIC1_ONION_LISTENER_FILE,
+    }
+}
+
+/// Removes what a session leaves in the wallet's directory besides the database: scratch slate
+/// files a stopped call did not remove, the tor expectation, the native-direct and epic1
+/// listener switches and tor's own directory. A deleted
+/// wallet leaves nothing of its payments or its connections behind.
+async fn remove_session_files(data_dir: &Path) -> Result<(), WalletError> {
+    let dir = data_dir.to_owned();
+    tokio::task::spawn_blocking(move || -> std::io::Result<()> {
+        for entry in std::fs::read_dir(&dir)? {
+            let entry = entry?;
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            if name.starts_with(SCRATCH_PREFIX) && name.ends_with(SCRATCH_SUFFIX) {
+                remove_if_present(std::fs::remove_file(entry.path()))?;
+            }
+        }
+        remove_if_present(std::fs::remove_file(dir.join(TOR_EXPECTED_FILE)))?;
+        remove_if_present(std::fs::remove_file(dir.join(NATIVE_DIRECT_FILE)))?;
+        remove_if_present(std::fs::remove_file(dir.join(EPIC1_WEB_LISTENER_FILE)))?;
+        remove_if_present(std::fs::remove_file(dir.join(EPIC1_ONION_LISTENER_FILE)))?;
+        remove_if_present(std::fs::remove_dir_all(dir.join(TOR_DIR)))
+    })
+    .await
+    .map_err(|_| WalletError::new(WalletErrorKind::Panic, "file removal failed inside lepic"))?
+    .map_err(|error| io("removing the wallet's session files", &error))
+}
+
+fn remove_if_present(removed: std::io::Result<()>) -> std::io::Result<()> {
+    match removed {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        other => other,
+    }
+}
+
+/// Removes every plain copy of the database set aside, by the move to encryption or as
+/// damaged, whatever the encrypted database records, and what an interrupted copy or key check
+/// left. A deleted wallet leaves no readable history behind.
+async fn remove_set_aside_databases(data_dir: &Path) -> Result<(), WalletError> {
+    let dir = data_dir.to_owned();
+    tokio::task::spawn_blocking(move || lepic_store::remove_database_leftovers(&dir))
+        .await
+        .map_err(|_| {
+            WalletError::new(
+                WalletErrorKind::Panic,
+                "database removal failed inside lepic",
+            )
+        })?
+        .map_err(|error| WalletError::new(WalletErrorKind::Io, error.to_string()))?;
+    Ok(())
+}
+
+/// Deletes the wallet database in `config.data_dir` and the vault in `store`.
+pub(crate) async fn delete_wallet(
+    runtime: &Arc<RuntimeInner>,
+    config: &WalletConfig,
+    store: &AppSecretStore,
+) -> Result<(), WalletError> {
+    let claim = runtime.claim(Path::new(&config.data_dir)).await?;
+    remove_set_aside_databases(&claim.dir).await?;
+    remove_database(&claim.dir).await?;
+    remove_session_files(&claim.dir).await?;
+    store.delete(VAULT_KEY).await?;
+    store.delete(VAULT_NEXT_KEY).await?;
+    crate::pin::forget(store).await?;
+    info!("wallet deleted");
+    Ok(())
+}
+
+/// Seals the seed of `phrase` under `password` as the vault in `store`, once the database in
+/// `config.data_dir` proves it that seed's; the database is left as it is, but for the seed
+/// check a database without one gets. It needs no node: the database is opened only for the
+/// check, under the directory's claim.
+pub(crate) async fn reset_password(
+    runtime: &Arc<RuntimeInner>,
+    config: &WalletConfig,
+    store: &AppSecretStore,
+    phrase: Zeroizing<String>,
+    password: Zeroizing<String>,
+) -> Result<(), WalletError> {
+    let network = config.chain.network();
+    // Held to the end, so no wallet on the directory opens while the vault is replaced.
+    let claim = runtime.claim(Path::new(&config.data_dir)).await?;
+    let dir = claim.dir.clone();
+    let phrase = normalize_phrase(&phrase);
+    let checked = tokio::task::spawn_blocking(move || {
+        lepic_wallet::lifecycle::check_phrase(
+            &lepic_wallet::EncryptingSqliteStores::default(),
+            &dir,
+            network,
+            &phrase,
+        )
+    })
+    .await
+    .map_err(|_| WalletError::new(WalletErrorKind::Panic, "phrase check failed inside lepic"))?;
+    let seed = match checked {
+        Ok(PhraseCheck::Matches(seed)) => seed,
+        Ok(PhraseCheck::Unused) => {
+            return Err(WalletError::new(
+                WalletErrorKind::WalletNotFound,
+                "the wallet directory holds no wallet database to check the phrase against",
+            ));
+        }
+        Ok(PhraseCheck::Unproven) => {
+            return Err(WalletError::new(
+                WalletErrorKind::WalletNotFound,
+                "the wallet database holds nothing that proves the phrase: \
+                 delete the wallet and restore it",
+            ));
+        }
+        Err(lepic_wallet::WalletError::ForeignDatabase) => {
+            return Err(WalletError::new(
+                WalletErrorKind::PhraseMismatch,
+                "the recovery phrase is not the phrase of this wallet",
+            ));
+        }
+        Err(error) => return Err(error.into()),
+    };
+    let vault = password_change::seal_seed(seed, password.clone(), runtime.kdf).await?;
+    // Before the vault is replaced: a PIN key left beside the new vault would unseal the old
+    // password, and every PIN attempt would fail and be counted. A stop between the two
+    // leaves the old vault without a PIN; the reset run again finishes.
+    crate::pin::forget(store).await?;
+    password_change::install(store, vault, password).await?;
+    drop(claim);
+    info!("wallet password reset");
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use lepic_wallet::event::{ReceivedTransaction, SelfSentTransaction, TransactionState};
+
+    use super::*;
+
+    #[test]
+    fn an_estimate_over_the_relay_limit_gives_its_amounts_and_size() {
+        let size = measured_size(Err(SendError::SlateTooLarge {
+            bytes: 140_000,
+            limit: 131_071,
+            inputs: 1_300,
+        }));
+        assert_eq!(
+            size,
+            Some(PostedSize {
+                bytes: 140_000,
+                limit: 131_071,
+            })
+        );
+        let selection = Selection {
+            inputs: Vec::new(),
+            change: vec![Amount::new(5)],
+            amount: Amount::new(100),
+            fee: Fee::new(7),
+            total: Amount::new(112),
+        };
+        let estimate = fee_estimate(&selection, size).expect("estimate");
+        assert_eq!(
+            (
+                estimate.amount,
+                estimate.fee,
+                estimate.change,
+                estimate.locked
+            ),
+            (100, 7, 5, 112)
+        );
+        assert_eq!(
+            (estimate.slate_bytes, estimate.slate_limit),
+            (Some(140_000), Some(131_071))
+        );
+    }
+
+    #[test]
+    fn an_estimate_whose_measure_fails_otherwise_gives_no_size() {
+        assert_eq!(measured_size(Err(SendError::InputKeyMismatch)), None);
+        assert_eq!(measured_size(Ok(None)), None);
+    }
+
+    fn received() -> Event {
+        Event::Received(ReceivedTransaction {
+            tx_id: TxId(3),
+            slate_id: lepic_wallet::event::SlateId::from_bytes([3; 16]),
+            account: DEFAULT_ACCOUNT,
+            amount: Amount::new(100_000_000),
+            transport: TRANSPORT_ID,
+        })
+    }
+
+    fn relay_config(domain: &str) -> WalletConfig {
+        WalletConfig {
+            policy: Default::default(),
+            data_dir: String::new(),
+            chain: crate::api::types::Chain::Mainnet,
+            node_url: String::new(),
+            node_api_secret: None,
+            epicbox_domain: domain.to_owned(),
+            epicbox_port: 3423,
+            onion_routes: Vec::new(),
+            tuning: crate::tuning::shipped(),
+            offline: false,
+            tor_wanted: false,
+            host_features: 0,
+            profile: 0,
+            domain: None,
+        }
+    }
+
+    #[test]
+    fn a_loopback_relay_is_reached_without_tls_and_any_other_with_tls() {
+        for domain in ["localhost", "LocalHost", "127.0.0.1", "127.1.2.3"] {
+            let endpoint = relay_endpoint(&relay_config(domain)).unwrap();
+            assert_eq!(endpoint.security(), Security::Plain, "{domain}");
+            assert_eq!(endpoint.port(), 3423, "{domain}");
+        }
+        let past_loopback = std::net::Ipv4Addr::new(128, 0, 0, 1).to_string();
+        let private = std::net::Ipv4Addr::new(10, 0, 0, 1).to_string();
+        for domain in [
+            "relay.example.org",
+            "localhost.example",
+            past_loopback.as_str(),
+            private.as_str(),
+        ] {
+            let endpoint = relay_endpoint(&relay_config(domain)).unwrap();
+            assert_eq!(endpoint.security(), Security::Tls, "{domain}");
+        }
+    }
+
+    #[test]
+    fn a_scan_slot_frees_only_its_own_scan() {
+        let slot = Mutex::new(None);
+        let first = ScanSlot::claim(&slot, ScanCancel::new()).unwrap();
+        assert_eq!(
+            ScanSlot::claim(&slot, ScanCancel::new())
+                .err()
+                .map(|e| e.kind),
+            Some(WalletErrorKind::WalletBusy)
+        );
+        // A lock takes the slot while the scan winds down; a new scan may claim it then.
+        lock(&slot).take();
+        let second = ScanCancel::new();
+        let claimed = ScanSlot::claim(&slot, second.clone()).unwrap();
+
+        drop(first);
+
+        assert!(
+            lock(&slot)
+                .as_ref()
+                .is_some_and(|held| held.is_same(&second))
+        );
+        drop(claimed);
+        assert!(lock(&slot).is_none());
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)] // A test reads best as one sequence of steps.
+    fn every_engine_detail_reaches_the_binding_type() {
+        use lepic_keychain::{Identifier, Keychain, SwitchCommitment};
+        use lepic_store::{StoredTransaction, TransactionEntry, TxDirection};
+        use lepic_transport::transport::Destination;
+
+        let phrase = "abandon abandon abandon abandon abandon abandon abandon abandon abandon \
+                      abandon abandon about";
+        let keychain = Keychain::from_mnemonic(phrase, Network::Floonet).unwrap();
+        let id = Identifier::new(3, [0, 0, 7, 0]).unwrap();
+        let excess = keychain.commit(5, &id, SwitchCommitment::Regular).unwrap();
+        let output = keychain
+            .commit(400, &id, SwitchCommitment::Regular)
+            .unwrap();
+        let created = Timestamp::from_millisecond(1_790_000_000_123).unwrap();
+        let confirmed = Timestamp::from_millisecond(1_790_000_600_456).unwrap();
+        let slate_id = "0436430c-2b02-624c-2032-570501212b0e";
+        let address = "zzRMBr82zhzvz6hAxJMecEchV4ohxJkrNtDKLqwJMq7EQ4y2ibhQ@epicbox.example:443";
+        let details = EngineTransactionDetails {
+            transaction: StoredTransaction {
+                id: TxId(12),
+                entry: TransactionEntry {
+                    account: DEFAULT_ACCOUNT,
+                    direction: TxDirection::Outgoing,
+                    state: TxState::Confirmed,
+                    slate_id: Some(slate_id.parse().unwrap()),
+                    transport: Some("epicbox".to_owned()),
+                    amount_credited: Amount::new(400),
+                    amount_debited: Amount::new(1_500),
+                    fee: Some(Fee::new(100)),
+                    created_at: created,
+                    updated_at: confirmed,
+                },
+            },
+            kernel_excess: Some(excess),
+            confirmed_height: Some(Height::new(321)),
+            counterparty: Some(Destination::new(address.to_owned())),
+            receive_listing: None,
+            ttl_cutoff_height: Some(Height::new(360)),
+            confirmed_at: Some(confirmed),
+            undelivered: true,
+            messages: vec![lepic_wallet::details::SlateMessage {
+                role: lepic_wallet::slate::Role::Receiver,
+                text: "got it".to_owned(),
+            }],
+            flow: lepic_wallet::details::TxFlow::Invoice,
+            origin: EngineTxOrigin::Imported,
+            imported: Some(lepic_wallet::details::ImportedDetails {
+                source_id: 31,
+                kind: lepic_store::ImportedKind::SentCancelled,
+                input_count: 2,
+                output_count: 1,
+                check: lepic_store::ChainCheck::CancelledButOnChain,
+            }),
+            found: Some(lepic_wallet::scan::ScanFound {
+                during: EngineFoundDuring::Restore,
+                dated_by_block: true,
+            }),
+            output_commits: vec![output],
+            spent_commits: vec![output],
+            sender_reported_posted_at: Some(confirmed),
+            sender_reported_cancelled_at: Some(created),
+            receiver_declined_at: Some(confirmed),
+            unanswered_at: Some(created),
+            epic1_index: None,
+            payer_declined_at: None,
+            unverified: true,
+            coinbase: true,
+            expired_reason: Some(lepic_wallet::details::ExpiredReason::RejectedByNode),
+            cancelled_reason: Some(lepic_wallet::details::CancelledReason::Recovered),
+            post_cutoff_height: None,
+            relay_cancellable: true,
+            recovery: Some(lepic_wallet::details::RecoveryDetails {
+                sent_tx: TxId(14),
+                received_tx: TxId(15),
+                state: lepic_store::RecoveryState::Confirming,
+                confirmations: 3,
+                needed: 10,
+                fee: Some(Fee::new(400_000)),
+                error: Some("node busy".to_owned()),
+            }),
+            recovery_of: Some(TxId(9)),
+            recoverable: true,
+        };
+
+        assert_eq!(
+            transaction_details(&details, None, None),
+            TransactionDetails {
+                tx_id: 12,
+                direction: crate::api::types::TxDirection::Outgoing,
+                status: TxStatus::Confirmed,
+                slate_id: Some(slate_id.to_owned()),
+                transport: Some("epicbox".to_owned()),
+                amount_credited: 400,
+                amount_debited: 1_500,
+                fee: Some(100),
+                created_at_ms: 1_790_000_000_123,
+                confirmed_at_ms: Some(1_790_000_600_456),
+                confirmed_height: Some(321),
+                kernel_excess: Some(excess.to_hex()),
+                counterparty: Some(address.to_owned()),
+                receive_listing: None,
+                ttl_cutoff_height: Some(360),
+                undelivered: true,
+                messages: vec![SlateMessage {
+                    role: crate::api::types::SlateRole::Receiver,
+                    text: "got it".to_owned(),
+                }],
+                flow: crate::api::types::TxFlow::Invoice,
+                origin: TxOrigin::Imported,
+                imported: Some(ImportedTx {
+                    source_id: 31,
+                    kind: crate::api::types::ImportedTxKind::SentCancelled,
+                    input_count: 2,
+                    output_count: 1,
+                    check: crate::api::types::ChainCheck::CancelledButOnChain,
+                }),
+                found: Some(ScanFound {
+                    during: FoundDuring::Restore,
+                    dated_by_block: true,
+                }),
+                output_commits: vec![output.to_hex()],
+                spent_commits: vec![output.to_hex()],
+                sender_reported_posted_at_ms: Some(1_790_000_600_456),
+                sender_reported_cancelled_at_ms: Some(1_790_000_000_123),
+                receiver_declined_at_ms: Some(1_790_000_600_456),
+                unanswered_at_ms: Some(1_790_000_000_123),
+                unverified: true,
+                coinbase: true,
+                relay_cancellable: true,
+                expired_reason: Some(ExpiredReason::RejectedByNode),
+                cancelled_reason: Some(CancelledReason::Recovered),
+                recovery: Some(TransactionRecovery {
+                    sent_tx_id: 14,
+                    received_tx_id: 15,
+                    state: RecoveryState::Confirming,
+                    confirmations: 3,
+                    needed: 10,
+                    fee: Some(400_000),
+                    error: Some("node busy".to_owned()),
+                }),
+                recovery_of: Some(9),
+                recoverable: true,
+                delivery: Some(DeliveryView {
+                    state: DeliveryState::Uncertain,
+                    updated_at_ms: 1_790_000_000_123,
+                    error: None,
+                }),
+                post: None,
+                received_at_epic1: false,
+            }
+        );
+        // A stored delivery is shown as stored, marked unanswered or not.
+        let stored = DeliveryView {
+            state: DeliveryState::Failed,
+            updated_at_ms: 1,
+            error: Some("no route".to_owned()),
+        };
+        assert_eq!(
+            transaction_details(&details, Some(stored.clone()), None).delivery,
+            Some(stored)
+        );
+        // The node's text in a recovery is escaped as lepic serve escapes it.
+        let mut details = details;
+        details.recovery.as_mut().unwrap().error = Some("busy\u{1b}[2J\u{202E}\n".to_owned());
+        assert_eq!(
+            transaction_details(&details, None, None)
+                .recovery
+                .and_then(|recovery| recovery.error),
+            Some("busy\\u{1b}[2J\\u{202e}\\n".to_owned())
+        );
+        let hex = excess.to_hex();
+        assert_eq!(hex.len(), 66);
+        assert!(
+            hex.bytes()
+                .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
+        );
+    }
+
+    #[test]
+    fn invoice_events_reach_the_event_stream_with_their_slate() {
+        use lepic_wallet::event::{
+            DeclinedInvoice, ExpiredInvoice, FinalizedInvoice, SlateId, WithdrawnInvoice,
+        };
+        let slate_id = SlateId::from_bytes([9; 16]);
+        let finalized = wallet_event(&Event::InvoiceFinalized(FinalizedInvoice {
+            tx_id: TxId(4),
+            slate_id,
+        }))
+        .unwrap();
+        assert_eq!(finalized.kind, WalletEventKind::InvoiceFinalized);
+        assert_eq!(finalized.tx_id, Some(4));
+        let expired = wallet_event(&Event::InvoiceExpired(ExpiredInvoice {
+            slate_id,
+            tx_id: None,
+        }))
+        .unwrap();
+        assert_eq!(expired.kind, WalletEventKind::InvoiceExpired);
+        assert_eq!(expired.tx_id, None);
+        assert_eq!(expired.slate_id, Some(slate_id.to_string()));
+        let declined = wallet_event(&Event::InvoiceDeclined(DeclinedInvoice {
+            tx_id: TxId(6),
+            slate_id,
+        }))
+        .unwrap();
+        assert_eq!(declined.kind, WalletEventKind::InvoiceDeclined);
+        assert_eq!(declined.tx_id, Some(6));
+        let withdrawn = wallet_event(&Event::InvoiceWithdrawn(WithdrawnInvoice {
+            slate_id,
+            tx_id: Some(TxId(7)),
+        }))
+        .unwrap();
+        assert_eq!(withdrawn.kind, WalletEventKind::InvoiceWithdrawn);
+        assert_eq!(withdrawn.tx_id, Some(7));
+        assert_eq!(withdrawn.slate_id, Some(slate_id.to_string()));
+    }
+
+    #[test]
+    fn a_recovery_change_reaches_the_event_stream_with_its_send_and_state() {
+        use lepic_store::RecoveryState as S;
+        for (state, shown) in [
+            (S::Uncertain, RecoveryState::Uncertain),
+            (S::Posted, RecoveryState::Posted),
+            (S::Confirming, RecoveryState::Confirming),
+            (S::Done, RecoveryState::Done),
+            (S::Failed, RecoveryState::Failed),
+        ] {
+            let event = wallet_event(&Event::RecoveryChanged(lepic_wallet::event::RecoveryNews {
+                tx_id: TxId(11),
+                state,
+            }))
+            .unwrap();
+            assert_eq!(event.kind, WalletEventKind::RecoveryChanged);
+            assert_eq!(event.tx_id, Some(11));
+            assert_eq!(event.recovery_state, Some(shown));
+        }
+    }
+
+    #[test]
+    fn all_three_expired_reasons_map() {
+        use lepic_wallet::details::ExpiredReason as R;
+        for (reason, shown) in [
+            (R::RejectedByNode, ExpiredReason::RejectedByNode),
+            (R::NoAnswer, ExpiredReason::NoAnswer),
+            (R::NotMined, ExpiredReason::NotMined),
+        ] {
+            assert_eq!(expired_reason(reason), Some(shown));
+        }
+    }
+
+    #[test]
+    fn the_post_record_shows_the_node_reason_and_next_attempt() {
+        let at = Timestamp::from_millisecond(1_700_000_000_000).unwrap();
+        let record = lepic_store::NodePost {
+            tx_id: TxId(3),
+            attempts: 2,
+            last_at: at,
+            last_height: Height::new(100),
+            last_outcome: lepic_store::NodeOutcome::Refused,
+            last_error: Some("double spend".to_owned()),
+            accepted_once: false,
+            unreachable_once: true,
+        };
+        let pushing = node_post_view(&record, true);
+        assert_eq!(
+            pushing,
+            NodePostView {
+                attempts: 2,
+                last_outcome: NodePostOutcome::Refused,
+                last_error: Some("double spend".to_owned()),
+                last_attempt_at_ms: 1_700_000_000_000,
+                // The second refused push waits two blocks.
+                next_attempt_height: Some(102),
+                accepted_once: false,
+            }
+        );
+        let ended = node_post_view(&record, false);
+        assert_eq!(ended.next_attempt_height, None);
+        assert_eq!(ended.last_error.as_deref(), Some("double spend"));
+        let accepted = node_post_view(
+            &lepic_store::NodePost {
+                last_outcome: lepic_store::NodeOutcome::Accepted,
+                last_error: None,
+                accepted_once: true,
+                ..record
+            },
+            true,
+        );
+        assert_eq!(accepted.last_outcome, NodePostOutcome::Accepted);
+        assert!(accepted.accepted_once);
+        assert_eq!(accepted.next_attempt_height, Some(110));
+    }
+
+    #[test]
+    fn node_and_relay_text_is_escaped_in_the_views_and_the_event() {
+        use lepic_wallet::event::{DeliveryNews, SlateId};
+        let planted = "refused\u{1b}[2J\u{202E}gnol\nforged";
+        let shown = "refused\\u{1b}[2J\\u{202e}gnol\\nforged";
+        let at = Timestamp::from_millisecond(1_700_000_000_000).unwrap();
+        let post = node_post_view(
+            &lepic_store::NodePost {
+                tx_id: TxId(3),
+                attempts: 1,
+                last_at: at,
+                last_height: Height::new(100),
+                last_outcome: lepic_store::NodeOutcome::Refused,
+                last_error: Some(planted.to_owned()),
+                accepted_once: false,
+                unreachable_once: false,
+            },
+            true,
+        );
+        assert_eq!(post.last_error.as_deref(), Some(shown));
+        let delivery = delivery_view(&lepic_store::PaymentDelivery {
+            payment_id: Default::default(),
+            alias: None,
+            state: Some(lepic_store::OutboxState::Failed),
+            state_reason: Some(planted.to_owned()),
+            updated_at: at,
+        })
+        .unwrap();
+        assert_eq!(delivery.error.as_deref(), Some(shown));
+        let event = wallet_event(&Event::DeliveryChanged(DeliveryNews {
+            slate_id: SlateId::from_bytes([8; 16]),
+            state: lepic_store::OutboxState::Uncertain,
+            route: format!("mailbox@{planted}"),
+        }))
+        .unwrap();
+        assert_eq!(event.relay, Some(format!("mailbox@{shown}")));
+        // A long text is cut as lepic serve cuts it.
+        let long = node_post_view(
+            &lepic_store::NodePost {
+                tx_id: TxId(3),
+                attempts: 1,
+                last_at: at,
+                last_height: Height::new(100),
+                last_outcome: lepic_store::NodeOutcome::Refused,
+                last_error: Some("x".repeat(1024)),
+                accepted_once: false,
+                unreachable_once: false,
+            },
+            false,
+        );
+        assert_eq!(
+            long.last_error.map(|text| text.chars().count()),
+            Some(lepic_wallet::error_text::NODE_TEXT_MAX_CHARS)
+        );
+    }
+
+    #[test]
+    fn a_delivery_change_reaches_the_event_stream_with_its_route_and_state() {
+        use lepic_store::OutboxState as S;
+        use lepic_wallet::event::{DeliveryNews, SlateId};
+        let slate_id = SlateId::from_bytes([8; 16]);
+        let route = "esWpjSHdScqVnFSkbM8mPEpzAGBWWSFg4Pu3sKHnqCsKgjzU4YD6@relay.example.org";
+        for (state, shown) in [
+            (S::Uncertain, DeliveryState::Uncertain),
+            (S::Failed, DeliveryState::Failed),
+            (S::Posted, DeliveryState::Sent),
+        ] {
+            let event = wallet_event(&Event::DeliveryChanged(DeliveryNews {
+                slate_id,
+                state,
+                route: route.to_owned(),
+            }))
+            .unwrap();
+            assert_eq!(event.kind, WalletEventKind::DeliveryChanged);
+            assert_eq!(event.slate_id, Some(slate_id.to_string()));
+            assert_eq!(event.relay.as_deref(), Some(route));
+            assert_eq!(event.delivery_state, Some(shown));
+            assert_eq!(event.tx_id, None);
+        }
+    }
+
+    #[test]
+    fn an_answer_for_an_unknown_slate_is_its_own_event_with_its_sender() {
+        use lepic_wallet::event::{SlateId, UnknownSlate};
+        let slate_id = SlateId::from_bytes([4; 16]);
+        let sender = "esWpjSHdScqVnFSkbM8mPEpzAGBWWSFg4Pu3sKHnqCsKgjzU4YD6@relay.example.org";
+        for (stage, text) in [
+            (lepic_wallet::slate::Stage::S2, "S2"),
+            (lepic_wallet::slate::Stage::I2, "I2"),
+        ] {
+            let event = wallet_event(&Event::UnknownSlate(UnknownSlate {
+                slate_id,
+                stage,
+                sender: sender.to_owned(),
+            }))
+            .unwrap();
+            assert_eq!(event.kind, WalletEventKind::UnknownSlate);
+            assert_eq!(event.slate_id, Some(slate_id.to_string()));
+            assert_eq!(event.slate_stage.as_deref(), Some(text));
+            assert_eq!(event.sender.as_deref(), Some(sender));
+            assert_eq!(event.tx_id, None);
+        }
+    }
+
+    #[test]
+    fn a_superseded_receive_is_its_own_event_with_its_transaction() {
+        use lepic_wallet::event::{SlateId, SupersededReceive};
+        let slate_id = SlateId::from_bytes([5; 16]);
+        let event = wallet_event(&Event::ReceiveSuperseded(SupersededReceive {
+            tx_id: TxId(6),
+            slate_id,
+        }))
+        .unwrap();
+        assert_eq!(event.kind, WalletEventKind::ReceiveSuperseded);
+        assert_eq!(event.tx_id, Some(6));
+        assert_eq!(event.slate_id, Some(slate_id.to_string()));
+        assert_eq!(event.sender, None);
+    }
+
+    #[test]
+    fn a_cancelled_payment_is_its_own_event() {
+        use lepic_wallet::event::{CancelledPayment, SlateId};
+        let slate_id = SlateId::from_bytes([9; 16]);
+        let event = wallet_event(&Event::PaymentCancelled(CancelledPayment {
+            tx_id: TxId(11),
+            slate_id,
+        }))
+        .unwrap();
+        assert_eq!(event.kind, WalletEventKind::PaymentCancelled);
+        assert_eq!(event.tx_id, Some(11));
+        assert_eq!(event.slate_id, Some(slate_id.to_string()));
+        assert_eq!(event.kernel_excess, None);
+    }
+
+    #[test]
+    fn a_declined_send_is_its_own_event() {
+        use lepic_wallet::event::{DeclinedPayment, SlateId};
+        let slate_id = SlateId::from_bytes([10; 16]);
+        let event = wallet_event(&Event::PaymentDeclined(DeclinedPayment {
+            tx_id: TxId(12),
+            slate_id,
+        }))
+        .unwrap();
+        assert_eq!(event.kind, WalletEventKind::PaymentDeclined);
+        assert_eq!(event.tx_id, Some(12));
+        assert_eq!(event.slate_id, Some(slate_id.to_string()));
+    }
+
+    #[test]
+    fn a_payment_refused_at_a_receipt_cap_is_its_own_event_with_its_cap() {
+        use lepic_wallet::event::{ReceiptCap as Cap, RefusedPayment, SlateId};
+        let slate_id = SlateId::from_bytes([11; 16]);
+        for (cap, sender, expected) in [
+            (
+                Cap::PerSender,
+                Some("es1sender@relay.example".to_owned()),
+                ReceiptCap::PerSender,
+            ),
+            (Cap::Total, None, ReceiptCap::Total),
+        ] {
+            let event = wallet_event(&Event::PaymentRefused(RefusedPayment {
+                slate_id,
+                transport: TransportId::new("epicbox"),
+                sender: sender.clone(),
+                cap,
+            }))
+            .unwrap();
+            assert_eq!(event.kind, WalletEventKind::PaymentRefused);
+            assert_eq!(event.slate_id, Some(slate_id.to_string()));
+            assert_eq!(event.transport.as_deref(), Some("epicbox"));
+            assert_eq!(event.sender, sender);
+            assert_eq!(event.receipt_cap, Some(expected));
+            assert_eq!(event.tx_id, None);
+        }
+    }
+
+    #[test]
+    fn a_posted_payment_is_its_own_event_with_its_kernel() {
+        use lepic_keychain::{Identifier, Keychain, SwitchCommitment};
+        use lepic_wallet::event::{PostedPayment, SlateId};
+        let slate_id = SlateId::from_bytes([7; 16]);
+        let keychain = Keychain::from_mnemonic(
+            "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon \
+             abandon about",
+            Network::Floonet,
+        )
+        .unwrap();
+        let id = Identifier::new(3, [0, 0, 7, 0]).unwrap();
+        let excess = keychain.commit(5, &id, SwitchCommitment::Regular).unwrap();
+        let event = wallet_event(&Event::PaymentPosted(PostedPayment {
+            tx_id: TxId(8),
+            slate_id,
+            excess,
+        }))
+        .unwrap();
+        assert_eq!(event.kind, WalletEventKind::PaymentPosted);
+        assert_eq!(event.tx_id, Some(8));
+        assert_eq!(event.slate_id, Some(slate_id.to_string()));
+        assert_eq!(event.kernel_excess, Some(excess.to_hex()));
+        assert_eq!(event.sender, None);
+    }
+
+    #[test]
+    fn a_received_slate_reaches_the_listener_as_received() {
+        let event = listener_event(&received()).unwrap();
+        assert_eq!(event.kind, ListenerEventKind::Received);
+        assert_eq!(event.tx_id, Some(3));
+    }
+
+    #[test]
+    fn a_self_send_reaches_the_event_stream_as_its_own_kind_and_never_the_listener() {
+        let event = Event::SelfSent(SelfSentTransaction {
+            tx_id: TxId(7),
+            received_tx_id: TxId(8),
+            account: DEFAULT_ACCOUNT,
+            amount: Amount::new(50),
+        });
+        let streamed = wallet_event(&event).unwrap();
+        assert_eq!(streamed.kind, WalletEventKind::SelfSend);
+        assert_eq!(streamed.tx_id, Some(7));
+        assert_eq!(streamed.account, Some(DEFAULT_ACCOUNT.0));
+        assert_eq!(streamed.amount, Some(50));
+        assert_eq!(streamed.to, None);
+        assert!(listener_event(&event).is_none());
+    }
+
+    #[test]
+    fn a_received_slate_reaches_the_event_stream_as_a_new_transaction() {
+        let event = wallet_event(&received()).unwrap();
+        assert_eq!(event.kind, WalletEventKind::Transaction);
+        assert_eq!(event.tx_id, Some(3));
+        assert_eq!(event.from, None);
+        assert_eq!(event.to, Some(TxStatus::Received));
+    }
+
+    #[test]
+    fn only_finalized_state_changes_reach_the_listener() {
+        let change = |to| {
+            Event::Transaction(TransactionState {
+                tx_id: TxId(5),
+                from: TxState::Sent,
+                to,
+            })
+        };
+        let finalized = listener_event(&change(TxState::Finalized)).unwrap();
+        assert_eq!(finalized.kind, ListenerEventKind::Finalized);
+        assert_eq!(finalized.tx_id, Some(5));
+        assert!(listener_event(&change(TxState::Cancelled)).is_none());
+    }
+
+    /// The sender posts the same S1 twice, as a sender that sent it again does. The receiver's
+    /// listener reports the first as a payment and the second only as answered again.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_slate_delivered_twice_reaches_the_listener_as_received_then_repeated() {
+        use lepic_epicbox::mock_relay::MockRelay;
+        use lepic_transport::transport::Transport as _;
+        use lepic_wallet::slate::{MediaType, WireSlate};
+
+        let relay = MockRelay::new(RelayNetwork::Floonet);
+        let chain = crate::api::testing::MockChain::new(1).unwrap();
+        let mut runtime = chain
+            .runtime(crate::api::diagnostics::LogLevel::Warn)
+            .unwrap();
+        Arc::get_mut(&mut runtime.inner).unwrap().relay = Some(relay.connector());
+        let dirs = [tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap()];
+        let mut sessions = Vec::new();
+        for dir in &dirs {
+            let mut config = WalletConfig {
+                policy: Default::default(),
+                data_dir: dir.path().to_string_lossy().into_owned(),
+                chain: crate::api::types::Chain::Floonet,
+                node_url: "http://127.0.0.1:1".to_owned(),
+                node_api_secret: None,
+                epicbox_domain: "epicbox.example".to_owned(),
+                epicbox_port: 443,
+                onion_routes: Vec::new(),
+                tuning: crate::tuning::shipped(),
+                offline: false,
+                tor_wanted: false,
+                host_features: 0,
+                profile: 0,
+                domain: None,
+            };
+            let secret = NodeSecret::take(&mut config);
+            let session = Session::new(
+                &runtime.inner,
+                &config,
+                &secret,
+                AppSecretStore::in_memory(),
+            )
+            .await
+            .unwrap();
+            session
+                .create(SeedOrigin::Generate, Zeroizing::new("password".to_owned()))
+                .await
+                .unwrap();
+            sessions.push(Arc::new(session));
+        }
+        let (sender, receiver) = (&sessions[0], &sessions[1]);
+        sender.epicbox_address().unwrap();
+        let to = Destination::new(receiver.epicbox_address().unwrap());
+        let vector: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../testdata/vectors/slates/send_epicbox_plain_s1_v3.json"
+        ))
+        .unwrap();
+        let s1 = WireSlate::text(
+            MediaType::JSON,
+            vector["expected"]["json"].as_str().unwrap().to_owned(),
+        );
+        let epicbox = sender.epicbox().unwrap();
+        let outbound = epicbox.outbound().unwrap();
+        outbound.deliver(&to, &s1).await.unwrap();
+        outbound.deliver(&to, &s1).await.unwrap();
+
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let handle = receiver.claim_listener().unwrap().unwrap();
+        let listening = tokio::spawn({
+            let receiver = Arc::clone(receiver);
+            let seen = Arc::clone(&seen);
+            let handle = handle.clone();
+            async move {
+                receiver
+                    .listen(&handle, |event| {
+                        if matches!(
+                            event.kind,
+                            ListenerEventKind::Received | ListenerEventKind::Repeated
+                        ) {
+                            lock(&seen).push((event.kind, event.tx_id));
+                        }
+                    })
+                    .await
+            }
+        });
+        for _ in 0..2000 {
+            if lock(&seen).len() >= 2 {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        handle.stop();
+        tokio::time::timeout(std::time::Duration::from_secs(20), listening)
+            .await
+            .expect("the listener ended")
+            .unwrap()
+            .unwrap();
+
+        let seen = lock(&seen).clone();
+        let [(ListenerEventKind::Received, Some(first)), (kind, again)] = seen.as_slice() else {
+            panic!("{seen:?}");
+        };
+        assert_eq!(*kind, ListenerEventKind::Repeated, "{seen:?}");
+        assert_eq!(*again, Some(*first));
+    }
+}

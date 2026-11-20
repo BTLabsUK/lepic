@@ -1,0 +1,77 @@
+# Conformance workspace (ADR 0009). Separate from the product workspace so that the reference
+# crates, RandomX and LMDB never enter the product dependency graph.
+[workspace]
+members = ["vectors", "differential"]
+resolver = "3"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+publish = false
+
+# The reference crates are pinned by tag: the node crates at epic v4.1.2 and the wallet crates at
+# epic-wallet v4.1.0, the latest release of each (ADR 0059). epic-wallet v4.1.0 asks for the node
+# crates at v4.1.0; the [patch] below moves those to the same v4.1.2 copy, so the workspace links
+# one node. Cargo refuses a patch from a source to itself, and it treats every spelling of
+# github.com/EpicCash/epic as one source, so the node crates come through www.github.com, which
+# GitHub redirects to the same repository. Cargo.lock records the commits, and a test in the
+# vectors crate checks them against ADR 0059.
+[workspace.dependencies]
+epic_api = { git = "https://www.github.com/EpicCash/epic", tag = "v4.1.2" }
+epic_chain = { git = "https://www.github.com/EpicCash/epic", tag = "v4.1.2" }
+epic_core = { git = "https://www.github.com/EpicCash/epic", tag = "v4.1.2" }
+epic_keychain = { git = "https://www.github.com/EpicCash/epic", tag = "v4.1.2" }
+epic_pool = { git = "https://www.github.com/EpicCash/epic", tag = "v4.1.2" }
+epic_util = { git = "https://www.github.com/EpicCash/epic", tag = "v4.1.2" }
+epic_wallet_libwallet = { git = "https://github.com/EpicCash/epic-wallet", tag = "v4.1.0" }
+epic_wallet_impls = { git = "https://github.com/EpicCash/epic-wallet", tag = "v4.1.0" }
+# The LEPIC crates the differential tests run. The reference wallet bundles its own SQLite, which
+# cannot share a build with rusqlite's, so LEPIC's SQLite backend stays off here.
+lepic-keychain = { path = "../crates/lepic-keychain" }
+lepic-node = { path = "../crates/lepic-node" }
+lepic-primitives = { path = "../crates/lepic-primitives" }
+lepic-slate = { path = "../crates/lepic-slate" }
+lepic-store = { path = "../crates/lepic-store", default-features = false }
+lepic-transport = { path = "../crates/lepic-transport" }
+lepic-wallet = { path = "../crates/lepic-wallet", default-features = false }
+# The BLAKE2b implementation the node and wallet hash with, at the version their lockfile resolves.
+blake2-rfc = "=0.2.18"
+serde = { version = "1", features = ["derive"] }
+# The payment proof addresses of the reference wallet, at the version its lockfile resolves.
+ed25519-dalek = "=2.2.0"
+# The runtime, randomness and time the LEPIC wallet ports take, at the product workspace versions.
+jiff = { version = "0.2.38", default-features = false }
+rand = { version = "0.10.3", default-features = false }
+tokio = { version = "1.54.1", default-features = false }
+serde_json = "1"
+# The AEAD and HKDF the host app seals its app data files with, at the version the reference
+# lockfile resolves, so the app data vectors come from an implementation independent of LEPIC's.
+ring = "=0.17.14"
+# Scratch directories with unpredictable names, at the version the reference lockfile resolves.
+tempfile = "3.27.0"
+thiserror = "2"
+
+[workspace.lints.rust]
+unsafe_code = "deny"
+
+[workspace.lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+indexing_slicing = "deny"
+arithmetic_side_effects = "deny"
+todo = "deny"
+unimplemented = "deny"
+unreachable = "deny"
+
+
+# epic-wallet v4.1.0's own node dependencies, moved to the v4.1.2 copy above (ADR 0059).
+[patch."https://github.com/EpicCash/epic"]
+epic_api = { git = "https://www.github.com/EpicCash/epic", tag = "v4.1.2" }
+epic_chain = { git = "https://www.github.com/EpicCash/epic", tag = "v4.1.2" }
+epic_core = { git = "https://www.github.com/EpicCash/epic", tag = "v4.1.2" }
+epic_keychain = { git = "https://www.github.com/EpicCash/epic", tag = "v4.1.2" }
+epic_pool = { git = "https://www.github.com/EpicCash/epic", tag = "v4.1.2" }
+epic_store = { git = "https://www.github.com/EpicCash/epic", tag = "v4.1.2" }
+epic_util = { git = "https://www.github.com/EpicCash/epic", tag = "v4.1.2" }

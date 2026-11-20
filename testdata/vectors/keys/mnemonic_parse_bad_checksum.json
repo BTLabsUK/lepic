@@ -1,0 +1,17 @@
+{
+  "schema": 1,
+  "area": "keys",
+  "name": "mnemonic_parse_bad_checksum",
+  "generator": "conformance/vectors/keys",
+  "upstream": {
+    "repo": "https://github.com/EpicCash/epic",
+    "commit": "bd3a8c8c5e957e57574364326dfb17051d0096ae"
+  },
+  "inputs": {
+    "mnemonic": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon"
+  },
+  "expected": {
+    "entropy": null,
+    "error": "checksum 0x3 does not match expected 0x0"
+  }
+}
