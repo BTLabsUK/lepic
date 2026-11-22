@@ -36,17 +36,45 @@ pub trait Epic1Keys: Send + Sync {
     fn epic1_keys(&self) -> BoxFuture<'_, Vec<Epic1AccountKeys>>;
 }
 
+/// How a wallet took an answer posted straight to one of its in-person codes
+/// ([`crate::ContactBook::in_person_take_direct`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InPersonDirect {
+    /// Checked and stored, or taken before: 200.
+    Accepted,
+    /// Refused for good, with the reason the listener names: `already_finalized`, `expired`,
+    /// `inputs_spent` or `bad_answer`. 422 `refused`.
+    Refused(&'static str),
+    /// Not checked now, such as while the node does not answer: 503 `not_ready`. Posting again
+    /// later may succeed.
+    Transient,
+    /// Answers no code of this wallet: 422 `refused`, with no reason.
+    NotOurs,
+}
+
+/// The wallet's in-person codes, for a listener that takes answers posted straight to them
+/// ([`DirectHandler::with_in_person`]).
+pub trait InPersonInbox: Send + Sync {
+    /// Takes `envelope`, sealed to the reply key of a code; as
+    /// [`crate::ContactBook::in_person_take_direct`].
+    fn take(&self, envelope: Vec<u8>) -> BoxFuture<'_, InPersonDirect>;
+}
+
 /// The handler of a listener socket's `/api/v1/inbox`: opens an envelope with a zero hint with
 /// the seal keys of the wallet's epic1 addresses ([`DirectHandler::with_epic1`]), receives the
 /// S1 in it through `host` into the address's account as the foreign API does, and seals the
 /// S2 to the reply key the envelope carries. An envelope that names its sender, or a slate
 /// that asks for a payment proof, is refused; without epic1 keys every envelope is.
+///
+/// With [`DirectHandler::with_in_person`], an envelope with a hint is an answer to one of the
+/// wallet's in-person codes and goes to its [`InPersonInbox`]; nothing is sealed back.
 pub struct DirectHandler<H: Host> {
     host: Arc<H>,
     method: Arc<dyn Method>,
     network: Network,
     rng: SharedRng,
     epic1: Option<Arc<dyn Epic1Keys>>,
+    in_person: Option<Arc<dyn InPersonInbox>>,
 }
 
 /// `envelope` tried with the epic1 seal key of each of `accounts` in turn, on the blocking
@@ -88,7 +116,22 @@ impl<H: Host> DirectHandler<H> {
             network,
             rng,
             epic1: None,
+            in_person: None,
         }
+    }
+
+    /// The handler, also taking answers to the wallet's in-person codes through `inbox`.
+    #[must_use]
+    pub fn with_in_person(mut self, inbox: Arc<dyn InPersonInbox>) -> Self {
+        self.in_person = Some(inbox);
+        self
+    }
+
+    /// The in-person inbox, when `envelope` has a hint and the handler has one.
+    fn in_person_for(&self, envelope: &[u8]) -> Option<&Arc<dyn InPersonInbox>> {
+        let inbox = self.in_person.as_ref()?;
+        let sealed = SealedEnvelope::decode(envelope, contact_network(self.network)).ok()?;
+        (sealed.hint() != Hint::from_bytes([0; 8])).then_some(inbox)
     }
 
     /// The handler, also taking payments sealed to the epic1 addresses whose keys `keys` gives.
@@ -168,6 +211,16 @@ impl<H: Host> SlateHandler for DirectHandler<H> {
 
     fn receive(&self, envelope: Vec<u8>) -> HandlerFuture<'_> {
         Box::pin(async move {
+            if let Some(inbox) = self.in_person_for(&envelope) {
+                return match inbox.take(envelope).await {
+                    InPersonDirect::Accepted => Ok(Vec::new()),
+                    InPersonDirect::Refused(reason) => Err(PeerRefusal::RefusedFor { reason }),
+                    InPersonDirect::Transient => Err(PeerRefusal::NotReady {
+                        retry_after: NOT_READY_RETRY,
+                    }),
+                    InPersonDirect::NotOurs => Err(PeerRefusal::Refused),
+                };
+            }
             let Proposal {
                 wire,
                 reply_key,

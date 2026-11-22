@@ -2244,8 +2244,17 @@ fn a_create_over_the_connection_bound_is_busy_and_keeps_nothing() {
         assert_eq!(repeated["id"], finished["id"], "{repeated}");
         client.tip_gate.open();
         wait_until("the jobs end", || count_of(socket, "invoice") == 3);
-        // Nothing was kept for the id: another body under it is a new create.
-        let made = post(socket, "/api/v1/payments", &invoice(id, "4"));
+        // Nothing was kept for the id: another body under it is a new create. A job frees its
+        // place under the bound only after its payment is stored, so the create may still meet
+        // `busy` (which keeps nothing) for a moment.
+        let mut made = None;
+        wait_until("the bound frees", || {
+            let reply = post(socket, "/api/v1/payments", &invoice(id, "4"));
+            let freed = reply.status != 503;
+            made = Some(reply);
+            freed
+        });
+        let made = made.unwrap();
         assert_eq!(made.status, 201, "{made:?}");
         assert_eq!(count_of(socket, "invoice"), 4);
     });

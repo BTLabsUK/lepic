@@ -1120,6 +1120,13 @@ impl SlateRepository for SqliteRepos<'_> {
         )
     }
 
+    fn delete_slates(&mut self, slate_id: Uuid) -> Result<usize, StoreError> {
+        Ok(self.conn.execute(
+            "DELETE FROM slates WHERE slate_id = ?1",
+            [&slate_id.as_bytes()[..]],
+        )?)
+    }
+
     fn slates(&self, slate_id: Uuid) -> Result<Vec<StoredSlate>, StoreError> {
         self.collect(
             &format!("SELECT {SLATE_COLUMNS} FROM slates WHERE slate_id = ?1 ORDER BY stage"),
@@ -2570,6 +2577,13 @@ impl ContactRepository for SqliteRepos<'_> {
             [&slate_id.as_bytes()[..]],
             |row| decode_contact_link(&row.get::<_, Vec<u8>>(0)?),
         )
+    }
+
+    fn delete_slate_contact(&mut self, slate_id: Uuid) -> Result<bool, StoreError> {
+        Ok(self.conn.execute(
+            "DELETE FROM contact_slates WHERE slate_id = ?1",
+            [&slate_id.as_bytes()[..]],
+        )? > 0)
     }
 
     fn set_slate_contact(&mut self, slate_id: Uuid, contact: ContactId) -> Result<(), StoreError> {

@@ -243,6 +243,13 @@ pub struct ServeArgs {
     /// Also answer GET /api/v1/metrics, counts and heights in the Prometheus text format
     #[arg(long)]
     pub metrics: bool,
+    /// A public address of this serve that payers post in-person answers to, as
+    /// https://host[:port] or http://<onion>.onion[:port]; repeat for more. Loopback and
+    /// local-network hosts are refused. Without the flag, LEPIC_SERVE_PUBLIC_URL, comma-separated.
+    /// None: in-person codes name no direct route
+    #[arg(long = "public-url", value_name = "URL", value_delimiter = ',')]
+    #[serde(default)]
+    pub public_url: Vec<String>,
     #[command(flatten)]
     pub listen: HttpListenArgs,
 }
@@ -1177,10 +1184,30 @@ pub struct InPersonCodeArg {
     pub file: Option<PathBuf>,
 }
 
+/// A scanned code or an invoice link: the code's raw bytes as hex, a file holding them, or the
+/// `epiccash://invoice/1/` link that carries them.
+#[derive(Debug, Clone, Args, Serialize, Deserialize)]
+#[command(group(clap::ArgGroup::new("bytes").required(true).args(["hex", "file", "link"])))]
+pub struct InPersonScanArg {
+    /// The payload as hex digits
+    #[arg(long, value_name = "HEX")]
+    pub hex: Option<String>,
+    /// A file whose bytes are the payload
+    #[arg(long, value_name = "FILE")]
+    pub file: Option<PathBuf>,
+    /// An invoice link, epiccash://invoice/1/...
+    #[arg(long, value_name = "URL")]
+    pub link: Option<String>,
+    /// The well-known file of the domain the code is signed for, as fetched, to check the
+    /// domain against
+    #[arg(long, value_name = "PATH")]
+    pub domain_file: Option<PathBuf>,
+}
+
 #[derive(Debug, Clone, Args, Serialize, Deserialize)]
 pub struct InPersonReadArgs {
     #[command(flatten)]
-    pub code: InPersonCodeArg,
+    pub code: InPersonScanArg,
     #[command(flatten)]
     pub account: AccountArg,
     #[command(flatten)]
@@ -1220,7 +1247,7 @@ pub struct InPersonPayArgs {
     #[arg(value_name = "AMOUNT")]
     pub amount: String,
     #[command(flatten)]
-    pub code: InPersonCodeArg,
+    pub code: InPersonScanArg,
     #[command(flatten)]
     pub account: AccountArg,
     #[command(flatten)]

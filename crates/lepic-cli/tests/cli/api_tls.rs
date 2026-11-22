@@ -605,6 +605,41 @@ fn a_tls_connection_closes_at_its_age_limit() {
     });
 }
 
+/// A client that sends requests and never reads their answers cannot keep its connection slot
+/// past the age limit: the answers stuck on the connection are dropped after the age limit once
+/// more.
+#[test]
+fn a_tls_connection_whose_answers_are_not_read_ends_after_its_age_limit() {
+    let age = Duration::from_secs(2);
+    let mut host = TestHost::new();
+    host.api_limits = Some(limits(1, PATIENCE, age));
+    let wallet = funded_wallet(&host);
+    let laptop = client_key(&wallet, "laptop");
+
+    serving(host, &wallet, |serve| {
+        serve.client(&["add", "laptop", laptop.pem.to_str().unwrap()]);
+        let started = Instant::now();
+        let mut stuck = serve.connect(Some(&laptop)).unwrap();
+        // Pipelined requests until the answers fill the buffers between serve and this client,
+        // which reads none of them. The writer ends when serve drops the connection.
+        let writer = std::thread::spawn(move || {
+            let request = b"GET /api/v1/status HTTP/1.1\r\nHost: lepic\r\n\r\n".repeat(64);
+            while stuck.get_mut().write_all(&request).is_ok() {}
+            drop(stuck);
+        });
+        wait_until("the only slot is taken", || {
+            serve.get(Some(&laptop), "/api/v1/status").unwrap().status == 503
+        });
+        wait_until("the stuck connection loses its slot", || {
+            serve.get(Some(&laptop), "/api/v1/status").unwrap().status == 200
+        });
+        let waited = started.elapsed();
+        assert!(waited >= age, "{waited:?}");
+        assert!(waited < PATIENCE, "{waited:?}");
+        writer.join().unwrap();
+    });
+}
+
 #[test]
 fn a_client_key_that_is_not_ed25519_is_refused_at_the_handshake() {
     let host = TestHost::new();

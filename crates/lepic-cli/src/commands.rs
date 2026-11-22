@@ -927,7 +927,7 @@ impl<H: Host> Run<'_, H> {
     /// Answers payments over HTTP until interrupted.
     async fn http_listen(&mut self, args: &HttpListenArgs) -> Result<Report, CliError> {
         let opened = self.open().await?;
-        let listener = HttpListener::start(&opened, self.settings, args).await?;
+        let listener = HttpListener::start(&opened, self.settings, args, false).await?;
         if self.settings.output == OutputFormat::Human {
             let what = if args.coinbase {
                 "payments and block rewards"
@@ -1905,10 +1905,12 @@ struct HttpListener {
 
 impl HttpListener {
     /// Binds the listener on the wallet `opened`; a port that cannot be bound is an error.
+    /// `in_person`: the inbox route also takes answers to the wallet's open in-person codes.
     async fn start<N: NodeApi + 'static>(
         opened: &Arc<Opened<N>>,
         settings: &Settings,
         args: &HttpListenArgs,
+        in_person: bool,
     ) -> Result<Self, CliError> {
         let exposure = if args.internet {
             Exposure::Internet
@@ -1926,6 +1928,7 @@ impl HttpListener {
             Arc::clone(&host),
             Arc::clone(&method),
             ListenerSocket::Web.serves_epic1(settings),
+            in_person,
         )?;
         let receiver = Arc::new(Receiver::new(host, method, ProofKey::Payments));
         let port = args.port.unwrap_or(settings.tuning.listen_port);
@@ -1996,6 +1999,7 @@ async fn onion_listeners<N: NodeApi + 'static>(
         Arc::clone(host),
         Arc::clone(&method),
         ListenerSocket::Onion.serves_epic1(cli),
+        true,
     )?;
     let handle =
         lepic_methods::http::listen_with(settings, receiver(ProofKey::Onion), peer).await?;
@@ -2033,21 +2037,43 @@ impl ListenerSocket {
 
 /// The inbox route of a listener socket: payments in envelopes sealed to the wallet's epic1
 /// addresses, received through `host` over `method` as the socket's foreign API receives them.
-/// None unless `epic1` (`epic1_web_listener` or `epic1_onion_listener` for the socket), so the
-/// socket answers as a stock listener does.
+/// With `in_person`, it also takes answers to the wallet's open in-person codes, posted to a
+/// direct route a code names. None unless `epic1` (`epic1_web_listener` or
+/// `epic1_onion_listener` for the socket) or `in_person`, so the socket answers as a stock
+/// listener does.
 fn peer_endpoint<N: NodeApi + 'static>(
     opened: &Opened<N>,
     host: Arc<CliHost<N>>,
     method: Arc<dyn Method>,
     epic1: bool,
+    in_person: bool,
 ) -> Result<Option<Arc<dyn SocketRoute>>, CliError> {
-    if !epic1 {
+    if !epic1 && !in_person {
         return Ok(None);
     }
     let network = opened.wallet.config().network;
+    let inbox = Arc::clone(&host) as Arc<dyn lepic_wallet_contacts::InPersonInbox>;
     let epic1_keys = Arc::clone(&host) as Arc<dyn lepic_wallet_contacts::Epic1Keys>;
-    let handler = DirectHandler::new(host, method, network, system_rng()?).with_epic1(epic1_keys);
+    let mut handler = DirectHandler::new(host, method, network, system_rng()?);
+    if epic1 {
+        handler = handler.with_epic1(epic1_keys);
+    }
+    if in_person {
+        handler = handler.with_in_person(inbox);
+    }
     Ok(Some(Arc::new(InboxRoute::new(Arc::new(handler)))))
+}
+
+impl<N: NodeApi + 'static> lepic_wallet_contacts::InPersonInbox for CliHost<N> {
+    fn take(&self, envelope: Vec<u8>) -> BoxFuture<'_, lepic_wallet_contacts::InPersonDirect> {
+        Box::pin(async move {
+            self.opened
+                .wallet
+                .contact_book()
+                .in_person_take_direct(&envelope)
+                .await
+        })
+    }
 }
 
 /// The wallet behind `http listen` and `tor listen`. Receipts reach the user as the wallet's

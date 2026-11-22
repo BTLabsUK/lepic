@@ -847,7 +847,9 @@ impl From<InvoiceError> for WalletError {
             E::NotPosted { .. } => WalletErrorKind::NotPosted,
             E::InputsSpentElsewhere { .. } => WalletErrorKind::InputsSpentElsewhere,
             E::InputsSpentByOwnTransaction { .. } => WalletErrorKind::InputsSpentByOwnTransaction,
-            E::PeerInputsSpent { .. } => WalletErrorKind::PeerInputsSpent,
+            E::PeerInputsSpent { .. } | E::AnswerInputsSpent { .. } => {
+                WalletErrorKind::PeerInputsSpent
+            }
             _ => WalletErrorKind::Other,
         };
         Self::chained(kind, &error)
@@ -954,7 +956,7 @@ const fn in_person_kind(refusal: InPersonRefusal) -> WalletErrorKind {
         R::NoMailbox => K::InPersonNoMailbox,
         R::UrIncomplete => K::UrCodeIncomplete,
         R::StoredAnswer => K::Other,
-        R::TtlTooShort { .. } => K::InvalidArgument,
+        R::TtlTooShort { .. } | R::DirectRoute | R::RepeatDiffers => K::InvalidArgument,
         R::Ended => K::Cancelled,
         _ => K::InvalidSlate,
     }
@@ -1500,6 +1502,10 @@ mod tests {
             (E::InPerson(InPersonRefusal::Proof), K::InvalidSlate),
             (E::InPerson(InPersonRefusal::Ended), K::Cancelled),
             (E::InPerson(InPersonRefusal::Loopback), K::InvalidSlate),
+            (
+                E::InPerson(InPersonRefusal::RepeatDiffers),
+                K::InvalidArgument,
+            ),
             (E::Wallet(lepic_wallet::WalletError::Locked), K::Locked),
             (
                 E::Invoice(InvoiceError::NotParked {

@@ -77,20 +77,37 @@ pub(in super::super) enum Waiting {
     Contact,
 }
 
-fn store<H: Host>(service: &Service<'_, H>) -> Result<crate::stores::SharedStore, CliError> {
+pub(super) fn store<H: Host>(
+    service: &Service<'_, H>,
+) -> Result<crate::stores::SharedStore, CliError> {
     service.held.store()
 }
 
-fn setting<H: Host>(service: &Service<'_, H>, key: &str) -> Result<Option<String>, CliError> {
+pub(super) fn setting<H: Host>(
+    service: &Service<'_, H>,
+    key: &str,
+) -> Result<Option<String>, CliError> {
     store(service)?.read(|repos| Ok::<_, CliError>(repos.setting(key)?))
 }
 
-fn put_setting<H: Host>(service: &Service<'_, H>, key: &str, value: &str) -> Result<(), CliError> {
+pub(super) fn put_setting<H: Host>(
+    service: &Service<'_, H>,
+    key: &str,
+    value: &str,
+) -> Result<(), CliError> {
     store(service)?.write(|repos| Ok::<_, CliError>(repos.put_setting(key, value)?))
 }
 
-fn delete_setting<H: Host>(service: &Service<'_, H>, key: &str) -> Result<(), CliError> {
+pub(super) fn delete_setting<H: Host>(service: &Service<'_, H>, key: &str) -> Result<(), CliError> {
     store(service)?.write(|repos| Ok::<_, CliError>(repos.delete_setting(key)?))
+}
+
+/// The settings whose keys start with `prefix`, as `(key, value)`.
+pub(super) fn settings_with_prefix<H: Host>(
+    service: &Service<'_, H>,
+    prefix: &str,
+) -> Result<Vec<(String, String)>, CliError> {
+    store(service)?.read(|repos| Ok::<_, CliError>(repos.settings_with_prefix(prefix)?))
 }
 
 /// The note of payment `id`; empty when it has none, or when it cannot be read.
@@ -211,7 +228,8 @@ pub(in super::super) fn held_expired<H: Host>(
     Ok(past(expires_at_height, known_tip(service)?))
 }
 
-fn known_tip<H: Host>(service: &Service<'_, H>) -> Result<Option<u64>, CliError> {
+/// The wallet's last known tip; the node is not asked.
+pub(super) fn known_tip<H: Host>(service: &Service<'_, H>) -> Result<Option<u64>, CliError> {
     Ok(service
         .held
         .wallet
@@ -702,6 +720,9 @@ impl Book {
             delivery.error = Some(error);
             delivery.undelivered = true;
         }
+        if let Some(request) = super::checkout::request_note(service, &payment.id)? {
+            super::checkout::fill(service, details, &mut payment, &request, self.tip).await;
+        }
         payment.purpose = note.purpose;
         payment.metadata = note.metadata;
         Ok(payment)
@@ -823,6 +844,7 @@ impl Book {
             delivery: delivery(details),
             answers: Vec::new(),
             check_code: None,
+            request: None,
             their_notices: None,
             recovery: self.recovery(details),
             post: None,
@@ -864,6 +886,10 @@ impl Book {
             if details.receive_listing.is_some() {
                 payment.set_our_address("listing", None);
             } else if let Some(index) = details.epic1_index {
+                // An epic1 payment is received as a file exchange: the record of the address
+                // it came to makes it a link payment, for payments received before this too.
+                // Its payer has no address, so `counterparty` stays empty.
+                payment.via = "link".to_owned();
                 payment.set_our_address("epic1", Some(index));
             } else if entry.transport.as_deref() == Some("epicbox") {
                 payment.set_our_address("epicbox", None);
@@ -1166,6 +1192,7 @@ fn waiting_payment(id: String, amount: u64, via: &str, received_at: String) -> P
         delivery: None,
         answers: Vec::new(),
         check_code: None,
+        request: None,
         their_notices: None,
         recovery: None,
         post: None,

@@ -353,8 +353,9 @@ fn send_declined_setting(slate_id: Uuid) -> String {
 /// receiver never signed. Such a send never happened: it is erased with its change, context,
 /// pending posts and watch, and its inputs unlocked ([`erase_declined_send`]). The time is
 /// kept as the only trace, and the first decline raises the event. A send to the wallet itself
-/// or one an open recovery holds is not erased, only recorded. A repeat, one for a send that
-/// was answered, finalized or ended, or one for a send already erased, is noted.
+/// or one an open recovery holds is not erased and nothing is recorded or raised for it. A
+/// repeat, one for a send that was answered, finalized or ended, or one for a send already
+/// erased, is noted.
 fn take_send_decline(
     repos: &mut dyn Repositories,
     slate_id: Uuid,
@@ -389,8 +390,11 @@ fn take_send_decline(
     if state != TxState::Sent || repos.slate(slate_id, SlateStage::Standard2)?.is_some() {
         return Ok(Effect::Noted);
     }
-    if let Some(entry) = repos.transaction(tx_id)? {
-        erase_declined_send(repos, tx_id, &entry)?;
+    if let Some(entry) = repos.transaction(tx_id)?
+        && !erase_declined_send(repos, tx_id, &entry)?
+    {
+        // A self-send or one an open recovery holds stays: it was not declined away.
+        return Ok(Effect::Noted);
     }
     if declined {
         return Ok(Effect::Noted);

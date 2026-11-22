@@ -37,10 +37,13 @@ pub use slate::{
     FLAG_PROOF, FLAG_RECEIVER_MESSAGE, FLAG_RESERVED, FLAG_SENDER_MESSAGE, FLAG_TTL, INPUT_LEN,
     NativeSlate, OUTPUT_LEN,
 };
-pub use tail::{ReplyKey, ReplyMailbox, Tail, UnknownRecord};
+pub use tail::{
+    DirectEntry, DirectMethod, DirectRoute, ReplyKey, ReplyMailbox, RequestClaim, Tail,
+    UnknownRecord,
+};
 pub use view::{
-    InputView, KernelView, MailboxView, MessageView, OutputView, ParticipantView, PaymentProofView,
-    SlateView, TailView, UnknownRecordView,
+    DirectEntryView, InputView, KernelView, MailboxView, MessageView, OutputView, ParticipantView,
+    PaymentProofView, RequestClaimView, SlateView, TailView, UnknownRecordView,
 };
 
 /// The id `lepic.v1` is stored and negotiated under. It never changes.

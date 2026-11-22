@@ -28,6 +28,7 @@ mod in_person;
 #[cfg(feature = "test-support")]
 #[doc(hidden)]
 pub mod in_person_testing;
+mod invoice_link;
 mod invoices;
 mod key_schedule;
 mod keycheck;
@@ -70,16 +71,23 @@ use thiserror::Error;
 pub use collect::{CollectReport, CollectTrigger};
 #[cfg(feature = "tor")]
 pub use direct::onion_dialer;
-pub use direct::{DirectHandler, Epic1Keys, InboxRoute};
-pub use domain::{DOMAIN_FILE_MAX, DomainFile, DomainRefused, DomainSigner, DomainVerdict, verify};
+pub use direct::{DirectHandler, Epic1Keys, InPersonDirect, InPersonInbox, InboxRoute};
+pub use domain::{
+    Claim, DOMAIN_FILE_MAX, DomainFile, DomainRefused, DomainSigner, DomainVerdict,
+    RequestSignError, RequestVerdict, request_claim, verify, verify_request,
+};
 pub use epic1::{
     EPIC1_TTL_BLOCKS, Epic1AnswerView, Epic1Attempt, Epic1LinkIssued, Epic1LinkRequest,
     Epic1NotRead, Epic1Paid, Epic1PayRequest, Epic1Read, Epic1Refusal, Epic1Restored,
     NotReadReason,
 };
 pub use in_person::{
-    IN_PERSON_TTL_BLOCKS, InPersonAnswerView, InPersonCode, InPersonCodeView,
-    InPersonInvoiceRequest, InPersonPaid, InPersonRead, InPersonRefusal, InPersonTaken,
+    ClaimSigner, IN_PERSON_TTL_BLOCKS, InPersonAnswerView, InPersonCode, InPersonCodeView,
+    InPersonInvoiceRequest, InPersonPaid, InPersonPostOutcome, InPersonPosted, InPersonRead,
+    InPersonRefusal, InPersonRoutePost, InPersonTaken, in_person_request_verify,
+};
+pub use invoice_link::{
+    INVOICE_LINK_PREFIX, InvoiceLinkError, MAX_INVOICE_LINK_LEN, invoice_link, parse_invoice_link,
 };
 pub use invoices::{ContactInvoice, InvoiceDetails, SAME_AMOUNT_WINDOW};
 pub use key_schedule::{

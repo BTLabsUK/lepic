@@ -7,6 +7,68 @@ Conventional Commit messages at release time.
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-11-22
+
+A shop can take Epic Cash at checkout: `lepic serve` issues a checkout request per order, the
+buyer's wallet opens it and pays on approval, and serve reports the request as paid. Serve can
+finalize the first valid answer by itself. The guide is `docs/guides/vendor-checkout.md`.
+Nothing is removed, and the wallet store keeps schema 22.
+
+### Added
+
+- `lepic serve` issues checkout requests: `POST /api/v1/payments` with `kind` `invoice` and `via`
+  `in_person` returns a code, QR frames and an `epiccash://invoice/1/<code>` link, for a shop's
+  order. The request can finalize the first valid answer by itself (`finalize: "first"`). The
+  payment view and `payment.state_changed` carry a `request.state`: `open`, `paid`, `expired` or
+  `refused`.
+- `lepic in-person read` and `lepic in-person pay` take `--link URL` and `--domain-file PATH`. They
+  show the requester's domain and whether it checked; a false claim is refused.
+- Two tail records for in-person invoices: `0x81` DIRECT_ROUTE (the shop's own host, `http` or
+  `tor`, as a second place for the answer) and `0xF0` REQUEST_CLAIM (the shop's domain, signed
+  over the whole code). Readers before this change ignore both.
+- `lepic serve --public-url URL` (repeatable, or `LEPIC_SERVE_PUBLIC_URL`): the shop's public
+  addresses, written into its checkout requests as the direct route. Serve refuses a loopback or
+  local-network address at startup.
+- The inbox, `/api/v1/inbox`, on serve's web listener and on `tor listen`, takes an answer to an
+  open code and answers `200`, `422 refused` with a reason, or `503 not_ready` in the same
+  request.
+- Serve's checkout requests share one reply slot per account, watched while any is open.
+- An answer to an invoice counts only when the node holds its inputs as unspent outputs.
+- FFI: `in_person_link_parse`, `in_person_request_verify`, `EpicWallet::in_person_invoice_with`;
+  `InPersonRead` carries the claim and the direct routes, and a post reports each route.
+
+### Changed
+
+- The invoice rule (ADR 0068): an invoice pushed through a mailbox needs a paired, verified
+  contact the payer allowed; an invoice the payer opens (scan, file or invoice link) needs no
+  pairing and is paid only on approval; no invoice goes to an address. ADR 0063 §8 is amended.
+- RFC 0003: an in-person answer can be finalized by serve when the request asked for it. Before,
+  nothing finalized by itself.
+- An invoice link needs a checked domain, and a false domain claim is refused.
+- An answer to a cancelled checkout request is refused with the reason `cancelled` and counts
+  in `answers_refused`. Before, it was dropped without a count.
+- Issuing an in-person request again for the same slate id with a different kind, account, amount
+  or message is refused (serve: 409 `idempotency_mismatch`). Before, the first code came back.
+- A posted transaction with no local cutoff records the node's tip as its post height, not the
+  height of the last refresh.
+- Serve: a payment received at the account's epic1 address reads `via` `link`, as on the payer's
+  side. Before, it read `file`. An epic1 payer has no address, so `counterparty` is absent there and
+  `our_address` names the epic1 address.
+
+### Fixed
+
+- Serve: a TLS client that stopped reading kept its answer and its connection slot for good once
+  the connection reached its age limit. The drain now gets the age limit once more, then the
+  connection is dropped.
+- A listener answering a payment checked the open-receipt caps and received outside the turn other
+  receives take, so two receives could both take the last free place. Both now run in that turn.
+- A declined send left its slates behind, so a retry under the same slate id failed with a raw
+  duplicate error. The slates are deleted with the send, and the id is refused as taken
+  (`SlateIdTaken`) while the decline is recorded. A decline for a self-send, or for a send under an
+  open recovery, records nothing and raises no event.
+- FFI: an offline session refuses sends and resends over HTTP and Tor with `Offline` before anything
+  is stored or locked. Before, a resend to an `https` peer connected out.
+
 ## [0.6.0] - 2026-11-20
 
 Payments between LEPIC wallets, contacts and pairing now go through a list of Epicmail mailboxes

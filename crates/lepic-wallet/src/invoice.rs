@@ -278,6 +278,10 @@ pub enum InvoiceError {
         #[source]
         source: NodeError,
     },
+    /// An answer to an invoice spends inputs that are not unspent outputs on the chain: they
+    /// were spent, or never existed. Nothing is stored for it.
+    #[error("inputs of the answer to invoice {slate_id} are not unspent outputs")]
+    AnswerInputsSpent { slate_id: SlateId },
     /// No invoice with the slate id waits to be paid or declined.
     #[error("invoice {slate_id} is not waiting to be paid")]
     NotParked { slate_id: SlateId },
@@ -1337,13 +1341,21 @@ where
     /// [`Wallet::finalize_invoice_decoded`] checks it, without storing or posting anything.
     /// Several answers to one invoice can each be checked; one of them is finalized later.
     ///
-    /// Fails as [`Wallet::finalize_invoice_decoded`] fails before it stores.
+    /// The node is asked for the answer's inputs as well: an answer whose inputs are not
+    /// unspent outputs could never be posted.
+    ///
+    /// Fails as [`Wallet::finalize_invoice_decoded`] fails before it stores, with
+    /// [`InvoiceError::AnswerInputsSpent`] when the node's UTXO set misses an input in two
+    /// answers, and with [`InvoiceError::Node`] when the node cannot be asked, so the answer is
+    /// checked again later.
     pub async fn check_invoice_answer(&self, i2: Slate) -> Result<(), InvoiceError> {
         let session = self.session()?;
         let network = self.config().network;
         if i2.stage() != Stage::I2 {
             return Err(InvoiceError::WrongStage { stage: i2.stage() });
         }
+        let slate_id = i2.id();
+        let inputs: Vec<Commitment> = i2.inputs().iter().map(|input| input.commitment).collect();
         let (tip, _) = self.stage_tip(&session, InvoiceError::Node).await?;
         self.blocking(move |ports, _| {
             let env = InvoiceEnvironment {
@@ -1355,7 +1367,34 @@ where
             };
             Ok(session.store.read(|repos| check_stored(repos, &env, &i2)))
         })
-        .await?
+        .await??;
+        if self.unspent_missing(inputs).await?.is_empty() {
+            Ok(())
+        } else {
+            info!(%slate_id, "invoice answer spends inputs the node does not hold");
+            Err(InvoiceError::AnswerInputsSpent { slate_id })
+        }
+    }
+
+    /// Of `commitments`, those the node's UTXO set misses in two answers, so an output the node
+    /// added between the two is not taken for spent.
+    async fn unspent_missing(
+        &self,
+        mut missing: Vec<Commitment>,
+    ) -> Result<Vec<Commitment>, InvoiceError> {
+        for _ in 0..2 {
+            if missing.is_empty() {
+                break;
+            }
+            let held = self
+                .ports()
+                .node
+                .get_outputs(&missing)
+                .await
+                .map_err(InvoiceError::Node)?;
+            missing.retain(|commitment| !held.iter().any(|found| found.commitment == *commitment));
+        }
+        Ok(missing)
     }
 
     async fn finalize_invoice_slate(
@@ -1399,7 +1438,7 @@ where
         // An offline session keeps the transaction `finalized`, for the app to post.
         let pushed = stored.state != TxState::Posted && !self.config().offline;
         if pushed {
-            self.push_invoice(stored.tx_id, &stored.finalized, propagation)
+            self.push_invoice(stored.tx_id, &stored.finalized, propagation, tip)
                 .await?;
         }
         Ok(Finalized {
@@ -1410,14 +1449,21 @@ where
         })
     }
 
-    /// [`Wallet::push_final`], with its failures as [`InvoiceError`].
+    /// [`Wallet::push_final_at`] at the tip `tip` the finalize read, with its failures as
+    /// [`InvoiceError`]. The push is recorded at that tip: recorded at the last refresh, which
+    /// can be many blocks behind, the next refresh would take it for an old push and push the
+    /// transaction again.
     async fn push_invoice(
         &self,
         tx_id: TxId,
         finalized: &FinalizedSlate,
         propagation: Propagation,
+        tip: Height,
     ) -> Result<(), InvoiceError> {
-        match self.push_final(finalized, tx_id, propagation).await {
+        match self
+            .push_final_at(finalized, tx_id, propagation, Some(tip))
+            .await
+        {
             Ok(_) => Ok(()),
             Err(PushFailure::NotPosted(source)) => Err(InvoiceError::NotPosted { tx_id, source }),
             Err(PushFailure::Unminable { source, spent }) => {

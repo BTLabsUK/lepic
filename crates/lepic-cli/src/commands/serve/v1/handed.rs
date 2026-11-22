@@ -408,6 +408,7 @@ pub(super) fn answer_handoff(id: &str, answer: SealedAnswer, qr: bool) -> Handof
             text,
             file_name: Some(file_name),
             qr_frames: None,
+            link: None,
         },
         qr,
     )

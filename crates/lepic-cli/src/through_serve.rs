@@ -624,6 +624,8 @@ mod tests {
             &["in-person", "receive", "--hex", "ab"],
             &["in-person", "read", "--hex", "ab"],
             &["in-person", "pay", "1", "--hex", "ab"],
+            &["in-person", "read", "--link", "epiccash://invoice/1/AA"],
+            &["in-person", "pay", "1", "--link", "epiccash://invoice/1/AA"],
             &["in-person", "take", "ab", "cd"],
             &["in-person", "finalize", "s1", "2", "--fluff"],
             &["in-person", "answers", "s1"],
@@ -692,6 +694,24 @@ mod tests {
             &["in-person", "invoice", "1", "--out", "code.txt"],
             &["in-person", "send", "1", "--selection", "all"],
             &["in-person", "read", "--hex", "ab", "--selection", "all"],
+            // The domain's file is checked here.
+            &[
+                "in-person",
+                "read",
+                "--hex",
+                "ab",
+                "--domain-file",
+                "shop.json",
+            ],
+            &[
+                "in-person",
+                "pay",
+                "1",
+                "--hex",
+                "ab",
+                "--domain-file",
+                "shop.json",
+            ],
             &["epic1", "--offline", "answers"],
         ];
         for arguments in local {
@@ -738,15 +758,17 @@ mod tests {
             else {
                 panic!("{command}")
             };
-            let (crate::cli::InPersonCommand::Read(crate::cli::InPersonReadArgs { code, .. })
-            | crate::cli::InPersonCommand::Receive(crate::cli::InPersonReceiveArgs {
-                code,
-                ..
-            })) = sent
-            else {
-                panic!("{command}")
+            let (hex, file) = match sent {
+                crate::cli::InPersonCommand::Read(crate::cli::InPersonReadArgs {
+                    code, ..
+                }) => (code.hex, code.file),
+                crate::cli::InPersonCommand::Receive(crate::cli::InPersonReceiveArgs {
+                    code,
+                    ..
+                }) => (code.hex, code.file),
+                _ => panic!("{command}"),
             };
-            assert_eq!((code.hex.as_deref(), code.file), (Some("abcd"), None));
+            assert_eq!((hex.as_deref(), file), (Some("abcd"), None));
         }
         let arguments = ["in-person", "take", "--file", code.as_str()];
         assert!(!forwarded(&parse(&arguments)));

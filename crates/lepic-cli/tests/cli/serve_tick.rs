@@ -123,11 +123,21 @@ fn an_epic1_payment_between_two_serves_completes_by_push_alone() {
             );
             assert_eq!(node.pushed_transactions().len(), 1);
 
-            // The payee lists the payment it took, with no link named in it.
+            // The payee lists the payment it took, with no link named in it. It came to the
+            // payee's epic1 address, so it reads as a link payment from a payer with no
+            // address, in the list, on GET and under the `via` filter.
             let listed = http(payee_socket, "GET", "/api/v1/payments?direction=in", None).ok();
             let item = &listed["items"][0];
             assert_eq!(item["amount"], "2.00000000", "{listed}");
             assert!(item.get("link_id").is_none(), "{listed}");
+            assert_eq!(item["via"], "link", "{listed}");
+            assert_eq!(item["our_address"]["type"], "epic1", "{listed}");
+            assert!(item["counterparty"].is_null(), "{listed}");
+            let id = text(item, "id");
+            let shown = http(payee_socket, "GET", &format!("/api/v1/payments/{id}"), None).ok();
+            assert_eq!(shown["via"], "link", "{shown}");
+            let by_link = http(payee_socket, "GET", "/api/v1/payments?via=link", None).ok();
+            assert_eq!(by_link["items"][0]["id"], item["id"], "{by_link}");
         });
     });
 }

@@ -54,6 +54,11 @@ pub const EPIC1_DELIVERY_KEY_LABEL: &[u8] = b"lepic-wallet epic1 delivery key v1
 /// `account (u32 BE) || net || slate_id (16) || counter (u8)`, 22 bytes.
 pub const REPLY_MAILBOX_LABEL: &[u8] = b"lepic-wallet reply mailbox v1";
 
+/// The Epicbox key of the one reply mailbox slot an account shares among its shared-slot
+/// in-person codes: context `account (u32 BE) || net`, 5 bytes. No slate id, so every such code
+/// of the account names the same slot.
+pub const SHARED_REPLY_MAILBOX_LABEL: &[u8] = b"lepic-wallet shared reply mailbox v1";
+
 /// The Epicbox `from` key of the posts of one payment to another party's mailbox: context
 /// `account (u32 BE) || net || payment_id (16) || role || counter (u8)`, 23 bytes
 /// ([`PostRole`]).
@@ -305,6 +310,20 @@ pub fn reply_mailbox_key(
         seed,
         REPLY_MAILBOX_LABEL,
         &[&account.to_be_bytes(), &[network.byte()], slate_id],
+    )
+}
+
+/// The key of the reply mailbox slot `account` on `network` shares among its shared-slot
+/// in-person codes.
+pub fn shared_reply_mailbox_key(
+    seed: &Seed,
+    account: u32,
+    network: Network,
+) -> Result<SecretKey, WalletError> {
+    first_valid_key(
+        seed,
+        SHARED_REPLY_MAILBOX_LABEL,
+        &[&account.to_be_bytes(), &[network.byte()]],
     )
 }
 
@@ -587,6 +606,19 @@ mod tests {
             &[&[0, 0, 0, 1], &[1], &slate_id, &[0]],
         );
         assert_eq!(reply.expose_bytes(), &expected);
+
+        let shared = shared_reply_mailbox_key(&seed(1), 1, Network::Floonet).unwrap();
+        let expected = keyed(
+            b"lepic-wallet shared reply mailbox v1",
+            &[&[0, 0, 0, 1], &[1], &[0]],
+        );
+        assert_eq!(shared.expose_bytes(), &expected);
+        for other in [
+            shared_reply_mailbox_key(&seed(1), 2, Network::Floonet),
+            shared_reply_mailbox_key(&seed(1), 1, Network::Mainnet),
+        ] {
+            assert_ne!(other.unwrap().expose_bytes(), shared.expose_bytes());
+        }
 
         let post = post_key(
             &seed(1),

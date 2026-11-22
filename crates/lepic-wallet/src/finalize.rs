@@ -1183,8 +1183,9 @@ where
     /// that spends one of them, it fails with [`FinalizeError::InputsSpentByOwnTransaction`]
     /// instead, and when only inputs the other party added are gone, once the node's tip is
     /// above the slate's height, with [`FinalizeError::PeerInputsSpent`]. In all three the
-    /// transaction is cancelled, its kernel stays watched, and a refresh runs. A send
-    /// with a cutoff, the earlier of its slate's TTL cutoff and the local cutoff of
+    /// transaction is cancelled, its kernel stays watched, and a refresh runs. The push is
+    /// recorded at the node's tip, read for the post. A send with a cutoff, the earlier of its
+    /// slate's TTL cutoff and the local cutoff of
     /// [`crate::send::SendRequest::local_ttl_blocks`], has the node's tip asked for, and is
     /// refused with [`FinalizeError::Expired`] once the tip reaches it, also when it was posted
     /// before. So is an invoice this wallet issued, at the earlier of its I3's TTL cutoff and
@@ -1212,21 +1213,29 @@ where
             })
             .await??
         };
-        let mut height = None;
-        if let Some(cutoff) = cutoff {
-            let tip = self
-                .ports()
-                .node
-                .get_tip()
-                .await
-                .map_err(FinalizeError::Node)?
-                .height;
-            self.check_plausible_tip(&session, tip).await?;
-            if tip >= cutoff {
-                return Err(FinalizeError::Expired { cutoff, tip });
+        // The push is recorded at the tip read now: recorded at the last refresh, which can be
+        // many blocks behind, the next refresh would take it for an old push and push the
+        // transaction again. Without a cutoff a tip that cannot be read or is not plausible
+        // does not stop the post: it is recorded at the last refresh then.
+        let read = self.ports().node.get_tip().await.map(|tip| tip.height);
+        let height = match cutoff {
+            Some(cutoff) => {
+                let tip = read.map_err(FinalizeError::Node)?;
+                self.check_plausible_tip(&session, tip).await?;
+                if tip >= cutoff {
+                    return Err(FinalizeError::Expired { cutoff, tip });
+                }
+                Some(tip)
             }
-            height = Some(tip);
-        }
+            None => match read {
+                Ok(tip) => self
+                    .check_plausible_tip(&session, tip)
+                    .await
+                    .ok()
+                    .map(|_| tip),
+                Err(_) => None,
+            },
+        };
         self.push_at(tx_id, &finalized, propagation, height).await
     }
 
@@ -1433,17 +1442,6 @@ where
             slate_id: finalized.slate.id(),
             reason: lepic_primitives::error_chain::ErrorChain(source).to_string(),
         }));
-    }
-
-    /// [`Self::push_final_at`] at the height the wallet last refreshed at.
-    pub(crate) async fn push_final(
-        &self,
-        finalized: &FinalizedSlate,
-        tx_id: TxId,
-        propagation: Propagation,
-    ) -> Result<Posted, PushFailure> {
-        self.push_final_at(finalized, tx_id, propagation, None)
-            .await
     }
 
     /// Hands the transaction to the node, adds the push to the transaction's record of pushes

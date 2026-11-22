@@ -16,7 +16,7 @@ pub use client::{
 };
 pub use error::{PeerClientError, PeerFormatError};
 pub use origin::{Origin, OriginError, PeerTarget, WebScheme};
-pub use problem::{Problem, ProblemCode};
+pub use problem::{MAX_REASON_LEN, Problem, ProblemCode};
 pub use server::{
     HandlerFuture, MAX_CACHED_REPLIES, PeerAnswer, PeerEndpoint, PeerRefusal, SlateHandler,
     problem_response,

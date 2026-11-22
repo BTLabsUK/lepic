@@ -348,6 +348,14 @@ pub enum CliError {
     DomainNotConfigured,
     #[error("the domain file would be over 4 KiB: name fewer relays")]
     DomainFileTooLarge,
+    #[error("invoice link rejected")]
+    InvoiceLink(#[source] lepic_wallet_contacts::InvoiceLinkError),
+    /// The scanned code claims a domain its well-known file does not prove: it is not paid.
+    #[error("the code claims {domain}, which its file does not prove ({reason}): nothing was paid")]
+    RequestDomainRefused {
+        domain: String,
+        reason: &'static str,
+    },
     #[error("{} exists; --force replaces it", path.display())]
     FileExists { path: std::path::PathBuf },
     #[error("{} exists; a backup goes to a path that does not exist yet", path.display())]
@@ -459,6 +467,7 @@ impl CliError {
             | Self::BackupExists { .. }
             | Self::BackupNotReady { .. }
             | Self::DomainFileTooLarge
+            | Self::InvoiceLink(_)
             | Self::SocketPathTooLong { .. }
             | Self::SocketPathTaken { .. }
             | Self::SocketInUse { .. }
@@ -492,7 +501,8 @@ impl CliError {
             Self::SlateIdReused { .. }
             | Self::ReviewChanged { .. }
             | Self::RecoveryFailed { .. }
-            | Self::PostedSend { .. } => ErrorKind::Rejected,
+            | Self::PostedSend { .. }
+            | Self::RequestDomainRefused { .. } => ErrorKind::Rejected,
             Self::NoSendWithSlate | Self::PaymentDeclined { .. } => ErrorKind::NotFound,
             Self::Send(error) => send_kind(error),
             Self::Receive(error) => receive_kind(error),
@@ -725,7 +735,11 @@ fn contact_kind(error: &ContactError) -> ErrorKind {
         ContactError::InPerson(InPersonRefusal::NoCode | InPersonRefusal::NoAnswer) => {
             ErrorKind::NotFound
         }
-        ContactError::InPerson(InPersonRefusal::TtlTooShort { .. }) => ErrorKind::Usage,
+        ContactError::InPerson(
+            InPersonRefusal::TtlTooShort { .. }
+            | InPersonRefusal::DirectRoute
+            | InPersonRefusal::RepeatDiffers,
+        ) => ErrorKind::Usage,
         ContactError::InPerson(_) => ErrorKind::Rejected,
         ContactError::Epic1Link(link) if link.is_earlier_address() => ErrorKind::EarlierAddress,
         ContactError::Epic1Link(_) => ErrorKind::Usage,
@@ -841,7 +855,8 @@ fn invoice_kind(error: &InvoiceError) -> ErrorKind {
         | InvoiceError::NotFinalizable { .. }
         | InvoiceError::InputsSpentElsewhere { .. }
         | InvoiceError::InputsSpentByOwnTransaction { .. }
-        | InvoiceError::PeerInputsSpent { .. } => ErrorKind::Rejected,
+        | InvoiceError::PeerInputsSpent { .. }
+        | InvoiceError::AnswerInputsSpent { .. } => ErrorKind::Rejected,
         _ => ErrorKind::Internal,
     }
 }
@@ -1075,6 +1090,17 @@ mod tests {
             (CliError::PayloadId, ErrorKind::Usage),
             (CliError::PayloadHex, ErrorKind::Usage),
             (CliError::DomainNotConfigured, ErrorKind::Usage),
+            (
+                CliError::InvoiceLink(lepic_wallet_contacts::InvoiceLinkError::Prefix),
+                ErrorKind::Usage,
+            ),
+            (
+                CliError::RequestDomainRefused {
+                    domain: "shop.example".to_owned(),
+                    reason: "key_not_listed",
+                },
+                ErrorKind::Rejected,
+            ),
             (CliError::OwnerTlsNotConfigured, ErrorKind::Config),
             (
                 CliError::ApiClientNotFound {

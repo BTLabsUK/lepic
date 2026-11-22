@@ -48,6 +48,9 @@ pub trait SlateHandler: Send + Sync {
 pub enum PeerRefusal {
     /// The wallet did not take the slate, such as an invoice: 422 `refused`.
     Refused,
+    /// The wallet did not take the slate and says why: 422 `refused` with `reason`. A reason
+    /// that is not 1 to [`crate::MAX_REASON_LEN`] characters of `a`-`z` and `_` is left out.
+    RefusedFor { reason: &'static str },
     /// The wallet cannot take a payment now: 503 `not_ready` with `Retry-After`.
     NotReady { retry_after: Duration },
     /// Not an envelope of a format the wallet reads: 415 `unsupported_format`.
@@ -58,6 +61,7 @@ impl PeerRefusal {
     fn response(self) -> Response<Full<Bytes>> {
         match self {
             Self::Refused => problem_response(ProblemCode::Refused, None),
+            Self::RefusedFor { reason } => refused_response(reason),
             Self::NotReady { retry_after } => {
                 problem_response(ProblemCode::NotReady, Some(retry_after))
             }
@@ -255,6 +259,20 @@ pub fn problem_response(code: ProblemCode, retry_after: Option<Duration>) -> Res
     response
 }
 
+/// A 422 `refused` answer that names its reason.
+fn refused_response(reason: &str) -> Response<Full<Bytes>> {
+    let mut problem = Problem::new(ProblemCode::Refused);
+    if crate::problem::reason_is_valid(reason) {
+        problem.reason = Some(reason.to_owned());
+    }
+    let mut response = with_type(
+        Response::new(Full::new(Bytes::from(problem.to_bytes()))),
+        PROBLEM_MEDIA_TYPE,
+    );
+    *response.status_mut() = StatusCode::UNPROCESSABLE_ENTITY;
+    response
+}
+
 fn with_type(mut response: Response<Full<Bytes>>, media: &'static str) -> Response<Full<Bytes>> {
     response
         .headers_mut()
@@ -362,6 +380,23 @@ mod tests {
         assert_eq!(handler.calls.load(Ordering::SeqCst), calls);
         endpoint.receive(b"0".to_vec()).await;
         assert_eq!(handler.calls.load(Ordering::SeqCst), calls + 1);
+    }
+
+    #[tokio::test]
+    async fn a_refusal_names_its_reason_when_it_is_a_plain_word() {
+        for (reason, sent) in [
+            ("already_finalized", Some("already_finalized")),
+            ("Not A Reason", None),
+            ("", None),
+        ] {
+            let (_, endpoint) = endpoint(Some(PeerRefusal::RefusedFor { reason }));
+            let answer = endpoint.receive(b"i1".to_vec()).await;
+            assert!(!answer.received);
+            assert_eq!(answer.response.status().as_u16(), 422);
+            let problem = problem(answer.response).await;
+            assert_eq!(problem.known_code(), Some(ProblemCode::Refused));
+            assert_eq!(problem.refusal_reason(), sent, "{reason:?}");
+        }
     }
 
     #[tokio::test]

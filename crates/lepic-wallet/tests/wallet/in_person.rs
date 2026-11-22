@@ -25,6 +25,7 @@ use lepic_epicbox::{Domain, EpicboxAddress, Network as RelayNetwork, RelayEndpoi
 use lepic_keychain::Identifier;
 use lepic_methods::epicbox::Epicbox;
 use lepic_node::Propagation;
+use lepic_node::mock::MockFailure;
 use lepic_primitives::amount::{Amount, Height};
 use lepic_primitives::params::Network;
 use lepic_slate::codec::{MediaType, WireSlate};
@@ -44,8 +45,9 @@ use lepic_wallet_contacts::in_person_testing::{
     armored, for_network, sealed_to_code, with_mailbox_host, with_proof, without_tail,
 };
 use lepic_wallet_contacts::{
-    CollectTrigger, ContactError, ContactRelays, IN_PERSON_TTL_BLOCKS, InPersonCode,
-    InPersonInvoiceRequest, InPersonPaid, InPersonRefusal, RelayMode, WalletContacts,
+    ClaimSigner, CollectTrigger, ContactError, ContactRelays, IN_PERSON_TTL_BLOCKS, InPersonCode,
+    InPersonDirect, InPersonInvoiceRequest, InPersonPaid, InPersonRefusal, MethodId, RelayMode,
+    RouteEntry, WalletContacts,
 };
 use rand::SeedableRng;
 use world::{ACCOUNT, AMOUNT, FUNDING, Party, TIP, World, pay_request};
@@ -64,6 +66,10 @@ fn request() -> InPersonInvoiceRequest {
         amount: Amount::new(AMOUNT),
         message: Some("coffee".to_owned()),
         ttl_blocks: None,
+        slate_id: None,
+        direct: Vec::new(),
+        claim: None,
+        shared_slot: false,
     }
 }
 
@@ -694,6 +700,8 @@ fn a_payment_past_the_ttl_frees_its_inputs_when_cancelled_and_the_code_is_forgot
     world
         .block_on(world.issuer.wallet.cancel(code.tx_id))
         .unwrap();
+    // The issuer forgets a cancelled code once its own tip is past the code's TTL.
+    world.block_on(world.issuer.wallet.refresh()).unwrap();
     let state = world
         .issuer
         .read(|repos| repos.transaction(code.tx_id))
@@ -1249,4 +1257,403 @@ fn an_in_person_answer_stored_before_its_ack_was_lost_is_handled_once() {
         .unwrap();
     assert_eq!(view.answers.len(), 1);
     assert_eq!(view.finalized, None);
+}
+
+impl World {
+    /// The issuer shows a code made from `request`.
+    fn show_with(&self, relays: &ContactRelays, request: InPersonInvoiceRequest) -> InPersonCode {
+        self.block_on(
+            self.issuer
+                .wallet
+                .contact_book()
+                .in_person_invoice(relays, request),
+        )
+        .unwrap()
+    }
+
+    /// `party` pays `code` and posts the answer.
+    fn pay_and_post(&self, party: &Party, code: &InPersonCode) -> InPersonPaid {
+        let book = party.wallet.contact_book();
+        let paid = self
+            .block_on(book.in_person_pay(&relays(party), &code.bytes, pay_request()))
+            .unwrap();
+        self.block_on(book.in_person_post(&relays(party), paid.slate_id))
+            .unwrap();
+        paid
+    }
+
+    fn take_direct(&self, envelope: &[u8]) -> InPersonDirect {
+        self.block_on(
+            self.issuer
+                .wallet
+                .contact_book()
+                .in_person_take_direct(envelope),
+        )
+    }
+
+    fn answers_to(&self, code: &InPersonCode) -> usize {
+        self.block_on(
+            self.issuer
+                .wallet
+                .contact_book()
+                .in_person_answers(code.slate_id),
+        )
+        .unwrap()
+        .answers
+        .len()
+    }
+}
+
+/// The reasons of the in-person answers refused among `events`.
+fn refused_reasons(events: &[Event]) -> Vec<&'static str> {
+    events
+        .iter()
+        .filter_map(|event| match event {
+            Event::InPersonAnswerRefused(refused) => Some(refused.reason),
+            _ => None,
+        })
+        .collect()
+}
+
+/// An answer whose inputs the node does not hold as unspent could never be posted: it is
+/// refused for good, told once, and not counted.
+#[test]
+fn an_in_person_answer_whose_inputs_are_spent_is_refused_and_not_counted() {
+    let world = World::new();
+    let mut issuer_events = world.issuer.wallet.subscribe();
+    let code = world.show(&offline(&world.issuer));
+    let paid = world
+        .block_on(world.payer.wallet.contact_book().in_person_pay(
+            &relays(&world.payer),
+            &code.bytes,
+            pay_request(),
+        ))
+        .unwrap();
+    world.node.update_chain(|chain| {
+        for output in &mut chain.outputs {
+            output.spent = true;
+        }
+    });
+
+    assert_eq!(
+        world.take_direct(&paid.envelope),
+        InPersonDirect::Refused("inputs_spent")
+    );
+    let taken = world.block_on(
+        world
+            .issuer
+            .wallet
+            .contact_book()
+            .in_person_take(&paid.envelope),
+    );
+    assert!(
+        matches!(
+            taken,
+            Err(ContactError::Invoice(InvoiceError::AnswerInputsSpent { slate_id }))
+                if slate_id == code.slate_id
+        ),
+        "{taken:?}"
+    );
+
+    let events = events(&mut issuer_events);
+    assert_eq!(refused_reasons(&events), ["inputs_spent", "inputs_spent"]);
+    assert_eq!(in_person_answers(&events), 0);
+    assert_eq!(world.answers_to(&code), 0);
+}
+
+/// When the node cannot say whether an answer's inputs are unspent, the answer is neither
+/// counted nor refused: it is taken once the node answers.
+#[test]
+fn an_in_person_answer_is_taken_later_when_the_node_cannot_check_its_inputs() {
+    let world = World::new();
+    let mut issuer_events = world.issuer.wallet.subscribe();
+    let code = world.show(&offline(&world.issuer));
+    let paid = world
+        .block_on(world.payer.wallet.contact_book().in_person_pay(
+            &relays(&world.payer),
+            &code.bytes,
+            pay_request(),
+        ))
+        .unwrap();
+    world
+        .node
+        .fail_every("get_outputs", MockFailure::Unreachable);
+
+    assert_eq!(world.take_direct(&paid.envelope), InPersonDirect::Transient);
+    assert_eq!(world.answers_to(&code), 0);
+    assert_eq!(
+        refused_reasons(&events(&mut issuer_events)),
+        Vec::<&str>::new()
+    );
+
+    world.node.stop_failing("get_outputs");
+    assert_eq!(world.take_direct(&paid.envelope), InPersonDirect::Accepted);
+    assert_eq!(world.answers_to(&code), 1);
+    assert_eq!(in_person_answers(&events(&mut issuer_events)), 1);
+}
+
+/// Once an answer is finalized, another answer to the same code is refused for good and never
+/// finalized; the one finalized, coming again, is still the same answer.
+#[test]
+fn a_second_in_person_answer_after_finalize_is_refused_and_never_finalized() {
+    let world = World::new();
+    let mut issuer_events = world.issuer.wallet.subscribe();
+    let code = world.show(&offline(&world.issuer));
+    let twin = world.payer_twin();
+    twin.fund(0, FUNDING);
+    let mut paid = Vec::new();
+    for party in [&world.payer, &twin] {
+        paid.push(
+            world
+                .block_on(party.wallet.contact_book().in_person_pay(
+                    &relays(party),
+                    &code.bytes,
+                    pay_request(),
+                ))
+                .unwrap(),
+        );
+    }
+    assert_eq!(
+        world.take_direct(&paid[0].envelope),
+        InPersonDirect::Accepted
+    );
+    world
+        .block_on(world.issuer.wallet.contact_book().in_person_finalize(
+            code.slate_id,
+            1,
+            Propagation::Stem,
+        ))
+        .unwrap();
+    assert_eq!(world.node.pushed_transactions().len(), 1);
+
+    assert_eq!(
+        world.take_direct(&paid[1].envelope),
+        InPersonDirect::Refused("already_finalized")
+    );
+    assert_eq!(
+        world.take_direct(&paid[0].envelope),
+        InPersonDirect::Accepted
+    );
+    assert_eq!(
+        refusal(
+            world.block_on(world.issuer.wallet.contact_book().in_person_finalize(
+                code.slate_id,
+                2,
+                Propagation::Stem,
+            ))
+        ),
+        InPersonRefusal::NoAnswer
+    );
+
+    assert_eq!(world.node.pushed_transactions().len(), 1);
+    let view = world
+        .block_on(
+            world
+                .issuer
+                .wallet
+                .contact_book()
+                .in_person_answers(code.slate_id),
+        )
+        .unwrap();
+    assert_eq!(view.finalized, Some(1));
+    assert_eq!(view.answers.len(), 1);
+    assert_eq!(
+        refused_reasons(&events(&mut issuer_events)),
+        ["already_finalized"]
+    );
+}
+
+/// Codes made for the account's shared slot name one reply mailbox and share one watch row,
+/// kept while any of them waits; a code made without it keeps its own slot.
+#[test]
+fn in_person_codes_on_the_shared_slot_share_one_row_until_the_last_ends() {
+    let world = World::new();
+    let issuer_relays = relays(&world.issuer);
+    let shared = || InPersonInvoiceRequest {
+        shared_slot: true,
+        ..request()
+    };
+    let first = world.show_with(&issuer_relays, shared());
+    let second = world.show_with(&issuer_relays, shared());
+    let own = world.show(&issuer_relays);
+    let slot = WatchRow {
+        key_ref: format!("inperson-slot:{}", ACCOUNT.0),
+        relay: first.mailbox.clone().unwrap(),
+        class: MailClass::InPerson,
+        expires_at: None,
+    };
+    let rows = |world: &World| {
+        world.block_on(
+            world
+                .issuer
+                .wallet
+                .contact_book()
+                .claim_pushed(&issuer_relays),
+        );
+        let mut rows = code_rows(&world.issuer);
+        rows.sort_by(|a, b| a.key_ref.cmp(&b.key_ref));
+        rows
+    };
+    let own_row = WatchRow {
+        key_ref: format!("inperson:{}", own.slate_id),
+        ..slot.clone()
+    };
+    assert_eq!(rows(&world), [slot.clone(), own_row.clone()]);
+
+    let paid = world.pay_and_post(&world.payer, &first);
+    assert_eq!(paid.slate_id, first.slate_id);
+    assert_eq!(world.collect_with(&world.issuer, &issuer_relays), 1);
+    world
+        .block_on(world.issuer.wallet.contact_book().in_person_finalize(
+            first.slate_id,
+            1,
+            Propagation::Stem,
+        ))
+        .unwrap();
+    // The second code still waits on the slot.
+    assert_eq!(rows(&world), [slot, own_row.clone()]);
+
+    let twin = world.payer_twin();
+    twin.fund(0, FUNDING);
+    world.pay_and_post(&twin, &second);
+    assert_eq!(world.collect_with(&world.issuer, &issuer_relays), 1);
+    assert_eq!(world.answers_to(&second), 1);
+    world
+        .block_on(world.issuer.wallet.contact_book().in_person_finalize(
+            second.slate_id,
+            1,
+            Propagation::Stem,
+        ))
+        .unwrap();
+    assert_eq!(rows(&world), [own_row]);
+}
+
+/// Issuing a code again for the same slate id returns the code stored, without a second
+/// invoice.
+#[test]
+fn an_in_person_code_issued_again_for_its_slate_id_is_the_same_code() {
+    let world = World::new();
+    let slate_id = lepic_slate::model::SlateId::from_bytes([5; 16]);
+    let ask = || InPersonInvoiceRequest {
+        slate_id: Some(slate_id),
+        ..request()
+    };
+    let entries = || world.issuer.read(|repos| repos.transactions(ACCOUNT)).len();
+    let before = entries();
+    let first = world.show_with(&relays(&world.issuer), ask());
+    let again = world.show_with(&relays(&world.issuer), ask());
+
+    assert_eq!(first.slate_id, slate_id);
+    assert_eq!(again, first);
+    assert_eq!(entries(), before + 1);
+
+    for other in [
+        InPersonInvoiceRequest {
+            amount: Amount::new(AMOUNT + 1),
+            ..ask()
+        },
+        InPersonInvoiceRequest {
+            message: Some("tea".to_owned()),
+            ..ask()
+        },
+    ] {
+        assert_eq!(
+            refusal(
+                world.block_on(
+                    world
+                        .issuer
+                        .wallet
+                        .contact_book()
+                        .in_person_invoice(&relays(&world.issuer), other)
+                )
+            ),
+            InPersonRefusal::RepeatDiffers
+        );
+    }
+    assert_eq!(entries(), before + 1);
+}
+
+/// An answer to a code the issuer cancelled is refused as `cancelled`, also after the
+/// issuer's upkeep ran, until the code's TTL passes.
+#[test]
+fn an_answer_to_a_cancelled_code_is_refused_as_cancelled() {
+    let world = World::new();
+    let mut issuer_events = world.issuer.wallet.subscribe();
+    let code = world.show(&offline(&world.issuer));
+    let paid = world
+        .block_on(world.payer.wallet.contact_book().in_person_pay(
+            &relays(&world.payer),
+            &code.bytes,
+            pay_request(),
+        ))
+        .unwrap();
+    world
+        .block_on(world.issuer.wallet.cancel(code.tx_id))
+        .unwrap();
+    world.collect_with(&world.issuer, &relays(&world.issuer));
+
+    assert_eq!(
+        world.take_direct(&paid.envelope),
+        InPersonDirect::Refused("cancelled")
+    );
+    let events = events(&mut issuer_events);
+    assert_eq!(refused_reasons(&events), ["cancelled"]);
+}
+
+/// A code with direct routes and a domain claim is read with both; a direct route of the
+/// mailbox method is refused when the code is made.
+#[test]
+fn an_in_person_code_with_direct_routes_and_a_claim_is_read_with_them() {
+    let world = World::new();
+    let routes = vec![
+        RouteEntry {
+            method: MethodId::Http,
+            value: "shop-1.test:8443".to_owned(),
+        },
+        RouteEntry {
+            method: MethodId::Tor,
+            value: "pg6mmjiyjmcrsslvykfwnntlaru7p5svn6y2ymmju6nubxndf4pscryd.onion".to_owned(),
+        },
+    ];
+    let code = world.show_with(
+        &offline(&world.issuer),
+        InPersonInvoiceRequest {
+            direct: routes.clone(),
+            claim: Some(ClaimSigner {
+                domain: "shop.test".to_owned(),
+            }),
+            ..request()
+        },
+    );
+
+    let read = world
+        .block_on(world.payer.wallet.contact_book().in_person_read(
+            &relays(&world.payer),
+            options(),
+            &code.bytes,
+        ))
+        .unwrap();
+    assert_eq!(read.direct, routes);
+    let claim = read.claim.unwrap();
+    assert_eq!(claim.domain.as_str(), "shop.test");
+    assert_eq!(
+        lepic_wallet_contacts::request_claim(&code.bytes),
+        Some(claim)
+    );
+
+    assert_eq!(
+        refusal(
+            world.block_on(world.issuer.wallet.contact_book().in_person_invoice(
+                &offline(&world.issuer),
+                InPersonInvoiceRequest {
+                    direct: vec![RouteEntry {
+                        method: MethodId::Epicbox,
+                        value: "relay.test".to_owned(),
+                    }],
+                    ..request()
+                },
+            ))
+        ),
+        InPersonRefusal::DirectRoute
+    );
 }

@@ -144,7 +144,7 @@ fn slates_decode_like_their_v3_json_and_encode_to_the_same_bytes() {
         count += 1;
     }
     assert!(count >= 100, "only {count} slates");
-    assert_eq!(with_tail, 5, "slates with a tail");
+    assert_eq!(with_tail, 8, "slates with a tail");
 }
 
 #[test]

@@ -54,6 +54,7 @@ stored_enum! {
 /// | `address:<account>.<index>`         | `link`          | each usable relay        | never     |
 /// | `reply:<slate id>`                  | `reply`         | the reply relay          | never     |
 /// | `inperson:<slate id>`               | `in-person`     | the code's mailbox relay | never     |
+/// | `inperson-slot:<account>`           | `in-person`     | the slot's relay         | never     |
 ///
 /// Slate ids are hyphenated lowercase UUIDs.
 #[derive(Debug, Clone, PartialEq, Eq)]

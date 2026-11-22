@@ -5,7 +5,8 @@ Decision record: [ADR 0052](../adr/0052-legacy-at-the-edge-native-between-lepic-
 [ADR 0062](../adr/0062-the-address-decides-the-protocol.md) and
 [ADR 0063](../adr/0063-the-epic1-address-carries-its-own-mailbox.md); §5.13, §5.14 and §5.19 follow
 [ADR 0066](../adr/0066-one-address-per-account.md) and
-[ADR 0065](../adr/0065-mail-goes-where-the-receiver-reads.md). This RFC says relay for a server
+[ADR 0065](../adr/0065-mail-goes-where-the-receiver-reads.md); §3.2, §5.20, §6.10 and §9 follow
+[ADR 0068](../adr/0068-invoices-the-payer-opens-need-no-pairing.md). This RFC says relay for a server
 that runs Epicmail (a mailbox) and mailbox for the box of one key (a slot).
 Amends [RFC 0001](0001-lepic-slate-v1.md) and builds on the sealed envelope of
 [RFC 0002](0002-contact-pairing.md).
@@ -96,7 +97,8 @@ answering wallet is offline.
 
 LEPIC builds, seals, opens, checks and stores slates. It never asks the user anything: where a
 flow needs a person's decision (pick an in-person answer, approve a payment), LEPIC reports what
-it found and the consumer asks. LEPIC never finalizes an in-person answer by itself.
+it found and the consumer asks. LEPIC finalizes an in-person answer by itself only when the code
+asked for it (9, `finalize: first`), and only in `lepic serve`; the library calls stay single calls.
 
 ## 4 Design summary
 
@@ -422,9 +424,14 @@ spent by an input; a body heavier than the block weight limit; and a truncated f
 |---|---|---|
 | `01` | Reply key | X25519 public key, 32 bytes |
 | `02` | Reply mailbox | Mailbox key (33) and relay `domain[:port]` (1–128 bytes, `relay-domain`) |
+| `81` | Direct route | 1 to 4 entries, each `method (1) \|\| len (1) \|\| host`; method 1 = `http`, 2 = `tor` |
+| `F0` | Request claim | `key (32) \|\| issued_at (u64 BE) \|\| sig (64) \|\| domain (1–253 bytes)` |
 
-A reply mailbox needs a reply key. Records `01` and `02` are allowed only in a proposal. An unknown
-type below `80` refuses the slate; from `80` up it is kept verbatim and in order. A slate inside an
+A reply mailbox needs a reply key. Records `01`, `02`, `81` and `F0` are allowed only in a proposal,
+and `81` and `F0` only in an I1. An unknown
+type below `80` refuses the slate; from `80` up it is kept verbatim and in order, so a reader that
+does not know `81` and `F0` pays through the reply mailbox as before. Record `F0` is always the
+last record. 5.20 describes `81` and `F0`. A slate inside an
 envelope has an empty tail: the envelope carries the reply key and mailbox in tags `03` and `09`.
 The tail is for raw slates shown in person (9).
 
@@ -635,7 +642,11 @@ A LEPIC listener on HTTP or Tor can take payments to its epic1 addresses at one 
 A sender makes no request before the POST. The body is a slate envelope sealed to an epic1 seal
 key: anonymous, with a zero hint and a reply key (tag `03`), carrying a native S1. The endpoint
 opens it by trial over the seal key of each account's address (5.5, 5.13) and takes nothing else: an envelope
-that is signed, carries no reply key, or holds another stage or an invoice is refused. Its
+that is signed, carries no reply key, or holds another stage or an invoice is refused. One
+exception: an anonymous envelope whose hint (5.5) names the reply key of an open in-person code
+(9) is taken as the answer to that code, an I2 or an S2. It runs the take path of the code's wallet
+and is answered `200` when accepted and `422` with `code` `refused` when not, in the same request.
+A wallet with no open code takes none. Its
 `Content-Type` MUST be `application/vnd.lepic.epictx` (parameters ignored). The body is at most
 69,632 bytes. The media type, length and envelope decoding are checked before a post counts
 against the payment budget. The listener answers with the S2, sealed to the reply key with the
@@ -767,6 +778,56 @@ notice, it cancels the copies of its post on the other relays where the relay of
 (txcancel/1); the rest expire at the relay's retention. A payment to an `http` or `tor` entry is
 answered in the request (5.15) and has no reply mailbox to watch.
 
+### 5.20 Checkout requests
+
+A shop's `lepic serve` issues an I1 for one order, signed for the shop's domain, and shows it as a
+code or as an invoice link. This section is the wire of that request; 9 is the flow.
+
+**Direct route, record `81`.** One to four entries, each `method (1) || len (1) || host`. Method 1
+is `http`: an HTTPS `host[:port]`, port 443 by default, where `host` is a lower-case DNS name
+(labels of `a-z`, `0-9` and `-`, not led or ended by a hyphen, no trailing dot) or an IPv4
+literal, and never an onion name. Unlike a link's `http=` entry, a hyphen is allowed: the entry
+names the shop's own host, not a mailbox. Method 2 is `tor`: a v3 onion
+`<56 base32>.onion[:port]`, port 80 by default. An entry is at most 128 bytes, and the four
+entries are distinct. The payer applies the host rules of 5.14 before it posts (no loopback, no
+local-network address after resolution, the onion checksum), and skips an entry that fails them. The payer posts the sealed answer to each kept
+entry as 5.14 says, at `/api/v1/inbox` (5.15), in addition to the reply mailbox. Over Tor only,
+the payer uses `tor` entries and never an `http` entry.
+
+**Request claim, record `F0`.** The value is
+`key (32) || issued_at (u64 BE, seconds) || sig (64) || domain (1 to 253 bytes)`. `domain` is
+written as in ADR 0043: lower case ASCII. `key` is the Ed25519 verifying key of the shop's
+domain key (ADR 0043). The signature is Ed25519 by that key over:
+
+```text
+"epic-request/1" || net (1 byte: 00 mainnet, 01 floonet) || key (32) || SHA256(P) || issued_at (u64 BE) || domain
+```
+
+`P` is the code's bytes up to the start of record `F0`: the header, the slate and every other tail
+record. The signature so covers the whole code: the amount, the message, the TTL, the reply key
+and every route. A code whose `F0` is malformed, or not the last record, does not decode.
+
+**Verifying.** The wallet reads the claim, fetches `https://<domain>/.well-known/epic-wallet.json`
+(ADR 0043; HTTPS only, no redirects, at most 4,096 bytes), and passes the bytes to a pure
+function. The result is one of:
+
+| Result | Meaning |
+|---|---|
+| Unsigned | The code carries no `F0` |
+| Checked, with the domain | The file lists `key` for the network and `sig` is valid |
+| Refused, with the domain and a reason | The file or the claim fails: the ADR 0043 reasons, plus `BadSignature` and `KeyNotListed` |
+
+LEPIC fetches nothing. The host fetches, calls the function and applies 9.
+
+**Invoice link.** A code as a link:
+
+```text
+epiccash://invoice/1/<base64url of the code bytes, no padding>
+```
+
+The reader refuses a link over 8 KiB, decodes the bytes and runs the normal `lepic.v1` decode, so
+a link carries nothing a scan could not. The rules of 9 for a raw code apply to the link.
+
 ## 6 Flows
 
 ### 6.1 Paired contact
@@ -865,12 +926,17 @@ show an S1 to a paypoint, as in 6.7 "Payer starts".
 
 ### 6.10 Invoices: who started it
 
+[ADR 0068](../adr/0068-invoices-the-payer-opens-need-no-pairing.md) sets the rule:
+
 | How an invoice arrives | Rule |
 |---|---|
-| The payer scans it in person | No pairing needed. Paid only on the user's approval (9). |
-| Pushed by Epicbox, a mailbox or a link | Taken only from a paired contact with invoices allowed (RFC 0002 §11) |
-| To a classic address | Refused before anything is stored |
-| In a file the user opens | The RFC 0002 §11.5 file rule |
+| Pushed through a mailbox | Taken only from a paired, verified contact the payer allowed (RFC 0002 §11) |
+| Opened by the payer: a scan, a file or an invoice link | No pairing needed. Paid only on the user's approval (9). Nothing is stored before. |
+| To an address (classic or epic1) | Refused before anything is stored |
+
+An invoice link needs a checked domain, and a false claim is refused (9). A scan with no claim,
+or whose file cannot be fetched, is shown with a caution. The RFC 0002 §11.5 file rule applies to a
+file.
 
 No invoice is ever pushed to a receive code. A printed code can be covered by another sticker;
 the payer checks the amount and the payee before approving.
@@ -886,7 +952,7 @@ gives EUF-CMA, and Mimblewimble partial signatures bind the parties to a transac
 |---|---|---|
 | Carrier of a slate envelope (chat, mail, drive) | Network, suite, hint, `enc`, padded size, timing | Drop, delay, replay (idempotent); seal its own anonymous S1 to a public epic1 key |
 | Whoever hands the payer a link or code | Nothing more | Replace the whole link, as with any address; replace only a route entry, whose host receives an S1 it cannot open |
-| Onlooker in person | The raw proposal: amount, messages, public keys, reply key, reply mailbox | Post its own answer, which LEPIC reports with its check code and never finalizes by itself |
+| Onlooker in person | The raw proposal: amount, messages, public keys, reply key, reply mailbox, direct route, claimed domain | Post its own answer, which LEPIC reports with its check code and finalizes only for a code that asked for it (9) |
 | Relay of a delivery or reply mailbox | Which mailbox receives messages, when, sizes, the poster's IP address and post key | Drop, delay, replay, deny service |
 | Host of an `http` entry | The poster's IP address, envelope size, timing | Drop, delay, deny service; the S1 is sealed to the address, not to the host |
 | Network observer of an `http` entry | IP addresses, envelope size, timing | Nothing more; the post is HTTPS and the slate is sealed |
@@ -924,7 +990,13 @@ and the header.
 - Post-quantum confidentiality.
 - Recipient-side forward secrecy: a leak of a static seal key opens past envelopes to it.
 - Confidentiality of a raw in-person code.
-- That the first answer to an in-person code comes from the intended party.
+- Who controls a domain beyond its HTTPS files: a request's domain check says the claimed key is
+  listed in the file the domain serves. It stops a code swapped by a script or a relayed page, not
+  someone who can change the domain's own files. A look-alike domain passes the check for its own
+  name.
+- That the first answer to an in-person code comes from the intended party. A code that asked for
+  `finalize: first` is completed by the first valid answer, so whoever holds the code first pays
+  that order. The payer's coins go nowhere else.
 - Hiding the answering wallet's IP address from a relay the other party named.
 - Protection against a hacked paypoint or a covered printed code.
 - Delivery when the payer's and the payee's relay lists share no relay, and the link has no
@@ -976,9 +1048,33 @@ check = u32(SHA256("epic-check/1" || excess)[0..4]) mod 10000, written with 4 di
 receiver's in an S2. Both screens show the same digits for the same answer. Two answers with the
 same digits are flagged.
 
-**Finalizing.** Nothing finalizes by itself. Each answer is stored and reported with its number
-and check code; the user picks the one to finalize. Answers that arrive before the TTL are still
-recorded.
+**Finalizing.** By default nothing finalizes by itself. Each answer is stored and reported with
+its number and check code; the user picks the one to finalize. Answers that arrive before the TTL
+are still recorded.
+
+A checkout request (5.20) may ask that `lepic serve` finalize the first valid answer and post it
+(`finalize: first`, per request, default `manual`). Serve then finalizes at most one answer per
+code, never a second, and once across a crash or restart. An answer is valid when it opens, has
+the right slate and balances for the code's amount, and the node shows its inputs unspent; a node
+that cannot be reached means the answer is not counted and is tried again on the next take. Only
+a code that asked for it is completed this way.
+
+**Direct answers.** An envelope posted to `/api/v1/inbox` (5.15) whose hint names the reply key of
+an open code goes through the same take path as one from the reply mailbox. The listener answers
+`200` when the answer was accepted, `422 refused` with a `reason` when it was refused for good
+(`already_finalized`, `expired`, `inputs_spent`, `bad_answer`, `cancelled`), and `503 not_ready` when it could
+not be checked now (the node does not answer); a payer may post a `503` answer again. An envelope
+that answers no open code is `422 refused` without a reason. An answer taken twice, by both
+routes, counts once.
+
+A serve holds one reply slot per account for all its open codes and sorts answers by hint. The
+slot's Epicbox key is derived from the seed with the label `lepic-wallet shared reply mailbox v1`
+and the context `account (u32 BE) || net`, so it names no slate. The slot is watched while any
+code on it is open. Codes issued before this change keep their own slot.
+
+**Domain.** A code with a claim (5.20) is verified before the payer is asked. An invoice link
+without a checked domain is refused, and so is any code whose claim is false. A scan with no claim,
+or whose file cannot be fetched, shows a caution that the requester is unknown.
 
 ## 10 Security considerations
 
@@ -1045,6 +1141,7 @@ with its delivery key (ADR 0063) and the delivery described here are in no relea
 | Native slates to paired contacts | `crates/lepic-wallet-contacts/src/native.rs` |
 | Slates in QR codes | `crates/lepic-slate/src/ur_slate.rs` |
 | In-person codes | `crates/lepic-wallet-contacts/src/in_person.rs` (`IN_PERSON_TTL_BLOCKS`, 30) |
+| Checkout request: records `81` and `F0`, the verify function, the invoice link | `crates/lepic-native-slate/src/tail*`, `crates/lepic-seal/src/domain.rs`, `crates/lepic-wallet-contacts/src/{domain,invoice_link}.rs` |
 | Hosts from untrusted input | `crates/lepic-transport/src/host_rule.rs`, `crates/lepic-epic1/src/relay.rs` |
 | epic1 address and link | `crates/lepic-epic1/src/{address,bech32m,link,relay}.rs` |
 | The account's one epic1 address | `crates/lepic-wallet/src/epic1_index.rs` |

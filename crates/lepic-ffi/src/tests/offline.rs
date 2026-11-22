@@ -204,3 +204,35 @@ async fn offline_changes_only_by_opening_the_wallet_again() {
         WalletErrorKind::Offline
     );
 }
+
+#[tokio::test]
+async fn an_offline_wallet_refuses_http_sends_before_locking_coins_or_dialing() {
+    let mut world = World::new();
+    let (cold, _) = cold_wallet(&mut world).await;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let before = cold.transactions().await.unwrap().len();
+
+    assert_eq!(
+        kind(cold.send_http(EPIC, 1, url.clone(), true, None, None).await),
+        WalletErrorKind::Offline,
+        "a send"
+    );
+    assert_eq!(
+        kind(cold.resend_http(1, url, true).await),
+        WalletErrorKind::Offline,
+        "a resend"
+    );
+
+    let accepted =
+        tokio::time::timeout(std::time::Duration::from_millis(200), listener.accept()).await;
+    assert!(accepted.is_err(), "a connection was opened");
+    assert_eq!(cold.transactions().await.unwrap().len(), before);
+    assert!(
+        cold.outputs()
+            .await
+            .unwrap()
+            .iter()
+            .all(|output| output.status != crate::api::types::OutputStatus::Locked)
+    );
+}

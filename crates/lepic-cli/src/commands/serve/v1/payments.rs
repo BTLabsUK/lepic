@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Payments: `/payments` and the actions on one.
 
+mod checkout;
 mod create;
 pub(super) mod view;
 
@@ -15,6 +16,9 @@ use lepic_wallet::slate::{MediaType, WireSlate};
 use lepic_wallet_contacts::WalletContacts as _;
 use serde::Deserialize;
 
+pub(in super::super) use checkout::{
+    Locks as CheckoutLocks, driver as checkout_driver, public_routes,
+};
 pub(in super::super) use create::{Creates, Work, failed, make_queued, uuid, with_coins, with_id};
 pub(super) use create::{create, estimate};
 
@@ -775,6 +779,9 @@ pub(super) async fn deliver<H: Host>(
 struct PostBody {
     #[serde(default)]
     fluff: bool,
+    /// For an open in-person request: the answer to finalize, by its id or check code.
+    #[serde(default)]
+    answer: Option<String>,
 }
 
 pub(super) async fn post<H: Host>(
@@ -787,7 +794,52 @@ pub(super) async fn post<H: Host>(
         request.require(Role::Full)?;
     }
     let body: PostBody = request.json()?;
+    // The answer of a paid request again: the same one finalized is answered as it is, another
+    // is refused and changes nothing.
+    if body.answer.is_some()
+        && payment
+            .request
+            .as_ref()
+            .is_some_and(|paid| paid.state == "paid")
+    {
+        let answer = checkout::chosen_answer(&payment.answers, body.answer.as_deref())?;
+        checkout::finalize(
+            service,
+            &payment.id,
+            answer,
+            crate::commands::propagation(body.fluff),
+        )
+        .await?;
+        let (payment, _) = found(service, &payment.id).await?;
+        return ok(&payment);
+    }
     allowed(&payment, "post")?;
+    if let Some(open) = payment.request.as_ref().filter(|open| open.state == "open") {
+        if open.finalize != checkout::MANUAL {
+            return Err(Problem::conflict(
+                "action_not_available",
+                "serve finalizes this request's first answer itself",
+            )
+            .with_payment(payment.id));
+        }
+        let answer = checkout::chosen_answer(&payment.answers, body.answer.as_deref())?;
+        checkout::finalize(
+            service,
+            &payment.id,
+            answer,
+            crate::commands::propagation(body.fluff),
+        )
+        .await?;
+        events::payment(service, &payment.id, Change::State(None)).await;
+        let (payment, _) = found(service, &payment.id).await?;
+        return ok(&payment);
+    }
+    if body.answer.is_some() {
+        return Err(Problem::invalid(
+            "/answer",
+            "answer goes only to an open in-person request",
+        ));
+    }
     let tx = tx_of(service, &payment.id).await?;
     run(
         service,
@@ -870,11 +922,19 @@ pub(super) async fn cancel<H: Host>(
         .epicbox
         .attach_wallet(&opened.wallet)
         .map_err(CliError::from)?;
-    opened
-        .wallet
-        .cancel_with_relay(tx_id)
-        .await
-        .map_err(CliError::from)?;
+    // The wallet's own state event fires during the cancel and reads the request's note, so the
+    // shop's mark goes first or that event says `expired`. The mark counts only once the
+    // payment is `Cancelled`, so the request stays open meanwhile; a failed cancel clears it.
+    let requested = payment.request.is_some();
+    if requested {
+        checkout::mark_cancelled(service, &payment.id).await?;
+    }
+    if let Err(error) = opened.wallet.cancel_with_relay(tx_id).await {
+        if requested {
+            checkout::unmark_cancelled(service, &payment.id).await?;
+        }
+        return Err(CliError::from(error).into());
+    }
     events::payment(
         service,
         &payment.id,
@@ -911,7 +971,8 @@ pub(super) async fn handoff<H: Host>(
         .with_param("/format")
         .with_payment(payment.id));
     }
-    if qr {
+    // An in-person code keeps its own frames: they carry the code's bytes, not its text.
+    if qr && handoff.format != "in_person_code" {
         handoff.qr_frames = Some(qr_frames(&handoff.text)?);
     }
     ok(&handoff)
@@ -962,6 +1023,7 @@ async fn handoff_of<H: Host>(
         text,
         file_name: Some(format!("{}.slate", payment.id)),
         qr_frames: None,
+        link: None,
     }))
 }
 

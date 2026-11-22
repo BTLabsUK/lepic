@@ -95,4 +95,18 @@ pub enum TailError {
     MailboxWithoutKey,
     #[error("tail record type {record_type:#04x} is not allowed at stage {stage}")]
     NotAllowed { record_type: u8, stage: Stage },
+    #[error("tail record type {record_type:#04x} is known and cannot be an unknown record")]
+    KnownType { record_type: u8 },
+    #[error("direct route has {count} entries; it holds 1 to 4")]
+    DirectEntryCount { count: usize },
+    #[error("direct route method byte {byte:#04x} names no method")]
+    DirectMethod { byte: u8 },
+    #[error("direct route address is not in the form of its method")]
+    DirectAddress,
+    #[error("direct route names the same entry twice")]
+    DirectDuplicate,
+    #[error("request claim domain is not a lower-case domain name")]
+    ClaimDomain,
+    #[error("a tail record follows the request claim")]
+    ClaimNotLast,
 }

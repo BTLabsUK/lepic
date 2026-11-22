@@ -76,7 +76,8 @@ pub struct ApiLimits {
     pub body_timeout: Duration,
     pub max_body: usize,
     /// How long a connection to the owner TLS listener lasts. At the limit it closes once its
-    /// answer is out, and an event stream on it ends.
+    /// answer is out, and an event stream on it ends. An answer the client does not read in as
+    /// long again is dropped with the connection.
     pub tls_max_age: Duration,
 }
 

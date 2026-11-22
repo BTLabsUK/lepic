@@ -8,6 +8,7 @@ rust-version.workspace = true
 publish.workspace = true
 
 [dependencies]
+base64 = { workspace = true, features = ["alloc"] }
 blake2 = { workspace = true, features = ["zeroize"] }
 ed25519-dalek = { workspace = true, features = ["zeroize"] }
 futures-util = { workspace = true, features = ["alloc"] }

@@ -403,6 +403,10 @@ fn invoice_body(world: &World) -> Vec<u8> {
                 amount: Amount::new(AMOUNT),
                 message: None,
                 ttl_blocks: None,
+                slate_id: None,
+                direct: Vec::new(),
+                claim: None,
+                shared_slot: false,
             },
         ))
         .unwrap();

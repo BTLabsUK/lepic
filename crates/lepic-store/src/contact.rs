@@ -486,6 +486,10 @@ pub trait ContactRepository {
     /// recorded before. The link outlives the contact, so a slate id stays taken.
     fn set_slate_contact(&mut self, slate_id: Uuid, contact: ContactId) -> Result<(), StoreError>;
 
+    /// Forgets the contact of the slate `slate_id`, and returns whether there was one. Frees the
+    /// slate id of a send that never happened.
+    fn delete_slate_contact(&mut self, slate_id: Uuid) -> Result<bool, StoreError>;
+
     /// The contact the transaction `tx_id` was exchanged with, if any.
     fn tx_contact(&self, tx_id: TxId) -> Result<Option<ContactId>, StoreError>;
 

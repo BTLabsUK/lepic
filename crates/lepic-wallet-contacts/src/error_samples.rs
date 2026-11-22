@@ -446,6 +446,7 @@ pub fn invoice_errors() -> Vec<InvoiceError> {
             source: node(),
         },
         InvoiceError::NotParked { slate_id: SLATE },
+        InvoiceError::AnswerInputsSpent { slate_id: SLATE },
         InvoiceError::PaymentUndelivered {
             tx_id: TX,
             slate_id: SLATE,
@@ -516,6 +517,8 @@ pub fn in_person_refusals() -> Vec<InPersonRefusal> {
         R::UrIncomplete,
         R::Ended,
         R::AnswerToCode,
+        R::DirectRoute,
+        R::RepeatDiffers,
     ]
 }
 
@@ -625,6 +628,9 @@ pub fn peer_client_errors() -> Vec<PeerClientError> {
         },
         PeerClientError::NotReady { retry_after: None },
         PeerClientError::Refused,
+        PeerClientError::RefusedFor {
+            reason: "already_finalized".to_owned(),
+        },
         PeerClientError::TooLarge,
         PeerClientError::RateLimited {
             retry_after: Some(RETRY_AFTER),

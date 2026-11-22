@@ -357,6 +357,10 @@ pub(crate) fn erase_declined_send(
         for post in repos.native_outbox_of(slate_id)? {
             repos.delete_native_outbox(post.id)?;
         }
+        // The slate id is free again: nothing of the send is left to collide with a retry or
+        // to be read as part of a later payment under the same id.
+        repos.delete_slates(slate_id)?;
+        repos.delete_slate_contact(slate_id)?;
     }
     repos.delete_transaction(tx_id)?;
     Ok(true)

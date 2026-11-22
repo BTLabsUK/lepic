@@ -72,7 +72,9 @@ person ([RFC 0003 §9](../rfcs/0003-epictx-native-slates.md#9-in-person-codes)).
 |---|---|---|
 | `01` | `ReplyKey`, 32 bytes | Proposal only |
 | `02` | `ReplyMailbox`: mailbox key (33) and relay `domain[:port]`, at most 128 bytes | Proposal only, needs record `01` |
-| `80` and up | `UnknownRecord` | Kept verbatim and in order |
+| `81` | `DirectRoute`: 1 to 4 entries `method (1) \|\| len (1) \|\| host`, method 1 `http`, 2 `tor` | I1 only |
+| `F0` | `RequestClaim`: `key (32) \|\| issued_at (u64 BE) \|\| sig (64) \|\| domain` | I1 only, always last |
+| `80` and up, other | `UnknownRecord` | Kept verbatim and in order |
 
 An unknown type below `80` is `TailError::UnknownRequired`. A slate inside an envelope has an
 empty tail.
@@ -230,7 +232,8 @@ key. It is posted to the reply mailbox, or shown back as a code.
 | TTL margin | A TTL of 10 blocks or fewer is refused (`InPersonRefusal::TtlTooShort`) |
 | `MAX_ANSWERS_PER_CODE` | 16 |
 
-Nothing finalizes by itself. Each answer is stored with a four-digit check code from the
+By default nothing finalizes by itself. A request can ask `lepic serve` to finalize the first
+valid answer (`finalize: first`); see Checkout requests below. Each answer is stored with a four-digit check code from the
 answering party's public excess:
 
 ```text
@@ -242,6 +245,28 @@ code carries none, and the side that takes it reports the code. The user finaliz
 whose check code the other screen shows. `InPersonRefusal` names
 why a code or an answer was refused. Examples: `Proof`, `NoReplyKey`, `NoTtl`, `Signed`,
 `ReplyMailboxTag`, `OtherSlate`, `TooManyAnswers` and `Loopback`.
+
+### Checkout requests
+
+A shop's `lepic serve` issues an I1 for one order, signed for its domain
+([RFC 0003 §5.20](../rfcs/0003-epictx-native-slates.md#520-checkout-requests),
+[ADR 0068](../adr/0068-invoices-the-payer-opens-need-no-pairing.md)). Two more tail records, both
+ignored by readers that do not know them:
+
+- `81` names the shop's own host (`http` or `tor`) as a second place for the answer. The payer
+  posts to the reply mailbox and to each entry; the host accepts (`200`) or refuses (`422`) in the
+  same request. Over Tor only, `tor` entries alone are used.
+- `F0` claims a domain. The signature is Ed25519 by the domain key (ADR 0043) over
+  `"epic-request/1" || net || key || SHA256(P) || issued_at || domain`, where `P` is the code up to
+  `F0`. The wallet fetches `https://<domain>/.well-known/epic-wallet.json` and checks it. A false
+  claim is refused; no claim, or a file that cannot be fetched, shows a caution on a scan.
+
+The same code as a link: `epiccash://invoice/1/<base64url, no padding>`, at most 8 KiB. An invoice
+link needs a checked domain.
+
+The invoice rule: pushed through a mailbox, an invoice needs a paired, verified contact the payer
+allowed; opened by the payer (scan, file, invoice link), it needs no pairing and is paid on
+approval only; no invoice goes to an address.
 
 ### QR codes
 

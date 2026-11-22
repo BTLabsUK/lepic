@@ -28,7 +28,10 @@ use lepic_epicbox::{
 };
 use lepic_keychain::Keychain;
 use lepic_methods::epicbox::relay_network;
-use lepic_native_slate::{NativeError, NativeSlate, ReplyKey as TailReplyKey, ReplyMailbox, Tail};
+use lepic_native_slate::{
+    DirectEntry, DirectMethod, DirectRoute, NativeError, NativeSlate, ReplyKey as TailReplyKey,
+    ReplyMailbox, Tail,
+};
 use lepic_node::{NodeApi, Propagation};
 use lepic_primitives::amount::{Amount, Fee};
 use lepic_primitives::error_chain::ErrorChain;
@@ -47,9 +50,9 @@ use lepic_store::{
 use lepic_transport::host_rule::{self, HostReport};
 use lepic_transport::transport::{BoxFuture, Location};
 use lepic_wallet::account::{DEFAULT_ACCOUNT_LABEL, parent_key_id};
-use lepic_wallet::event::{Event, InPersonAnswerEvent};
-use lepic_wallet::finalize::Finalized;
-use lepic_wallet::invoice::{INVOICE_TTL_MARGIN_BLOCKS, InvoiceRequest, PayRequest};
+use lepic_wallet::event::{Event, InPersonAnswerEvent, InPersonAnswerRefusedEvent};
+use lepic_wallet::finalize::{FinalizeError, Finalized};
+use lepic_wallet::invoice::{INVOICE_TTL_MARGIN_BLOCKS, InvoiceError, InvoiceRequest, PayRequest};
 use lepic_wallet::namespace::check_code;
 use lepic_wallet::ports::{SecretVault, StoreOpener};
 use lepic_wallet::receive::ReceiveRequest;
@@ -60,9 +63,12 @@ use thiserror::Error;
 use tracing::{debug, info, instrument, warn};
 use uuid::Uuid;
 
+use super::address_proof::domain_signer;
 use super::collect::{Job, passes};
+use super::delivery::epicbox::{Envelope, PostError, Posted};
 use super::delivery::outbox::{self, Owed, Sender};
 use super::delivery::router::{Handler, Hold, Pushed, Stored};
+use super::direct::InPersonDirect;
 use super::keys::contact_network;
 use super::relay::{check_online, mailbox_host, parse_host};
 use super::{ContactError, ContactRelays, LockedRng, RelayMode};
@@ -155,6 +161,14 @@ pub enum InPersonRefusal {
     /// [`ContactBook::in_person_finalize`].
     #[error("an answer to an in-person code is finalized with its check code")]
     AnswerToCode,
+    /// A direct route entry is not an `http` or `tor` address a code can carry, or there are
+    /// more entries than a code carries.
+    #[error("the direct route is not one a code can carry")]
+    DirectRoute,
+    /// The slate id names a code issued before for another account, amount or message: a
+    /// repeat issues nothing new and returns the stored code only for the same request.
+    #[error("this slate id was issued before with another account, amount or message")]
+    RepeatDiffers,
 }
 
 /// An in-person invoice to show.
@@ -166,6 +180,25 @@ pub struct InPersonInvoiceRequest {
     /// Blocks past the chain tip, more than [`INVOICE_TTL_MARGIN_BLOCKS`];
     /// [`IN_PERSON_TTL_BLOCKS`] when `None`.
     pub ttl_blocks: Option<u64>,
+    /// The slate id to issue under; a new one when `None`. Issuing an id again while its code
+    /// is stored returns the stored code and issues nothing.
+    pub slate_id: Option<SlateId>,
+    /// Where the payer may also post the answer directly (tail record 0x81): `http` and `tor`
+    /// entries, at most [`lepic_native_slate::MAX_DIRECT_ENTRIES`], in the payee's order.
+    pub direct: Vec<RouteEntry>,
+    /// Signs the code with the wallet's domain key for this domain (tail record 0xF0).
+    pub claim: Option<ClaimSigner>,
+    /// The answers come to the account's one shared reply slot rather than a slot for this
+    /// code only: a service showing many codes watches one mailbox.
+    pub shared_slot: bool,
+}
+
+/// The domain a code is signed for. The key is the wallet's own domain key
+/// ([`ContactBook::own_domain_key`]); the domain's file must list it for a payer to see the
+/// domain as checked.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClaimSigner {
+    pub domain: String,
 }
 
 /// A code this wallet made, to show as a QR code.
@@ -194,6 +227,61 @@ pub struct InPersonRead {
     pub ttl_cutoff: u64,
     /// The relay of the code's reply mailbox, when it names one.
     pub mailbox: Option<HostReport>,
+    /// The domain the code is signed for, as the code claims it: check it with
+    /// [`crate::verify_request`] against the domain's file before showing it as proven.
+    pub claim: Option<crate::Claim>,
+    /// The direct routes the code names, in the payee's order.
+    pub direct: Vec<RouteEntry>,
+}
+
+/// Whether the well-known file `file`, fetched from the domain the request claim of the scanned
+/// code `code` names, proves the claim on the chain `network`: [`crate::verify_request`] for a
+/// wallet's network. Needs no wallet; nothing is fetched or stored.
+pub fn in_person_request_verify(
+    code: &[u8],
+    file: &[u8],
+    network: Network,
+) -> crate::RequestVerdict {
+    crate::verify_request(code, file, contact_network(network))
+}
+
+/// How a post of an answer to one route went.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum InPersonPostOutcome {
+    /// The mailbox stored it, or the payee's listener took the answer.
+    Accepted,
+    /// The payee's listener refused the answer, with its reason when it gave one
+    /// (`already_finalized`, `expired`, `inputs_spent`, `bad_answer`).
+    Refused { reason: Option<String> },
+    /// The route could not be reached or was not tried (`tor_expected`: an `http` route in
+    /// Tor-only mode).
+    Failed { reason: String },
+}
+
+/// The post of an answer to one route.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InPersonRoutePost {
+    /// The reply mailbox as an `epicbox` route, or a direct `http` or `tor` route.
+    pub route: RouteEntry,
+    pub outcome: InPersonPostOutcome,
+}
+
+/// What [`ContactBook::in_person_post`] did.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InPersonPosted {
+    /// The answer's check code, to show now that it is posted.
+    pub check_code: String,
+    /// One per route, the reply mailbox first.
+    pub routes: Vec<InPersonRoutePost>,
+}
+
+impl InPersonPosted {
+    /// Whether any route took the answer.
+    pub fn accepted(&self) -> bool {
+        self.routes
+            .iter()
+            .any(|post| post.outcome == InPersonPostOutcome::Accepted)
+    }
 }
 
 /// An answer this wallet made to a scanned code.
@@ -284,6 +372,13 @@ struct CodeState {
     closed: bool,
     finalized: Option<u32>,
     answers: Vec<StoredAnswer>,
+    /// The answers come to the account's shared reply slot. Codes stored before it are false.
+    #[serde(default)]
+    shared_slot: bool,
+    /// The code's `lepic.v1` bytes, hex, so issuing its slate id again returns it. Codes
+    /// stored before it have none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    bytes: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -310,6 +405,10 @@ struct ReplyState {
     check_code: String,
     /// Set by a wallet made before the outbox once it posted the answer; read by the fill.
     posted: bool,
+    /// The direct routes the code named, as `(method, value)`. Answers stored before them
+    /// have none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    direct: Vec<(String, String)>,
 }
 
 fn code_key(slate_id: SlateId) -> String {
@@ -339,19 +438,41 @@ pub(crate) fn in_person_rows(
         let open = repos
             .transaction(TxId(state.tx_id))?
             .is_some_and(|tx| matches!(tx.state, TxState::Received | TxState::Sent));
-        if let (true, None, Some(relay)) = (open, state.finalized, state.mailbox) {
-            rows.push((
-                WatchRow {
-                    key_ref: format!("inperson:{slate_id}"),
-                    relay,
-                    class: MailClass::InPerson,
-                    expires_at: None,
-                },
+        let (true, None, Some(relay)) = (open, state.finalized, state.mailbox) else {
+            continue;
+        };
+        let (key_ref, job) = if state.shared_slot {
+            let account = AccountIndex(state.account);
+            (slot_ref(account), Job::Slot(account))
+        } else {
+            (
+                format!("inperson:{slate_id}"),
                 Job::Code(slate_id, AccountIndex(state.account)),
-            ));
+            )
+        };
+        // The codes sharing a slot share its one row, kept while any of them waits.
+        if rows
+            .iter()
+            .any(|(row, _): &(WatchRow, Job)| row.key_ref == key_ref && row.relay == relay)
+        {
+            continue;
         }
+        rows.push((
+            WatchRow {
+                key_ref,
+                relay,
+                class: MailClass::InPerson,
+                expires_at: None,
+            },
+            job,
+        ));
     }
     Ok(rows)
+}
+
+/// The watch-row key of the shared reply slot of `account`.
+fn slot_ref(account: AccountIndex) -> String {
+    format!("inperson-slot:{}", account.0)
 }
 
 fn reply_key(slate_id: SlateId) -> String {
@@ -401,7 +522,7 @@ fn load_reply(repos: &dyn Repositories, slate_id: SlateId) -> Result<ReplyState,
     Ok(from_text(&text, "in-person answer")?)
 }
 
-/// The open code among `codes`, stored settings, whose reply key the hint `hint` of an
+/// The code among `codes`, stored settings, finalized or not, whose reply key the hint `hint` of an
 /// envelope with the ephemeral key `enc` names, with its state and reply key.
 fn code_for_hint(
     codes: Vec<(String, String)>,
@@ -420,9 +541,6 @@ fn code_for_hint(
         let Ok(state) = from_text::<CodeState>(&text, "in-person code") else {
             continue;
         };
-        if state.finalized.is_some() {
-            continue;
-        }
         let secret = reply_secret(keychain, network, AccountIndex(state.account), slate_id)?;
         if Hint::reply(&secret.public_key(), enc) == hint {
             return Ok(Some((slate_id, state, secret)));
@@ -464,6 +582,37 @@ fn record_answer(
     state.closed = true;
     repos.put_setting(&code_key(slate_id), &to_text(&state, "in-person code")?)?;
     Ok((number, same_code, false))
+}
+
+/// Why an answer to a code was refused for good, as [`Event::InPersonAnswerRefused`] and a
+/// direct route's listener say it: `already_finalized`, `cancelled`, `expired`, `inputs_spent`
+/// or `bad_answer`. `None` for a failure that passes, such as the node not answering: the
+/// answer is taken again later.
+pub(crate) fn refusal_reason(error: &ContactError) -> Option<&'static str> {
+    if passes(error) {
+        return None;
+    }
+    Some(match error {
+        ContactError::Invoice(InvoiceError::AlreadyFinalized { .. })
+        | ContactError::Finalize(FinalizeError::AlreadyFinalized { .. }) => "already_finalized",
+        ContactError::Invoice(InvoiceError::NotFinalizable {
+            state: TxState::Cancelled,
+            ..
+        })
+        | ContactError::Finalize(FinalizeError::NotFinalizable {
+            state: TxState::Cancelled,
+            ..
+        }) => "cancelled",
+        ContactError::Invoice(
+            InvoiceError::Expired { .. } | InvoiceError::NotFinalizable { .. },
+        )
+        | ContactError::Finalize(
+            FinalizeError::Expired { .. } | FinalizeError::NotFinalizable { .. },
+        ) => "expired",
+        ContactError::Invoice(InvoiceError::AnswerInputsSpent { .. })
+        | ContactError::Finalize(FinalizeError::PeerInputsSpent { .. }) => "inputs_spent",
+        _ => "bad_answer",
+    })
 }
 
 /// The reply key of the slate `slate_id` of `account`: answers to its code are sealed to it.
@@ -590,6 +739,52 @@ impl ReplyState {
     }
 }
 
+/// The reason of a direct route not tried in Tor-only mode.
+const TOR_EXPECTED: &str = "tor_expected";
+
+impl ReplyState {
+    /// The direct routes the code named, those of a method this wallet posts by.
+    fn direct_routes(&self) -> Vec<RouteEntry> {
+        self.direct
+            .iter()
+            .filter_map(|(method, value)| {
+                let method = method.parse::<MethodId>().ok()?;
+                matches!(method, MethodId::Http | MethodId::Tor).then(|| RouteEntry {
+                    method,
+                    value: value.clone(),
+                })
+            })
+            .collect()
+    }
+}
+
+/// What a post to a direct route did: taken, refused by the payee's listener with its reason,
+/// or not delivered.
+fn direct_outcome(posted: Result<Posted, PostError>) -> InPersonPostOutcome {
+    match posted {
+        Ok(_) => InPersonPostOutcome::Accepted,
+        Err(PostError::Refused {
+            reason,
+            retryable: false,
+            ..
+        }) => InPersonPostOutcome::Refused { reason },
+        Err(error) => InPersonPostOutcome::Failed {
+            reason: ErrorChain(&error).to_string(),
+        },
+    }
+}
+
+impl InPersonPostOutcome {
+    /// The outcome's name, for logs.
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::Accepted => "accepted",
+            Self::Refused { .. } => "refused",
+            Self::Failed { .. } => "failed",
+        }
+    }
+}
+
 /// The route of a post to the reply mailbox of key `mailbox_key`, hex, on the relay `host`:
 /// its Epicbox address. `what` names the record the key was read from.
 pub(crate) fn reply_route(
@@ -659,6 +854,58 @@ fn read_code(
 /// on it.
 type AnswerMailbox = (String, String, HostReport);
 
+/// What a code carries besides its slate and reply key.
+struct CodeMade {
+    kind: CodeKind,
+    direct: Option<DirectRoute>,
+    claim: Option<ClaimSigner>,
+    shared_slot: bool,
+}
+
+/// The tail record of the direct routes `entries`; none for none. Refuses an `epicbox` entry,
+/// an address that is not canonical for its method, a duplicate and too many entries.
+fn direct_route(entries: &[RouteEntry]) -> Result<Option<DirectRoute>, ContactError> {
+    if entries.is_empty() {
+        return Ok(None);
+    }
+    let entries = entries
+        .iter()
+        .map(|entry| {
+            let method = match entry.method {
+                MethodId::Http => DirectMethod::Http,
+                MethodId::Tor => DirectMethod::Tor,
+                MethodId::Epicbox => return Err(refused(InPersonRefusal::DirectRoute)),
+            };
+            DirectEntry::new(method, entry.value.clone())
+                .map_err(|_| refused(InPersonRefusal::DirectRoute))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    DirectRoute::new(entries)
+        .map(Some)
+        .map_err(|_| refused(InPersonRefusal::DirectRoute))
+}
+
+/// The direct routes of the code `native`, as routes.
+fn direct_entries(native: &NativeSlate) -> Vec<RouteEntry> {
+    native
+        .tail()
+        .direct_route()
+        .map(|route| {
+            route
+                .entries()
+                .iter()
+                .map(|entry| RouteEntry {
+                    method: match entry.method() {
+                        DirectMethod::Http => MethodId::Http,
+                        DirectMethod::Tor => MethodId::Tor,
+                    },
+                    value: entry.address().to_owned(),
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 /// Where an answer to `native` goes: the reply mailbox it names and the reply key the answer
 /// is sealed to.
 fn answer_route(
@@ -707,10 +954,14 @@ where
     ) -> Result<InPersonCode, ContactError> {
         self.check_contact_network(relays)?;
         let ttl_blocks = check_ttl(request.ttl_blocks.unwrap_or(IN_PERSON_TTL_BLOCKS))?;
+        let direct = direct_route(&request.direct)?;
+        if let Some(code) = self.stored_code(&request).await? {
+            return Ok(code);
+        }
         let account = request.account;
         let (tx_id, slate, _) = self
             .wallet
-            .issue_unsent(
+            .issue_unsent_as(
                 &file_method(),
                 InvoiceRequest {
                     account,
@@ -723,13 +974,17 @@ where
                 Delivery::Export {
                     to: Location::File(PathBuf::new()),
                 },
+                request.slate_id,
             )
             .await
             .map_err(ContactError::Invoice)?;
-        match self
-            .store_code(relays, tx_id, account, slate, CodeKind::Invoice)
-            .await
-        {
+        let made = CodeMade {
+            kind: CodeKind::Invoice,
+            direct,
+            claim: request.claim,
+            shared_slot: request.shared_slot,
+        };
+        match self.store_code(relays, tx_id, account, slate, made).await {
             Ok(code) => Ok(code),
             Err(error) => Err(self.give_up_send(tx_id, error).await),
         }
@@ -770,13 +1025,76 @@ where
             )
             .await
             .map_err(ContactError::Send)?;
+        let made = CodeMade {
+            kind: CodeKind::Send,
+            direct: None,
+            claim: None,
+            shared_slot: false,
+        };
         match self
-            .store_code(relays, sent.tx_id, account, slate, CodeKind::Send)
+            .store_code(relays, sent.tx_id, account, slate, made)
             .await
         {
             Ok(code) => Ok(code),
             Err(error) => Err(self.give_up_send(sent.tx_id, error).await),
         }
+    }
+
+    /// The code stored for the slate id `request` names, when it names one whose code holds
+    /// its bytes. Fails with [`InPersonRefusal::RepeatDiffers`] when that code is an invoice for
+    /// another account, amount or message than `request` asks for.
+    async fn stored_code(
+        &self,
+        request: &InPersonInvoiceRequest,
+    ) -> Result<Option<InPersonCode>, ContactError> {
+        let Some(slate_id) = request.slate_id else {
+            return Ok(None);
+        };
+        let session = self.wallet.session()?;
+        let state = self
+            .contact_work(move |_, _| {
+                session
+                    .store
+                    .read(|repos| match repos.setting(&code_key(slate_id))? {
+                        Some(text) => Ok::<_, ContactError>(Some(from_text::<CodeState>(
+                            &text,
+                            "in-person code",
+                        )?)),
+                        None => Ok(None),
+                    })
+            })
+            .await?;
+        let Some(state) = state else {
+            return Ok(None);
+        };
+        let bytes = state
+            .bytes
+            .as_deref()
+            .and_then(hex::unhex)
+            .ok_or(corrupt("in-person code"))?;
+        let stored = NativeSlate::decode(self.wallet.config().network, &bytes)
+            .map_err(|_| corrupt("in-person code"))?
+            .into_parts()
+            .0;
+        let message = stored
+            .participant(stored.flow().initiator())
+            .and_then(|participant| participant.message.as_ref())
+            .map(lepic_slate::model::ParticipantMessage::text);
+        if !matches!(state.kind, CodeKind::Invoice)
+            || state.account != request.account.0
+            || stored.amount() != request.amount
+            || message != request.message.as_deref()
+        {
+            return Err(refused(InPersonRefusal::RepeatDiffers));
+        }
+        debug!(tx_id = state.tx_id, "in-person code issued before");
+        Ok(Some(InPersonCode {
+            tx_id: TxId(state.tx_id),
+            slate_id,
+            bytes,
+            ttl_cutoff: state.ttl_cutoff,
+            mailbox: state.mailbox,
+        }))
     }
 
     async fn store_code(
@@ -785,8 +1103,14 @@ where
         tx_id: TxId,
         account: AccountIndex,
         slate: Slate,
-        kind: CodeKind,
+        made: CodeMade,
     ) -> Result<InPersonCode, ContactError> {
+        let CodeMade {
+            kind,
+            direct,
+            claim,
+            shared_slot,
+        } = made;
         let network = self.wallet.config().network;
         let net = contact_network(network);
         let slate_id = slate.id();
@@ -799,9 +1123,12 @@ where
             // A relay on this device cannot be reached from the other one: the code names
             // none, and the answer is shown back.
             RelayMode::Online if host_rule::classify_name(own.domain().as_str()).is_ok() => {
-                let secret = self
-                    .wallet
-                    .reply_mailbox_key(account, net, slate_id.as_bytes())?;
+                let secret = if shared_slot {
+                    self.wallet.shared_reply_mailbox_key(account, net)?
+                } else {
+                    self.wallet
+                        .reply_mailbox_key(account, net, slate_id.as_bytes())?
+                };
                 let public =
                     PublicKey::from_secret_key(&secret).map_err(|_| ContactError::RelayAddress)?;
                 Some(
@@ -813,7 +1140,8 @@ where
         };
         let host = mailbox.as_ref().map(|mailbox| mailbox.address().to_owned());
         let session = self.wallet.session()?;
-        let state = CodeState {
+        let issued_at = self.wallet.ports().clock.now().as_second();
+        let mut state = CodeState {
             tx_id: tx_id.0,
             account: account.0,
             kind,
@@ -822,19 +1150,34 @@ where
             closed: false,
             finalized: None,
             answers: Vec::new(),
+            shared_slot: shared_slot && host.is_some(),
+            bytes: None,
         };
         let bytes = self
             .contact_work(move |_, _| {
                 let reply = reply_secret(&session.keychain, network, account, slate_id)?;
-                let tail = Tail::new(
+                let mut tail = Tail::new(
                     Some(TailReplyKey::from_bytes(*reply.public_key().as_bytes())),
                     mailbox,
                     Vec::new(),
                 )
                 .map_err(|error| native_error(error.into()))?;
-                let bytes = NativeSlate::new(slate, tail)
+                if let Some(direct) = direct {
+                    tail = tail.with_direct_route(direct);
+                }
+                let mut bytes = NativeSlate::new(slate, tail)
                     .map_err(native_error)?
                     .encode(network);
+                // The claim is signed last, over the whole code before it.
+                if let Some(claim) = claim {
+                    let signer = domain_signer(&session.keychain, network, Some(&claim.domain))?
+                        .ok_or(ContactError::Domain(lepic_contact::DomainError::Name))?;
+                    // Only an I1 is signed, and only invoices carry a claim.
+                    bytes = signer
+                        .sign_request(&bytes, net, u64::try_from(issued_at).unwrap_or(0))
+                        .map_err(|_| refused(InPersonRefusal::WrongStage))?;
+                }
+                state.bytes = Some(hex::encode(&bytes));
                 let text = to_text(&state, "in-person code")?;
                 session.store.write(|repos| {
                     repos.put_setting(&code_key(slate_id), &text)?;
@@ -843,7 +1186,7 @@ where
                 Ok(bytes)
             })
             .await?;
-        info!(tx_id = %tx_id, online = host.is_some(), "in-person code made");
+        info!(tx_id = %tx_id, online = host.is_some(), shared_slot, "in-person code made");
         Ok(InPersonCode {
             tx_id,
             slate_id,
@@ -851,6 +1194,13 @@ where
             ttl_cutoff,
             mailbox: host,
         })
+    }
+
+    /// Whether the well-known file `file`, fetched from the domain the request claim of the
+    /// scanned code `code` names, proves the claim on this wallet's network: as
+    /// [`crate::verify_request`]. Nothing is fetched or stored.
+    pub fn in_person_request_verify(&self, code: &[u8], file: &[u8]) -> crate::RequestVerdict {
+        in_person_request_verify(code, file, self.wallet.config().network)
     }
 
     /// Reads a scanned code: raw `lepic.v1`, which only a scan gives. A code with a payment
@@ -897,6 +1247,8 @@ where
                 .ttl_cutoff_height()
                 .map_or(0, lepic_primitives::amount::Height::value),
             mailbox,
+            claim: crate::request_claim(bytes),
+            direct: direct_entries(&native),
         })
     }
 
@@ -917,6 +1269,7 @@ where
         let network = self.wallet.config().network;
         let native = read_code(network, bytes, Some(CodeKind::Invoice))?;
         let (mailbox, reply_to) = answer_route(&native, relays)?;
+        let direct = direct_entries(&native);
         let (i1, _) = native.into_parts();
         let account = request.account;
         let paid = self
@@ -932,6 +1285,7 @@ where
                 account,
                 &reply_to,
                 mailbox,
+                direct,
                 CodeKind::Invoice,
             )
             .await
@@ -977,6 +1331,7 @@ where
                 account,
                 &reply_to,
                 mailbox,
+                Vec::new(),
                 CodeKind::Send,
             )
             .await
@@ -986,6 +1341,7 @@ where
         }
     }
 
+    #[allow(clippy::too_many_arguments)] // Each is one fact of the answer as stored.
     async fn store_answer(
         &self,
         answer: Slate,
@@ -993,6 +1349,7 @@ where
         account: AccountIndex,
         reply_to: &EncPublicKey,
         mailbox: Option<AnswerMailbox>,
+        direct: Vec<RouteEntry>,
         kind: CodeKind,
     ) -> Result<InPersonPaid, ContactError> {
         let network = self.wallet.config().network;
@@ -1027,6 +1384,10 @@ where
             mailbox: host,
             check_code: check.clone(),
             posted: false,
+            direct: direct
+                .into_iter()
+                .map(|route| (route.method.as_str().to_owned(), route.value))
+                .collect(),
         };
         let session = self.wallet.session()?;
         self.contact_work(move |_, _| {
@@ -1048,27 +1409,31 @@ where
     }
 
     /// Posts the stored answer to the slate `slate_id` to the reply mailbox its code named,
-    /// from a key used for this slate only, through the outbox: the post is stored before it
-    /// is made, and one that is sent and not answered is posted again later. The host is
-    /// checked again when connecting: a name or, connecting directly, any address it resolves
-    /// to that is loopback or unspecified is refused, and the connection goes to the addresses
-    /// checked. Through Tor the exit resolves the name, so only the name is checked.
+    /// from a key used for this slate only, through the outbox, and to each direct route the
+    /// code named, at once. The outbox stores the mailbox post before it is made, and one
+    /// that is sent and not answered is posted again later. The hosts are checked again when
+    /// connecting: a name or, connecting directly, any address it resolves to that is loopback
+    /// or unspecified is refused, and the connection goes to the addresses checked. Through
+    /// Tor the exit resolves the name, so only the name is checked. In Tor-only mode an `http`
+    /// direct route is not tried.
     ///
     /// Only an answer whose transaction is still sent or received is posted: once it is
-    /// cancelled, the answer no longer moves money.
+    /// cancelled, the answer no longer moves money. A direct route that refuses the answer
+    /// cancels nothing: the caller reads its reason.
     ///
     /// Fails with [`ContactError::InPerson`] when no answer is stored, the code named no
-    /// mailbox or the transaction was cancelled or ended ([`InPersonRefusal::Ended`]),
-    /// [`ContactError::Offline`], and [`ContactError::Relay`] when the post failed; posting again
-    /// is safe.
+    /// mailbox and no direct route, or the transaction was cancelled or ended
+    /// ([`InPersonRefusal::Ended`]), [`ContactError::Offline`], and, for a code that named a
+    /// mailbox and no direct route, [`ContactError::Relay`] when the post failed; posting
+    /// again is safe.
     ///
-    /// Returns the answer's check code, to show now that it is posted.
+    /// Returns the answer's check code, to show once a route took it, and what each route did.
     #[instrument(skip_all, fields(wallet = %self.wallet.config().name))]
     pub async fn in_person_post(
         &self,
         relays: &ContactRelays,
         slate_id: SlateId,
-    ) -> Result<String, ContactError> {
+    ) -> Result<InPersonPosted, ContactError> {
         self.check_contact_network(relays)?;
         check_online(relays)?;
         let network = self.wallet.config().network;
@@ -1085,20 +1450,69 @@ where
         if !matches!(tx_state, Some(TxState::Sent | TxState::Received)) {
             return Err(refused(InPersonRefusal::Ended));
         }
-        let (Some(key), Some(host)) = (&state.mailbox_key, &state.mailbox) else {
-            return Err(refused(InPersonRefusal::NoMailbox));
+        let direct = state.direct_routes();
+        let mailbox = match (&state.mailbox_key, &state.mailbox) {
+            (Some(key), Some(host)) => Some((key, host)),
+            _ => None,
         };
-        // The route is checked first, so a host refused has its own error.
-        reply_route(network, relays, key, host, "in-person answer")?;
-        let owed = state
-            .owed(network, relays, slate_id)
-            .ok_or(corrupt("in-person answer"))?;
-        {
-            let _turn = self.wallet.contact_turn().await;
-            self.outbox_post_now(relays, owed).await?;
+        if mailbox.is_none() && direct.is_empty() {
+            return Err(refused(InPersonRefusal::NoMailbox));
+        }
+        let mut routes = Vec::with_capacity(direct.len().saturating_add(1));
+        if let Some((key, host)) = mailbox {
+            // The route is checked first, so a host refused has its own error.
+            let posted = match reply_route(network, relays, key, host, "in-person answer") {
+                Ok(route) => {
+                    let owed = state
+                        .owed(network, relays, slate_id)
+                        .ok_or(corrupt("in-person answer"))?;
+                    let _turn = self.wallet.contact_turn().await;
+                    self.outbox_post_now(relays, owed).await.map(|()| route)
+                }
+                Err(error) => Err(error),
+            };
+            match posted {
+                Ok(route) => routes.push(InPersonRoutePost {
+                    route,
+                    outcome: InPersonPostOutcome::Accepted,
+                }),
+                Err(error) if direct.is_empty() => return Err(error),
+                Err(error) => {
+                    warn!(error = %ErrorChain(&error), "in-person answer not posted to the mailbox");
+                    routes.push(InPersonRoutePost {
+                        route: RouteEntry {
+                            method: MethodId::Epicbox,
+                            value: host.clone(),
+                        },
+                        outcome: InPersonPostOutcome::Failed {
+                            reason: ErrorChain(&error).to_string(),
+                        },
+                    });
+                }
+            }
+        }
+        if !direct.is_empty() {
+            let envelope = hex::unhex(&state.envelope).ok_or(corrupt("in-person answer"))?;
+            let envelope = Envelope::Sealed(envelope);
+            let carrier = outbox::link_carrier(relays);
+            for route in direct {
+                let outcome = if relays.tor_expected && route.method == MethodId::Http {
+                    InPersonPostOutcome::Failed {
+                        reason: TOR_EXPECTED.to_owned(),
+                    }
+                } else {
+                    direct_outcome(carrier.post_to_peer(&envelope, &route).await)
+                };
+                info!(slate_id = %slate_id, method = %route.method, outcome = outcome.label(),
+                    "in-person answer posted to a direct route");
+                routes.push(InPersonRoutePost { route, outcome });
+            }
         }
         info!(slate_id = %slate_id, "in-person answer posted");
-        Ok(state.check_code)
+        Ok(InPersonPosted {
+            check_code: state.check_code,
+            routes,
+        })
     }
 
     /// Takes an answer to a code this wallet showed, given offline: the envelope's bytes, or
@@ -1143,6 +1557,10 @@ where
         }
     }
 
+    /// Takes a sealed answer to an open code, found by the envelope's hint, as
+    /// [`ContactBook::in_person_take`] does. An answer refused for good, such as one to a code
+    /// already finalized, is told with [`Event::InPersonAnswerRefused`]; one whose check failed
+    /// for a passing reason, such as the node not answering, is not.
     pub(crate) async fn take_envelope(
         &self,
         envelope: &[u8],
@@ -1162,8 +1580,61 @@ where
             })
             .await?
             .ok_or(ContactError::NotForThisInstall)?;
+        let tx_id = TxId(state.tx_id);
+        let taken = self
+            .take_answer(network, slate_id, state, &secret, &sealed)
+            .await;
+        if let Err(error) = &taken
+            && let Some(reason) = refusal_reason(error)
+        {
+            info!(
+                tx_id = %tx_id,
+                slate_id = %slate_id,
+                reason,
+                error = %ErrorChain(error),
+                "in-person answer refused"
+            );
+            self.wallet
+                .emit(Event::InPersonAnswerRefused(InPersonAnswerRefusedEvent {
+                    tx_id,
+                    slate_id,
+                    reason,
+                }));
+        }
+        taken
+    }
+
+    /// Takes a pushed or posted answer straight to a code this wallet showed, for a listener of
+    /// direct routes: the envelope `envelope` sealed to the reply key of an open code. Runs
+    /// [`ContactBook::in_person_take`]'s checks and says how the listener answers.
+    pub async fn in_person_take_direct(&self, envelope: &[u8]) -> InPersonDirect {
+        match self.take_envelope(envelope).await {
+            Ok(_) => InPersonDirect::Accepted,
+            Err(ContactError::NotForThisInstall | ContactError::Decode(_)) => {
+                InPersonDirect::NotOurs
+            }
+            Err(error) => match refusal_reason(&error) {
+                Some(reason) => InPersonDirect::Refused(reason),
+                None => {
+                    warn!(error = %ErrorChain(&error), "direct in-person answer not taken for now");
+                    InPersonDirect::Transient
+                }
+            },
+        }
+    }
+
+    /// Opens, checks and records an answer to the code of `slate_id`, found by its hint.
+    #[allow(clippy::too_many_lines)] // One answer from checks to stored, in order.
+    async fn take_answer(
+        &self,
+        network: Network,
+        slate_id: SlateId,
+        state: CodeState,
+        secret: &EncSecretKey,
+        sealed: &SealedEnvelope<'_>,
+    ) -> Result<InPersonTaken, ContactError> {
         let opened = sealed
-            .open_tx(&secret, KeyClass::Seal)
+            .open_tx(secret, KeyClass::Seal)
             .map_err(|_| ContactError::CannotOpen)?;
         if opened.sender.is_some() {
             return Err(refused(InPersonRefusal::Signed));
@@ -1182,6 +1653,32 @@ where
         if answer.id() != slate_id {
             return Err(refused(InPersonRefusal::OtherSlate));
         }
+        let tx_id = TxId(state.tx_id);
+        let stage = state.kind.answer();
+        let body = hex::encode(&body);
+        if state.finalized.is_some() {
+            // The answer finalized, or another taken before it, comes again: nothing changes.
+            if let Some(earlier) = state.answers.iter().find(|stored| stored.body == body) {
+                debug!(tx_id = %tx_id, answer = earlier.number, "in-person answer taken before");
+                return Ok(InPersonTaken {
+                    tx_id,
+                    slate_id,
+                    stage,
+                    answer: earlier.number,
+                    check_code: earlier.check_code.clone(),
+                    same_code: earlier.same_code,
+                    duplicate: true,
+                });
+            }
+            return Err(match state.kind {
+                CodeKind::Invoice => {
+                    ContactError::Invoice(InvoiceError::AlreadyFinalized { slate_id, tx_id })
+                }
+                CodeKind::Send => {
+                    ContactError::Finalize(FinalizeError::AlreadyFinalized { slate_id, tx_id })
+                }
+            });
+        }
         let check = check_code(&answering_excess(&answer)?);
         match state.kind {
             CodeKind::Invoice => self
@@ -1197,7 +1694,6 @@ where
         }
         let now = self.wallet.ports().clock.now();
         let session = self.wallet.session()?;
-        let body = hex::encode(&body);
         let code = check.clone();
         let recorded = self
             .contact_work(move |_, _| {
@@ -1218,8 +1714,6 @@ where
             );
         }
         let (number, same_code, duplicate) = recorded?;
-        let tx_id = TxId(state.tx_id);
-        let stage = state.kind.answer();
         if duplicate {
             debug!(tx_id = %tx_id, answer = number, "in-person answer taken before");
         } else {
@@ -1281,7 +1775,8 @@ where
     /// `propagation`, as finalizing the invoice does; the user picked it by its check code.
     ///
     /// Fails with [`ContactError::InPerson`] when there is no such code or answer, and
-    /// [`ContactError::Invoice`] as finalizing fails.
+    /// [`ContactError::Invoice`] as finalizing fails. After a `NotPosted` failure the code
+    /// names `answer` as finalized: the transaction was stored finalized with it.
     #[instrument(skip_all, fields(wallet = %self.wallet.config().name))]
     pub async fn in_person_finalize(
         &self,
@@ -1309,13 +1804,23 @@ where
                 .wallet
                 .finalize_invoice_decoded(slate, propagation)
                 .await
-                .map_err(ContactError::Invoice)?,
+                .map_err(ContactError::Invoice),
             CodeKind::Send => self
                 .wallet
                 .finalize_decoded(slate, propagation)
                 .await
-                .map_err(ContactError::Finalize)?,
+                .map_err(ContactError::Finalize),
         };
+        // A push the node did not take still stored the transaction finalized with this
+        // answer: note it, so the code names the answer its retries post.
+        if !matches!(
+            finalized,
+            Ok(_)
+                | Err(ContactError::Invoice(InvoiceError::NotPosted { .. })
+                    | ContactError::Finalize(FinalizeError::NotPosted { .. }))
+        ) {
+            return finalized;
+        }
         let session = self.wallet.session()?;
         self.contact_work(move |_, _| {
             session.store.write(|repos| {
@@ -1328,13 +1833,17 @@ where
         })
         .await?;
         info!(slate_id = %slate_id, answer, "in-person answer finalized");
-        Ok(finalized)
+        finalized
     }
 
     /// Forgets the codes and the answers whose transaction ended. Runs before the watch set is
-    /// made equal to the records, so their reply mailboxes leave it.
+    /// made equal to the records, so their reply mailboxes leave it. The code of a cancelled
+    /// transaction stays until the confirmed tip reaches its TTL cutoff, so an answer posted to
+    /// a direct route after the cancel is still found and refused as `cancelled`; its mailbox
+    /// is not watched (see [`in_person_rows`]).
     pub(crate) async fn tend_in_person(&self) -> Result<(), ContactError> {
         let session = self.wallet.session()?;
+        let tip = self.wallet.confirmed_tip()?.map(|tip| tip.height.value());
         self.contact_work(move |_, _| {
             // Read first: a cycle with nothing to forget writes nothing.
             let ended_keys = session.store.read(|repos| {
@@ -1343,10 +1852,12 @@ where
                     let Ok(state) = from_text::<CodeState>(&text, "in-person code") else {
                         continue;
                     };
-                    if repos
-                        .transaction(TxId(state.tx_id))?
-                        .is_none_or(|tx| ended(tx.state))
-                    {
+                    let forget = repos.transaction(TxId(state.tx_id))?.is_none_or(|tx| {
+                        ended(tx.state)
+                            && (tx.state != TxState::Cancelled
+                                || tip.is_some_and(|tip| tip >= state.ttl_cutoff))
+                    });
+                    if forget {
                         keys.push(key);
                     }
                 }
@@ -1498,6 +2009,8 @@ mod tests {
             closed: false,
             finalized: None,
             answers: Vec::new(),
+            shared_slot: false,
+            bytes: None,
         };
         store
             .write(|repos| {
@@ -1527,5 +2040,28 @@ mod tests {
         assert!(kept.iter().all(|answer| answer.body != "ff"));
         // An answer already taken is still known past the cap.
         assert_eq!(record("01").unwrap(), (1, false, true));
+    }
+
+    /// Codes and answers stored before shared slots, stored code bytes and direct routes
+    /// still read: a per-code slot, no bytes and no routes.
+    #[test]
+    fn codes_and_answers_stored_before_shared_slots_still_read() {
+        let code: CodeState = from_text(
+            r#"{"tx_id":3,"account":0,"kind":"invoice","ttl_cutoff":130,"mailbox":"relay.test:80","closed":false,"finalized":null,"answers":[]}"#,
+            "in-person code",
+        )
+        .unwrap();
+        assert!(!code.shared_slot);
+        assert_eq!(code.bytes, None);
+        assert_eq!(code.mailbox.as_deref(), Some("relay.test:80"));
+
+        let reply: ReplyState = from_text(
+            r#"{"tx_id":4,"account":0,"kind":"invoice","envelope":"00","mailbox_key":null,"mailbox":null,"check_code":"1234","posted":true}"#,
+            "in-person answer",
+        )
+        .unwrap();
+        assert!(reply.direct.is_empty());
+        assert!(reply.direct_routes().is_empty());
+        assert!(reply.posted);
     }
 }

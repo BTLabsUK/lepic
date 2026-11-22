@@ -346,6 +346,7 @@ pub fn invoice_finalize_is_permanent(error: &InvoiceError) -> bool {
         | InvoiceError::InputsSpentElsewhere { .. }
         | InvoiceError::InputsSpentByOwnTransaction { .. }
         | InvoiceError::PeerInputsSpent { .. }
+        | InvoiceError::AnswerInputsSpent { .. }
         | InvoiceError::Decode(_)
         | InvoiceError::WrongStage { .. }
         | InvoiceError::AmountMismatch { .. }

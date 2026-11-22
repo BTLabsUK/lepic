@@ -19,6 +19,7 @@ mod link;
 mod network;
 mod pairing_id;
 mod psk;
+mod request;
 mod text;
 mod tlv;
 mod tx;
@@ -41,6 +42,7 @@ pub use keys::{EncPublicKey, EncSecretKey, HintKey};
 pub use network::Network;
 pub use pairing_id::{InviteId, PairingCode};
 pub use psk::{PresharedKey, SUITE_PSK};
+pub use request::{REQUEST_CLAIM_TYPE, REQUEST_TAG, check_request_signature, sign_request_code};
 pub use text::{
     ContactName, MAX_HOST_LEN, MAX_MAILBOX_LEN, MAX_NAME_LEN, MAX_REFERENCE_LEN, MailboxAddress,
     Reference, RelayHost,

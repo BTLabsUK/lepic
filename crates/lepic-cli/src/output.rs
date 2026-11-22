@@ -688,6 +688,35 @@ pub struct InPersonReadReport {
     pub message: Option<String>,
     pub ttl_cutoff: u64,
     pub mailbox: Option<InPersonHostReport>,
+    /// The domain the code is signed for; absent for a code not signed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub domain: Option<InPersonDomainReport>,
+    /// The payee's direct routes, in its order; the answer is posted to each.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub direct: Vec<InPersonRouteReport>,
+}
+
+/// The domain a scanned code is signed for, and whether its well-known file proves it.
+#[derive(Debug, Serialize)]
+pub struct InPersonDomainReport {
+    pub domain: String,
+    /// `checked`: the domain's file lists the key; `unchecked`: no file was given;
+    /// `refused`: the file does not prove the claim, for `reason`.
+    pub state: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<&'static str>,
+    /// The key that signed the code, hex.
+    pub key: String,
+    /// Unix seconds when the code was signed, as the code says.
+    pub issued_at: u64,
+}
+
+/// A route an answer is posted to.
+#[derive(Debug, Serialize)]
+pub struct InPersonRouteReport {
+    /// `epicbox`, `http` or `tor`.
+    pub method: String,
+    pub value: String,
 }
 
 /// An answer to a scanned code, from `in-person pay`.
@@ -701,15 +730,33 @@ pub struct InPersonPaidReport {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub file: Option<String>,
     pub mailbox: Option<InPersonHostReport>,
+    /// The domain the paid code is signed for, from `in-person pay`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub domain: Option<InPersonDomainReport>,
 }
 
-/// An answer posted to the relay its code names, from `in-person post`.
+/// An answer posted to the relay and the direct routes its code names, from `in-person post`.
 #[derive(Debug, Serialize)]
 pub struct InPersonPostReport {
     pub slate_id: String,
+    /// A route took the answer.
     pub posted: bool,
     /// The check code the other screen shows for this answer, shown only once it is posted.
     pub check_code: String,
+    /// What each route did, the reply mailbox first.
+    pub routes: Vec<InPersonRoutePostReport>,
+}
+
+/// The post of an answer to one route.
+#[derive(Debug, Serialize)]
+pub struct InPersonRoutePostReport {
+    pub method: String,
+    pub value: String,
+    /// `accepted`, `refused` or `failed`.
+    pub outcome: &'static str,
+    /// Why it was refused, as the payee said, or why it failed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
 }
 
 /// An answer taken for a code this wallet showed, from `in-person take`.
@@ -2485,13 +2532,12 @@ fn write_in_person_human(out: &mut Vec<u8>, report: &Report) -> std::io::Result<
                 (Some(envelope), None) => writeln!(out, "Answer: {envelope}")?,
                 (None, None) => {}
             }
+            if let Some(domain) = &r.domain {
+                write_in_person_domain(out, domain)?;
+            }
             writeln!(out, "Transaction {}.", r.tx_id)
         }
-        Report::InPersonPost(r) => writeln!(
-            out,
-            "Answer to {} posted; check code {}.",
-            r.slate_id, r.check_code
-        ),
+        Report::InPersonPost(r) => write_in_person_post(out, r),
         Report::InPersonTaken(r) if r.duplicate => writeln!(
             out,
             "Answer {} to {} was taken before.",
@@ -2541,6 +2587,48 @@ fn write_in_person_human(out: &mut Vec<u8>, report: &Report) -> std::io::Result<
     }
 }
 
+/// Where an answer went, route by route; the check code only once a route took it.
+fn write_in_person_post(out: &mut Vec<u8>, r: &InPersonPostReport) -> std::io::Result<()> {
+    for route in &r.routes {
+        writeln!(
+            out,
+            "{} {}: {}{}",
+            route.method,
+            printable(&route.value),
+            route.outcome,
+            route
+                .reason
+                .as_deref()
+                .map(|reason| format!(" ({})", printable(reason)))
+                .unwrap_or_default()
+        )?;
+    }
+    if r.posted {
+        writeln!(
+            out,
+            "Answer to {} posted; check code {}.",
+            r.slate_id, r.check_code
+        )
+    } else {
+        writeln!(out, "Answer to {} not taken; post it again.", r.slate_id)
+    }
+}
+
+/// The domain line of a scanned code.
+fn write_in_person_domain(out: &mut Vec<u8>, domain: &InPersonDomainReport) -> std::io::Result<()> {
+    match (domain.state, domain.reason) {
+        ("checked", _) => writeln!(out, "Signed for {} (checked).", domain.domain),
+        ("refused", Some(reason)) => {
+            writeln!(out, "Signed for {} (refused: {reason}).", domain.domain)
+        }
+        _ => writeln!(
+            out,
+            "Signed for {} (unchecked: give --domain-file to check it).",
+            domain.domain
+        ),
+    }
+}
+
 /// What a scanned in-person code asks for.
 fn write_in_person_read(out: &mut Vec<u8>, r: &InPersonReadReport) -> std::io::Result<()> {
     writeln!(
@@ -2553,6 +2641,17 @@ fn write_in_person_read(out: &mut Vec<u8>, r: &InPersonReadReport) -> std::io::R
     }
     if let Some(message) = &r.message {
         writeln!(out, "Message: {}", printable(message))?;
+    }
+    if let Some(domain) = &r.domain {
+        write_in_person_domain(out, domain)?;
+    }
+    for route in &r.direct {
+        writeln!(
+            out,
+            "The answer also goes to {} {}.",
+            route.method,
+            printable(&route.value)
+        )?;
     }
     match &r.mailbox {
         Some(host) => writeln!(

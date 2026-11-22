@@ -18,7 +18,9 @@ no part of this record.
 | epic1 address | the account's one epic1 address, index 0 of ADR 0063 §1 | public address, first address |
 | payment link | the epic1 address as a link, payable any number of times | open link |
 | request link | the payment link with an amount, a message or both, which fill in the payer's Send screen | link with an amount |
-| invoice | a payment request between paired contacts; never a link | invoice, contact invoice |
+| invoice | a payment request: pushed only between paired contacts, or opened by the payer as a scan, a file or an invoice link (ADR 0068); never sent to an address | invoice, contact invoice |
+| checkout request | an in-person invoice code that a shop's `lepic serve` issues for one order, signed for the shop's domain (ADR 0068) | paypoint code, in-person invoice |
+| invoice link | a checkout request as `epiccash://invoice/1/<code>`; needs a checked domain (ADR 0068) | |
 | legacy Epicbox address | the old index-0 Epicbox address | classic address, payments address |
 
 ## Context

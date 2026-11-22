@@ -46,6 +46,18 @@ where
         namespace::reply_mailbox_key(&self.session()?.seed, account.0, network, slate_id)
     }
 
+    /// The Epicbox key of the reply mailbox slot `account` on `network` shares among its
+    /// shared-slot in-person codes: one slot, so one watch, for many codes at a time.
+    ///
+    /// Fails with [`WalletError::Locked`].
+    pub fn shared_reply_mailbox_key(
+        &self,
+        account: AccountIndex,
+        network: Network,
+    ) -> Result<SecretKey, WalletError> {
+        namespace::shared_reply_mailbox_key(&self.session()?.seed, account.0, network)
+    }
+
     /// The key `account` on `network` posts for the payment `payment_id` from, in `role`. It
     /// is apart from every address of the wallet, so a post does not name the wallet.
     ///

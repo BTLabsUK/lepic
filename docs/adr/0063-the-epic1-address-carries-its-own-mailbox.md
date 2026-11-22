@@ -154,6 +154,9 @@ epic:<address>[?amount=<n>][&message=<text>][&http=<host[:port]>][&tor=<onion>]
 
 ### 8. Payment requests travel only between verified contacts
 
+> Amended by ADR 0068: an invoice the payer opens (scan, file, invoice link) needs no pairing, and
+> an in-person request is no longer limited to verified contacts. Pushed invoices stay as written.
+
 - A payment request (an invoice) sent by slot goes only to a contact whose pairing is
   verified, and is taken only from a contact the payer verified and allowed to send invoices
   (RFC 0002 11.5; allow is per contact, off by default, set by the payer). A contact known by

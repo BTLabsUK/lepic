@@ -161,7 +161,14 @@ struct Service<'a, H: Host> {
     metrics: bool,
     /// What the metrics count since serve started.
     counters: v1::Counters,
+    /// The direct routes in-person codes name, from `--public-url`; empty, none.
+    public_routes: Vec<lepic_wallet_contacts::RouteEntry>,
+    /// The locks over this serve's checkout requests.
+    checkout: v1::CheckoutLocks,
 }
+
+/// The variable `--public-url` falls back to, comma-separated.
+const PUBLIC_URL_ENV: &str = "LEPIC_SERVE_PUBLIC_URL";
 
 impl<H: Host> Service<'_, H> {
     /// Runs `command` as `lepic` runs it, with a console that has no input and discards output,
@@ -518,6 +525,7 @@ async fn upkeep<H: Host>(service: &Service<'_, H>, contacts: &str) -> Infallible
         never = v1::event_writer(service) => never,
         never = v1::scan_driver(service) => never,
         never = v1::webhook_driver(service) => never,
+        never = v1::checkout_driver(service) => never,
     }
 }
 
@@ -739,6 +747,8 @@ impl<H: Host> Run<'_, H> {
             .clone()
             .unwrap_or_else(|| service::default_socket(&self.settings.data_dir));
         service::check_socket_path(&path)?;
+        // A route every payer refuses is refused before the wallet opens.
+        self.public_routes(&args)?;
         let owner_tls_address = args
             .owner_tls
             .then(|| {
@@ -766,6 +776,24 @@ impl<H: Host> Run<'_, H> {
         report
     }
 
+    /// The direct routes of `--public-url`, or of [`PUBLIC_URL_ENV`] when the option is not
+    /// given: the flag wins over the variable, as clap's own `env` would have it. Fails on an
+    /// address every payer refuses.
+    fn public_routes(
+        &self,
+        args: &ServeArgs,
+    ) -> Result<Vec<lepic_wallet_contacts::RouteEntry>, CliError> {
+        let from_env: Vec<String> = match self.console.env.get(PUBLIC_URL_ENV) {
+            Some(urls) if args.public_url.is_empty() => vec![urls.to_owned()],
+            _ => Vec::new(),
+        };
+        v1::public_routes(if from_env.is_empty() {
+            &args.public_url
+        } else {
+            &from_env
+        })
+    }
+
     /// Serves the API, owner TLS, Epicbox and maintenance on the open wallet `opened`, at the
     /// socket `path`, until `stop` completes or the run's interrupt fires, then drains the
     /// connections, shuts the listeners down and returns the report. Called by `lepic serve`
@@ -779,8 +807,17 @@ impl<H: Host> Run<'_, H> {
         args: &ServeArgs,
         stop_when: impl Future<Output = ()>,
     ) -> Result<Report, CliError> {
+        let public_routes = self.public_routes(args)?;
         let http = if args.http {
-            Some(HttpListener::start(opened, self.settings, &args.listen).await?)
+            Some(
+                HttpListener::start(
+                    opened,
+                    self.settings,
+                    &args.listen,
+                    !public_routes.is_empty(),
+                )
+                .await?,
+            )
         } else {
             None
         };
@@ -811,6 +848,8 @@ impl<H: Host> Run<'_, H> {
             creates: v1::Creates::default(),
             metrics: args.metrics,
             counters: v1::Counters::default(),
+            public_routes,
+            checkout: v1::CheckoutLocks::default(),
         };
         let api = Api::new(
             &service,

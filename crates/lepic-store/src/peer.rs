@@ -225,6 +225,8 @@ fn sealing_error(failure: SealFailure) -> StoreError {
     }
 }
 
+/// Used only by the v12 migration, which needs the `sqlite` feature.
+#[cfg(any(feature = "sqlite", test))]
 pub(crate) fn seal(
     key: &ContextKey,
     tag: &PeerTag,

@@ -185,6 +185,10 @@ pub enum Event {
     /// Nothing was finalized: the host shows the answer with its check code and the user picks
     /// the one to finalize. Raised once per answer that checks.
     InPersonAnswer(InPersonAnswerEvent),
+    /// An answer to an in-person code was refused for good: it reached the code's slot or a
+    /// direct route, but the checks turned it down. Nothing was stored for it. Not raised when
+    /// the answer is held to be tried again (the node did not answer).
+    InPersonAnswerRefused(InPersonAnswerRefusedEvent),
     /// The recovery of a payment ([`crate::Wallet::recover`]) moved to another state: stored,
     /// taken by the node, mined, back to waiting after a reorg, done or failed. Raised once per
     /// change; the payment's own changes arrive as [`Event::Transaction`].
@@ -204,6 +208,15 @@ pub struct InPersonAnswerEvent {
     /// An earlier answer to this code had the same check code: the user cannot tell the two
     /// apart by it.
     pub same_code: bool,
+}
+
+/// An answer to an in-person code that was refused.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InPersonAnswerRefusedEvent {
+    pub tx_id: TxId,
+    pub slate_id: SlateId,
+    /// Why, in snake case: `already_finalized`, `expired`, `inputs_spent`, `bad_answer` or `cancelled`.
+    pub reason: &'static str,
 }
 
 /// An invoice a contact sent, with what the contact says about it.

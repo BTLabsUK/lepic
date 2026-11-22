@@ -15,7 +15,7 @@ words.
 | slot | the box of one key on a mailbox, which a wallet watches | mailbox |
 | request link | the payment link with an amount, a message or both, which fill in the payer's Send screen | link with an amount |
 | payment link | the account's one epic1 address as a link, payable any number of times | open link |
-| invoice | a payment request between paired contacts; never a link | invoice, contact invoice |
+| invoice | a payment request: pushed only between paired contacts, or opened by the payer as a scan, a file or an invoice link (ADR 0068); never sent to an address | invoice, contact invoice |
 | legacy Epicbox address | the index-0 Epicbox address | classic address, payments address |
 
 Names in code are quoted as they are today (`RelayNotRead`, `pairing_servers`, the home mailbox

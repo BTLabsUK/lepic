@@ -353,9 +353,10 @@ mod tests {
     // reference's.
     const SECP_REPO: &str = "https://github.com/EpicCash/rust-secp256k1-zkp";
 
-    /// The source of the secp256k1-zkp copy that `epic_util`, the reference's crypto boundary,
-    /// depends on.
-    fn reference_secp_source() -> Option<&'static str> {
+    /// The `epic_util` dependency entry on secp256k1-zkp, without the package name: empty when
+    /// the lockfile holds one package of that name, else ` <version> (<source>)`. `epic_util` is
+    /// the reference's crypto boundary.
+    fn reference_secp_dependency() -> Option<&'static str> {
         LOCKFILE
             .split("[[package]]")
             .find(|block| {
@@ -364,7 +365,12 @@ mod tests {
                     .any(|line| line.trim() == "name = \"epic_util\"")
             })?
             .lines()
-            .find_map(|line| line.trim().strip_prefix("\"grin_secp256k1zkp "))
+            .find_map(|line| {
+                line.trim()
+                    .strip_prefix("\"grin_secp256k1zkp")?
+                    .strip_suffix("\",")
+                    .filter(|rest| rest.is_empty() || rest.starts_with(' '))
+            })
     }
 
     #[test]
@@ -385,8 +391,10 @@ mod tests {
         assert_eq!(Pins::from_lockfile(LOCKFILE)?.node.commit, NODE_COMMIT);
 
         // The reference resolves its secp256k1-zkp to the commit its own lockfile records.
-        let reference = reference_secp_source().ok_or(Error::MissingPin("grin_secp256k1zkp"))?;
-        let resolved = LOCKFILE
+        // Cargo qualifies the dependency with its source only when two packages share the name.
+        let reference =
+            reference_secp_dependency().ok_or(Error::MissingPin("grin_secp256k1zkp"))?;
+        let sources: Vec<&str> = LOCKFILE
             .split("[[package]]")
             .filter(|block| {
                 block
@@ -398,14 +406,19 @@ mod tests {
                     .lines()
                     .find_map(|line| line.trim().strip_prefix("source = \"git+"))
             })
-            .find(|source| {
-                reference
-                    .split_once('(')
-                    .and_then(|(_, rest)| rest.strip_prefix("git+"))
-                    .and_then(|rest| rest.strip_suffix(")\","))
-                    .is_some_and(|url| source.starts_with(&format!("{url}#")))
-            })
-            .ok_or(Error::MissingPin("grin_secp256k1zkp"))?;
+            .collect();
+        let resolved = match reference
+            .split_once('(')
+            .and_then(|(_, rest)| rest.strip_prefix("git+"))
+            .and_then(|rest| rest.strip_suffix(')'))
+        {
+            Some(url) => sources
+                .into_iter()
+                .find(|source| source.starts_with(&format!("{url}#"))),
+            None if reference.is_empty() && sources.len() == 1 => sources.first().copied(),
+            None => None,
+        }
+        .ok_or(Error::MissingPin("grin_secp256k1zkp"))?;
         assert!(
             resolved.starts_with(SECP_REPO) && resolved.ends_with(&format!("#{SECP_COMMIT}\"")),
             "{resolved}"

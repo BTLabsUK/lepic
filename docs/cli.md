@@ -8,7 +8,7 @@ slate files, pairs with contacts, and runs as a service with a local REST API. S
 flags, `LEPIC_*` variables and two optional files. Reports go to stdout as text or JSON, with a
 documented exit code.
 
-This page describes `lepic 0.6.0`. Every option is also in `lepic COMMAND --help`. Settings files
+This page describes `lepic 0.6.1`. Every option is also in `lepic COMMAND --help`. Settings files
 are in [Configuration](configuration.md), task-by-task examples with the matching API calls in
 [Recipes](recipes.md).
 
@@ -18,7 +18,7 @@ are in [Configuration](configuration.md), task-by-task examples with the matchin
    later.
 
    ```bash
-   cargo build --release -p lepic-cli      # prints lepic 0.6.0 from ./target/release/lepic --version
+   cargo build --release -p lepic-cli      # prints lepic 0.6.1 from ./target/release/lepic --version
    ```
 
 2. **Set the password source.** Commands that open the wallet read the password from a file, a
@@ -1153,7 +1153,7 @@ lepic serve --http --port 3415                                             # als
 ```
 
 ```json
-{"version":"0.6.0","uptime_s":5,"listeners":{"epicbox":{"state":"connected"}},"node":{"tip_height":3412790,"tip_changed_at":"2026-11-11T02:54:31.226402118Z"},"payments":{"open":{"needs_approval":0,"awaiting_answer":0,"finalized":0,"posted":0}},"refresh":{"failures":0,"last_success_at":"2026-11-11T02:55:09.797663717Z"},"collect":{"failures":0,"last_success_at":"2026-11-11T02:55:09.816610725Z"},"requests":{"served":0,"in_flight":1,"refused":0}}
+{"version":"0.6.1","uptime_s":5,"listeners":{"epicbox":{"state":"connected"}},"node":{"tip_height":3412790,"tip_changed_at":"2026-11-11T02:54:31.226402118Z"},"payments":{"open":{"needs_approval":0,"awaiting_answer":0,"finalized":0,"posted":0}},"refresh":{"failures":0,"last_success_at":"2026-11-11T02:55:09.797663717Z"},"collect":{"failures":0,"last_success_at":"2026-11-11T02:55:09.816610725Z"},"requests":{"served":0,"in_flight":1,"refused":0}}
 ```
 
 `refresh` has `"failures":0` and a `last_success_at` when serve reaches the node. If it cannot,
@@ -1168,6 +1168,7 @@ Common options:
 | `--http` | Also answers payments at `/v2/foreign`, as `http listen` does; takes its `--port`, `--internet`, `--coinbase` and `--coinbase-remote` |
 | `--owner-tls` | Also answers the wallet API over mutual TLS ([Owner API over TLS](#owner-api-over-tls)) |
 | `--metrics` | Answers `GET /api/v1/metrics` with the Prometheus text format ([Metrics](#metrics)); without it that path answers 404 `not_found` |
+| `--public-url URL` | A public address of this serve that in-person request codes name as a direct route ([In-person requests](#in-person-requests)); repeatable. `LEPIC_SERVE_PUBLIC_URL` takes them comma-separated when the option is not given |
 
 `GET /api/v1/openapi.json` returns the OpenAPI document; the same document is in
 [api/openapi.json](api/openapi.json). It is written by hand and is the contract. The API has its
@@ -1175,6 +1176,40 @@ own objects (payments, accounts, outputs, addresses, links, contacts, the relay,
 the node, the wallet and the service), its own errors and an event log. They are not the JSON
 that `lepic --output json` prints, and the CLI does not map onto routes. Amounts are decimal
 strings in EPIC. [api/README.md](api/README.md) is the guide for people who write against it.
+
+### In-person requests
+
+`POST /api/v1/payments` with `"kind": "invoice"` and `"via": "in_person"` issues an in-person
+request: a code the payer scans once, signed for the `domain` setting when one is set. The
+handoff is the code as hex, its QR frames and its `epiccash://invoice/1/` link. The payer's answer
+comes to the account's shared reply slot on the mailbox and, with `direct`, to this serve's direct
+route. The create takes the `receive` role and is idempotent by `id`; it answers 503
+`node_unreachable` when the node does not answer, since the code's TTL counts from the chain tip.
+
+| Field | Meaning |
+|---|---|
+| `ttl_blocks` | Blocks the code stays payable; default 30. 10 or fewer is refused |
+| `finalize` | `manual` (default): the answers wait in the payment's `answers` and `POST /payments/{id}/post` finalizes one, by its id or check code in `answer`. `first`: serve finalizes and posts the first answer itself, once, across restarts |
+| `direct` | Whether the code names this serve's public addresses; default true when serve has one. `true` without one is refused |
+
+The payment's `request` object has the request's `state` (`open`, `paid`, `expired`, or
+`refused` once the shop cancels it), the `reference` (the check code of the answer finalized),
+the `link`, the `domain`, `finalize`, and `answers_refused` with `last_refusal`: answers the wallet
+refused for good, which leave the state as it is. A change of `request.state` is a
+`payment.state_changed` event; confirmations stay on `payment.confirmations_reached`. In-person
+sends are refused.
+
+`--public-url` names where payers reach this serve: an `.onion` host becomes a `tor` route,
+any other `https://` host an `http` route. The address has no path, user, query or fragment.
+Serve refuses at start a loopback or local-network host, which every payer refuses. With an
+address given, the `--http` listener's `/api/v1/inbox` takes answers to open requests; put it
+behind the public address (a TLS proxy or an onion service). Without one, codes name no direct
+route and answers come by the mailbox only.
+
+```bash
+lepic serve --http --port 3415 --public-url https://pay.example.com
+LEPIC_SERVE_PUBLIC_URL=https://pay.example.com,http://ONION.onion lepic serve --http
+```
 
 ### Metrics
 

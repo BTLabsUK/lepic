@@ -10,6 +10,7 @@
 //! and TTL cutoff past it, so they carry block header version 7.
 
 use epic_wallet_libwallet::{Slate, SlateVersion, VersionedSlate};
+use ring::{digest, signature};
 use serde::Serialize;
 use serde_json::{Value, json};
 
@@ -53,6 +54,13 @@ const REPLY_KEY: [u8; 32] = {
 };
 /// 20 bytes, the mailbox length of the QR sizes in specification 5.18.
 const MAILBOX_ADDRESS: &str = "relay.example.net:80";
+/// A direct route's http entry and tor entry (a well-formed v3 onion name).
+const DIRECT_HTTP: &str = "pay.example.com:443";
+const DIRECT_TOR: &str = "pg6mmjiyjmcrsslvykfwnntlaru7p5svn6y2ymmju6nubxndf4pscryd.onion:80";
+/// The Ed25519 seed, time and domain of the signed request vectors.
+const CLAIM_SEED: [u8; 32] = [0x5a; 32];
+const CLAIM_ISSUED_AT: &str = "1795000000";
+const CLAIM_DOMAIN: &str = "shop.example.com";
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Network {
@@ -437,7 +445,13 @@ fn record(record_type: u8, value: &[u8]) -> Vec<u8> {
 }
 
 /// The JSON view (the `lepic.v1` 1:1 view) of the V3 slate as `lepic.v1` carries it.
-fn view(v3: &Value, stage: Stage, network: Network, tail: &TailInputs) -> Result<Value, Error> {
+fn view(
+    v3: &Value,
+    stage: Stage,
+    network: Network,
+    tail: &TailInputs,
+    claim: Option<&SignedClaim>,
+) -> Result<Value, Error> {
     let height = number(v3, "/height")?;
     let lock_height = number(v3, "/lock_height")?;
     let ttl = optional_number(v3, "/ttl_cutoff_height")?;
@@ -515,7 +529,7 @@ fn view(v3: &Value, stage: Stage, network: Network, tail: &TailInputs) -> Result
         "offset": field(v3, "/tx/offset")?,
         "inputs": body("/tx/body/inputs")?,
         "outputs": body("/tx/body/outputs")?,
-        "tail": tail.view(),
+        "tail": tail.view(claim),
     });
     if lock_height != 0 {
         insert(&mut view, "lock_height", json!(lock_height.to_string()));
@@ -556,14 +570,96 @@ fn view(v3: &Value, stage: Stage, network: Network, tail: &TailInputs) -> Result
     Ok(view)
 }
 
-/// The tail a case appends: the reply key, the reply mailbox and unknown records, in that order.
+/// The tail a case appends: the reply key, the reply mailbox, the direct route and unknown
+/// records in type order, then the request claim, signed over every byte before it.
 #[derive(Default, Serialize)]
 struct TailInputs {
     #[serde(skip_serializing_if = "Option::is_none")]
     reply_key: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     reply_mailbox: Option<MailboxInputs>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    direct_route: Vec<DirectInputs>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    request_claim: Option<ClaimInputs>,
     unknown: Vec<UnknownInputs>,
+}
+
+/// A direct route entry: method 1 (http) or 2 (tor), and `host[:port]`.
+#[derive(Serialize)]
+struct DirectInputs {
+    method: &'static str,
+    address: String,
+}
+
+/// What the request claim is signed with; the key and signature follow from them.
+#[derive(Serialize)]
+struct ClaimInputs {
+    ed25519_seed: String,
+    issued_at: String,
+    domain: String,
+}
+
+/// The request claim as signed: `key || issued_at || signature || domain`.
+struct SignedClaim {
+    key: Vec<u8>,
+    issued_at: u64,
+    signature: Vec<u8>,
+    domain: String,
+}
+
+const DIRECT_ROUTE: u8 = 0x81;
+const REQUEST_CLAIM: u8 = 0xF0;
+const REQUEST_TAG: &[u8] = b"epic-request/1";
+
+impl ClaimInputs {
+    /// Signs `signed`, the code before the claim:
+    /// `Ed25519(epic-request/1 || net || key || SHA-256(signed) || issued_at BE || domain)`.
+    fn sign(&self, network: Network, signed: &[u8]) -> Result<SignedClaim, Error> {
+        let seed = unhex(&self.ed25519_seed)?;
+        let pair = signature::Ed25519KeyPair::from_seed_unchecked(&seed)
+            .map_err(|_| bad("signing a request claim", "seed rejected"))?;
+        let key = signature::KeyPair::public_key(&pair).as_ref().to_vec();
+        let issued_at: u64 = self
+            .issued_at
+            .parse()
+            .map_err(|_| bad("signing a request claim", "issued_at"))?;
+        let net = match network {
+            Network::Mainnet => 0u8,
+            Network::Floonet => 1u8,
+        };
+        let mut message = REQUEST_TAG.to_vec();
+        message.push(net);
+        message.extend_from_slice(&key);
+        message.extend_from_slice(digest::digest(&digest::SHA256, signed).as_ref());
+        message.extend_from_slice(&issued_at.to_be_bytes());
+        message.extend_from_slice(self.domain.as_bytes());
+        Ok(SignedClaim {
+            signature: pair.sign(&message).as_ref().to_vec(),
+            key,
+            issued_at,
+            domain: self.domain.clone(),
+        })
+    }
+}
+
+impl SignedClaim {
+    fn record(&self) -> Vec<u8> {
+        let mut value = self.key.clone();
+        value.extend_from_slice(&self.issued_at.to_be_bytes());
+        value.extend_from_slice(&self.signature);
+        value.extend_from_slice(self.domain.as_bytes());
+        record(REQUEST_CLAIM, &value)
+    }
+
+    fn view(&self) -> Value {
+        json!({
+            "key": hex(&self.key),
+            "issued_at": self.issued_at.to_string(),
+            "signature": hex(&self.signature),
+            "domain": self.domain,
+        })
+    }
 }
 
 #[derive(Serialize)]
@@ -580,29 +676,56 @@ struct UnknownInputs {
 }
 
 impl TailInputs {
+    /// Every record but the request claim, in type order.
     fn bytes(&self) -> Result<Vec<u8>, Error> {
-        let mut out = Vec::new();
+        let mut records = Vec::new();
         if let Some(key) = &self.reply_key {
-            out.extend(record(0x01, &unhex(key)?));
+            records.push((0x01, unhex(key)?));
         }
         if let Some(mailbox) = &self.reply_mailbox {
             let mut value = unhex(&mailbox.key)?;
             value.extend_from_slice(mailbox.address.as_bytes());
-            out.extend(record(0x02, &value));
+            records.push((0x02, value));
+        }
+        if !self.direct_route.is_empty() {
+            let mut value = Vec::new();
+            for entry in &self.direct_route {
+                value.push(match entry.method {
+                    "http" => 1,
+                    "tor" => 2,
+                    other => return Err(bad("writing a direct route", other)),
+                });
+                value.push(
+                    u8::try_from(entry.address.len())
+                        .map_err(|_| bad("writing a direct route", "address too long"))?,
+                );
+                value.extend_from_slice(entry.address.as_bytes());
+            }
+            records.push((DIRECT_ROUTE, value));
         }
         for unknown in &self.unknown {
-            out.extend(record(unknown.record_type, &unhex(&unknown.hex)?));
+            records.push((unknown.record_type, unhex(&unknown.hex)?));
         }
-        Ok(out)
+        records.sort_by_key(|(record_type, _)| *record_type);
+        Ok(records
+            .iter()
+            .flat_map(|(record_type, value)| record(*record_type, value))
+            .collect())
     }
 
-    fn view(&self) -> Value {
+    fn view(&self, claim: Option<&SignedClaim>) -> Value {
         let mut view = json!({ "unknown": self.unknown });
         if let Some(key) = &self.reply_key {
             insert(&mut view, "reply_key", json!(key));
         }
         if let Some(mailbox) = &self.reply_mailbox {
             insert(&mut view, "reply_mailbox", json!(mailbox));
+        }
+        if !self.direct_route.is_empty() {
+            insert(&mut view, "direct_route", json!(self.direct_route));
+        }
+        if let Some(claim) = claim {
+            insert(&mut view, "request_claim", claim.view());
         }
         view
     }
@@ -699,6 +822,14 @@ fn render_case(
     let (label, tail) = tail.unwrap_or_default();
     let mut bytes = encode(&slate.value, slate.stage, network, Keep::default())?.bytes;
     bytes.extend(tail.bytes()?);
+    let claim = tail
+        .request_claim
+        .as_ref()
+        .map(|claim| claim.sign(network, &bytes))
+        .transpose()?;
+    if let Some(claim) = &claim {
+        bytes.extend(claim.record());
+    }
     let stage = slate.stage.name();
     let mut name = format!("{case}_{}_{}", stage.to_lowercase(), network.name());
     if slate.shift.is_some() {
@@ -710,7 +841,7 @@ fn render_case(
     let expected = CaseExpected {
         size: bytes.len(),
         lepic_v1: hex(&bytes),
-        view: view(&slate.value, slate.stage, network, &tail)?,
+        view: view(&slate.value, slate.stage, network, &tail, claim.as_ref())?,
     };
     let inputs = CaseInputs {
         case,
@@ -810,6 +941,37 @@ fn tail_cases(upstream: &Upstream, flows: &[(&Case, FlowRecord)]) -> Result<Vec<
                 reply_key: Some(hex(REPLY_KEY)),
                 reply_mailbox: Some(mailbox(&invoice_i1)?),
                 unknown: vec![unknown(0x90, b"x")],
+                ..TailInputs::default()
+            },
+        ),
+        (
+            "invoice_file_plain",
+            &invoice_i1,
+            "direct_route",
+            TailInputs {
+                direct_route: direct_route(),
+                ..TailInputs::default()
+            },
+        ),
+        (
+            "invoice_file_plain",
+            &invoice_i1,
+            "signed",
+            TailInputs {
+                request_claim: Some(claim()),
+                ..TailInputs::default()
+            },
+        ),
+        (
+            "invoice_file_plain",
+            &invoice_i1,
+            "signed_direct_route",
+            TailInputs {
+                reply_key: Some(hex(REPLY_KEY)),
+                reply_mailbox: Some(mailbox(&invoice_i1)?),
+                direct_route: direct_route(),
+                request_claim: Some(claim()),
+                unknown: vec![unknown(0x90, b"x")],
             },
         ),
     ];
@@ -819,6 +981,27 @@ fn tail_cases(upstream: &Upstream, flows: &[(&Case, FlowRecord)]) -> Result<Vec<
             render_case(upstream, case, slate, net, Some((label, tail)))
         })
         .collect()
+}
+
+fn direct_route() -> Vec<DirectInputs> {
+    vec![
+        DirectInputs {
+            method: "http",
+            address: DIRECT_HTTP.to_owned(),
+        },
+        DirectInputs {
+            method: "tor",
+            address: DIRECT_TOR.to_owned(),
+        },
+    ]
+}
+
+fn claim() -> ClaimInputs {
+    ClaimInputs {
+        ed25519_seed: hex(CLAIM_SEED),
+        issued_at: CLAIM_ISSUED_AT.to_owned(),
+        domain: CLAIM_DOMAIN.to_owned(),
+    }
 }
 
 #[derive(Serialize)]
@@ -1258,6 +1441,20 @@ fn malformed_cases() -> Vec<Malformed> {
                 "an S2 with a reply key",
                 "Tail.NotAllowed",
                 |e| append(e, &record(0x01, &REPLY_KEY)),
+            )
+        },
+        Malformed {
+            base: ("invoice_file_plain", Stage::I1),
+            ..malformed_case(
+                "tail_claim_not_last",
+                "an I1 with a record of type f1 after its request claim",
+                "Tail.ClaimNotLast",
+                |e| {
+                    let mut claim = vec![0u8; 32 + 8 + 64];
+                    claim.extend_from_slice(CLAIM_DOMAIN.as_bytes());
+                    append(e, &record(REQUEST_CLAIM, &claim))?;
+                    append(e, &record(0xf1, b""))
+                },
             )
         },
     ]

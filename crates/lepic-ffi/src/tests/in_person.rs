@@ -6,8 +6,10 @@
 use super::contact::{EPIC, World, raised};
 use super::kind;
 use crate::api::error::WalletErrorKind;
-use crate::api::in_person::{in_person_qr_parts, in_person_qr_read};
-use crate::api::types::{ContactRelayMode, SlateStage, SlateWire};
+use crate::api::in_person::{
+    in_person_link_parse, in_person_qr_parts, in_person_qr_read, in_person_request_verify,
+};
+use crate::api::types::{Chain, ContactRelayMode, InPersonDomainState, SlateStage, SlateWire};
 
 use ContactRelayMode::{Offline, Online};
 
@@ -268,6 +270,38 @@ fn qr_parts_refuse_what_is_neither_a_code_nor_an_answer() {
     );
     assert_eq!(
         kind(in_person_qr_parts(Vec::new(), 200, None)),
+        WalletErrorKind::InvalidSlate
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_in_person_link_gives_back_its_code_and_an_unsigned_code_checks_as_unsigned() {
+    let mut world = World::new();
+    let shop = world.wallet().await;
+    shop.session().scan_to_tip().await;
+    let code = shop
+        .in_person_invoice(2 * EPIC, None, None, Offline)
+        .await
+        .unwrap();
+    let link = lepic_wallet_contacts::invoice_link(&code.bytes);
+    assert_eq!(in_person_link_parse(link).unwrap(), code.bytes);
+    assert_eq!(
+        kind(in_person_link_parse("https://shop.test/pay".to_owned())),
+        WalletErrorKind::InvalidArgument
+    );
+    assert_eq!(
+        kind(in_person_link_parse("epiccash://invoice/1/AAAA".to_owned())),
+        WalletErrorKind::InvalidSlate
+    );
+    let check = in_person_request_verify(code.bytes, b"{}".to_vec(), Chain::Floonet).unwrap();
+    assert_eq!(check.state, InPersonDomainState::Unsigned);
+    assert_eq!((check.domain, check.reason), (None, None));
+    assert_eq!(
+        kind(in_person_request_verify(
+            vec![0; 129 * 1024],
+            Vec::new(),
+            Chain::Floonet
+        )),
         WalletErrorKind::InvalidSlate
     );
 }

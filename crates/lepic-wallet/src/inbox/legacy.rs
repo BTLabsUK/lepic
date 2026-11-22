@@ -327,10 +327,14 @@ where
         reply_to: &Destination,
         listing: Option<Listing>,
     ) -> Result<Handled, Settlement> {
-        self.make_room_for(method, proposal, reply_to, listing)
-            .await?;
-        match self
-            .receive_from(
+        // The caps are checked and the S1 received under one turn, as
+        // [`crate::Wallet::receive_unsolicited`] does, so two listeners at the last free place
+        // cannot both take it. The answer goes out after the turn is given back.
+        let received = {
+            let _turn = self.unsolicited_turn().await;
+            self.make_room_for(method, proposal, reply_to, listing)
+                .await?;
+            self.receive_from(
                 method,
                 envelope.wire(),
                 ReceiveRequest::default(),
@@ -338,7 +342,8 @@ where
                 listing,
             )
             .await
-        {
+        };
+        match received {
             Ok(received) => {
                 // A payment answers only from the address it came in on: the S1 of a listing
                 // payment that arrives again at the payments address, or the other way round,

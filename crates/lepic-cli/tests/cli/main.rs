@@ -15,6 +15,7 @@
 
 mod support;
 
+mod api_checkout;
 mod api_contacts;
 mod api_contract;
 mod api_metrics;

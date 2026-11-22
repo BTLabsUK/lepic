@@ -31,7 +31,7 @@ use crate::host::Host;
 
 pub(super) use events::{Log, writer as event_writer};
 pub(super) use metrics::Counters;
-pub(super) use payments::{Creates, make_queued};
+pub(super) use payments::{CheckoutLocks, Creates, checkout_driver, make_queued, public_routes};
 pub(super) use wallet::{Scans, drive as scan_driver};
 pub(super) use webhook::drive as webhook_driver;
 

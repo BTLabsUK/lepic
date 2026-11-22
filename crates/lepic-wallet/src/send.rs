@@ -51,7 +51,7 @@ use lepic_slate::stage::{Flow, Stage};
 use lepic_store::{
     AccountIndex, KeyId, OutboxEntry, OutboxId, OutboxStatus, OutputRecord, OutputStatus,
     ParticipantId, PrivateContext, Record, Repositories, SlateStage, StoreError, StoredOutbox,
-    StoredSlate, TransactionEntry, TransactionRepository, TxDirection, TxId, TxState, WalletStore,
+    StoredSlate, TransactionEntry, TxDirection, TxId, TxState, WalletStore,
 };
 use lepic_transport::error::{FormatError, TransportError};
 use lepic_transport::method::{Method, Sending};
@@ -709,9 +709,10 @@ pub(crate) fn spendable_here(
 
 /// `randomness` under the caller's `slate_id`, when there is one and no stored transaction has
 /// it, in either direction; else [`SendError::SlateIdTaken`]. The stage caches key by slate id
-/// alone, so an id taken in either direction is refused.
+/// alone, so an id taken in either direction is refused. So is one whose send its receiver
+/// declined: the wallet erased that send, but the id stays spent (`sent` is then `None`).
 pub(crate) fn under_slate_id(
-    repos: &dyn TransactionRepository,
+    repos: &dyn Repositories,
     randomness: S1Randomness,
     slate_id: Option<SlateId>,
 ) -> Result<S1Randomness, SendError> {
@@ -724,6 +725,7 @@ pub(crate) fn under_slate_id(
         || repos
             .transaction_by_slate(uuid, TxDirection::Incoming)?
             .is_some()
+        || crate::notices::receiver_declined_report(repos, uuid)?.is_some()
     {
         return Err(SendError::SlateIdTaken {
             slate_id,

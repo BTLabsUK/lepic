@@ -673,6 +673,13 @@ impl SlateRepository for MemoryRepos<'_> {
         Ok(self.state.slates.get(&slate_key(slate_id, stage)).cloned())
     }
 
+    fn delete_slates(&mut self, slate_id: Uuid) -> Result<usize, StoreError> {
+        let id = slate_id.into_bytes();
+        let before = self.state.slates.len();
+        self.state.slates.retain(|(other, _), _| *other != id);
+        Ok(before.saturating_sub(self.state.slates.len()))
+    }
+
     fn slates(&self, slate_id: Uuid) -> Result<Vec<StoredSlate>, StoreError> {
         let id = slate_id.into_bytes();
         Ok(self
@@ -1340,6 +1347,14 @@ impl ContactRepository for MemoryRepos<'_> {
 
     fn slate_contact(&self, slate_id: Uuid) -> Result<Option<ContactId>, StoreError> {
         Ok(self.state.slate_contacts.get(slate_id.as_bytes()).copied())
+    }
+
+    fn delete_slate_contact(&mut self, slate_id: Uuid) -> Result<bool, StoreError> {
+        Ok(self
+            .state
+            .slate_contacts
+            .remove(slate_id.as_bytes())
+            .is_some())
     }
 
     fn set_slate_contact(&mut self, slate_id: Uuid, contact: ContactId) -> Result<(), StoreError> {

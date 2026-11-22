@@ -69,7 +69,7 @@ new name to this table in the same change.
 | `paused_ms` | length of a process pause, after which Tor deadlines moved |
 | `rounds` | rounds a listener held, or challenge intervals it waited without a challenge, before it moved to a fresh socket |
 | `interval_s` | seconds between the relay's challenges as a listener learned them; absent until learned |
-| `code` | close code a relay sent, or a node's error code |
+| `code` | close code a relay sent, a node's error code, or the problem code of a payment request that was not finalized |
 | `mailbox` | index a mux/1 session gave a mailbox |
 | `attach_per_frame`, `mailboxes_per_socket`, `inflight_per_socket` | the limits a relay granted a mux/1 session |
 | `set_aside` | file name a damaged database was moved to, in the data directory (`wallet.enc.sqlite3.damaged-<unix seconds>`) |
@@ -81,7 +81,7 @@ new name to this table in the same change.
 | `tag` | app-chosen tag of a line logged under target `dart` |
 | `txid` | Epicbox relay transaction id (a UUID, not the slate id) of a cancellation |
 | `txid_sent` | whether a post carried a relay transaction id (true on a 3.1.0 relay) |
-| `outcome` | how a relay cancel request ended |
+| `outcome` | how a relay cancel request ended, or how a direct route took an in-person answer: `accepted`, `refused` or `failed` |
 | `via` | how a relay cancel request went: `mux` (a mux/1 session with `txcancel/1`) or `socket` (a short classic connection) |
 | `applied` | what the wallet did with a relay cancellation: `Kept` (the transaction stays as it is) or `Unknown` (no such transaction). A relay cancellation cancels nothing in the wallet |
 | `changed` | whether a relay cancellation changed the transaction; a wallet of this version never does |
@@ -91,10 +91,11 @@ new name to this table in the same change.
 | `kind` | kind of a link envelope, of a node's rejection, or of a watched mailbox |
 | `origin` | origin of a native endpoint |
 | `online` | whether an in-person code was made with a relay host |
+| `shared_slot` | whether an in-person code uses the account's shared reply slot (checkout requests) |
 | `answer`, `same_code` | answer number of an in-person code, and whether an earlier answer had the same check code |
 | `amount` | value of a coinbase output; `debug` only |
 | `row` | id of an outbox row |
-| `route`, `method` | method of a link entry or an outbox row: `epicbox`, `http` or `tor` |
+| `route`, `method` | method of a link entry, an outbox row or a direct route: `epicbox`, `http` or `tor` |
 | `state` | state of an outbox row: `Queued`, `Posted`, `Uncertain` or `Failed` |
 | `posted` | index of the link entry a payment was posted to; absent when none was |
 | `payment` | slate id of the payment a copy of a post belonged to, when a mailbox is asked to cancel it |

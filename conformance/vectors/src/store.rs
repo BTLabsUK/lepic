@@ -199,12 +199,13 @@ fn render_case(pins: &Pins, case: &Case) -> Result<Rendered, Error> {
     let key_tag = keyed(&peer_tag_key, &[TAG_DOMAIN, case.peer_key.as_bytes()]);
     let associated_data = [ASSOCIATED_DATA_DOMAIN, &key_tag].concat();
     let record = record_bytes(&case.record);
-    let key_len = if case.record.native_key.is_some() {
-        32
+    // 34 bytes of record, then the 32-byte native key when the record has one.
+    let record_len = if case.record.native_key.is_some() {
+        66
     } else {
-        0
+        34
     };
-    if record.len() != 34 + key_len {
+    if record.len() != record_len {
         return Err(inconsistent("record length"));
     }
     let sealed = seal(&context_key, &case.nonce, &associated_data, &record)?;

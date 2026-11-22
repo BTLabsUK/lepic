@@ -33,6 +33,9 @@ pub enum PeerClientError {
     NotReady { retry_after: Option<Duration> },
     #[error("the wallet refused the slate")]
     Refused,
+    /// A 422 `refused` answer that named its reason, such as `already_finalized`.
+    #[error("the wallet refused the slate: {reason}")]
+    RefusedFor { reason: String },
     #[error("the wallet says the envelope is too large")]
     TooLarge,
     #[error("the wallet is taking no more payments for now")]

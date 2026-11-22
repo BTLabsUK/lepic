@@ -32,6 +32,9 @@ pub trait SlateRepository {
 
     fn slate(&self, slate_id: Uuid, stage: SlateStage) -> Result<Option<StoredSlate>, StoreError>;
 
+    /// Deletes every stored stage of a slate, and returns how many there were.
+    fn delete_slates(&mut self, slate_id: Uuid) -> Result<usize, StoreError>;
+
     /// Every stored stage of a slate, ordered by stage code.
     fn slates(&self, slate_id: Uuid) -> Result<Vec<StoredSlate>, StoreError>;
 

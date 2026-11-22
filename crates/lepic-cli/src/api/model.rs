@@ -21,7 +21,9 @@ pub(crate) use handed::{Inspection, OpenResult};
 pub(crate) use network::{
     Mailbox, MailboxAdded, MailboxProbe, Mailboxes, ProbeStep, Profile, Relay,
 };
-pub(crate) use payment::{Delivery, Estimate, Handoff, Payment, PaymentRecovery, Post};
+pub(crate) use payment::{
+    Answer, Delivery, Estimate, Handoff, Payment, PaymentRecovery, PaymentRequest, Post,
+};
 pub(crate) use service::{
     Boost, EpicboxListener, EpicboxRelay, Event, HttpListener, Listeners, NodeStatus,
     OldestPayment, OpenPayments, OwnerTls, PaymentsStatus, Requests, Status, Task, Webhook,

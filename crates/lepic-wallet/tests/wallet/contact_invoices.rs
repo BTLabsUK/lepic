@@ -859,6 +859,117 @@ fn an_answer_to_a_send_its_receiver_declined_is_not_finalized() {
     assert_eq!(declined_rows(&world.payer, ben_side, slate_id), 0);
 }
 
+/// A decline taken by `world.payer` for `slate_id`, from the contact `ben_side`.
+fn take_decline_from(
+    world: &World,
+    ben_side: ContactId,
+    slate_id: lepic_slate::model::SlateId,
+) -> lepic_wallet::Taken {
+    world
+        .block_on(world.payer.wallet.take_notice(
+            lepic_wallet::notice::Notice::Declined {
+                slate_id,
+                reason: None,
+            },
+            lepic_wallet::NoticeFrom::Pairing(ben_side),
+        ))
+        .unwrap()
+}
+
+/// The send a receiver declined leaves no slate and no slate contact behind, and its slate id
+/// stays spent: a retry under it is refused with `SlateIdTaken` naming no send, not a store error.
+#[test]
+fn a_declined_send_leaves_no_slate_rows_and_its_slate_id_is_refused() {
+    let world = World::new();
+    let (_, ben_side) = world.pair_for_invoices(ContactKind::Exchange);
+    let tx_id = send_through_mailbox(&world, &relays(&world.payer), ben_side);
+    let uuid = world
+        .payer
+        .read(|repos| repos.transaction(tx_id))
+        .unwrap()
+        .slate_id
+        .unwrap();
+    let slate_id = lepic_slate::model::SlateId::from_bytes(uuid.into_bytes());
+    assert!(!world.payer.read(|repos| repos.slates(uuid)).is_empty());
+    assert_eq!(
+        take_decline_from(&world, ben_side, slate_id),
+        lepic_wallet::Taken::Raised
+    );
+    assert_send_erased(&world.payer, tx_id);
+    assert!(world.payer.read(|repos| repos.slates(uuid)).is_empty());
+    assert_eq!(world.payer.read(|repos| repos.slate_contact(uuid)), None);
+
+    let retry = world.block_on(world.payer.wallet.send(
+        &crate::support::file(),
+        SendRequest {
+            minimum_confirmations: 1,
+            strategy: SelectionStrategy::Smallest,
+            slate_id: Some(slate_id),
+            ..SendRequest::new(ACCOUNT, Amount::new(AMOUNT))
+        },
+        Delivery::Export {
+            to: lepic_transport::transport::Location::File(
+                tempfile::tempdir().unwrap().keep().join("s1.tx"),
+            ),
+        },
+    ));
+    assert!(
+        matches!(
+            retry,
+            Err(lepic_wallet::send::SendError::SlateIdTaken {
+                sent: None,
+                slate_id: taken,
+            }) if taken == slate_id
+        ),
+        "{retry:?}"
+    );
+}
+
+/// A decline for a send an open recovery holds erases nothing: the send stays, nothing is
+/// recorded, and the host is told nothing.
+#[test]
+fn a_decline_for_a_send_under_an_open_recovery_changes_nothing() {
+    let world = World::new();
+    let (_, ben_side) = world.pair_for_invoices(ContactKind::Exchange);
+    let tx_id = send_through_mailbox(&world, &relays(&world.payer), ben_side);
+    let uuid = world
+        .payer
+        .read(|repos| repos.transaction(tx_id))
+        .unwrap()
+        .slate_id
+        .unwrap();
+    let slate_id = lepic_slate::model::SlateId::from_bytes(uuid.into_bytes());
+    let now = jiff::Timestamp::now();
+    world.payer.write(|repos| {
+        repos.put_recovery(&lepic_store::Recovery {
+            tx_id,
+            sent_tx: tx_id,
+            received_tx: tx_id,
+            state: lepic_store::RecoveryState::Posted,
+            kernel_height: None,
+            last_error: None,
+            created_at: now,
+            updated_at: now,
+        })
+    });
+    let mut payer_events = world.payer.wallet.subscribe();
+
+    let taken = take_decline_from(&world, ben_side, slate_id);
+
+    assert_ne!(taken, lepic_wallet::Taken::Raised);
+    assert!(world.payer.read(|repos| repos.transaction(tx_id)).is_some());
+    assert!(!world.payer.read(|repos| repos.slates(uuid)).is_empty());
+    assert!(
+        events(&mut payer_events)
+            .into_iter()
+            .all(|event| !matches!(event, Event::PaymentDeclined(_)))
+    );
+    let declined = world
+        .block_on(world.payer.wallet.send_declined_at(slate_id))
+        .unwrap();
+    assert!(declined.is_none(), "nothing is recorded");
+}
+
 /// `party` holds nothing of the send `tx_id`: no entry, no output that names it, and no coins
 /// locked or awaiting finalization.
 fn assert_send_erased(party: &Party, tx_id: lepic_store::TxId) {

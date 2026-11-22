@@ -98,6 +98,7 @@ fn documented_field_names() -> Vec<String> {
 }
 
 #[test]
+#[allow(clippy::too_many_lines)] // One event carries every documented field name.
 fn json_lines_carry_documented_field_names() {
     let (telemetry, buffer) = console(LogFormat::Json, LogFilter::parse("trace").unwrap());
     let error = Refused(io::Error::new(io::ErrorKind::ConnectionRefused, "closed"));
@@ -134,6 +135,7 @@ fn json_lines_carry_documented_field_names() {
             kind = "invoice",
             origin = "http://127.0.0.1",
             online = true,
+            shared_slot = false,
             answer = 1_u32,
             same_code = false,
             amount = 1_000_000_u64,

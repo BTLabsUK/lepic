@@ -91,6 +91,10 @@ impl DomainKey {
     pub fn public(&self) -> VerifyingKey {
         self.0.verifying_key()
     }
+
+    pub(crate) const fn signing_key(&self) -> &SigningKey {
+        &self.0
+    }
 }
 
 impl fmt::Debug for DomainKey {

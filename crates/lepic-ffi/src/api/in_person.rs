@@ -28,11 +28,13 @@ use flutter_rust_bridge::frb;
 
 use crate::api::error::WalletError;
 use crate::api::types::{
-    ContactRelayMode, FinalizedTx, InPersonCode, InPersonCodeView, InPersonPosted,
-    InPersonQrProgress, InPersonRead, InPersonReply, InPersonTaken, SendOptions,
+    Chain, ContactRelayMode, FinalizedTx, InPersonCode, InPersonCodeView, InPersonDomainCheck,
+    InPersonInvoiceOptions, InPersonPosted, InPersonQrProgress, InPersonRead, InPersonReply,
+    InPersonTaken, SendOptions,
 };
 use crate::api::wallet::EpicWallet;
 use crate::boundary::guard;
+use crate::session::in_person::{bounded, domain_check, link_error};
 use crate::ur_slate;
 
 /// The parts of an animated QR code for the `bytes` of an in-person code or the `envelope` of
@@ -64,6 +66,39 @@ pub fn in_person_qr_read(parts: Vec<String>) -> Result<InPersonQrProgress, Walle
     guard("in_person_qr_read", move || ur_slate::decode_binary(&parts))
 }
 
+/// The raw `lepic.v1` bytes of the in-person invoice code an invoice link
+/// (`epiccash://invoice/1/…`, as a website shows it) carries, to read with
+/// [`EpicWallet::in_person_read`] as a scanned code. Holds no state.
+///
+/// Fails with `InvalidArgument` for text over 8 KiB or not an invoice link, and
+/// `InvalidSlate` for a link whose payload is not an I1 code.
+#[frb(sync)]
+pub fn in_person_link_parse(text: String) -> Result<Vec<u8>, WalletError> {
+    guard("in_person_link_parse", move || {
+        lepic_wallet_contacts::parse_invoice_link(&text).map_err(|error| link_error(&error))
+    })
+}
+
+/// Whether `file`, the well-known file fetched from the domain an in-person code's claim names
+/// ([`InPersonRead::claim`]), proves that claim for `chain`. Fetching the file is the app's
+/// part; nothing is fetched or stored here. `Unsigned` for a code without a claim. Show the
+/// domain as the payee's only when this gives `Checked`; with `Refused`, do not pay.
+///
+/// Fails with `InvalidSlate` for a code over 128 KiB.
+#[frb(sync)]
+pub fn in_person_request_verify(
+    code: Vec<u8>,
+    file: Vec<u8>,
+    chain: Chain,
+) -> Result<InPersonDomainCheck, WalletError> {
+    guard("in_person_request_verify", move || {
+        let code = bounded(&code)?;
+        Ok(domain_check(
+            lepic_wallet_contacts::in_person_request_verify(code, &file, chain.network()),
+        ))
+    })
+}
+
 impl EpicWallet {
     /// Makes an in-person invoice for `amount` atomic units, with no payment proof, good for
     /// `ttl_blocks` blocks past the chain tip. The app chooses the TTL: LEPIC uses 30 when `None`
@@ -82,7 +117,36 @@ impl EpicWallet {
     ) -> Result<InPersonCode, WalletError> {
         self.run("in_person_invoice", |session| async move {
             session
-                .in_person_invoice(amount, message, ttl_blocks, relay_mode)
+                .in_person_invoice(
+                    amount,
+                    message,
+                    ttl_blocks,
+                    InPersonInvoiceOptions::default(),
+                    relay_mode,
+                )
+                .await
+        })
+        .await
+    }
+
+    /// Makes an in-person invoice as [`EpicWallet::in_person_invoice`] does, issued as
+    /// `options` says: under a given slate id, with direct routes the payer also posts the
+    /// answer to, signed for a domain, or answered to the account's shared reply mailbox.
+    ///
+    /// Fails as `in_person_invoice` does, and with `InvalidArgument` for a slate id that is not
+    /// one, a direct route that is not an `http` or `tor` address a code can carry, more than
+    /// four of them, or a domain that is not a domain name.
+    pub async fn in_person_invoice_with(
+        &self,
+        amount: u64,
+        message: Option<String>,
+        ttl_blocks: Option<u64>,
+        options: InPersonInvoiceOptions,
+        relay_mode: ContactRelayMode,
+    ) -> Result<InPersonCode, WalletError> {
+        self.run("in_person_invoice_with", |session| async move {
+            session
+                .in_person_invoice(amount, message, ttl_blocks, options, relay_mode)
                 .await
         })
         .await
@@ -194,14 +258,16 @@ impl EpicWallet {
 
     /// Posts the stored answer for the slate `slate_id` to the reply mailbox its code named,
     /// from a key used for this slate only, through the wallet's connection to relays (over
-    /// Tor when Epicbox over Tor is on). Posting again is safe.
+    /// Tor when Epicbox over Tor is on), and to each direct route the code names: `tor` routes
+    /// always, `http` routes only when relays are not reached over Tor only. Posting again is
+    /// safe. A route that refuses the answer cancels nothing.
     ///
     /// Fails with `InPersonNotFound` when no answer is stored for the slate, `InPersonNoMailbox`
-    /// when its code named no mailbox, `ContactsOffline` before connecting, and
-    /// `TransportFailed` when the post failed.
+    /// when its code named no mailbox and no direct route, `ContactsOffline` before connecting,
+    /// and `TransportFailed` when the mailbox post failed and the code names no direct route.
     ///
-    /// Returns the answer's check code, to show the user now and not before, and the format
-    /// the answer went out in, always `Native`.
+    /// Returns the answer's check code, to show the user now and not before, the format the
+    /// answer went out in, always `Native`, and what each route did with it.
     pub async fn in_person_post(
         &self,
         slate_id: String,

@@ -22,6 +22,7 @@ use super::super::super::Service;
 use super::super::events::{self, Change};
 use super::super::handed;
 use super::super::{Create, Reply, check_message};
+use super::checkout;
 use super::view::{self, Note};
 use super::{check_metadata, default_spend};
 use crate::amount::{format_units, parse_amount};
@@ -83,6 +84,12 @@ struct CreateBody {
     deliver: bool,
     #[serde(default)]
     metadata: BTreeMap<String, String>,
+    /// For an in-person request: `first` or `manual`.
+    #[serde(default)]
+    finalize: Option<String>,
+    /// For an in-person request: whether its code names serve's direct routes.
+    #[serde(default)]
+    direct: Option<bool>,
 }
 
 const fn yes() -> bool {
@@ -174,6 +181,8 @@ enum Route {
     Address(String),
     /// An epic1 link, paid as `lepic epic1 pay` pays it.
     Epic1(String),
+    /// An in-person request: a code shown to the payer.
+    InPerson,
 }
 
 /// The values of `via`.
@@ -227,10 +236,19 @@ fn route(body: &mut CreateBody) -> Result<Route, Problem> {
             format!("via: {via} is not one of {}", VIAS.join(", ")),
         ));
     }
+    if via == Some("in_person") {
+        if body.to.as_deref().is_some_and(|to| !to.trim().is_empty()) {
+            return Err(Problem::invalid(
+                "/to",
+                "an in-person request goes to no one: the payer reads its code",
+            ));
+        }
+        return Ok(Route::InPerson);
+    }
     if !body.deliver || via == Some("file") {
         return Ok(Route::File);
     }
-    if let Some(via @ ("in_person" | "peer" | "chain")) = via {
+    if let Some(via @ ("peer" | "chain")) = via {
         return Err(Problem::invalid(
             "/via",
             format!("via: {via} payments are not supported yet"),
@@ -285,6 +303,26 @@ async fn settle<H: Host>(
     invoice: bool,
 ) -> Result<Route, Problem> {
     let route = route(body)?;
+    if matches!(route, Route::InPerson) {
+        if !invoice {
+            return Err(Problem::invalid(
+                "/via",
+                "via: in_person sends are not supported yet",
+            ));
+        }
+        checkout::finalize_mode(body.finalize.as_deref())?;
+        checkout::direct_mode(service, body.direct)?;
+    } else if body.finalize.is_some() {
+        return Err(Problem::invalid(
+            "/finalize",
+            "finalize goes only to an in-person request",
+        ));
+    } else if body.direct.is_some() {
+        return Err(Problem::invalid(
+            "/direct",
+            "direct goes only to an in-person request",
+        ));
+    }
     if !body.mailboxes.is_empty() {
         if !matches!(route, Route::Epic1(_)) {
             return Err(Problem::invalid(
@@ -493,7 +531,7 @@ pub(in crate::commands::serve) async fn with_id<H: Host>(
             return ok(&payment);
         }
         // The receiver declined the send and the wallet erased it: a repeat must not make it
-        // again (the send's first slate is still stored, so the store would refuse it).
+        // again (its slate id is spent, so a send under it is refused).
         if let Some(at) = super::declined_at(service, id).await? {
             return Err(Problem::payment_declined(id, at));
         }
@@ -621,6 +659,35 @@ pub(in crate::commands::serve) async fn make_queued<H: Host>(service: &Service<'
     let _ = answer.send(reply);
 }
 
+/// Issues the in-person request `body` asks for, under the payment id `id` when it has one.
+async fn in_person<H: Host>(
+    service: &Service<'_, H>,
+    body: CreateBody,
+    id: Option<String>,
+) -> Reply {
+    let issue = checkout::Issue {
+        account: body.account(),
+        finalize: checkout::finalize_mode(body.finalize.as_deref())?,
+        direct: checkout::direct_mode(service, body.direct)?,
+        note: Note {
+            purpose: body.purpose,
+            metadata: body.metadata,
+            handoff: None,
+        },
+        // Settled before the code is issued, so a repeat after a crash issues under the
+        // same slate id and the wallet returns the stored code.
+        slate_id: id
+            .as_deref()
+            .map(|id| invoice_slate_id(service, id))
+            .transpose()?,
+        id,
+        amount: body.amount,
+        message: body.message,
+        ttl_blocks: body.ttl_blocks,
+    };
+    checkout::make(service, issue).await
+}
+
 /// Makes the payment `order` names and answers 201 with it.
 async fn make<H: Host>(service: &Service<'_, H>, order: Order) -> Reply {
     let Order {
@@ -632,6 +699,9 @@ async fn make<H: Host>(service: &Service<'_, H>, order: Order) -> Reply {
         spend,
         reach,
     } = order;
+    if matches!(route, Route::InPerson) {
+        return in_person(service, body, id).await;
+    }
     let file = match route {
         Route::File => Some(SlateFile::new(&service.settings.data_dir)?),
         _ => None,
@@ -695,6 +765,7 @@ async fn make<H: Host>(service: &Service<'_, H>, order: Order) -> Reply {
             text: std::fs::read_to_string(&file.path).map_err(CliError::io("the payment slate"))?,
             file_name: Some(format!("{slate_id}.slate")),
             qr_frames: None,
+            link: None,
         }),
         None => None,
     };
@@ -718,7 +789,7 @@ async fn make<H: Host>(service: &Service<'_, H>, order: Order) -> Reply {
 /// Where the command sends the slate: an address, a contact, or the file handed back.
 fn destination(route: Route, file: Option<&SlateFile>) -> SendDestinationArgs {
     let (to, to_contact) = match route {
-        Route::File => (None, None),
+        Route::File | Route::InPerson => (None, None),
         Route::Contact(contact) => (None, Some(contact)),
         Route::Address(to) | Route::Epic1(to) => (Some(to), None),
     };

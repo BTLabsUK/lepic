@@ -734,6 +734,7 @@ impl Session {
         message: Option<String>,
         options: Option<SendOptions>,
     ) -> Result<HttpSentTx, WalletError> {
+        self.refuse_when_offline()?;
         let request =
             self.policy
                 .send_request_with(amount, minimum_confirmations, message, options)?;
@@ -772,6 +773,7 @@ impl Session {
         tx_id: u32,
         to: &str,
     ) -> Result<HttpResentTx, WalletError> {
+        self.refuse_when_offline()?;
         let onion = onion(to)?;
         let details = self.engine.transaction_details(TxId(tx_id)).await?;
         let entry = &details.transaction.entry;

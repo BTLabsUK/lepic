@@ -784,6 +784,21 @@ function paymentTitle(payment) {
   return direction === "in" ? "Receiving" : direction === "out" ? "Sending" : "Moving within this wallet";
 }
 
+// An in-person request serve issued, as the shop reads it.
+const REQUEST_STATE = {
+  open: "Open, waiting for the payer",
+  paid: "Paid",
+  expired: "Expired before it was paid",
+  refused: "Withdrawn by this shop",
+};
+
+function requestState(request) {
+  if (!request) return null;
+  const state = REQUEST_STATE[request.state] || capital(words(request.state || "unknown"));
+  const refused = request.answers_refused ? `, ${plural(request.answers_refused, "answer")} refused` : "";
+  return `${state}${refused}`;
+}
+
 function paymentState(payment) {
   if (payment.state === "awaiting_answer") {
     if (payment.direction === "out") return "Waiting for the recipient";
@@ -951,6 +966,7 @@ function renderPayment(payment) {
       ["Network fee", payment.direction !== "in" && fee !== null && fee > 0n ? `${plain(fee)} EPIC` : null],
       ["Direction", incoming ? "Into this wallet" : payment.direction === "out" ? "Out of this wallet" : "Between this wallet's own coins"],
       ["Delivery", payment.via ? capital(over(payment.via)) : null],
+      ["Request", requestState(payment.request)],
       ["Payment id", payment.id, true],
       ["Started", payment.created_at ? when(payment.created_at) : null],
       ["Last change", payment.updated_at ? timeNode(payment.updated_at) : null],

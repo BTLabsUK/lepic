@@ -44,6 +44,9 @@ pub(crate) struct Payment {
     pub(crate) answers: Vec<Answer>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) check_code: Option<String>,
+    /// An in-person payment request serve shows: where it stands for the shop.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) request: Option<PaymentRequest>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) their_notices: Option<TheirNotices>,
     /// The latest recovery of the payment, in any state.
@@ -147,6 +150,29 @@ pub(crate) struct Answer {
     pub(crate) same_code_as: Option<String>,
 }
 
+/// An in-person payment request serve shows, as the shop sees it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct PaymentRequest {
+    /// `open`, `paid`, `expired` or `refused`.
+    pub(crate) state: String,
+    /// The check code of the answer that was finalized.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) reference: Option<String>,
+    /// The request as an invoice link, when one was made.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) link: Option<String>,
+    /// The domain the code is signed for.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) domain: Option<String>,
+    /// `first` or `manual`.
+    pub(crate) finalize: String,
+    /// The answers that came and were refused.
+    pub(crate) answers_refused: u32,
+    /// Why the last refused answer was refused.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) last_refusal: Option<String>,
+}
+
 /// What the other side reported about a payment.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct TheirNotices {
@@ -234,6 +260,9 @@ pub(crate) struct Handoff {
     pub(crate) file_name: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) qr_frames: Option<Vec<String>>,
+    /// The same request as an invoice link, for an in-person code.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) link: Option<String>,
 }
 
 /// What a payment would cost.

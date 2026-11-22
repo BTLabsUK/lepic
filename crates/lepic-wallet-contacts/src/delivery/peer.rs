@@ -193,7 +193,7 @@ pub(crate) fn link_posters(relays: &ContactRelays) -> (Option<Poster>, Option<Po
 
 impl Carrier {
     /// Posts a sealed envelope on an `http` or `tor` route with the host's poster for it.
-    pub(super) async fn post_to_peer(
+    pub(crate) async fn post_to_peer(
         &self,
         envelope: &Envelope,
         route: &RouteEntry,
@@ -250,6 +250,11 @@ pub(crate) fn peer_failure(error: PeerClientError) -> PostError {
         | PeerClientError::LocalNetwork => PostError::NotSent(Unsent::Peer(error)),
         PeerClientError::NotReady { retry_after } => refused(PeerRefusal::NotReady, retry_after),
         PeerClientError::Refused => refused(PeerRefusal::Refused, None),
+        PeerClientError::RefusedFor { reason } => PostError::refused(
+            Some(RefusalCode::Peer(PeerRefusal::Refused)),
+            None,
+            Some(reason),
+        ),
         PeerClientError::TooLarge => refused(PeerRefusal::TooLarge, None),
         PeerClientError::RateLimited { retry_after } => {
             refused(PeerRefusal::RateLimited, retry_after)
@@ -719,6 +724,7 @@ mod tests {
             ("NotReady", "Refused"),
             ("NotReady", "Refused"),
             ("Refused", "Refused"),
+            ("RefusedFor", "Refused"),
             ("TooLarge", "Refused"),
             ("RateLimited", "Refused"),
             ("RateLimited", "Refused"),
@@ -779,6 +785,19 @@ mod tests {
             };
             assert_eq!((got, retry_after), (code, wait));
         }
+        let failure = peer_failure(PeerClientError::RefusedFor {
+            reason: "inputs_spent".to_owned(),
+        });
+        let PostError::Refused {
+            code: Some(RefusalCode::Peer(PeerRefusal::Refused)),
+            reason: Some(reason),
+            retryable: false,
+            ..
+        } = failure
+        else {
+            panic!("{failure:?}");
+        };
+        assert_eq!(reason, "inputs_spent");
     }
 
     #[tokio::test]

@@ -1224,6 +1224,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "epic_secp256k1zkp"
+version = "0.8.1"
+dependencies = [
+ "arrayvec 0.7.6",
+ "cc",
+ "libc",
+ "rand 0.9.2",
+ "serde",
+ "serde_json",
+ "zeroize",
+]
+
+[[package]]
 name = "epic_store"
 version = "4.1.2"
 source = "git+https://www.github.com/EpicCash/epic?tag=v4.1.2#bd3a8c8c5e957e57574364326dfb17051d0096ae"
@@ -1253,7 +1266,7 @@ dependencies = [
  "base64 0.22.1",
  "byteorder",
  "chrono",
- "grin_secp256k1zkp 0.8.1 (git+https://github.com/EpicCash/rust-secp256k1-zkp?branch=master)",
+ "grin_secp256k1zkp",
  "lazy_static",
  "log",
  "log4rs",
@@ -1696,19 +1709,6 @@ name = "glob"
 version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a8d1add55171497b4705a648c6b583acafb01d58050a51727785f0b2c8e0a2b2"
-
-[[package]]
-name = "epic_secp256k1zkp"
-version = "0.8.1"
-dependencies = [
- "arrayvec 0.7.6",
- "cc",
- "libc",
- "rand 0.9.2",
- "serde",
- "serde_json",
- "zeroize",
-]
 
 [[package]]
 name = "grin_secp256k1zkp"
@@ -2301,7 +2301,7 @@ checksum = "bbd2bcb4c963f2ddae06a2efc7e9f3591312473c50c6685e1f298068316e66fe"
 
 [[package]]
 name = "lepic-contact"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "base64 0.23.1",
  "chacha20poly1305 0.11.0",
@@ -2318,9 +2318,9 @@ dependencies = [
 
 [[package]]
 name = "lepic-crypto"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
- "epic_secp256k1zkp 0.8.1",
+ "epic_secp256k1zkp",
  "rand_core 0.10.1",
  "thiserror 2.0.21",
  "zeroize",
@@ -2328,7 +2328,7 @@ dependencies = [
 
 [[package]]
 name = "lepic-keychain"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "argon2",
  "bip39",
@@ -2351,7 +2351,7 @@ dependencies = [
 
 [[package]]
 name = "lepic-legacy-slate"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "lepic-crypto",
  "lepic-primitives",
@@ -2362,7 +2362,7 @@ dependencies = [
 
 [[package]]
 name = "lepic-node"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "base64 0.23.1",
  "futures-util",
@@ -2387,7 +2387,7 @@ dependencies = [
 
 [[package]]
 name = "lepic-primitives"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "blake2",
  "lepic-crypto",
@@ -2397,7 +2397,7 @@ dependencies = [
 
 [[package]]
 name = "lepic-seal"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "base64 0.23.1",
  "ed25519-dalek 3.0.0",
@@ -2412,7 +2412,7 @@ dependencies = [
 
 [[package]]
 name = "lepic-slate"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "ed25519-dalek 3.0.0",
  "lepic-crypto",
@@ -2428,7 +2428,7 @@ dependencies = [
 
 [[package]]
 name = "lepic-store"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "blake2",
  "chacha20poly1305 0.11.0",
@@ -2442,7 +2442,7 @@ dependencies = [
 
 [[package]]
 name = "lepic-transport"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "lepic-crypto",
  "lepic-legacy-slate",
@@ -2456,7 +2456,7 @@ dependencies = [
 
 [[package]]
 name = "lepic-wallet"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "blake2",
  "ed25519-dalek 3.0.0",

@@ -405,6 +405,26 @@ fn finalizing_the_same_i2_again_returns_the_stored_result_without_posting_again(
     assert_eq!(flow.state(), TxState::Posted);
 }
 
+/// The push of a finalize is recorded at the tip the finalize read, not at the issuer's last
+/// refresh: a refresh right after it does not take the push for an old one and push again.
+#[test]
+fn a_refresh_after_a_finalize_past_the_last_refresh_does_not_push_again() {
+    let flow = flow(None, request());
+    let tip = Height::new(TIP + 20);
+    flow.node.update_chain(|chain| chain.tip.height = tip);
+
+    flow.issuer.finalize(&flow.i2).unwrap();
+    let post = flow
+        .issuer
+        .read(|repos| repos.node_post(flow.tx_id))
+        .unwrap();
+    assert_eq!(post.last_height, tip);
+    flow.issuer.block_on(flow.issuer.wallet.refresh()).unwrap();
+
+    assert_eq!(flow.node.pushed_transactions().len(), 1);
+    assert_eq!(flow.state(), TxState::Posted);
+}
+
 #[test]
 fn another_payment_of_a_finalized_invoice_is_refused() {
     let flow = flow(None, request());
@@ -647,20 +667,27 @@ fn a_failed_post_is_not_retried_from_the_cutoff() {
     assert!(flow.node.pushed_transactions().is_empty());
 }
 
+/// A late post of an invoice without a cutoff is recorded at the tip the post read, not at
+/// the issuer's last refresh.
 #[test]
 fn a_failed_post_of_an_invoice_issued_without_a_ttl_is_retried_late() {
     let flow = flow(None, request());
     flow.node
         .fail_next("push_transaction", MockFailure::Unreachable);
     flow.issuer.finalize(&flow.i2).unwrap_err();
-    flow.node
-        .update_chain(|chain| chain.tip.height = Height::new(TIP + INVOICE_TTL_BLOCKS));
+    let late = Height::new(TIP + INVOICE_TTL_BLOCKS);
+    flow.node.update_chain(|chain| chain.tip.height = late);
 
     flow.issuer
         .block_on(flow.issuer.wallet.post(flow.tx_id, Propagation::Stem))
         .unwrap();
 
     assert_eq!(flow.state(), TxState::Posted);
+    let post = flow
+        .issuer
+        .read(|repos| repos.node_post(flow.tx_id))
+        .unwrap();
+    assert_eq!(post.last_height, late);
 }
 
 #[test]

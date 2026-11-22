@@ -7,12 +7,12 @@
 
 use std::path::Path;
 
-use crate::cli::{ContactPayloadPostArgs, InPersonCodeArg};
+use crate::cli::{ContactPayloadPostArgs, InPersonCodeArg, InPersonScanArg};
 use crate::exit::CliError;
 use crate::output::Report;
 
 use super::contact::{payload_bytes, read_backup, read_sealed, to_hex, write_backup};
-use super::in_person::{code_bytes, read_limited};
+use super::in_person::{code_bytes, read_limited, scan_bytes};
 use super::profile::write_text;
 
 /// The text of a sealed file, or of standard input for `-`.
@@ -32,6 +32,14 @@ pub(crate) fn payload_hex(args: &ContactPayloadPostArgs) -> Result<String, CliEr
 pub(crate) fn code_hex(code: &InPersonCodeArg) -> Result<String, CliError> {
     match &code.file {
         Some(_) => Ok(to_hex(&code_bytes(code)?)),
+        None => Ok(code.hex.clone().unwrap_or_default()),
+    }
+}
+
+/// A scanned code or invoice link as hex: the bytes of the file, or the hex given.
+pub(crate) fn scan_hex(code: &InPersonScanArg) -> Result<String, CliError> {
+    match &code.file {
+        Some(_) => Ok(to_hex(&scan_bytes(code)?)),
         None => Ok(code.hex.clone().unwrap_or_default()),
     }
 }

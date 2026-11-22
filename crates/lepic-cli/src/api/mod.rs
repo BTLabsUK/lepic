@@ -336,19 +336,34 @@ impl<'o, O: Owner> Api<'o, O> {
             }
         };
         let ended = tokio::select! {
-            result = connection.as_mut() => Some(result),
+            result = connection.as_mut() => Ended::Done(result),
             // Not the guard `wait_for` returns: held through the drain, it would block serve's
             // own stop.
-            _ = async { stop.wait_for(|stopped| *stopped).await.map(drop) } => None,
-            () = aged => None,
+            _ = async { stop.wait_for(|stopped| *stopped).await.map(drop) } => Ended::Stopped,
+            () = aged => Ended::Aged,
         };
         let result = match ended {
-            Some(result) => result,
-            None => {
-                // Ends an event stream, whose answer has no end of its own.
+            Ended::Done(result) => result,
+            Ended::Stopped => {
+                // Ends an event stream, whose answer has no end of its own. Serve's own drain
+                // deadline bounds the wait.
                 closing.send_replace(true);
                 connection.as_mut().graceful_shutdown();
                 connection.await
+            }
+            Ended::Aged => {
+                closing.send_replace(true);
+                connection.as_mut().graceful_shutdown();
+                // A client that stops reading would hold the answer, and the slot, for good:
+                // the drain of an aged connection gets the age limit once more, then the
+                // connection is dropped.
+                match tokio::time::timeout(self.limits().tls_max_age, connection).await {
+                    Ok(result) => result,
+                    Err(_) => {
+                        tracing::debug!("api connection dropped after its age limit's drain");
+                        Ok(())
+                    }
+                }
             }
         };
         if let Err(error) = result {
@@ -577,4 +592,14 @@ pub(crate) fn problem(problem: &Problem) -> Response<Body> {
         headers.insert(header::RETRY_AFTER, HeaderValue::from(seconds));
     }
     response
+}
+
+/// Why [`Api::connection`] stopped waiting for its connection.
+enum Ended<T> {
+    /// The connection ended by itself.
+    Done(T),
+    /// Serve stops.
+    Stopped,
+    /// A TLS connection reached its age limit.
+    Aged,
 }

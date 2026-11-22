@@ -29,7 +29,10 @@ use crate::slate::{
     FLAG_PROOF, FLAG_RECEIVER_MESSAGE, FLAG_SENDER_MESSAGE, FLAG_TTL, NativeSlate, flags,
     header_version,
 };
-use crate::tail::{ReplyKey, ReplyMailbox, Tail, UnknownRecord};
+use crate::tail::{
+    DirectEntry, DirectMethod, DirectRoute, ReplyKey, ReplyMailbox, RequestClaim, Tail,
+    UnknownRecord,
+};
 
 const FLAG_NAMES: [(u8, &str); 4] = [
     (FLAG_TTL, "ttl"),
@@ -130,8 +133,30 @@ pub struct TailView {
     pub reply_key: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reply_mailbox: Option<MailboxView>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub direct_route: Vec<DirectEntryView>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub request_claim: Option<RequestClaimView>,
     #[serde(default)]
     pub unknown: Vec<UnknownRecordView>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DirectEntryView {
+    /// `http` or `tor`.
+    pub method: String,
+    pub address: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RequestClaimView {
+    pub key: String,
+    /// Unix seconds, in decimal.
+    pub issued_at: String,
+    pub signature: String,
+    pub domain: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -307,6 +332,25 @@ fn tail_view(tail: &Tail) -> TailView {
             key: mailbox.key().to_hex(),
             address: mailbox.address().to_owned(),
         }),
+        direct_route: tail
+            .direct_route()
+            .map(|route| {
+                route
+                    .entries()
+                    .iter()
+                    .map(|entry| DirectEntryView {
+                        method: entry.method().as_str().to_owned(),
+                        address: entry.address().to_owned(),
+                    })
+                    .collect()
+            })
+            .unwrap_or_default(),
+        request_claim: tail.request_claim().map(|claim| RequestClaimView {
+            key: encode_hex(claim.key()),
+            issued_at: claim.issued_at().to_string(),
+            signature: encode_hex(claim.signature()),
+            domain: claim.domain().to_owned(),
+        }),
         unknown: tail
             .unknown()
             .iter()
@@ -420,5 +464,29 @@ fn tail(view: &TailView) -> Result<Tail, NativeError> {
             UnknownRecord::new(record.record_type, value).map_err(NativeError::from)
         })
         .collect::<Result<_, _>>()?;
-    Ok(Tail::new(reply_key, reply_mailbox, unknown)?)
+    let mut tail = Tail::new(reply_key, reply_mailbox, unknown)?;
+    if !view.direct_route.is_empty() {
+        let entries = view
+            .direct_route
+            .iter()
+            .map(|entry| {
+                let method = match entry.method.as_str() {
+                    "http" => DirectMethod::Http,
+                    "tor" => DirectMethod::Tor,
+                    _ => return Err(bad()),
+                };
+                DirectEntry::new(method, entry.address.clone()).map_err(NativeError::from)
+            })
+            .collect::<Result<_, _>>()?;
+        tail = tail.with_direct_route(DirectRoute::new(entries)?);
+    }
+    if let Some(claim) = &view.request_claim {
+        let key = decode_hex_array::<{ RequestClaim::KEY_LEN }>(&claim.key).map_err(|_| bad())?;
+        let signature = decode_hex_array::<{ RequestClaim::SIGNATURE_LEN }>(&claim.signature)
+            .map_err(|_| bad())?;
+        let issued_at = integer(&claim.issued_at, "tail")?;
+        let claim = RequestClaim::new(key, issued_at, signature, claim.domain.clone())?;
+        tail = tail.with_request_claim(claim)?;
+    }
+    Ok(tail)
 }

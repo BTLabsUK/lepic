@@ -8,6 +8,18 @@ use serde::{Deserialize, Serialize};
 pub const PROBLEM_MEDIA_TYPE: &str = "application/problem+json";
 /// The longest problem answer read.
 pub(crate) const MAX_PROBLEM_LEN: usize = 4096;
+/// The longest refusal reason read from a problem answer.
+pub const MAX_REASON_LEN: usize = 32;
+
+/// Whether `reason` is one a refusal may carry: 1 to [`MAX_REASON_LEN`] characters of `a`-`z`
+/// and `_`.
+pub(crate) fn reason_is_valid(reason: &str) -> bool {
+    !reason.is_empty()
+        && reason.len() <= MAX_REASON_LEN
+        && reason
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte == b'_')
+}
 
 /// The problems the endpoint answers with.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -89,6 +101,10 @@ pub struct Problem {
     pub code: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub detail: Option<String>,
+    /// Why a `refused` answer was refused, from the handler's closed list, such as
+    /// `already_finalized`. Absent on every other problem.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
 }
 
 impl Problem {
@@ -99,7 +115,19 @@ impl Problem {
             status: code.status(),
             code: code.as_str().to_owned(),
             detail: Some(code.detail().to_owned()),
+            reason: None,
         }
+    }
+
+    /// The reason of a `refused` answer, when it is one a client reads: 1 to
+    /// [`MAX_REASON_LEN`] characters of `a`-`z` and `_`.
+    pub fn refusal_reason(&self) -> Option<&str> {
+        if self.known_code() != Some(ProblemCode::Refused) {
+            return None;
+        }
+        self.reason
+            .as_deref()
+            .filter(|reason| reason_is_valid(reason))
     }
 
     /// The code, when it is one of the closed list.

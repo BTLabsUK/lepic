@@ -104,7 +104,7 @@ pub(crate) use http::HttpReport;
 #[cfg(all(test, unix))]
 #[cfg(feature = "tor")]
 pub(crate) use tor::TorReport;
-mod in_person;
+pub(crate) mod in_person;
 mod invoice;
 mod mailboxes;
 mod pushed;
@@ -522,6 +522,7 @@ fn session_transports(
     epicbox: Option<&EpicboxSlot>,
     tuning: &Tuning,
     send_tor: &Arc<RelayTor>,
+    offline: bool,
 ) -> Result<SessionTransports, WalletError> {
     let mut methods = Methods::new();
     let file: Arc<dyn Method> = Arc::new(FileTransport::new());
@@ -533,7 +534,7 @@ fn session_transports(
             .register(Arc::new(epicbox.clone()))
             .map_err(|error| invalid(error.to_string()))?;
     }
-    let http = http::http_transport(tuning, send_tor)?;
+    let http = http::http_transport(tuning, send_tor, offline)?;
     methods
         .register(Arc::new(http.clone()))
         .map_err(|error| invalid(error.to_string()))?;
@@ -645,7 +646,7 @@ impl Session {
             &onion_routes,
         )?
         .map(EpicboxSlot::new);
-        let transports = session_transports(epicbox.as_ref(), &tuning, &send_tor)?;
+        let transports = session_transports(epicbox.as_ref(), &tuning, &send_tor, config.offline)?;
         let vault = VaultBytes::default();
         let engine = engine(
             runtime,
@@ -1627,6 +1628,19 @@ impl Session {
         let wire = self.engine.finished_payment(TxId(tx_id)).await?;
         String::from_utf8(wire.as_bytes().to_vec())
             .map_err(|_| WalletError::new(WalletErrorKind::InvalidSlate, "slate is not text"))
+    }
+
+    /// Refuses a send over HTTP or Tor in an offline session, before anything is stored or
+    /// locked.
+    pub(crate) fn refuse_when_offline(&self) -> Result<(), WalletError> {
+        if self.offline {
+            Err(WalletError::new(
+                WalletErrorKind::Offline,
+                "sends over the network are off for this session",
+            ))
+        } else {
+            Ok(())
+        }
     }
 
     /// Refuses `config` when it is not offline as the session is: the ports were built for

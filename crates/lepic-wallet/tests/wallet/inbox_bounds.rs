@@ -38,7 +38,7 @@ use lepic_store::{
 };
 use lepic_wallet::event::{ReceiptCap, RefusedPayment};
 use lepic_wallet::inbox::{InboxSummary, ListenHandle};
-use lepic_wallet::{Event, WalletPolicy};
+use lepic_wallet::{Event, ReceiveRequest, WalletPolicy};
 use world::World;
 
 const MAX_OPEN_RECEIPTS: usize = WalletPolicy::DEFAULT.max_open_receipts;
@@ -279,6 +279,59 @@ fn open_receipts_over_all_senders_are_capped_and_none_is_cancelled() {
     assert_eq!(incoming(&world, TxState::Received), MAX_OPEN_RECEIPTS);
     assert_eq!(incoming(&world, TxState::Cancelled), 0);
     assert_eq!(world.receiver.transactions(), MAX_OPEN_RECEIPTS);
+}
+
+/// How many scheduler yields the second receive waits, swept from 0 to this.
+const SWEEP: usize = 16;
+
+/// A listener and another receive of the same transport at the last free place take it
+/// once between them, whichever of the two checks the cap first.
+#[test]
+fn a_listener_and_another_receive_at_the_last_free_place_take_it_once() {
+    let world = World::new();
+    let cap = u32::try_from(MAX_OPEN_RECEIPTS).unwrap();
+    for n in 1..cap {
+        post_from(&world, n, &s1_numbered(n));
+    }
+    assert_eq!(drain(&world).received, cap - 1);
+
+    for yields in 0..SWEEP {
+        let n = 1_000 + 2 * u32::try_from(yields).unwrap();
+        post_from(&world, n, &s1_numbered(n));
+        let other = WireSlate::text(MediaType::JSON, s1_numbered(n + 1));
+        let (summary, other) = world.block_on(async {
+            tokio::join!(
+                world.receiver_epicbox.drain(&world.receiver_wallet),
+                async {
+                    for _ in 0..yields {
+                        tokio::task::yield_now().await;
+                    }
+                    world
+                        .receiver_wallet
+                        .receive_unsolicited(
+                            &world.receiver_method,
+                            &other,
+                            ReceiveRequest::default(),
+                        )
+                        .await
+                }
+            )
+        });
+        let summary = summary.unwrap();
+        let taken = summary.received + u32::from(other.is_ok());
+        assert_eq!(
+            taken,
+            1,
+            "after {yields} yields: {summary:?}, other taken: {}",
+            other.is_ok()
+        );
+        let open = open_receipts(&world);
+        assert_eq!(open.len(), MAX_OPEN_RECEIPTS, "after {yields} yields");
+        // The place is freed for the next round.
+        world
+            .block_on(world.receiver_wallet.cancel(*open.last().unwrap()))
+            .unwrap();
+    }
 }
 
 /// The payments refused at an open receipt cap, as raised.

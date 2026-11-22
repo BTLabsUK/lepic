@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 //! What the history reads from the stored stages of a slate, decoded once per session.
 //!
-//! A stage is stored once per slate id and is never changed or removed, so what the stages of
-//! a slate decode to changes only when a stage is added. An entry keeps the stages and lengths
-//! it was decoded from, and is decoded again when the stored ones differ.
+//! A stage is stored once per slate id and is never changed, so what the stages of a slate
+//! decode to changes only when a stage is added or removed: a declined send's S1 is erased, and
+//! a payment received later under its id stores an S2. An entry keeps the stages and lengths it
+//! was decoded from, and is decoded again when the stored ones differ.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};

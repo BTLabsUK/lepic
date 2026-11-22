@@ -3617,7 +3617,50 @@ fn contact_links_are_replaced_and_a_transactions_goes_with_it<B: Backend>() {
     );
 }
 
+fn deleting_a_slate_id_forgets_its_slates_and_contact_and_nothing_else<B: Backend>() {
+    let backend = B::create(context_key(1));
+    let store = backend.store();
+    write(store, |repos| {
+        repos.insert_slate(&slate(SLATE_A, SlateStage::Standard1, b"s1"))?;
+        repos.insert_slate(&slate(SLATE_A, SlateStage::Standard2, b"s2"))?;
+        repos.insert_slate(&slate(SLATE_B, SlateStage::Standard1, b"b1"))?;
+        repos.set_slate_contact(SLATE_A, contact_id(1))?;
+        repos.set_slate_contact(SLATE_B, contact_id(2))
+    })
+    .unwrap();
+    let (slates, contact) = write(store, |repos| {
+        Ok((
+            repos.delete_slates(SLATE_A)?,
+            repos.delete_slate_contact(SLATE_A)?,
+        ))
+    })
+    .unwrap();
+    assert_eq!((slates, contact), (2, true));
+    let after = read(store, |repos| {
+        Ok((
+            repos.slates(SLATE_A)?.len(),
+            repos.slate_contact(SLATE_A)?,
+            repos.slates(SLATE_B)?.len(),
+            repos.slate_contact(SLATE_B)?,
+        ))
+    })
+    .unwrap();
+    assert_eq!(after, (0, None, 1, Some(contact_id(2))));
+    // Nothing left: both report it, and the id can be stored again.
+    let again = write(store, |repos| {
+        let gone = (
+            repos.delete_slates(SLATE_A)?,
+            repos.delete_slate_contact(SLATE_A)?,
+        );
+        repos.insert_slate(&slate(SLATE_A, SlateStage::Standard1, b"new"))?;
+        Ok(gone)
+    })
+    .unwrap();
+    assert_eq!(again, (0, false));
+}
+
 for_each_backend!(
+    deleting_a_slate_id_forgets_its_slates_and_contact_and_nothing_else,
     accounts_round_trip_in_index_order,
     put_account_replaces_label_and_child_counter,
     rejects_label_used_by_another_account,

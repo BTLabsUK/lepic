@@ -25,7 +25,7 @@ use lepic_wallet_contacts::{DirectHandler, Epic1Keys, InboxRoute};
 use tokio::net::TcpStream;
 use tracing::{debug, info, warn};
 
-use super::{DEFAULT_ACCOUNT, Session, invalid, lock, os_rng};
+use super::{DEFAULT_ACCOUNT, RelayOffline, Session, invalid, lock, os_rng};
 use crate::api::epic1::ListenerSocket;
 use crate::api::error::{WalletError, WalletErrorKind};
 use crate::api::http::{
@@ -53,12 +53,17 @@ pub(super) enum HttpListener {
 }
 
 /// The HTTP method of a session.
-pub(super) fn http_transport(tuning: &Tuning, tor: &Arc<RelayTor>) -> Result<Http, WalletError> {
+pub(super) fn http_transport(
+    tuning: &Tuning,
+    tor: &Arc<RelayTor>,
+    offline: bool,
+) -> Result<Http, WalletError> {
     let tls = webpki_tls_config()
         .map_err(|error| WalletError::new(WalletErrorKind::Other, error.to_string()))?;
     let dialer = Arc::new(SendDialer {
         tor: Arc::clone(tor),
         connect_timeout: tuning.send.connect_timeout,
+        offline,
     });
     Ok(Http::new(RpcClient::with_dialer(tuning.send, tls, dialer)))
 }
@@ -76,6 +81,9 @@ fn is_onion_host(host: &str) -> bool {
 struct SendDialer {
     tor: Arc<RelayTor>,
     connect_timeout: Duration,
+    /// An offline session's dialer refuses every connection with [`RelayOffline`], before any
+    /// name lookup.
+    offline: bool,
 }
 
 impl SendDialer {
@@ -91,6 +99,9 @@ impl SendDialer {
 impl RpcDialer for SendDialer {
     fn dial<'a>(&'a self, host: &'a str, port: u16) -> RpcDialFuture<'a> {
         Box::pin(async move {
+            if self.offline {
+                return Err(io::Error::other(RelayOffline));
+            }
             if is_loopback_host(host) {
                 return self.connect_directly(host, port).await;
             }
@@ -203,6 +214,7 @@ impl Session {
         message: Option<String>,
         options: Option<SendOptions>,
     ) -> Result<HttpSentTx, WalletError> {
+        self.refuse_when_offline()?;
         let request =
             self.policy
                 .send_request_with(amount, minimum_confirmations, message, options)?;
@@ -233,6 +245,7 @@ impl Session {
         url: &str,
         allow_plain_http: bool,
     ) -> Result<HttpResentTx, WalletError> {
+        self.refuse_when_offline()?;
         let url = foreign_url(url, allow_plain_http)?;
         let details = self.engine.transaction_details(TxId(tx_id)).await?;
         let entry = &details.transaction.entry;
@@ -642,6 +655,7 @@ mod tests {
         SendDialer {
             tor: Arc::clone(tor),
             connect_timeout: Duration::from_secs(5),
+            offline: false,
         }
     }
 
@@ -793,6 +807,7 @@ mod tests {
         let dialer = SendDialer {
             tor: Arc::clone(&tor),
             connect_timeout: Duration::from_secs(60),
+            offline: false,
         };
         for url in std::env::var("LEPIC_TEST_GET_URLS").unwrap().split(',') {
             let rest = url.strip_prefix("https://").unwrap();
@@ -814,5 +829,30 @@ mod tests {
                 body.chars().take(400).collect::<String>()
             );
         }
+    }
+
+    #[tokio::test]
+    async fn an_offline_dialer_refuses_before_connecting_anywhere() {
+        let listener = tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
+            .await
+            .unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let dialer = SendDialer {
+            tor: Arc::new(RelayTor::new(false, Duration::from_secs(5))),
+            connect_timeout: Duration::from_secs(5),
+            offline: true,
+        };
+        for host in ["127.0.0.1", "wallet.example"] {
+            let Err(error) = dialer.dial(host, port).await else {
+                panic!("{host} was dialed");
+            };
+            assert!(
+                error
+                    .get_ref()
+                    .is_some_and(<dyn std::error::Error + Send + Sync>::is::<RelayOffline>)
+            );
+        }
+        let accepted = tokio::time::timeout(Duration::from_millis(100), listener.accept()).await;
+        assert!(accepted.is_err(), "a connection was opened");
     }
 }

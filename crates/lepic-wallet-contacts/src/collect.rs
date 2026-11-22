@@ -205,12 +205,17 @@ pub(crate) enum Job {
     Payment(SlateId, AccountIndex),
     /// The reply mailbox of an in-person code of the account.
     Code(SlateId, AccountIndex),
+    /// The reply mailbox slot the account's shared-slot in-person codes share.
+    Slot(AccountIndex),
 }
 
 impl Job {
     /// Whether the mailbox is one of the wallet's own epic1 or in-person mailboxes.
     pub(crate) fn is_native(self) -> bool {
-        matches!(self, Self::Address(..) | Self::Payment(..) | Self::Code(..))
+        matches!(
+            self,
+            Self::Address(..) | Self::Payment(..) | Self::Code(..) | Self::Slot(..)
+        )
     }
 }
 
@@ -469,6 +474,7 @@ where
                 Job::Payment(slate_id, account) | Job::Code(slate_id, account) => self
                     .wallet
                     .reply_mailbox_key(account, net, slate_id.as_bytes()),
+                Job::Slot(account) => self.wallet.shared_reply_mailbox_key(account, net),
                 Job::Reply(_) | Job::Confirm(_) | Job::Contact(..) => return None,
             };
             let identity = secret
@@ -664,7 +670,8 @@ where
                         Job::Contact(_, false)
                         | Job::Address(..)
                         | Job::Payment(..)
-                        | Job::Code(..),
+                        | Job::Code(..)
+                        | Job::Slot(..),
                     )
                     | None => {}
                 }
@@ -2159,7 +2166,9 @@ where
                     .await?
             }
             // The native classes have handlers of their own; none of their mail comes here.
-            Job::Address(..) | Job::Payment(..) | Job::Code(..) => return Ok(Handled::Stored),
+            Job::Address(..) | Job::Payment(..) | Job::Code(..) | Job::Slot(..) => {
+                return Ok(Handled::Stored);
+            }
         };
         if handled == Handled::Stored {
             let quarantined = match self.told.dropped.take() {

@@ -11,8 +11,8 @@ use crate::cli::{
     ContactPayloadAckArgs, ContactPayloadArgs, ContactPayloadCommand, ContactPayloadPostArgs,
     DomainCommand, DomainFileArgs, Epic1Args, Epic1Command, Epic1PayArgs, EpictxCommand,
     EpictxOpenArgs, InPersonArgs, InPersonCodeArg, InPersonCommand, InPersonInvoiceArgs,
-    InPersonPayArgs, InPersonReadArgs, InPersonReceiveArgs, InPersonSendArgs, InPersonTakeArgs,
-    OutFileArg, SelectionArg, SpendArgs,
+    InPersonPayArgs, InPersonReadArgs, InPersonReceiveArgs, InPersonScanArg, InPersonSendArgs,
+    InPersonTakeArgs, OutFileArg, SelectionArg, SpendArgs,
 };
 use crate::commands::files;
 
@@ -125,6 +125,34 @@ fn coded(
     }))
 }
 
+/// As [`coded`], for a code or invoice link scanned to read or pay. A command given a domain's
+/// file checks the domain here, so it runs here; a link travels as it is.
+fn scanned(
+    command: &Command,
+    code: &InPersonScanArg,
+    rebuilt: impl FnOnce(InPersonScanArg) -> InPersonCommand + Send + 'static,
+) -> Option<Call> {
+    if code.domain_file.is_some() {
+        return None;
+    }
+    if code.file.is_none() {
+        return Call::command(command);
+    }
+    let code = code.clone();
+    Some(Call::read(move || {
+        let hex = files::scan_hex(&code)?;
+        Ok(CliCall::of(Command::InPerson(InPersonArgs {
+            command: rebuilt(InPersonScanArg {
+                hex: Some(hex),
+                file: None,
+                link: None,
+                domain_file: None,
+            }),
+            offline: false,
+        })))
+    }))
+}
+
 /// `in-person pay`: the scanned code is read here when it names a file.
 fn in_person_pay(command: &Command, pay: &InPersonPayArgs) -> Option<Call> {
     let InPersonPayArgs {
@@ -147,7 +175,7 @@ fn in_person_pay(command: &Command, pay: &InPersonPayArgs) -> Option<Call> {
         message.clone(),
         spend.clone(),
     );
-    coded(command, code, move |code| {
+    scanned(command, code, move |code| {
         InPersonCommand::Pay(InPersonPayArgs {
             amount,
             code,
@@ -211,7 +239,7 @@ pub(super) fn in_person(command: &Command, args: &InPersonArgs) -> Option<Call> 
                 return None;
             }
             let (account, spend) = (account.clone(), spend.clone());
-            coded(command, code, move |code| {
+            scanned(command, code, move |code| {
                 InPersonCommand::Read(InPersonReadArgs {
                     code,
                     account,

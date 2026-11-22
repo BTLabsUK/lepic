@@ -426,14 +426,24 @@ impl PeerClient {
         let status = response.status();
         if !status.is_success() {
             let retry_after = retry_after(response.headers());
+            let mut reason = None;
             if media_is(response.headers(), PROBLEM_MEDIA_TYPE) {
-                // Read so the connection can be reused; what it says is the status's.
-                let _ = Limited::new(response.into_body(), MAX_PROBLEM_LEN)
+                // Read so the connection can be reused; what it says is the status's, but for
+                // the reason of a refusal.
+                if let Ok(body) = Limited::new(response.into_body(), MAX_PROBLEM_LEN)
                     .collect()
-                    .await;
+                    .await
+                {
+                    reason = refusal_reason(&body.to_bytes());
+                }
             }
             debug!(status = status.as_u16(), "endpoint answered with an error");
-            return Err(status_error(status, retry_after));
+            return Err(match reason {
+                Some(reason) if status == StatusCode::UNPROCESSABLE_ENTITY => {
+                    PeerClientError::RefusedFor { reason }
+                }
+                _ => status_error(status, retry_after),
+            });
         }
         let declared = response
             .headers()
@@ -475,6 +485,14 @@ fn status_error(status: StatusCode, retry_after: Option<Duration>) -> PeerClient
     }
 }
 
+/// The reason a refused problem body names, when it is one a client reads.
+fn refusal_reason(body: &[u8]) -> Option<String> {
+    serde_json::from_slice::<crate::Problem>(body)
+        .ok()?
+        .refusal_reason()
+        .map(str::to_owned)
+}
+
 /// `Retry-After` in seconds; a date is not read.
 fn retry_after(headers: &HeaderMap) -> Option<Duration> {
     headers
@@ -495,6 +513,24 @@ fn media_is(headers: &HeaderMap, media: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_refused_body_gives_its_reason_and_nothing_else_does() {
+        let mut refused = crate::Problem::new(crate::ProblemCode::Refused);
+        refused.reason = Some("inputs_spent".to_owned());
+        assert_eq!(
+            refusal_reason(&refused.to_bytes()).as_deref(),
+            Some("inputs_spent")
+        );
+        refused.reason = Some("x".repeat(crate::MAX_REASON_LEN + 1));
+        assert_eq!(refusal_reason(&refused.to_bytes()), None);
+        refused.reason = Some("Spent!".to_owned());
+        assert_eq!(refusal_reason(&refused.to_bytes()), None);
+        let mut other = crate::Problem::new(crate::ProblemCode::NotReady);
+        other.reason = Some("expired".to_owned());
+        assert_eq!(refusal_reason(&other.to_bytes()), None);
+        assert_eq!(refusal_reason(b"not json"), None);
+    }
 
     #[test]
     fn every_problem_status_has_its_error() {

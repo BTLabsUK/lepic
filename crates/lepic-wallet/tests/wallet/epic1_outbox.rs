@@ -46,8 +46,9 @@ use lepic_wallet::{Epic1AccountKeys, ProofKey, ReceiveRequest, Received, SharedR
 use lepic_wallet_contacts::epic1_testing::delivery_mailbox;
 use lepic_wallet_contacts::{
     CollectTrigger, ContactError, ContactRelays, DirectHandler, Epic1Keys, Epic1Paid,
-    Epic1PayRequest, Epic1Refusal, InboxRoute, MailboxList, NotReadReason, OUTBOX_STUCK_AFTER,
-    OutboxReport, PeerDialFuture, PeerDialer, PeerStream, WalletContacts,
+    Epic1PayRequest, Epic1Refusal, InPersonDirect, InPersonInbox, InPersonInvoiceRequest,
+    InPersonPostOutcome, InboxRoute, MailboxList, MethodId, NotReadReason, OUTBOX_STUCK_AFTER,
+    OutboxReport, PeerDialFuture, PeerDialer, PeerStream, RelayMode, RouteEntry, WalletContacts,
 };
 use rand::SeedableRng;
 use uuid::Uuid;
@@ -1277,6 +1278,19 @@ fn a_payment_stored_and_not_posted_is_posted_once_after_the_wallet_is_opened_aga
 
 const ONION: &str = "pg6mmjiyjmcrsslvykfwnntlaru7p5svn6y2ymmju6nubxndf4pscryd.onion";
 
+impl InPersonInbox for Listening {
+    fn take(&self, envelope: Vec<u8>) -> BoxFuture<'_, InPersonDirect> {
+        Box::pin(async move {
+            self.0
+                .issuer
+                .wallet
+                .contact_book()
+                .in_person_take_direct(&envelope)
+                .await
+        })
+    }
+}
+
 impl Epic1Keys for Listening {
     fn epic1_keys(&self) -> BoxFuture<'_, Vec<Epic1AccountKeys>> {
         Box::pin(async { self.0.issuer.wallet.epic1_trial_keys_all().await.unwrap() })
@@ -1294,8 +1308,9 @@ fn payee_endpoint(world: &Arc<World>) -> u16 {
         ProofKey::Payments,
     ));
     let rng = SharedRng::new(rand::rngs::StdRng::seed_from_u64(9));
-    let handler =
-        DirectHandler::new(Arc::clone(&host), method, Network::Floonet, rng).with_epic1(host);
+    let handler = DirectHandler::new(Arc::clone(&host), method, Network::Floonet, rng)
+        .with_epic1(Arc::<Listening>::clone(&host))
+        .with_in_person(host);
     let endpoint: Arc<dyn SocketRoute> = Arc::new(InboxRoute::new(Arc::new(handler)));
     let settings = ListenSettings::new(Exposure::LocalOnly, 0, listen_limits());
     let handle = world
@@ -1322,6 +1337,86 @@ impl PeerDialer for ToPayee {
             Ok(Box::new(stream) as Box<dyn PeerStream>)
         })
     }
+}
+
+/// An in-person answer posted on the code's `tor` direct route is taken by the payee's
+/// listener in the same exchange. Once one is finalized, another answer posted there is
+/// refused with its reason, and the payment it carries is not cancelled.
+#[test]
+fn an_in_person_answer_on_a_direct_route_is_taken_and_a_late_one_refused() {
+    let world = Arc::new(World::new());
+    let port = payee_endpoint(&world);
+    let route = RouteEntry {
+        method: MethodId::Tor,
+        value: ONION.to_owned(),
+    };
+    let offline = ContactRelays {
+        mode: RelayMode::Offline,
+        ..relays(&world.issuer)
+    };
+    let code = world
+        .block_on(world.issuer.wallet.contact_book().in_person_invoice(
+            &offline,
+            InPersonInvoiceRequest {
+                account: ACCOUNT,
+                amount: lepic_primitives::amount::Amount::new(world::AMOUNT),
+                message: None,
+                ttl_blocks: None,
+                slate_id: None,
+                direct: vec![route.clone()],
+                claim: None,
+                shared_slot: false,
+            },
+        ))
+        .unwrap();
+    assert_eq!(code.mailbox, None);
+    let dialer = Arc::new(ToPayee {
+        port,
+        dials: std::sync::Mutex::new(0),
+    });
+    let twin = world.payer_twin();
+    twin.fund(0, FUNDING);
+    let mut posted = Vec::new();
+    for party in [&world.payer, &twin] {
+        let book = party.wallet.contact_book();
+        let paid = world
+            .block_on(book.in_person_pay(&relays(party), &code.bytes, world::pay_request()))
+            .unwrap();
+        let tor = relays(party).with_tor(dialer.clone(), |_| Ok(()));
+        let routes = world
+            .block_on(book.in_person_post(&tor, paid.slate_id))
+            .unwrap()
+            .routes;
+        posted.push((paid, routes));
+        if posted.len() == 1 {
+            world
+                .block_on(world.issuer.wallet.contact_book().in_person_finalize(
+                    code.slate_id,
+                    1,
+                    lepic_node::Propagation::Stem,
+                ))
+                .unwrap();
+        }
+    }
+
+    assert_eq!(*dialer.dials.lock().unwrap(), 2);
+    assert_eq!(posted[0].1.len(), 1);
+    assert_eq!(posted[0].1[0].route, route);
+    assert_eq!(posted[0].1[0].outcome, InPersonPostOutcome::Accepted);
+    assert_eq!(
+        posted[1].1[0].outcome,
+        InPersonPostOutcome::Refused {
+            reason: Some("already_finalized".to_owned())
+        }
+    );
+    assert_eq!(world.node.pushed_transactions().len(), 1);
+    let late = &posted[1].0;
+    assert_eq!(
+        twin.read(|repos| repos.transaction(late.tx_id))
+            .unwrap()
+            .state,
+        TxState::Sent
+    );
 }
 
 /// `link`, which asks an amount, with a `tor` entry added; links are not signed.

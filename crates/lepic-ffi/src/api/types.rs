@@ -2100,6 +2100,91 @@ pub struct InPersonRead {
     pub ttl_cutoff: u64,
     /// The reply mailbox the answer would be posted to; `None` when the answer is shown back.
     pub mailbox: Option<InPersonHost>,
+    /// The domain the code is signed for, as the code claims it: show it as checked only after
+    /// `in_person_request_verify` gives `Checked` for the domain's file.
+    pub claim: Option<InPersonClaim>,
+    /// The direct routes the code names, in the payee's order; `in_person_post` posts to each.
+    pub direct: Vec<InPersonRoute>,
+}
+
+/// A route an in-person answer goes to: `epicbox` for the reply mailbox, `http` or `tor` for a
+/// direct route, and its address.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InPersonRoute {
+    pub method: String,
+    pub value: String,
+}
+
+/// The domain an in-person code is signed for, as the code claims it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InPersonClaim {
+    pub domain: String,
+    /// The Ed25519 key that signed the code, as 64 hex digits.
+    pub key: String,
+    /// Unix seconds when the code was signed, as the code says; informational.
+    pub issued_at: u64,
+}
+
+/// What a check of a code's domain claim against the domain's file found.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InPersonDomainState {
+    /// The code carries no domain claim.
+    Unsigned,
+    /// The domain's file lists the key that signed the code.
+    Checked,
+    /// The code names a domain, but the claim is not proven: do not show the domain as the
+    /// payee's, and do not pay.
+    Refused,
+}
+
+/// The result of `in_person_request_verify`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InPersonDomainCheck {
+    pub state: InPersonDomainState,
+    /// The domain the code names; `None` when it is unsigned.
+    pub domain: Option<String>,
+    /// For `Refused`, why, as a snake_case word: `file_too_large`, `file_malformed`,
+    /// `unsupported_version`, `network_absent`, `domain_mismatch`, `no_key_matches`,
+    /// `bad_signature` or `key_not_listed`.
+    pub reason: Option<String>,
+}
+
+/// What became of an in-person answer posted to one route.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InPersonPostOutcome {
+    /// The mailbox stored the answer, or the payee's listener took it.
+    Accepted,
+    /// The payee's listener refused the answer. Nothing is cancelled: show the reason.
+    Refused,
+    /// The route could not be reached, or was not tried.
+    Failed,
+}
+
+/// The post of an in-person answer to one route.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InPersonRoutePost {
+    pub route: InPersonRoute,
+    pub outcome: InPersonPostOutcome,
+    /// For `Refused`, the listener's reason when it gave one: `already_finalized`, `expired`,
+    /// `inputs_spent` or `bad_answer`. For `Failed`, what went wrong; `tor_expected` for an
+    /// `http` route not tried because the wallet reaches relays over Tor only.
+    pub reason: Option<String>,
+}
+
+/// How an in-person invoice is issued, for `EpicWallet::in_person_invoice_with`.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct InPersonInvoiceOptions {
+    /// The slate id to issue under; a new one when `None`. Issuing an id again while its code
+    /// is stored returns the stored code.
+    pub slate_id: Option<String>,
+    /// Routes where the payer may also post the answer directly: `http` or `tor` entries, at
+    /// most four, in the order to try them.
+    pub direct: Vec<InPersonRoute>,
+    /// Signs the code for this domain with the wallet's domain key; the domain's file must list
+    /// the key for a payer to see the domain as checked.
+    pub claim_domain: Option<String>,
+    /// The answer comes to the account's one shared reply mailbox rather than one for this code.
+    pub shared_slot: bool,
 }
 
 /// The answer to a scanned in-person code, from `EpicWallet::in_person_pay` or
@@ -2126,6 +2211,8 @@ pub struct InPersonPosted {
     pub check_code: String,
     /// How the answer went out: always `Native`, a sealed `lepic.v1` slate.
     pub format: SlateWire,
+    /// One per route, the reply mailbox first, then each direct route the code names.
+    pub routes: Vec<InPersonRoutePost>,
 }
 
 /// An answer taken for a code this wallet showed.
