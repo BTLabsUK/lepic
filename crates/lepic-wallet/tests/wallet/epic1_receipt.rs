@@ -20,11 +20,12 @@ use lepic_contact::{
 };
 use lepic_node::Propagation;
 use lepic_primitives::amount::Amount;
+use lepic_primitives::params::Network;
 use lepic_slate::model::SlateId;
 use lepic_store::TxState;
 use lepic_wallet::ReceiveRequest;
 use lepic_wallet::finalize::Finalized;
-use lepic_wallet_contacts::epic1_testing::sealed_asking_receipt;
+use lepic_wallet_contacts::epic1_testing::{forged_answer, sealed_asking_receipt};
 use lepic_wallet_contacts::{
     ContactError, Epic1Paid, Epic1Receipt, Epic1Refusal, ReceiptVerdict, SealedAnswer,
     WalletContacts,
@@ -44,18 +45,30 @@ impl World {
     /// changes its content with `change` and returns it sealed again to the payment's reply
     /// key, as text a user would paste.
     fn changed_answer(&self, slate_id: SlateId, change: impl FnOnce(&mut TxContent)) -> String {
+        let mut content = self.answer_content(slate_id);
+        change(&mut content);
+        self.sealed_answer(slate_id, &content)
+    }
+
+    /// Takes the payee's answer to the payment `slate_id` off the payer's reply mailbox and
+    /// returns its content.
+    fn answer_content(&self, slate_id: SlateId) -> TxContent {
         let texts = self.drain_reply(slate_id);
         assert_eq!(texts.len(), 1);
         let secret = self.reply_secret(slate_id);
         let bytes = dearmor(&texts[0]).unwrap();
         let envelope = SealedEnvelope::decode(&bytes, lepic_contact::Network::Floonet).unwrap();
-        let mut content = envelope.open_tx(&secret, KeyClass::Seal).unwrap().content;
-        change(&mut content);
+        envelope.open_tx(&secret, KeyClass::Seal).unwrap().content
+    }
+
+    /// `content` sealed to the reply key of the payment `slate_id`, as text.
+    fn sealed_answer(&self, slate_id: SlateId, content: &TxContent) -> String {
+        let secret = self.reply_secret(slate_id);
         let resealed = seal_tx(
             lepic_contact::Network::Floonet,
             &secret.public_key(),
             TxKey::Seal(HintRule::ReplyKey),
-            &content,
+            content,
             None,
             &mut rand::rngs::StdRng::seed_from_u64(41),
         )
@@ -86,6 +99,27 @@ impl World {
             .unwrap();
         assert_eq!(self.taken(&self.issuer), 1);
         paid
+    }
+
+    /// The payee's answer to `paid`, as text, and a forged one: the payee's partial signature
+    /// changed and no receipt, as anyone who knows the reply key could send it.
+    fn genuine_and_forged(&self, paid: &Epic1Paid) -> (String, String) {
+        let genuine = self.answer_content(paid.slate_id);
+        let mut forged = genuine.clone();
+        forged.body = forged_answer(Network::Floonet, &forged.body).unwrap();
+        forged.receipt = None;
+        (
+            self.sealed_answer(paid.slate_id, &genuine),
+            self.sealed_answer(paid.slate_id, &forged),
+        )
+    }
+
+    /// The payment `paid` still waits for its answer: sent, its funds locked, nothing posted.
+    fn assert_waiting(&self, paid: &Epic1Paid) {
+        assert_eq!(self.payer_state(paid.tx_id), TxState::Sent);
+        assert!(self.payer_locked() > Amount::ZERO);
+        assert!(self.node.pushed_transactions().is_empty());
+        assert_eq!(self.receipt_of(paid), None);
     }
 
     /// The payment `paid` was refused when its answer came: not finalized, cancelled, and
@@ -186,6 +220,47 @@ fn a_payer_that_requires_a_receipt_refuses_a_changed_one() {
     });
     world.collect(&world.payer);
     world.assert_refused(&paid);
+}
+
+/// A forged answer with no receipt does not cancel a payment that requires one: only the
+/// payee's genuine answer is refused for its receipt, and the genuine one still finalizes.
+#[test]
+fn a_forged_answer_without_a_receipt_leaves_the_payment_waiting() {
+    let world = World::new();
+    let paid = world.pay_and_answer(true);
+    let (genuine, forged) = world.genuine_and_forged(&paid);
+    let reply = world.reply_mailbox(paid.slate_id);
+    world.post(7, &reply, &forged, 1);
+    world.collect(&world.payer);
+    world.assert_waiting(&paid);
+
+    world.post(7, &reply, &genuine, 1);
+    world.collect(&world.payer);
+    assert_eq!(world.node.pushed_transactions().len(), 1);
+    assert_eq!(
+        world.receipt_of(&paid).unwrap().check(None),
+        ReceiptVerdict::Valid
+    );
+}
+
+#[test]
+fn a_pasted_forged_answer_without_a_receipt_leaves_the_payment_waiting() {
+    let world = World::new();
+    let paid = world.pay_and_answer(true);
+    let (genuine, forged) = world.genuine_and_forged(&paid);
+    assert!(matches!(
+        world.paste_answer(&forged),
+        Err(ContactError::Finalize(_))
+    ));
+    world.assert_waiting(&paid);
+
+    let finalized = world.paste_answer(&genuine).unwrap();
+    assert_eq!(finalized.tx_id, paid.tx_id);
+    assert_eq!(world.node.pushed_transactions().len(), 1);
+    assert_eq!(
+        world.receipt_of(&paid).unwrap().check(None),
+        ReceiptVerdict::Valid
+    );
 }
 
 /// An answer pasted as sealed text has its receipt checked and kept as one from the reply

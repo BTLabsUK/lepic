@@ -186,3 +186,25 @@ pub fn sealed_notice<R: rand_core::CryptoRng>(
 pub fn native_body_of(network: Network, v3: &[u8]) -> Option<Vec<u8>> {
     super::native::native_body(network, v3).ok()
 }
+
+/// The native S2 `body` for `network` with a forged answer: the payee's partial signature with
+/// one byte changed, as one without the payee's key would send it. `None` when `body` is no
+/// native slate whose receiver signed.
+#[must_use]
+pub fn forged_answer(network: Network, body: &[u8]) -> Option<Vec<u8>> {
+    let (slate, tail) = lepic_native_slate::NativeSlate::decode(network, body)
+        .ok()?
+        .into_parts();
+    let mut parts = slate.into_parts();
+    let signature = parts.receiver.as_mut()?.partial_signature.as_mut()?;
+    let mut bytes = signature.to_compact();
+    let last = bytes.last_mut()?;
+    *last ^= 1;
+    *signature = lepic_crypto::Signature::from_compact(&bytes).ok()?;
+    let slate = lepic_slate::model::Slate::from_parts(parts).ok()?;
+    Some(
+        lepic_native_slate::NativeSlate::new(slate, tail)
+            .ok()?
+            .encode(network),
+    )
+}

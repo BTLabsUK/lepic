@@ -20,7 +20,8 @@ Conventional Commit messages at release time.
 - `--require-proof` on `lepic epic1 pay` and `lepic tx send --to` an epic1 address, and the
   setting `epic1_require_proof` (`LEPIC_EPIC1_REQUIRE_PROOF`, off by default) for every such
   payment: without a proof that holds, the payer cancels the payment unfinalized and unlocks its
-  inputs.
+  inputs. Only the payee's genuine answer cancels it: an answer whose signature or slate fields
+  do not hold is dropped, and the payment keeps waiting.
 - `POST /api/v1/payments` takes `require_proof`, and `GET /api/v1/payments/{id}/proof` returns a
   payment's proof, or 409 `no_payment_proof`.
 

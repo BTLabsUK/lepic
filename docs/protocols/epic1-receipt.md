@@ -161,6 +161,9 @@ All fields are required. A reader refuses another type or version and any other 
   the secret of `P`, which they derive again from the seed and the slate id. LEPIC has no command
   for that yet.
 - It does not show what was bought or why.
+- A payment taken again from its sealed text is answered with a proof for the payer key that
+  copy carries. Only the payer can make a valid copy, so a payer can hold two true proofs for one
+  payment under two payer keys. This is by design.
 
 ## The payer's side
 
@@ -173,6 +176,10 @@ All fields are required. A reader refuses another type or version and any other 
   are unlocked and the payee gets a `declined` notice. A cancel that fails (the store cannot be
   written) leaves the payment unfinalized with its inputs locked until it is cancelled again or
   expires. The flag on a payment that is not to an epic1 address is a usage error.
+- The answer is refused for its proof only when it is otherwise the payee's genuine S2: the
+  payee's partial signature holds, the fields of the S1 are unchanged and the sender's check
+  passes. Any other S2 is dropped as a failed finalize, and the payment keeps waiting for its
+  answer, as without a requirement.
 - An S2 finalized from a plain slate file carries no proof and is not checked.
 
 ## Vectors

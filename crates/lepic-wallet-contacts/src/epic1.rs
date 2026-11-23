@@ -2169,7 +2169,12 @@ where
 
     /// Checks the proof `carried` of the S2 `slate` (native `body`) answering the payment in
     /// `state`, finalizes and posts it, and keeps the proof and marks the payment finalized.
-    /// A payment that requires a proof and has none that holds is refused and cancelled.
+    /// A payment that requires a proof and has none that holds is refused and cancelled, once
+    /// the S2 is otherwise one that finalizes: the payee's partial signature, the fields of the
+    /// stored S1 and the sender's check. An S2 that fails them fails as [`Wallet::finalize`]
+    /// fails and leaves the payment waiting for its answer, as without a required proof.
+    ///
+    /// [`Wallet::finalize`]: lepic_wallet::Wallet::finalize
     async fn finish_epic1_answer(
         &self,
         state: &PayState,
@@ -2182,6 +2187,12 @@ where
         let receipt = match self.answer_receipt(state, slate, carried)? {
             Ok(receipt) => Some(receipt),
             Err(fault) if state.require_receipt => {
+                // Only the payee's genuine S2 cancels the payment: anyone who knows the reply
+                // key could send one with no receipt.
+                self.wallet
+                    .check_send_answer(slate.clone())
+                    .await
+                    .map_err(ContactError::Finalize)?;
                 return Err(self.refuse_answer(state, slate_id, fault).await);
             }
             Err(fault) => {
