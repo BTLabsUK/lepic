@@ -902,7 +902,8 @@ kernel.
 
 `--require-proof` on `epic1 pay` and on `tx send --to` an epic1 address makes the payment depend
 on the proof: unless the payee's answer brings one that holds, the payer cancels the payment
-unfinalized, its inputs are unlocked and the payee is told. On a payment that is not to an epic1
+unfinalized, its inputs are unlocked and the payee is told. Only the payee's genuine answer
+cancels it: an answer that would not finalize is dropped and the payment keeps waiting. On a payment that is not to an epic1
 address it exits 2 (`usage`): "--require-proof has a use only for a payment to an epic1
 address". The setting `epic1_require_proof` (`LEPIC_EPIC1_REQUIRE_PROOF`, off by default) turns
 it on for every epic1 payment; see [Configuration](configuration.md).

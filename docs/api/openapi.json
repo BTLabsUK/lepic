@@ -5009,7 +5009,7 @@
           "require_proof": {
             "type": "boolean",
             "default": false,
-            "description": "For a payment to an epic1 address: cancel it, unfinalized, unless the payee's answer brings a payment proof that holds. The `epic1_require_proof` setting turns this on for every epic1 payment. Every LEPIC payee signs one, so this refuses payees that run other wallets. 400 `invalid_field` at `/require_proof` for any other payment."
+            "description": "For a payment to an epic1 address: cancel it, unfinalized, unless the payee's answer brings a payment proof that holds. Only the payee's genuine answer cancels it: an answer that would not finalize is dropped and the payment keeps waiting. The `epic1_require_proof` setting turns this on for every epic1 payment. Every LEPIC payee signs one, so this refuses payees that run other wallets. 400 `invalid_field` at `/require_proof` for any other payment."
           },
           "min_confirmations": {
             "type": "integer"
