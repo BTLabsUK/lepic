@@ -369,3 +369,25 @@ fn a_notice_to_an_epic1_key_opens_only_with_the_epic1_opener() {
         Some(DecodeError::CannotOpen)
     );
 }
+
+#[test]
+fn the_receipt_fields_round_trip() {
+    let mut asked = content(40);
+    asked.receipt_ask = Some([0x02; 33]);
+    asked.receipt = Some([0x5c; 64]);
+    let envelope = seal_listener(&asked).unwrap();
+    let opened = SealedEnvelope::decode(&envelope, NET)
+        .unwrap()
+        .open_tx(&recipient(), KeyClass::Listener)
+        .unwrap();
+    assert_eq!(opened.content.receipt_ask, Some([0x02; 33]));
+    assert_eq!(opened.content.receipt, Some([0x5c; 64]));
+
+    let plain = seal_listener(&content(40)).unwrap();
+    let opened = SealedEnvelope::decode(&plain, NET)
+        .unwrap()
+        .open_tx(&recipient(), KeyClass::Listener)
+        .unwrap();
+    assert_eq!(opened.content.receipt_ask, None);
+    assert_eq!(opened.content.receipt, None);
+}

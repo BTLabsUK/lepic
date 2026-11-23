@@ -12,7 +12,9 @@ use crate::api::contact::sealed_file_extension;
 use crate::api::epic1::ListenerSocket;
 use crate::api::error::WalletErrorKind;
 use crate::api::secret_store::AppSecretStore;
-use crate::api::types::{Chain, ContactRelayMode, DeliveryState, WalletEventKind};
+use crate::api::types::{
+    Chain, ContactRelayMode, DeliveryState, PaymentProofVerdict, WalletEventKind,
+};
 use crate::api::wallet::EpicWallet;
 
 use ContactRelayMode::{Offline, Online};
@@ -129,7 +131,16 @@ async fn a_link_paid_is_answered_by_the_payee_and_finalized_by_the_payers_collec
     assert_eq!(read.http_host.as_deref(), Some("shop.example"));
 
     let paid = ben
-        .epic1_pay(link.link.clone(), None, 1, None, None, Vec::new(), Online)
+        .epic1_pay(
+            link.link.clone(),
+            None,
+            1,
+            None,
+            None,
+            Vec::new(),
+            Online,
+            false,
+        )
         .await
         .unwrap();
     assert_eq!(paid.address, link.address);
@@ -176,6 +187,44 @@ async fn a_link_paid_is_answered_by_the_payee_and_finalized_by_the_payers_collec
     // The payment is answered once.
     wake(&anna).await;
     assert_eq!(anna.epic1_answers().await.unwrap().len(), 1);
+
+    // The answer brought a payment proof; the payee's receive has none.
+    let proof = ben.epic1_proof(paid.tx_id).await.unwrap().unwrap();
+    assert_eq!(anna.epic1_proof(received.tx_id).await.unwrap(), None);
+    assert_eq!(
+        kind(ben.epic1_proof(9_999).await),
+        WalletErrorKind::InvalidArgument
+    );
+    let checked = anna.epic1_proof_verify(proof.clone(), false).await.unwrap();
+    assert_eq!(checked.verdict, PaymentProofVerdict::Valid);
+    assert_eq!(checked.address, link.address);
+    assert_eq!(checked.amount, EPIC);
+    assert_eq!(checked.slate_id, paid.slate_id);
+    assert_eq!(checked.network, "floonet");
+    assert_eq!(checked.height, None);
+    // Until a block holds the kernel the node does not know it.
+    let posted = anna.epic1_proof_verify(proof.clone(), true).await.unwrap();
+    assert_eq!(posted.verdict, PaymentProofVerdict::NotOnChain);
+    world.chain.mine_pushed();
+    let mined = anna.epic1_proof_verify(proof.clone(), true).await.unwrap();
+    assert_eq!(mined.verdict, PaymentProofVerdict::Valid);
+    assert_eq!(mined.height, Some(world.chain.height()));
+    // One changed fact breaks the signature; text that is no proof is refused.
+    let mut changed: serde_json::Value = serde_json::from_str(&proof).unwrap();
+    changed["amount"] = serde_json::Value::from(EPIC + 1);
+    let changed = anna
+        .epic1_proof_verify(changed.to_string(), true)
+        .await
+        .unwrap();
+    assert_eq!(changed.verdict, PaymentProofVerdict::BadSignature);
+    assert_eq!(changed.height, None);
+    assert_eq!(
+        kind(
+            anna.epic1_proof_verify("not a proof".to_owned(), false)
+                .await
+        ),
+        WalletErrorKind::InvalidArgument
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -242,7 +291,7 @@ async fn a_delivery_change_is_an_event_and_in_the_details() {
     // The relay stores the post but its answer is lost: the payer cannot tell it arrived.
     world.relay.set_unanswered(Unanswered::PostAnswer, true);
     let paid = ben
-        .epic1_pay(link.link, None, 1, None, None, Vec::new(), Online)
+        .epic1_pay(link.link, None, 1, None, None, Vec::new(), Online, false)
         .await
         .unwrap();
     world.relay.set_unanswered(Unanswered::PostAnswer, false);
@@ -307,7 +356,8 @@ async fn bad_link_requests_are_refused() {
                 None,
                 None,
                 Vec::new(),
-                Online
+                Online,
+                false
             )
             .await
         ),
@@ -315,8 +365,17 @@ async fn bad_link_requests_are_refused() {
     );
     assert_eq!(
         kind(
-            ben.epic1_pay(printed.link, Some(0), 1, None, None, Vec::new(), Online)
-                .await
+            ben.epic1_pay(
+                printed.link,
+                Some(0),
+                1,
+                None,
+                None,
+                Vec::new(),
+                Online,
+                false
+            )
+            .await
         ),
         WalletErrorKind::InvalidArgument
     );
@@ -365,7 +424,7 @@ async fn a_payment_through_the_session_is_posted_to_every_relay_of_the_list() {
     let link = anna.epic1_link_make(Some(EPIC), None).await.unwrap();
 
     let paid = ben
-        .epic1_pay(link.link, None, 1, None, None, Vec::new(), Online)
+        .epic1_pay(link.link, None, 1, None, None, Vec::new(), Online, false)
         .await
         .unwrap();
     assert_eq!(paid.posted, Some(0));
@@ -454,7 +513,7 @@ async fn an_answer_is_posted_over_the_sessions_transport_and_not_with_the_relay_
     ben.session().scan_to_tip().await;
     let link = anna.epic1_link_make(Some(EPIC), None).await.unwrap();
     let paid = ben
-        .epic1_pay(link.link, None, 1, None, None, Vec::new(), Online)
+        .epic1_pay(link.link, None, 1, None, None, Vec::new(), Online, false)
         .await
         .unwrap();
     assert_eq!(paid.posted, Some(0));

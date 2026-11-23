@@ -83,6 +83,8 @@ pub(crate) fn seal_native(
         address_proof: content.address_proof,
         features: content.features,
         domain: content.domain,
+        receipt_ask: None,
+        receipt: None,
     };
     seal_tx(
         super::keys::contact_network(network),
@@ -121,12 +123,21 @@ pub(crate) fn open_any(
     sealed: &SealedEnvelope<'_>,
     key: &EncSecretKey,
 ) -> Result<(Opened, bool), DecodeError> {
+    open_any_with_receipt(sealed, key).map(|(opened, native, _)| (opened, native))
+}
+
+/// [`open_any`], with the payment proof (tag `85`) a native envelope carries.
+pub(crate) fn open_any_with_receipt(
+    sealed: &SealedEnvelope<'_>,
+    key: &EncSecretKey,
+) -> Result<(Opened, bool, Option<[u8; 64]>), DecodeError> {
     match sealed.open(key) {
-        Ok(opened) => Ok((opened, false)),
+        Ok(opened) => Ok((opened, false, None)),
         // The types of RFC 0002 do not include 0A; only then is it tried as a native slate.
-        Err(DecodeError::Malformed(_)) => sealed
-            .open_tx(key, KeyClass::Seal)
-            .map(|opened| (opened_of(opened), true)),
+        Err(DecodeError::Malformed(_)) => sealed.open_tx(key, KeyClass::Seal).map(|opened| {
+            let receipt = opened.content.receipt;
+            (opened_of(opened), true, receipt)
+        }),
         Err(error) => Err(error),
     }
 }

@@ -26,5 +26,7 @@ pub fn native_content(network: Network, content: Content) -> Result<TxContent, C
         address_proof: content.address_proof,
         features: content.features,
         domain: content.domain,
+        receipt_ask: None,
+        receipt: None,
     })
 }

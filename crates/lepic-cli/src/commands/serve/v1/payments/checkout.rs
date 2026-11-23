@@ -806,7 +806,7 @@ fn public_route(url: &str) -> Result<RouteEntry, CliError> {
         _ => host.to_owned(),
     };
     let entry = RouteEntry { method, value };
-    if entry.host_port().is_none() {
+    if entry.direct_host_port().is_none() {
         return Err(refuse("the host is not one a payer posts to"));
     }
     Ok(entry)
@@ -845,6 +845,21 @@ mod tests {
     }
 
     #[test]
+    fn a_hyphenated_host_is_an_http_entry() {
+        let found = routes(&[
+            "https://Shop-Demo.example.com",
+            "https://pay-shop.example:8443",
+        ])
+        .unwrap();
+        let shown: Vec<_> = found.iter().map(|entry| entry.value.as_str()).collect();
+        assert_eq!(shown, ["shop-demo.example.com", "pay-shop.example:8443"]);
+        assert_eq!(
+            found[0].direct_host_port(),
+            Some(("shop-demo.example.com".to_owned(), 443))
+        );
+    }
+
+    #[test]
     fn the_environment_form_splits_on_commas() {
         let found = routes(&[&format!("https://pay.example.com, https://{ONION}:81")]).unwrap();
         assert_eq!(found.len(), 2);
@@ -865,6 +880,8 @@ mod tests {
             "https://user@pay.example.com",
             "https://pay.example.com?x=1",
             "https://pay.example.com:port",
+            "https://-shop.example.com",
+            "https://shop-.example.com",
         ] {
             assert!(
                 matches!(routes(&[url]), Err(CliError::Arguments(_))),

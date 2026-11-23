@@ -1,11 +1,12 @@
 # shellcheck shell=bash
 # epic1: the account's one address, request links, paying with another amount and message,
-# collecting, restore, concurrent payers and the refuse switch.
+# collecting, restore, concurrent payers, the refuse switch and payment proofs.
 
 CASES+=("epic1.address|case_e1_address|crates/lepic-cli crates/lepic-epic1 crates/lepic-wallet-contacts")
 CASES+=("epic1.link-pay|case_e1_link_pay|crates/lepic-cli crates/lepic-epic1 crates/lepic-wallet-contacts crates/lepic-wallet")
 
 CASES+=("epic1.no-amount|case_e1_no_amount|crates/lepic-cli crates/lepic-epic1")
+CASES+=("epic1.proof|case_e1_proof|crates/lepic-cli crates/lepic-epic1 crates/lepic-wallet-contacts crates/lepic-seal")
 CASES+=("epic1.restore|case_e1_restore|crates/lepic-cli crates/lepic-epic1 crates/lepic-wallet crates/lepic-keychain")
 CASES+=("epic1.two-installs|case_e1_two_installs|crates/lepic-cli crates/lepic-epic1 crates/lepic-wallet-contacts crates/lepic-epicbox crates/lepic-wallet")
 CASES+=("epic1.concurrent|case_e1_concurrent|crates/lepic-cli crates/lepic-epic1 crates/lepic-wallet-contacts")
@@ -421,4 +422,77 @@ e1_no_shared_run() {
     wsettings_reset "${E1_PAYER}"
     e1_collect_until "${E1_PAYER}" "${slate}" "posted confirmed" "${E1_PAYEE}" || return 1
     note "payer sharing no mailbox: exit 14, then --mailbox ${E2E_RELAY} paid and was taken"
+}
+
+# A payee that signs no payment proof: a LEPIC release from before proofs. LEPIC_E2E_OLD_LEPIC
+# names its binary; unset, the old-payee half of epic1.proof is left out and noted.
+E1_OLD_LEPIC="${LEPIC_E2E_OLD_LEPIC:-}"
+E1_OLD_PAYEE="${E2E_PREFIX}-link-oldpayee"
+
+# `w` on the old payee, with the old binary. The release build is on mainnet unless told.
+e1_old() { LEPIC_BIN="${E1_OLD_LEPIC}" w "${E1_OLD_PAYEE}" "$@"; }
+
+# One collect on the old payee and one on the payer; true once the payer's tx of `slate` is in
+# a state of `states`. The payer's collect may fail when it refuses an answer.
+e1_old_round() {
+    e1_old contact collect >/dev/null 2>&1 || true
+    w "${E1_PAYER}" contact collect >/dev/null 2>&1 || true
+    slate_state_in "${E1_PAYER}" "$1" "$2"
+}
+
+# A payment that requires a proof leaves one that verifies, on chain too; a changed one fails.
+# A payee that does not sign leaves none, and a payer that requires one refuses its answer.
+case_e1_proof() {
+    local addr pay slate tx file checked old_addr before after
+    e1_setup || return 1
+    addr="$(w "${E1_PAYEE}" epic1 address | jq -r .address)" || fail "epic1 address failed" || return 1
+    pay="$(w "${E1_PAYER}" epic1 pay "${addr}" 0.02 --require-proof --min-confirmations "${E2E_MINCONF}" --ttl-blocks 200)" || fail "epic1 pay --require-proof failed" || return 1
+    printf '%s\n' "${pay}" >"${CASE_DIR}/pay.json"
+    slate="$(jq -r .slate_id <<<"${pay}")"
+    tx="$(jq -r .tx_id <<<"${pay}")"
+    e1_collect_until "${E1_PAYEE}" "${slate}" "pending_confirmation received finalized confirmed" || return 1
+    e1_collect_until "${E1_PAYER}" "${slate}" "posted confirmed" || return 1
+    file="${CASE_DIR}/proof.json"
+    w "${E1_PAYER}" proof export "${tx}" --out "${file}" >/dev/null || fail "proof export failed" || return 1
+    checked="$(w "${E1_PAYER}" proof verify "${file}")" || fail "proof verify failed" || return 1
+    printf '%s\n' "${checked}" >"${CASE_DIR}/verify.json"
+    expect_json "${checked}" ".valid == true and .amount == 2000000 and .address == \"${addr}\" and .slate_id == \"${slate}\"" "proof verifies" || return 1
+    jq -c '.amount += 1' "${file}" >"${CASE_DIR}/tampered.json"
+    wx 7 "${E1_PAYER}" proof verify "${CASE_DIR}/tampered.json" || return 1
+    expect_json "${LAST_JSON}" '.error.kind == "rejected" and (.error.message | test("signature"))' "a changed amount fails" || return 1
+    e1_confirmed "${E1_PAYER}" "${slate}" || return 1
+    checked="$(w "${E1_PAYER}" proof verify "${file}" --on-chain)" || fail "proof verify --on-chain failed" || return 1
+    printf '%s\n' "${checked}" >"${CASE_DIR}/verify-on-chain.json"
+    expect_json "${checked}" '.on_chain == true and (.height | type == "number")' "the kernel is on chain" || return 1
+    note "proof verified, on chain at $(jq -r .height <<<"${checked}"); a changed amount fails"
+
+    if [[ -z "${E1_OLD_LEPIC}" ]]; then
+        note "old payee left out: LEPIC_E2E_OLD_LEPIC is not set"
+        return 0
+    fi
+    [[ -x "${E1_OLD_LEPIC}" ]] || fail "no binary at ${E1_OLD_LEPIC}" || return 1
+    [[ -f "${E2E_STATE}/wallets/${E1_OLD_PAYEE}.toml" ]] || wconfig_set "${E1_OLD_PAYEE}" 'network = "floonet"'
+    LEPIC_BIN="${E1_OLD_LEPIC}" ensure_wallet "${E1_OLD_PAYEE}" || fail "could not create ${E1_OLD_PAYEE}" || return 1
+    old_addr="$(e1_old epic1 address | jq -r .address)" || fail "old payee: epic1 address failed" || return 1
+
+    # Not required: the payment goes through with no proof.
+    pay="$(w "${E1_PAYER}" epic1 pay "${old_addr}" 0.01 --min-confirmations "${E2E_MINCONF}" --ttl-blocks 200)" || fail "epic1 pay to the old payee failed" || return 1
+    slate="$(jq -r .slate_id <<<"${pay}")"
+    tx="$(jq -r .tx_id <<<"${pay}")"
+    wait_until "the payer to finalize ${slate}" 120 e1_old_round "${slate}" "posted confirmed" || fail "the payer never finalized ${slate}" || return 1
+    wx 6 "${E1_PAYER}" proof export "${tx}" || return 1
+    expect_json "${LAST_JSON}" '.error.kind == "not_found"' "no proof from an old payee" || return 1
+
+    # Required: the answer without a proof is refused and the payment cancelled. The miner moves
+    # the chain, so usable funds grow as change confirms; the locked amount is what the refused
+    # payment would hold, once the payment above is confirmed and holds nothing.
+    e1_confirmed "${E1_PAYER}" "${slate}" || return 1
+    before="$(w "${E1_PAYER}" wallet info | jq -r '.accounts[0].locked')" || return 1
+    pay="$(w "${E1_PAYER}" epic1 pay "${old_addr}" 0.01 --require-proof --min-confirmations "${E2E_MINCONF}" --ttl-blocks 200)" || fail "epic1 pay --require-proof to the old payee failed" || return 1
+    printf '%s\n' "${pay}" >"${CASE_DIR}/pay-required.json"
+    slate="$(jq -r .slate_id <<<"${pay}")"
+    wait_until "the payer to refuse ${slate}" 120 e1_old_round "${slate}" "cancelled" || fail "the payer never refused ${slate} (now $(tx_by_slate "${E1_PAYER}" "${slate}" | jq -r ".state // \"none\""))" || return 1
+    after="$(w "${E1_PAYER}" wallet info | jq -r '.accounts[0].locked')" || return 1
+    expect_eq "${after}" "${before}" "payer's locked amount after the refusal" || return 1
+    note "old payee: no proof to export; with --require-proof the answer is refused and cancelled"
 }

@@ -482,12 +482,13 @@ pub(crate) fn meant(word: &str) -> Option<&'static str> {
 /// The lines of `help`: the commands used most, the shell words, then the commands in two
 /// groups, each with what it does.
 pub(crate) fn help_lines(root: &clap::Command) -> Vec<String> {
-    const WALLET: [&str; 8] = [
+    const WALLET: [&str; 9] = [
         "wallet",
         "tx",
         "invoice",
         "contact",
         "epic1",
+        "proof",
         "in-person",
         "epictx",
         "profile",

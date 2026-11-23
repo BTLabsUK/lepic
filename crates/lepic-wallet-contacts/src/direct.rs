@@ -9,6 +9,9 @@ use std::time::Duration;
 use lepic_contact::{
     EncPublicKey, Hint, HintRule, KeyClass, SealedEnvelope, TxContent, TxKey, TxOpened, seal_tx,
 };
+use lepic_crypto::{PublicKey, SecretKey};
+use lepic_epic1::Epic1Address;
+use lepic_methods::epicbox::relay_network;
 use lepic_methods::http::{Busy, RouteRequest, RouteResponse, SocketRoute};
 use lepic_methods::http::{Host, Refusal};
 use lepic_peer::{
@@ -18,13 +21,13 @@ use lepic_peer::{
 use lepic_primitives::params::Network;
 use lepic_slate::codec::{MediaType, WireSlate};
 use lepic_slate::stage::Stage;
-use lepic_store::AccountIndex;
 use lepic_transport::method::Method;
 use lepic_transport::transport::BoxFuture;
 use lepic_wallet::ports::SharedRng;
 use lepic_wallet::{Epic1AccountKeys, ProofKey, ReceiveRequest};
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
+use super::epic1_receipt::sign_receipt;
 use super::keys::contact_network;
 use super::native::{decode_native, native_body, v3_of_native};
 use super::{ContactError, LockedRng};
@@ -79,17 +82,17 @@ pub struct DirectHandler<H: Host> {
 
 /// `envelope` tried with the epic1 seal key of each of `accounts` in turn, on the blocking
 /// pool: a zero hint does not tell which account's address it was sealed to, and each key tried
-/// is an X25519 operation. Returns the account and its label of the first key that opens.
+/// is an X25519 operation. Returns the keys of the first account whose seal key opens it.
 pub(crate) async fn trial_open_accounts(
     envelope: Vec<u8>,
     network: lepic_contact::Network,
     accounts: Vec<Epic1AccountKeys>,
-) -> Option<(AccountIndex, String, TxOpened)> {
+) -> Option<(Epic1AccountKeys, TxOpened)> {
     tokio::task::spawn_blocking(move || {
         let sealed = SealedEnvelope::decode(&envelope, network).ok()?;
         accounts.into_iter().find_map(|account| {
             let opened = sealed.open_tx(&account.key, KeyClass::Epic1).ok()?;
-            Some((account.account, account.label, opened))
+            Some((account, opened))
         })
     })
     .await
@@ -104,6 +107,15 @@ struct Proposal {
     reply_key: EncPublicKey,
     /// The label of the account whose address it was sealed to.
     epic1: String,
+    /// What signs the receipt the S1 asks for; `None` when it asks for none.
+    receipt: Option<ReceiptAsk>,
+}
+
+/// A payer's ask for a receipt, and the address paid with its delivery secret.
+struct ReceiptAsk {
+    address: Epic1Address,
+    delivery: SecretKey,
+    payer_key: [u8; 33],
 }
 
 impl<H: Host> DirectHandler<H> {
@@ -142,8 +154,8 @@ impl<H: Host> DirectHandler<H> {
     }
 
     /// `envelope`, with a zero hint, opened with the seal key of an epic1 address, with the
-    /// label of the address's account.
-    async fn open(&self, envelope: &[u8]) -> Result<(TxOpened, String), PeerRefusal> {
+    /// keys of the address's account.
+    async fn open(&self, envelope: &[u8]) -> Result<(TxOpened, Epic1AccountKeys), PeerRefusal> {
         let sealed = SealedEnvelope::decode(envelope, contact_network(self.network))
             .map_err(|_| PeerRefusal::UnsupportedFormat)?;
         let Some(source) = &self.epic1 else {
@@ -156,19 +168,38 @@ impl<H: Host> DirectHandler<H> {
         let found = trial_open_accounts(envelope.to_vec(), contact_network(self.network), accounts)
             .await
             .ok_or(PeerRefusal::Refused)?;
-        let (account, label, opened) = found;
+        let (account, opened) = found;
         // A payment to an epic1 is anonymous.
         if opened.sender.is_some() {
             return Err(PeerRefusal::Refused);
         }
-        info!(account = account.0, "payment opened at an epic1 address");
-        Ok((opened, label))
+        info!(
+            account = account.account.0,
+            "payment opened at an epic1 address"
+        );
+        Ok((opened, account))
     }
 
     /// The S1 in `envelope`, the key its answer is sealed to, and the epic1 address it came to.
     async fn proposal(&self, envelope: &[u8]) -> Result<Proposal, PeerRefusal> {
-        let (opened, epic1) = self.open(envelope).await?;
+        let (opened, account) = self.open(envelope).await?;
         let reply_key = opened.content.reply_key.ok_or(PeerRefusal::Refused)?;
+        let receipt = match opened.content.receipt_ask {
+            Some(payer_key) => {
+                let delivery_key = PublicKey::from_secret_key(&account.delivery)
+                    .map_err(|_| PeerRefusal::Refused)?;
+                Some(ReceiptAsk {
+                    address: Epic1Address::new(
+                        relay_network(self.network),
+                        account.key.public_key(),
+                        delivery_key,
+                    ),
+                    delivery: account.delivery,
+                    payer_key,
+                })
+            }
+            None => None,
+        };
         // An invoice, or any stage but a proposal, is not taken here.
         let slate = decode_native(self.network, &opened.content.body)
             .filter(|slate| slate.stage() == Stage::S1)
@@ -178,22 +209,34 @@ impl<H: Host> DirectHandler<H> {
         Ok(Proposal {
             wire: WireSlate::text(MediaType::JSON, text),
             reply_key,
-            epic1,
+            epic1: account.label,
+            receipt,
         })
     }
 
-    /// `reply`, the S2 the engine stored, as `lepic.v1` sealed to `reply_key`.
+    /// `reply`, the S2 the engine stored, as `lepic.v1` sealed to `reply_key`, with the receipt
+    /// `receipt` asks for.
     fn sealed_reply(
         &self,
         reply: &WireSlate,
         reply_key: &EncPublicKey,
+        receipt: Option<&ReceiptAsk>,
     ) -> Result<Vec<u8>, ContactError> {
         let body = native_body(self.network, reply.as_bytes())?;
+        let mut content = TxContent::new(body);
+        if let Some(ask) = receipt {
+            content.receipt = decode_native(self.network, &content.body).and_then(|slate| {
+                sign_receipt(&ask.address, &ask.delivery, &slate, &ask.payer_key)
+            });
+            if content.receipt.is_none() {
+                debug!("epic1 receipt ask not answered");
+            }
+        }
         seal_tx(
             contact_network(self.network),
             reply_key,
             TxKey::Seal(HintRule::ReplyKey),
-            &TxContent::new(body),
+            &content,
             None,
             &mut LockedRng(&mut **self.rng.lock()),
         )
@@ -225,6 +268,7 @@ impl<H: Host> SlateHandler for DirectHandler<H> {
                 wire,
                 reply_key,
                 epic1,
+                receipt,
             } = match self.proposal(&envelope).await {
                 Ok(proposal) => proposal,
                 Err(refusal) => {
@@ -249,7 +293,7 @@ impl<H: Host> SlateHandler for DirectHandler<H> {
                     });
                 }
             };
-            match self.sealed_reply(&received.reply, &reply_key) {
+            match self.sealed_reply(&received.reply, &reply_key, receipt.as_ref()) {
                 Ok(sealed) => {
                     self.host.received(&received);
                     Ok(sealed)
@@ -521,9 +565,10 @@ mod tests {
     impl Epic1Keys for OneAddress {
         fn epic1_keys(&self) -> BoxFuture<'_, Vec<Epic1AccountKeys>> {
             let keys = vec![Epic1AccountKeys {
-                account: AccountIndex(0),
+                account: lepic_store::AccountIndex(0),
                 label: "default".to_owned(),
                 key: self.0.clone(),
+                delivery: lepic_crypto::SecretKey::from_array([0x21; 32]).unwrap(),
             }];
             Box::pin(async move { keys })
         }

@@ -5,7 +5,8 @@ restore gap), the `POST /addresses` and link id lines of §8, and in §9 "an ope
 and the reason `amount` for an address superseded by 0066 (one address per account; a request
 link only fills in the Send screen); §4 (the own mailbox first in the list, the post to every
 mailbox, the single answering mailbox and the default-host notice) and §11 superseded by 0065;
-in §9 the payer's cancel on `declined` superseded by 0067 §4: the payer erases a declined send
+in §9 the payer's cancel on `declined` superseded by 0067 §4: the payer erases a declined send;
+§2 amended by 0069
 Date: 2026-11-18
 
 Terms: this record uses the glossary of 2026-11-19 (ADR 0066): a mailbox is a server that runs
@@ -60,6 +61,9 @@ length  = 117 characters on mainnet, 118 on floonet
 - Each numbered address has its own two keys, so each has its own slot.
 
 ### 2. No proof key; receipts are dropped for epic1
+
+> Amended by ADR 0069: epic1 payments between LEPIC wallets carry a payment proof, signed by a
+> public tweak of the delivery key. The address and the retired labels stay as written.
 
 - The address carries no signing key. epic1 payments carry no payment proof.
 - The labels `lepic-wallet epic1 proof key v1` and `lepic-wallet epic1 indexed proof key v1` are
@@ -226,6 +230,7 @@ carrier interface, one outbox, "recover funds", the in-person record 02 and `lab
 - The address is 2 characters longer than before (117 against 115) and has the same QR size in
   upper case.
 - epic1 has no receipts until a receipt key is added in pairing or in a later address version.
+  (Amended by ADR 0069: the receipt key is a tweak of the delivery key.)
 - One payment can sit on several mailboxes for a short time. Each copy is deleted when read or
   cancelled, and at the latest at the mailbox's retention.
 - A payee that shares no mailbox with a payer cannot be paid at its bare address. The payer's

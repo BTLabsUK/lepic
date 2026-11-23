@@ -125,6 +125,7 @@ exception covers this class of key and no other use.
 | `lepic-wallet epic1 indexed proof key v1` ‖ account(u32 BE) ‖ net ‖ index(u32 BE) | Ed25519 seed | The proof key of the epic1 address `index`, index 1 and above, in earlier builds | none | retired-reserved (ADR 0063) |
 | `lepic-wallet reply mailbox v1` ‖ account(u32 BE) ‖ net ‖ slate_id(16) ‖ ctr | secp256k1 | Throwaway Epicbox slot for the answer to one slate | `lepic-wallet::namespace` | live |
 | `lepic-wallet post key v1` ‖ account(u32 BE) ‖ net ‖ payment id(16) ‖ role ‖ ctr | secp256k1 | Epicbox `from` key of every post for one payment to another party's slot; role 00 initiator, 01 responder; keys the transaction id of a posted copy (`lepic/post-txid/v1`) | `lepic-wallet::namespace` | live |
+| `lepic-wallet receipt payer key v1` ‖ account(u32 BE) ‖ net ‖ slate_id(16) ‖ ctr | secp256k1 | The payer's one-time key in the payment proof of one payment to an epic1 address (ADR 0069) | `lepic-wallet::namespace` | live |
 | `lepic-wallet link mailbox v1` ‖ account(u32 BE) ‖ net ‖ kind ‖ n(u32 BE) ‖ ctr | secp256k1 | Slot named by an epic1 link in earlier builds; kind 00 on screen, 01 printed | none | retired-reserved (ADR 0063) |
 
 `lepic-wallet store check v1` ‖ salt(16) is the check file of ADR 0032, keyed by the store key
@@ -164,6 +165,7 @@ rather than the seed; it is listed here so the label is reserved.
 | `epic-tx/1` ‖ net ‖ suite ‖ 00, 01 or 02 | HPKE | Envelopes sealed to an epic1 seal key (00), a listener seal key (01) or the seal key of an Epicbox payments address (02) (RFC 0003). Wallets seal and open with 00 only; the codec keeps 01 and 02, and the pairing kit's vectors cover them | `lepic-seal` | live |
 | `lepic/post-txid/v1` | HMAC-SHA256 keyed by the post key, over tag ‖ payment id(16) ‖ stage (`S1` to `S3`, `I1` to `I3`); the first 16 bytes, set as a version 4 id; a post of no stage carries no id | The transaction id of every copy of one post, which a mailbox cancel names (ADR 0063) | `lepic-wallet-contacts` | live |
 | `epicbox-cancel/1:` ‖ transaction id | ECDSA over text, the key the message was posted from | A `CancelTx` to a mailbox that offers the separated form (ADR 0061) | `lepic-epicbox` | live |
+| `lepic-epic1-receipt-key/1`, `lepic-epic1-receipt/1`, `lepic-epic1-receipt-nonce/1` | SHA-256 over tag ‖ the delivery key; the receipt message; tag ‖ receipt secret ‖ digest | The receipt key tweak, the signed receipt and its nonce; secp256k1-zkp single Schnorr with the receipt key (ADR 0069) | `lepic-epic1` | live |
 | `epic-check/1` | SHA-256 over tag ‖ the answering party's 33-byte public excess | The four-digit check code shown after an answer (RFC 0003) | `lepic-wallet::namespace` | live |
 
 The `epic-tx/1` and `epic-seal/1` tags are prefix-free with each other, and every context above is

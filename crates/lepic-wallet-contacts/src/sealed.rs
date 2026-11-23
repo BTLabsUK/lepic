@@ -108,13 +108,19 @@ struct Envelope {
     contact: Option<ContactId>,
     /// The epic1 address it was sealed to, when it was.
     epic1: Option<Epic1Opening>,
+    /// The payment proof (tag `85`) a native envelope carried.
+    receipt: Option<[u8; 64]>,
 }
 
 /// The epic1 address an envelope was sealed to.
 #[derive(Debug, Clone)]
 struct Epic1Opening {
+    /// The address's account.
+    account: lepic_store::AccountIndex,
     /// The label of the address's account.
     label: String,
+    /// The payer key the payment asks a receipt for, when it asks for one.
+    receipt_ask: Option<[u8; 33]>,
 }
 
 /// What [`ContactBook::open_text`] opened.
@@ -124,6 +130,10 @@ struct TextOpened {
     epic1: Option<Epic1Opening>,
     /// The key the slate's answer is sealed to, as the envelope named it.
     reply_key: Option<EncPublicKey>,
+    /// The `lepic.v1` body of a native slate, as it arrived.
+    native_body: Option<Vec<u8>>,
+    /// The payment proof the envelope carried (tag `85`).
+    receipt: Option<[u8; 64]>,
 }
 
 /// The key a sealed text may open with.
@@ -552,8 +562,8 @@ where
         };
         let (opened, contact) = match opening {
             Opening::Contact { key, records } => {
-                let opened =
-                    super::native::open_any(&sealed, &key).map_err(|_| ContactError::CannotOpen)?;
+                let opened = super::native::open_any_with_receipt(&sealed, &key)
+                    .map_err(|_| ContactError::CannotOpen)?;
                 let contact = match &opened.0.sender {
                     Some(sender) => Some(
                         records
@@ -572,17 +582,18 @@ where
                 (opened, contact)
             }
             Opening::Reply { key } => {
-                let opened =
-                    super::native::open_any(&sealed, &key).map_err(|_| ContactError::CannotOpen)?;
+                let opened = super::native::open_any_with_receipt(&sealed, &key)
+                    .map_err(|_| ContactError::CannotOpen)?;
                 (opened, None)
             }
         };
-        let ((Opened { content, .. }, native), contact) = (opened, contact);
+        let ((Opened { content, .. }, native, receipt), contact) = (opened, contact);
         Ok(Envelope {
             content,
             native,
             contact,
             epic1: None,
+            receipt,
         })
     }
 
@@ -595,9 +606,11 @@ where
         net: lepic_contact::Network,
     ) -> Result<Envelope, ContactError> {
         let accounts = self.wallet.epic1_trial_keys_all().await?;
-        let (account, label, opened) = trial_open_accounts(envelope, net, accounts)
+        let (keys, opened) = trial_open_accounts(envelope, net, accounts)
             .await
             .ok_or(ContactError::NotForThisInstall)?;
+        let account = keys.account;
+        let receipt_ask = opened.content.receipt_ask;
         if opened.sender.is_some() {
             return Err(ContactError::Epic1(Epic1Refusal::Signed));
         }
@@ -609,7 +622,12 @@ where
             content: super::native::opened_of(opened).content,
             native: true,
             contact: None,
-            epic1: Some(Epic1Opening { label }),
+            epic1: Some(Epic1Opening {
+                account,
+                label: keys.label,
+                receipt_ask,
+            }),
+            receipt: None,
         })
     }
 
@@ -627,12 +645,13 @@ where
             native,
             contact,
             epic1,
+            receipt,
         } = self.open_envelope(text).await?;
         let reply_key = content.reply_key;
         if content.kind != MessageType::Slate {
             return Err(ContactError::NotASlate);
         }
-        let body = if native {
+        let (body, native_body) = if native {
             // An anonymous native invoice is never taken: it needs the payer's consent
             // (RFC 0003 5.9).
             if contact.is_none()
@@ -641,11 +660,13 @@ where
             {
                 return Err(ContactError::NotASlate);
             }
-            self.v3_of_native(&content.body)
+            let v3 = self
+                .v3_of_native(&content.body)
                 .await?
-                .ok_or(ContactError::NotASlate)?
+                .ok_or(ContactError::NotASlate)?;
+            (v3, Some(content.body))
         } else {
-            content.body
+            (content.body, None)
         };
         let wire = wire_text(body)?;
         let slate = legacy_codecs(network)
@@ -677,6 +698,8 @@ where
             native,
             epic1,
             reply_key,
+            native_body,
+            receipt,
         })
     }
 
@@ -705,6 +728,7 @@ where
             native,
             epic1,
             reply_key,
+            ..
         } = self.open_text(text).await?;
         if opened.stage != Stage::S1 {
             return Err(ContactError::Stage(opened.stage));
@@ -714,7 +738,7 @@ where
                 let reply_key = reply_key.ok_or(ContactError::Epic1(Epic1Refusal::NoReplyKey))?;
                 request.account = Some(epic1.label);
                 request.proof_key = ProofKey::Epic1 { index: 0 };
-                Some(reply_key)
+                Some((reply_key, epic1.account, epic1.receipt_ask))
             }
             None => None,
         };
@@ -723,8 +747,8 @@ where
             .receive(&file_method(), &opened.wire, request)
             .await
             .map_err(ContactError::Receive)?;
-        if let Some(reply_key) = epic1_reply {
-            let answer = self.epic1_answer(&received.reply, &reply_key)?;
+        if let Some((reply_key, account, receipt_ask)) = epic1_reply {
+            let answer = self.epic1_answer(&received.reply, &reply_key, account, receipt_ask)?;
             return Ok(SealedReceived { received, answer });
         }
         let answer = self
@@ -768,7 +792,10 @@ where
     /// [`Wallet::finalize_invoice`] do for a file.
     ///
     /// An answer to an in-person code this wallet showed is not finalized here: it is taken
-    /// with its check code by [`ContactBook::in_person_take`].
+    /// with its check code by [`ContactBook::in_person_take`]. An answer to an epic1 payment
+    /// has its payment proof checked and kept as one from the reply mailbox has: a payment that
+    /// requires a proof is refused with [`Epic1Refusal::NoReceipt`] or
+    /// [`Epic1Refusal::BadReceipt`] and cancelled.
     ///
     /// Fails as [`ContactBook::sealed_open`] does, with [`ContactError::Stage`] for another stage,
     /// [`ContactError::InPerson`] with [`InPersonRefusal::AnswerToCode`] for an answer to an
@@ -779,14 +806,32 @@ where
         text: &str,
         propagation: Propagation,
     ) -> Result<Finalized, ContactError> {
-        let opened = self.sealed_open(text).await?;
+        let TextOpened {
+            slate: opened,
+            native_body,
+            receipt,
+            ..
+        } = self.open_text(text).await?;
         self.refuse_answer_to_code(&opened.wire).await?;
         match opened.stage {
-            Stage::S2 => self
-                .wallet
-                .finalize(&file_method(), &opened.wire, propagation)
-                .await
-                .map_err(ContactError::Finalize),
+            Stage::S2 => {
+                if let Some(body) = &native_body
+                    && let Some(finalized) = self
+                        .finalize_epic1_text(
+                            body,
+                            receipt.as_ref(),
+                            opened.contact_id.is_some(),
+                            propagation,
+                        )
+                        .await?
+                {
+                    return Ok(finalized);
+                }
+                self.wallet
+                    .finalize(&file_method(), &opened.wire, propagation)
+                    .await
+                    .map_err(ContactError::Finalize)
+            }
             Stage::I2 => self
                 .wallet
                 .finalize_invoice(&file_method(), &opened.wire, propagation)
@@ -895,20 +940,28 @@ where
         Ok(SealedAnswer::Plain(reply.clone()))
     }
 
-    /// `reply`, the S2 for a payment to an epic1 address, as `lepic.v1` sealed anonymously to
-    /// `reply_key`, the key the payment named.
+    /// `reply`, the S2 for a payment to the epic1 address of `account`, as `lepic.v1` sealed
+    /// anonymously to `reply_key`, the key the payment named, with the receipt for the payer key
+    /// `receipt_ask` when the payment asked for one.
     fn epic1_answer(
         &self,
         reply: &WireSlate,
         reply_key: &EncPublicKey,
+        account: lepic_store::AccountIndex,
+        receipt_ask: Option<[u8; 33]>,
     ) -> Result<SealedAnswer, ContactError> {
         let network = self.wallet.config().network;
         let body = super::native::native_body(network, reply.as_bytes())?;
+        let mut content = TxContent::new(body);
+        if receipt_ask.is_some() {
+            content.receipt = super::native::decode_native(network, &content.body)
+                .and_then(|slate| self.receipt_for(account, &slate, receipt_ask));
+        }
         let envelope = seal_tx(
             contact_network(network),
             reply_key,
             TxKey::Seal(HintRule::ReplyKey),
-            &TxContent::new(body),
+            &content,
             None,
             &mut LockedRng(&mut **self.wallet.ports().rng.lock()),
         )

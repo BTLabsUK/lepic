@@ -49,6 +49,7 @@ use lepic_store::{
 use lepic_transport::host_rule;
 use lepic_transport::transport::{BoxFuture, Location, PostedSize};
 use lepic_wallet::epic1_index;
+use lepic_wallet::finalize::Finalized;
 use lepic_wallet::notice::{Notice, Payload, Reason, classify_text};
 use lepic_wallet::ports::{SecretVault, StoreOpener};
 use lepic_wallet::receive::{ProofKey, ReceiveError, ReceiveRequest, Received};
@@ -68,6 +69,7 @@ use super::delivery::reconcile::Mailboxes;
 use super::delivery::router::{Handler, Hold, Pushed, Stored};
 use super::delivery::transport::Reach;
 use super::delivery::watch::WatchError;
+use super::epic1_receipt::{self, ReceiptFault, receipt_key};
 use super::in_person::{corrupt, from_text, known_endpoint, reply_secret, to_text};
 use super::keys::contact_network;
 use super::mailboxes::{MailboxList, check_public};
@@ -152,6 +154,14 @@ pub enum Epic1Refusal {
     /// it needs Tor turned off, or an entry that does not go direct.
     #[error("Tor is expected and this link's http entry would connect directly")]
     TorExpected,
+    /// The payment requires a receipt and the payee's answer carries none: it is not
+    /// finalized, and the payment is cancelled.
+    #[error("the payee's answer brings no payment proof")]
+    NoReceipt,
+    /// The payment requires a receipt and the one the payee's answer carries does not hold for
+    /// the payment: it is not finalized, and the payment is cancelled.
+    #[error("the payee's payment proof does not verify")]
+    BadReceipt,
 }
 
 /// A link to make: the account's address, with what the link asks.
@@ -251,6 +261,10 @@ pub struct Epic1PayRequest {
     /// public name: the payee's, or the wallet's own when payer and payee share a private one.
     /// Empty to pay through the list.
     pub mailboxes: Vec<RelayEndpoint>,
+    /// Finalize only on an answer that carries a receipt that holds
+    /// (`docs/protocols/epic1-receipt.md`): an S2 with none, or with one that does not hold, is
+    /// refused and the payment cancelled. Off, such an answer is finalized with no receipt kept.
+    pub require_receipt: bool,
 }
 
 /// A post of a payment to one transport of a link.
@@ -396,6 +410,10 @@ struct PayState {
     /// The payment goes through `relays`, which the pay call gave, in place of the list.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     given: bool,
+    /// The payer finalizes only on an answer with a receipt that holds
+    /// ([`Epic1PayRequest::require_receipt`]).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    require_receipt: bool,
     finalized: bool,
 }
 
@@ -408,6 +426,8 @@ struct CarriedPayment {
     seal_key: EncPublicKey,
     reply: EncPublicKey,
     mailbox_key: [u8; 33],
+    /// The payer key the S1 asks a receipt for (tag 84).
+    receipt_ask: [u8; 33],
     first: RouteEntry,
     /// The record, its transaction and envelope still to be filled in.
     state: PayState,
@@ -429,6 +449,7 @@ impl CarriedPayment {
         let mut content = TxContent::new(body);
         content.reply_key = Some(self.reply);
         content.reply_route = Some(ReplyRoute::epicbox(self.mailbox_key));
+        content.receipt_ask = Some(self.receipt_ask);
         let envelope = seal_tx(
             contact_network(self.network),
             &self.seal_key,
@@ -612,6 +633,7 @@ fn sealed_s1_size(
     let mut content = TxContent::new(native_body(network, v3).ok()?);
     content.reply_key = Some(EncSecretKey::from_bytes([1; 32]).public_key());
     content.reply_route = Some(ReplyRoute::epicbox([2; 33]));
+    content.receipt_ask = Some([2; 33]);
     let envelope = seal_tx(
         contact_network(network),
         seal_key,
@@ -1031,6 +1053,7 @@ fn open_payment(
         v3,
         reply_key,
         reply_mailbox,
+        receipt_ask: content.receipt_ask,
     })
 }
 
@@ -1041,6 +1064,8 @@ struct OpenedPayment {
     reply_key: EncPublicKey,
     /// The key of the reply mailbox; the answer goes to it on the relay the S1 was read from.
     reply_mailbox: [u8; 33],
+    /// The payer key the payment asks a receipt for (tag 84), when it asks one.
+    receipt_ask: Option<[u8; 33]>,
 }
 
 impl<N, S, V> ContactBook<'_, N, S, V>
@@ -1094,6 +1119,37 @@ where
             link: link.to_uri(),
             address: link.address.encode(),
         })
+    }
+
+    /// The receipt the payee's answer carried for the epic1 payment `tx_id`; `None` when the
+    /// payment has none: not an epic1 payment, not answered yet, or answered without one. Fails
+    /// with [`WalletError::UnknownTransaction`] for a transaction the wallet does not have.
+    ///
+    /// [`WalletError::UnknownTransaction`]: lepic_wallet::WalletError::UnknownTransaction
+    pub async fn epic1_receipt(
+        &self,
+        tx_id: TxId,
+    ) -> Result<Option<epic1_receipt::Epic1Receipt>, ContactError> {
+        let session = self.wallet.session()?;
+        let stored = self
+            .contact_work(move |_, _| {
+                Ok(session.store.read(|repos| {
+                    let Some(entry) = repos.transaction(tx_id)? else {
+                        return Ok(None);
+                    };
+                    // A payment to this wallet's own address keeps the proof under the same
+                    // slate id: only the sending side has it.
+                    let text = match entry.slate_id {
+                        Some(slate_id) if entry.direction == TxDirection::Outgoing => repos
+                            .setting(&receipt_key(SlateId::from_bytes(*slate_id.as_bytes())))?,
+                        _ => None,
+                    };
+                    Ok::<_, StoreError>(Some(text))
+                })?)
+            })
+            .await?;
+        let text = stored.ok_or(lepic_wallet::WalletError::UnknownTransaction(tx_id))?;
+        Ok(text.and_then(|text| epic1_receipt::Epic1Receipt::parse(&text)))
     }
 
     /// The S2s this wallet made for payments taken at its delivery mailboxes.
@@ -1222,6 +1278,39 @@ where
         Ok(())
     }
 
+    /// The receipt the payee signs into the S2 `slate` of a payment to the address of `account`
+    /// that asked one for the payer key `ask` (`docs/protocols/epic1-receipt.md`). `None` when the
+    /// payment asks none, its ask is not a key, or the keys to sign cannot be had (a locked
+    /// wallet): the answer then goes with no receipt, as the payment is taken either way.
+    pub(crate) fn receipt_for(
+        &self,
+        account: AccountIndex,
+        slate: &lepic_slate::model::Slate,
+        ask: Option<[u8; 33]>,
+    ) -> Option<[u8; 64]> {
+        let ask = ask?;
+        let net = contact_network(self.wallet.config().network);
+        let signed = self
+            .wallet
+            .epic1_delivery_key(account, net)
+            .map_err(ContactError::from)
+            .and_then(|delivery| Ok((delivery, self.epic1_address(account)?)))
+            .map(|(delivery, address)| {
+                epic1_receipt::sign_receipt(&address, &delivery, slate, &ask)
+            });
+        match signed {
+            Ok(Some(receipt)) => Some(receipt),
+            Ok(None) => {
+                debug!(slate_id = %slate.id(), "epic1 receipt ask not answered");
+                None
+            }
+            Err(error) => {
+                warn!(slate_id = %slate.id(), error = %ErrorChain(&error), "epic1 answer sent with no receipt");
+                None
+            }
+        }
+    }
+
     /// Opens a payment that came to the delivery mailbox of the address of `account`, with
     /// that address's seal key only.
     fn open_address_payment(
@@ -1320,16 +1409,19 @@ where
         // Received before with no answer stored, as a stop between the two left it: the stored
         // S2 is the answer, sealed and stored now.
         let repeated = received.repeated;
+        let receipt = self.receipt_for(account, &received.slate, payment.receipt_ask);
         let body = NativeSlate::new(received.slate, Tail::empty())
             .map_err(ContactError::Native)?
             .encode(network);
+        let mut content = TxContent::new(body);
+        content.receipt = receipt;
         let envelope = {
             let mut rng = LockedRng(&mut **self.wallet.ports().rng.lock());
             seal_tx(
                 net,
                 &payment.reply_key,
                 TxKey::Seal(HintRule::ReplyKey),
-                &TxContent::new(body),
+                &content,
                 None,
                 &mut rng,
             )
@@ -1621,7 +1713,7 @@ where
                 &link.address,
                 (slate_id, account),
                 &routes,
-                (paid_relays, given && to_mailbox),
+                (paid_relays, given && to_mailbox, request.require_receipt),
             )
             .await?;
         let sent = match self
@@ -1679,7 +1771,7 @@ where
         address: &Epic1Address,
         (slate_id, account): (SlateId, AccountIndex),
         routes: &[RouteEntry],
-        (relays, given): (Vec<String>, bool),
+        (relays, given, require_receipt): (Vec<String>, bool, bool),
     ) -> Result<(StoreCarried, PaymentRow), ContactError> {
         let network = self.wallet.config().network;
         let net = contact_network(network);
@@ -1693,6 +1785,12 @@ where
         let mailbox_key = PublicKey::from_secret_key(&mailbox_secret)
             .map_err(|_| ContactError::RelayAddress)?
             .to_bytes();
+        let payer_secret = self
+            .wallet
+            .receipt_payer_key(account, net, slate_id.as_bytes())?;
+        let receipt_ask = PublicKey::from_secret_key(&payer_secret)
+            .map_err(|_| ContactError::RelayAddress)?
+            .to_bytes();
         let session = self.wallet.session()?;
         let reply = self
             .contact_work(move |_, _| {
@@ -1704,6 +1802,7 @@ where
             seal_key: *address.seal_key(),
             reply,
             mailbox_key,
+            receipt_ask,
             first,
             state: PayState {
                 tx_id: 0,
@@ -1719,6 +1818,7 @@ where
                     .collect(),
                 relays,
                 given,
+                require_receipt,
                 finalized: false,
             },
         };
@@ -1989,6 +2089,7 @@ where
         if opened.sender.is_some() {
             return Err(refused(Epic1Refusal::Signed));
         }
+        let carried_receipt = opened.content.receipt;
         let body = opened.content.body;
         let slate = decode_native(network, &body).ok_or(ContactError::NotASlate)?;
         if slate.stage() != Stage::S2 {
@@ -2002,8 +2103,94 @@ where
         if self.mark_if_finalized(slate_id, TxId(state.tx_id)).await? {
             return Ok(false);
         }
+        self.finish_epic1_answer(
+            &state,
+            &slate,
+            &body,
+            carried_receipt.as_ref(),
+            Propagation::Stem,
+        )
+        .await?;
+        Ok(true)
+    }
+
+    /// Finalizes the native S2 `body` from sealed text when it answers an epic1 payment this
+    /// wallet made and still holds unfinalized, with its proof checked and kept as
+    /// [`Self::take_epic1_answer`] does: a payment that requires a proof is refused without
+    /// one that holds. `receipt` is the proof the envelope carried and `signed` whether a
+    /// contact signed it. Returns `None` for any other S2, for the caller to finalize as a
+    /// file's.
+    pub(crate) async fn finalize_epic1_text(
+        &self,
+        body: &[u8],
+        receipt: Option<&[u8; 64]>,
+        signed: bool,
+        propagation: Propagation,
+    ) -> Result<Option<Finalized>, ContactError> {
+        let network = self.wallet.config().network;
+        let Some(slate) = decode_native(network, body) else {
+            return Ok(None);
+        };
+        if slate.stage() != Stage::S2 {
+            return Ok(None);
+        }
+        let slate_id = slate.id();
+        let Some(state) = self.pay_state(slate_id).await? else {
+            return Ok(None);
+        };
+        if state.finalized || !self.payment_held(TxId(state.tx_id)).await? {
+            return Ok(None);
+        }
+        if signed {
+            return Err(refused(Epic1Refusal::Signed));
+        }
+        if self.mark_if_finalized(slate_id, TxId(state.tx_id)).await? {
+            return Ok(None);
+        }
+        self.finish_epic1_answer(&state, &slate, body, receipt, propagation)
+            .await
+            .map(Some)
+    }
+
+    /// The stored epic1 payment `slate_id`, when this wallet made one.
+    async fn pay_state(&self, slate_id: SlateId) -> Result<Option<PayState>, ContactError> {
+        let session = self.wallet.session()?;
+        self.contact_work(move |_, _| {
+            session.store.read(|repos| {
+                Ok::<_, ContactError>(
+                    repos
+                        .setting(&pay_key(slate_id))?
+                        .and_then(|text| from_text::<PayState>(&text, "epic1 payment").ok()),
+                )
+            })
+        })
+        .await
+    }
+
+    /// Checks the proof `carried` of the S2 `slate` (native `body`) answering the payment in
+    /// `state`, finalizes and posts it, and keeps the proof and marks the payment finalized.
+    /// A payment that requires a proof and has none that holds is refused and cancelled.
+    async fn finish_epic1_answer(
+        &self,
+        state: &PayState,
+        slate: &lepic_slate::model::Slate,
+        body: &[u8],
+        carried: Option<&[u8; 64]>,
+        propagation: Propagation,
+    ) -> Result<Finalized, ContactError> {
+        let slate_id = slate.id();
+        let receipt = match self.answer_receipt(state, slate, carried)? {
+            Ok(receipt) => Some(receipt),
+            Err(fault) if state.require_receipt => {
+                return Err(self.refuse_answer(state, slate_id, fault).await);
+            }
+            Err(fault) => {
+                warn!(slate_id = %slate_id, fault = ?fault, "epic1 answer finalized with no receipt");
+                None
+            }
+        };
         let v3 = self
-            .v3_of_native(&body)
+            .v3_of_native(body)
             .await?
             .ok_or(ContactError::NotASlate)?;
         let finalized = self
@@ -2011,15 +2198,71 @@ where
             .finalize(
                 &file_method(),
                 &WireSlate::binary(MediaType::JSON, v3),
-                Propagation::Stem,
+                propagation,
             )
             .await
             .map_err(ContactError::Finalize)?;
         let session = self.wallet.session()?;
-        self.contact_work(move |_, _| session.store.write(|repos| mark_finalized(repos, slate_id)))
-            .await?;
+        let receipt = receipt.map(|receipt| receipt.to_text());
+        self.contact_work(move |_, _| {
+            session.store.write(|repos| {
+                if let Some(receipt) = &receipt {
+                    repos.put_setting(&receipt_key(slate_id), receipt)?;
+                }
+                mark_finalized(repos, slate_id)
+            })
+        })
+        .await?;
         info!(tx_id = %finalized.tx_id, "epic1 payment finalized");
-        Ok(true)
+        Ok(finalized)
+    }
+
+    /// The receipt the S2 `slate` of the payment in `state` carries, `signature`, checked
+    /// against the address paid, the S2's amount, kernel excess and slate id, and the payer key
+    /// this wallet asked with. The inner result is the receipt or why it does not hold; the
+    /// outer one fails with [`ContactError::Wallet`] when the payer key cannot be derived (a
+    /// locked wallet), which says nothing about the receipt.
+    fn answer_receipt(
+        &self,
+        state: &PayState,
+        slate: &lepic_slate::model::Slate,
+        signature: Option<&[u8; 64]>,
+    ) -> Result<Result<epic1_receipt::Epic1Receipt, ReceiptFault>, ContactError> {
+        let network = self.wallet.config().network;
+        let Ok(address) = Epic1Address::decode(&state.address, relay_network(network)) else {
+            return Ok(Err(ReceiptFault::Invalid));
+        };
+        let secret = self.wallet.receipt_payer_key(
+            AccountIndex(state.account),
+            contact_network(network),
+            slate.id().as_bytes(),
+        )?;
+        let Ok(payer_key) = PublicKey::from_secret_key(&secret) else {
+            return Ok(Err(ReceiptFault::Invalid));
+        };
+        Ok(epic1_receipt::check_answer(
+            &address, slate, payer_key, signature,
+        ))
+    }
+
+    /// Refuses the answer to the payment in `state`, which requires a receipt, for `fault`: the
+    /// payment is not finalized and is cancelled, which unlocks its inputs and tells the payee.
+    /// A cancel that fails leaves the payment to its TTL. Returns the error the answer fails with.
+    async fn refuse_answer(
+        &self,
+        state: &PayState,
+        slate_id: SlateId,
+        fault: ReceiptFault,
+    ) -> ContactError {
+        let refusal = match fault {
+            ReceiptFault::Missing => Epic1Refusal::NoReceipt,
+            ReceiptFault::Invalid => Epic1Refusal::BadReceipt,
+        };
+        warn!(slate_id = %slate_id, reason = %refusal, "epic1 answer refused");
+        if let Err(error) = self.wallet.cancel(TxId(state.tx_id)).await {
+            warn!(error = %ErrorChain(&error), "epic1 payment not cancelled after its answer was refused");
+        }
+        refused(refusal)
     }
 
     /// Whether the transaction `tx_id` of an epic1 payment is still stored.

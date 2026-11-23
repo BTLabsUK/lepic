@@ -69,6 +69,11 @@ const TAG_FEATURES: u8 = 0x82;
 /// The sender's domain claim (RFC 0002 6.3): `issued_at (8) || signature (64) || domain`; skipped
 /// when it is shorter or its domain is not a valid name.
 const TAG_DOMAIN: u8 = 0x83;
+/// The payer's ask for a receipt in an epic1 payment (S1): its one-time 33-byte secp256k1 key;
+/// skipped when it is not 33 bytes.
+const TAG_RECEIPT_ASK: u8 = 0x84;
+/// The payee's receipt in its answer (S2): a 64-byte signature; skipped when it is not 64 bytes.
+const TAG_RECEIPT: u8 = 0x85;
 const TAG_SIGNATURE: u8 = 0xff;
 
 type SealKem = X25519HkdfSha256;
@@ -410,6 +415,8 @@ fn seal_with<R: CryptoRng>(
         address_proof: content.address_proof.as_ref(),
         features: content.features,
         domain: content.domain.as_ref(),
+        receipt_ask: None,
+        receipt: None,
         pad: pad_slate && content.kind == MessageType::Slate,
     };
     seal_inner(
@@ -439,6 +446,8 @@ pub(crate) struct Inner<'c> {
     pub address_proof: Option<&'c [u8; 32]>,
     pub features: Option<u32>,
     pub domain: Option<&'c DomainClaim>,
+    pub receipt_ask: Option<&'c [u8; 33]>,
+    pub receipt: Option<&'c [u8; 64]>,
     /// Whether to write the padding field: for a `0A` slate envelope always, for a type 01 one
     /// when the host asks for it.
     pub pad: bool,
@@ -460,6 +469,8 @@ impl<'c> Inner<'c> {
             address_proof: None,
             features: None,
             domain: None,
+            receipt_ask: None,
+            receipt: None,
             pad,
         }
     }
@@ -608,6 +619,8 @@ fn encode_inner(
         TAG_DOMAIN,
         inner.domain.map(DomainClaim::to_bytes).as_deref(),
     )?;
+    writer.optional(TAG_RECEIPT_ASK, inner.receipt_ask.map(|key| &key[..]))?;
+    writer.optional(TAG_RECEIPT, inner.receipt.map(|signature| &signature[..]))?;
     if inner.pad {
         // L counts every field, the padding field's header and the signature field to come.
         let length = writer
@@ -912,6 +925,8 @@ fn tx_opened(decoded: Decoded, inner_len: usize) -> TxOpened {
             address_proof: decoded.address_proof,
             features: decoded.features,
             domain: decoded.domain,
+            receipt_ask: decoded.receipt_ask,
+            receipt: decoded.receipt,
         },
         sender: decoded.sender,
         padding: decoded.padding,
@@ -943,6 +958,8 @@ struct Decoded {
     address_proof: Option<[u8; 32]>,
     features: Option<u32>,
     domain: Option<DomainClaim>,
+    receipt_ask: Option<[u8; 33]>,
+    receipt: Option<[u8; 64]>,
     padding: Option<usize>,
     sender: Option<VerifyingKey>,
 }
@@ -1038,6 +1055,13 @@ fn check_tx_padding(inner_len: usize, padding: Option<usize>) -> Result<(), Malf
     }
 }
 
+/// An extension field of exactly `N` bytes; one of another length is skipped like an unknown one.
+fn sized_extension<const N: usize>(fields: &Fields<'_>, tag: u8) -> Option<[u8; N]> {
+    fields
+        .extension(tag)
+        .and_then(|bytes| <[u8; N]>::try_from(bytes).ok())
+}
+
 fn decode_inner(
     bytes: &[u8],
     network: Network,
@@ -1076,20 +1100,14 @@ fn decode_inner(
         .map(|bytes| ContactCard::decode(bytes, network))
         .transpose()?;
     let reply_route = reply_route(&fields, reply_key.is_some())?;
-    let sent_at = fields
-        .extension(TAG_SENT_AT)
-        .and_then(|bytes| <[u8; 8]>::try_from(bytes).ok())
-        .map(u64::from_be_bytes);
-    let address_proof = fields
-        .extension(TAG_ADDRESS_PROOF)
-        .and_then(|bytes| <[u8; 32]>::try_from(bytes).ok());
-    let features = fields
-        .extension(TAG_FEATURES)
-        .and_then(|bytes| <[u8; 4]>::try_from(bytes).ok())
-        .map(u32::from_be_bytes);
+    let sent_at = sized_extension(&fields, TAG_SENT_AT).map(u64::from_be_bytes);
+    let address_proof = sized_extension(&fields, TAG_ADDRESS_PROOF);
+    let features = sized_extension(&fields, TAG_FEATURES).map(u32::from_be_bytes);
     let domain = fields
         .extension(TAG_DOMAIN)
         .and_then(|bytes| DomainClaim::from_bytes(bytes).ok());
+    let receipt_ask = sized_extension(&fields, TAG_RECEIPT_ASK);
+    let receipt = sized_extension(&fields, TAG_RECEIPT);
     let padding = padding_len(&fields)?;
     if reader != Reader::Rfc0002 {
         check_tx_padding(bytes.len(), padding)?;
@@ -1140,6 +1158,8 @@ fn decode_inner(
         address_proof,
         features,
         domain,
+        receipt_ask,
+        receipt,
         padding,
         sender,
     })

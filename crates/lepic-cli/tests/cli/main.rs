@@ -37,6 +37,7 @@ mod large_store;
 mod mailbox;
 mod owner_commands;
 mod payments_paging;
+mod proof;
 mod send_epic1;
 mod serve_push;
 mod serve_tick;

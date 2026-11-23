@@ -59,6 +59,10 @@ pub const REPLY_MAILBOX_LABEL: &[u8] = b"lepic-wallet reply mailbox v1";
 /// of the account names the same slot.
 pub const SHARED_REPLY_MAILBOX_LABEL: &[u8] = b"lepic-wallet shared reply mailbox v1";
 
+/// The payer's one-time key of one epic1 payment, which the payee's receipt names: context
+/// `account (u32 BE) || net || slate_id (16) || counter (u8)`, 22 bytes.
+pub const RECEIPT_PAYER_KEY_LABEL: &[u8] = b"lepic-wallet receipt payer key v1";
+
 /// The Epicbox `from` key of the posts of one payment to another party's mailbox: context
 /// `account (u32 BE) || net || payment_id (16) || role || counter (u8)`, 23 bytes
 /// ([`PostRole`]).
@@ -309,6 +313,20 @@ pub fn reply_mailbox_key(
     first_valid_key(
         seed,
         REPLY_MAILBOX_LABEL,
+        &[&account.to_be_bytes(), &[network.byte()], slate_id],
+    )
+}
+
+/// The payer key of `account` on `network` for the epic1 payment of the slate `slate_id`.
+pub fn receipt_payer_key(
+    seed: &Seed,
+    account: u32,
+    network: Network,
+    slate_id: &[u8; 16],
+) -> Result<SecretKey, WalletError> {
+    first_valid_key(
+        seed,
+        RECEIPT_PAYER_KEY_LABEL,
         &[&account.to_be_bytes(), &[network.byte()], slate_id],
     )
 }

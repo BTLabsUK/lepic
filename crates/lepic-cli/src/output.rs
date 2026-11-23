@@ -109,6 +109,8 @@ pub enum Report {
     Epic1Answers(Epic1AnswersReport),
     Epic1Restore(Epic1RestoreReport),
     EpictxOpen(EpictxOpenReport),
+    ProofExport(ProofExportReport),
+    ProofVerify(ProofVerifyReport),
     MailboxList(MailboxListReport),
     MailboxAdd(MailboxAddReport),
     MailboxRemove(MailboxRemoveReport),
@@ -1310,6 +1312,65 @@ pub struct EpicboxStatusReport {
     pub pending_deliveries: usize,
 }
 
+/// `lepic proof export`: the payment proof, and the file it went to.
+#[derive(Debug, Serialize)]
+pub struct ProofExportReport {
+    pub tx_id: u32,
+    /// The file written; absent when the proof is printed.
+    pub path: Option<String>,
+    pub proof: lepic_wallet_contacts::Epic1Receipt,
+}
+
+/// `lepic proof verify`: a proof whose signature holds, and what it says.
+#[derive(Debug, Serialize)]
+pub struct ProofVerifyReport {
+    /// Always true: a proof that does not verify is an error.
+    pub valid: bool,
+    pub network: String,
+    /// The epic1 address paid.
+    pub address: String,
+    /// In base units.
+    pub amount: u64,
+    pub kernel_excess: String,
+    pub slate_id: String,
+    /// Whether the node's chain holds the kernel; absent when no node was asked.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub on_chain: Option<bool>,
+    /// The kernel's height; absent when no node was asked.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub height: Option<u64>,
+}
+
+fn write_proof_export(out: &mut Vec<u8>, r: &ProofExportReport) -> std::io::Result<()> {
+    match &r.path {
+        Some(path) => writeln!(
+            out,
+            "Payment proof of transaction {} written to {path}.",
+            r.tx_id
+        ),
+        None => writeln!(out, "{}", r.proof.to_text()),
+    }
+}
+
+fn write_proof_verify(out: &mut Vec<u8>, r: &ProofVerifyReport) -> std::io::Result<()> {
+    writeln!(
+        out,
+        "Valid: the owner of {} signed for {} EPIC on {}.",
+        r.address,
+        format_units(r.amount),
+        r.network
+    )?;
+    writeln!(out, "Kernel {}", r.kernel_excess)?;
+    writeln!(out, "Slate {}", r.slate_id)?;
+    match r.height {
+        Some(height) => writeln!(out, "On chain at height {height}."),
+        None => writeln!(
+            out,
+            "Not looked up on chain; --on-chain asks the node whether the kernel was posted."
+        ),
+    }
+}
+
 #[derive(Debug, Serialize)]
 pub struct NodeStatusReport {
     pub node: String,
@@ -1683,6 +1744,8 @@ fn write_human(out: &mut Vec<u8>, report: &Report) -> std::io::Result<()> {
         | Report::MailboxAdd(_)
         | Report::MailboxRemove(_)
         | Report::MailboxProbe(_) => mailbox::write_mailbox_human(out, report),
+        Report::ProofExport(r) => write_proof_export(out, r),
+        Report::ProofVerify(r) => write_proof_verify(out, r),
         Report::ApiClientAdd(r) => writeln!(
             out,
             "Client {} added with role {}: {}",

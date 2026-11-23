@@ -7,7 +7,7 @@ use std::str::FromStr;
 
 use thiserror::Error;
 
-use crate::relay::parse_host_port;
+use crate::relay::{parse_host_port, parse_web_host_port};
 
 /// The port of an `http` entry that names none: HTTPS.
 pub const HTTP_DEFAULT_PORT: u16 = 443;
@@ -75,8 +75,10 @@ pub struct RouteEntry {
 
 impl RouteEntry {
     /// The host and port an `http` or `tor` entry is posted to, with the method's default port.
-    /// `None` for an `epicbox` entry and for a value not in its form. The onion checksum is not
-    /// checked here: the poster checks it before it connects.
+    /// `None` for an `epicbox` entry and for a value not in its form. An `http` host follows
+    /// the link rule (letters and digits in each label, RFC 0003 `relay-domain`), as an epic1
+    /// link carries it; a direct route's host is read by [`Self::direct_host_port`]. The onion
+    /// checksum is not checked here: the poster checks it before it connects.
     pub fn host_port(&self) -> Option<(String, u16)> {
         match self.method {
             MethodId::Epicbox => None,
@@ -88,6 +90,19 @@ impl RouteEntry {
                 let (host, port) = onion_host_port(&self.value)?;
                 Some((host.to_owned(), port.unwrap_or(TOR_DEFAULT_PORT)))
             }
+        }
+    }
+
+    /// As [`Self::host_port`], for a direct route (a checkout request's 0x81 entry, posted to
+    /// by a paying wallet): an `http` host is any DNS name, hyphens inside labels included
+    /// (RFC 0003 5.20). Entries read from an epic1 link already passed the stricter link rule.
+    pub fn direct_host_port(&self) -> Option<(String, u16)> {
+        match self.method {
+            MethodId::Http => {
+                let (host, port) = parse_web_host_port(&self.value).ok()?;
+                Some((host.to_string(), port.unwrap_or(HTTP_DEFAULT_PORT)))
+            }
+            _ => self.host_port(),
         }
     }
 }
@@ -122,6 +137,40 @@ mod tests {
             assert_eq!(method.to_string(), text);
             assert_eq!(text.parse::<MethodId>(), Ok(method));
         }
+    }
+
+    #[test]
+    fn a_direct_http_entry_takes_a_hyphenated_host_and_a_link_entry_does_not() {
+        let entry = |method, value: &str| RouteEntry {
+            method,
+            value: value.to_owned(),
+        };
+        assert_eq!(
+            entry(MethodId::Http, "shop-demo.example.com").direct_host_port(),
+            Some(("shop-demo.example.com".to_owned(), 443))
+        );
+        assert_eq!(
+            entry(MethodId::Http, "pay-shop.example:8443").direct_host_port(),
+            Some(("pay-shop.example".to_owned(), 8443))
+        );
+        assert_eq!(
+            entry(MethodId::Http, "-shop.example").direct_host_port(),
+            None
+        );
+        assert_eq!(
+            entry(MethodId::Http, "shop-.example").direct_host_port(),
+            None
+        );
+        // A link's http entry keeps the link rule.
+        assert_eq!(
+            entry(MethodId::Http, "shop-demo.example.com").host_port(),
+            None
+        );
+        assert_eq!(
+            entry(MethodId::Http, "shop.example.com").direct_host_port(),
+            entry(MethodId::Http, "shop.example.com").host_port()
+        );
+        assert!(crate::RelayHost::parse("shop-demo.example.com").is_err());
     }
 
     #[test]

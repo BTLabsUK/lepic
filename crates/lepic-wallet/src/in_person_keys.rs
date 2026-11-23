@@ -25,6 +25,8 @@ pub struct Epic1AccountKeys {
     pub label: String,
     /// The seal key of the address, index 0.
     pub key: EncSecretKey,
+    /// The delivery secret of the address, index 0: it signs the receipts of payments to it.
+    pub delivery: SecretKey,
 }
 
 impl<N, S, V> Wallet<N, S, V>
@@ -44,6 +46,19 @@ where
         slate_id: &[u8; 16],
     ) -> Result<SecretKey, WalletError> {
         namespace::reply_mailbox_key(&self.session()?.seed, account.0, network, slate_id)
+    }
+
+    /// The payer's one-time key of `account` on `network` for the epic1 payment of the slate
+    /// `slate_id`: the key it asks the payee's receipt to name, apart from every other key.
+    ///
+    /// Fails with [`WalletError::Locked`].
+    pub fn receipt_payer_key(
+        &self,
+        account: AccountIndex,
+        network: Network,
+        slate_id: &[u8; 16],
+    ) -> Result<SecretKey, WalletError> {
+        namespace::receipt_payer_key(&self.session()?.seed, account.0, network, slate_id)
     }
 
     /// The Epicbox key of the reply mailbox slot `account` on `network` shares among its
@@ -97,9 +112,10 @@ where
         namespace::epic1_delivery_key(&self.session()?.seed, account.0, network, 0)
     }
 
-    /// The seal key of the epic1 address of every account of the wallet on its network, by
-    /// account index, that a zero-hint envelope is tried with: a file, pasted text, or a payment
-    /// at the direct listener. Keys derived once stay with the unlocked session.
+    /// The seal and delivery keys of the epic1 address of every account of the wallet on its
+    /// network, by account index. A zero-hint envelope is tried with the seal keys: a file,
+    /// pasted text, or a payment at the direct listener; the delivery key signs the receipt of
+    /// the payment that opens. Seal keys derived once stay with the unlocked session.
     ///
     /// Fails with [`WalletError::Locked`] and [`WalletError::Store`].
     pub async fn epic1_trial_keys_all(&self) -> Result<Vec<Epic1AccountKeys>, WalletError> {
@@ -122,6 +138,7 @@ where
                     account,
                     label,
                     key: session.epic1_keys.key(&session.seed, account.0, network)?,
+                    delivery: namespace::epic1_delivery_key(&session.seed, account.0, network, 0)?,
                 });
             }
             keys.sort_by_key(|entry| entry.account.0);

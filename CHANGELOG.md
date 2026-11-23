@@ -7,6 +7,41 @@ Conventional Commit messages at release time.
 
 ## [Unreleased]
 
+### Added
+
+- A wallet that pays an epic1 address now gets a payment proof: the payee's LEPIC wallet signs it
+  into its answer, with no setting, and the payer keeps it with the payment if it holds. It shows
+  that the address's owner took the amount in the transaction whose kernel it names. It names no
+  payer. A missing or bad proof does not stop the payment unless proof was required. The format
+  is `docs/protocols/epic1-receipt.md`.
+- `lepic proof export TX_ID [--out PATH] [--force]` writes a payment proof as JSON, and
+  `lepic proof verify FILE|- [--on-chain] [--node URL]` checks one with no wallet, and with
+  `--on-chain` or `--node` looks its kernel up on the chain.
+- `--require-proof` on `lepic epic1 pay` and `lepic tx send --to` an epic1 address, and the
+  setting `epic1_require_proof` (`LEPIC_EPIC1_REQUIRE_PROOF`, off by default) for every such
+  payment: without a proof that holds, the payer cancels the payment unfinalized and unlocks its
+  inputs.
+- `POST /api/v1/payments` takes `require_proof`, and `GET /api/v1/payments/{id}/proof` returns a
+  payment's proof, or 409 `no_payment_proof`.
+
+### Breaking changes
+
+FFI:
+
+- `epic1_pay` takes a new argument, `require_proof` (a bool, after `relay_mode`). Every caller
+  passes it; `false` pays as before. New calls: `epic1_proof(tx_id)` and
+  `epic1_proof_verify(proof, on_chain)`, with the type `PaymentProofCheck`.
+
+### Fixed
+
+- `lepic serve --public-url` takes a shop host with hyphens (`https://shop-demo.example.com`),
+  and a paying wallet posts its answer to that host. Before, such a host was refused at start
+  and wallets skipped it, so answers came by the mailbox only. Epicbox and mailbox hosts and
+  epic1 link `http=` hosts keep the letters-and-digits rule.
+- A wallet that paid an invoice the issuer finalizes itself (a shop's checkout request) reports
+  it posted (`InvoicePosted`) once a refresh finds the payment in the node's pool, before the
+  first block. Before, only a paired contact's notice did.
+
 ## [0.6.1] - 2026-11-22
 
 A shop can take Epic Cash at checkout: `lepic serve` issues a checkout request per order, the

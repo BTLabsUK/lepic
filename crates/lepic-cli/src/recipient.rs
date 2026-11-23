@@ -34,6 +34,11 @@ pub(crate) fn resolve(command: Command) -> Result<Command, CliError> {
                 "--mailbox has a use only for a payment to an epic1 address".to_owned(),
             ));
         }
+        if send.require_proof.require_proof {
+            return Err(CliError::Arguments(
+                "--require-proof has a use only for a payment to an epic1 address".to_owned(),
+            ));
+        }
         return Ok(Command::Tx(TxCommand::Send(send)));
     };
     let SendArgs {
@@ -46,6 +51,7 @@ pub(crate) fn resolve(command: Command) -> Result<Command, CliError> {
         spend,
         slate_id,
         mailboxes,
+        require_proof,
         ..
     } = send;
     let unused = [
@@ -67,6 +73,7 @@ pub(crate) fn resolve(command: Command) -> Result<Command, CliError> {
             spend,
             slate_id,
             mailboxes,
+            require_proof,
         }),
         // `tx` has no `--offline`: a send always reaches the relays.
         offline: false,

@@ -97,6 +97,7 @@ pub(crate) mod files;
 mod in_person;
 mod mailbox;
 mod profile;
+pub(crate) mod proof;
 #[cfg(unix)]
 mod serve;
 pub(crate) mod shell;
@@ -276,6 +277,7 @@ impl<H: Host> Run<'_, H> {
             Command::InPerson(args) => self.in_person(args).await,
             Command::Epic1(args) => self.epic1(args).await,
             Command::Epictx(command) => self.epictx(command).await,
+            Command::Proof(command) => self.proof(command).await,
             Command::Mailbox(command) => self.mailbox(command).await,
             Command::Profile(command) => self.profile(command).await,
             Command::Serve(args) => self.serve(args).await,

@@ -121,6 +121,17 @@ impl World {
         link: &str,
         send: SendRequest,
     ) -> Result<Epic1Paid, ContactError> {
+        self.pay_epic1_with(link, send, false)
+    }
+
+    /// Pays `link` with `send`, refusing an answer without a receipt that holds when
+    /// `require_receipt`.
+    pub(crate) fn pay_epic1_with(
+        &self,
+        link: &str,
+        send: SendRequest,
+        require_receipt: bool,
+    ) -> Result<Epic1Paid, ContactError> {
         let file = tempfile::tempdir().unwrap().keep().join("s1.tx");
         self.block_on(self.payer.wallet.contact_book().epic1_pay(
             &relays(&self.payer),
@@ -129,6 +140,7 @@ impl World {
                 send,
                 slate_file: file,
                 mailboxes: Vec::new(),
+                require_receipt,
             },
         ))
     }
@@ -146,7 +158,7 @@ impl World {
     }
 
     /// The payer's reply secret of the payment `slate_id`, which notices to it are sealed to.
-    fn reply_secret(&self, slate_id: SlateId) -> EncSecretKey {
+    pub(crate) fn reply_secret(&self, slate_id: SlateId) -> EncSecretKey {
         let reply = lepic_wallet_contacts::contact_root(
             &self.payer.keychain(),
             &lepic_keychain::Identifier::new(2, [0, 0, 0, 0]).unwrap(),
@@ -177,7 +189,7 @@ impl World {
 
     /// Reads and acknowledges every text waiting at the payer's reply mailbox of the payment
     /// `slate_id`, in the order the relay gives them.
-    fn drain_reply(&self, slate_id: SlateId) -> Vec<String> {
+    pub(crate) fn drain_reply(&self, slate_id: SlateId) -> Vec<String> {
         let mailbox = self.reply_mailbox(slate_id);
         let secret = self
             .payer
@@ -751,8 +763,8 @@ impl World {
         )
     }
 
-    /// The S1 of `send` from the payer, sealed to the epic1 `address` as a file is, armored.
-    fn s1_file_of(&self, address: &str, send: SendRequest, seed: u64) -> String {
+    /// The S1 of `send` from the payer as a file holds it, in the native form.
+    pub(crate) fn s1_body(&self, send: SendRequest) -> Vec<u8> {
         let path = tempfile::tempdir().unwrap().keep().join("s1.json");
         self.block_on(self.payer.wallet.send(
             &support::file(),
@@ -762,7 +774,12 @@ impl World {
             },
         ))
         .unwrap();
-        let body = native_body_of(Network::Floonet, &std::fs::read(&path).unwrap()).unwrap();
+        native_body_of(Network::Floonet, &std::fs::read(&path).unwrap()).unwrap()
+    }
+
+    /// The S1 of `send` from the payer, sealed to the epic1 `address` as a file is, armored.
+    fn s1_file_of(&self, address: &str, send: SendRequest, seed: u64) -> String {
+        let body = self.s1_body(send);
         let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
         let sealed =
             sealed_to_epic1(Network::Floonet, address, body, true, false, &mut rng).unwrap();
@@ -1420,6 +1437,17 @@ fn a_bare_address_takes_any_amount_by_mailbox_and_by_file() {
     assert_eq!(received(&world), 2);
 }
 
+/// A link's `http` host keeps the link rule (letters and digits in each label): a hyphenated
+/// one is refused when the link is made, since every reader would drop it.
+#[test]
+fn a_hyphenated_http_host_is_refused_in_a_link() {
+    let world = World::new();
+    assert_eq!(
+        refusal(world.try_issue_link(&world.issuer, vec![http_entry("shop-demo.example.com")])),
+        Epic1Refusal::LinkRelay
+    );
+}
+
 /// A link may not carry an `http` entry on the local network unless the host is in the
 /// wallet's relay list, on any port; a payer leaves such an entry out, and with no entry left
 /// it cannot pay.
@@ -2017,6 +2045,7 @@ fn a_declined_payment_is_told_once_by_its_reply_route_and_not_cancelled_back() {
                 send: send(),
                 slate_file: file,
                 mailboxes: Vec::new(),
+                require_receipt: false,
             },
         ))
         .unwrap();

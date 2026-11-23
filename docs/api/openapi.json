@@ -1124,6 +1124,43 @@
         }
       }
     },
+    "/payments/{id}/proof": {
+      "get": {
+        "operationId": "getPaymentProof",
+        "x-role": "read",
+        "summary": "The payment proof of a payment to an epic1 address.",
+        "description": "The proof the payee signed into its answer to an epic1 payment this wallet made: the address paid, the amount, the kernel excess, the slate id and the payer's one-time key, signed with a key only the address's owner holds. It is the file `lepic proof export` writes; `lepic proof verify` checks it with no wallet, and with `--on-chain` asks a node for the kernel. The payer checks it when the answer comes and keeps it only when it holds. 409 `no_payment_proof` for any other payment and for an epic1 payment whose answer has not come or came without a proof that holds. Spec: `docs/protocols/epic1-receipt.md`.",
+        "tags": [
+          "Payments"
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/PaymentId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PaymentProof"
+                }
+              }
+            }
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          }
+        }
+      }
+    },
     "/inspect": {
       "post": {
         "operationId": "inspect",
@@ -1235,6 +1272,7 @@
         "operationId": "listOutputs",
         "x-role": "read",
         "summary": "The wallet's outputs.",
+        "description": "On a wallet that answers `build_coinbase` for a mining node (`--coinbase`), an output with `coinbase: true` and `state: unconfirmed` is a candidate: the node asks for a coinbase for every block template it builds, and each request stores one output at that block's height. Several nodes, or several templates for one height, list several candidates for it. At most one of them can win; the others never confirm. Only a `coinbase: true` output that is no longer `unconfirmed` is a reward, so count those and skip the candidates. A candidate goes when a refresh finds the tip more than 50 blocks past its height (or its height more than 50 above the tip), or when the wallet holds more than 4096 candidates (the oldest go first). The winner stays and confirms when its block is on chain.",
         "tags": [
           "Coins"
         ],
@@ -3313,6 +3351,70 @@
           "updated_at": "2026-11-10T09:30:05Z"
         }
       },
+      "PaymentProof": {
+        "type": "object",
+        "description": "A payment proof file (`application/vnd.lepic.receipt+json`). The signature is a Schnorr signature by the address's receipt key over the SHA-256 of the signed facts; `docs/protocols/epic1-receipt.md` gives the bytes and test vectors.",
+        "additionalProperties": false,
+        "required": [
+          "type",
+          "version",
+          "network",
+          "address",
+          "amount",
+          "kernel_excess",
+          "slate_id",
+          "payer_key",
+          "signature"
+        ],
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "lepic-epic1-receipt"
+            ]
+          },
+          "version": {
+            "type": "integer",
+            "enum": [
+              1
+            ]
+          },
+          "network": {
+            "type": "string",
+            "enum": [
+              "mainnet",
+              "floonet"
+            ]
+          },
+          "address": {
+            "type": "string",
+            "description": "The epic1 address paid."
+          },
+          "amount": {
+            "type": "integer",
+            "description": "The amount paid, in base units (1 EPIC = 100000000)."
+          },
+          "kernel_excess": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{66}$",
+            "description": "The transaction's kernel excess, 33 bytes as hex."
+          },
+          "slate_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "payer_key": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{66}$",
+            "description": "The payer's one-time key for this payment, 33 bytes as hex."
+          },
+          "signature": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{128}$",
+            "description": "The payee's signature, 64 bytes as hex."
+          }
+        }
+      },
       "PaymentRecovery": {
         "type": "object",
         "description": "The latest recovery of a send (`POST /payments/{id}/recover`), in any state.",
@@ -4602,7 +4704,7 @@
           },
           "code": {
             "type": "string",
-            "description": "Stable, fine-grained error name, e.g. `insufficient_funds`. Clients must accept codes they do not know and fall back on `category`. Any call: `no_route` 404, `method_not_allowed` 405 (with `Allow`), `body_too_slow` 408, `body_too_large` 413, `unsupported_media_type` 415, `role_required` 403, `socket_only` 403, `client_not_listed` 403, `serve_version_differs` and `serve_settings_differ` 409, `invalid_request`, `invalid_body`, `invalid_field`, `invalid_cursor`, `cursor_filters_changed` 400, `not_found` 404, `payment_declined` 404 (with `declined_at`), `internal` 500, `interrupted` and `cancelled` 503. `busy` 503 when the listener holds as many connections as it takes, and on payment creates when as many creates run. Creates: `idempotency_mismatch`, `in_progress`, `account_exists` 409. Payments: `action_not_available`, `format_not_available`, `no_handoff`, `nothing_to_open`, `too_many_held`, `no_more_routes`, `ambiguous_answer` 409; `unexpected_input`, `insufficient_funds` 422; `invoice_already_paid`, `invoice_locked_above_tip`, `inputs_spent_elsewhere`, `inputs_spent_by_own_transaction`, `peer_inputs_spent`, `on_chain`, `in_pool`, `recovery_open`, `not_recoverable`, `use_recover`, `changed_during_cancel` 409; `plain_http_not_allowed`, `http_url_invalid`, `onion_address_invalid`, `slate_too_large`, `invoice_to_address`, `via_mismatch` 400; `change_too_small`, `too_heavy`, `nothing_to_consolidate`, `invalid_slate`, `payment_expired`, `invoice_changed`, `amount_mismatch`, `not_posted`, `not_delivered` by category. Wallet and node: `wrong_password` 403, `wallet_not_found` 404, `wallet_already_exists`, `wallet_busy`, `receipts_full` (a payment nobody asked for refused because the open-receipt cap is full), `locked`, `foreign_wallet`, `offline`, `tor_expected`, `damaged_database_kept`, `wallet_too_new`, `wrong_key` 409, `restore_scan_required` 503, `scan_running` 409 or 503, `node_unreachable` 502 (504 on a timeout; 503 on an in-person request create), `tor_not_running` 503, `onion_unreachable` 502, `transport_failed` 502, `damaged_database` 500. Contacts: `contact_not_found`, `pairing_not_found` 404; `invite_expired`, `already_paired`, `pairing_in_progress`, `pairing_crossed`, `pairing_ended`, `pairing_waiting`, `contact_not_verified`, `key_check_refused`, `relay_changed`, `keys_not_changed`, `domain_fixed`, `contact_cap_reached`, `contacts_offline` 409; `wrong_pairing_class`, `earlier_epic1_address` 400; `other_address`, `address_proof_missing`, `no_free_slot` 422. A code not listed here has its category's status: `usage` 400, `wrong_password` 403, `not_found` 404, `wallet_state` and `conflict` 409, `rejected` and `funds` 422, `node` and `transport` 502, `interrupted` 503, `internal` and `config` 500. 409 `in_progress`, 502, 503 and 504 carry `Retry-After` when waiting is worth it."
+            "description": "Stable, fine-grained error name, e.g. `insufficient_funds`. Clients must accept codes they do not know and fall back on `category`. Any call: `no_route` 404, `method_not_allowed` 405 (with `Allow`), `body_too_slow` 408, `body_too_large` 413, `unsupported_media_type` 415, `role_required` 403, `socket_only` 403, `client_not_listed` 403, `serve_version_differs` and `serve_settings_differ` 409, `invalid_request`, `invalid_body`, `invalid_field`, `invalid_cursor`, `cursor_filters_changed` 400, `not_found` 404, `payment_declined` 404 (with `declined_at`), `internal` 500, `interrupted` and `cancelled` 503. `busy` 503 when the listener holds as many connections as it takes, and on payment creates when as many creates run. Creates: `idempotency_mismatch`, `in_progress`, `account_exists` 409. Payments: `action_not_available`, `format_not_available`, `no_handoff`, `no_payment_proof`, `nothing_to_open`, `too_many_held`, `no_more_routes`, `ambiguous_answer` 409; `unexpected_input`, `insufficient_funds` 422; `invoice_already_paid`, `invoice_locked_above_tip`, `inputs_spent_elsewhere`, `inputs_spent_by_own_transaction`, `peer_inputs_spent`, `on_chain`, `in_pool`, `recovery_open`, `not_recoverable`, `use_recover`, `changed_during_cancel` 409; `plain_http_not_allowed`, `http_url_invalid`, `onion_address_invalid`, `slate_too_large`, `invoice_to_address`, `via_mismatch` 400; `change_too_small`, `too_heavy`, `nothing_to_consolidate`, `invalid_slate`, `payment_expired`, `invoice_changed`, `amount_mismatch`, `not_posted`, `not_delivered` by category. Wallet and node: `wrong_password` 403, `wallet_not_found` 404, `wallet_already_exists`, `wallet_busy`, `receipts_full` (a payment nobody asked for refused because the open-receipt cap is full), `locked`, `foreign_wallet`, `offline`, `tor_expected`, `damaged_database_kept`, `wallet_too_new`, `wrong_key` 409, `restore_scan_required` 503, `scan_running` 409 or 503, `node_unreachable` 502 (504 on a timeout; 503 on an in-person request create), `tor_not_running` 503, `onion_unreachable` 502, `transport_failed` 502, `damaged_database` 500. Contacts: `contact_not_found`, `pairing_not_found` 404; `invite_expired`, `already_paired`, `pairing_in_progress`, `pairing_crossed`, `pairing_ended`, `pairing_waiting`, `contact_not_verified`, `key_check_refused`, `relay_changed`, `keys_not_changed`, `domain_fixed`, `contact_cap_reached`, `contacts_offline` 409; `wrong_pairing_class`, `earlier_epic1_address` 400; `other_address`, `address_proof_missing`, `no_free_slot` 422. A code not listed here has its category's status: `usage` 400, `wrong_password` 403, `not_found` 404, `wallet_state` and `conflict` 409, `rejected` and `funds` 422, `node` and `transport` 502, `interrupted` 503, `internal` and `config` 500. 409 `in_progress`, 502, 503 and 504 carry `Retry-After` when waiting is worth it."
           },
           "category": {
             "type": "string",
@@ -4903,6 +5005,11 @@
             },
             "maxItems": 16,
             "description": "For an epic1 payment to the payee's mailbox: the mailboxes it is posted through in place of the wallet's list, each `domain` or `domain:port`. 400 `invalid_field` at `/mailboxes` for any other payment or a host that is not a public name. 422 `no_shared_mailbox` when the payee's address names none of the wallet's shipped mailboxes and no `mailboxes` is given."
+          },
+          "require_proof": {
+            "type": "boolean",
+            "default": false,
+            "description": "For a payment to an epic1 address: cancel it, unfinalized, unless the payee's answer brings a payment proof that holds. The `epic1_require_proof` setting turns this on for every epic1 payment. Every LEPIC payee signs one, so this refuses payees that run other wallets. 400 `invalid_field` at `/require_proof` for any other payment."
           },
           "min_confirmations": {
             "type": "integer"

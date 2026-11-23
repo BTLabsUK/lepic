@@ -27,7 +27,7 @@ const CHARSET: &[u8; 32] = b"qpzry9x8gf2tvdw0s3jn54khce6mua7l";
 /// The bech32m checksum constant, BIP 350.
 const BECH32M: u32 = 0x2bc8_30a3;
 
-const SEAL_KEYS: [(&str, &str); 2] = [
+pub(super) const SEAL_KEYS: [(&str, &str); 2] = [
     (
         "rfc7748_alice",
         "8520f0098930a754748b7ddcb43ef75a0dbf3a0d26381af4eba4a98eaa9b4e6a",
@@ -145,7 +145,7 @@ fn address_data(version: u8, seal: &str, delivery: &str) -> Vec<u8> {
     data
 }
 
-fn address_text(network: Network, version: u8, seal: &str, delivery: &str) -> String {
+pub(super) fn address_text(network: Network, version: u8, seal: &str, delivery: &str) -> String {
     bech32m_encode(hrp(network), &address_data(version, seal, delivery))
 }
 

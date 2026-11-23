@@ -134,6 +134,10 @@ pub struct TxContent {
     pub address_proof: Option<[u8; 32]>,
     pub features: Option<u32>,
     pub domain: Option<DomainClaim>,
+    /// The payer's one-time key, asking the payee of an epic1 payment for a receipt (S1).
+    pub receipt_ask: Option<[u8; 33]>,
+    /// The payee's receipt signature for an epic1 payment (S2).
+    pub receipt: Option<[u8; 64]>,
 }
 
 impl fmt::Debug for TxContent {
@@ -150,6 +154,8 @@ impl fmt::Debug for TxContent {
             .field("address_proof", &self.address_proof.is_some())
             .field("features", &self.features)
             .field("domain", &self.domain)
+            .field("receipt_ask", &self.receipt_ask.is_some())
+            .field("receipt", &self.receipt.is_some())
             .finish()
     }
 }
@@ -168,6 +174,8 @@ impl TxContent {
             address_proof: None,
             features: None,
             domain: None,
+            receipt_ask: None,
+            receipt: None,
         }
     }
 }
@@ -243,6 +251,8 @@ pub fn seal_tx<R: CryptoRng>(
         address_proof: content.address_proof.as_ref(),
         features: content.features,
         domain: content.domain.as_ref(),
+        receipt_ask: content.receipt_ask.as_ref(),
+        receipt: content.receipt.as_ref(),
         pad: true,
     };
     seal_inner(

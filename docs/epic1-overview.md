@@ -85,6 +85,15 @@ sequenceDiagram
    own limit for the transaction if that comes first, the outbox stops posting it, and the
    next refresh expires it if it was not finalized.
 
+## Payment proofs
+
+The payee's LEPIC wallet signs a payment proof into the S2. It says the owner of the address took
+this amount in the transaction whose kernel it names, for this slate id, and it names no payer.
+The payer checks it when it finalizes and keeps it with the payment if it holds; a missing or bad
+proof does not stop the payment unless `--require-proof` or `epic1_require_proof` asks for one.
+Anyone verifies the proof with only the address (`lepic proof verify`). See
+[Payment proofs](protocols/epic1-receipt.md) and [CLI](cli.md#payment-proofs).
+
 ## What the host does
 
 The collect reads by push and posts what the outbox owes, as

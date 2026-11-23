@@ -17,6 +17,7 @@ mod delivery;
 mod direct;
 mod domain;
 mod epic1;
+mod epic1_receipt;
 #[cfg(feature = "test-support")]
 #[doc(hidden)]
 pub mod epic1_testing;
@@ -80,6 +81,10 @@ pub use epic1::{
     EPIC1_TTL_BLOCKS, Epic1AnswerView, Epic1Attempt, Epic1LinkIssued, Epic1LinkRequest,
     Epic1NotRead, Epic1Paid, Epic1PayRequest, Epic1Read, Epic1Refusal, Epic1Restored,
     NotReadReason,
+};
+pub use epic1_receipt::{
+    Epic1Receipt, MAX_RECEIPT_LEN, RECEIPT_MEDIA_TYPE, RECEIPT_TYPE, RECEIPT_VERSION,
+    ReceiptOnChain, ReceiptVerdict,
 };
 pub use in_person::{
     ClaimSigner, IN_PERSON_TTL_BLOCKS, InPersonAnswerView, InPersonCode, InPersonCodeView,

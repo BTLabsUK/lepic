@@ -492,6 +492,8 @@ pub fn epic1_refusals() -> Vec<Epic1Refusal> {
         R::Message,
         R::Finalized,
         R::TorExpected,
+        R::NoReceipt,
+        R::BadReceipt,
     ]
 }
 

@@ -81,6 +81,7 @@ Switches take `true` or `false` and default to `false`.
 | `max_open_receipts_per_sender` | `LEPIC_MAX_OPEN_RECEIPTS_PER_SENDER` | The same count for one sender key, 1 to 100000. Default 10 |
 | `epic1_web_listener` | `LEPIC_EPIC1_WEB_LISTENER` | Switch: the HTTP listener also answers `/api/v1/inbox` and takes payments sealed to this wallet's epic1 addresses there. Off by default: the path is then not found, as on a stock listener |
 | `epic1_onion_listener` | `LEPIC_EPIC1_ONION_LISTENER` | Switch: the same, for the onion listener |
+| `epic1_require_proof` | `LEPIC_EPIC1_REQUIRE_PROOF` | Switch: cancel a payment to an epic1 address whose answer brings no valid payment proof, as `--require-proof` does for one payment. Off by default |
 | `invoice_expiry_hours` | `LEPIC_INVOICE_EXPIRY_HOURS` | Hours an unpaid Epicbox invoice is kept, a whole number of at least 1. Default 24 |
 | `send_ttl_blocks` | `LEPIC_SEND_TTL_BLOCKS` | Blocks after which an unanswered send expires when `--ttl-blocks` or `ttl_blocks` names none, 1 to 525600. Default 10080 (7 days). An invoice keeps 1440 |
 | `final_confirmations` | `LEPIC_FINAL_CONFIRMATIONS` | Confirmations after which a payment is final: `lepic serve` sets `final` on it and logs `payment.confirmations_reached`, 1 to 1440. Default 6 |

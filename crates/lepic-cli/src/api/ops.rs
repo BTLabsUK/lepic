@@ -48,6 +48,7 @@ ops! {
     CancelPayment = "cancelPayment",
     RecoverPayment = "recoverPayment",
     GetPaymentHandoff = "getPaymentHandoff",
+    GetPaymentProof = "getPaymentProof",
     Inspect = "inspect",
     Open = "open",
     ListOutputs = "listOutputs",

@@ -354,11 +354,9 @@ fn string(schema: &Value, text: &str, at: &str, errors: &mut Vec<String>) {
     if let Some(pattern) = schema.get("pattern").and_then(Value::as_str) {
         let fits = match pattern {
             r"^-?[0-9]+(\.[0-9]{1,8})?$" => is_decimal(text),
-            "^[0-9a-f]+$" => {
-                !text.is_empty()
-                    && text
-                        .bytes()
-                        .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
+            "^[0-9a-f]+$" => !text.is_empty() && is_lower_hex(text),
+            other if fixed_hex_len(other).is_some() => {
+                fixed_hex_len(other) == Some(text.len()) && is_lower_hex(text)
             }
             other => panic!("the contract check does not know the pattern {other} (at {at})"),
         };
@@ -366,6 +364,20 @@ fn string(schema: &Value, text: &str, at: &str, errors: &mut Vec<String>) {
             errors.push(format!("{at}: {text:?} does not match {pattern}"));
         }
     }
+}
+
+fn is_lower_hex(text: &str) -> bool {
+    text.bytes()
+        .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
+}
+
+/// The length `N` of a pattern `^[0-9a-f]{N}$`.
+fn fixed_hex_len(pattern: &str) -> Option<usize> {
+    pattern
+        .strip_prefix("^[0-9a-f]{")?
+        .strip_suffix("}$")?
+        .parse()
+        .ok()
 }
 
 pub fn is_decimal(text: &str) -> bool {

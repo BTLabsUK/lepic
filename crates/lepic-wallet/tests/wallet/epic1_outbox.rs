@@ -206,6 +206,7 @@ pub(crate) fn pay_over(world: &World, relays: &ContactRelays, link: &str) -> Epi
                 send: send(),
                 slate_file: file,
                 mailboxes: Vec::new(),
+                require_receipt: false,
             },
         ))
         .unwrap()
@@ -223,6 +224,7 @@ pub(crate) fn pay_unanswered(world: &World, relays: &ContactRelays, link: &str) 
             send: send(),
             slate_file: file,
             mailboxes: Vec::new(),
+            require_receipt: false,
         },
     ));
     world.relay.set_unanswered(Unanswered::PostSlate, false);
@@ -833,6 +835,7 @@ fn a_payer_sharing_no_mailbox_is_refused_until_it_gives_one() {
                 send: send(),
                 slate_file: tempfile::tempdir().unwrap().keep().join("s1.tx"),
                 mailboxes,
+                require_receipt: false,
             },
         ))
     };
@@ -1459,6 +1462,15 @@ fn a_payment_answered_on_a_tor_entry_is_finalized_once_and_not_posted_again() {
     assert_eq!(posted[0].entry.attempts, 1);
     assert_ne!(world.payer_state(paid.tx_id), TxState::Sent);
     assert_eq!(world.node.pushed_transactions().len(), 1);
+    // The answer on the direct route carries the payee's receipt.
+    let receipt = world
+        .block_on(world.payer.wallet.contact_book().epic1_receipt(paid.tx_id))
+        .unwrap()
+        .expect("a receipt is kept");
+    assert_eq!(
+        receipt.check(None),
+        lepic_wallet_contacts::ReceiptVerdict::Valid
+    );
     // The answer came in the exchange: no relay is watched for it.
     reconciled(&world, &world.payer);
     assert_eq!(rows_of(&world.payer, MailClass::Reply), []);
@@ -1675,6 +1687,7 @@ fn a_refusal_of_a_payment_read_on_another_relay_waits_there() {
                 send: send(),
                 slate_file: file,
                 mailboxes: Vec::new(),
+                require_receipt: false,
             },
         ))
         .unwrap();

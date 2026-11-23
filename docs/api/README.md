@@ -557,6 +557,19 @@ arrives in `needs_approval` when the contact is verified and `allow_invoices` is
 the wallet declines it. An invoice to a contact goes only to a verified one, and to a paired
 contact not verified answers 409 `contact_not_verified`.
 
+## Coinbase outputs
+
+On a wallet that answers `build_coinbase` for a mining node (`lepic serve --http --coinbase`), `GET /outputs`
+lists one unconfirmed coinbase output, a candidate, for every block template the node
+asks for. Two nodes mining the same height give two or three candidates for it, and a few dozen
+blocks of them stay listed. Only one can win; the others never confirm.
+
+- Count only coinbase outputs that are no longer `unconfirmed`. They are the rewards. Summing
+  candidates counts one reward several times.
+- A candidate is deleted when a refresh finds the tip more than 50 blocks past its height, or
+  its height more than 50 above the tip. Past 4096 candidates the oldest go first.
+- The winning candidate stays and changes state when its block is on chain.
+
 ## Consolidate outputs
 
 `POST /outputs/consolidate` (role `full`) spends the wallet's outputs to itself as fewer

@@ -41,7 +41,7 @@ use crate::chain::{self, ChainPosition, ImplausibleNodeData};
 use crate::codecs;
 use crate::epicbox_invoice::epicbox_invoice_payment;
 use crate::error::WalletError;
-use crate::event::{Balance, Event, SlateId, SupersededReceive};
+use crate::event::{Balance, Event, PostedInvoice, SlateId, SupersededReceive};
 use crate::finalize::answered_excess;
 use crate::invoice::{earliest_cutoff, payer_release_height};
 use crate::lifecycle::Session;
@@ -334,6 +334,7 @@ where
             .confirm_kernels(&session, &mut tip, now, &mut summary)
             .await?;
         kernel_missing.extend(reopened);
+        self.report_pooled_invoices(&session).await?;
         self.end_superseded(&session, &found_outputs, &mut tip, now, &mut summary)
             .await?;
         self.end_spent_posts(&session, &tip, now, &mut summary)
@@ -432,6 +433,56 @@ where
             self.record_changes(summary, changes);
         }
         Ok(kernel_missing)
+    }
+
+    /// Raises [`Event::InvoicePosted`] for each paid invoice in `unposted` whose kernel the
+    /// node's pool holds: the issuer finalized and posted it, and may not say so (a vendor
+    /// checkout's shop sends no notice). Once per payment per open wallet. The pool is asked
+    /// only when one is not reported yet; a failed lookup is logged and left to the next
+    /// refresh, since nothing is stored.
+    async fn report_pooled_invoices(
+        &self,
+        session: &Arc<Session<S::Store>>,
+    ) -> Result<(), RefreshError> {
+        let codecs = codecs::legacy(self.config().network.params().default_base_fee());
+        let unposted = {
+            let session = Arc::clone(session);
+            self.blocking(move |_, _| {
+                Ok(session
+                    .store
+                    .read(|repos| unposted_payments(repos, &codecs)))
+            })
+            .await??
+        };
+        let unposted: Vec<_> = {
+            let reported = self.pool_posted();
+            unposted
+                .into_iter()
+                .filter(|(tx_id, _, _)| !reported.contains(tx_id))
+                .collect()
+        };
+        if unposted.is_empty() {
+            return Ok(());
+        }
+        let pool = match pool_kernels(&self.ports().node).await {
+            Ok(pool) => pool,
+            Err(error) => {
+                warn!(error = %ErrorChain(&error), "pool lookup for paid invoices failed");
+                return Ok(());
+            }
+        };
+        for (tx_id, slate_id, excess) in unposted {
+            if !pool.contains(&excess) || !self.pool_posted().insert(tx_id) {
+                continue;
+            }
+            debug!(tx_id = %tx_id, "paid invoice found in the node pool");
+            self.emit(Event::InvoicePosted(PostedInvoice {
+                tx_id,
+                slate_id,
+                excess,
+            }));
+        }
+        Ok(())
     }
 
     /// Checks that the chain still holds the transactions confirmed within the last
@@ -2274,6 +2325,28 @@ fn expire_all(
         changes.extend(expire(repos, &stored, now)?);
     }
     Ok(changes)
+}
+
+/// This wallet's invoice payments still `sent`, with their kernel excess taken from the stored
+/// I2: the issuer finalizes and posts them, and the payer learns of the post only from a notice
+/// or the node's pool.
+fn unposted_payments(
+    repos: &dyn Repositories,
+    codecs: &CodecRegistry,
+) -> Result<Vec<(TxId, SlateId, Commitment)>, RefreshError> {
+    let mut unposted = Vec::new();
+    for stored in open_transactions(repos)? {
+        let Some(slate_id) = stored.entry.slate_id else {
+            continue;
+        };
+        if stored.entry.state != TxState::Sent || !invoice_payment(repos, &stored, slate_id)? {
+            continue;
+        }
+        if let Some((excess, _)) = final_kernel(repos, codecs, stored.id, slate_id)? {
+            unposted.push((stored.id, SlateId::from_bytes(*slate_id.as_bytes()), excess));
+        }
+    }
+    Ok(unposted)
 }
 
 /// Whether `stored` is this wallet's payment of an invoice: outgoing, answered with an I2.

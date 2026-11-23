@@ -116,6 +116,7 @@ impl<H: Host> Service<'_, H> {
                 Op::CancelPayment => payments::cancel(s, r, c).await,
                 Op::RecoverPayment => payments::recover(s, r, c).await,
                 Op::GetPaymentHandoff => payments::handoff(s, r, c).await,
+                Op::GetPaymentProof => payments::proof(s, r, c).await,
                 Op::Inspect => handed::inspect(s, r, c).await,
                 Op::Open => handed::open(s, r, c).await,
                 Op::ListOutputs => coins::list_outputs(s, r, c).await,

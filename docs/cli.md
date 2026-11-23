@@ -83,6 +83,7 @@ Every failure ends in an [exit code](#exit-codes). `--output json` prints every 
 | Pay and get paid by the same people often | `lepic contact invite --name Shop` | [Contacts and pairing](#contacts-and-pairing) |
 | Take a payment face to face | `lepic in-person invoice AMOUNT` | [In-person codes](#in-person-codes) |
 | Put a payment link on a page or a sign | `lepic epic1 link 5 --qr` | [epic1 links](#epic1-links) |
+| Keep proof that an epic1 address took a payment | `lepic proof export TX_ID --out proof.json` | [Payment proofs](#payment-proofs) |
 | See what happened to a payment | `lepic tx list` then `lepic tx show TX_ID` | [After the send](#after-the-send) |
 | Finish a send that ended with exit code 11 | `lepic tx resend TX_ID --to ADDRESS@HOST` | [After the send](#after-the-send) |
 | Run the wallet for a program | `lepic serve` | [serve](#lepic-serve-and-the-wallet-api) |
@@ -124,6 +125,7 @@ after something went wrong. `lepic GROUP --help` lists a group.
 | epic1 | | `epic1 address`, `epic1 link`, `epic1 read`, `epic1 pay`, `epic1 answers` | `epic1 post-next`, `epic1 restore` |
 | mailbox | | `mailbox list`, `mailbox add`, `mailbox remove`, `mailbox probe` | |
 | epictx | | `epictx open` | |
+| proof | | `proof export`, `proof verify` | |
 | profile | | `profile show`, `profile set`, `profile domain show`, `profile domain file`, `profile domain attach` | |
 | serve | `serve` | | |
 | api | | `api client add`, `api client list`, `api client remove` | |
@@ -425,6 +427,11 @@ For `--coinbase`, the node's `wallet_listener_url` in `[server.stratum_mining_co
 `http://127.0.0.1:<port>`. Behind a local reverse proxy every caller is loopback, so `--coinbase`
 alone then serves whatever the proxy forwards.
 
+With `--coinbase` the wallet stores one unconfirmed coinbase output per block template the node
+requests, so `GET /outputs` shows several for one height. Only confirmed coinbase outputs are
+rewards. The rest are deleted once they are 50 blocks from the tip; see
+[Coinbase outputs](api/README.md#coinbase-outputs).
+
 ### Tor listener
 
 ```bash
@@ -487,7 +494,7 @@ To an epic1 address or link the send is the payment `epic1 pay` makes, with its 
 report. A bare address is paid as a link without an amount. `AMOUNT` may be left out when
 the link asks an amount; another amount is paid as given.
 `--allow-plain-http`, `--tor-binary` and `--fluff` have no use there and are refused with exit
-code 2.
+code 2. `--require-proof` is for these payments only; see [Payment proofs](#payment-proofs).
 
 Over Epicbox the payee's answer is finalized and posted by the next `epicbox listen` or `epicbox
 drain`. With a file, the payer runs `lepic tx finalize FILE.response` on the reply, plain V3 or
@@ -830,7 +837,7 @@ link's message. `--mailbox HOST`, repeatable, posts the payment to those mailbox
 the payee's, in place of the list. A payer whose list holds none of the shipped mailboxes, and
 that names no `--mailbox`, exits with code 14 (`no_shared_mailbox`) naming the shipped
 mailboxes, and stores nothing. It takes `-a`, `-m`, `--min-confirmations`,
-`--change-outputs`, `--selection` and `--ttl-blocks` as `tx send` does. Both `epic1 pay` and `tx send --to` take a bare epic1
+`--change-outputs`, `--selection`, `--ttl-blocks` and `--require-proof` as `tx send` does. Both `epic1 pay` and `tx send --to` take a bare epic1
 address as well as a link; a bare address is paid as a link without an amount, and both make the
 same payment with the same checks and report. A link without entries is posted to the address's
 slot on at most 3 mailboxes of the list, the healthiest first, and is posted when any of them
@@ -856,6 +863,52 @@ exits 0. When no mailbox could be read it exits with code 10. With `--output jso
 ```json
 {"taken": 1, "not_read": [{"host": "…", "reason": "…"}]}
 ```
+
+## Payment proofs
+
+The payee of a payment to an epic1 address signs a payment proof into its answer, and the paying
+wallet keeps it with the payment. It shows that the address's owner took this amount in the
+transaction whose kernel it names, for this slate id. It names no payer. Anyone can verify it
+with only the address, without a wallet; only the chain shows the transaction was posted.
+
+Only LEPIC wallets sign proofs: the CLI, `lepic serve` and the BT wallet app. A stock Epic wallet
+does not. The paying wallet checks the proof and keeps it only if it holds. A payment whose
+answer has no proof, or a bad one, is still finalized, unless the payment requires one (below).
+[protocols/epic1-receipt.md](protocols/epic1-receipt.md) has the format.
+
+| Command | What it does |
+|---|---|
+| `proof export TX_ID [--out PATH] [--force]` | Prints the proof of a payment, or writes it to `PATH` |
+| `proof verify FILE\|- [--on-chain] [--node URL]` | Checks a proof file, or standard input for `-` |
+
+`proof export` writes JSON of media type `application/vnd.lepic.receipt+json`. With `--out` the
+file must not exist unless `--force` is given, and `--force` needs `--out`. A transaction with no
+proof exits 6 (`not_found`): "transaction N has no payment proof; only an answered payment to an
+epic1 address has one". Through a running `lepic serve` it works the same.
+
+`proof verify` checks the signature for the network of `--network` (default mainnet). It prints
+
+```
+Valid: the owner of ADDRESS signed for AMOUNT EPIC on NETWORK.
+Kernel KERNEL_EXCESS
+Slate SLATE_ID
+```
+
+then `On chain at height H.` with `--on-chain`, or a line saying it was not looked up. `--on-chain` asks the configured node whether
+its chain holds the kernel; `--node URL` asks that node instead and implies `--on-chain`. It
+exits 7 (`rejected`) when the file is not a proof, the signature does not hold, the proof is for
+another network (the message says to give `--network X`), or the node's chain holds no such
+kernel.
+
+`--require-proof` on `epic1 pay` and on `tx send --to` an epic1 address makes the payment depend
+on the proof: unless the payee's answer brings one that holds, the payer cancels the payment
+unfinalized, its inputs are unlocked and the payee is told. On a payment that is not to an epic1
+address it exits 2 (`usage`): "--require-proof has a use only for a payment to an epic1
+address". The setting `epic1_require_proof` (`LEPIC_EPIC1_REQUIRE_PROOF`, off by default) turns
+it on for every epic1 payment; see [Configuration](configuration.md).
+
+Through `lepic serve`, `POST /api/v1/payments` takes `require_proof` and
+`GET /api/v1/payments/{id}/proof` returns the proof; see [the API guide](api/README.md).
 
 ## Mailboxes
 
@@ -1200,7 +1253,8 @@ refused for good, which leave the state as it is. A change of `request.state` is
 sends are refused.
 
 `--public-url` names where payers reach this serve: an `.onion` host becomes a `tor` route,
-any other `https://` host an `http` route. The address has no path, user, query or fragment.
+any other `https://` host an `http` route. The host is any DNS name: letters, digits and
+hyphens inside its labels. The address has no path, user, query or fragment.
 Serve refuses at start a loopback or local-network host, which every payer refuses. With an
 address given, the `--http` listener's `/api/v1/inbox` takes answers to open requests; put it
 behind the public address (a TLS proxy or an onion service). Without one, codes name no direct

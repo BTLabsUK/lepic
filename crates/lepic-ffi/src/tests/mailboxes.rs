@@ -206,7 +206,16 @@ async fn a_payer_sharing_no_mailbox_pays_only_through_a_mailbox_it_gives() {
     let before = ben.transactions().await.unwrap().len();
 
     let refused = ben
-        .epic1_pay(link.link.clone(), None, 1, None, None, Vec::new(), Online)
+        .epic1_pay(
+            link.link.clone(),
+            None,
+            1,
+            None,
+            None,
+            Vec::new(),
+            Online,
+            false,
+        )
         .await;
     let error = refused.unwrap_err();
     assert_eq!(error.kind, WalletErrorKind::NoSharedMailbox);
@@ -221,7 +230,8 @@ async fn a_payer_sharing_no_mailbox_pays_only_through_a_mailbox_it_gives() {
                 None,
                 None,
                 hosts(&["relay.lan"]),
-                Online
+                Online,
+                false
             )
             .await
         ),
@@ -239,6 +249,7 @@ async fn a_payer_sharing_no_mailbox_pays_only_through_a_mailbox_it_gives() {
             None,
             hosts(&[RELAY]),
             Online,
+            false,
         )
         .await
         .unwrap();

@@ -12,6 +12,7 @@ lepic-contact.workspace = true
 lepic-crypto.workspace = true
 lepic-epicbox.workspace = true
 lepic-primitives.workspace = true
+sha2.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]

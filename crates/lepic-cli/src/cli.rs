@@ -172,6 +172,9 @@ pub enum Command {
     /// Look into .epictx files
     #[command(subcommand)]
     Epictx(EpictxCommand),
+    /// Export and verify payment proofs of payments to an epic1 address
+    #[command(subcommand, after_help = PROOF_HELP)]
+    Proof(ProofCommand),
     /// Show or change what this wallet tells its paired contacts about the host
     #[command(subcommand)]
     Profile(ProfileCommand),
@@ -192,6 +195,12 @@ it holds 1 to 16. `add` and `remove` write `[mailboxes] added` and `removed` in 
 leave the rest of the file as it was. While `lepic serve` runs they go through it, and its
 sessions take the new list at once. A mailbox is a public name reached over TLS: an address, a
 name of this computer or one only a private network resolves is refused.";
+
+const PROOF_HELP: &str = "\
+The payee of a payment to an epic1 address signs a payment proof into its answer, and the paying
+wallet keeps it with the payment. It shows that the address's owner took this amount in the
+transaction whose kernel it names. It names no payer. Anyone can verify it without a wallet; only
+the chain shows the transaction was posted.";
 
 const SHELL_HELP: &str = "\
 Opens the wallet once and keeps it open between commands, which are typed without `lepic`. Tab
@@ -596,6 +605,10 @@ pub struct SendArgs {
     /// For a payment to an epic1 address or link only
     #[command(flatten)]
     pub mailboxes: PayMailboxesArg,
+    /// For a payment to an epic1 address or link only
+    #[command(flatten)]
+    #[serde(default)]
+    pub require_proof: RequireProofArg,
     /// Which computers an HTTP send may reach; set by the API, never on the command line.
     #[arg(skip)]
     pub reach: HttpReach,
@@ -1378,6 +1391,18 @@ pub struct Epic1PayArgs {
     pub slate_id: SendSlateIdArg,
     #[command(flatten)]
     pub mailboxes: PayMailboxesArg,
+    #[command(flatten)]
+    #[serde(default)]
+    pub require_proof: RequireProofArg,
+}
+
+/// Whether one epic1 payment is finished only with the payee's payment proof.
+#[derive(Debug, Clone, Copy, Default, Args, Serialize, Deserialize)]
+pub struct RequireProofArg {
+    /// Cancel the payment unless the payee's answer brings a valid payment proof; the
+    /// epic1_require_proof setting turns this on for every payment
+    #[arg(long)]
+    pub require_proof: bool,
 }
 
 /// The mailboxes one epic1 payment goes through in place of the wallet's list.
@@ -1440,6 +1465,43 @@ pub enum EpictxCommand {
 A lepic.v1 slate is shown field by field, with its network, kernel features, header version and \
 tail; any other slate as its V3 JSON.")]
     Open(EpictxOpenArgs),
+}
+
+#[derive(Debug, Clone, Subcommand, Serialize, Deserialize)]
+pub enum ProofCommand {
+    /// Write the payment proof of a payment to an epic1 address, as JSON
+    Export(ProofExportArgs),
+    /// Check a payment proof file, and with --on-chain or --node look its kernel up
+    #[command(after_help = "\
+The proof must be for the network of --network. Exits 7 when the signature does not hold, the \
+proof is for another network, or the node's chain does not hold the kernel.")]
+    Verify(ProofVerifyArgs),
+}
+
+#[derive(Debug, Clone, Args, Serialize, Deserialize)]
+pub struct ProofExportArgs {
+    #[command(flatten)]
+    pub tx: TxIdArgs,
+    /// Write to this file instead of printing
+    #[arg(long, value_name = "PATH")]
+    pub out: Option<PathBuf>,
+    /// Replace the file when it exists
+    #[arg(long, requires = "out")]
+    #[serde(default)]
+    pub force: bool,
+}
+
+#[derive(Debug, Clone, Args, Serialize, Deserialize)]
+pub struct ProofVerifyArgs {
+    /// The proof file, or - to read it from standard input
+    #[arg(value_name = "FILE|-")]
+    pub input: String,
+    /// Also ask the configured node whether its chain holds the proof's kernel
+    #[arg(long)]
+    pub on_chain: bool,
+    /// Ask this node rather than the configured one; implies --on-chain
+    #[arg(long, value_name = "URL")]
+    pub node: Option<String>,
 }
 
 #[derive(Debug, Clone, Args, Serialize, Deserialize)]

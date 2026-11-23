@@ -304,6 +304,17 @@ A refusal is an `Epic1Refusal` inside `ContactError::Epic1`:
 | `Message` | the message does not fit in a link |
 | `Finalized` | the payment was finalized already |
 | `NoSharedMailbox` | the payer's list holds no shipped mailbox and the call names none |
+| `NoReceipt` | the payee's answer brings no payment proof (a payment that requires one) |
+| `BadReceipt` | the payee's payment proof does not verify (a payment that requires one) |
+
+## Payment proofs
+
+A LEPIC payee signs a payment proof into the S2 of every epic1 payment it takes, with a key
+derived from the address's delivery key. It says the owner of the address took this amount in the
+transaction whose kernel excess it names, for this slate id. The payer key in it is one-time and
+names no payer. The payer keeps the proof if it holds, and finalizes the payment even without one
+unless it requires proof (`--require-proof`, `epic1_require_proof`). Stock Epic wallets sign none.
+The byte-level format is [epic1-receipt](epic1-receipt.md).
 
 ## Notices
 

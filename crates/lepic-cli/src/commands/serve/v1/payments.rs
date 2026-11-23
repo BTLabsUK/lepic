@@ -978,6 +978,32 @@ pub(super) async fn handoff<H: Host>(
     ok(&handoff)
 }
 
+/// `GET /payments/{id}/proof`: the payment proof the payee of an epic1 payment signed, as
+/// `lepic proof export` writes it; 409 `no_payment_proof` for a payment without one.
+pub(super) async fn proof<H: Host>(
+    service: &Service<'_, H>,
+    request: Request,
+    _context: &Context,
+) -> Reply {
+    let (payment, _) = found(service, request.param("id")?).await?;
+    let tx = tx_of(service, &payment.id).await?;
+    let receipt = service
+        .held
+        .wallet
+        .contact_book()
+        .epic1_receipt(tx)
+        .await
+        .map_err(CliError::from)?;
+    let Some(receipt) = receipt else {
+        return Err(Problem::conflict(
+            "no_payment_proof",
+            "this payment has no payment proof: only an answered payment to an epic1 address has one",
+        )
+        .with_payment(payment.id));
+    };
+    ok(&receipt)
+}
+
 /// The handoff of `payment`: the one stored with it; else, for a payment this wallet handed over
 /// by hand as a plain slate, that slate made again from the store, the text the create returned.
 async fn handoff_of<H: Host>(

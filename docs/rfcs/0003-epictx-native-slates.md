@@ -145,6 +145,7 @@ No key here sits on a BIP32 path, so none can equal an output or address key.
 | epic1 delivery key | `lepic-wallet epic1 delivery key v1` | `account (u32) || net || index (u32) || counter` |
 | Reply mailbox | `lepic-wallet reply mailbox v1` | `account (u32) || net || slate_id (16) || counter` |
 | Post key | `lepic-wallet post key v1` | `account (u32) || net || slate_id (16) || role || counter` |
+| Receipt payer key | `lepic-wallet receipt payer key v1` | `account (u32) || net || slate_id (16) || counter` |
 
 - **Seal key kinds:** `00` epic1. The 32 output bytes are the X25519 secret. Kinds `01`, `02`
   and `03` are reserved: no wallet seals to them or opens with them, and the values are not
@@ -158,8 +159,10 @@ No key here sits on a BIP32 path, so none can equal an output or address key.
   `testdata/vectors/keys/epic1_delivery_key_seed{16,32}.json` (accounts 0 and 7, indexes 0, 1
   and 2³¹, both networks).
 - **epic1 delivery key:** a secp256k1 key, made as the mailbox keys are. Its public key is the
-  delivery key of the epic1 address at that index (5.13). An epic1 address signs no payment
-  proof: a slate that came to one and asks for a proof is refused (`ForeignProofAddress`).
+  delivery key of the epic1 address at that index (5.13). An epic1 address signs no slate-level
+  payment proof: a slate that came to one and asks for one is refused (`ForeignProofAddress`).
+  Its payment proof is the receipt of tags `84` and `85`, signed by a tweak of the delivery key
+  (ADR 0069, `docs/protocols/epic1-receipt.md`).
 - **Mailbox and post keys** are secp256k1 keys, the Epicbox key type. `counter` is one byte from
   `00` up; the first output that is a valid secp256k1 secret is the key.
 - **Retired labels:** `lepic-wallet epic1 proof key v1`, `lepic-wallet epic1 indexed proof key
@@ -261,6 +264,8 @@ up are extensions a reader skips. A reader keeps at most 8 extensions and skips 
 | `81` | Address proof, 32 bytes | Pairing envelopes |
 | `82` | Feature bits, `u32` | Optional |
 | `83` | Domain claim | Optional |
+| `84` | Receipt ask: the payer's one-time key, compressed secp256k1, 33 bytes | S1 to an epic1 address |
+| `85` | Receipt: the payee's signature, 64 bytes | S2 answering tag `84` |
 | `FE` | Padding, zero bytes | Always, 5.7 |
 | `FF` | Signature, Ed25519, 64 bytes | Signed envelopes, last |
 

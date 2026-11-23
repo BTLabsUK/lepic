@@ -2360,6 +2360,39 @@ pub enum Epic1NotReadReason {
     SlotsLeftOut,
 }
 
+/// What a check of a payment proof says, from `EpicWallet::epic1_proof_verify`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PaymentProofVerdict {
+    /// The owner of the address signed these facts, and the node holds the kernel when it was
+    /// asked.
+    Valid,
+    /// The signature does not hold for the facts the proof states.
+    BadSignature,
+    /// A field does not decode, or the proof's network is not its address's.
+    Malformed,
+    /// The proof is for the other network.
+    WrongNetwork,
+    /// The signature holds, and the node holds no kernel with the proof's excess.
+    NotOnChain,
+}
+
+/// A payment proof as checked: the verdict and the facts the proof states.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PaymentProofCheck {
+    pub verdict: PaymentProofVerdict,
+    /// `mainnet` or `floonet`.
+    pub network: String,
+    /// The epic1 address paid.
+    pub address: String,
+    /// The amount paid, in atomic units.
+    pub amount: u64,
+    /// The kernel excess of the transaction, 33 bytes as hex.
+    pub kernel_excess: String,
+    pub slate_id: String,
+    /// The height of the block that holds the kernel, when the node was asked and holds it.
+    pub height: Option<u64>,
+}
+
 /// One post of an epic1 payment on a route of its link.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Epic1Attempt {

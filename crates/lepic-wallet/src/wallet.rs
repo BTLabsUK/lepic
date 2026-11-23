@@ -1,11 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
-use std::sync::{Arc, Mutex, OnceLock, PoisonError, RwLock};
+use std::collections::BTreeSet;
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError, RwLock};
 
 use lepic_keychain::{Seed, WalletSeedError, WalletSeedFile};
 use lepic_node::NodeApi;
 use lepic_primitives::amount::Height;
 use lepic_slate::model::SlateId;
-use lepic_store::WalletStore;
+use lepic_store::{TxId, WalletStore};
 use tokio::sync::broadcast;
 use tracing::{Dispatch, Span, debug, dispatcher, info, instrument};
 
@@ -36,6 +37,8 @@ pub struct Wallet<N, S: StoreOpener, V> {
     contact_notices: OnceLock<Arc<dyn ContactNotices<N, S, V>>>,
     posting: tokio::sync::Mutex<()>,
     finalizing: Mutex<Vec<SlateId>>,
+    /// Paid invoices a refresh found in the node's pool and reported posted.
+    pool_posted: Mutex<BTreeSet<TxId>>,
     boosts: crate::boost::Boosts,
 }
 
@@ -60,6 +63,7 @@ where
             contact_notices: OnceLock::new(),
             posting: tokio::sync::Mutex::new(()),
             finalizing: Mutex::new(Vec::new()),
+            pool_posted: Mutex::new(BTreeSet::new()),
             boosts: crate::boost::Boosts::default(),
         })
     }
@@ -481,6 +485,14 @@ where
     /// could take one message twice or post one entry twice.
     pub async fn contact_turn(&self) -> tokio::sync::MutexGuard<'_, ()> {
         self.contacts.lock().await
+    }
+
+    /// The paid invoices a refresh reported posted from the node's pool
+    /// ([`crate::Event::InvoicePosted`]).
+    pub(crate) fn pool_posted(&self) -> MutexGuard<'_, BTreeSet<TxId>> {
+        self.pool_posted
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
     }
 
     /// Sends `event` to every subscriber.

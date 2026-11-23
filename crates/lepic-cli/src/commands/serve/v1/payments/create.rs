@@ -32,8 +32,9 @@ use crate::api_clients::Role;
 use crate::cli::{
     AccountArg, Command, ContactArgs, ContactCommand, ContactIdArg, ContactInvoiceArgs,
     DestinationArgs, Epic1Args, Epic1Command, Epic1LinkArg, Epic1PayArgs, FluffArg, HttpReach,
-    InvoiceCommand, IssueArgs, MessageArg, PayMailboxesArg, PlainHttpArg, PurposeArg, SelectionArg,
-    SendArgs, SendDestinationArgs, SendSlateIdArg, SpendArgs, TorBinaryArgs, TxCommand,
+    InvoiceCommand, IssueArgs, MessageArg, PayMailboxesArg, PlainHttpArg, PurposeArg,
+    RequireProofArg, SelectionArg, SendArgs, SendDestinationArgs, SendSlateIdArg, SpendArgs,
+    TorBinaryArgs, TxCommand,
 };
 use crate::commands::contact::SlateFile;
 use crate::commands::{caller_slate_id, drawn_slate_id};
@@ -66,6 +67,10 @@ struct CreateBody {
     /// For an epic1 payment: the mailboxes it goes through in place of the wallet's list.
     #[serde(default)]
     mailboxes: Vec<String>,
+    /// For an epic1 payment: cancel it unless the payee's answer brings a valid payment proof.
+    /// The `epic1_require_proof` setting turns this on for every payment.
+    #[serde(default)]
+    require_proof: bool,
     #[serde(default)]
     min_confirmations: Option<u64>,
     #[serde(default)]
@@ -321,6 +326,12 @@ async fn settle<H: Host>(
         return Err(Problem::invalid(
             "/direct",
             "direct goes only to an in-person request",
+        ));
+    }
+    if body.require_proof && !matches!(route, Route::Epic1(_)) {
+        return Err(Problem::invalid(
+            "/require_proof",
+            "require_proof goes only to a payment to an epic1 address",
         ));
     }
     if !body.mailboxes.is_empty() {
@@ -879,6 +890,9 @@ fn epic1_command(
             mailboxes: PayMailboxesArg {
                 mailboxes: body.mailboxes.clone(),
             },
+            require_proof: RequireProofArg {
+                require_proof: body.require_proof,
+            },
         }),
         offline: false,
     })
@@ -929,6 +943,7 @@ fn send_command(
         slate_id: SendSlateIdArg { slate_id },
         reach,
         mailboxes: PayMailboxesArg::default(),
+        require_proof: RequireProofArg::default(),
     }))
 }
 

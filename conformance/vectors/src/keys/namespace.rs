@@ -19,8 +19,8 @@
 //! - epic1 delivery key: BLAKE2b(key = seed, "lepic-wallet epic1 delivery key v1" || account
 //!   (u32 BE) || net || index (u32 BE) || counter), the counter from 0 up to the first valid
 //!   secp256k1 key, for every address index;
-//! - reply mailbox and post key: BLAKE2b(key = seed, label || account (u32 BE) || net ||
-//!   slate_id (16) || counter) for a reply mailbox, payment_id (16) || role in place of the
+//! - reply mailbox, receipt payer key and post key: BLAKE2b(key = seed, label || account
+//!   (u32 BE) || net || slate_id (16) || counter) for a reply mailbox or a receipt payer key, payment_id (16) || role in place of the
 //!   slate id for a post key; the counter from 0 up to the first valid secp256k1 key, each an
 //!   ordinary Epicbox address;
 //! - post transaction id: HMAC-SHA256(post key, "lepic/post-txid/v1" || payment_id (16) ||
@@ -53,6 +53,7 @@ const ED25519_SPKI_PREFIX: [u8; 12] = [
 ];
 const EPIC1_DELIVERY_KEY_LABEL: &[u8] = b"lepic-wallet epic1 delivery key v1";
 const REPLY_MAILBOX_LABEL: &[u8] = b"lepic-wallet reply mailbox v1";
+const RECEIPT_PAYER_KEY_LABEL: &[u8] = b"lepic-wallet receipt payer key v1";
 const POST_KEY_LABEL: &[u8] = b"lepic-wallet post key v1";
 const CHECK_CODE_TAG: &[u8] = b"epic-check/1";
 const POST_TXID_TAG: &[u8] = b"lepic/post-txid/v1";
@@ -702,6 +703,12 @@ fn epicbox_mailbox_keys(pins: &KeysPins<'_>) -> Result<Vec<Rendered>, Error> {
         })
         .collect();
     let mut vectors = mailbox_keys(pins, "reply_mailbox", REPLY_MAILBOX_LABEL, &reply)?;
+    vectors.extend(mailbox_keys(
+        pins,
+        "receipt_payer_key",
+        RECEIPT_PAYER_KEY_LABEL,
+        &reply,
+    )?);
     vectors.extend(mailbox_keys(pins, "post_key", POST_KEY_LABEL, &post)?);
     vectors.extend(mailbox_keys(
         pins,

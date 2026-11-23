@@ -8,11 +8,13 @@
 //!   a label. Hosts in a link come from untrusted input; the host rule that classifies them
 //!   lives in `lepic-transport`.
 //! - [`RouteEntry`]: a delivery method and the text that addresses a recipient on it.
+//! - [`receipt`]: the receipt a payee signs for a payment to its epic1 address.
 
 pub mod address;
 mod amount;
 pub mod bech32m;
 mod link;
+pub mod receipt;
 mod relay;
 mod route;
 
@@ -22,5 +24,7 @@ pub use lepic_epicbox::Network;
 pub use link::{
     Epic1Link, LinkError, MAX_LINK_LEN, MAX_TRANSPORTS, MAX_VALUE_LEN, Skipped, TransportFault,
 };
-pub use relay::{MAX_HOST_PORT_LEN, RelayHost, RelayHostError, parse_host_port};
+pub use relay::{
+    MAX_HOST_PORT_LEN, RelayHost, RelayHostError, parse_host_port, parse_web_host_port,
+};
 pub use route::{HTTP_DEFAULT_PORT, MethodId, RouteEntry, TOR_DEFAULT_PORT, UnknownMethod};

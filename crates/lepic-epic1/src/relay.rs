@@ -2,7 +2,8 @@
 //! The relay host of an `epicbox=` entry (RFC 0003 Appendix B.2, `relay-domain`): labels of
 //! letters and digits, the rule Epicbox relays apply to every address they carry, so no hyphens.
 //! A last label that starts with a digit makes the host an IPv4 literal; no IPv6 literal can be
-//! written.
+//! written. The host of a direct `http` route (RFC 0003 5.20) may also hold hyphens inside its
+//! labels ([`RelayHost::parse_web`]).
 
 use std::fmt;
 use std::net::Ipv4Addr;
@@ -37,23 +38,14 @@ impl RelayHost {
     /// as an IPv4 literal and must be exactly four decimal numbers up to 255 without leading
     /// zeros, so a short, octal or hex form cannot hide an address.
     pub fn parse(text: &str) -> Result<Self, RelayHostError> {
-        if text.is_empty() || text.len() > MAX_HOST_PORT_LEN {
-            return Err(RelayHostError::Length);
-        }
-        let mut last = "";
-        for label in text.split('.') {
-            let valid = !label.is_empty()
-                && label.len() <= MAX_LABEL_LEN
-                && label.bytes().all(|byte| byte.is_ascii_alphanumeric());
-            if !valid {
-                return Err(RelayHostError::Label);
-            }
-            last = label;
-        }
-        if last.starts_with(|c: char| c.is_ascii_digit()) && text.parse::<Ipv4Addr>().is_err() {
-            return Err(RelayHostError::NotAnAddress);
-        }
-        Ok(Self(text.to_ascii_lowercase()))
+        checked_host(text, false).map(Self)
+    }
+
+    /// Checks `text` as the host of a direct `http` route (RFC 0003 5.20): as [`Self::parse`],
+    /// but a label may also hold hyphens, never as its first or last character, so any DNS host
+    /// name a web shop runs on is taken. Never for an `epicbox=` or a link's `http=` entry.
+    pub fn parse_web(text: &str) -> Result<Self, RelayHostError> {
+        checked_host(text, true).map(Self)
     }
 
     pub fn as_str(&self) -> &str {
@@ -67,14 +59,52 @@ impl fmt::Display for RelayHost {
     }
 }
 
+/// `text` lower-cased once it is a host name or IPv4 literal: labels of letters and digits, and
+/// hyphens inside a label when `hyphens`.
+fn checked_host(text: &str, hyphens: bool) -> Result<String, RelayHostError> {
+    if text.is_empty() || text.len() > MAX_HOST_PORT_LEN {
+        return Err(RelayHostError::Length);
+    }
+    let mut last = "";
+    for label in text.split('.') {
+        let valid = !label.is_empty()
+            && label.len() <= MAX_LABEL_LEN
+            && label
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || (hyphens && byte == b'-'))
+            && !label.starts_with('-')
+            && !label.ends_with('-');
+        if !valid {
+            return Err(RelayHostError::Label);
+        }
+        last = label;
+    }
+    if last.starts_with(|c: char| c.is_ascii_digit()) && text.parse::<Ipv4Addr>().is_err() {
+        return Err(RelayHostError::NotAnAddress);
+    }
+    Ok(text.to_ascii_lowercase())
+}
+
 /// Reads `host[:port]`; the port is 1–65535 in digits only (at most five).
 pub fn parse_host_port(text: &str) -> Result<(RelayHost, Option<u16>), RelayHostError> {
+    host_port_with(text, RelayHost::parse)
+}
+
+/// Reads `host[:port]` of a direct `http` route, its host as [`RelayHost::parse_web`].
+pub fn parse_web_host_port(text: &str) -> Result<(RelayHost, Option<u16>), RelayHostError> {
+    host_port_with(text, RelayHost::parse_web)
+}
+
+fn host_port_with(
+    text: &str,
+    host: fn(&str) -> Result<RelayHost, RelayHostError>,
+) -> Result<(RelayHost, Option<u16>), RelayHostError> {
     if text.len() > MAX_HOST_PORT_LEN {
         return Err(RelayHostError::Length);
     }
     match text.split_once(':') {
-        None => Ok((RelayHost::parse(text)?, None)),
-        Some((host, port)) => {
+        None => Ok((host(text)?, None)),
+        Some((name, port)) => {
             let digits = !port.is_empty()
                 && port.len() <= 5
                 && port.bytes().all(|byte| byte.is_ascii_digit());
@@ -83,7 +113,7 @@ pub fn parse_host_port(text: &str) -> Result<(RelayHost, Option<u16>), RelayHost
                 .ok()
                 .filter(|port| digits && *port != 0)
                 .ok_or(RelayHostError::Port)?;
-            Ok((RelayHost::parse(host)?, Some(port)))
+            Ok((host(name)?, Some(port)))
         }
     }
 }
@@ -134,6 +164,38 @@ mod tests {
         assert_eq!(
             RelayHost::parse(&format!("{}.example", "a".repeat(64))),
             Err(RelayHostError::Label)
+        );
+    }
+
+    #[test]
+    fn a_web_host_takes_hyphens_inside_labels_only() {
+        for text in [
+            "shop-demo.example",
+            "a-b-c.pay-shop.example",
+            "xn--bcher-kva.example",
+        ] {
+            assert_eq!(RelayHost::parse_web(text).unwrap().as_str(), text);
+        }
+        assert_eq!(
+            parse_web_host_port("Shop-Demo.example:8443").unwrap(),
+            (
+                RelayHost::parse_web("shop-demo.example").unwrap(),
+                Some(8443)
+            )
+        );
+        for text in [
+            "-a.example",
+            "a-.example",
+            "a.-b",
+            "a_b.example",
+            "a..b",
+            "1-2.3-4",
+        ] {
+            assert!(RelayHost::parse_web(text).is_err(), "{text:?}");
+        }
+        assert_eq!(
+            RelayHost::parse_web("127.1"),
+            Err(RelayHostError::NotAnAddress)
         );
     }
 

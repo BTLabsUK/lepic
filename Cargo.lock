@@ -1302,6 +1302,7 @@ dependencies = [
  "lepic-epicbox",
  "lepic-primitives",
  "serde_json",
+ "sha2",
  "thiserror",
 ]
 

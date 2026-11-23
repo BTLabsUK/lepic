@@ -120,6 +120,8 @@ fn the_tree_has_every_planned_command() {
         "api client add",
         "api client list",
         "api client remove",
+        "proof export",
+        "proof verify",
         "shell",
     ] {
         assert!(

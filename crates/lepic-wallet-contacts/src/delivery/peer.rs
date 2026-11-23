@@ -214,7 +214,7 @@ impl Carrier {
             ))));
         }
         let (host, port) = route
-            .host_port()
+            .direct_host_port()
             .ok_or(PostError::Address(RouteAddressError::HostPort))?;
         match poster.post(&host, port, body).await {
             Ok(reply) => Ok(Posted::Reply(reply)),

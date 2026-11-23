@@ -58,7 +58,9 @@ impl<H: Host> Run<'_, H> {
             Epic1Command::Pay(args) => {
                 let data_dir = self.settings.data_dir.clone();
                 let ttl = self.settings.send_ttl_blocks;
-                let (paid, repeated) = pay(&opened, &relays, args, &data_dir, ttl).await?;
+                let require = self.settings.epic1_require_proof;
+                let (paid, repeated) =
+                    pay(&opened, &relays, args, &data_dir, (ttl, require)).await?;
                 paid_report(&opened, paid, repeated).await?
             }
             Epic1Command::PostNext(args) => {
@@ -156,12 +158,14 @@ fn link<N: lepic_node::NodeApi + 'static>(
 
 /// Pays an epic1 link: the amount and message given, or those the link asks. Returns the payment
 /// and whether it was made before under the caller's slate id, in which case nothing is sent.
+/// The payment needs the payee's payment proof when the arguments or `always_require` (the
+/// `epic1_require_proof` setting) say so.
 async fn pay<N: lepic_node::NodeApi + 'static>(
     opened: &Opened<N>,
     relays: &ContactRelays,
     args: Epic1PayArgs,
     data_dir: &std::path::Path,
-    default_ttl_blocks: u64,
+    (default_ttl_blocks, always_require): (u64, bool),
 ) -> Result<(Epic1Paid, bool), CliError> {
     let Epic1PayArgs {
         link,
@@ -171,6 +175,7 @@ async fn pay<N: lepic_node::NodeApi + 'static>(
         spend,
         slate_id,
         mailboxes,
+        require_proof,
     } = args;
     let mailboxes = mailboxes
         .mailboxes
@@ -233,6 +238,7 @@ async fn pay<N: lepic_node::NodeApi + 'static>(
                 send,
                 slate_file: slate_file.path.clone(),
                 mailboxes,
+                require_receipt: require_proof.require_proof || always_require,
             },
         )
         .await;

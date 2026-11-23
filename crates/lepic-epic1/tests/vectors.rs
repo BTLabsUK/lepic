@@ -12,7 +12,7 @@
 
 use lepic_epic1::{
     Epic1Address, Epic1Error, Epic1Link, LinkError, MAX_TRANSPORTS, Network, Skipped,
-    TransportFault, bech32m::Bech32Error, parse_host_port,
+    TransportFault, bech32m::Bech32Error, parse_host_port, receipt,
 };
 use serde_json::Value;
 
@@ -263,5 +263,96 @@ fn relay_hosts_match_the_shared_cases() {
             let name = relay.split(':').next().unwrap();
             assert_eq!(host.as_str(), name.to_ascii_lowercase());
         }
+    }
+}
+
+fn unhex(text: &str) -> Vec<u8> {
+    assert_eq!(text.len() % 2, 0, "{text}");
+    (0..text.len())
+        .step_by(2)
+        .map(|at| u8::from_str_radix(&text[at..at + 2], 16).unwrap())
+        .collect()
+}
+
+fn array<const N: usize>(value: &Value, key: &str) -> [u8; N] {
+    unhex(text(value, key)).try_into().unwrap()
+}
+
+fn public_key(value: &Value, key: &str) -> lepic_crypto::PublicKey {
+    lepic_crypto::PublicKey::from_bytes(&unhex(text(value, key))).unwrap()
+}
+
+fn receipt_facts(case: &Value) -> receipt::ReceiptFacts {
+    receipt::ReceiptFacts {
+        network: network(text(case, "network")),
+        delivery_key: public_key(case, "delivery_key"),
+        amount: case["amount"].as_u64().unwrap(),
+        kernel_excess: array(case, "kernel_excess"),
+        slate_id: array(case, "slate_id"),
+        payer_key: public_key(case, "payer_key"),
+    }
+}
+
+/// Each receipt case, from the delivery secret and the facts: the tweak, the receipt key and
+/// secret, the message and its digest, and the signature byte for byte; the address carries the
+/// delivery key; and the signature verifies.
+#[test]
+fn epic1_receipts_match_the_vectors() {
+    let document = {
+        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../testdata/vectors/keys/epic1_receipts.json");
+        serde_json::from_str::<Value>(&std::fs::read_to_string(&path).unwrap()).unwrap()
+    };
+    let cases = vectors("epic1_receipts");
+    let cases = cases.as_array().unwrap();
+    assert_eq!(cases.len(), 8);
+    for case in cases {
+        let facts = receipt_facts(case);
+        let net = facts.network;
+        assert_eq!(
+            case["net"].as_u64().unwrap(),
+            u64::from(receipt::net_byte(net))
+        );
+        let address = Epic1Address::decode(text(case, "address"), net).unwrap();
+        assert_eq!(address.delivery_key(), &facts.delivery_key);
+        let delivery = lepic_crypto::SecretKey::from_array(array(case, "delivery_secret")).unwrap();
+        assert_eq!(
+            hex(receipt::tweak(&facts.delivery_key).unwrap().expose_bytes()),
+            text(case, "tweak")
+        );
+        assert_eq!(
+            hex(receipt::receipt_secret(&delivery).unwrap().expose_bytes()),
+            text(case, "receipt_secret")
+        );
+        assert_eq!(
+            hex(&receipt::receipt_key(&facts.delivery_key)
+                .unwrap()
+                .to_bytes()),
+            text(case, "receipt_key")
+        );
+        assert_eq!(hex(&receipt::message(&facts)), text(case, "message"));
+        assert_eq!(hex(&receipt::digest(&facts)), text(case, "digest"));
+        let signature = receipt::sign(&facts, &delivery).unwrap();
+        assert_eq!(hex(&signature), text(case, "signature"));
+        receipt::verify(&facts, &signature).unwrap();
+    }
+    let refused = document["expected"]["refused"].as_array().unwrap();
+    let names: Vec<&str> = refused.iter().map(|case| text(case, "name")).collect();
+    assert_eq!(
+        names,
+        [
+            "flipped_bit",
+            "amount_changed",
+            "untweaked_delivery_key",
+            "key_not_in_challenge"
+        ]
+    );
+    for case in refused {
+        assert_eq!(
+            receipt::verify(&receipt_facts(case), &array(case, "signature")),
+            Err(receipt::ReceiptError::BadSignature),
+            "{}",
+            text(case, "name")
+        );
     }
 }

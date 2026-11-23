@@ -203,6 +203,7 @@ fn every_operation_keeps_the_contract() {
         walk.call("GET", &format!("/payments/{invoice_id}/handoff"), None)
             .ok();
         walk.call("GET", &format!("/payments/{id}/handoff"), None);
+        walk.call("GET", &format!("/payments/{id}/proof"), None);
         let approve = json!({"amount": "1"});
         walk.call("POST", &format!("/payments/{id}/approve"), Some(&approve));
         walk.call("POST", &format!("/payments/{id}/decline"), None);

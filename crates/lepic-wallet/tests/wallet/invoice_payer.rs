@@ -16,7 +16,7 @@ use crate::invoice_harness as harness;
 use crate::support;
 
 use harness::{ACCOUNT, FUNDING, ISSUER_MNEMONIC, PAYER_MNEMONIC, Party};
-use lepic_node::mock::{ChainOutput, ChainState, MockNode};
+use lepic_node::mock::{ChainOutput, ChainState, MockFailure, MockNode};
 use lepic_node::{LocatedKernel, NodeVersion, Tip};
 use lepic_primitives::amount::{Amount, Height};
 use lepic_primitives::hash::Hash;
@@ -703,4 +703,62 @@ fn a_cancelled_payment_of_an_invoice_is_recovered_to_the_count() {
     let funding_output = funding(&invoice.payer);
     assert_eq!(funding_output.status, OutputStatus::Spent);
     assert_eq!(funding_output.tx, Some(done.sent_tx));
+}
+
+/// The `InvoicePosted` events `receiver` holds, as transaction and kernel excess.
+fn posted_events(
+    receiver: &mut tokio::sync::broadcast::Receiver<lepic_wallet::Event>,
+) -> Vec<(TxId, lepic_crypto::Commitment)> {
+    std::iter::from_fn(|| receiver.try_recv().ok())
+        .filter_map(|event| match event {
+            lepic_wallet::Event::InvoicePosted(posted) => Some((posted.tx_id, posted.excess)),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn a_refresh_reports_a_paid_invoice_posted_once_the_node_pool_holds_the_issuers_post() {
+    let invoice = Invoice::issued();
+    let i2 = invoice.payer.pay(&invoice.i1, request()).unwrap().reply;
+    let (tx_id, _) = invoice.payment().unwrap();
+    let mut events = invoice.payer.wallet.subscribe();
+
+    // Not posted yet: nothing to report.
+    invoice
+        .payer
+        .block_on(invoice.payer.wallet.refresh())
+        .unwrap();
+    assert!(posted_events(&mut events).is_empty());
+
+    // The issuer finalizes and posts; the payer hears nothing from it, but its node's pool
+    // holds the post.
+    invoice.issuer.finalize(&i2).unwrap();
+    let posted = invoice.posted();
+    let excess = posted.kernels()[0].excess;
+    invoice.node.update_chain(|chain| chain.pool.push(posted));
+
+    // A pool the node does not give: the refresh goes on and the next one asks again.
+    invoice
+        .node
+        .fail_next("get_unconfirmed_transactions", MockFailure::Unreachable);
+    invoice
+        .payer
+        .block_on(invoice.payer.wallet.refresh())
+        .unwrap();
+    assert!(posted_events(&mut events).is_empty());
+
+    invoice
+        .payer
+        .block_on(invoice.payer.wallet.refresh())
+        .unwrap();
+    assert_eq!(posted_events(&mut events), vec![(tx_id, excess)]);
+    assert_eq!(invoice.payment(), Some((tx_id, TxState::Sent)));
+
+    // Reported once.
+    invoice
+        .payer
+        .block_on(invoice.payer.wallet.refresh())
+        .unwrap();
+    assert!(posted_events(&mut events).is_empty());
 }

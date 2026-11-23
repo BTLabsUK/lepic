@@ -42,7 +42,7 @@ big-endian `u32`. In the derivations below, `seed` is the BLAKE2b key.
 | `onion_key_<seed>` | Ed25519 key from BLAKE2b(key = seed, `lepic-wallet onion key v1`) and its onion v3 address. |
 | `api_tls_key_<seed>` | Ed25519 key from BLAKE2b(key = seed, `lepic-wallet api tls v1`) and the SHA-256 of its RFC 8410 SubjectPublicKeyInfo, the fingerprint a client pins. |
 | `epic1_delivery_key_<seed>` | secp256k1 key from BLAKE2b(key = seed, `lepic-wallet epic1 delivery key v1` ‖ account (u32 BE) ‖ network ‖ index (u32 BE) ‖ counter), for indexes 0, 1 and 2^31. The counter counts from 0 to the first valid secp256k1 key. |
-| `reply_mailbox_<seed>`, `post_key_<seed>` | BLAKE2b(key = seed, label ‖ account (u32 BE) ‖ network ‖ slate id (16) ‖ counter), each an ordinary Epicbox address. A post key takes the payment id (16) and `role` in place of the slate id. The counter counts from 0 to the first valid secp256k1 key. |
+| `reply_mailbox_<seed>`, `post_key_<seed>`, `receipt_payer_key_<seed>` | BLAKE2b(key = seed, label ‖ account (u32 BE) ‖ network ‖ slate id (16) ‖ counter), each an ordinary Epicbox address. The receipt payer key is the payer's one-time key in an epic1 receipt. A post key takes the payment id (16) and `role` in place of the slate id. The counter counts from 0 to the first valid secp256k1 key. |
 | `seed_check_<seed>` | Seed check: BLAKE2b-256(key = seed, `lepic-wallet seed check v1`). |
 | `post_txids` | Transaction id of a post: HMAC-SHA256(key = the post key's 32 secret bytes, `lepic/post-txid/v1` ‖ payment id (16) ‖ stage), the first 16 bytes with the version 4 and RFC 4122 variant bits set, as 32 hex digits. |
 | `check_codes` | Check code: the first 4 bytes of SHA-256(`epic-check/1` ‖ public excess (33)), read big-endian, modulo 10,000, as four digits. |
@@ -72,3 +72,16 @@ The mailbox keys in `epicbox` entries come from the wallet's address code.
   releases wrote and a reader no longer reads, and `transport_http` or `transport_onion` for a
   value out of form. A link with more than three `http` and `tor` entries is refused with
   `too_many_entries`; an Epicbox link with an `epic1` parameter with `not_an_epic1_link`.
+
+## The epic1 receipt
+
+`epic1_receipts` pins down the receipt a payee signs for a payment to its `epic1` address
+([../../../docs/protocols/epic1-receipt.md](../../../docs/protocols/epic1-receipt.md)), written with the
+node's secp256k1-zkp and `ring`'s SHA-256. Each case runs from the delivery secret `d` and the
+payment's facts to the signature: the tweak `t = SHA-256("lepic-epic1-receipt-key/1" ‖ D)`, the
+receipt secret `r = d + t` and key `R = D + t·G`, the 145 message bytes, their SHA-256, the nonce
+`SHA-256("lepic-epic1-receipt-nonce/1" ‖ r ‖ digest)` and the 64-byte compact aggsig signature
+with `R` in its challenge. The kernel excess is the commitment to zero of a fixed blinding
+factor. The `refused` cases change the first case and must not verify: `flipped_bit`,
+`amount_changed`, `untweaked_delivery_key` (signed by `d` alone) and `key_not_in_challenge`
+(signed by `r` with no key in the challenge).

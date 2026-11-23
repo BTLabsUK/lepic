@@ -116,6 +116,32 @@ pub fn sealed_to_epic1<R: rand_core::CryptoRng>(
     .ok()
 }
 
+/// `body` sealed to the epic1 `address` for `network` as a LEPIC payer seals a file payment:
+/// naming the reply key `reply` and asking a receipt for the payer key `receipt_ask`.
+#[must_use]
+pub fn sealed_asking_receipt<R: rand_core::CryptoRng>(
+    network: Network,
+    address: &str,
+    body: Vec<u8>,
+    reply: &EncPublicKey,
+    receipt_ask: [u8; 33],
+    rng: &mut R,
+) -> Option<Vec<u8>> {
+    let address = Epic1Address::decode_any(address).ok()?;
+    let mut content = TxContent::new(body);
+    content.reply_key = Some(*reply);
+    content.receipt_ask = Some(receipt_ask);
+    seal_tx(
+        contact_network(network),
+        address.seal_key(),
+        TxKey::Epic1,
+        &content,
+        None,
+        rng,
+    )
+    .ok()
+}
+
 /// `body` sealed to the epic1 `address` as a payer seals its payment, for `network`: naming
 /// the reply key `reply_key` and the reply mailbox of the key `reply_mailbox`.
 #[must_use]

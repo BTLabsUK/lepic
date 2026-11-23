@@ -47,8 +47,9 @@ pub enum Event {
     /// cancelled.
     InvoiceExpired(ExpiredInvoice),
     /// The issuer of an invoice this wallet paid reports that it pushed the transaction, with
-    /// the kernel excess the payment expects. Advisory: the transaction's state changes only
-    /// when a refresh finds the kernel.
+    /// the kernel excess the payment expects, or a refresh found that kernel in the node's
+    /// pool (once per payment while the wallet is open). Advisory: the transaction's state
+    /// changes only when a refresh finds the kernel on chain.
     InvoicePosted(PostedInvoice),
     /// The payer declined an invoice this wallet issued. Nothing changed; the host may cancel
     /// the invoice. A cancellation the relay reports raises nothing

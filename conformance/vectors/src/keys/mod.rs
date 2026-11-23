@@ -13,6 +13,7 @@ mod mnemonic;
 mod namespace;
 mod pairing_keys;
 mod proofs;
+mod receipt;
 mod seed_file;
 
 use epic_keychain::{ExtKeychain, ExtKeychainPath, Identifier, Keychain, SwitchCommitmentType};
@@ -144,6 +145,7 @@ pub(crate) fn generate(pins: &Pins) -> Result<Vec<Rendered>, Error> {
     vectors.extend(seed_file::generate(&pins)?);
     vectors.extend(namespace::generate(&pins)?);
     vectors.extend(pairing_keys::generate(&pins)?);
+    vectors.extend(receipt::generate(&pins)?);
     Ok(vectors)
 }
 

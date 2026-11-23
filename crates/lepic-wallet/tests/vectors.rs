@@ -608,17 +608,30 @@ fn epic1_seal_keys_are_the_vectors() {
     }
 }
 
-/// `testdata/vectors/keys/reply_mailbox_*.json` and `post_key_*.json`: every Epicbox mailbox key
-/// is the generator's first valid secp256k1 key.
+/// `testdata/vectors/keys/reply_mailbox_*.json`, `receipt_payer_key_*.json` and
+/// `post_key_*.json`: every such key is the generator's first valid secp256k1 key.
 #[test]
 fn epicbox_mailbox_keys_are_the_vectors() {
-    use lepic_wallet::namespace::{PostRole, post_key, reply_mailbox_key};
+    use lepic_wallet::namespace::{PostRole, post_key, receipt_payer_key, reply_mailbox_key};
     for seed_name in ["seed32", "seed16"] {
         let name = format!("reply_mailbox_{seed_name}");
         let vector = keys_vector(&name);
         let seed = seed_of(&vector);
         for case in vector["expected"]["cases"].as_array().unwrap() {
             let key = reply_mailbox_key(
+                &seed,
+                account_of(case),
+                network_of(case),
+                &slate_id_of(case),
+            )
+            .unwrap();
+            assert_mailbox_key(&name, case, &key);
+        }
+
+        let name = format!("receipt_payer_key_{seed_name}");
+        let vector = keys_vector(&name);
+        for case in vector["expected"]["cases"].as_array().unwrap() {
+            let key = receipt_payer_key(
                 &seed,
                 account_of(case),
                 network_of(case),

@@ -128,6 +128,17 @@ the golden vectors in `testdata/vectors`, written by the unpatched reference cod
    `secp256k1_rangeproof_rewind_inner`. Each site only tests the result against zero, where
    the two functions agree; the surjection module's call is not compiled here.
 
+## Parity with Epic
+
+Checked 2026-10-02 against Epic's wrapper `1131a20920576413cd949e012a160561080324c1`
+(EpicCash/rust-secp256k1-zkp, master) and its C library `69adeea7667cfe99bbeb381a683ecf20bc448108`
+(EpicCash/secp256k1-zkp). Both of that update's changes are in this copy:
+
+- The verifier's scratch-frame release is C patch 1. `rangeproof_impl.h` differs from Epic's
+  fixed file only by `secp256k1_memcmp_var` in place of `memcmp` (C patch 18).
+- The refusal of an oversized range proof is in `src/pedersen.rs` (the `RangeProof` visitor, Rust
+  patch 4).
+
 ## Build changes (`build.rs`)
 
 Each one is a change to how the C library is compiled, not to its source.

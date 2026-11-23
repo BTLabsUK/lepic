@@ -25,6 +25,7 @@ errors in the code. The normative byte layouts are in the [RFCs](../rfcs/).
 |---|---|
 | [EPICTX](epictx.md) | Native slates, the slate envelope, armors, reply keys, in-person codes, legacy at the edge |
 | [epic1](epic1.md) | The epic1 address, links and their transports, paying a link |
+| [Payment proofs](epic1-receipt.md) | The proof a payee of an epic1 payment signs: fields, signature, how anyone verifies it |
 | [Pairing](pairing.md) | Invite, reply, confirm, SAS, private pairings, contact mailboxes, sealed slates, contact invoices, key checks, domain proof, relay moves |
 | [Epicbox](epicbox.md) | Addresses, encryption, frames, listening and draining, the classic lane, messages that cannot be taken yet |
 | [Epicbox mux/1](epicbox-mux.md) | The optional push extension: one socket for many mailboxes, tokens to resume, acknowledgements without signatures |

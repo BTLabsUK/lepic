@@ -32,6 +32,7 @@ mod epic1;
 mod epic1_installs;
 mod epic1_outbox;
 mod epic1_outbox_copies;
+mod epic1_receipt;
 mod epicbox_invoices;
 mod epicbox_send_logs;
 #[path = "epicbox_invoices/world.rs"]

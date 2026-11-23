@@ -132,6 +132,12 @@ pub const SETTINGS: &[(&str, &str, &str)] = &[
         "true to take payments to the wallet's epic1 addresses at the onion listener",
     ),
     (
+        "epic1_require_proof",
+        "LEPIC_EPIC1_REQUIRE_PROOF",
+        "true to cancel a payment to an epic1 address whose answer brings no valid payment \
+         proof, as --require-proof does for one payment",
+    ),
+    (
         "invoice_expiry_hours",
         "LEPIC_INVOICE_EXPIRY_HOURS",
         "hours an unpaid invoice is kept, 1 to 48",
@@ -512,6 +518,9 @@ pub struct Settings {
     pub epic1_web_listener: bool,
     /// As `epic1_web_listener`, for the onion listener.
     pub epic1_onion_listener: bool,
+    /// Every payment to an epic1 address needs the payee's payment proof: one whose answer
+    /// brings none, or one that does not verify, is cancelled. Off unless set.
+    pub epic1_require_proof: bool,
     /// How long an unpaid invoice is kept, on either side.
     pub invoice_expiry: InvoiceExpiry,
     /// The blocks after which a send nobody answered expires, when the send names none: a CLI
@@ -738,6 +747,7 @@ impl Settings {
             retired: lookup.retired(),
             epic1_web_listener: lookup.switch("epic1_web_listener")?,
             epic1_onion_listener: lookup.switch("epic1_onion_listener")?,
+            epic1_require_proof: lookup.switch("epic1_require_proof")?,
             invoice_expiry: lookup
                 .parse("invoice_expiry_hours", parse_expiry_hours)?
                 .unwrap_or_default(),

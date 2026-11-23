@@ -361,6 +361,17 @@ fn a_cancelled_send_frees_its_coins_and_its_handoff_comes_in_each_form() {
             "insufficient_funds",
         );
 
+        let proof = problem(
+            &post(
+                socket,
+                "/api/v1/payments",
+                &json!({ "amount": "1", "deliver": false, "require_proof": true }),
+            ),
+            400,
+            "invalid_field",
+        );
+        assert_eq!(proof["param"], "/require_proof", "{proof}");
+
         let created = post(
             socket,
             "/api/v1/payments",

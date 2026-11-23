@@ -30,9 +30,9 @@ use zeroize::Zeroizing;
 use crate::api::{Caller, VERSION, VERSION_HEADER};
 use crate::cli::{
     Command, Epic1Args, Epic1Command, Epic1PayArgs, EpicboxCommand, FluffArg, ListingArgs,
-    MailboxCommand, NodeCommand, PlainHttpArg, ProfileCommand, SelectionArg, SendArgs,
-    SendDestinationArgs, SendSlateIdArg, SpendArgs, TorBinaryArgs, TxCommand, TxShowArgs,
-    WalletCommand,
+    MailboxCommand, NodeCommand, PlainHttpArg, ProfileCommand, ProofCommand, ProofExportArgs,
+    SelectionArg, SendArgs, SendDestinationArgs, SendSlateIdArg, SpendArgs, TorBinaryArgs,
+    TxCommand, TxShowArgs, WalletCommand,
 };
 use crate::commands::files;
 use crate::commands::is_onion;
@@ -133,6 +133,8 @@ enum Finish {
     ContactBackup(PathBuf),
     /// The answer holds the domain file; write it and report the file.
     DomainFile { path: Option<PathBuf>, force: bool },
+    /// The answer holds a payment proof; write it to the file and report the file.
+    ProofFile { path: PathBuf, force: bool },
 }
 
 impl Call {
@@ -329,6 +331,11 @@ fn finish(
                 serde_json::from_str(&text).map_err(|e| unanswered(e.into()))?;
             files::save_domain_file(path.as_deref(), force, &answer.document, answer.url)?
         }
+        Finish::ProofFile { path, force } => {
+            let answer: ProofAnswer =
+                serde_json::from_str(&text).map_err(|e| unanswered(e.into()))?;
+            crate::commands::proof::save_proof(&path, force, answer.tx_id, &answer.proof)?
+        }
     };
     Ok(output::render(&report, format))
 }
@@ -338,6 +345,13 @@ fn finish(
 struct Backup {
     #[serde(deserialize_with = "secret")]
     backup: Zeroizing<String>,
+}
+
+/// The report of `proof export` with no file.
+#[derive(Deserialize)]
+struct ProofAnswer {
+    tx_id: u32,
+    proof: lepic_wallet_contacts::Epic1Receipt,
 }
 
 /// The report of [`CliCall::DomainFile`].
@@ -437,6 +451,22 @@ fn call(command: &Command) -> Option<Call> {
         Command::InPerson(args) => families::in_person(command, args),
         Command::Epic1(args) => families::epic1(command, args),
         Command::Epictx(args) => families::epictx(command, args),
+        Command::Proof(ProofCommand::Export(ProofExportArgs { tx, out, force })) => match out {
+            None => Call::command(command),
+            Some(path) => Some(
+                Call::ready(CliCall::of(Command::Proof(ProofCommand::Export(
+                    ProofExportArgs {
+                        tx: tx.clone(),
+                        out: None,
+                        force: false,
+                    },
+                ))))
+                .finish(Finish::ProofFile {
+                    path: path.clone(),
+                    force: *force,
+                }),
+            ),
+        },
         // The list serve's sessions use changes in serve; a test changes nothing.
         Command::Mailbox(
             MailboxCommand::List | MailboxCommand::Add(_) | MailboxCommand::Remove(_),

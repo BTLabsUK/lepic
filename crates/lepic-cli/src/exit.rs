@@ -356,6 +356,12 @@ pub enum CliError {
         domain: String,
         reason: &'static str,
     },
+    #[error(
+        "transaction {tx_id} has no payment proof; only an answered payment to an epic1 address has one"
+    )]
+    NoPaymentProof { tx_id: u32 },
+    #[error("the payment proof does not verify: {reason}")]
+    ProofRefused { reason: String },
     #[error("{} exists; --force replaces it", path.display())]
     FileExists { path: std::path::PathBuf },
     #[error("{} exists; a backup goes to a path that does not exist yet", path.display())]
@@ -485,7 +491,7 @@ impl CliError {
             Self::MailboxChange(error) => mailbox_change_kind(error),
             Self::MailboxUntested { .. } => ErrorKind::Transport,
             Self::HttpListen(_) | Self::OwnerTlsListen { .. } => ErrorKind::Transport,
-            Self::ApiClientNotFound { .. } => ErrorKind::NotFound,
+            Self::ApiClientNotFound { .. } | Self::NoPaymentProof { .. } => ErrorKind::NotFound,
             Self::HttpReplyLost { .. } => ErrorKind::Incomplete,
             Self::Wallet(error) => wallet_kind(error),
             Self::Store(StoreError::SchemaTooNew { .. } | StoreError::DamagedKept { .. }) => {
@@ -502,7 +508,8 @@ impl CliError {
             | Self::ReviewChanged { .. }
             | Self::RecoveryFailed { .. }
             | Self::PostedSend { .. }
-            | Self::RequestDomainRefused { .. } => ErrorKind::Rejected,
+            | Self::RequestDomainRefused { .. }
+            | Self::ProofRefused { .. } => ErrorKind::Rejected,
             Self::NoSendWithSlate | Self::PaymentDeclined { .. } => ErrorKind::NotFound,
             Self::Send(error) => send_kind(error),
             Self::Receive(error) => receive_kind(error),

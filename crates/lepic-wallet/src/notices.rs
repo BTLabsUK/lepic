@@ -745,7 +745,14 @@ where
             _ => info!(slate_id = %slate_id, kind, "notice received"),
         }
         if let Some(event) = event_of(slate_id, effect) {
-            self.emit(event);
+            // The refresh may have seen the same post in the node pool: one report per payment.
+            let first = match &event {
+                Event::InvoicePosted(posted) => self.pool_posted().insert(posted.tx_id),
+                _ => true,
+            };
+            if first {
+                self.emit(event);
+            }
         }
         taken
     }
