@@ -15,7 +15,6 @@
 use crate::send_support;
 use crate::support;
 
-use lepic_crypto::RangeProof;
 use lepic_legacy_slate::v3_json::LEGACY_V3_JSON;
 use lepic_node::LocatedKernel;
 use lepic_node::mock::{ChainOutput, MockFailure};
@@ -69,8 +68,9 @@ fn on_chain(output: &OutputRecord, height: u64, mmr_index: u64) -> ChainOutput {
     ChainOutput {
         commitment: output.id.commitment,
         features: output.id.features,
-        // `get_outputs` answers do not carry proofs, so any proof bytes do.
-        proof: RangeProof::from_bytes(&[1; 64]).unwrap(),
+        // A refresh reads the block of a coinbase candidate as pages of unspent outputs, which
+        // carry proofs of the right size.
+        proof: crate::support::some_proof(),
         height: Height::new(height),
         mmr_index,
         spent: false,

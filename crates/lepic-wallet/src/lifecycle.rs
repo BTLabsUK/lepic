@@ -23,6 +23,7 @@ use zeroize::Zeroizing;
 
 use crate::account::{ensure_default_account, place_key_counters};
 use crate::checked_outputs::CheckedOutputs;
+use crate::coinbase::CheckedBlocks;
 use crate::epic1_keys::Epic1KeyCache;
 use crate::error::WalletError;
 use crate::ports::{SecretVault, StoreOpener};
@@ -141,6 +142,8 @@ pub struct Session<D> {
     pub(crate) epic1_keys: Epic1KeyCache,
     /// Which outputs a send found it can spend while the wallet is unlocked.
     pub(crate) checked: CheckedOutputs,
+    /// The blocks a refresh checked coinbase candidates against while the wallet is unlocked.
+    pub(crate) coinbase_blocks: CheckedBlocks,
     /// How the database was found on disk, for an opener that keeps it encrypted at rest.
     pub(crate) at_rest: Option<AtRestReport>,
 }
@@ -233,6 +236,7 @@ pub(crate) fn create<S: StoreOpener, V: SecretVault>(
         slates: SlateCache::default(),
         epic1_keys: Epic1KeyCache::default(),
         checked: CheckedOutputs::default(),
+        coinbase_blocks: CheckedBlocks::default(),
         at_rest,
     })
 }
@@ -311,6 +315,7 @@ pub(crate) fn open<S: StoreOpener, V: SecretVault>(
         slates: SlateCache::default(),
         epic1_keys: Epic1KeyCache::default(),
         checked: CheckedOutputs::default(),
+        coinbase_blocks: CheckedBlocks::default(),
         at_rest,
     })
 }

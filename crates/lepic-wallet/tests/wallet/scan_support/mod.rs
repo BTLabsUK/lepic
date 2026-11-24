@@ -17,13 +17,14 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
-use lepic_crypto::Commitment;
+use lepic_crypto::{Commitment, Signature};
 use lepic_node::mock::MockNode;
 use lepic_node::{
     BlockHeaderInfo, LocatedKernel, NodeApi, NodeClient, NodeError, NodeVersion, OutputLocation,
     PmmrIndices, PoolTransaction, Propagation, Tip, UnspentOutputs,
 };
 use lepic_primitives::amount::Height;
+use lepic_primitives::kernel::{KernelFeatures, TxKernel};
 use lepic_primitives::params::Network;
 use lepic_primitives::tx::Transaction;
 use lepic_store::{
@@ -108,8 +109,8 @@ pub fn options(vector: &Value) -> ScanOptions {
 }
 
 /// The mock node's client with answers the recorded session does not cover: `get_outputs`
-/// answers from `held`, every height a page of unspent outputs reports is raised, and the last
-/// output index of a height range is raised by `index_lead`.
+/// answers from `held`, `get_kernel` finds every kernel, every height a page of unspent outputs
+/// reports is raised, and the last output index of a height range is raised by `index_lead`.
 pub struct Rechecking {
     pub inner: NodeClient<MockNode>,
     pub held: Vec<OutputLocation>,
@@ -139,7 +140,19 @@ impl NodeApi for Rechecking {
         min_height: Option<Height>,
         max_height: Option<Height>,
     ) -> impl Future<Output = Result<Option<LocatedKernel>, NodeError>> + Send {
-        self.inner.get_kernel(excess, min_height, max_height)
+        // The recorded session holds no kernel lookups: every kernel is on chain, at the lowest
+        // height asked about, so a scan's check of its block rewards finds each one.
+        let _ = max_height;
+        let kernel = TxKernel::new(
+            KernelFeatures::Coinbase,
+            *excess,
+            Signature::from_compact(&[1; 64]).unwrap(),
+        );
+        std::future::ready(Ok(Some(LocatedKernel {
+            kernel,
+            height: min_height.unwrap_or(Height::new(1)),
+            mmr_index: 1,
+        })))
     }
 
     fn get_outputs(

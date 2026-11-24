@@ -1,6 +1,7 @@
 # ADR 0046: A wallet for a mining node
 
-Status: accepted; who is served and how many candidates are kept: see ADR 0048
+Status: accepted; who is served and how many candidates are kept: see ADR 0048; how a refresh
+checks and deletes candidates, and a reward a reorganisation takes: see ADR 0070
 
 ## Context
 

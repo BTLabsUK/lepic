@@ -13912,6 +13912,7 @@ impl SseDecode for crate::api::types::ExpiredReason {
             0 => crate::api::types::ExpiredReason::RejectedByNode,
             1 => crate::api::types::ExpiredReason::NoAnswer,
             2 => crate::api::types::ExpiredReason::NotMined,
+            3 => crate::api::types::ExpiredReason::Orphaned,
             _ => unreachable!("Invalid variant for ExpiredReason: {}", inner),
         };
     }
@@ -19170,6 +19171,7 @@ impl flutter_rust_bridge::IntoDart for crate::api::types::ExpiredReason {
             Self::RejectedByNode => 0.into_dart(),
             Self::NoAnswer => 1.into_dart(),
             Self::NotMined => 2.into_dart(),
+            Self::Orphaned => 3.into_dart(),
             _ => unreachable!(),
         }
     }
@@ -23289,6 +23291,7 @@ impl SseEncode for crate::api::types::ExpiredReason {
                 crate::api::types::ExpiredReason::RejectedByNode => 0,
                 crate::api::types::ExpiredReason::NoAnswer => 1,
                 crate::api::types::ExpiredReason::NotMined => 2,
+                crate::api::types::ExpiredReason::Orphaned => 3,
                 _ => {
                     unimplemented!("");
                 }

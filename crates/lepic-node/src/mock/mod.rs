@@ -84,6 +84,7 @@ enum InvalidPushes {
 struct State {
     source: Source,
     calls: Vec<String>,
+    outputs_asked: Vec<String>,
     violations: Vec<Violation>,
     invalid_pushes: InvalidPushes,
     unexpected_refusals: Vec<&'static str>,
@@ -132,6 +133,7 @@ impl MockNode {
             state: Arc::new(Mutex::new(State {
                 source,
                 calls: Vec::new(),
+                outputs_asked: Vec::new(),
                 violations: Vec::new(),
                 invalid_pushes: InvalidPushes::Unexpected,
                 unexpected_refusals: Vec::new(),
@@ -209,6 +211,12 @@ impl MockNode {
         self.lock().calls.clone()
     }
 
+    /// The commitments `get_outputs` asked for so far, as lowercase hex, in order. A node logs a
+    /// warning for each one it does not hold.
+    pub fn outputs_asked(&self) -> Vec<String> {
+        self.lock().outputs_asked.clone()
+    }
+
     /// Requests that broke the replay rules. A passing test leaves this empty.
     pub fn violations(&self) -> Vec<Violation> {
         self.lock().violations.clone()
@@ -233,6 +241,16 @@ impl MockNode {
             }
         };
         state.calls.push(request.method.clone());
+        if request.method == "get_outputs"
+            && let Some(asked) = request.params.get(0).and_then(Value::as_array)
+        {
+            let asked: Vec<String> = asked
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::to_ascii_lowercase)
+                .collect();
+            state.outputs_asked.extend(asked);
+        }
         let queued = state
             .failures
             .iter()

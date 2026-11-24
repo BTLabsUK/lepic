@@ -225,6 +225,7 @@ pub fn cancelled_reason(
 /// any of these the transaction ends [`ExpiredReason::NoAnswer`]. Every other expiry, including
 /// each one of a wallet that answered (a receive, a paid invoice), ends
 /// [`ExpiredReason::NotMined`], unless [`ExpiredReason::RejectedByNode`] applies, which wins.
+/// A block reward only expires [`ExpiredReason::Orphaned`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum ExpiredReason {
@@ -238,6 +239,25 @@ pub enum ExpiredReason {
     /// A transaction that was answered but not mined before its cutoff. Its kernel may still
     /// be mined.
     NotMined,
+    /// A block reward whose block a reorganisation replaced after it was confirmed. Its output
+    /// is unconfirmed again and counts in no balance. It becomes `confirmed` again if the
+    /// chain returns to that block.
+    Orphaned,
+}
+
+/// Why `transaction` expired, as [`expired_reason`], or [`ExpiredReason::Orphaned`] for a block
+/// reward: only [`crate::coinbase::orphan`] expires one.
+fn expiry(
+    repos: &dyn Repositories,
+    transaction: &StoredTransaction,
+    stages: Option<&Stages>,
+    kernel_excess: Option<&Commitment>,
+    coinbase: bool,
+) -> Result<Option<ExpiredReason>, StoreError> {
+    if coinbase && transaction.entry.state == TxState::Expired {
+        return Ok(Some(ExpiredReason::Orphaned));
+    }
+    expired_reason(repos, transaction, stages, kernel_excess)
 }
 
 /// Why `transaction` ended `expired`, by the rule of [`ExpiredReason`]. `stages` and
@@ -798,14 +818,14 @@ fn details(
     let unverified =
         origin == TxOrigin::OtherWallet && crate::other_wallet::is_unverified(repos, tx_id)?;
     let coinbase = is_coinbase(repos, &transaction, &output_commits)?;
-    let expired_reason = expired_reason(repos, &transaction, stages, kernel_excess.as_ref())?;
+    let excess = kernel_excess.as_ref();
     let cancelled_reason = cancelled_reason(repos, &transaction)?;
     let post_cutoff_height = post_cutoff(repos, stages, &transaction)?;
     Ok(TransactionDetails {
         recovery: recoveries.of(repos, tx_id)?,
         recovery_of: recoveries.pair_of(tx_id),
         recoverable: recoveries.recoverable(repos, &transaction, stages)?,
-        expired_reason,
+        expired_reason: expiry(repos, &transaction, stages, excess, coinbase)?,
         cancelled_reason,
         post_cutoff_height,
         relay_cancellable,

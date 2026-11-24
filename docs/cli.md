@@ -8,7 +8,7 @@ slate files, pairs with contacts, and runs as a service with a local REST API. S
 flags, `LEPIC_*` variables and two optional files. Reports go to stdout as text or JSON, with a
 documented exit code.
 
-This page describes `lepic 0.6.1`. Every option is also in `lepic COMMAND --help`. Settings files
+This page describes `lepic 0.6.2`. Every option is also in `lepic COMMAND --help`. Settings files
 are in [Configuration](configuration.md), task-by-task examples with the matching API calls in
 [Recipes](recipes.md).
 
@@ -18,7 +18,7 @@ are in [Configuration](configuration.md), task-by-task examples with the matchin
    later.
 
    ```bash
-   cargo build --release -p lepic-cli      # prints lepic 0.6.1 from ./target/release/lepic --version
+   cargo build --release -p lepic-cli      # prints lepic 0.6.2 from ./target/release/lepic --version
    ```
 
 2. **Set the password source.** Commands that open the wallet read the password from a file, a
@@ -429,8 +429,10 @@ alone then serves whatever the proxy forwards.
 
 With `--coinbase` the wallet stores one unconfirmed coinbase output per block template the node
 requests, so `GET /outputs` shows several for one height. Only confirmed coinbase outputs are
-rewards. The rest are deleted once they are 50 blocks from the tip; see
-[Coinbase outputs](api/README.md#coinbase-outputs).
+rewards. A refresh checks them against the block at their height, so the node logs no
+`Output … Not found` for them; those the block did not hold are deleted once the tip is 10 blocks
+past it. A reward whose block a reorganisation replaced becomes `expired`
+(`expired_orphaned`); see [Coinbase outputs](api/README.md#coinbase-outputs).
 
 ### Tor listener
 
@@ -1207,7 +1209,7 @@ lepic serve --http --port 3415                                             # als
 ```
 
 ```json
-{"version":"0.6.1","uptime_s":5,"listeners":{"epicbox":{"state":"connected"}},"node":{"tip_height":3412790,"tip_changed_at":"2026-11-11T02:54:31.226402118Z"},"payments":{"open":{"needs_approval":0,"awaiting_answer":0,"finalized":0,"posted":0}},"refresh":{"failures":0,"last_success_at":"2026-11-11T02:55:09.797663717Z"},"collect":{"failures":0,"last_success_at":"2026-11-11T02:55:09.816610725Z"},"requests":{"served":0,"in_flight":1,"refused":0}}
+{"version":"0.6.2","uptime_s":5,"listeners":{"epicbox":{"state":"connected"}},"node":{"tip_height":3412790,"tip_changed_at":"2026-11-11T02:54:31.226402118Z"},"payments":{"open":{"needs_approval":0,"awaiting_answer":0,"finalized":0,"posted":0}},"refresh":{"failures":0,"last_success_at":"2026-11-11T02:55:09.797663717Z"},"collect":{"failures":0,"last_success_at":"2026-11-11T02:55:09.816610725Z"},"requests":{"served":0,"in_flight":1,"refused":0}}
 ```
 
 `refresh` has `"failures":0` and a `last_success_at` when serve reaches the node. If it cannot,

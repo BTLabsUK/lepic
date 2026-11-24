@@ -279,6 +279,7 @@ where
         let node = &self.ports().node;
         let tip = node.get_tip().await?;
         let now = self.ports().clock.now();
+        let known_tip = tip.height;
         let known = {
             let session = Arc::clone(&session);
             let height = tip.height;
@@ -302,9 +303,17 @@ where
             read_again: false,
         };
         let tracked = known.tracked;
-        let commitments: Vec<Commitment> =
+        let mut commitments: Vec<Commitment> =
             tracked.iter().map(|(commitment, _)| *commitment).collect();
-        let found = self.locate(&commitments, &tracked, &mut tip).await?;
+        let mut found = self.locate(&commitments, &tracked, &mut tip).await?;
+        let candidates = self
+            .check_candidates(&session.coinbase_blocks, &known.candidates, known_tip)
+            .await?;
+        for location in candidates.found {
+            commitments.push(location.commitment);
+            found.insert(location.commitment, location);
+        }
+        let expired = candidates.expired;
         let found_outputs: BTreeSet<Commitment> = found.keys().copied().collect();
         let mut summary = RefreshSummary::default();
         let reopened = self
@@ -321,10 +330,11 @@ where
             self.blocking(move |_, _| {
                 Ok(session
                     .store
-                    .write(|repos| apply_outputs(repos, &commitments, &found, seen, now)))
+                    .write(|repos| apply_outputs(repos, &commitments, &found, &expired, seen, now)))
             })
             .await??
         };
+        session.coinbase_blocks.replace(candidates.checked);
 
         summary.confirmed_outputs = outcome.confirmed_outputs;
         summary.spent_outputs = outcome.spent_outputs;
@@ -1430,29 +1440,53 @@ struct KnownState {
     last_confirmed: Option<Height>,
     position: ChainPosition,
     /// Every output the node is asked about, in every account: all those not stored as spent,
-    /// and those a recent refresh took for another wallet's spend.
+    /// and those a recent refresh took for another wallet's spend, apart from candidates.
     tracked: Vec<(Commitment, OutputStatus)>,
+    /// The coinbase candidates, by the height they were built for, and the orphaned block
+    /// rewards within [`CONFIRMATION_RECHECK_BLOCKS`] of the tip, by their height: their blocks
+    /// are checked instead ([`Wallet::check_candidates`]).
+    candidates: BTreeMap<Height, BTreeSet<Commitment>>,
 }
 
 fn known_state(repos: &dyn Repositories, tip: Height) -> Result<KnownState, RefreshError> {
     let recently_spent = other_wallet::recently_spent(repos, tip)?;
     let mut tracked = Vec::new();
+    let mut candidates: BTreeMap<Height, BTreeSet<Commitment>> = BTreeMap::new();
     for account in repos.accounts()? {
-        tracked.extend(
-            repos
-                .outputs(account.index, None)?
-                .into_iter()
-                .filter(|output| {
-                    output.status != OutputStatus::Spent
-                        || recently_spent.contains(&output.id.commitment)
-                })
-                .map(|output| (output.id.commitment, output.status)),
-        );
+        for output in repos.outputs(account.index, None)? {
+            if crate::coinbase::is_candidate(&output) {
+                candidates
+                    .entry(output.height)
+                    .or_default()
+                    .insert(output.id.commitment);
+            } else if crate::coinbase::is_orphaned(&output) {
+                // Asked about by commitment, it would be a miss in the node's log on every
+                // refresh. Its block is checked instead, for as long as a confirmed payment is
+                // looked at again, so a lagging node's false orphan heals; past that, only a
+                // scan finds it again.
+                if output
+                    .height
+                    .value()
+                    .saturating_add(CONFIRMATION_RECHECK_BLOCKS)
+                    >= tip.value()
+                {
+                    candidates
+                        .entry(output.height)
+                        .or_default()
+                        .insert(output.id.commitment);
+                }
+            } else if output.status != OutputStatus::Spent
+                || recently_spent.contains(&output.id.commitment)
+            {
+                tracked.push((output.id.commitment, output.status));
+            }
+        }
     }
     Ok(KnownState {
         last_confirmed: last_confirmed(repos)?,
         position: chain::position(repos)?,
         tracked,
+        candidates,
     })
 }
 
@@ -1464,6 +1498,7 @@ fn apply_outputs(
     repos: &mut dyn Repositories,
     tracked: &[Commitment],
     found: &BTreeMap<Commitment, OutputLocation>,
+    expired: &BTreeSet<Commitment>,
     seen: ChainSeen,
     now: Timestamp,
 ) -> Result<StepOutcome, RefreshError> {
@@ -1528,7 +1563,7 @@ fn apply_outputs(
             repos, &elsewhere, after, seen.tip, now,
         )?);
     }
-    crate::coinbase::delete_stale(repos, seen.tip)?;
+    crate::coinbase::delete_stale(repos, seen.tip, expired)?;
     Ok(outcome)
 }
 
@@ -1540,7 +1575,17 @@ fn on_chain(
     now: Timestamp,
     outcome: &mut StepOutcome,
 ) -> Result<OutputRecord, RefreshError> {
-    if crate::coinbase::is_candidate(&output) {
+    if crate::coinbase::is_orphaned(&output) {
+        outcome.confirmed_outputs = outcome.confirmed_outputs.saturating_add(1);
+        let lock_height = location.height.checked_add_blocks(coinbase_maturity)?;
+        outcome.changes.extend(crate::coinbase::confirm_again(
+            repos,
+            &mut output,
+            location.height,
+            lock_height,
+            now,
+        )?);
+    } else if crate::coinbase::is_candidate(&output) {
         outcome.confirmed_outputs = outcome.confirmed_outputs.saturating_add(1);
         let lock_height = location.height.checked_add_blocks(coinbase_maturity)?;
         outcome.changes.push(crate::coinbase::confirm(
@@ -1642,10 +1687,11 @@ struct ConfirmedRecheck {
 }
 
 /// The transactions confirmed within the last [`CONFIRMATION_RECHECK_BLOCKS`] of `tip` none of
-/// whose own outputs is among those `found`, with the kernel that shows them on chain. Those
-/// whose kernel the wallet does not know are left out: an entry with no slate (a coinbase, a
-/// scan's find, another wallet's spend) or with no final slate stored. So are the two entries of
-/// an open recovery, which settles them itself.
+/// whose own outputs is among those `found`, with the kernel that shows them on chain. A block
+/// reward's kernel follows from its output ([`crate::coinbase::reward_kernel`]). Those whose
+/// kernel the wallet does not know are left out: another entry with no slate (a scan's find of a
+/// plain output, another wallet's spend) or one with no final slate stored. So are the two
+/// entries of an open recovery, which settles them itself.
 fn confirmed_rechecks(
     repos: &dyn Repositories,
     codecs: &CodecRegistry,
@@ -1668,19 +1714,19 @@ fn confirmed_rechecks(
         let Some(entry) = repos.transaction(tx_id)? else {
             continue;
         };
-        let Some(slate_id) = entry.slate_id else {
-            continue;
-        };
-        let on_chain = repos
-            .outputs_of_transaction(tx_id)?
+        let outputs = repos.outputs_of_transaction(tx_id)?;
+        let on_chain = outputs
             .iter()
             .any(|output| made_by(output, confirmed) && found.contains(&output.id.commitment));
         if on_chain {
             continue;
         }
-        if let Some((excess, min_height)) =
-            confirmed_kernel(repos, codecs, tx_id, &entry, slate_id)?
-        {
+        let kernel = match entry.slate_id {
+            Some(slate_id) => confirmed_kernel(repos, codecs, tx_id, &entry, slate_id)?,
+            None => crate::coinbase::reward_kernel(&entry, &outputs, confirmed)
+                .map(|excess| (excess, confirmed)),
+        };
+        if let Some((excess, min_height)) = kernel {
             rechecks.push(ConfirmedRecheck {
                 tx_id,
                 confirmed,
@@ -1727,7 +1773,7 @@ fn confirmed_kernel(
 /// otherwise `received` for a payment received and `sent` for an invoice paid, for the peer to
 /// post. The outputs it made are unconfirmed again, any record of another wallet's spend of
 /// them is undone, and the inputs it spent are locked again. Its confirmation height is
-/// cleared.
+/// cleared. A block reward, which has no slate, expires instead ([`crate::coinbase::orphan`]).
 fn reopen(
     repos: &mut dyn Repositories,
     codecs: &CodecRegistry,
@@ -1737,6 +1783,9 @@ fn reopen(
     let Some(entry) = repos.transaction(tx_id)? else {
         return Ok(None);
     };
+    if entry.slate_id.is_none() {
+        return Ok(crate::coinbase::orphan(repos, tx_id, now)?);
+    }
     let (TxState::Confirmed, Some(slate_id), Some(confirmed)) =
         (entry.state, entry.slate_id, repos.confirmed_height(tx_id)?)
     else {

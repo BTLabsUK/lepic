@@ -33,6 +33,7 @@ LEPIC records each of these steps as its own state.
 | incoming `confirmed` | `TxReceived` | true | a refresh finding one of its outputs on chain, or the kernel of a watched transaction (below) |
 | incoming `confirmed` | `TxReceivedMempool` | true | the same, for an invoice issuer whose posted transaction was seen in the mempool; the refresh rewrites only outgoing types |
 | incoming `confirmed` | `ConfirmedCoinbase` | true | a refresh confirming a coinbase output, or a restore finding one; no slate |
+| incoming `expired`, block reward | none: upstream has no state for a reward a reorganisation took | none | a refresh or scan that finds its block replaced (ADR 0070); its output is unconfirmed again |
 | incoming `confirmed` | `TxReceived`, no slate id | true | a restore finding an output with no entry |
 | incoming `cancelled` | `TxReceivedCancelled` | false | the owner's cancel; for an invoice this wallet finalized, a post or refresh that finds an input of the payer gone from the chain while neither the node's pool nor its chain holds its kernel |
 | incoming `expired` | `TxReceivedCancelled` | false | a refresh at or past the TTL cutoff height; for a received payment with no TTL, 10,080 blocks after a refresh first saw it; in both cases once the node holds no kernel the sender could have completed. For an invoice this wallet finalized or posted: a refresh at or past the earlier of its I3's and its I1's TTL cutoff, once the node holds no kernel of it |
@@ -52,6 +53,8 @@ refused with a typed error (`InvalidTransition`).
 | `posted` | `confirmed`, `cancelled`, `expired` |
 | `cancelled`, `expired`, for a watched transaction only | `confirmed`, by a refresh that finds its kernel |
 | `confirmed`, within 1,440 blocks of its confirmation, when a refresh finds neither its outputs nor its kernel on chain (a reorganisation) | `posted` when this wallet holds the final transaction, otherwise `received` (a payment received) or `sent` (an invoice paid) |
+| `confirmed` block reward (no slate), when a refresh within 1,440 blocks finds neither its output nor its kernel, or a scan finds no kernel for one whose output is stored spent (ADR 0070) | `expired`, reason `Orphaned` |
+| `expired` block reward with reason `Orphaned` | `confirmed`, by a refresh within 1,440 blocks of its height or a scan that finds its output |
 | `confirmed`, `cancelled`, `expired` | none otherwise |
 
 `confirmed` is reachable from every open state because the chain decides: a peer may post the
@@ -123,8 +126,9 @@ change `unspent` from that height, so the balance equals what a scan finds. If a
 restored the change under an incoming entry with no slate of its own, the send takes the output
 over and that entry is dropped, so the history counts the change once.
 
-This is the one transition out of `cancelled` or `expired`, and only a watched transaction takes
-it. After the window a refresh asks the node for the change outputs instead, with no end. A send
+Apart from an orphaned block reward confirmed again (ADR 0070), this is the one transition out
+of `cancelled` or `expired`, and only a watched transaction takes it. After the window a refresh
+asks the node for the change outputs instead, with no end. A send
 with no change mined later stays `cancelled`.
 
 ### Transactions the peer can still complete

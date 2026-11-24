@@ -7,6 +7,17 @@ Conventional Commit messages at release time.
 
 ## [Unreleased]
 
+## [0.6.2] - 2026-11-24
+
+A payment to an epic1 address now carries a payment proof, and a payer can require one. A wallet
+serving a mining node no longer floods the node's log, and a block reward whose block was
+replaced is shown as expired instead of confirmed. The wallet store keeps schema 22.
+
+Upgrading a pool or any wallet that receives block rewards (`lepic serve --coinbase`): after the
+upgrade, run `lepic wallet scan` once. It corrects rewards whose block was replaced but which an
+earlier version kept as `confirmed`. They become `expired` (`expired_orphaned`) and leave the sum
+of rewards.
+
 ### Added
 
 - A wallet that pays an epic1 address now gets a payment proof: the payee's LEPIC wallet signs it
@@ -24,6 +35,8 @@ Conventional Commit messages at release time.
   do not hold is dropped, and the payment keeps waiting.
 - `POST /api/v1/payments` takes `require_proof`, and `GET /api/v1/payments/{id}/proof` returns a
   payment's proof, or 409 `no_payment_proof`.
+- `ExpiredReason::Orphaned` (serve API `state_reason` `expired_orphaned`): a block reward whose
+  block a reorganisation replaced. The FFI reports it as `ExpiredReason::Orphaned`.
 
 ### Breaking changes
 
@@ -35,6 +48,16 @@ FFI:
 
 ### Fixed
 
+- A wallet serving a mining node (`lepic serve --coinbase`) no longer fills the node's log with
+  `Output … Not found`. A refresh checks coinbase candidates against the block at their height
+  instead of asking for each by commitment, and never asks about a height above the tip. A
+  candidate its block did not hold is deleted once the tip is 10 blocks past it, not 50.
+- A block reward whose block a reorganisation replaced leaves `confirmed`: a refresh within 1,440
+  blocks, or any scan, marks the payment `expired` (`expired_orphaned`), raises
+  `payment.state_changed`, and keeps its output `unconfirmed`, out of every balance. Before, the
+  payment stayed confirmed and the output was listed `spent`, so a sum of rewards counted it. A
+  wallet that already shows such a reward fixes it on its next scan. If the chain holds the
+  block again within 1,440 blocks, the payment is confirmed again.
 - `lepic serve --public-url` takes a shop host with hyphens (`https://shop-demo.example.com`),
   and a paying wallet posts its answer to that host. Before, such a host was refused at start
   and wallets skipped it, so answers came by the mailbox only. Epicbox and mailbox hosts and

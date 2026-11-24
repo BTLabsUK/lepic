@@ -15,25 +15,37 @@
 use crate::send_support;
 use crate::support;
 
+use lepic_crypto::Commitment;
 use lepic_crypto::aggsig::verify_single_from_commit;
-use lepic_crypto::{Commitment, RangeProof};
 use lepic_keychain::proof::OutputRewinder;
 use lepic_keychain::{Identifier, SwitchCommitment};
-use lepic_node::mock::ChainOutput;
-use lepic_primitives::amount::{Fee, Height};
+use lepic_node::mock::{ChainOutput, MockFailure};
+use lepic_node::{LocatedKernel, RejectionKind};
+use lepic_primitives::amount::{Amount, Fee, Height};
+use lepic_primitives::hash::Hash;
 use lepic_primitives::kernel::KernelFeatures;
 use lepic_primitives::output::OutputFeatures;
 use lepic_primitives::params::Network;
-use lepic_store::{KeyId, OutputRecord, OutputStatus, TxDirection, TxState, WalletStore};
+use lepic_store::{
+    AccountIndex, KeyId, OtherWalletSpend, OutputRecord, OutputStatus, TxDirection, TxId, TxState,
+    WalletStore,
+};
 use lepic_wallet::WalletError;
 use lepic_wallet::coinbase::{
-    Coinbase, CoinbaseError, CoinbaseRequest, MAX_CANDIDATES, STALE_AFTER,
+    Coinbase, CoinbaseError, CoinbaseRequest, MAX_CANDIDATES, REORG_WINDOW, STALE_AFTER,
 };
-use lepic_wallet::refresh::RefreshOutcome;
+use lepic_wallet::details::ExpiredReason;
+use lepic_wallet::event::{Event, TransactionState};
+use lepic_wallet::refresh::{CONFIRMATION_RECHECK_BLOCKS, RefreshOutcome};
+use lepic_wallet::scan::{ScanCancel, ScanOptions};
 use send_support::{NEXT_CHILD, Sender};
 use support::both_stores;
 
 const FEES: u64 = 7_000_000;
+
+/// The hash of the block at 5 on the chain these tests start from. Pinned, as on a real chain:
+/// the mock otherwise gives the tip a hash of its own.
+const BLOCK_5: [u8; 32] = [0xb5; 32];
 
 /// The sender, with its funding output on the node's chain.
 fn wallet() -> Sender {
@@ -45,12 +57,15 @@ fn wallet() -> Sender {
             ChainOutput {
                 commitment: funding.id.commitment,
                 features: funding.id.features,
-                proof: RangeProof::from_bytes(&[1; 64]).unwrap(),
+                proof: support::some_proof(),
                 height: Height::new(1),
                 mmr_index: 1,
                 spent: false,
             },
         );
+        chain
+            .header_hashes
+            .insert(Height::new(5), Hash::from_bytes(BLOCK_5));
     });
     sender
 }
@@ -78,7 +93,7 @@ fn mined(coinbase: &Coinbase, height: u64, mmr_index: u64) -> ChainOutput {
     ChainOutput {
         commitment: coinbase.output.commitment,
         features: OutputFeatures::Coinbase,
-        proof: RangeProof::from_bytes(&[1; 64]).unwrap(),
+        proof: support::some_proof(),
         height: Height::new(height),
         mmr_index,
         spent: false,
@@ -365,6 +380,501 @@ fn deletes_candidates_at_height_zero_or_far_above_the_tip() {
                 .any(|output| output.id == kept.output.identifier())
         );
     }
+}
+
+/// Whether the node was asked for `coinbase`'s output by commitment, which it logs as a miss
+/// when it does not hold it.
+fn asked_for(sender: &Sender, coinbase: &Coinbase) -> usize {
+    let hex = coinbase.output.commitment.to_hex().to_ascii_lowercase();
+    sender
+        .harness
+        .node
+        .outputs_asked()
+        .iter()
+        .filter(|asked| **asked == hex)
+        .count()
+}
+
+fn stored(sender: &Sender, coinbase: &Coinbase) -> Option<OutputRecord> {
+    sender.read(|repos| repos.output(coinbase.output.commitment.as_bytes()))
+}
+
+both_stores!(finds_a_candidate_in_its_block_without_asking_for_it);
+fn finds_a_candidate_in_its_block_without_asking_for_it() {
+    let sender = wallet();
+    let winner = build(&sender, 5, None);
+    let loser = sender
+        .harness
+        .block_on(sender.wallet.build_coinbase(CoinbaseRequest {
+            fees: Fee::new(FEES + 1),
+            height: Height::new(5),
+            key_id: Some(winner.key_id),
+        }))
+        .unwrap();
+    sender
+        .harness
+        .node
+        .update_chain(|chain| crate::support::mine_output(chain, mined(&winner, 5, 7)));
+
+    refresh_at(&sender, 6);
+
+    let output = stored(&sender, &winner).unwrap();
+    assert_eq!(output.status, OutputStatus::Unspent);
+    assert_eq!(output.mmr_index, Some(7));
+    assert_eq!(sender.transactions().len(), 1);
+    assert_eq!(asked_for(&sender, &winner), 0);
+    assert_eq!(asked_for(&sender, &loser), 0);
+    let calls = sender.harness.node.calls();
+    assert!(calls.iter().any(|call| call == "get_header"));
+    // The block may still be replaced, so the candidate it did not hold stays.
+    refresh_at(&sender, 5 + REORG_WINDOW);
+    assert!(stored(&sender, &loser).is_some());
+}
+
+both_stores!(drops_candidates_their_block_did_not_hold_past_the_window_unasked);
+fn drops_candidates_their_block_did_not_hold_past_the_window_unasked() {
+    let sender = wallet();
+    let first = build(&sender, 5, None);
+    let second = build(&sender, 5, None);
+    let before = sender.harness.node.calls().len();
+
+    for tip in 5..=5 + REORG_WINDOW {
+        refresh_at(&sender, tip);
+        assert!(stored(&sender, &first).is_some(), "tip {tip}");
+        assert!(stored(&sender, &second).is_some(), "tip {tip}");
+    }
+    let reads = |sender: &Sender| {
+        sender
+            .harness
+            .node
+            .calls()
+            .iter()
+            .skip(before)
+            .filter(|call| *call == "get_pmmr_indices")
+            .count()
+    };
+    // The block's hash did not change, so it was read once.
+    assert_eq!(reads(&sender), 1);
+    refresh_at(&sender, 6 + REORG_WINDOW);
+
+    assert_eq!(stored(&sender, &first), None);
+    assert_eq!(stored(&sender, &second), None);
+    assert_eq!(asked_for(&sender, &first), 0);
+    assert_eq!(asked_for(&sender, &second), 0);
+    assert!(sender.transactions().is_empty());
+}
+
+both_stores!(looks_up_no_candidate_above_the_tip);
+fn looks_up_no_candidate_above_the_tip() {
+    let sender = wallet();
+    let tip = 10;
+    let next = build(&sender, tip + 1, None);
+    let later = build(&sender, tip + STALE_AFTER, None);
+    let before = sender.harness.node.calls().len();
+
+    refresh_at(&sender, tip);
+
+    let calls = sender.harness.node.calls().split_off(before);
+    assert!(
+        !calls.iter().any(|call| call == "get_pmmr_indices"),
+        "{calls:?}"
+    );
+    assert!(
+        !calls.iter().any(|call| call == "get_unspent_outputs"),
+        "{calls:?}"
+    );
+    assert_eq!(asked_for(&sender, &next), 0);
+    assert_eq!(asked_for(&sender, &later), 0);
+    assert_eq!(candidates(&sender).len(), 2);
+}
+
+both_stores!(a_refresh_at_tip_zero_reads_no_block);
+fn a_refresh_at_tip_zero_reads_no_block() {
+    let sender = wallet();
+    // The funding output, mined at 1, would make a tip of 0 implausible.
+    let mut funding = sender.outputs().remove(0);
+    funding.status = OutputStatus::Spent;
+    sender
+        .store
+        .write(|repos| repos.put_output(&funding))
+        .unwrap();
+    let next = build(&sender, 1, None);
+    let before = sender.harness.node.calls().len();
+
+    refresh_at(&sender, 0);
+
+    let calls = sender.harness.node.calls().split_off(before);
+    assert!(
+        !calls.iter().any(|call| call == "get_pmmr_indices"),
+        "{calls:?}"
+    );
+    assert_eq!(asked_for(&sender, &next), 0);
+    assert_eq!(candidates(&sender).len(), 1);
+}
+
+both_stores!(reads_a_block_again_when_a_reorganisation_replaces_it);
+fn reads_a_block_again_when_a_reorganisation_replaces_it() {
+    let sender = wallet();
+    let coinbase = build(&sender, 5, None);
+    refresh_at(&sender, 8);
+    assert_eq!(candidates(&sender).len(), 1);
+
+    // The block another miner found at 5 is replaced by ours.
+    sender.harness.node.update_chain(|chain| {
+        chain
+            .header_hashes
+            .insert(Height::new(5), Hash::from_bytes([0xee; 32]));
+        crate::support::mine_output(chain, mined(&coinbase, 5, 7));
+    });
+    refresh_at(&sender, 9);
+
+    let output = stored(&sender, &coinbase).unwrap();
+    assert_eq!(output.status, OutputStatus::Unspent);
+    let tx_id = output.tx.unwrap();
+    assert_eq!(
+        sender.read(|repos| repos.transaction(tx_id)).unwrap().state,
+        TxState::Confirmed
+    );
+    assert_eq!(asked_for(&sender, &coinbase), 0);
+}
+
+/// A reward the wallet holds: built and mined at 5, with its kernel, and recorded by a refresh
+/// at 6.
+fn confirmed_reward(sender: &Sender) -> (Coinbase, TxId) {
+    let coinbase = build(sender, 5, None);
+    sender.harness.node.update_chain(|chain| {
+        crate::support::mine_output(chain, mined(&coinbase, 5, 7));
+        chain.kernels.push(LocatedKernel {
+            kernel: coinbase.kernel,
+            height: Height::new(5),
+            mmr_index: 3,
+        });
+    });
+    refresh_at(sender, 6);
+    let tx_id = stored(sender, &coinbase).unwrap().tx.unwrap();
+    (coinbase, tx_id)
+}
+
+/// A reorganisation replaces the block at 5 with one that holds neither the reward's output
+/// nor its kernel.
+fn replace_block(sender: &Sender, coinbase: &Coinbase) {
+    sender.harness.node.update_chain(|chain| {
+        chain
+            .outputs
+            .retain(|output| output.commitment != coinbase.output.commitment);
+        chain
+            .kernels
+            .retain(|located| located.kernel.excess != coinbase.kernel.excess);
+        chain
+            .header_hashes
+            .insert(Height::new(5), Hash::from_bytes([0xee; 32]));
+    });
+}
+
+/// The block at 5 holds the reward again.
+fn restore_block(sender: &Sender, coinbase: &Coinbase) {
+    sender.harness.node.update_chain(|chain| {
+        chain
+            .header_hashes
+            .insert(Height::new(5), Hash::from_bytes(BLOCK_5));
+        crate::support::mine_output(chain, mined(coinbase, 5, 7));
+        chain.kernels.push(LocatedKernel {
+            kernel: coinbase.kernel,
+            height: Height::new(5),
+            mmr_index: 3,
+        });
+    });
+}
+
+fn state_of(sender: &Sender, tx_id: TxId) -> TxState {
+    sender.read(|repos| repos.transaction(tx_id)).unwrap().state
+}
+
+fn transitions(events: &mut tokio::sync::broadcast::Receiver<Event>) -> Vec<TransactionState> {
+    let mut seen = Vec::new();
+    while let Ok(event) = events.try_recv() {
+        if let Event::Transaction(state) = event {
+            seen.push(state);
+        }
+    }
+    seen
+}
+
+both_stores!(a_reward_whose_block_was_replaced_expires_and_leaves_the_balance);
+fn a_reward_whose_block_was_replaced_expires_and_leaves_the_balance() {
+    let sender = wallet();
+    let (coinbase, tx_id) = confirmed_reward(&sender);
+    let amount = stored(&sender, &coinbase).unwrap().amount;
+    let before = sender.wallet.balance(AccountIndex(0)).unwrap();
+    assert_eq!(before.immature, amount);
+    let mut events = sender.wallet.subscribe();
+
+    replace_block(&sender, &coinbase);
+    refresh_at(&sender, 7);
+
+    assert_eq!(state_of(&sender, tx_id), TxState::Expired);
+    assert_eq!(
+        transitions(&mut events),
+        vec![TransactionState {
+            tx_id,
+            from: TxState::Confirmed,
+            to: TxState::Expired,
+        }]
+    );
+    let output = stored(&sender, &coinbase).unwrap();
+    assert_eq!(output.status, OutputStatus::Unconfirmed);
+    assert_eq!(output.tx, Some(tx_id));
+    assert_eq!(output.mmr_index, None);
+    assert_eq!(sender.read(|repos| repos.confirmed_height(tx_id)), None);
+    let after = sender.wallet.balance(AccountIndex(0)).unwrap();
+    assert_eq!(after.immature, Amount::ZERO);
+    assert_eq!(after.total, before.total.checked_sub(amount).unwrap());
+    let details = sender
+        .harness
+        .block_on(sender.wallet.transaction_details(tx_id))
+        .unwrap();
+    assert!(details.coinbase);
+    assert_eq!(details.expired_reason, Some(ExpiredReason::Orphaned));
+
+    // Later refreshes neither ask for it nor delete it.
+    let asked = asked_for(&sender, &coinbase);
+    refresh_at(&sender, 8);
+    refresh_at(&sender, 6 + REORG_WINDOW);
+    refresh_at(&sender, 40);
+    assert_eq!(asked_for(&sender, &coinbase), asked);
+    assert_eq!(state_of(&sender, tx_id), TxState::Expired);
+    assert_eq!(
+        stored(&sender, &coinbase).unwrap().status,
+        OutputStatus::Unconfirmed
+    );
+    assert!(transitions(&mut events).is_empty());
+}
+
+both_stores!(a_replaced_reward_whose_block_comes_back_confirms_again);
+fn a_replaced_reward_whose_block_comes_back_confirms_again() {
+    let sender = wallet();
+    let (coinbase, tx_id) = confirmed_reward(&sender);
+    replace_block(&sender, &coinbase);
+    refresh_at(&sender, 7);
+    // A refresh reads the replacing block, which does not hold the reward.
+    refresh_at(&sender, 8);
+    assert_eq!(state_of(&sender, tx_id), TxState::Expired);
+    let mut events = sender.wallet.subscribe();
+
+    restore_block(&sender, &coinbase);
+    refresh_at(&sender, 9);
+
+    assert_eq!(state_of(&sender, tx_id), TxState::Confirmed);
+    assert_eq!(
+        transitions(&mut events),
+        vec![TransactionState {
+            tx_id,
+            from: TxState::Expired,
+            to: TxState::Confirmed,
+        }]
+    );
+    let output = stored(&sender, &coinbase).unwrap();
+    assert_eq!(output.status, OutputStatus::Unspent);
+    assert_eq!(output.mmr_index, Some(7));
+    assert_eq!(
+        output.lock_height,
+        Height::new(5 + Network::Floonet.params().coinbase_maturity())
+    );
+    assert_eq!(
+        sender.read(|repos| repos.confirmed_height(tx_id)),
+        Some(Height::new(5))
+    );
+    let details = sender
+        .harness
+        .block_on(sender.wallet.transaction_details(tx_id))
+        .unwrap();
+    assert_eq!(details.expired_reason, None);
+}
+
+both_stores!(a_reward_a_lagging_node_showed_gone_confirms_again_past_the_reorg_window);
+fn a_reward_a_lagging_node_showed_gone_confirms_again_past_the_reorg_window() {
+    let sender = wallet();
+    let (coinbase, tx_id) = confirmed_reward(&sender);
+    replace_block(&sender, &coinbase);
+    refresh_at(&sender, 7);
+    let asked = asked_for(&sender, &coinbase);
+    refresh_at(&sender, 6 + REORG_WINDOW);
+    assert_eq!(state_of(&sender, tx_id), TxState::Expired);
+
+    // A node that had the block all along answers again, deeper than REORG_WINDOW.
+    restore_block(&sender, &coinbase);
+    refresh_at(&sender, 30);
+
+    assert_eq!(state_of(&sender, tx_id), TxState::Confirmed);
+    assert_eq!(
+        stored(&sender, &coinbase).unwrap().status,
+        OutputStatus::Unspent
+    );
+    assert_eq!(asked_for(&sender, &coinbase), asked);
+}
+
+both_stores!(past_the_recheck_window_only_a_scan_confirms_an_orphaned_reward);
+fn past_the_recheck_window_only_a_scan_confirms_an_orphaned_reward() {
+    let sender = wallet();
+    let (coinbase, tx_id) = confirmed_reward(&sender);
+    replace_block(&sender, &coinbase);
+    refresh_at(&sender, 7);
+    restore_block(&sender, &coinbase);
+    let before = sender.harness.node.calls().len();
+
+    refresh_at(&sender, 6 + CONFIRMATION_RECHECK_BLOCKS);
+
+    assert_eq!(state_of(&sender, tx_id), TxState::Expired);
+    let calls = sender.harness.node.calls().split_off(before);
+    assert!(
+        !calls.iter().any(|call| call == "get_pmmr_indices"),
+        "{calls:?}"
+    );
+    // A scan rewinds the output's own proof.
+    sender.harness.node.update_chain(|chain| {
+        for output in &mut chain.outputs {
+            if output.commitment == coinbase.output.commitment {
+                output.proof = coinbase.output.proof.clone();
+            }
+        }
+    });
+    scan(&sender, false);
+    assert_eq!(state_of(&sender, tx_id), TxState::Confirmed);
+    let output = stored(&sender, &coinbase).unwrap();
+    assert_eq!(output.status, OutputStatus::Unspent);
+    assert_eq!(
+        sender.read(|repos| repos.confirmed_height(tx_id)),
+        Some(Height::new(5))
+    );
+}
+
+/// Stores the reward's output as spent, as a refresh before this change left one whose block
+/// was replaced.
+fn mark_spent(sender: &Sender, coinbase: &Coinbase) {
+    let mut output = stored(sender, coinbase).unwrap();
+    output.status = OutputStatus::Spent;
+    sender
+        .store
+        .write(|repos| repos.put_output(&output))
+        .unwrap();
+}
+
+fn scan(sender: &Sender, delete_unconfirmed: bool) {
+    sender
+        .harness
+        .block_on(sender.wallet.scan(
+            ScanOptions {
+                delete_unconfirmed,
+                ..ScanOptions::update(Network::Floonet)
+            },
+            &ScanCancel::new(),
+        ))
+        .unwrap();
+}
+
+both_stores!(a_scan_expires_a_reward_stored_as_spent_whose_block_was_replaced);
+fn a_scan_expires_a_reward_stored_as_spent_whose_block_was_replaced() {
+    let sender = wallet();
+    let (coinbase, tx_id) = confirmed_reward(&sender);
+    replace_block(&sender, &coinbase);
+    mark_spent(&sender, &coinbase);
+    let tip = 6 + CONFIRMATION_RECHECK_BLOCKS;
+    // Too deep for a refresh to look at again.
+    refresh_at(&sender, tip);
+    assert_eq!(state_of(&sender, tx_id), TxState::Confirmed);
+    let mut events = sender.wallet.subscribe();
+
+    scan(&sender, false);
+
+    assert_eq!(state_of(&sender, tx_id), TxState::Expired);
+    assert_eq!(
+        transitions(&mut events),
+        vec![TransactionState {
+            tx_id,
+            from: TxState::Confirmed,
+            to: TxState::Expired,
+        }]
+    );
+    let output = stored(&sender, &coinbase).unwrap();
+    assert_eq!(output.status, OutputStatus::Unconfirmed);
+    assert_eq!(output.tx, Some(tx_id));
+
+    // The repair keeps it with its entry.
+    scan(&sender, true);
+    assert_eq!(state_of(&sender, tx_id), TxState::Expired);
+    assert_eq!(
+        stored(&sender, &coinbase).unwrap().status,
+        OutputStatus::Unconfirmed
+    );
+}
+
+both_stores!(a_scan_keeps_a_reward_on_chain_or_spent_by_another_wallet);
+fn a_scan_keeps_a_reward_on_chain_or_spent_by_another_wallet() {
+    let sender = wallet();
+    let (coinbase, tx_id) = confirmed_reward(&sender);
+
+    // Spent, its kernel still on chain.
+    mark_spent(&sender, &coinbase);
+    sender.harness.node.update_chain(|chain| {
+        chain
+            .outputs
+            .retain(|output| output.commitment != coinbase.output.commitment);
+    });
+    scan(&sender, false);
+    assert_eq!(state_of(&sender, tx_id), TxState::Confirmed);
+
+    // Spent by another wallet on the same phrase, so not looked up.
+    replace_block(&sender, &coinbase);
+    mark_spent(&sender, &coinbase);
+    sender
+        .store
+        .write(|repos| {
+            repos.put_other_wallet_spend(
+                tx_id,
+                &OtherWalletSpend {
+                    after: Height::new(5),
+                    to: Height::new(6),
+                    open: false,
+                    spent: vec![*coinbase.output.commitment.as_bytes()],
+                    change: Vec::new(),
+                },
+            )
+        })
+        .unwrap();
+    let lookups = |sender: &Sender| {
+        sender
+            .harness
+            .node
+            .calls()
+            .iter()
+            .filter(|call| *call == "get_kernel")
+            .count()
+    };
+    let before = lookups(&sender);
+    scan(&sender, false);
+    assert_eq!(lookups(&sender), before);
+    assert_eq!(state_of(&sender, tx_id), TxState::Confirmed);
+}
+
+both_stores!(a_scan_whose_kernel_lookup_fails_keeps_the_reward_and_completes);
+fn a_scan_whose_kernel_lookup_fails_keeps_the_reward_and_completes() {
+    let sender = wallet();
+    let (coinbase, tx_id) = confirmed_reward(&sender);
+    replace_block(&sender, &coinbase);
+    mark_spent(&sender, &coinbase);
+    refresh_at(&sender, 6 + CONFIRMATION_RECHECK_BLOCKS);
+    for failure in [
+        MockFailure::Unreachable,
+        MockFailure::Rejected(RejectionKind::Internal),
+    ] {
+        sender.harness.node.fail_every("get_kernel", failure);
+        scan(&sender, false);
+        assert_eq!(state_of(&sender, tx_id), TxState::Confirmed);
+        sender.harness.node.stop_failing("get_kernel");
+    }
+
+    scan(&sender, false);
+    assert_eq!(state_of(&sender, tx_id), TxState::Expired);
 }
 
 #[test]

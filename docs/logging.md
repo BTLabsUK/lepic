@@ -140,6 +140,10 @@ Log an error once, where it is handled, not at every layer it passes through.
 height that was cleared) is logged when a refresh finds that a reorganisation took the block of a
 confirmed transaction. The transaction is open again; see [states.md](compat/states.md).
 
+`block reward no longer on chain` (`warn`, fields `tx_id` and `height`) is the same for a block
+reward: a refresh or scan found its block replaced, and the reward is `expired`. `block reward
+back on chain` (`info`, same fields) is logged when its block comes back. See ADR 0070.
+
 ## The log ring
 
 `LogRing` keeps redacted records on the device for a problem report. The app opens it with

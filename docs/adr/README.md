@@ -60,7 +60,7 @@ they were written, and the file names do not change.
 | [0043](0043-domain-proof-for-paired-contacts.md) | Domain proof for paired contacts | accepted |
 | [0044](0044-the-onion-has-its-own-key.md) | The onion has its own key | accepted |
 | [0045](0045-refusing-slates-nobody-asked-for.md) | Refusing slates nobody asked for | accepted; "declined" on a payments address superseded by 0062; the cancel on "declined" by 0067 |
-| [0046](0046-a-wallet-for-a-mining-node.md) | A wallet for a mining node | accepted; who is served and how many candidates are kept superseded by 0048 |
+| [0046](0046-a-wallet-for-a-mining-node.md) | A wallet for a mining node | accepted; who is served and how many candidates are kept superseded by 0048; the refresh rules for candidates by 0070 |
 | [0047](0047-the-mailbox-is-the-default-between-paired-contacts.md) | The mailbox is the default route between paired contacts | accepted; plain fallback superseded by 0062 |
 | [0048](0048-block-rewards-for-this-computer.md) | Block rewards are served to this computer unless the host opens them | accepted |
 | [0049](0049-keeping-messages-that-cannot-be-taken-yet.md) | Keeping messages that cannot be taken yet | accepted |
@@ -84,3 +84,4 @@ they were written, and the file names do not change.
 | [0067](0067-one-notice-path.md) | One notice path: one kind set, one send path, one intake; no notice but `declined` affects the engine | accepted |
 | [0068](0068-invoices-the-payer-opens-need-no-pairing.md) | Invoices the payer opens need no pairing: the invoice rule, checkout requests, links need a checked domain | accepted |
 | [0069](0069-epic1-payment-proofs.md) | Payment proofs for epic1 payments, signed by a tweak of the delivery key | accepted |
+| [0070](0070-coinbase-candidates-by-block.md) | Coinbase candidates are checked by block, and a reward a reorganisation takes expires | accepted |

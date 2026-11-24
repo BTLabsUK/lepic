@@ -22,6 +22,7 @@ use lepic_crypto::Commitment;
 use lepic_keychain::{Identifier, OutputRewinder, ProofError, SwitchCommitment};
 use lepic_node::{NodeApi, NodeError, UnspentOutput, UnspentOutputs};
 use lepic_primitives::amount::{Amount, ArithmeticError, Height};
+use lepic_primitives::error_chain::ErrorChain;
 use lepic_primitives::hash::Hash;
 use lepic_primitives::output::OutputIdentifier;
 use lepic_primitives::params::Network;
@@ -523,6 +524,7 @@ where
             .await?;
         summary.add(&outcome);
         self.emit_changes(outcome.changes);
+        self.emit_changes(self.check_rewards(&session, tip.height).await?);
         self.emit(Event::Sync(SyncProgress {
             height: tip.height,
             target: tip.height,
@@ -634,6 +636,56 @@ where
         })
         .await??;
         Ok(outcome)
+    }
+
+    /// Looks up the kernel of each block reward [`crate::coinbase::rewards_to_check`] names and
+    /// expires those the chain no longer holds ([`crate::coinbase::orphan`]). A lookup that fails
+    /// or that the node refuses leaves the reward as it is, logged, and does not fail the scan,
+    /// which is stored by then. Returns the changes.
+    async fn check_rewards(
+        &self,
+        session: &Arc<Session<S::Store>>,
+        tip: Height,
+    ) -> Result<Vec<StateChange>, ScanError> {
+        let checks = {
+            let session = Arc::clone(session);
+            self.blocking(move |_, _| {
+                Ok(session
+                    .store
+                    .read(|repos| crate::coinbase::rewards_to_check(repos)))
+            })
+            .await??
+        };
+        let node = &self.ports().node;
+        let mut gone = Vec::new();
+        for check in checks {
+            let floor = chain::kernel_floor(check.confirmed, tip);
+            // The scan is stored already; a lookup that fails leaves the reward for the next one.
+            match node.get_kernel(&check.excess, Some(floor), Some(tip)).await {
+                Ok(None) => gone.push(check.tx_id),
+                Ok(Some(_)) => {}
+                Err(error) => {
+                    warn!(tx_id = %check.tx_id, error = %ErrorChain(&error), "reward kernel lookup failed");
+                }
+            }
+        }
+        if gone.is_empty() {
+            return Ok(Vec::new());
+        }
+        let now = self.ports().clock.now();
+        let session = Arc::clone(session);
+        let changes = self
+            .blocking(move |_, _| {
+                Ok(session.store.write(|repos| {
+                    let mut changes = Vec::new();
+                    for tx_id in &gone {
+                        changes.extend(crate::coinbase::orphan(repos, *tx_id, now)?);
+                    }
+                    Ok::<_, WalletError>(changes)
+                }))
+            })
+            .await??;
+        Ok(changes)
     }
 
     /// Where the last completed scan ended, or `None` before the first one completes. Fails with
@@ -1103,6 +1155,18 @@ fn reconcile(
             outcome.unlocked = outcome.unlocked.saturating_add(1);
             true
         }
+        // A block reward a reorganisation orphaned, which the chain holds again.
+        OutputStatus::Unconfirmed if crate::coinbase::is_orphaned(&stored) => {
+            outcome.changes.extend(crate::coinbase::confirm_again(
+                repos,
+                &mut stored,
+                found.height,
+                found.lock_height,
+                ending.now,
+            )?);
+            repos.put_output(&stored)?;
+            return Ok(());
+        }
         // The repair deletes the unconfirmed outputs it started with that are left at the end;
         // one on chain is kept as unspent instead of being lost until the next scan.
         // A coinbase the wallet built that the chain mined, before any refresh saw it.
@@ -1377,7 +1441,8 @@ fn finish(
         let Some(output) = unconfirmed(repos)? else {
             continue;
         };
-        if in_open_recovery(repos, output.tx)? {
+        // An orphaned block reward stays with its expired entry, as the record of it.
+        if in_open_recovery(repos, output.tx)? || crate::coinbase::is_orphaned(&output) {
             continue;
         }
         cancel_open(repos, output.tx, ending, &mut outcome)?;

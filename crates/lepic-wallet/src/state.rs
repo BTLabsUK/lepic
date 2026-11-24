@@ -190,6 +190,33 @@ pub(crate) fn reopen_confirmed(
     Ok(Some(change))
 }
 
+/// Moves a confirmed block reward the chain no longer holds to `expired`: a reorganisation
+/// replaced the block that held it, and its output and kernel fit no other height. The second
+/// step out of `confirmed` (`docs/compat/states.md`); only a refresh or scan that finds the
+/// reward's kernel gone takes it ([`crate::coinbase::orphan`]). Should the chain return to that
+/// block, [`confirm_released`] confirms it again. Returns `Ok(None)` when it is not confirmed.
+pub(crate) fn orphan_reward(
+    repos: &mut dyn Repositories,
+    tx_id: TxId,
+    at: Timestamp,
+) -> Result<Option<StateChange>, WalletError> {
+    let mut entry = repos
+        .transaction(tx_id)?
+        .ok_or(WalletError::UnknownTransaction(tx_id))?;
+    if entry.state != TxState::Confirmed {
+        return Ok(None);
+    }
+    let change = StateChange {
+        tx_id,
+        from: entry.state,
+        to: TxState::Expired,
+    };
+    entry.state = TxState::Expired;
+    entry.updated_at = at;
+    repos.update_transaction(tx_id, &entry)?;
+    Ok(Some(change))
+}
+
 #[cfg(test)]
 mod tests {
     use lepic_primitives::amount::Amount;

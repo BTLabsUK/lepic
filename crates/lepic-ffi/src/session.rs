@@ -2295,6 +2295,7 @@ fn expired_reason(reason: lepic_wallet::details::ExpiredReason) -> Option<Expire
         R::RejectedByNode => Some(ExpiredReason::RejectedByNode),
         R::NoAnswer => Some(ExpiredReason::NoAnswer),
         R::NotMined => Some(ExpiredReason::NotMined),
+        R::Orphaned => Some(ExpiredReason::Orphaned),
         _ => None,
     }
 }
@@ -3435,12 +3436,13 @@ mod tests {
     }
 
     #[test]
-    fn all_three_expired_reasons_map() {
+    fn every_expired_reason_maps() {
         use lepic_wallet::details::ExpiredReason as R;
         for (reason, shown) in [
             (R::RejectedByNode, ExpiredReason::RejectedByNode),
             (R::NoAnswer, ExpiredReason::NoAnswer),
             (R::NotMined, ExpiredReason::NotMined),
+            (R::Orphaned, ExpiredReason::Orphaned),
         ] {
             assert_eq!(expired_reason(reason), Some(shown));
         }

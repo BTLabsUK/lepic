@@ -631,6 +631,10 @@ pub enum ExpiredReason {
     /// A transaction that was answered but not mined before its cutoff. Its kernel may still be
     /// mined.
     NotMined,
+    /// A block reward whose block a reorganisation replaced after it was confirmed. Its output
+    /// is unconfirmed again and counts in no balance. It becomes `Confirmed` again if the chain
+    /// returns to that block.
+    Orphaned,
 }
 
 /// Why the wallet ended a transaction `Cancelled`. Values are only added, at the end.

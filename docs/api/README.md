@@ -3,7 +3,7 @@
 Interactive version: [docs.btlabs.uk/developers/lepic/api/v1](https://docs.btlabs.uk/developers/lepic/api/v1/).
 
 `lepic serve` holds one wallet open and answers an HTTP API under `/api/v1` on a Unix socket, and
-on an owner TLS listener when that is on. This guide covers lepic 0.6.1. `lepic serve` runs on Unix only; on Windows the rest of the CLI runs but the API does not. The contract is
+on an owner TLS listener when that is on. This guide covers lepic 0.6.2. `lepic serve` runs on Unix only; on Windows the rest of the CLI runs but the API does not. The contract is
 [openapi.json](openapi.json), document version 2.0.0 (the path stays `/api/v1`); `GET /api/v1/openapi.json` returns the same
 document from a running serve. The
 [explorer](https://docs.btlabs.uk/developers/lepic/api/v1/explorer/) has every endpoint with its
@@ -24,7 +24,7 @@ curl --unix-socket ./w.sock http://lepic/api/v1/status
 ```
 
 ```json
-{"version":"0.6.1","uptime_s":5,"listeners":{"epicbox":{"state":"connected","relays":[{"host":"relay.example:443","group":"wallet","state":"attached","push":true,"connected_since":"2026-11-11T02:55:09.512041201Z"}]}},"node":{"tip_height":3412790,"tip_changed_at":"2026-11-11T02:54:31.226402118Z"},"payments":{"open":{"needs_approval":0,"awaiting_answer":0,"finalized":0,"posted":0}},"refresh":{"failures":0,"last_success_at":"2026-11-11T02:55:09.797663717Z"},"collect":{"failures":0,"last_success_at":"2026-11-11T02:55:09.816610725Z"},"requests":{"served":0,"in_flight":1,"refused":0}}
+{"version":"0.6.2","uptime_s":5,"listeners":{"epicbox":{"state":"connected","relays":[{"host":"relay.example:443","group":"wallet","state":"attached","push":true,"connected_since":"2026-11-11T02:55:09.512041201Z"}]}},"node":{"tip_height":3412790,"tip_changed_at":"2026-11-11T02:54:31.226402118Z"},"payments":{"open":{"needs_approval":0,"awaiting_answer":0,"finalized":0,"posted":0}},"refresh":{"failures":0,"last_success_at":"2026-11-11T02:55:09.797663717Z"},"collect":{"failures":0,"last_success_at":"2026-11-11T02:55:09.816610725Z"},"requests":{"served":0,"in_flight":1,"refused":0}}
 ```
 
 Read the accounts and their balances.
@@ -80,7 +80,7 @@ stateDiagram-v2
 | `confirmed` | The transaction is on the chain. Within 1,440 blocks of its confirmation, a reorg that takes it off the chain reopens it: serve moves it back to `posted` (`received` for a payment you received, `sent` for a send not yet posted) and raises `payment.state_changed`. | none |
 | `cancelled` | Ended without a transaction. `state_reason` is `by_us`, `by_them`, or `recovered` once a recovery is done. | `recover` for a send whose inputs are still held for it |
 | `declined` | One side refused the invoice. `state_reason` says which. A send this wallet made that its receiver declines is erased instead: no payment is left, `GET /payments/{id}` answers 404 `payment_declined`, and `payment.declined` is raised. | none |
-| `expired` | Ended at its expiry height. `state_reason` is `expired_no_answer` when the answer to a payment or invoice you started never came, `expired_not_mined` when it was answered but not mined, and `expired_rejected_by_node` for a send whose every push the node's pool refused. | `recover` for a send whose inputs are still held for it |
+| `expired` | Ended at its expiry height. `state_reason` is `expired_no_answer` when the answer to a payment or invoice you started never came, `expired_not_mined` when it was answered but not mined, `expired_rejected_by_node` for a send whose every push the node's pool refused, and `expired_orphaned` for a block reward whose block a reorganisation replaced (see [Coinbase outputs](#coinbase-outputs)). | `recover` for a send whose inputs are still held for it |
 
 While serve is online, its refresh pushes a `finalized` payment to the node again until it is
 mined or its expiry height passes: 1 block after the first push, 2 after the second, then 4, 8
@@ -119,7 +119,8 @@ The wallet decides the reason from what it stored. The side that started the pay
 of a send, the issuer of an invoice) holds the answer once it stored the answer's slate, knows the
 final kernel, or pushed the transaction to the node. Without any of these the payment ends
 `expired_no_answer`. Every other expiry, including each one on the side that answered, ends
-`expired_not_mined`, unless `expired_rejected_by_node` applies.
+`expired_not_mined`, unless `expired_rejected_by_node` applies. A block reward (`kind`
+`coinbase`) expires only when a reorganisation replaced its block, with `expired_orphaned`.
 
 ### Post to the node
 
@@ -561,14 +562,33 @@ contact not verified answers 409 `contact_not_verified`.
 
 On a wallet that answers `build_coinbase` for a mining node (`lepic serve --http --coinbase`), `GET /outputs`
 lists one unconfirmed coinbase output, a candidate, for every block template the node
-asks for. Two nodes mining the same height give two or three candidates for it, and a few dozen
-blocks of them stay listed. Only one can win; the others never confirm.
+asks for. Two nodes mining the same height give two or three candidates for it, and those of the
+last 10 or so blocks stay listed. Only one can win; the others never confirm.
 
 - Count only coinbase outputs that are no longer `unconfirmed`. They are the rewards. Summing
   candidates counts one reward several times.
-- A candidate is deleted when a refresh finds the tip more than 50 blocks past its height, or
-  its height more than 50 above the tip. Past 4096 candidates the oldest go first.
-- The winning candidate stays and changes state when its block is on chain.
+- A refresh checks candidates against the block at their height, without asking the node for
+  each one. A candidate the block did not hold is deleted once the tip is more than 10 blocks
+  past its height. One more than 50 above the tip is deleted. Past 4096 candidates the oldest go
+  first.
+- The winning candidate stays and changes state when its block is on chain. It becomes a payment
+  of `kind` `coinbase`, `direction` `in`, `state` `confirmed`.
+
+A reorganisation can replace the block that paid a reward. A refresh notices within 1,440 blocks,
+and any scan notices at any depth. Then:
+
+- The payment goes from `confirmed` to `expired` with `state_reason` `expired_orphaned`.
+  `payment.state_changed` is raised with `from_state` `confirmed`, `to_state` `expired` and
+  `reason` `expired_orphaned`.
+- Its output stays in `GET /outputs` with `state` `unconfirmed`, `coinbase: true` and the
+  payment's `payment_id`. It counts in no balance.
+- If the chain holds the block again within 1,440 blocks of its height, a refresh confirms the
+  payment again (`expired` to `confirmed`, with no reason) and the output's `state` is `unspent`
+  again. This also heals a reward a lagging node showed as gone. Later, only a scan does.
+
+Sum the rewards over payments of `kind` `coinbase` in state `confirmed`, or over coinbase outputs
+whose `state` is not `unconfirmed`. A wallet on 0.6.1 or earlier listed the output of such a
+reward as `spent` and kept the payment `confirmed`; a scan on this version corrects it.
 
 ## Consolidate outputs
 

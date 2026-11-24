@@ -76,6 +76,8 @@ pub struct ChainState {
     /// unless `header_times` says otherwise.
     pub genesis_time: Timestamp,
     pub header_times: BTreeMap<Height, Timestamp>,
+    /// Header hashes that replace the derived ones, for a block another one replaced.
+    pub header_hashes: BTreeMap<Height, Hash>,
     /// The answer to `ready_for_txs`; `None` answers as a node before 4.1.0, which does not
     /// know the method.
     pub ready_for_txs: Option<bool>,
@@ -94,6 +96,7 @@ impl ChainState {
             genesis_time: Timestamp::from_second(DEFAULT_GENESIS_SECONDS)
                 .unwrap_or(Timestamp::UNIX_EPOCH),
             header_times: BTreeMap::new(),
+            header_hashes: BTreeMap::new(),
             ready_for_txs: None,
         }
     }
@@ -190,9 +193,12 @@ impl ChainState {
         Hash::from_bytes(bytes)
     }
 
-    /// The hash the scripted chain gives the block at `height`: the tip's own hash at the tip,
-    /// otherwise one derived from the height.
+    /// The hash the scripted chain gives the block at `height`: the one `header_hashes` gives
+    /// it, the tip's own hash at the tip, otherwise one derived from the height.
     pub fn header_hash(&self, height: Height) -> Hash {
+        if let Some(hash) = self.header_hashes.get(&height) {
+            return *hash;
+        }
         if height == self.tip.height {
             return self.tip.last_block_pushed;
         }

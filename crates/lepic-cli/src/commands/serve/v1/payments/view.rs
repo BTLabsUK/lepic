@@ -1070,6 +1070,7 @@ fn state(details: &TransactionDetails) -> (&'static str, Option<&'static str>) {
             Some(ExpiredReason::RejectedByNode) => ("expired", Some("expired_rejected_by_node")),
             Some(ExpiredReason::NoAnswer) => ("expired", Some("expired_no_answer")),
             Some(ExpiredReason::NotMined) => ("expired", Some("expired_not_mined")),
+            Some(ExpiredReason::Orphaned) => ("expired", Some("expired_orphaned")),
             _ => ("expired", None),
         },
         TxState::Cancelled if declined.is_some() => ("declined", Some("by_them")),
@@ -1570,6 +1571,19 @@ mod tests {
         assert_eq!(delivery.error.as_deref(), Some(UNANSWERED));
         assert!(!delivery.undelivered);
         assert_eq!(delivery.to.as_deref(), Some(ROUTE));
+    }
+
+    #[test]
+    fn a_reward_whose_block_was_replaced_is_expired_orphaned() {
+        let mut reward = epicbox_send(None);
+        reward.transaction.entry.direction = TxDirection::Incoming;
+        reward.transaction.entry.state = TxState::Expired;
+        reward.transaction.entry.slate_id = None;
+        reward.transaction.entry.transport = None;
+        reward.counterparty = None;
+        reward.coinbase = true;
+        reward.expired_reason = Some(ExpiredReason::Orphaned);
+        assert_eq!(state(&reward), ("expired", Some("expired_orphaned")));
     }
 
     #[test]
