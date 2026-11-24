@@ -29,8 +29,9 @@ text  = bech32m("epic", data)   on mainnet: 117 characters
 - The **delivery key** is a compressed secp256k1 public key, prefix `02` or `03`.
 
 The address is written in lower case. A reader takes it in lower or upper case, so a QR code
-can hold it in upper case; mixed case is refused. An epic1 has no payment proof: the payee
-refuses a payment to it that asks for one.
+can hold it in upper case; mixed case is refused. An epic1 carries no proof key. The payee signs a
+payment proof with a key derived in public from the delivery key
+([Payment proofs](#payment-proofs)); a slate that asks for a slate-level proof is refused.
 
 Both derive from the seed, the account and the address's index, so a restore gives the same
 epic1. The address names no mailbox or transport, and no index. Its delivery key, read as an
@@ -313,7 +314,7 @@ A LEPIC payee signs a payment proof into the S2 of every epic1 payment it takes,
 derived from the address's delivery key. It says the owner of the address took this amount in the
 transaction whose kernel excess it names, for this slate id. The payer key in it is one-time and
 names no payer. The payer keeps the proof if it holds, and finalizes the payment even without one
-unless it requires proof (`--require-proof`, `epic1_require_proof`). Stock Epic wallets sign none.
+unless it requires proof (`--require-proof`, `epic1_require_proof`). Stock Epic wallets and LEPIC wallets of 0.6.1 and older sign none.
 The byte-level format is [epic1-receipt](epic1-receipt.md).
 
 ## Notices

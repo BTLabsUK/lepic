@@ -772,7 +772,7 @@ posted again, the same bytes.
 | Payment | `reason` |
 |---|---|
 | To the address while the wallet refuses unsolicited payments (`refuse_unsolicited_payments`); a request link does not make a payment asked for | `declined` |
-| Asking for a payment proof, which an epic1 address has no key to sign | `declined` |
+| Asking for a slate-level payment proof, which an epic1 address does not sign | `declined` |
 
 A wallet keeps at most 64 refusals, each for 7 days; a payment refused past that gets none.
 
@@ -983,7 +983,8 @@ and the header.
 - **Everyone who holds a user's links sees the same address.** An account has one epic1 address
   (5.13). A user who wants two payers not to know they pay the same wallet uses a second account.
   Every envelope to an address carries the zero hint (5.5). The payee's answers come from the
-  payee's IP address. An epic1 payment carries no payment proof.
+  payee's IP address. An epic1 payment carries a receipt
+  (tags `84` and `85`) that names the payer only by a one-time key.
 - **Length hiding** of sealed proposals above the 768-byte floor.
 - **Delivery cannot redirect payment:** a link's route entries decide where an S1 is posted,
   never who can open it.

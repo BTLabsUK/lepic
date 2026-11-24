@@ -1,5 +1,9 @@
 # ADR 0063: The epic1 address carries its own slot
 
+Amended by ADR 0069 (payment proofs): epic1 payments between LEPIC wallets carry a payment proof,
+signed by a public tweak of the delivery key. Where this record says the proof key signs nothing or
+that epic1 payments carry no payment proof, ADR 0069 governs.
+
 Status: accepted; in §1 the numbered addresses (index 1 and up), §7 (a link per address, the link id, the amount check, the 256 bound, the
 restore gap), the `POST /addresses` and link id lines of §8, and in §9 "an open link's address"
 and the reason `amount` for an address superseded by 0066 (one address per account; a request

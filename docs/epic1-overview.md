@@ -20,8 +20,8 @@ text  = bech32m("epic", data)    mainnet, 117 characters
 Payments are sealed to the **seal key**. The **delivery key**, read as an Epicbox key, is the
 address's mailbox, the same on every mailbox. Both derive from the seed, the account, the network
 and index 0, so each account has one address and a restore gives the same one. The address
-names no mailbox, transport or index, and carries no proof key: an epic1 payment has no payment
-proof. The payment link is the address, `epic:<address>`; a request link adds an amount, a
+names no mailbox, transport or index, and carries no proof key. The payee signs a payment proof
+with a key anyone derives from the address ([Payment proofs](#payment-proofs)). The payment link is the address, `epic:<address>`; a request link adds an amount, a
 message or both, and only fills in the payer's Send screen
 ([The links](protocols/epic1.md#the-links)).
 
@@ -90,7 +90,7 @@ sequenceDiagram
 The payee's LEPIC wallet signs a payment proof into the S2. It says the owner of the address took
 this amount in the transaction whose kernel it names, for this slate id, and it names no payer.
 The payer checks it when it finalizes and keeps it with the payment if it holds; a missing or bad
-proof does not stop the payment unless `--require-proof` or `epic1_require_proof` asks for one.
+proof does not stop the payment unless `--require-proof` or `epic1_require_proof` asks for one. LEPIC wallets of 0.6.1 and older sign no proof.
 Anyone verifies the proof with only the address (`lepic proof verify`). See
 [Payment proofs](protocols/epic1-receipt.md) and [CLI](cli.md#payment-proofs).
 
