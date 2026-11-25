@@ -1816,8 +1816,11 @@ where
         if !matches!(
             finalized,
             Ok(_)
-                | Err(ContactError::Invoice(InvoiceError::NotPosted { .. })
-                    | ContactError::Finalize(FinalizeError::NotPosted { .. }))
+                | Err(ContactError::Invoice(
+                    InvoiceError::NotPosted { .. } | InvoiceError::InputsReorged { .. }
+                ) | ContactError::Finalize(
+                    FinalizeError::NotPosted { .. } | FinalizeError::InputsReorged { .. }
+                ))
         ) {
             return finalized;
         }

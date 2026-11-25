@@ -13456,6 +13456,19 @@ impl SseDecode for crate::api::types::ChainCheck {
     }
 }
 
+impl SseDecode for crate::api::types::ChainReplaced {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut inner = <i32>::sse_decode(deserializer);
+        return match inner {
+            0 => crate::api::types::ChainReplaced::InputsReplaced,
+            1 => crate::api::types::ChainReplaced::Reopened,
+            2 => crate::api::types::ChainReplaced::Recent,
+            _ => unreachable!("Invalid variant for ChainReplaced: {}", inner),
+        };
+    }
+}
+
 impl SseDecode for crate::api::types::ContactChange {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
@@ -13913,6 +13926,7 @@ impl SseDecode for crate::api::types::ExpiredReason {
             1 => crate::api::types::ExpiredReason::NoAnswer,
             2 => crate::api::types::ExpiredReason::NotMined,
             3 => crate::api::types::ExpiredReason::Orphaned,
+            4 => crate::api::types::ExpiredReason::InputsReorged,
             _ => unreachable!("Invalid variant for ExpiredReason: {}", inner),
         };
     }
@@ -15377,6 +15391,17 @@ impl SseDecode for Option<crate::api::types::CancelledReason> {
             return Some(<crate::api::types::CancelledReason>::sse_decode(
                 deserializer,
             ));
+        } else {
+            return None;
+        }
+    }
+}
+
+impl SseDecode for Option<crate::api::types::ChainReplaced> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        if (<bool>::sse_decode(deserializer)) {
+            return Some(<crate::api::types::ChainReplaced>::sse_decode(deserializer));
         } else {
             return None;
         }
@@ -16897,6 +16922,8 @@ impl SseDecode for crate::api::types::TransactionDetails {
         let mut var_delivery = <Option<crate::api::types::DeliveryView>>::sse_decode(deserializer);
         let mut var_post = <Option<crate::api::types::NodePostView>>::sse_decode(deserializer);
         let mut var_receivedAtEpic1 = <bool>::sse_decode(deserializer);
+        let mut var_chainReplaced =
+            <Option<crate::api::types::ChainReplaced>>::sse_decode(deserializer);
         return crate::api::types::TransactionDetails {
             tx_id: var_txId,
             direction: var_direction,
@@ -16936,6 +16963,7 @@ impl SseDecode for crate::api::types::TransactionDetails {
             delivery: var_delivery,
             post: var_post,
             received_at_epic1: var_receivedAtEpic1,
+            chain_replaced: var_chainReplaced,
         };
     }
 }
@@ -17266,6 +17294,7 @@ impl SseDecode for crate::api::error::WalletErrorKind {
             101 => crate::api::error::WalletErrorKind::LastMailbox,
             102 => crate::api::error::WalletErrorKind::DamagedKept,
             103 => crate::api::error::WalletErrorKind::EarlierEpic1Address,
+            104 => crate::api::error::WalletErrorKind::InputsReorged,
             _ => unreachable!("Invalid variant for WalletErrorKind: {}", inner),
         };
     }
@@ -18585,6 +18614,28 @@ impl flutter_rust_bridge::IntoIntoDart<crate::api::types::ChainCheck>
     }
 }
 // Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for crate::api::types::ChainReplaced {
+    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+        match self {
+            Self::InputsReplaced => 0.into_dart(),
+            Self::Reopened => 1.into_dart(),
+            Self::Recent => 2.into_dart(),
+            _ => unreachable!(),
+        }
+    }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive
+    for crate::api::types::ChainReplaced
+{
+}
+impl flutter_rust_bridge::IntoIntoDart<crate::api::types::ChainReplaced>
+    for crate::api::types::ChainReplaced
+{
+    fn into_into_dart(self) -> crate::api::types::ChainReplaced {
+        self
+    }
+}
+// Codec=Dco (DartCObject based), see doc to use other codecs
 impl flutter_rust_bridge::IntoDart for crate::api::types::ContactChange {
     fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
         match self {
@@ -19172,6 +19223,7 @@ impl flutter_rust_bridge::IntoDart for crate::api::types::ExpiredReason {
             Self::NoAnswer => 1.into_dart(),
             Self::NotMined => 2.into_dart(),
             Self::Orphaned => 3.into_dart(),
+            Self::InputsReorged => 4.into_dart(),
             _ => unreachable!(),
         }
     }
@@ -22136,6 +22188,7 @@ impl flutter_rust_bridge::IntoDart for crate::api::types::TransactionDetails {
             self.delivery.into_into_dart().into_dart(),
             self.post.into_into_dart().into_dart(),
             self.received_at_epic1.into_into_dart().into_dart(),
+            self.chain_replaced.into_into_dart().into_dart(),
         ]
         .into_dart()
     }
@@ -22491,6 +22544,7 @@ impl flutter_rust_bridge::IntoDart for crate::api::error::WalletErrorKind {
             Self::LastMailbox => 101.into_dart(),
             Self::DamagedKept => 102.into_dart(),
             Self::EarlierEpic1Address => 103.into_dart(),
+            Self::InputsReorged => 104.into_dart(),
             _ => unreachable!(),
         }
     }
@@ -22950,6 +23004,23 @@ impl SseEncode for crate::api::types::ChainCheck {
     }
 }
 
+impl SseEncode for crate::api::types::ChainReplaced {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <i32>::sse_encode(
+            match self {
+                crate::api::types::ChainReplaced::InputsReplaced => 0,
+                crate::api::types::ChainReplaced::Reopened => 1,
+                crate::api::types::ChainReplaced::Recent => 2,
+                _ => {
+                    unimplemented!("");
+                }
+            },
+            serializer,
+        );
+    }
+}
+
 impl SseEncode for crate::api::types::ContactChange {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
@@ -23292,6 +23363,7 @@ impl SseEncode for crate::api::types::ExpiredReason {
                 crate::api::types::ExpiredReason::NoAnswer => 1,
                 crate::api::types::ExpiredReason::NotMined => 2,
                 crate::api::types::ExpiredReason::Orphaned => 3,
+                crate::api::types::ExpiredReason::InputsReorged => 4,
                 _ => {
                     unimplemented!("");
                 }
@@ -24439,6 +24511,16 @@ impl SseEncode for Option<crate::api::types::CancelledReason> {
         <bool>::sse_encode(self.is_some(), serializer);
         if let Some(value) = self {
             <crate::api::types::CancelledReason>::sse_encode(value, serializer);
+        }
+    }
+}
+
+impl SseEncode for Option<crate::api::types::ChainReplaced> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <bool>::sse_encode(self.is_some(), serializer);
+        if let Some(value) = self {
+            <crate::api::types::ChainReplaced>::sse_encode(value, serializer);
         }
     }
 }
@@ -25776,6 +25858,7 @@ impl SseEncode for crate::api::types::TransactionDetails {
         <Option<crate::api::types::DeliveryView>>::sse_encode(self.delivery, serializer);
         <Option<crate::api::types::NodePostView>>::sse_encode(self.post, serializer);
         <bool>::sse_encode(self.received_at_epic1, serializer);
+        <Option<crate::api::types::ChainReplaced>>::sse_encode(self.chain_replaced, serializer);
     }
 }
 
@@ -26092,6 +26175,7 @@ impl SseEncode for crate::api::error::WalletErrorKind {
                 crate::api::error::WalletErrorKind::LastMailbox => 101,
                 crate::api::error::WalletErrorKind::DamagedKept => 102,
                 crate::api::error::WalletErrorKind::EarlierEpic1Address => 103,
+                crate::api::error::WalletErrorKind::InputsReorged => 104,
                 _ => {
                     unimplemented!("");
                 }

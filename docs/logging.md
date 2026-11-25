@@ -144,6 +144,13 @@ confirmed transaction. The transaction is open again; see [states.md](compat/sta
 reward: a refresh or scan found its block replaced, and the reward is `expired`. `block reward
 back on chain` (`info`, same fields) is logged when its block comes back. See ADR 0070.
 
+`inputs reorged, waiting` (`warn`, fields `tx_id` and `inputs`, the number of inputs gone) is
+logged when a refresh keeps a posted send whose inputs a reorganisation took: the transactions
+that made them lost their block. The send is pushed again once they are mined again. `inputs
+reorged, expired` (`warn`, same fields) is logged when such a send is still waiting 60 blocks
+after the wallet first saw it waiting: it ends `expired` and its coins go back to the
+transactions that made them. See ADR 0071.
+
 ## The log ring
 
 `LogRing` keeps redacted records on the device for a problem report. The app opens it with

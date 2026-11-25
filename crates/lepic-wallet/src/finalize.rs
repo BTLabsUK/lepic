@@ -208,6 +208,16 @@ pub enum FinalizeError {
         #[source]
         source: NodeError,
     },
+    /// The node refused the transaction and no longer holds inputs of it that this wallet
+    /// held, because a reorganisation took the blocks of the transactions that made them
+    /// (ADR 0071). The transaction stays finalized: a refresh pushes it again, and it is mined
+    /// once its inputs are back on chain.
+    #[error("inputs of transaction {tx_id} left the chain in a reorganisation")]
+    InputsReorged {
+        tx_id: TxId,
+        #[source]
+        source: NodeError,
+    },
 }
 
 impl From<StoreError> for FinalizeError {
@@ -840,7 +850,18 @@ pub(crate) enum PushFailure {
         source: NodeError,
         spent: SpentInputs,
     },
+    /// The node's pool refused it because inputs of it are gone, and a reorganisation took
+    /// the blocks of the transactions that made them: it may be mined once they are back.
+    Reorged(NodeError),
     Wallet(WalletError),
+}
+
+/// Why the node's pool refused a transaction, as far as the chain tells.
+enum Refusal {
+    /// Inputs of it are gone for good.
+    Spent(SpentInputs),
+    /// Inputs of it this wallet held left the chain in a reorganisation, seen at `tip`.
+    Reorged { tip: Height },
 }
 
 /// Whose inputs of a refused transaction are gone from the chain, and who spent them.
@@ -1285,6 +1306,9 @@ where
                 self.end_unminable(tx_id, spent).await;
                 Err(spent.finalize_error(tx_id, source))
             }
+            Err(PushFailure::Reorged(source)) => {
+                Err(FinalizeError::InputsReorged { tx_id, source })
+            }
             Err(PushFailure::Wallet(error)) => Err(FinalizeError::Wallet(error)),
         }
     }
@@ -1332,10 +1356,11 @@ where
     /// Whose inputs of `finalized`, which `tx_id` posts, are missing from the node's UTXO set
     /// in two answers, as a refresh decides an output was spent: first the inputs this wallet
     /// holds, then the others, once the node's tip is above the height the slate was made at,
-    /// as a refresh requires before it ends a transaction for them. `None` when none are, when
-    /// the node's tip is below the height the wallet last refreshed at, or when the node or the
-    /// store cannot tell; the refusal then stays a failed post.
-    async fn spent_inputs(&self, tx_id: TxId, finalized: &FinalizedSlate) -> Option<SpentInputs> {
+    /// as a refresh requires before it ends a transaction for them. Inputs this wallet held whose
+    /// makers a reorganisation took are [`Refusal::Reorged`] ([`crate::origin`]). `None` when
+    /// none are gone, when the node's tip is below the height the wallet last refreshed at, or
+    /// when the node or the store cannot tell; the refusal then stays a failed post.
+    async fn refusal(&self, tx_id: TxId, finalized: &FinalizedSlate) -> Option<Refusal> {
         let session = self.session().ok()?;
         let inputs: Vec<Commitment> = finalized
             .transaction
@@ -1371,12 +1396,21 @@ where
             return None;
         }
         if !gone.is_empty() {
-            return Some(
-                match self.own_spender(&session, tx_id, gone, tip).await.ok()? {
-                    Some(by) => SpentInputs::OwnTransaction(by),
-                    None => SpentInputs::OtherWallet,
-                },
-            );
+            if let Some(by) = self
+                .own_spender(&session, tx_id, gone.clone(), tip)
+                .await
+                .ok()?
+            {
+                return Some(Refusal::Spent(SpentInputs::OwnTransaction(by)));
+            }
+            // A transaction of this wallet whose inputs are gone did not spend them; when
+            // the chain lost the makers of every one, a reorganisation took them.
+            let count = gone.len();
+            if self.inputs_reorged(&session, tx_id, gone, tip).await.ok()? {
+                warn!(inputs = count, "inputs reorged, waiting");
+                return Some(Refusal::Reorged { tip });
+            }
+            return Some(Refusal::Spent(SpentInputs::OtherWallet));
         }
         // The other party's inputs may be younger than any this wallet saw, so a node that is
         // still syncing may simply not have them.
@@ -1384,7 +1418,7 @@ where
             return None;
         }
         let gone = self.gone_twice(theirs).await?;
-        (!gone.is_empty()).then_some(SpentInputs::Peer)
+        (!gone.is_empty()).then_some(Refusal::Spent(SpentInputs::Peer))
     }
 
     /// Of `commitments`, those the node's UTXO set misses in two answers; `None` when the node
@@ -1462,6 +1496,34 @@ where
             .await
     }
 
+    /// Pushes `finalized` to the node. A transaction the pool already holds is accepted, and
+    /// a refused one whose kernel the chain holds is already on chain.
+    async fn push_to_node(
+        &self,
+        finalized: &FinalizedSlate,
+        propagation: Propagation,
+    ) -> Result<Posted, NodeError> {
+        let answer = self
+            .ports()
+            .node
+            .push_transaction(&finalized.transaction, propagation)
+            .await;
+        match answer {
+            Ok(()) => Ok(Posted::Accepted),
+            Err(error) if pool_holds_transaction(&error) => {
+                debug!("transaction already in the node pool");
+                Ok(Posted::Accepted)
+            }
+            Err(source) => match self.kernel_height(&finalized.slate).await {
+                Some(height) => {
+                    debug!(height = %height, "kernel found on chain");
+                    Ok(Posted::AlreadyOnChain { height })
+                }
+                None => Err(source),
+            },
+        }
+    }
+
     /// [`Self::push_final_at`] for a caller that already holds the posting turn `posting`.
     pub(crate) async fn push_final_in_turn(
         &self,
@@ -1500,25 +1562,7 @@ where
             check_transition(tx_id, state, TxState::Posted)
                 .map_err(|invalid| PushFailure::Wallet(invalid.into()))?;
         }
-        let answer = self
-            .ports()
-            .node
-            .push_transaction(&finalized.transaction, propagation)
-            .await;
-        let answer = match answer {
-            Ok(()) => Ok(Posted::Accepted),
-            Err(error) if pool_holds_transaction(&error) => {
-                debug!("transaction already in the node pool");
-                Ok(Posted::Accepted)
-            }
-            Err(source) => match self.kernel_height(&finalized.slate).await {
-                Some(height) => {
-                    debug!(height = %height, "kernel found on chain");
-                    Ok(Posted::AlreadyOnChain { height })
-                }
-                None => Err(source),
-            },
-        };
+        let answer = self.push_to_node(finalized, propagation).await;
         let (outcome, text) = match &answer {
             Ok(_) => (NodeOutcome::Accepted, None),
             Err(source) => (push_outcome(source), Some(stored_error(source))),
@@ -1537,9 +1581,11 @@ where
         let posted = match answer {
             Ok(posted) => posted,
             Err(source) => {
-                if outcome == NodeOutcome::Refused
-                    && let Some(spent) = self.spent_inputs(tx_id, finalized).await
-                {
+                let refusal = match outcome {
+                    NodeOutcome::Refused => self.refusal(tx_id, finalized).await,
+                    _ => None,
+                };
+                if let Some(Refusal::Spent(spent)) = refusal {
                     log_spent(&spent);
                     return Err(PushFailure::Unminable { source, spent });
                 }
@@ -1549,15 +1595,24 @@ where
                 }) {
                     self.raise_not_posted(tx_id, finalized, &source);
                 }
-                return Err(PushFailure::NotPosted(source));
+                return Err(match refusal {
+                    Some(Refusal::Reorged { tip }) => {
+                        self.mark_inputs_reorged(&session, finalized, tip).await;
+                        PushFailure::Reorged(source)
+                    }
+                    _ => PushFailure::NotPosted(source),
+                });
             }
         };
+        let slate_id = Uuid::from_bytes(*finalized.slate.id().as_bytes());
         let change = self
             .blocking(move |ports, _| {
                 let now = ports.clock.now();
-                session
-                    .store
-                    .write(|repos| apply_transition(repos, tx_id, TxState::Posted, now))
+                session.store.write(|repos| {
+                    // Its inputs are back: the wait for them is over.
+                    crate::reorg_marks::clear_inputs_reorged(repos, slate_id)?;
+                    apply_transition(repos, tx_id, TxState::Posted, now)
+                })
             })
             .await
             .map_err(PushFailure::Wallet)?;
@@ -1571,6 +1626,28 @@ where
             None => debug!("transaction posted again"),
         }
         Ok(posted)
+    }
+
+    /// Marks the send `finalized` as waiting for inputs a reorganisation took, first seen at
+    /// `tip` ([`crate::reorg_marks`]). A store failure is logged: the next refresh marks it.
+    async fn mark_inputs_reorged(
+        &self,
+        session: &Arc<Session<S::Store>>,
+        finalized: &FinalizedSlate,
+        tip: Height,
+    ) {
+        let session = Arc::clone(session);
+        let slate_id = Uuid::from_bytes(*finalized.slate.id().as_bytes());
+        let marked = self
+            .blocking(move |_, _| {
+                Ok(session
+                    .store
+                    .write(|repos| crate::reorg_marks::mark_inputs_reorged(repos, slate_id, tip))?)
+            })
+            .await;
+        if let Err(error) = marked {
+            warn!(error = %lepic_primitives::error_chain::ErrorChain(&error), "reorged inputs not marked");
+        }
     }
 
     /// Adds `push` to the record of its transaction, at the clock's time, and returns the record

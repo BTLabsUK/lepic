@@ -313,6 +313,13 @@ pub enum WalletErrorKind {
     /// it. Ask the payee for their Epicbox address (the one with an `@`) or an epic1 address
     /// or link from an updated wallet.
     EarlierEpic1Address,
+    /// The node refused the transaction because inputs of it are no longer unspent, and a
+    /// chain reorganisation took them: the blocks that made them were replaced, and the
+    /// transactions that made them are off chain for now. The transaction is finalized and
+    /// stored, and stays open with its coins held; a refresh posts it again once they are
+    /// mined again. Nothing was spent elsewhere. `repost_transaction` tries now, and a cancel
+    /// gives up.
+    InputsReorged,
 }
 
 impl WalletErrorKind {
@@ -437,6 +444,7 @@ impl WalletErrorKind {
             Self::LastMailbox => 123,
             Self::DamagedKept => 124,
             Self::EarlierEpic1Address => 125,
+            Self::InputsReorged => 126,
         }
     }
 }
@@ -745,6 +753,7 @@ impl From<FinalizeError> for WalletError {
             E::Expired { .. } => WalletErrorKind::PaymentExpired,
             E::Node(_) => WalletErrorKind::NodeUnreachable,
             E::NotPosted { .. } => WalletErrorKind::NotPosted,
+            E::InputsReorged { .. } => WalletErrorKind::InputsReorged,
             E::InputsSpentElsewhere { .. } => WalletErrorKind::InputsSpentElsewhere,
             E::InputsSpentByOwnTransaction { .. } => WalletErrorKind::InputsSpentByOwnTransaction,
             E::PeerInputsSpent { .. } => WalletErrorKind::PeerInputsSpent,
@@ -845,6 +854,7 @@ impl From<InvoiceError> for WalletError {
             E::NotParked { .. } => WalletErrorKind::InvoiceNotFound,
             E::Undelivered { .. } | E::PaymentUndelivered { .. } => WalletErrorKind::NotDelivered,
             E::NotPosted { .. } => WalletErrorKind::NotPosted,
+            E::InputsReorged { .. } => WalletErrorKind::InputsReorged,
             E::InputsSpentElsewhere { .. } => WalletErrorKind::InputsSpentElsewhere,
             E::InputsSpentByOwnTransaction { .. } => WalletErrorKind::InputsSpentByOwnTransaction,
             E::PeerInputsSpent { .. } | E::AnswerInputsSpent { .. } => {
@@ -1131,6 +1141,7 @@ mod tests {
             (K::LastMailbox, 123),
             (K::DamagedKept, 124),
             (K::EarlierEpic1Address, 125),
+            (K::InputsReorged, 126),
         ];
         for (kind, code) in expected {
             assert_eq!(kind.code(), code, "{kind:?}");
@@ -1279,6 +1290,13 @@ mod tests {
                 },
                 WalletErrorKind::PeerInputsSpent,
             ),
+            (
+                FinalizeError::InputsReorged {
+                    tx_id,
+                    source: source(),
+                },
+                WalletErrorKind::InputsReorged,
+            ),
         ];
         for (error, kind) in finalize {
             assert_eq!(WalletError::from(error).kind, kind);
@@ -1298,6 +1316,13 @@ mod tests {
                     source: source(),
                 },
                 WalletErrorKind::PeerInputsSpent,
+            ),
+            (
+                InvoiceError::InputsReorged {
+                    tx_id,
+                    source: source(),
+                },
+                WalletErrorKind::InputsReorged,
             ),
         ];
         for (error, kind) in invoice {

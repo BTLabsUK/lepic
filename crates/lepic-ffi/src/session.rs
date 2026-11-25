@@ -69,14 +69,15 @@ use crate::api::policy::Policy;
 use crate::api::runtime::{ClaimHolder, ClaimedStores, RuntimeInner};
 use crate::api::secret_store::AppSecretStore;
 use crate::api::types::{
-    CancelledReason, DeliveryState, DeliveryView, ExpiredReason, FeeEstimate, FinalizedTx,
-    FoundDuring, ImportedTx, InboxReport, KernelLocation, LegacyImport, LegacyImportStatus,
-    ListenVia, ListenerEvent, ListenerEventKind, ListingDrain, ListingRef, NodePostOutcome,
-    NodePostView, NodeRoute, NodeTip, OutputCategory, OutputStatus, ReceiptCap, ReceivedSlate,
-    RecoveryState, RelayCancelOutcome, ScanFound, ScanProgress, ScanResult, SelfInputs,
-    SelfOutputs, SelfSendRequest, SelfSentTx, SendOptions, SentTx, Slate, SlateMessage, SlateStage,
-    SlateWire, TransactionDetails, TransactionRecovery, TransportConnection, TransportState,
-    TxOrigin, TxStatus, WalletConfig, WalletEvent, WalletEventKind, WalletOutput, WalletSummary,
+    CancelledReason, ChainReplaced, DeliveryState, DeliveryView, ExpiredReason, FeeEstimate,
+    FinalizedTx, FoundDuring, ImportedTx, InboxReport, KernelLocation, LegacyImport,
+    LegacyImportStatus, ListenVia, ListenerEvent, ListenerEventKind, ListingDrain, ListingRef,
+    NodePostOutcome, NodePostView, NodeRoute, NodeTip, OutputCategory, OutputStatus, ReceiptCap,
+    ReceivedSlate, RecoveryState, RelayCancelOutcome, ScanFound, ScanProgress, ScanResult,
+    SelfInputs, SelfOutputs, SelfSendRequest, SelfSentTx, SendOptions, SentTx, Slate, SlateMessage,
+    SlateStage, SlateWire, TransactionDetails, TransactionRecovery, TransportConnection,
+    TransportState, TxOrigin, TxStatus, WalletConfig, WalletEvent, WalletEventKind, WalletOutput,
+    WalletSummary,
 };
 use crate::boundary::InFlight;
 use crate::frb_generated::StreamSink;
@@ -2274,6 +2275,7 @@ fn transaction_details(
         delivery: delivery.or_else(|| unanswered_delivery(details)),
         post,
         received_at_epic1: details.epic1_index.is_some(),
+        chain_replaced: details.chain_replaced.and_then(chain_replaced),
     }
 }
 
@@ -2296,6 +2298,18 @@ fn expired_reason(reason: lepic_wallet::details::ExpiredReason) -> Option<Expire
         R::NoAnswer => Some(ExpiredReason::NoAnswer),
         R::NotMined => Some(ExpiredReason::NotMined),
         R::Orphaned => Some(ExpiredReason::Orphaned),
+        R::InputsReorged => Some(ExpiredReason::InputsReorged),
+        _ => None,
+    }
+}
+
+/// How a reorganisation touched the transaction; `None` for a case a later core adds.
+fn chain_replaced(replaced: lepic_wallet::details::ChainReplaced) -> Option<ChainReplaced> {
+    use lepic_wallet::details::ChainReplaced as C;
+    match replaced {
+        C::InputsReplaced => Some(ChainReplaced::InputsReplaced),
+        C::Reopened => Some(ChainReplaced::Reopened),
+        C::Recent => Some(ChainReplaced::Recent),
         _ => None,
     }
 }
@@ -3280,6 +3294,7 @@ mod tests {
             }),
             recovery_of: Some(TxId(9)),
             recoverable: true,
+            chain_replaced: Some(lepic_wallet::details::ChainReplaced::Reopened),
         };
 
         assert_eq!(
@@ -3347,6 +3362,7 @@ mod tests {
                 }),
                 post: None,
                 received_at_epic1: false,
+                chain_replaced: Some(ChainReplaced::Reopened),
             }
         );
         // A stored delivery is shown as stored, marked unanswered or not.
@@ -3443,8 +3459,21 @@ mod tests {
             (R::NoAnswer, ExpiredReason::NoAnswer),
             (R::NotMined, ExpiredReason::NotMined),
             (R::Orphaned, ExpiredReason::Orphaned),
+            (R::InputsReorged, ExpiredReason::InputsReorged),
         ] {
             assert_eq!(expired_reason(reason), Some(shown));
+        }
+    }
+
+    #[test]
+    fn every_chain_replaced_maps() {
+        use lepic_wallet::details::ChainReplaced as C;
+        for (replaced, shown) in [
+            (C::InputsReplaced, ChainReplaced::InputsReplaced),
+            (C::Reopened, ChainReplaced::Reopened),
+            (C::Recent, ChainReplaced::Recent),
+        ] {
+            assert_eq!(chain_replaced(replaced), Some(shown));
         }
     }
 

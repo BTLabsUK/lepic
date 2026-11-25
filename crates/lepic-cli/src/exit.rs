@@ -591,19 +591,26 @@ impl CliError {
             | Self::PostedSend { tx_id }
             | Self::HttpReplyLost { tx_id } => Some(*tx_id),
             Self::Send(SendError::Undelivered { tx_id, .. })
-            | Self::Finalize(FinalizeError::NotPosted { tx_id, .. })
+            | Self::Finalize(
+                FinalizeError::NotPosted { tx_id, .. } | FinalizeError::InputsReorged { tx_id, .. },
+            )
             | Self::Invoice(
                 InvoiceError::Undelivered { tx_id, .. }
                 | InvoiceError::PaymentUndelivered { tx_id, .. }
-                | InvoiceError::NotPosted { tx_id, .. },
+                | InvoiceError::NotPosted { tx_id, .. }
+                | InvoiceError::InputsReorged { tx_id, .. },
             )
             | Self::Contact(
                 ContactError::Send(SendError::Undelivered { tx_id, .. })
-                | ContactError::Finalize(FinalizeError::NotPosted { tx_id, .. })
+                | ContactError::Finalize(
+                    FinalizeError::NotPosted { tx_id, .. }
+                    | FinalizeError::InputsReorged { tx_id, .. },
+                )
                 | ContactError::Invoice(
                     InvoiceError::Undelivered { tx_id, .. }
                     | InvoiceError::PaymentUndelivered { tx_id, .. }
-                    | InvoiceError::NotPosted { tx_id, .. },
+                    | InvoiceError::NotPosted { tx_id, .. }
+                    | InvoiceError::InputsReorged { tx_id, .. },
                 ),
             ) => Some(tx_id.0),
             Self::Served { tx_id, .. } => *tx_id,
@@ -800,7 +807,9 @@ fn finalize_kind(error: &FinalizeError) -> ErrorKind {
         FinalizeError::Wallet(error) => wallet_kind(error),
         FinalizeError::UnknownTransport { .. } => ErrorKind::Transport,
         FinalizeError::Node(_) => ErrorKind::Node,
-        FinalizeError::NotPosted { .. } => ErrorKind::Incomplete,
+        FinalizeError::NotPosted { .. } | FinalizeError::InputsReorged { .. } => {
+            ErrorKind::Incomplete
+        }
         FinalizeError::UnknownSlate { .. } => ErrorKind::NotFound,
         FinalizeError::Decode(_)
         | FinalizeError::WrongStage { .. }
@@ -838,7 +847,8 @@ fn invoice_kind(error: &InvoiceError) -> ErrorKind {
         }
         InvoiceError::Undelivered { .. }
         | InvoiceError::PaymentUndelivered { .. }
-        | InvoiceError::NotPosted { .. } => ErrorKind::Incomplete,
+        | InvoiceError::NotPosted { .. }
+        | InvoiceError::InputsReorged { .. } => ErrorKind::Incomplete,
         InvoiceError::UnknownSlate { .. } | InvoiceError::NotParked { .. } => ErrorKind::NotFound,
         InvoiceError::SlateIdTaken { .. } => ErrorKind::Rejected,
         InvoiceError::Decode(_)
@@ -973,6 +983,22 @@ mod tests {
                 }
                 .into(),
                 ErrorKind::Rejected,
+            ),
+            (
+                FinalizeError::InputsReorged {
+                    tx_id: lepic_store::TxId(3),
+                    source: NodeError::Timeout,
+                }
+                .into(),
+                ErrorKind::Incomplete,
+            ),
+            (
+                InvoiceError::InputsReorged {
+                    tx_id: lepic_store::TxId(3),
+                    source: NodeError::Timeout,
+                }
+                .into(),
+                ErrorKind::Incomplete,
             ),
             (ReceiveError::FeeOverflow.into(), ErrorKind::Rejected),
             (

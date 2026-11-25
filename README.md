@@ -8,7 +8,7 @@
 
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![MSRV 1.100](https://img.shields.io/badge/rust-1.100-orange.svg)](rust-toolchain.toml)
-[![Version 0.6.2](https://img.shields.io/badge/version-0.6.2-informational.svg)](CHANGELOG.md)
+[![Version 0.6.3](https://img.shields.io/badge/version-0.6.3-informational.svg)](CHANGELOG.md)
 
 [Quick start](#quick-start) · [Build](#build-from-source) · [Docs](docs/README.md) ·
 [Architecture](docs/architecture.md) · [Flutter binding](https://github.com/BTLabsUK/lepic-flutter) ·

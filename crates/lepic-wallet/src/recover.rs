@@ -276,6 +276,8 @@ where
                 }
                 return Ok(ended);
             }
+            // The payment's inputs may come back with the blocks that made them.
+            Err(PushFailure::Reorged(_)) => PushEnd::Unchanged,
             Err(PushFailure::Wallet(error)) => {
                 warn!(error = %lepic_primitives::error_chain::ErrorChain(&error), "recovery not pushed");
                 PushEnd::Unchanged

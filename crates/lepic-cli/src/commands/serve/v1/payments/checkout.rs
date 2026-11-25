@@ -456,7 +456,10 @@ pub(super) async fn finalize<H: Host>(
         .await?;
     }
     match book.in_person_finalize(slate_id, answer, propagation).await {
-        Ok(_) | Err(ContactError::Invoice(InvoiceError::NotPosted { .. })) => {}
+        Ok(_)
+        | Err(ContactError::Invoice(
+            InvoiceError::NotPosted { .. } | InvoiceError::InputsReorged { .. },
+        )) => {}
         Err(ContactError::Invoice(InvoiceError::AlreadyFinalized { .. })) => {
             settle(service, slate, slate_id).await?;
             return Err(paid_by_another(slate));

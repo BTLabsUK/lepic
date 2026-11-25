@@ -803,7 +803,10 @@ where
             // Finalized and stored, but the node did not take it: the host hears of it now,
             // and the message stays so the next collect finalizes it again from the stored
             // slate and posts it again, as the Epicbox inbox does.
-            Err(lepic_wallet::finalize::FinalizeError::NotPosted { tx_id, source }) => {
+            Err(
+                lepic_wallet::finalize::FinalizeError::NotPosted { tx_id, source }
+                | lepic_wallet::finalize::FinalizeError::InputsReorged { tx_id, source },
+            ) => {
                 warn!(tx_id = %tx_id, error = %ErrorChain(&source), "answer from a contact finalized but not posted");
                 self.wallet
                     .emit(Event::ContactPaymentFinalized(ContactSlateEvent {
@@ -857,7 +860,10 @@ where
                 ));
                 Ok(Handled::Stored)
             }
-            Err(InvoiceError::NotPosted { tx_id, source }) => {
+            Err(
+                InvoiceError::NotPosted { tx_id, source }
+                | InvoiceError::InputsReorged { tx_id, source },
+            ) => {
                 warn!(tx_id = %tx_id, error = %ErrorChain(&source), "payment from a contact finalized but not posted");
                 self.wallet.emit(Event::InvoiceFinalized(
                     lepic_wallet::event::FinalizedInvoice {

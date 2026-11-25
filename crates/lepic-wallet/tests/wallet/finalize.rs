@@ -1144,6 +1144,42 @@ fn the_wallet_refuses_its_own_s1_after_cancelling_the_send() {
     assert_eq!(sender.transactions().len(), 1);
 }
 
+both_stores!(the_wallet_takes_its_own_epic1_payment_at_its_epic1_address);
+/// An epic1 payment is stored as an export; when the wallet pays its own epic1 link, the install
+/// that sent it may be the one that collects its S1 at the epic1 address, and answers it.
+fn the_wallet_takes_its_own_epic1_payment_at_its_epic1_address() {
+    let sender = Sender::new();
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("send.slate");
+    let sent = sender
+        .harness
+        .block_on(sender.wallet.send(
+            &support::file(),
+            request(),
+            Delivery::Export {
+                to: Location::File(path.clone()),
+            },
+        ))
+        .unwrap();
+    let s1 = WireSlate::text(MediaType::JSON, std::fs::read_to_string(&path).unwrap());
+
+    let received = sender
+        .harness
+        .block_on(sender.wallet.receive(
+            &support::file(),
+            &s1,
+            ReceiveRequest {
+                proof_key: ProofKey::Epic1 { index: 0 },
+                ..ReceiveRequest::default()
+            },
+        ))
+        .unwrap();
+
+    assert_ne!(received.tx_id, sent.tx_id);
+    assert!(!received.repeated);
+    assert_eq!(sender.transactions().len(), 2);
+}
+
 both_stores!(the_wallet_refuses_the_file_of_its_own_exported_send);
 fn the_wallet_refuses_the_file_of_its_own_exported_send() {
     let sender = Sender::new();

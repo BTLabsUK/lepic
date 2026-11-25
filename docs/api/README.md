@@ -3,7 +3,7 @@
 Interactive version: [docs.btlabs.uk/developers/lepic/api/v1](https://docs.btlabs.uk/developers/lepic/api/v1/).
 
 `lepic serve` holds one wallet open and answers an HTTP API under `/api/v1` on a Unix socket, and
-on an owner TLS listener when that is on. This guide covers lepic 0.6.2. `lepic serve` runs on Unix only; on Windows the rest of the CLI runs but the API does not. The contract is
+on an owner TLS listener when that is on. This guide covers lepic 0.6.3. `lepic serve` runs on Unix only; on Windows the rest of the CLI runs but the API does not. The contract is
 [openapi.json](openapi.json), document version 2.0.0 (the path stays `/api/v1`); `GET /api/v1/openapi.json` returns the same
 document from a running serve. The
 [explorer](https://docs.btlabs.uk/developers/lepic/api/v1/explorer/) has every endpoint with its
@@ -24,7 +24,7 @@ curl --unix-socket ./w.sock http://lepic/api/v1/status
 ```
 
 ```json
-{"version":"0.6.2","uptime_s":5,"listeners":{"epicbox":{"state":"connected","relays":[{"host":"relay.example:443","group":"wallet","state":"attached","push":true,"connected_since":"2026-11-11T02:55:09.512041201Z"}]}},"node":{"tip_height":3412790,"tip_changed_at":"2026-11-11T02:54:31.226402118Z"},"payments":{"open":{"needs_approval":0,"awaiting_answer":0,"finalized":0,"posted":0}},"refresh":{"failures":0,"last_success_at":"2026-11-11T02:55:09.797663717Z"},"collect":{"failures":0,"last_success_at":"2026-11-11T02:55:09.816610725Z"},"requests":{"served":0,"in_flight":1,"refused":0}}
+{"version":"0.6.3","uptime_s":5,"listeners":{"epicbox":{"state":"connected","relays":[{"host":"relay.example:443","group":"wallet","state":"attached","push":true,"connected_since":"2026-11-11T02:55:09.512041201Z"}]}},"node":{"tip_height":3412790,"tip_changed_at":"2026-11-11T02:54:31.226402118Z"},"payments":{"open":{"needs_approval":0,"awaiting_answer":0,"finalized":0,"posted":0}},"refresh":{"failures":0,"last_success_at":"2026-11-11T02:55:09.797663717Z"},"collect":{"failures":0,"last_success_at":"2026-11-11T02:55:09.816610725Z"},"requests":{"served":0,"in_flight":1,"refused":0}}
 ```
 
 Read the accounts and their balances.
@@ -80,7 +80,7 @@ stateDiagram-v2
 | `confirmed` | The transaction is on the chain. Within 1,440 blocks of its confirmation, a reorg that takes it off the chain reopens it: serve moves it back to `posted` (`received` for a payment you received, `sent` for a send not yet posted) and raises `payment.state_changed`. | none |
 | `cancelled` | Ended without a transaction. `state_reason` is `by_us`, `by_them`, or `recovered` once a recovery is done. | `recover` for a send whose inputs are still held for it |
 | `declined` | One side refused the invoice. `state_reason` says which. A send this wallet made that its receiver declines is erased instead: no payment is left, `GET /payments/{id}` answers 404 `payment_declined`, and `payment.declined` is raised. | none |
-| `expired` | Ended at its expiry height. `state_reason` is `expired_no_answer` when the answer to a payment or invoice you started never came, `expired_not_mined` when it was answered but not mined, `expired_rejected_by_node` for a send whose every push the node's pool refused, and `expired_orphaned` for a block reward whose block a reorganisation replaced (see [Coinbase outputs](#coinbase-outputs)). | `recover` for a send whose inputs are still held for it |
+| `expired` | Ended at its expiry height. `state_reason` is `expired_no_answer` when the answer to a payment or invoice you started never came, `expired_not_mined` when it was answered but not mined, `expired_rejected_by_node` for a send whose every push the node's pool refused, `expired_orphaned` for a block reward whose block a reorganisation replaced (see [Coinbase outputs](#coinbase-outputs)), and `expired_inputs_reorged` for a send whose inputs a reorganisation took and that were still gone 60 blocks later (ADR 0071). | `recover` for a send whose inputs are still held for it |
 
 While serve is online, its refresh pushes a `finalized` payment to the node again until it is
 mined or its expiry height passes: 1 block after the first push, 2 after the second, then 4, 8

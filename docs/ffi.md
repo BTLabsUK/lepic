@@ -389,6 +389,7 @@ another kind.
 | 123 | `LastMailbox` | The last mailbox of the list cannot go |
 | 124 | `DamagedKept` | A damaged database was set aside earlier and is kept, and no database replaced it. Nothing was made; opening again gives this again. `set_aside` names the file. `start_over` (or `start_over_with_pin`) makes a new, empty database when the user asks |
 | 125 | `EarlierEpic1Address` | The text is an epic1 address or link of LEPIC 0.5 or earlier, which this version cannot read. Nothing was stored. `mailbox` names the link's mailbox when it has one. Ask for the payee's Epicbox address or an epic1 address or link from an updated wallet |
+| 126 | `InputsReorged` | The node refused the transaction because a reorganisation took the blocks of coins it spends. It stays finalized or posted, its coins held; a refresh posts it again once those coins are mined again, `repost_transaction` tries now, a cancel gives it up |
 
 ## Building the native libraries
 

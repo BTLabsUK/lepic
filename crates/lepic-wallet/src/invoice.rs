@@ -278,6 +278,14 @@ pub enum InvoiceError {
         #[source]
         source: NodeError,
     },
+    /// As [`crate::finalize::FinalizeError::InputsReorged`]: the invoice stays finalized and a
+    /// refresh pushes it again.
+    #[error("inputs of transaction {tx_id} left the chain in a reorganisation")]
+    InputsReorged {
+        tx_id: TxId,
+        #[source]
+        source: NodeError,
+    },
     /// An answer to an invoice spends inputs that are not unspent outputs on the chain: they
     /// were spent, or never existed. Nothing is stored for it.
     #[error("inputs of the answer to invoice {slate_id} are not unspent outputs")]
@@ -1478,6 +1486,7 @@ where
                     SpentInputs::Peer => InvoiceError::PeerInputsSpent { tx_id, source },
                 })
             }
+            Err(PushFailure::Reorged(source)) => Err(InvoiceError::InputsReorged { tx_id, source }),
             Err(PushFailure::Wallet(error)) => Err(InvoiceError::Wallet(error)),
         }
     }

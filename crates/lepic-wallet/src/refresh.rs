@@ -51,6 +51,7 @@ use crate::post_retry::refused_every_time;
 use crate::recover::{kept_for_recovery, open_recoveries, recovering, recovery_entries};
 use crate::relay_cancel::{RelayCancelResult, RelayEnd};
 use crate::release::{RELEASED_WATCH_BLOCKS, lapsed_receipt, record_watch};
+use crate::reorg_marks;
 use crate::selection::SelectionRequest;
 use crate::self_send::SELF;
 use crate::send_limit::effective_cutoff;
@@ -201,6 +202,18 @@ struct SpentPost {
     lost: Vec<Commitment>,
 }
 
+/// What became of the gone inputs of a pending post, as [`Wallet::end_spent_posts`] tells.
+#[derive(Debug, Clone)]
+enum Lost {
+    /// Gone for good: these inputs this wallet held another wallet spent, none when a
+    /// transaction of its own did or no input of this wallet is gone.
+    Spent(Vec<Commitment>),
+    /// These inputs this wallet held left the chain with the blocks of their makers.
+    Reorged(Vec<Commitment>),
+    /// Not known yet: the node refused a lookup.
+    Wait,
+}
+
 /// An open transaction whose kernel can confirm it: one with no change output.
 #[derive(Debug, Clone, Copy)]
 struct KernelLookup {
@@ -278,6 +291,7 @@ where
         let session = self.session()?;
         let node = &self.ports().node;
         let tip = node.get_tip().await?;
+        self.watch_chain(&session, &tip).await;
         let now = self.ports().clock.now();
         let known_tip = tip.height;
         let known = {
@@ -327,10 +341,11 @@ where
         };
         let outcome = {
             let session = Arc::clone(&session);
-            self.blocking(move |_, _| {
-                Ok(session
-                    .store
-                    .write(|repos| apply_outputs(repos, &commitments, &found, &expired, seen, now)))
+            self.blocking(move |_, config| {
+                let codecs = codecs::legacy(config.network.params().default_base_fee());
+                Ok(session.store.write(|repos| {
+                    apply_outputs(repos, &codecs, &commitments, &found, &expired, seen, now)
+                }))
             })
             .await??
         };
@@ -351,9 +366,10 @@ where
             .await?;
 
         summary.height = tip.height;
-        self.expire_unheld(&session, &mut tip, now, &mut summary)
+        self.expire_unheld(&session, &found_outputs, &mut tip, now, &mut summary)
             .await?;
         self.mark_unanswered(&session, now).await?;
+        self.sweep_reorg_marks(&session).await?;
         // A recovery that settles or fails here needs no further push.
         let changes = self.settle_recoveries(&session, tip.height, now).await?;
         self.record_changes(&mut summary, changes);
@@ -547,7 +563,11 @@ where
             return Ok(BTreeSet::new());
         }
         let reopened = gone.iter().copied().collect();
+        if !gone.is_empty() {
+            session.chain_watch.replaced(tip.height);
+        }
         let session = Arc::clone(session);
+        let height = tip.height;
         let changes = self
             .blocking(move |_, _| {
                 let codecs = codecs::legacy(base_fee);
@@ -559,6 +579,11 @@ where
                     let mut changes = Vec::new();
                     for tx_id in &gone {
                         changes.extend(reopen(repos, &codecs, *tx_id, now)?);
+                        if let Some(slate_id) =
+                            repos.transaction(*tx_id)?.and_then(|entry| entry.slate_id)
+                        {
+                            reorg_marks::mark_reopened(repos, slate_id, height)?;
+                        }
                     }
                     Ok::<_, RefreshError>(changes)
                 }))
@@ -570,10 +595,12 @@ where
 
     /// Expires the transactions past their cutoff whose kernel neither the pool nor the chain
     /// holds, once a second tip agrees with the first, and records the receives seen and the
-    /// confirmed tip.
+    /// confirmed tip. A send waiting for inputs a reorganisation took gives those not among
+    /// `found` back to their makers.
     async fn expire_unheld(
         &self,
         session: &Arc<Session<S::Store>>,
+        found: &BTreeSet<Commitment>,
         tip: &mut RefreshTip,
         now: Timestamp,
         summary: &mut RefreshSummary,
@@ -613,11 +640,12 @@ where
         let changes = {
             let session = Arc::clone(session);
             let height = tip.height;
+            let found = found.clone();
             self.blocking(move |_, _| {
                 Ok(session.store.write(|repos| {
                     // Only a tip that was confirmed by a second one expires anything.
                     let changes = if due {
-                        expire_all(repos, &codecs, height, &cleared, now)?
+                        expire_all(repos, &codecs, height, &cleared, &found, now)?
                     } else {
                         Vec::new()
                     };
@@ -641,6 +669,48 @@ where
         self.record_changes(summary, changes);
         self.end_expired_on_relay(expired).await;
         Ok(())
+    }
+
+    /// Remembers `tip` for the session, and whether a block the last tip read was in has been
+    /// replaced since: the tip is lower, or the block at the last tip's height has another
+    /// hash. Best effort: a header the node cannot give is logged and the check skipped.
+    async fn watch_chain(&self, session: &Arc<Session<S::Store>>, tip: &lepic_node::Tip) {
+        let watch = &session.chain_watch;
+        if let Some((height, hash)) = watch.last_tip()
+            && (height, hash) != (tip.height, tip.last_block_pushed)
+        {
+            // Not higher, yet another block: the one the last tip read was replaced.
+            if tip.height <= height {
+                watch.replaced(tip.height);
+            } else {
+                match self.ports().node.get_header(height).await {
+                    Ok(Some(header)) if header.hash != hash => watch.replaced(tip.height),
+                    Ok(_) => {}
+                    Err(error) => {
+                        debug!(error = %ErrorChain(&error), "header for the last tip not read");
+                    }
+                }
+            }
+        }
+        watch.saw_tip(tip.height, tip.last_block_pushed);
+    }
+
+    /// Deletes the reorganisation marks whose transaction is gone or ended in a way they do not
+    /// explain ([`reorg_marks::sweep`]). Reads first, and opens a write only when there is
+    /// something to delete.
+    async fn sweep_reorg_marks(
+        &self,
+        session: &Arc<Session<S::Store>>,
+    ) -> Result<(), RefreshError> {
+        let session = Arc::clone(session);
+        self.blocking(move |_, _| {
+            if session.store.read(reorg_marks::sweep_due)?.is_empty() {
+                return Ok(Ok(()));
+            }
+            Ok(session.store.write(reorg_marks::sweep))
+        })
+        .await?
+        .map_err(RefreshError::from)
     }
 
     /// Marks the sends over stock Epicbox left unanswered for a day and raises
@@ -881,6 +951,7 @@ where
             return Ok(());
         };
         let mut spent = Vec::new();
+        let mut reorged = Vec::new();
         for post in candidates {
             let (excess, min_height) = post.kernel;
             if pool.contains(&excess) {
@@ -893,15 +964,21 @@ where
             if !matches!(unless_refused(post.tx_id, answer)?, Some(None)) {
                 continue;
             }
-            let Some(lost) = self.lost_inputs(session, &post, &gone, tip.height).await? else {
-                continue;
+            let (lost, ends) = match self.lost_inputs(session, &post, &gone, tip.height).await? {
+                Lost::Spent(lost) => (lost, &mut spent),
+                Lost::Reorged(lost) => (lost, &mut reorged),
+                Lost::Wait => continue,
             };
-            spent.push(SpentPost {
+            ends.push(SpentPost {
                 tx_id: post.tx_id,
                 watch: (excess, floor),
                 lost,
             });
         }
+        let changes = self
+            .wait_reorged_posts(session, reorged, tip.height, now)
+            .await?;
+        self.record_changes(summary, changes);
         if spent.is_empty() {
             return Ok(());
         }
@@ -922,16 +999,16 @@ where
         Ok(())
     }
 
-    /// The inputs of `post` among `gone` that this wallet held and another wallet spent: none
-    /// when a transaction of its own spent them. `None` when the node refused the kernel
-    /// lookup, so the post is left for the next refresh.
+    /// What became of the inputs of `post` among `gone` that this wallet held: another wallet
+    /// spent them (none when a transaction of its own did), a reorganisation took their makers,
+    /// or the node refused the kernel lookup, so the post is left for the next refresh.
     async fn lost_inputs(
         &self,
         session: &Arc<Session<S::Store>>,
         post: &PendingPost,
         gone: &BTreeSet<Commitment>,
         tip: Height,
-    ) -> Result<Option<Vec<Commitment>>, RefreshError> {
+    ) -> Result<Lost, RefreshError> {
         let held = {
             let session = Arc::clone(session);
             let gone: Vec<Commitment> = post
@@ -954,20 +1031,67 @@ where
             .await??
         };
         if held.is_empty() {
-            return Ok(Some(held));
+            return Ok(Lost::Spent(held));
         }
-        match self
+        let looked_up = match self
             .own_spender(session, post.tx_id, held.clone(), tip)
             .await
         {
-            Ok(Some(_)) => Ok(Some(Vec::new())),
-            Ok(None) => Ok(Some(held)),
+            Ok(Some(_)) => return Ok(Lost::Spent(Vec::new())),
+            Ok(None) => {
+                self.inputs_reorged(session, post.tx_id, held.clone(), tip)
+                    .await
+            }
+            Err(error) => Err(error),
+        };
+        match looked_up {
+            // The inputs come back with the blocks that made them, for a while (ADR 0071).
+            Ok(true) => Ok(Lost::Reorged(held)),
+            Ok(false) => Ok(Lost::Spent(held)),
             Err(RefreshError::Node(error @ NodeError::Rejected { .. })) => {
                 warn!(tx_id = %post.tx_id, error = %ErrorChain(&error), "kernel lookup refused");
-                Ok(None)
+                Ok(Lost::Wait)
             }
             Err(error) => Err(error),
         }
+    }
+
+    /// Marks each of `reorged`, sends waiting for inputs a reorganisation took, with the tip it
+    /// was first seen waiting at, and ends those that waited
+    /// [`reorg_marks::REORG_WAIT_BLOCKS`] in vain ([`end_reorged_post`]).
+    async fn wait_reorged_posts(
+        &self,
+        session: &Arc<Session<S::Store>>,
+        reorged: Vec<SpentPost>,
+        tip: Height,
+        now: Timestamp,
+    ) -> Result<Vec<StateChange>, RefreshError> {
+        if reorged.is_empty() {
+            return Ok(Vec::new());
+        }
+        let session = Arc::clone(session);
+        self.blocking(move |_, config| {
+            let codecs = codecs::legacy(config.network.params().default_base_fee());
+            Ok(session.store.write(|repos| {
+                let mut changes = Vec::new();
+                for post in &reorged {
+                    let Some(entry) = repos.transaction(post.tx_id)? else {
+                        continue;
+                    };
+                    let Some(slate_id) = entry.slate_id else {
+                        continue;
+                    };
+                    let marked = reorg_marks::mark_inputs_reorged(repos, slate_id, tip)?;
+                    if !reorg_marks::waited_out(marked, tip) {
+                        warn!(tx_id = %post.tx_id, inputs = post.lost.len(), "inputs reorged, waiting");
+                        continue;
+                    }
+                    changes.extend(end_reorged_post(repos, &codecs, post, tip, now)?);
+                }
+                Ok::<_, RefreshError>(changes)
+            }))
+        })
+        .await?
     }
 
     /// Of `commitments`, those the node holds in neither of two answers: the second asks only
@@ -1440,7 +1564,8 @@ struct KnownState {
     last_confirmed: Option<Height>,
     position: ChainPosition,
     /// Every output the node is asked about, in every account: all those not stored as spent,
-    /// and those a recent refresh took for another wallet's spend, apart from candidates.
+    /// those a recent refresh took for another wallet's spend, and the spent inputs of open
+    /// sends, which a reorganisation may bring back (ADR 0071), apart from candidates.
     tracked: Vec<(Commitment, OutputStatus)>,
     /// The coinbase candidates, by the height they were built for, and the orphaned block
     /// rewards within [`CONFIRMATION_RECHECK_BLOCKS`] of the tip, by their height: their blocks
@@ -1450,6 +1575,7 @@ struct KnownState {
 
 fn known_state(repos: &dyn Repositories, tip: Height) -> Result<KnownState, RefreshError> {
     let recently_spent = other_wallet::recently_spent(repos, tip)?;
+    let open_sends = open_sends(repos)?;
     let mut tracked = Vec::new();
     let mut candidates: BTreeMap<Height, BTreeSet<Commitment>> = BTreeMap::new();
     for account in repos.accounts()? {
@@ -1477,6 +1603,7 @@ fn known_state(repos: &dyn Repositories, tip: Height) -> Result<KnownState, Refr
                 }
             } else if output.status != OutputStatus::Spent
                 || recently_spent.contains(&output.id.commitment)
+                || output.tx.is_some_and(|tx_id| open_sends.contains(&tx_id))
             {
                 tracked.push((output.id.commitment, output.status));
             }
@@ -1490,12 +1617,40 @@ fn known_state(repos: &dyn Repositories, tip: Height) -> Result<KnownState, Refr
     })
 }
 
+/// The open transaction that made `stored`, for a coin a send holds (`held`) or one released
+/// and missing from `found`: a reorganisation may have reopened its maker. `makers` caches the
+/// open makers, read the first time a coin needs them.
+fn reopened_maker(
+    repos: &dyn Repositories,
+    codecs: &CodecRegistry,
+    makers: &mut Option<BTreeMap<Commitment, TxId>>,
+    stored: &OutputRecord,
+    held: bool,
+    found: &BTreeMap<Commitment, OutputLocation>,
+) -> Result<Option<TxId>, RefreshError> {
+    let commitment = &stored.id.commitment;
+    let wanted = match stored.status {
+        OutputStatus::Locked => held,
+        OutputStatus::Unspent => !found.contains_key(commitment),
+        _ => false,
+    };
+    if !wanted {
+        return Ok(None);
+    }
+    let makers = match makers {
+        Some(makers) => makers,
+        None => makers.insert(crate::origin::open_makers(repos, codecs)?),
+    };
+    Ok(makers.get(commitment).copied())
+}
+
 /// Upstream's `apply_api_outputs`: what the node holds becomes unspent and confirms its
 /// transaction, what it does not hold is spent unless it was never confirmed. Unspent outputs
 /// no transaction here spent are recorded as spent by another wallet
 /// ([`crate::other_wallet`]), unless the database still waits for its restore scan.
 fn apply_outputs(
     repos: &mut dyn Repositories,
+    codecs: &CodecRegistry,
     tracked: &[Commitment],
     found: &BTreeMap<Commitment, OutputLocation>,
     expired: &BTreeSet<Commitment>,
@@ -1505,6 +1660,9 @@ fn apply_outputs(
     let mut outcome = StepOutcome::default();
     let mut elsewhere = Vec::new();
     let recoveries = open_recoveries(repos)?;
+    let sends = open_sends(repos)?;
+    // The open makers of locked coins, read once a locked coin needs them.
+    let mut makers: Option<BTreeMap<Commitment, TxId>> = None;
     for commitment in tracked {
         // A concurrent cancel may have deleted it since it was read.
         let Some(stored) = repos.output(commitment.as_bytes())? else {
@@ -1514,9 +1672,22 @@ fn apply_outputs(
         if kept_for_recovery(&stored, &recoveries) {
             continue;
         }
+        let held = stored.tx.is_some_and(|tx_id| sends.contains(&tx_id));
+        let maker = reopened_maker(repos, codecs, &mut makers, &stored, held, found)?;
         let updated = match found.get(commitment) {
-            // Only another wallet's spend leaves a spent output tracked: the node holds it
-            // unspent after all, so that spend is undone.
+            // A send still open holds it: a reorganisation took the block that spent it, or
+            // the send was never mined. It stays the send's, locked (ADR 0071).
+            Some(location) if stored.status == OutputStatus::Spent && held => {
+                debug!(height = %location.height, "spent input of an open send found again");
+                OutputRecord {
+                    status: OutputStatus::Locked,
+                    height: location.height,
+                    mmr_index: Some(location.mmr_index),
+                    ..stored.clone()
+                }
+            }
+            // Only another wallet's spend leaves any other spent output tracked: the node
+            // holds it unspent after all, so that spend is undone.
             Some(location) if stored.status == OutputStatus::Spent => {
                 other_wallet::revived(repos, &stored)?;
                 debug!(height = %location.height, "output taken for another wallet's spend found again");
@@ -1527,14 +1698,50 @@ fn apply_outputs(
                     ..stored.clone()
                 }
             }
-            Some(location) => on_chain(
-                repos,
-                stored.clone(),
-                location,
-                seen.coinbase_maturity,
-                now,
-                &mut outcome,
-            )?,
+            Some(location) => {
+                // The coin's maker, reopened after a reorganisation, is mined again.
+                if let Some(maker) = maker {
+                    outcome
+                        .changes
+                        .extend(confirm(repos, maker, location.height, now)?);
+                }
+                on_chain(
+                    repos,
+                    stored.clone(),
+                    location,
+                    seen.coinbase_maturity,
+                    now,
+                    &mut outcome,
+                )?
+            }
+            // A reorganisation took the block of its maker, which a refresh reopened: the coin
+            // comes back when the maker is mined again, so the send holding it keeps it, and one
+            // released goes back to the maker, unconfirmed, as the reopen left its other outputs.
+            None if let Some(maker) = maker => {
+                debug!(height = %stored.height, "coin off chain with its maker");
+                match stored.status {
+                    OutputStatus::Locked => OutputRecord {
+                        mmr_index: None,
+                        ..stored.clone()
+                    },
+                    _ => OutputRecord {
+                        status: OutputStatus::Unconfirmed,
+                        mmr_index: None,
+                        tx: Some(maker),
+                        ..stored.clone()
+                    },
+                }
+            }
+            // A send that ended while it waited for the coin, which a reorganisation took,
+            // gives it back to its maker (ADR 0071).
+            None if maker.is_none()
+                && let Some(spender) = crate::origin::reorged_spender(repos, &stored)?
+                && let Some(changes) =
+                    crate::origin::release_to_maker(repos, codecs, commitment, spender, now)? =>
+            {
+                outcome.changes.extend(changes);
+                continue;
+            }
             None => {
                 if other_wallet::spent_elsewhere(repos, &stored, seen.tip, seen.coinbase_maturity)?
                 {
@@ -1746,7 +1953,7 @@ fn made_by(output: &OutputRecord, confirmed: Height) -> bool {
 
 /// The kernel of a confirmed transaction and the height below which it cannot be: that of its
 /// final slate ([`final_kernel`]), or for a payment received, the one its S2 answered to.
-fn confirmed_kernel(
+pub(crate) fn confirmed_kernel(
     repos: &dyn Repositories,
     codecs: &CodecRegistry,
     tx_id: TxId,
@@ -1879,6 +2086,15 @@ fn kernel_lookups(
         }
     }
     Ok(lookups)
+}
+
+/// The open sends, which hold their inputs locked until they are mined or end.
+fn open_sends(repos: &dyn Repositories) -> Result<BTreeSet<TxId>, RefreshError> {
+    Ok(open_transactions(repos)?
+        .into_iter()
+        .filter(|stored| stored.entry.direction == TxDirection::Outgoing)
+        .map(|stored| stored.id)
+        .collect())
 }
 
 /// Whether a refresh confirms the transaction of `entry` by an output it receives, its change,
@@ -2234,6 +2450,49 @@ fn end_spent_post(
     Ok(changes)
 }
 
+/// Ends a pending post that waited [`reorg_marks::REORG_WAIT_BLOCKS`] for the inputs a
+/// reorganisation took, if it is still finalized or posted: `expired`, its kernel watched, its
+/// holdings released as a cancel releases them, and each of its gone inputs, `post.lost`, given
+/// back to its maker ([`crate::origin::release_to_maker`]), with its self-send partner. Nothing
+/// is recorded as another wallet's spend.
+fn end_reorged_post(
+    repos: &mut dyn Repositories,
+    codecs: &CodecRegistry,
+    post: &SpentPost,
+    ended_at: Height,
+    now: Timestamp,
+) -> Result<Vec<StateChange>, RefreshError> {
+    let tx_id = post.tx_id;
+    let Some(entry) = repos.transaction(tx_id)? else {
+        return Ok(Vec::new());
+    };
+    if !matches!(entry.state, TxState::Finalized | TxState::Posted) {
+        return Ok(Vec::new());
+    }
+    let partner = self_send_partner(repos, &entry)?;
+    let (excess, floor) = post.watch;
+    record_watch(repos, tx_id, excess, floor, ended_at)?;
+    drop_holdings(repos, tx_id, &entry)?;
+    let mut changes = Vec::new();
+    for commitment in &post.lost {
+        changes.extend(
+            crate::origin::release_to_maker(repos, codecs, commitment, tx_id, now)?
+                .unwrap_or_default(),
+        );
+    }
+    changes.extend(apply_transition(repos, tx_id, TxState::Expired, now)?);
+    if let Some(partner) = partner {
+        changes.extend(cancel_partner(
+            repos,
+            &partner,
+            Some((excess, floor, ended_at)),
+            now,
+        )?);
+    }
+    warn!(tx_id = %tx_id, inputs = post.lost.len(), "inputs reorged, expired");
+    Ok(changes)
+}
+
 /// Ends a superseded received payment as a cancel does, if it still waits for its sender, and
 /// keeps watching its kernel `watch` from `ended_at`.
 fn supersede(
@@ -2356,6 +2615,7 @@ fn expire_all(
     codecs: &CodecRegistry,
     tip: Height,
     cleared: &BTreeSet<TxId>,
+    found: &BTreeSet<Commitment>,
     now: Timestamp,
 ) -> Result<Vec<StateChange>, RefreshError> {
     let mut changes = Vec::new();
@@ -2371,7 +2631,7 @@ fn expire_all(
             let floor = chain::kernel_floor(min_height, tip);
             record_watch(repos, stored.id, excess, floor, tip)?;
         }
-        changes.extend(expire(repos, &stored, now)?);
+        changes.extend(expire(repos, codecs, &stored, found, now)?);
     }
     Ok(changes)
 }
@@ -2423,14 +2683,39 @@ pub(crate) fn ttl_cutoff(
     Ok(None)
 }
 
-/// Releases what the transaction holds, as the owner's cancel does, and marks it expired.
+/// Releases what the transaction holds, as the owner's cancel does, and marks it expired. A
+/// send waiting for inputs a reorganisation took gives each it held that is not among `found`
+/// back to its maker ([`crate::origin::release_to_maker`]).
 fn expire(
     repos: &mut dyn Repositories,
+    codecs: &CodecRegistry,
     stored: &StoredTransaction,
+    found: &BTreeSet<Commitment>,
     now: Timestamp,
-) -> Result<Option<StateChange>, RefreshError> {
+) -> Result<Vec<StateChange>, RefreshError> {
+    let reorged: Vec<Commitment> = if reorg_marks::inputs_reorged_at(repos, &stored.entry)?
+        .is_some()
+    {
+        repos
+            .outputs_of_transaction(stored.id)?
+            .into_iter()
+            .filter(|output| matches!(output.status, OutputStatus::Locked | OutputStatus::Spent))
+            .map(|output| output.id.commitment)
+            .filter(|commitment| !found.contains(commitment))
+            .collect()
+    } else {
+        Vec::new()
+    };
     drop_holdings(repos, stored.id, &stored.entry)?;
-    Ok(apply_transition(repos, stored.id, TxState::Expired, now)?)
+    let mut changes = Vec::new();
+    for commitment in &reorged {
+        changes.extend(
+            crate::origin::release_to_maker(repos, codecs, commitment, stored.id, now)?
+                .unwrap_or_default(),
+        );
+    }
+    changes.extend(apply_transition(repos, stored.id, TxState::Expired, now)?);
+    Ok(changes)
 }
 
 pub(crate) fn open_transactions(

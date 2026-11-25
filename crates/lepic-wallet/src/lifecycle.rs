@@ -27,6 +27,7 @@ use crate::coinbase::CheckedBlocks;
 use crate::epic1_keys::Epic1KeyCache;
 use crate::error::WalletError;
 use crate::ports::{SecretVault, StoreOpener};
+use crate::reorg_marks::ChainWatch;
 use crate::slate_cache::SlateCache;
 
 /// The secret name the seed is stored under in the wallet's secret storage.
@@ -144,6 +145,8 @@ pub struct Session<D> {
     pub(crate) checked: CheckedOutputs,
     /// The blocks a refresh checked coinbase candidates against while the wallet is unlocked.
     pub(crate) coinbase_blocks: CheckedBlocks,
+    /// The last tip a refresh read, and when the session last saw a block replaced.
+    pub(crate) chain_watch: ChainWatch,
     /// How the database was found on disk, for an opener that keeps it encrypted at rest.
     pub(crate) at_rest: Option<AtRestReport>,
 }
@@ -237,6 +240,7 @@ pub(crate) fn create<S: StoreOpener, V: SecretVault>(
         epic1_keys: Epic1KeyCache::default(),
         checked: CheckedOutputs::default(),
         coinbase_blocks: CheckedBlocks::default(),
+        chain_watch: ChainWatch::default(),
         at_rest,
     })
 }
@@ -316,6 +320,7 @@ pub(crate) fn open<S: StoreOpener, V: SecretVault>(
         epic1_keys: Epic1KeyCache::default(),
         checked: CheckedOutputs::default(),
         coinbase_blocks: CheckedBlocks::default(),
+        chain_watch: ChainWatch::default(),
         at_rest,
     })
 }

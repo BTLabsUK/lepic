@@ -78,6 +78,10 @@ pub struct ChainState {
     pub header_times: BTreeMap<Height, Timestamp>,
     /// Header hashes that replace the derived ones, for a block another one replaced.
     pub header_hashes: BTreeMap<Height, Hash>,
+    /// The hash `get_tip` gave for each height it answered at, which `get_header` gives that
+    /// block once the tip moved on: a test that moves only `tip.height` keeps the hashes it
+    /// served.
+    pub served_tips: BTreeMap<Height, Hash>,
     /// The answer to `ready_for_txs`; `None` answers as a node before 4.1.0, which does not
     /// know the method.
     pub ready_for_txs: Option<bool>,
@@ -97,6 +101,7 @@ impl ChainState {
                 .unwrap_or(Timestamp::UNIX_EPOCH),
             header_times: BTreeMap::new(),
             header_hashes: BTreeMap::new(),
+            served_tips: BTreeMap::new(),
             ready_for_txs: None,
         }
     }
@@ -194,7 +199,8 @@ impl ChainState {
     }
 
     /// The hash the scripted chain gives the block at `height`: the one `header_hashes` gives
-    /// it, the tip's own hash at the tip, otherwise one derived from the height.
+    /// it, the tip's own hash at the tip, the hash `get_tip` served at that height, otherwise
+    /// one derived from the height.
     pub fn header_hash(&self, height: Height) -> Hash {
         if let Some(hash) = self.header_hashes.get(&height) {
             return *hash;
@@ -202,7 +208,16 @@ impl ChainState {
         if height == self.tip.height {
             return self.tip.last_block_pushed;
         }
+        if let Some(hash) = self.served_tips.get(&height) {
+            return *hash;
+        }
         self.header_hash_derived(height)
+    }
+
+    /// Remembers the tip `get_tip` is about to serve, in [`Self::served_tips`].
+    pub(super) fn serve_tip(&mut self) {
+        self.served_tips
+            .insert(self.tip.height, self.tip.last_block_pushed);
     }
 
     pub(super) fn answer(&self, method: &str, params: &Value) -> Answer {

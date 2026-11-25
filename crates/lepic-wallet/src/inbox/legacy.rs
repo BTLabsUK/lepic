@@ -473,7 +473,10 @@ where
             .await;
         match finalized {
             Ok(_) => Ok(handled),
-            Err(FinalizeError::NotPosted { tx_id, source }) => {
+            Err(
+                FinalizeError::NotPosted { tx_id, source }
+                | FinalizeError::InputsReorged { tx_id, source },
+            ) => {
                 warn!(tx_id = %tx_id, error = %ErrorChain(&source), "finalized transaction not posted");
                 Ok(handled)
             }

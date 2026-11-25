@@ -248,6 +248,7 @@ fn invoice_hint(error: &InvoiceError) -> Option<String> {
                 .to_owned(),
         ),
         InvoiceError::NotPosted { tx_id, .. } => Some(not_posted_hint(*tx_id)),
+        InvoiceError::InputsReorged { tx_id, .. } => Some(inputs_reorged_hint(*tx_id)),
         InvoiceError::InputsSpentElsewhere { tx_id, .. } => Some(spent_elsewhere_hint(*tx_id)),
         InvoiceError::InputsSpentByOwnTransaction { tx_id, by, .. } => {
             Some(spent_by_own_hint(*tx_id, *by))
@@ -282,11 +283,19 @@ pub fn recovery(error: &CliError) -> Vec<String> {
         | CliError::Contact(ContactError::Invoice(InvoiceError::Undelivered { tx_id, .. })) => {
             vec![cancel(tx_id)]
         }
-        CliError::Finalize(FinalizeError::NotPosted { tx_id, .. })
-        | CliError::Invoice(InvoiceError::NotPosted { tx_id, .. })
+        CliError::Finalize(
+            FinalizeError::NotPosted { tx_id, .. } | FinalizeError::InputsReorged { tx_id, .. },
+        )
+        | CliError::Invoice(
+            InvoiceError::NotPosted { tx_id, .. } | InvoiceError::InputsReorged { tx_id, .. },
+        )
         | CliError::Contact(
-            ContactError::Finalize(FinalizeError::NotPosted { tx_id, .. })
-            | ContactError::Invoice(InvoiceError::NotPosted { tx_id, .. }),
+            ContactError::Finalize(
+                FinalizeError::NotPosted { tx_id, .. } | FinalizeError::InputsReorged { tx_id, .. },
+            )
+            | ContactError::Invoice(
+                InvoiceError::NotPosted { tx_id, .. } | InvoiceError::InputsReorged { tx_id, .. },
+            ),
         ) => {
             vec![post(tx_id), cancel(tx_id)]
         }
@@ -302,6 +311,7 @@ pub fn recovery(error: &CliError) -> Vec<String> {
 fn finalize_hint(error: &FinalizeError) -> Option<String> {
     match error {
         FinalizeError::NotPosted { tx_id, .. } => Some(not_posted_hint(*tx_id)),
+        FinalizeError::InputsReorged { tx_id, .. } => Some(inputs_reorged_hint(*tx_id)),
         FinalizeError::InputsSpentElsewhere { tx_id, .. } => Some(spent_elsewhere_hint(*tx_id)),
         FinalizeError::InputsSpentByOwnTransaction { tx_id, by, .. } => {
             Some(spent_by_own_hint(*tx_id, *by))
@@ -331,6 +341,14 @@ fn not_posted_hint(tx_id: TxId) -> String {
     format!(
         "the transaction is stored, and the node neither took it nor holds its kernel; `lepic \
          tx post {tx_id}` sends it again"
+    )
+}
+
+fn inputs_reorged_hint(tx_id: TxId) -> String {
+    format!(
+        "a chain reorganisation took the blocks of coins transaction {tx_id} spends; it stays \
+         stored and the wallet posts it again once those coins are mined again, or `lepic tx \
+         post {tx_id}` tries now"
     )
 }
 
@@ -644,6 +662,18 @@ mod tests {
             source: NodeError::Timeout,
         }));
         assert!(peer.contains("other party"), "{peer}");
+    }
+
+    #[test]
+    fn a_post_whose_coins_were_reorged_says_it_waits() {
+        let error = CliError::Finalize(FinalizeError::InputsReorged {
+            tx_id: TxId(7),
+            source: NodeError::Timeout,
+        });
+        let text = hint_for(&error);
+        assert!(text.contains("reorganisation"), "{text}");
+        assert!(text.contains("lepic tx post 7"), "{text}");
+        assert_eq!(recovery(&error), ["lepic tx post 7", "lepic tx cancel 7"]);
     }
 
     #[test]

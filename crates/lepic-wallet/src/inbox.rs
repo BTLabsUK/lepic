@@ -297,7 +297,8 @@ pub fn finalize_is_permanent(error: &FinalizeError) -> bool {
         | FinalizeError::UnknownTransport { .. }
         | FinalizeError::Node(_)
         | FinalizeError::Codecs(_)
-        | FinalizeError::NotPosted { .. } => false,
+        | FinalizeError::NotPosted { .. }
+        | FinalizeError::InputsReorged { .. } => false,
         // The send was cancelled: the same answer finds nothing to finalize.
         FinalizeError::InputsSpentElsewhere { .. }
         | FinalizeError::InputsSpentByOwnTransaction { .. }
@@ -340,6 +341,7 @@ pub fn invoice_finalize_is_permanent(error: &InvoiceError) -> bool {
         | InvoiceError::Codecs(_)
         | InvoiceError::Selection(_)
         | InvoiceError::NotPosted { .. }
+        | InvoiceError::InputsReorged { .. }
         | InvoiceError::Undelivered { .. }
         | InvoiceError::PaymentUndelivered { .. } => false,
         InvoiceError::ToAddress

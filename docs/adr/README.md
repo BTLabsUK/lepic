@@ -85,3 +85,4 @@ they were written, and the file names do not change.
 | [0068](0068-invoices-the-payer-opens-need-no-pairing.md) | Invoices the payer opens need no pairing: the invoice rule, checkout requests, links need a checked domain | accepted |
 | [0069](0069-epic1-payment-proofs.md) | Payment proofs for epic1 payments, signed by a tweak of the delivery key | accepted |
 | [0070](0070-coinbase-candidates-by-block.md) | Coinbase candidates are checked by block, and a reward a reorganisation takes expires | accepted |
+| [0071](0071-reorged-send-inputs.md) | A send whose inputs a reorganisation took waits for them | proposed |

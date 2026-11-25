@@ -568,6 +568,26 @@ pub struct TransactionDetails {
     /// opened here. LEPIC lists its transport as for any other receive. `false` for every other
     /// transaction.
     pub received_at_epic1: bool,
+    /// For an open transaction: how a reorganisation touched it. The wallet waits in each
+    /// case. `None` for an ended transaction, and for an open one the wallet saw no replaced
+    /// block for.
+    pub chain_replaced: Option<ChainReplaced>,
+}
+
+/// How a reorganisation touched an open transaction, from `TransactionDetails.chain_replaced`.
+/// Values are only added, at the end.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChainReplaced {
+    /// A send whose inputs a reorganisation took. It goes through once the transaction that
+    /// made them is mined again, and ends `Expired` with `InputsReorged` if that takes more
+    /// than 60 blocks.
+    InputsReplaced,
+    /// A transaction that was `Confirmed` until a reorganisation replaced its block. It
+    /// confirms again when a block of the new chain includes it.
+    Reopened,
+    /// An incoming payment, open while the wallet saw a block replaced within the last 60
+    /// blocks: it may take a few blocks more.
+    Recent,
 }
 
 /// Where the post of a payment's slate stands.
@@ -635,6 +655,10 @@ pub enum ExpiredReason {
     /// is unconfirmed again and counts in no balance. It becomes `Confirmed` again if the chain
     /// returns to that block.
     Orphaned,
+    /// A send whose inputs a reorganisation took, still gone 60 blocks after the wallet first
+    /// saw them gone. Its coins went back to the transactions that made them: each is
+    /// unconfirmed until that transaction is mined again.
+    InputsReorged,
 }
 
 /// Why the wallet ended a transaction `Cancelled`. Values are only added, at the end.

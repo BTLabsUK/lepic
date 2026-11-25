@@ -82,6 +82,7 @@ mod refresh;
 mod refresh_node_data;
 mod relay_cancel;
 mod release;
+mod reorged_inputs;
 mod restore_from_height;
 mod scan;
 mod scan_node_data;

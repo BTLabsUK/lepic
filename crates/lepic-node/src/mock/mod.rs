@@ -281,6 +281,11 @@ impl MockNode {
                 }
             };
         }
+        if request.method == "get_tip"
+            && let Source::Chain(chain) = &mut state.source
+        {
+            chain.serve_tip();
+        }
         let answer = match request.method.as_str() {
             "push_transaction" => state.push(&request.params),
             _ => match &state.source {

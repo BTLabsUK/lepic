@@ -42,7 +42,7 @@ use support::{Harness, TestWallet, password};
 
 const AMOUNT: u64 = 100_000_000;
 
-const RECEIVER_MNEMONIC: &str = "legal winner thank year wave sausage worth useful legal winner \
+pub(crate) const RECEIVER_MNEMONIC: &str = "legal winner thank year wave sausage worth useful legal winner \
     thank year wave sausage worth useful legal winner thank year wave sausage worth title";
 
 /// The wallet-local limit of every send here, in blocks past the tip it was made at.
@@ -105,7 +105,7 @@ fn refreshed(harness: &Harness, wallet: &TestWallet) {
 }
 
 /// A send from `wallet` to the peer at the other end of `peer`, and the receiver's S2.
-fn answered_send(
+pub(crate) fn answered_send(
     harness: &Harness,
     wallet: &TestWallet,
     peer: &LoopbackTransport,
@@ -144,7 +144,7 @@ fn answered_send_of(
     (sent.tx_id, s2)
 }
 
-fn finalize(
+pub(crate) fn finalize(
     harness: &Harness,
     wallet: &TestWallet,
     s2: &WireSlate,
@@ -182,15 +182,23 @@ pub(crate) struct Retrying {
 
 impl Retrying {
     pub(crate) fn answered() -> Self {
+        Self::answered_with(|_| ()).0
+    }
+
+    /// As [`Self::answered`], with `prepare` run on the funded sender before the send, and the
+    /// wallet that answered it.
+    pub(crate) fn answered_with(prepare: impl FnOnce(&Sender)) -> (Self, Receiver) {
         let (sender, receiver) = funded(1);
+        prepare(&sender);
         let funding = sender.outputs()[0].id.commitment;
         let (tx_id, s2) = answered_send(&sender.harness, &sender.wallet, &sender.peer, &receiver);
-        Self {
+        let retrying = Self {
             sender,
             tx_id,
             s2,
             funding,
-        }
+        };
+        (retrying, receiver)
     }
 
     /// As [`Self::failing`], next to a second send of the same sender, answered and still
@@ -338,10 +346,15 @@ impl Retrying {
 
     /// The send's transaction as the wallet finalized it.
     pub(crate) fn final_transaction(&self) -> Transaction {
+        self.final_transaction_of(self.tx_id)
+    }
+
+    /// The transaction `tx_id` of the sender as the wallet finalized it.
+    pub(crate) fn final_transaction_of(&self, tx_id: TxId) -> Transaction {
         let finished = self
             .sender
             .harness
-            .block_on(self.sender.wallet.finished_payment(self.tx_id))
+            .block_on(self.sender.wallet.finished_payment(tx_id))
             .unwrap();
         let slate = send_support::legacy_codecs().decode(&finished).unwrap();
         let kernel = slate.kernel().unwrap();

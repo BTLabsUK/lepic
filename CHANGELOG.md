@@ -7,6 +7,41 @@ Conventional Commit messages at release time.
 
 ## [Unreleased]
 
+## [0.6.3] - 2026-11-25
+
+A send whose inputs a chain reorganisation took now waits and goes through again instead of being
+cancelled, and a payment to the wallet's own epic1 address completes again. The wallet store keeps
+schema 22. The FFI gains error kind `InputsReorged` (126), `TransactionDetails::chain_replaced`
+and `ExpiredReason::InputsReorged`.
+
+### Added
+
+- FFI error kind `InputsReorged` (126), serve API code `inputs_reorged` and the matching
+  `FinalizeError` and `InvoiceError` variants: the node refused a send because a reorganisation
+  took the blocks of coins it spends. The CLI exits with the `Incomplete` code and says the send
+  waits. ADR 0071.
+- `TransactionDetails::chain_replaced` (FFI and wallet): `InputsReplaced` for a send waiting for
+  inputs a reorganisation took, `Reopened` for a transaction a refresh reopened after its block
+  was replaced, `Recent` for an incoming transaction while the wallet saw a block replaced in
+  the last 60 blocks. `ExpiredReason::InputsReorged` (FFI 4, serve API `expired_inputs_reorged`):
+  a send whose inputs were still gone 60 blocks after a reorganisation took them.
+
+### Fixed
+
+- A send that spends the change of an earlier transaction is no longer cancelled when a
+  reorganisation takes the block of that transaction. Its coins stay held, a refresh posts it
+  again, and it goes through once the earlier transaction is mined again; no other-wallet spend
+  is recorded. A send whose input is gone while the transaction that made it keeps its kernel on
+  chain still ends, as before. A send of a block reward whose block was replaced waits the same
+  way. A send still waiting 60 blocks later ends `expired` and its coins go back to the
+  transactions that made them. The wallet store keeps schema 22.
+
+- A payment to the wallet's own epic1 address completes again. Since 0.6.0 the sending install
+  dropped its own S1 at that address, as it does for an exported send, and deleted it from the
+  relay, so neither it nor a linked install of the same wallet could answer. An S1 of the
+  wallet's own open payment that arrives at its epic1 address is now taken, and whichever
+  install collects it first answers. Other own S1s are still refused.
+
 ## [0.6.2] - 2026-11-24
 
 A payment to an epic1 address now carries a payment proof, and a payer can require one. A wallet

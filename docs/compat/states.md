@@ -91,6 +91,15 @@ LEPIC differs as follows:
 - A posted send ends by confirmation, by a recovery, or, like a finalized one, when an
   input it spends is gone from the chain and neither the node's pool nor its chain holds its
   kernel. It can never be mined then, and its kernel stays watched.
+- A finalized or posted send whose missing inputs a reorganisation took stays as it is (ADR
+  0071): each was made by a transaction of this wallet that a refresh reopened, or whose kernel
+  the node no longer finds. Its coins stay `locked`, a refresh pushes it again, and it goes
+  through once that transaction is mined again. A post refused for it returns `InputsReorged`.
+  A send of a block reward whose kernel is gone waits the same way: the reward comes back if the
+  chain returns to its block. A send still waiting 60 blocks (`REORG_WAIT_BLOCKS`) after the
+  wallet first saw it waiting ends `expired` with reason `InputsReorged`, and its coins go back
+  to the transactions that made them, `unconfirmed` (a reward's coin to the reward). The post
+  cutoff still ends it earlier; the reason is `InputsReorged` then too.
 - The two entries of a send to the wallet itself end together. The cancel of either refuses while
   the other is posted (`PartnerPosted`).
 
@@ -213,6 +222,18 @@ under the settings key `send.unanswered.<slate id>`, the refresh raises `Deliver
 error saying what the owner can do. Nothing else changes: the send stays `sent`, an S2 that comes
 later finalizes it, and its funds unlock at its cutoff or when the owner cancels it. The first
 refresh after the send leaves `sent` deletes the key.
+
+### Reorganisation marks
+
+Two settings keys hold what a refresh learned of a reorganisation (ADR 0071); the store schema
+stays. `send.inputs_reorged.<slate id>` holds the tip at which the wallet first saw a send
+waiting for inputs a reorganisation took. A push the node accepts deletes it; it stays with a
+send that ended `expired`, as the record of the reason `InputsReorged`. `tx.reopened.<slate id>`
+holds the tip at which a refresh reopened a confirmed transaction whose block was replaced. A
+refresh deletes either key once its transaction is gone or ended any way the key does not
+explain. `TransactionDetails::chain_replaced` reads them: `InputsReplaced`, `Reopened`, or
+`Recent` for an incoming transaction while the session saw a block replaced in the last 60
+blocks.
 
 ### Received payments with no TTL
 

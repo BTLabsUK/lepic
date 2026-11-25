@@ -330,6 +330,10 @@ pub fn finalize_errors() -> Vec<FinalizeError> {
             tx_id: TX,
             source: node(),
         },
+        FinalizeError::InputsReorged {
+            tx_id: TX,
+            source: node(),
+        },
     ]
 }
 
@@ -442,6 +446,10 @@ pub fn invoice_errors() -> Vec<InvoiceError> {
             source: node(),
         },
         InvoiceError::PeerInputsSpent {
+            tx_id: TX,
+            source: node(),
+        },
+        InvoiceError::InputsReorged {
             tx_id: TX,
             source: node(),
         },

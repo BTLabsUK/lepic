@@ -170,6 +170,27 @@ pub struct TransactionDetails {
     /// final kernel and inputs are stored, each input held for it, and whose inputs pay the
     /// recovery's fee. The node may still refuse it.
     pub recoverable: bool,
+    /// Whether a reorganisation replaced a block this open transaction depends on
+    /// ([`ChainReplaced`]). `None` for an ended transaction, and for an open one the wallet saw
+    /// no replaced block for.
+    pub chain_replaced: Option<ChainReplaced>,
+}
+
+/// How a reorganisation touched an open transaction (ADR 0071). The wallet waits in each case;
+/// nothing is needed from the user.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ChainReplaced {
+    /// A send whose inputs a reorganisation took: their maker is off chain. The send goes
+    /// through once the maker is mined again, and ends `expired`
+    /// ([`ExpiredReason::InputsReorged`]) if the maker is not back within 60 blocks.
+    InputsReplaced,
+    /// A transaction that was confirmed until a reorganisation replaced its block. It is open
+    /// again and confirms when a block of the new chain includes it.
+    Reopened,
+    /// An incoming transaction, open while this session saw a block replaced within the last
+    /// 60 blocks: a payment reported mined may take a few blocks more.
+    Recent,
 }
 
 /// A recovery of a payment as the payment's details show it.
@@ -225,7 +246,8 @@ pub fn cancelled_reason(
 /// any of these the transaction ends [`ExpiredReason::NoAnswer`]. Every other expiry, including
 /// each one of a wallet that answered (a receive, a paid invoice), ends
 /// [`ExpiredReason::NotMined`], unless [`ExpiredReason::RejectedByNode`] applies, which wins.
-/// A block reward only expires [`ExpiredReason::Orphaned`].
+/// [`ExpiredReason::InputsReorged`] wins over all of them. A block reward only expires
+/// [`ExpiredReason::Orphaned`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum ExpiredReason {
@@ -243,6 +265,10 @@ pub enum ExpiredReason {
     /// is unconfirmed again and counts in no balance. It becomes `confirmed` again if the
     /// chain returns to that block.
     Orphaned,
+    /// A send whose inputs a reorganisation took, still gone 60 blocks after the wallet first
+    /// saw them gone (ADR 0071). Its coins went back to the transactions that made them: each is
+    /// unconfirmed until its maker is mined again, and a block reward's is orphaned.
+    InputsReorged,
 }
 
 /// Why `transaction` expired, as [`expired_reason`], or [`ExpiredReason::Orphaned`] for a block
@@ -272,6 +298,9 @@ pub(crate) fn expired_reason(
     let entry = &transaction.entry;
     if entry.state != TxState::Expired {
         return Ok(None);
+    }
+    if crate::reorg_marks::inputs_reorged_at(repos, entry)?.is_some() {
+        return Ok(Some(ExpiredReason::InputsReorged));
     }
     let post = repos.node_post(transaction.id)?;
     if entry.direction == TxDirection::Outgoing && post.as_ref().is_some_and(refused_every_time) {
@@ -461,6 +490,7 @@ where
         tx_id: TxId,
     ) -> Result<TransactionDetails, WalletError> {
         let session = self.session()?;
+        let replaced_recently = session.chain_watch.replaced_recently();
         let base_fee = self.config().network.params().default_base_fee();
         let default_minimum = self.config().policy.default_minimum_confirmations;
         let codecs = codecs::legacy(base_fee);
@@ -480,6 +510,7 @@ where
                     &mut outbox,
                     &recoveries,
                     stored,
+                    replaced_recently,
                     now,
                 )
             })
@@ -498,6 +529,7 @@ where
         tx_ids: Vec<TxId>,
     ) -> Result<Vec<TransactionDetails>, WalletError> {
         let session = self.session()?;
+        let replaced_recently = session.chain_watch.replaced_recently();
         let base_fee = self.config().network.params().default_base_fee();
         let default_minimum = self.config().policy.default_minimum_confirmations;
         let codecs = codecs::legacy(base_fee);
@@ -518,6 +550,7 @@ where
                         &mut outbox,
                         &recoveries,
                         StoredTransaction { id: tx_id, entry },
+                        replaced_recently,
                         now,
                     )?);
                 }
@@ -536,6 +569,7 @@ where
         slate_id: SlateId,
     ) -> Result<Option<TransactionDetails>, WalletError> {
         let session = self.session()?;
+        let replaced_recently = session.chain_watch.replaced_recently();
         let base_fee = self.config().network.params().default_base_fee();
         let default_minimum = self.config().policy.default_minimum_confirmations;
         let codecs = codecs::legacy(base_fee);
@@ -555,6 +589,7 @@ where
                     &mut outbox,
                     &recoveries,
                     stored,
+                    replaced_recently,
                     now,
                 )
                 .map(Some)
@@ -591,6 +626,7 @@ where
         account: AccountIndex,
     ) -> Result<Vec<TransactionDetails>, WalletError> {
         let session = self.session()?;
+        let replaced_recently = session.chain_watch.replaced_recently();
         let base_fee = self.config().network.params().default_base_fee();
         let default_minimum = self.config().policy.default_minimum_confirmations;
         let codecs = codecs::legacy(base_fee);
@@ -615,6 +651,7 @@ where
                             &mut outbox,
                             &recoveries,
                             stored,
+                            replaced_recently,
                             now,
                         )
                     })
@@ -758,6 +795,7 @@ fn details(
     outbox: &mut PendingOutbox,
     recoveries: &Recoveries,
     transaction: StoredTransaction,
+    replaced_recently: bool,
     now: Timestamp,
 ) -> Result<TransactionDetails, WalletError> {
     let tx_id = transaction.id;
@@ -819,15 +857,14 @@ fn details(
         origin == TxOrigin::OtherWallet && crate::other_wallet::is_unverified(repos, tx_id)?;
     let coinbase = is_coinbase(repos, &transaction, &output_commits)?;
     let excess = kernel_excess.as_ref();
-    let cancelled_reason = cancelled_reason(repos, &transaction)?;
-    let post_cutoff_height = post_cutoff(repos, stages, &transaction)?;
     Ok(TransactionDetails {
+        chain_replaced: chain_replaced(repos, &transaction.entry, replaced_recently)?,
         recovery: recoveries.of(repos, tx_id)?,
         recovery_of: recoveries.pair_of(tx_id),
         recoverable: recoveries.recoverable(repos, &transaction, stages)?,
         expired_reason: expiry(repos, &transaction, stages, excess, coinbase)?,
-        cancelled_reason,
-        post_cutoff_height,
+        cancelled_reason: cancelled_reason(repos, &transaction)?,
+        post_cutoff_height: post_cutoff(repos, stages, &transaction)?,
         relay_cancellable,
         coinbase,
         unverified,
@@ -863,6 +900,29 @@ fn details(
         flow,
         transaction,
     })
+}
+
+/// How a reorganisation touched the open transaction `entry`, by the marks of
+/// [`crate::reorg_marks`] and, for [`ChainReplaced::Recent`], whether this session saw a block
+/// replaced within the last 60 blocks.
+fn chain_replaced(
+    repos: &dyn Repositories,
+    entry: &lepic_store::TransactionEntry,
+    replaced_recently: bool,
+) -> Result<Option<ChainReplaced>, StoreError> {
+    if crate::state::is_final(entry.state) {
+        return Ok(None);
+    }
+    if crate::reorg_marks::inputs_reorged_at(repos, entry)?.is_some() {
+        return Ok(Some(ChainReplaced::InputsReplaced));
+    }
+    if crate::reorg_marks::reopened_at(repos, entry)?.is_some() {
+        return Ok(Some(ChainReplaced::Reopened));
+    }
+    Ok(
+        (replaced_recently && entry.direction == TxDirection::Incoming)
+            .then_some(ChainReplaced::Recent),
+    )
 }
 
 /// A block reward comes with no slate, and its output keeps the coinbase features after it is

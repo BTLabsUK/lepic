@@ -1071,6 +1071,7 @@ fn state(details: &TransactionDetails) -> (&'static str, Option<&'static str>) {
             Some(ExpiredReason::NoAnswer) => ("expired", Some("expired_no_answer")),
             Some(ExpiredReason::NotMined) => ("expired", Some("expired_not_mined")),
             Some(ExpiredReason::Orphaned) => ("expired", Some("expired_orphaned")),
+            Some(ExpiredReason::InputsReorged) => ("expired", Some("expired_inputs_reorged")),
             _ => ("expired", None),
         },
         TxState::Cancelled if declined.is_some() => ("declined", Some("by_them")),
@@ -1558,6 +1559,7 @@ mod tests {
             recovery: None,
             recovery_of: None,
             recoverable: false,
+            chain_replaced: None,
         }
     }
 
@@ -1584,6 +1586,14 @@ mod tests {
         reward.coinbase = true;
         reward.expired_reason = Some(ExpiredReason::Orphaned);
         assert_eq!(state(&reward), ("expired", Some("expired_orphaned")));
+    }
+
+    #[test]
+    fn a_send_whose_inputs_stayed_reorged_is_expired_inputs_reorged() {
+        let mut send = epicbox_send(None);
+        send.transaction.entry.state = TxState::Expired;
+        send.expired_reason = Some(ExpiredReason::InputsReorged);
+        assert_eq!(state(&send), ("expired", Some("expired_inputs_reorged")));
     }
 
     #[test]

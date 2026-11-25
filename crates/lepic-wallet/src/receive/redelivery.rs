@@ -142,7 +142,7 @@ pub(crate) fn answer_again(
     let slate_id = proposal.id();
     let uuid = Uuid::from_bytes(*slate_id.as_bytes());
     let Some(transaction) = repos.transaction_by_slate(uuid, TxDirection::Incoming)? else {
-        return not_sent_here(repos, network, proposal).map(|()| None);
+        return not_sent_here(repos, network, proposal, arrival).map(|()| None);
     };
     let refused = ReceiveError::AlreadyReceived {
         slate_id,
@@ -173,16 +173,19 @@ pub(crate) fn answer_again(
 }
 
 /// Refuses `proposal` when its slate id names a payment this wallet made, a send or an invoice
-/// it paid, unless it is the S1 of that very send, delivered to an address and still open, as
-/// when the wallet pays its own address. An exported send went to no address, so its file opened
-/// in the same wallet is refused, and so is the S1 of a send that was cancelled or expired, whose
-/// inputs were released. Stored
+/// it paid, unless it is the S1 of that very send, still open, and either delivered to an
+/// address, as when the wallet pays its own address, or come in at the wallet's epic1 address
+/// (`arrival` under an epic1 proof key), as when it pays its own epic1 link: an epic1 payment is
+/// stored as an export, and the install that sent it may be the one that collects it. Any other
+/// exported send went to no address, so its file opened in the same wallet is refused, and so
+/// is the S1 of a send that was cancelled or expired, whose inputs were released. Stored
 /// slates key by slate id and stage alone, so a stranger's S1 under the id of a payment this
 /// wallet once made to it would otherwise sit beside that payment and read its stages.
 fn not_sent_here(
     repos: &dyn Repositories,
     network: Network,
     proposal: &Slate,
+    arrival: Arrival,
 ) -> Result<(), ReceiveError> {
     let slate_id = proposal.id();
     let uuid = Uuid::from_bytes(*slate_id.as_bytes());
@@ -193,8 +196,9 @@ fn not_sent_here(
         slate_id,
         tx_id: sent.id,
     };
+    let at_epic1 = matches!(arrival.proof_key, ProofKey::Epic1 { .. });
     if matches!(sent.entry.state, TxState::Cancelled | TxState::Expired)
-        || repos.counterparty(sent.id)?.is_none()
+        || (!at_epic1 && repos.counterparty(sent.id)?.is_none())
     {
         return Err(refused);
     }

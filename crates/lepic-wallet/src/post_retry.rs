@@ -371,6 +371,11 @@ where
                 self.end_spent(push.tx_id, spent).await;
                 true
             }
+            // Never cancelled: the transaction is pushed again until its inputs are back.
+            Err(PushFailure::Reorged(source)) => {
+                debug!(error = %ErrorChain(&source), "transaction not pushed again, inputs reorged");
+                true
+            }
             Err(PushFailure::Wallet(error)) => {
                 debug!(error = %ErrorChain(&error), "transaction not pushed again");
                 true
