@@ -105,7 +105,8 @@ pub(crate) fn recently_spent(
 /// Whether `stored`, which a refresh is about to mark spent, was spent by another wallet: it was
 /// unspent here, not an immature coinbase output, which nobody can spend and which leaves the
 /// chain only when its block does, and not an input of a send that ended here, which may still
-/// be mined and which the release watch looks for.
+/// be mined and which the release watch looks for. A send that ended with no watch, as one
+/// cancelled before its answer, can never be mined, so its inputs count.
 pub(crate) fn spent_elsewhere(
     repos: &dyn Repositories,
     stored: &OutputRecord,
@@ -123,6 +124,7 @@ pub(crate) fn spent_elsewhere(
     if let Some(tx_id) = stored.tx
         && let Some(entry) = repos.transaction(tx_id)?
         && matches!(entry.state, TxState::Cancelled | TxState::Expired)
+        && repos.tx_watch(tx_id)?.is_some()
         && !repos.tx_marks(tx_id)?.inputs_spent_elsewhere
     {
         return Ok(false);

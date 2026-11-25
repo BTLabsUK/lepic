@@ -7,6 +7,17 @@ Conventional Commit messages at release time.
 
 ## [Unreleased]
 
+## [0.6.4] - 2026-11-25
+
+A coin freed by a send cancelled before its answer now counts when another install of the same
+recovery phrase spends it. No change to the FFI, the CLI or the wallet store (schema 22).
+
+### Fixed
+
+- A coin freed by a send cancelled before its answer, and then spent by another install of the
+  same recovery phrase, now counts in that install's spend. Before, the spend went unrecorded and
+  its change showed as received from another wallet.
+
 ## [0.6.3] - 2026-11-25
 
 A send whose inputs a chain reorganisation took now waits and goes through again instead of being

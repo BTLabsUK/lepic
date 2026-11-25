@@ -26,7 +26,7 @@ use lepic_primitives::amount::{Amount, Height};
 use lepic_slate::codec::{MediaType, WireSlate};
 use lepic_slate::stage::Stage;
 use lepic_store::{OutputStatus, SlateStage, StoreError, TxDirection, TxId, TxState, WalletStore};
-use lepic_transport::transport::Destination;
+use lepic_transport::transport::{Destination, Location};
 use lepic_wallet::event::SupersededReceive;
 use lepic_wallet::inbox::{
     InboxSummary, ListenHandle, MAX_TWIN_ANSWERS, TWIN_HOLD, TWIN_REQUEUE_WINDOW,
@@ -759,6 +759,40 @@ fn a_spend_by_the_other_install_shows_as_sent_from_another_wallet_with_its_chang
     // A later refresh records nothing more.
     refresh_and_scan(&world, &twin);
     assert_eq!(other_wallet_entries(&world, &twin).len(), 1);
+}
+
+/// The twin's coin, released by a send it cancelled before any answer, which no one can finish,
+/// is spent by the payer: the twin shows that spend with its change, like any other.
+#[test]
+fn a_coin_a_send_cancelled_before_its_answer_released_counts_in_the_other_installs_spend() {
+    let world = World::new();
+    plain_outputs(&world.payer);
+    on_chain(&world, &world.payer);
+    let twin = world.payer_twin();
+    twin.fund(0, FUNDING);
+    plain_outputs(&twin);
+    on_chain(&world, &twin);
+    refresh_and_scan(&world, &twin);
+    let dir = tempfile::tempdir().unwrap();
+    let cancelled = world
+        .block_on(twin.wallet.send(
+            &crate::support::file(),
+            send_request(),
+            Delivery::Export {
+                to: Location::File(dir.path().join("s1.tx")),
+            },
+        ))
+        .unwrap();
+    world.block_on(twin.wallet.cancel(cancelled.tx_id)).unwrap();
+
+    paid_and_mined(&world);
+    refresh_and_scan(&world, &twin);
+
+    let entries = other_wallet_entries(&world, &twin);
+    assert_eq!(entries.len(), 1, "{entries:?}");
+    let entry = &entries[0].transaction.entry;
+    assert_eq!(entry.amount_debited, Amount::new(FUNDING));
+    assert!(entry.amount_credited < entry.amount_debited, "{entry:?}");
 }
 
 /// Raises the mock chain's tip by `blocks` and dates block `height` long before: returns that
