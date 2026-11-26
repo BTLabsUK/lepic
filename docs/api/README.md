@@ -3,7 +3,7 @@
 Interactive version: [docs.btlabs.uk/developers/lepic/api/v1](https://docs.btlabs.uk/developers/lepic/api/v1/).
 
 `lepic serve` holds one wallet open and answers an HTTP API under `/api/v1` on a Unix socket, and
-on an owner TLS listener when that is on. This guide covers lepic 0.6.4. `lepic serve` runs on Unix only; on Windows the rest of the CLI runs but the API does not. The contract is
+on an owner TLS listener when that is on. This guide covers lepic 0.6.5. `lepic serve` runs on Unix only; on Windows the rest of the CLI runs but the API does not. The contract is
 [openapi.json](openapi.json), document version 2.0.0 (the path stays `/api/v1`); `GET /api/v1/openapi.json` returns the same
 document from a running serve. The
 [explorer](https://docs.btlabs.uk/developers/lepic/api/v1/explorer/) has every endpoint with its
@@ -24,7 +24,7 @@ curl --unix-socket ./w.sock http://lepic/api/v1/status
 ```
 
 ```json
-{"version":"0.6.4","uptime_s":5,"listeners":{"epicbox":{"state":"connected","relays":[{"host":"relay.example:443","group":"wallet","state":"attached","push":true,"connected_since":"2026-11-11T02:55:09.512041201Z"}]}},"node":{"tip_height":3412790,"tip_changed_at":"2026-11-11T02:54:31.226402118Z"},"payments":{"open":{"needs_approval":0,"awaiting_answer":0,"finalized":0,"posted":0}},"refresh":{"failures":0,"last_success_at":"2026-11-11T02:55:09.797663717Z"},"collect":{"failures":0,"last_success_at":"2026-11-11T02:55:09.816610725Z"},"requests":{"served":0,"in_flight":1,"refused":0}}
+{"version":"0.6.5","uptime_s":5,"listeners":{"epicbox":{"state":"connected","relays":[{"host":"relay.example:443","group":"wallet","state":"attached","push":true,"connected_since":"2026-11-11T02:55:09.512041201Z"}]}},"node":{"tip_height":3412790,"tip_changed_at":"2026-11-11T02:54:31.226402118Z"},"payments":{"open":{"needs_approval":0,"awaiting_answer":0,"finalized":0,"posted":0}},"refresh":{"failures":0,"last_success_at":"2026-11-11T02:55:09.797663717Z"},"collect":{"failures":0,"last_success_at":"2026-11-11T02:55:09.816610725Z"},"requests":{"served":0,"in_flight":1,"refused":0}}
 ```
 
 Read the accounts and their balances.

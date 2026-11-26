@@ -106,8 +106,9 @@ where
     /// network's coinbase maturity has passed above the block.
     ///
     /// The output takes the key the node passed back when that key blinds only candidates of
-    /// this wallet; any other key, or none, takes the account's next output key. Candidates
-    /// already stored stay. The kernel is checked against its excess before it is returned.
+    /// this wallet and would not make one again for another height; any other key, or none,
+    /// takes the account's next output key. Candidates already stored stay. The kernel is
+    /// checked against its excess before it is returned.
     ///
     /// Fails with [`WalletError::Locked`] inside [`CoinbaseError::Wallet`] when the wallet is
     /// locked, and with [`WalletError::RestoreScanRequired`] on a database rebuilt from the
@@ -126,11 +127,15 @@ where
         self.blocking(move |ports, _| {
             Ok(session.store.write(|repos| {
                 let account = account::account_by_label(repos, DEFAULT_ACCOUNT_LABEL)?;
+                let value = params.coinbase_value(request.fees, request.height);
                 let key_id = match request.key_id {
-                    Some(key_id) if key_reusable(&*repos, account.index, key_id)? => key_id,
+                    Some(key_id)
+                        if key_reusable(&*repos, account.index, key_id, value, request.height)? =>
+                    {
+                        key_id
+                    }
                     _ => account::next_output_key(repos, account.index)?,
                 };
-                let value = params.coinbase_value(request.fees, request.height);
                 let coinbase = build(&session.keychain, value, key_id, &mut **ports.rng.lock())?;
                 repos.put_output(&OutputRecord {
                     id: coinbase.output.identifier(),
@@ -369,12 +374,18 @@ pub(crate) fn is_candidate(output: &OutputRecord) -> bool {
         && output.id.features == OutputFeatures::Coinbase
 }
 
-/// Says whether `key_id` may be used again: some output has it, and every one is a candidate of
-/// `account`. A key that blinds anything else, or nothing this wallet stored, is not reused.
+/// Says whether `key_id` may be used again for `value` at `height`: some output has it, and every
+/// one is a candidate of `account` built for this height or for another value. A key that blinds
+/// anything else, or nothing this wallet stored, is not reused. The same key and value make the
+/// same commitment, and a candidate is checked in the block of its one height: built again for
+/// the next height, as a node asks right after it found a block, it would leave the found block
+/// unchecked.
 fn key_reusable(
     repos: &dyn Repositories,
     account: AccountIndex,
     key_id: Identifier,
+    value: Amount,
+    height: Height,
 ) -> Result<bool, StoreError> {
     let key = KeyId(key_id.to_bytes());
     let mut found = false;
@@ -383,7 +394,10 @@ fn key_reusable(
             if output.key_id != key {
                 continue;
             }
-            if output.account != account || !is_candidate(&output) {
+            if output.account != account
+                || !is_candidate(&output)
+                || (output.amount == value && output.height != height)
+            {
                 return Ok(false);
             }
             found = true;

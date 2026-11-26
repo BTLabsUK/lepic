@@ -225,6 +225,27 @@ fn a_block_found_on_the_older_template_still_pays_the_wallet() {
     assert_ne!(next.key_id, first.key_id);
 }
 
+both_stores!(a_block_found_before_the_node_passes_its_key_to_the_next_height_pays);
+fn a_block_found_before_the_node_passes_its_key_to_the_next_height_pays() {
+    let sender = wallet();
+    let found = build(&sender, 5, None);
+    sender
+        .harness
+        .node
+        .update_chain(|chain| crate::support::mine_output(chain, mined(&found, 5, 7)));
+    // The node asks for the next height with the found block's key and the same fees before
+    // a refresh saw the block: the same key and value would make the same commitment.
+    let next = build(&sender, 6, Some(found.key_id));
+    assert_ne!(next.output.commitment, found.output.commitment);
+
+    refresh_at(&sender, 6 + REORG_WINDOW);
+
+    let output = stored(&sender, &found).unwrap();
+    assert_eq!(output.status, OutputStatus::Unspent);
+    assert_eq!(output.height, Height::new(5));
+    assert_eq!(sender.transactions().len(), 1);
+}
+
 both_stores!(takes_a_new_key_for_a_key_that_blinds_anything_else);
 fn takes_a_new_key_for_a_key_that_blinds_anything_else() {
     let sender = wallet();

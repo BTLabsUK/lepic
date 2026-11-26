@@ -7,6 +7,18 @@ Conventional Commit messages at release time.
 
 ## [Unreleased]
 
+## [0.6.5] - 2026-11-26
+
+A block reward is no longer missed when the node asks for the next height's coinbase with the
+found block's key. No change to the FFI, the CLI or the wallet store (schema 22).
+
+### Fixed
+
+- A block reward is no longer missed when the mining node asks for the next height's coinbase
+  with the found block's key before the wallet refreshed, with the same fees. The wallet built the
+  same output for the next height and checked only that block, so the reward showed only after a
+  scan. Such a request now takes a new key.
+
 ## [0.6.4] - 2026-11-25
 
 A coin freed by a send cancelled before its answer now counts when another install of the same
